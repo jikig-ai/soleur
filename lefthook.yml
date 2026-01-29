@@ -1,0 +1,22 @@
+pre-commit:
+  parallel: false
+  commands:
+    rust-format:
+      priority: 1
+      glob: "*.rs"
+      run: cargo fmt --all --
+      stage_fixed: true
+    rust-lint-fix:
+      priority: 2
+      glob: "*.rs"
+      run: cargo clippy --fix --allow-dirty --allow-staged -- -D warnings
+      stage_fixed: true
+    rust-lint-check:
+      priority: 3
+      glob: "*.rs"
+      run: cargo clippy -- -D warnings
+    markdown-lint:
+      priority: 4
+      glob: "*.md"
+      run: npx --yes markdownlint-cli {staged_files}
+      stage_fixed: true
