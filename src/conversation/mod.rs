@@ -6,6 +6,6 @@ mod decision;
 mod session;
 mod store;
 
-pub use decision::{Decision, DecisionLedger};
+pub use decision::{Decision, DecisionLedger, DecisionSource};
 pub use session::Session;
 pub use store::SessionStore;

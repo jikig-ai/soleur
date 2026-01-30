@@ -1,15 +1,22 @@
 //! Interactive REPL for Agent Conversations
 
+use regex::Regex;
 use rustyline::error::ReadlineError;
 use rustyline::{DefaultEditor, Result as RlResult};
 use std::io::{self, Write};
+use std::sync::LazyLock;
 use tokio_stream::StreamExt;
 
 use crate::agents::Agent;
+use crate::agents::markers::DECISION_MARKER_REGEX;
 use crate::config::Config;
-use crate::conversation::{DecisionLedger, Session, SessionStore};
+use crate::conversation::{DecisionLedger, DecisionSource, Session, SessionStore};
 use crate::error::{Result, SoleurError};
 use crate::providers::{CompletionConfig, ModelProvider};
+
+/// Compiled regex for detecting decision markers in agent responses
+static DECISION_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(DECISION_MARKER_REGEX).expect("Invalid decision regex pattern"));
 
 /// Interactive REPL for agent conversations
 pub struct Repl<'a, A: Agent, P: ModelProvider> {
@@ -19,6 +26,7 @@ pub struct Repl<'a, A: Agent, P: ModelProvider> {
     session_store: SessionStore,
     decision_ledger: DecisionLedger,
     config: CompletionConfig,
+    auto_record: bool,
 }
 
 impl<'a, A: Agent, P: ModelProvider> Repl<'a, A, P> {
@@ -36,6 +44,7 @@ impl<'a, A: Agent, P: ModelProvider> Repl<'a, A, P> {
             session_store: SessionStore::new(app_config.sessions_dir()),
             decision_ledger: DecisionLedger::new(app_config.decisions_dir()),
             config,
+            auto_record: true,
         }
     }
 
@@ -160,6 +169,25 @@ impl<'a, A: Agent, P: ModelProvider> Repl<'a, A, P> {
         // Add assistant response to session
         self.session.add_assistant_message(&response);
 
+        // Auto-detect and record decisions
+        if self.auto_record {
+            // Collect decisions first to avoid borrow checker issues
+            let decisions_to_record: Vec<String> = DECISION_REGEX
+                .captures_iter(&response)
+                .map(|cap| cap[1].trim().to_string())
+                .collect();
+
+            // Clone project_name before the loop to avoid borrow issues
+            let project_name = self.session.project_name.clone();
+            for decision_text in decisions_to_record {
+                let decision = self
+                    .session
+                    .add_decision(&decision_text, DecisionSource::AutoDetected);
+                self.decision_ledger.append(&project_name, decision)?;
+                println!("Decision auto-recorded: \"{decision_text}\"");
+            }
+        }
+
         // Auto-save session
         self.save_session()?;
 
@@ -211,7 +239,7 @@ impl<'a, A: Agent, P: ModelProvider> Repl<'a, A, P> {
             "/decide" => {
                 if let Some(text) = args {
                     let project_name = self.session.project_name.clone();
-                    let decision = self.session.add_decision(text);
+                    let decision = self.session.add_decision(text, DecisionSource::Manual);
                     self.decision_ledger.append(&project_name, decision)?;
                     println!("Decision recorded: {text}");
                 } else {
@@ -235,6 +263,23 @@ impl<'a, A: Agent, P: ModelProvider> Repl<'a, A, P> {
                 }
                 Ok(false)
             }
+            "/autorecord" => {
+                match args {
+                    Some("on") => {
+                        self.auto_record = true;
+                        println!("Auto-record: ON");
+                    }
+                    Some("off") => {
+                        self.auto_record = false;
+                        println!("Auto-record: OFF");
+                    }
+                    _ => {
+                        let status = if self.auto_record { "ON" } else { "OFF" };
+                        println!("Auto-record: {status} (use /autorecord on|off)");
+                    }
+                }
+                Ok(false)
+            }
             "/help" => {
                 self.print_help();
                 Ok(false)
@@ -255,7 +300,8 @@ impl<'a, A: Agent, P: ModelProvider> Repl<'a, A, P> {
         println!("  /save              Save current session");
         println!("  /load <id>         Load a specific session");
         println!("  /decisions         Show recorded decisions");
-        println!("  /decide <text>     Record a decision");
+        println!("  /decide <text>     Record a decision manually");
+        println!("  /autorecord [on|off]  Toggle auto-recording of decisions");
         println!("  /context <path>    Load file as project context");
         println!("  /help              Show this help");
         println!();
