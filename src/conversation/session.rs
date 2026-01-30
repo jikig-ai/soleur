@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::Decision;
+use super::{Decision, DecisionSource};
 use crate::providers::{Message, Role};
 
 /// A conversation session with an agent
@@ -70,8 +70,12 @@ impl Session {
     }
 
     /// Add a decision to the session
-    pub fn add_decision(&mut self, content: impl Into<String>) -> &Decision {
-        let decision = Decision::new(content, self.id);
+    pub fn add_decision(
+        &mut self,
+        content: impl Into<String>,
+        source: DecisionSource,
+    ) -> &Decision {
+        let decision = Decision::new(content, self.id, source);
         self.decisions.push(decision);
         self.updated_at = Utc::now();
         self.decisions.last().unwrap()
@@ -82,9 +86,9 @@ impl Session {
         &mut self,
         content: impl Into<String>,
         tags: Vec<String>,
+        source: DecisionSource,
     ) -> &Decision {
-        let mut decision = Decision::new(content, self.id);
-        decision.tags = tags;
+        let decision = Decision::with_tags(content, self.id, tags, source);
         self.decisions.push(decision);
         self.updated_at = Utc::now();
         self.decisions.last().unwrap()
@@ -150,7 +154,7 @@ mod tests {
     fn test_add_decision() {
         let mut session = Session::new("test", "test");
         let session_id = session.id;
-        session.add_decision("Use PostgreSQL instead of MySQL");
+        session.add_decision("Use PostgreSQL instead of MySQL", DecisionSource::Manual);
 
         assert_eq!(session.decisions.len(), 1);
         assert_eq!(
@@ -158,6 +162,7 @@ mod tests {
             "Use PostgreSQL instead of MySQL"
         );
         assert_eq!(session.decisions[0].session_id, session_id);
+        assert_eq!(session.decisions[0].source, DecisionSource::Manual);
     }
 
     #[test]

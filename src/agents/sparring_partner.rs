@@ -5,11 +5,16 @@
 use async_trait::async_trait;
 
 use super::Agent;
+use super::markers::DECISION_MARKER_INSTRUCTION;
 use crate::conversation::Session;
 use crate::error::Result;
 use crate::providers::{CompletionConfig, Message, ModelProvider, StreamResponse};
 
-const SPARRING_PARTNER_PROMPT: &str = r#"You are a Strategic Sparring Partner - a Socratic business advisor who helps founders stress-test their ideas through rigorous, constructive critique.
+/// Base prompt template for the Sparring Partner agent
+/// Note: Decision tracking instruction uses DECISION_MARKER_INSTRUCTION constant
+fn build_base_prompt() -> String {
+    format!(
+        r#"You are a Strategic Sparring Partner - a Socratic business advisor who helps founders stress-test their ideas through rigorous, constructive critique.
 
 ## Your Approach
 
@@ -21,7 +26,9 @@ const SPARRING_PARTNER_PROMPT: &str = r#"You are a Strategic Sparring Partner - 
 
 4. **Constructive Critique**: Identify weaknesses as opportunities for improvement, not failures. Frame critiques in terms of "what if" and "have you considered."
 
-5. **Decision Tracking**: When the founder makes a strategic decision during our conversation, acknowledge it explicitly and suggest recording it. Decisions sound like: "Let's focus on...", "We should target...", "I've decided to...", "We'll use X instead of Y."
+5. **Decision Tracking**: When the founder makes a strategic decision during our conversation, acknowledge it explicitly and format it as:
+   {}
+   This marker helps the system automatically track key choices. Decisions sound like: "Let's focus on...", "We should target...", "I've decided to...", "We'll use X instead of Y."
 
 ## Conversation Style
 
@@ -45,7 +52,10 @@ When asked, provide:
 - **SWOT Analysis**: Strengths, Weaknesses, Opportunities, Threats
 - **Action Items**: Prioritized, concrete next steps
 - **Risk Assessment**: Key risks with potential mitigations
-- **Decision Summary**: All strategic decisions made in the conversation"#;
+- **Decision Summary**: All strategic decisions made in the conversation"#,
+        DECISION_MARKER_INSTRUCTION
+    )
+}
 
 /// The Strategic Sparring Partner agent
 pub struct SparringPartner;
@@ -74,7 +84,7 @@ impl Agent for SparringPartner {
     }
 
     fn system_prompt(&self, session: &Session) -> String {
-        let mut prompt = SPARRING_PARTNER_PROMPT.to_string();
+        let mut prompt = build_base_prompt();
 
         // Add project context if available
         if let Some(context) = &session.project_context {
@@ -123,6 +133,7 @@ impl Agent for SparringPartner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conversation::DecisionSource;
 
     #[test]
     fn test_system_prompt_without_context() {
@@ -151,11 +162,21 @@ mod tests {
     fn test_system_prompt_with_decisions() {
         let agent = SparringPartner::new();
         let mut session = Session::new("sparring-partner", "test");
-        session.add_decision("Target enterprise customers");
+        session.add_decision("Target enterprise customers", DecisionSource::Manual);
 
         let prompt = agent.system_prompt(&session);
 
         assert!(prompt.contains("Decisions Made So Far"));
         assert!(prompt.contains("Target enterprise customers"));
+    }
+
+    #[test]
+    fn test_prompt_contains_decision_marker_instruction() {
+        let agent = SparringPartner::new();
+        let session = Session::new("sparring-partner", "test");
+        let prompt = agent.system_prompt(&session);
+
+        // Verify the prompt uses the shared marker instruction
+        assert!(prompt.contains(DECISION_MARKER_INSTRUCTION));
     }
 }

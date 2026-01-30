@@ -19,6 +19,7 @@ rustyline = "15"
 toml = "0.8"
 futures = "0.3"
 tokio-stream = "0.1"
+regex = "1"
 
 [dev-dependencies]
 tempfile = "3"

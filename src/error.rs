@@ -32,6 +32,10 @@ pub enum SoleurError {
     /// HTTP request errors
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
+
+    /// Input validation errors (invalid names, formats, etc.)
+    #[error("Validation error: {0}")]
+    Validation(String),
 }
 
 /// Convenience Result type for Soleur operations
