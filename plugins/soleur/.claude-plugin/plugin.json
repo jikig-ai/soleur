@@ -9,20 +9,11 @@
   },
   "homepage": "https://github.com/jikig-ai/soleur",
   "repository": "https://github.com/jikig-ai/soleur",
-  "license": "MIT",
+  "license": "BSL-1.1",
   "keywords": [
     "ai-powered",
-    "compound-engineering",
-    "workflow-automation",
-    "code-review",
-    "rails",
-    "ruby",
-    "python",
-    "typescript",
-    "knowledge-management",
-    "image-generation",
-    "agent-browser",
-    "browser-automation"
+    "soleur",
+    "company-as-a-service"
   ],
   "mcpServers": {
     "context7": {
