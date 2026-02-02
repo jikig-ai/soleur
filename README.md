@@ -44,3 +44,7 @@ Since Soleur isn't reselling tokens, the pricing shifts from "Utility" to "Value
 6. The Competitive Edge: Recursive Dogfooding
 
 Soleur is built by Soleur. The platform’s code, marketing, and customer support are all managed by its own internal swarms using various API keys. This ensures the system is inherently practical—if the agents can’t build the platform, they aren’t ready to build the customers' companies.
+
+## Credits
+
+This work has been initially using the following claude code plugin https://github.com/EveryInc/compound-engineering-plugin as a starting point
