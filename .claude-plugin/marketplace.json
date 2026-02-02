@@ -1,0 +1,26 @@
+{
+  "name": "jikigai-marketplace",
+  "owner": {
+    "name": "Jikigai",
+    "url": "https://github.com/jikiga-ai"
+  },
+  "metadata": {
+    "description": "Plugin marketplace for Claude Code extensions",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "soleur",
+      "description": "Soleur is the world’s first model-agnostic Orchestration Engine designed to turn a single founder into a billion-dollar enterprise. It provides the architectural \"brain\" that organizes fragmented AI models into a cohesive, goal-oriented workforce, allowing a human CEO to manage a \"Swarm of Agents\" instead of a headcount of employees.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Jean Deruelle",
+        "url": "https://github.com/deruelle",
+        "email": "jean.deruelle@jikigai.com"
+      },
+      "homepage": "https://github.com/jikig-ai/soleur",
+      "tags": ["ai-powered", "soleur", "company-as-a-service"],
+      "source": "./plugins/soleur"
+    }
+  ]
+}

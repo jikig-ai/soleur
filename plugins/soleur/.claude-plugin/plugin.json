@@ -1,0 +1,33 @@
+{
+  "name": "soleur",
+  "version": "1.0.0",
+  "description": "Soleur is the world’s first model-agnostic Orchestration Engine designed to turn a single founder into a billion-dollar enterprise. It provides the architectural \"brain\" that organizes fragmented AI models into a cohesive, goal-oriented workforce, allowing a human CEO to manage a \"Swarm of Agents\" instead of a headcount of employees.",
+  "author": {
+    "name": "Jean Deruelle",
+    "email": "jean.deruelle@jikigai.com",
+    "url": "https://github.com/deruelle"
+  },
+  "homepage": "https://github.com/jikig-ai/soleur",
+  "repository": "https://github.com/jikig-ai/soleur",
+  "license": "MIT",
+  "keywords": [
+    "ai-powered",
+    "compound-engineering",
+    "workflow-automation",
+    "code-review",
+    "rails",
+    "ruby",
+    "python",
+    "typescript",
+    "knowledge-management",
+    "image-generation",
+    "agent-browser",
+    "browser-automation"
+  ],
+  "mcpServers": {
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp"
+    }
+  }
+}
