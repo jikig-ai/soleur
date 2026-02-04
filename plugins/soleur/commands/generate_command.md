@@ -127,7 +127,7 @@ Implement #$ARGUMENTS following these steps:
 
 ## Creating the Command File
 
-1. **Create the file** at `.claude/commands/[name].md` (subdirectories like `workflows/` supported)
+1. **Create the file** at `.claude/commands/[name].md` (subdirectories like `soleur/` supported)
 2. **Start with YAML frontmatter** (see section above)
 3. **Structure the command** using the template above
 4. **Test the command** by using it with appropriate arguments

@@ -71,15 +71,15 @@ Agents are organized into categories for easier discovery.
 
 ### Workflow Commands
 
-Core workflow commands use `workflows:` prefix to avoid collisions with built-in commands:
+Core workflow commands use `soleur:` prefix to avoid collisions with built-in commands:
 
 | Command | Description |
 |---------|-------------|
-| `/workflows:brainstorm` | Explore requirements and approaches before planning |
-| `/workflows:plan` | Create implementation plans |
-| `/workflows:review` | Run comprehensive code reviews |
-| `/workflows:work` | Execute work items systematically |
-| `/workflows:compound` | Document solved problems to compound team knowledge |
+| `/soleur:brainstorm` | Explore requirements and approaches before planning |
+| `/soleur:plan` | Create implementation plans |
+| `/soleur:review` | Run comprehensive code reviews |
+| `/soleur:work` | Execute work items systematically |
+| `/soleur:compound` | Document solved problems to compound team knowledge |
 
 ### Utility Commands
 

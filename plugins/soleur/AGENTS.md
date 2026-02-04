@@ -35,7 +35,7 @@ agents/
 └── docs/       # Documentation agents
 
 commands/
-├── workflows/  # Core workflow commands (workflows:plan, workflows:review, etc.)
+├── soleur/  # Core workflow commands (soleur:plan, soleur:review, etc.)
 └── *.md        # Utility commands
 
 skills/
@@ -52,7 +52,7 @@ skills/
 - `/soleur:work` - Execute work items systematically
 - `/soleur:compound` - Document solved problems
 
-**Why `soleur:`?** Claude Code has built-in `/plan` and `/review` commands. Using `name: workflows:plan` in frontmatter creates a unique `/workflows:plan` command with no collision.
+**Why `soleur:`?** Claude Code has built-in `/plan` and `/review` commands. Using `name: soleur:plan` in frontmatter creates a unique `/soleur:plan` command with no collision.
 
 ## Skill Compliance Checklist
 
