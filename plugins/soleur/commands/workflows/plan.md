@@ -1,5 +1,5 @@
 ---
-name: workflows:plan
+name: soleur:plan
 description: Transform feature descriptions into well-structured project plans following conventions
 argument-hint: "[feature description, bug report, or improvement idea]"
 ---
@@ -499,8 +499,8 @@ After writing the plan file, use the **AskUserQuestion tool** to present these o
 1. **Open plan in editor** - Open the plan file for review
 2. **Run `/deepen-plan`** - Enhance each section with parallel research agents (best practices, performance, UI)
 3. **Run `/plan_review`** - Get feedback from reviewers (DHH, Kieran, Simplicity)
-4. **Start `/workflows:work`** - Begin implementing this plan locally
-5. **Start `/workflows:work` on remote** - Begin implementing in Claude Code on the web (use `&` to run in background)
+4. **Start `/soleur:work`** - Begin implementing this plan locally
+5. **Start `/soleur:work` on remote** - Begin implementing in Claude Code on the web (use `&` to run in background)
 6. **Create Issue** - Create issue in project tracker (GitHub/Linear)
 7. **Simplify** - Reduce detail level
 
@@ -508,15 +508,15 @@ Based on selection:
 - **Open plan in editor** → Run `open docs/plans/<plan_filename>.md` to open the file in the user's default editor
 - **`/deepen-plan`** → Call the /deepen-plan command with the plan file path to enhance with research
 - **`/plan_review`** → Call the /plan_review command with the plan file path
-- **`/workflows:work`** → Call the /workflows:work command with the plan file path
-- **`/workflows:work` on remote** → Run `/workflows:work docs/plans/<plan_filename>.md &` to start work in background for Claude Code web
+- **`/soleur:work`** → Call the /soleur:work command with the plan file path
+- **`/soleur:work` on remote** → Run `/soleur:work docs/plans/<plan_filename>.md &` to start work in background for Claude Code web
 - **Create Issue** → See "Issue Creation" section below
 - **Simplify** → Ask "What should I simplify?" then regenerate simpler version
 - **Other** (automatically provided) → Accept free text for rework or specific changes
 
-**Note:** If running `/workflows:plan` with ultrathink enabled, automatically run `/deepen-plan` after plan creation for maximum depth and grounding.
+**Note:** If running `/soleur:plan` with ultrathink enabled, automatically run `/deepen-plan` after plan creation for maximum depth and grounding.
 
-Loop back to options after Simplify or Other changes until user selects `/workflows:work` or `/plan_review`.
+Loop back to options after Simplify or Other changes until user selects `/soleur:work` or `/plan_review`.
 
 ## Issue Creation
 
@@ -546,6 +546,6 @@ When user selects "Create Issue", detect their project tracker from CLAUDE.md:
 
 5. **After creation:**
    - Display the issue URL
-   - Ask if they want to proceed to `/workflows:work` or `/plan_review`
+   - Ask if they want to proceed to `/soleur:work` or `/plan_review`
 
 NEVER CODE! Just research and write the plan.

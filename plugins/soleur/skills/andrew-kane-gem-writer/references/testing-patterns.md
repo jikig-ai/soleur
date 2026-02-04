@@ -151,7 +151,7 @@ jobs:
 ## Database-Specific Testing
 
 ```yaml
-# .github/workflows/build.yml (with services)
+# .github/soleur/build.yml (with services)
 services:
   postgres:
     image: postgres:15
