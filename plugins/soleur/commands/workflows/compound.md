@@ -1,5 +1,5 @@
 ---
-name: workflows:compound
+name: soleur:compound
 description: Document a recently solved problem to compound your team's knowledge
 argument-hint: "[optional: brief context about the fix]"
 ---
@@ -17,8 +17,8 @@ Captures problem solutions while context is fresh, creating structured documenta
 ## Usage
 
 ```bash
-/workflows:compound                    # Document the most recent fix
-/workflows:compound [brief context]    # Provide additional context hint
+/soleur:compound                    # Document the most recent fix
+/soleur:compound [brief context]    # Provide additional context hint
 ```
 
 ## Execution Strategy: Parallel Subagents
@@ -38,7 +38,7 @@ This command launches multiple specialized subagents IN PARALLEL to maximize eff
    - Returns: Solution content block
 
 ### 3. **Related Docs Finder** (Parallel)
-   - Searches `docs/solutions/` for related documentation
+   - Searches `specs/solutions/` for related documentation
    - Identifies cross-references and links
    - Finds related GitHub issues
    - Returns: Links and relationships
@@ -50,7 +50,7 @@ This command launches multiple specialized subagents IN PARALLEL to maximize eff
    - Returns: Prevention/testing content
 
 ### 5. **Category Classifier** (Parallel)
-   - Determines optimal `docs/solutions/` category
+   - Determines optimal `specs/solutions/` category
    - Validates category against schema
    - Suggests filename based on slug
    - Returns: Final path and filename
@@ -96,7 +96,7 @@ This command launches multiple specialized subagents IN PARALLEL to maximize eff
 
 **Organized documentation:**
 
-- File: `docs/solutions/[category]/[filename].md`
+- File: `specs/solutions/[category]/[filename].md`
 
 **Categories auto-detected from problem:**
 
@@ -166,7 +166,7 @@ Build → Test → Find Issue → Research → Improve → Document → Validate
 
 <auto_invoke> <trigger_phrases> - "that worked" - "it's fixed" - "working now" - "problem solved" </trigger_phrases>
 
-<manual_override> Use /workflows:compound [context] to document immediately without waiting for auto-detection. </manual_override> </auto_invoke>
+<manual_override> Use /soleur:compound [context] to document immediately without waiting for auto-detection. </manual_override> </auto_invoke>
 
 ## Routes To
 
@@ -194,9 +194,9 @@ Based on problem type, these agents can enhance documentation:
 
 ### When to Invoke
 - **Auto-triggered** (optional): Agents can run post-documentation for enhancement
-- **Manual trigger**: User can invoke agents after /workflows:compound completes for deeper review
+- **Manual trigger**: User can invoke agents after /soleur:compound completes for deeper review
 
 ## Related Commands
 
 - `/research [topic]` - Deep investigation (searches docs/solutions/ for patterns)
-- `/workflows:plan` - Planning workflow (references documented solutions)
+- `/soleur:plan` - Planning workflow (references documented solutions)
