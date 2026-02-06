@@ -69,6 +69,71 @@ This command launches multiple specialized subagents IN PARALLEL to maximize eff
    - **test_failure** → `cora-test-reviewer`
    - Any code-heavy issue → `kieran-rails-reviewer` + `code-simplicity-reviewer`
 
+## Knowledge Base Integration
+
+**If knowledge-base/ directory exists, compound saves learnings there and offers constitution promotion:**
+
+### Save Learning to Knowledge Base
+
+```bash
+if [[ -d "knowledge-base" ]]; then
+  # Save learning to knowledge-base/learnings/
+  learning_file="knowledge-base/learnings/$(date +%Y-%m-%d)-<topic>.md"
+else
+  # Fall back to docs/solutions/
+  learning_file="docs/solutions/<category>/<topic>.md"
+fi
+```
+
+**Learning format for knowledge-base/learnings/:**
+
+```markdown
+# Learning: [topic]
+
+## Problem
+[What we encountered]
+
+## Solution
+[How we solved it]
+
+## Key Insight
+[The generalizable lesson]
+
+## Tags
+category: [category]
+module: [module]
+```
+
+### Constitution Promotion (Manual)
+
+After saving the learning, prompt the user:
+
+**Question:** "Promote anything to constitution?"
+
+**If user says yes:**
+1. Show recent learnings (last 5 from `knowledge-base/learnings/`)
+2. User selects which learning to promote
+3. Ask: "Which domain? (Code Style / Architecture / Testing)"
+4. Ask: "Which category? (Always / Never / Prefer)"
+5. User writes the principle (one line, actionable)
+6. Append to `knowledge-base/constitution.md` under the correct section
+7. Commit: `git commit -m "constitution: add <domain> <category> principle"`
+
+**If user says no:** Continue to next step
+
+### Worktree Cleanup (Manual)
+
+At the end, if on a feature branch:
+
+**Question:** "Feature complete? Clean up worktree?"
+
+**If user says yes:**
+```bash
+git worktree remove .worktrees/feat-<name>
+```
+
+**If user says no:** Done
+
 ## What It Captures
 
 - **Problem symptom**: Exact error messages, observable behavior

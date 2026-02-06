@@ -5,6 +5,18 @@ All notable changes to the compound-engineering plugin will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-02-06
+
+### Added
+
+- Command integration for spec-driven workflow:
+  - `soleur:brainstorm` now creates worktree + spec.md when knowledge-base/ exists
+  - `soleur:plan` loads constitution + spec.md, creates tasks.md
+  - `soleur:work` loads constitution + tasks.md for implementation guidance
+  - `soleur:compound` saves learnings to knowledge-base/, offers manual constitution promotion
+- Manual constitution promotion flow (no automation, human-in-the-loop)
+- Worktree cleanup prompt after feature completion
+
 ## [1.1.0] - 2026-02-06
 
 ### Added

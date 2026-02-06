@@ -20,7 +20,37 @@ Transform feature descriptions, bug reports, or improvement ideas into well-stru
 
 Do not proceed until you have a clear feature description from the user.
 
-### 0. Idea Refinement
+### 0. Load Knowledge Base Context (if exists)
+
+**Check for knowledge-base directory and load context:**
+
+```bash
+if [[ -d "knowledge-base" ]]; then
+  # Load constitution for planning guidance
+  cat knowledge-base/constitution.md
+
+  # Detect feature from current branch
+  current_branch=$(git branch --show-current)
+  if [[ "$current_branch" == feat-* ]]; then
+    feature_name="$current_branch"
+    # Load spec if it exists
+    if [[ -f "knowledge-base/specs/$feature_name/spec.md" ]]; then
+      cat "knowledge-base/specs/$feature_name/spec.md"
+    fi
+  fi
+fi
+```
+
+**If knowledge-base/ exists:**
+1. Read `knowledge-base/constitution.md` - use principles to guide planning decisions
+2. Detect feature from current branch (`feat-<name>` pattern)
+3. Read `knowledge-base/specs/feat-<name>/spec.md` if it exists - use as planning input
+4. Announce: "Loaded constitution and spec for `feat-<name>`"
+
+**If knowledge-base/ does NOT exist:**
+- Continue with standard planning flow
+
+### 0.5. Idea Refinement
 
 **Check for brainstorm output first:**
 
@@ -488,6 +518,35 @@ Examples:
 - ❌ `docs/plans/2026-01-15-feat-new-feature-plan.md` (too vague - what feature?)
 - ❌ `docs/plans/2026-01-15-feat: user auth-plan.md` (invalid characters - colon and space)
 - ❌ `docs/plans/feat-user-auth-plan.md` (missing date prefix)
+
+## Save Tasks to Knowledge Base (if exists)
+
+**After writing the plan to `docs/plans/`, also create tasks.md if knowledge-base/ exists:**
+
+```bash
+if [[ -d "knowledge-base" ]]; then
+  current_branch=$(git branch --show-current)
+  if [[ "$current_branch" == feat-* ]]; then
+    # Create tasks.md from plan
+    spec_dir="knowledge-base/specs/$current_branch"
+    mkdir -p "$spec_dir"
+  fi
+fi
+```
+
+**If knowledge-base/ exists and on a feature branch:**
+
+1. **Generate tasks.md** using `spec-templates` skill template:
+   - Extract actionable tasks from the plan
+   - Organize into phases (Setup, Core Implementation, Testing)
+   - Use hierarchical numbering (1.1, 2.1, 2.1.1, etc.)
+
+2. **Save tasks.md** to `knowledge-base/specs/feat-<name>/tasks.md`
+
+3. **Announce:** "Tasks saved to `knowledge-base/specs/feat-<name>/tasks.md`. Run `/soleur:work` to implement."
+
+**If knowledge-base/ does NOT exist or not on feature branch:**
+- Plan saved to `docs/plans/` only (current behavior)
 
 ## Post-Generation Options
 
