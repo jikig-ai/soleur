@@ -309,7 +309,7 @@ fi
 
    ---
 
-   [![Compound Engineered](https://img.shields.io/badge/Compound-Engineered-6366f1)](https://github.com/EveryInc/compound-engineering-plugin) 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+   [![With love by Soleur](https://img.shields.io/badge/With_love-by_Soleur-6366f1)](https://github.com/jikig-ai/soleur) 🤖 Generated with [Claude Code](https://claude.com/claude-code)
    EOF
    )"
    ```
@@ -382,7 +382,7 @@ Before creating PR, verify:
 - [ ] Before/after screenshots captured and uploaded (for UI changes)
 - [ ] Commit messages follow conventional format
 - [ ] PR description includes summary, testing notes, and screenshots
-- [ ] PR description includes Compound Engineered badge
+- [ ] PR description includes Soleur badge
 - [ ] Run `/soleur:review` for comprehensive code review
 - [ ] Considered `/soleur:compound` for any learnings from this work
 
