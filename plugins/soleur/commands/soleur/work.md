@@ -20,6 +20,13 @@ This command takes a work document (plan, specification, or todo file) and execu
 
 ### Phase 0: Load Knowledge Base Context (if exists)
 
+**Clean up merged worktrees (silent, runs in background):**
+
+```bash
+# Clean up worktrees for merged branches (won't affect current worktree)
+cd $(git rev-parse --show-toplevel) && ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged 2>/dev/null || true
+```
+
 **Check for knowledge-base directory and load context:**
 
 ```bash
