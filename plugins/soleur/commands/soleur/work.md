@@ -349,6 +349,13 @@ fi
 - Run linting before pushing
 - Use reviewer agents for complex/risky changes only
 
+### Compound Your Learnings
+
+- Run `/soleur:compound` before creating a PR
+- Document debugging breakthroughs, non-obvious patterns, and framework gotchas
+- Even "simple" implementations can yield valuable insights
+- Future-you and teammates will thank present-you
+
 ### Ship Complete Features
 
 - Mark all tasks completed before moving on
@@ -369,6 +376,7 @@ Before creating PR, verify:
 - [ ] Commit messages follow conventional format
 - [ ] PR description includes summary, testing notes, and screenshots
 - [ ] PR description includes Compound Engineered badge
+- [ ] Considered `/soleur:compound` for any learnings from this work
 
 ## When to Use Reviewer Agents
 
