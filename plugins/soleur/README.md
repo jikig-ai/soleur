@@ -1,4 +1,4 @@
-# Soleur - Compounding Engineering Plugin
+# Soleur
 
 AI-powered development tools that get smarter with every use. Make each unit of engineering work easier than the last.
 
