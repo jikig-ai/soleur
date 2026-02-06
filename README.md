@@ -41,8 +41,38 @@ Since Soleur isn't reselling tokens, the pricing shifts from "Utility" to "Value
 
 ### The Competitive Edge: Recursive Dogfooding
 
-Soleur is built by Soleur. The platform’s code, marketing, and customer support are all managed by its own internal swarms using various API keys. This ensures the system is inherently practical—if the agents can’t build the platform, they aren’t ready to build the customers' companies.
+Soleur is built by Soleur. The platform's code, marketing, and customer support are all managed by its own internal swarms using various API keys. This ensures the system is inherently practical—if the agents can't build the platform, they aren't ready to build the customers' companies.
+
+## The Soleur Claude Code Plugin
+
+The first concrete implementation of Soleur's philosophy is the **Claude Code Plugin** - AI-powered development tools that compound your engineering knowledge over time.
+
+### Key Concept: Compounding Engineering
+
+Every problem you solve makes the next one easier. The plugin captures learnings, patterns, and solutions in a structured knowledge base that grows with your project. Instead of solving the same problems repeatedly, you build on past work.
+
+### The Workflow
+
+```text
+/soleur:brainstorm --> /soleur:plan --> /soleur:work --> /soleur:review --> /soleur:compound
+```
+
+| Command | Purpose |
+| ------- | ------- |
+| `/soleur:brainstorm` | Explore ideas and make design decisions |
+| `/soleur:plan` | Create structured implementation plans |
+| `/soleur:work` | Execute plans systematically with incremental commits |
+| `/soleur:review` | Run comprehensive code review with specialized agents |
+| `/soleur:compound` | Capture learnings to make future work easier |
+
+### Installation
+
+```bash
+claude plugin install soleur
+```
+
+See **[full documentation and component reference](./plugins/soleur/README.md)** for details on all 27 agents, 20 commands, and 14 skills.
 
 ## Credits
 
-This work has been initially using the following claude code plugin https://github.com/EveryInc/compound-engineering-plugin as a starting point.
+This work has been initially using the following Claude Code plugin as a starting point: https://github.com/EveryInc/compound-engineering-plugin
