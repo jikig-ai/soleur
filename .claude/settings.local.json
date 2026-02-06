@@ -13,8 +13,12 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git push:*)",
-      "Bash(gh pr create --title \"feat\\(sync\\): Add fuzzy deduplication for /sync command\" --body \"$\\(cat <<''EOF''\n## Summary\n\nCloses #12\n\nAdd near-duplicate detection to the `/sync` command using word-based Jaccard similarity. When a new finding is similar to an existing entry, prompts the user to skip it.\n\n### Changes\n\n- **sync.md**: Added Phase 2.1 \\(Load Existing Entries\\) and 2.2 \\(Fuzzy Dedup Check\\)\n- **plugin.json**: Version bump to 1.5.0\n- **CHANGELOG.md**: Added 1.5.0 entry\n\n### Key Design Decisions\n\nPer reviewer feedback \\(DHH, Kieran, Simplicity\\):\n- **Jaccard only** - No embeddings \\(Claude lacks embed endpoint, string similarity catches 90%+ of real duplicates\\)\n- **Inline in sync.md** - No new files or skill directory\n- **Hardcoded 0.8 threshold** - No CLI flags for v1\n- **Pairwise comparison** - No clustering or merge UX\n\n### How It Works\n\n1. Load existing entries \\(constitution rules + learnings\\)\n2. For each new finding, compute Jaccard similarity against all existing\n3. If similarity > 0.8: prompt \"Skip this duplicate?\" with Skip/Keep options\n4. If Skip: continue to next finding\n5. If Keep: proceed to standard Accept/Skip/Edit\n\n### Testing\n\n- Manual testing recommended with knowledge-base containing similar rules\n- No unit tests \\(this is a markdown instruction file, not TypeScript\\)\n\n---\n\n[![With love by Soleur]\\(https://img.shields.io/badge/With_love-by_Soleur-6366f1\\)]\\(https://github.com/jikig-ai/soleur\\)\nEOF\n\\)\")",
-      "Bash(git rev-parse:*)"
+      "Bash(git rev-parse:*)",
+      "Skill(soleur:compound)",
+      "Bash(find:*)",
+      "Bash(git log:*)",
+      "Bash(cat:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfix\\(settings\\): Clean up local settings permissions\n\nRemove accidentally committed specific gh pr create command with\nembedded PR body. Replace with general utility permissions.\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
     ]
   },
   "hooks": {
