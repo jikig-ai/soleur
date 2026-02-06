@@ -1,0 +1,287 @@
+---
+name: soleur:sync
+description: Analyze codebase and populate knowledge-base with conventions, patterns, and technical debt
+argument-hint: "[area: conventions|architecture|testing|debt|all]"
+---
+
+# Sync Codebase to Knowledge Base
+
+Analyze an existing codebase and populate knowledge-base files with coding conventions, architecture decisions, testing practices, and technical debt markers.
+
+**Use this command when:**
+
+- Adopting Soleur on an existing project (initial bootstrap)
+- Periodically updating knowledge-base as codebase evolves (maintenance)
+
+## Input
+
+<sync_area> #$ARGUMENTS </sync_area>
+
+**Valid areas:** `conventions`, `architecture`, `testing`, `debt`, `all` (default)
+
+## Execution Flow
+
+### Phase 0: Setup
+
+**Validate knowledge-base directory exists:**
+
+```bash
+if [[ ! -d "knowledge-base" ]]; then
+  mkdir -p knowledge-base/{learnings,brainstorms,specs,plans}
+  echo "Created knowledge-base/ directory structure"
+fi
+```
+
+If `knowledge-base/` does not exist, create it with standard subdirectories.
+
+**Validate git repository:**
+
+```bash
+if [[ ! -d ".git" ]]; then
+  echo "Warning: Not a git repository. Some analysis features may be limited."
+fi
+```
+
+Warn but continue if not a git repo.
+
+### Phase 1: Analyze
+
+Based on the area specified (or `all` if none):
+
+**1.1 Parse Area Filter**
+
+If `<sync_area>` is empty or `all`, analyze all areas. Otherwise, analyze only the specified area.
+
+**1.2 Codebase Analysis**
+
+For each selected area, analyze the codebase:
+
+#### Conventions Analysis
+
+Look for coding conventions by examining:
+
+- **Naming patterns**: Variable naming (camelCase, snake_case), file naming, class naming
+- **Code style**: Indentation, bracket style, import ordering
+- **Linting config**: `.eslintrc`, `.rubocop.yml`, `pyproject.toml`, etc.
+- **Common patterns**: Guard clauses, early returns, error handling style
+
+Extract as constitution.md rules in Always/Never/Prefer format.
+
+#### Architecture Analysis
+
+Look for architecture patterns by examining:
+
+- **Directory structure**: Layer organization (models, services, controllers)
+- **Module boundaries**: How code is organized into modules/packages
+- **Dependency patterns**: Import relationships, service dependencies
+- **Design patterns**: Repository pattern, service objects, etc.
+
+Extract as learnings in `learnings/architecture/` with YAML frontmatter.
+
+#### Testing Analysis
+
+Look for testing practices by examining:
+
+- **Test file patterns**: Where tests live, naming conventions
+- **Test frameworks**: What testing tools are used
+- **Fixture/factory patterns**: How test data is managed
+- **Coverage config**: What coverage tools and thresholds are configured
+
+Extract as constitution.md rules (Testing section).
+
+#### Technical Debt Analysis
+
+Look for technical debt by examining:
+
+- **TODO/FIXME comments**: Grep for TODO, FIXME, HACK, XXX
+- **Complexity hotspots**: Large files, deeply nested code
+- **Outdated dependencies**: Package versions, deprecation warnings
+- **Code smells**: Duplicate code patterns, long methods
+
+Extract as learnings in `learnings/technical-debt/` with severity tags.
+
+**1.3 Assign Confidence Scores**
+
+For each finding, assign confidence:
+
+- **high**: Clear, explicit pattern (linting rule, documented convention)
+- **medium**: Consistent but implicit pattern (80%+ of files follow it)
+- **low**: Possible pattern (some evidence but not conclusive)
+
+**1.4 Limit Findings**
+
+Present only the top 20 findings by confidence. If more exist, inform user: "Found N findings. Showing top 20 by confidence. Run `/sync` again to discover more."
+
+### Phase 2: Review
+
+**2.1 Check for Existing Entries (Idempotency)**
+
+Before presenting each finding, check if an identical entry already exists:
+
+- For constitution.md: Check if exact rule text exists in target section
+- For learnings/: Check if file with same title exists
+
+If duplicate found, skip silently. Track count for summary.
+
+**2.2 Sequential Review**
+
+Present findings one at a time using the **AskUserQuestion tool**:
+
+**Format:**
+
+```text
+## Sync Review (1/N)
+
+**Finding:** [type] [description]
+**Target:** [constitution.md > Section > Subsection] or [learnings/category/filename.md]
+**Confidence:** [high/medium/low]
+```
+
+**Options:**
+
+1. **Accept** - Add this to knowledge-base
+2. **Skip** - Don't add this finding
+3. **Edit** - Modify the finding before accepting
+
+**If user selects Edit:**
+
+Use AskUserQuestion with a text input option to let user modify the finding text. Then present the modified version for final approval.
+
+**Continue until all findings reviewed or user selects "Done reviewing".**
+
+### Phase 3: Write
+
+**3.1 Write Constitution Entries**
+
+For accepted constitution findings:
+
+1. Read current `knowledge-base/constitution.md`
+2. Find the target section (Code Style, Architecture, Testing, etc.)
+3. Find the subsection (Always, Never, Prefer)
+4. Append the new rule as a bullet point: `- [Rule text]`
+5. Write updated file
+
+**Format:**
+
+```markdown
+## Code Style
+
+### Prefer
+
+- Prefer early returns over nested conditionals
+- [NEW] Prefer snake_case for local variables
+```
+
+**3.2 Write Learnings Entries**
+
+For accepted learnings findings:
+
+1. Create new file in appropriate category: `learnings/[category]/[kebab-case-title].md`
+2. Use compound-docs YAML schema with `problem_type: best_practice`
+
+**Template:**
+
+```yaml
+---
+module: [Extracted module name or "General"]
+date: [TODAY]
+problem_type: best_practice
+component: [Mapped component type]
+tags: [relevant, tags]
+severity: [info|low|medium|high]
+---
+
+# [Finding Title]
+
+## Context
+
+[Why this pattern exists or was chosen]
+
+## Pattern
+
+[Description of the pattern or convention]
+
+## Examples
+
+[Code examples if applicable]
+```
+
+**3.3 Generate Summary**
+
+After writing, display summary:
+
+```text
+## Sync Complete
+
+**Created:** N new entries
+**Skipped:** M duplicates (already in knowledge-base)
+**User skipped:** P findings
+
+### New Constitution Rules
+- [Rule 1] (Code Style > Prefer)
+- [Rule 2] (Testing > Always)
+
+### New Learnings
+- learnings/architecture/service-layer-pattern.md
+- learnings/technical-debt/legacy-api-endpoints.md
+
+Run `/sync` again to discover additional patterns.
+```
+
+## Output Locations
+
+| Finding Type | Destination |
+| ------------ | ----------- |
+| Coding conventions | `knowledge-base/constitution.md` |
+| Architecture decisions | `knowledge-base/learnings/architecture/` |
+| Testing practices | `knowledge-base/constitution.md` (Testing section) |
+| Technical debt | `knowledge-base/learnings/technical-debt/` |
+
+## Design Decisions
+
+### Single Command, No Separate Agents
+
+Analysis happens inline in this command rather than spawning separate agents. This keeps the implementation simple and debuggable.
+
+### Sequential Review
+
+Each finding is reviewed one at a time with y/n/edit options. This is familiar UX with no custom query syntax to learn.
+
+### Exact Match Deduplication
+
+If an identical entry exists, skip silently. Users can recognize near-duplicates during review and skip manually.
+
+### Existing Learnings Schema
+
+Uses the `compound-docs` YAML schema with `problem_type: best_practice` for non-problem learnings. This ensures compatibility with existing learnings tooling.
+
+## Examples
+
+**Bootstrap entire knowledge-base:**
+
+```bash
+/sync all
+# or just
+/sync
+```
+
+**Sync only coding conventions:**
+
+```bash
+/sync conventions
+```
+
+**Sync only technical debt:**
+
+```bash
+/sync debt
+```
+
+## Limitations (v1)
+
+- No PR analysis (requires GitHub token - deferred to v2)
+- No fuzzy deduplication (exact match only)
+- No sampling for large codebases (analyze what fits)
+- No parallel agent execution (single-pass analysis)
+
+Run `/sync` multiple times to discover more patterns as the codebase evolves.
