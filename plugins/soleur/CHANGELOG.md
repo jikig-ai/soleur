@@ -5,6 +5,16 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-02-06
+
+### Added
+
+- Fuzzy deduplication for `/sync` command (GitHub issue #12)
+  - Detects near-duplicate findings using word-based Jaccard similarity
+  - Prompts user to skip when similarity > 0.8 threshold
+  - Loads existing constitution rules and learnings for comparison
+  - Two-stage deduplication: exact match (silent skip) + fuzzy match (user prompt)
+
 ## [1.4.2] - 2026-02-06
 
 ### Fixed
