@@ -5,6 +5,16 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.2] - 2026-02-06
+
+### Fixed
+
+- `soleur:brainstorm` now detects existing GitHub issue references and skips duplicate creation
+  - Parses feature description for `#N` patterns
+  - Validates issue state (OPEN/CLOSED/NOT FOUND) before deciding
+  - Updates existing issue body with artifact links instead of creating new
+  - Shows "Using existing issue: #N" in output summary
+
 ## [1.4.1] - 2026-02-06
 
 ### Fixed

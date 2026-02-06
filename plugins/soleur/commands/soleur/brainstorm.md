@@ -115,7 +115,36 @@ Ensure the brainstorms directory exists before writing.
 
 **If worktree was created:**
 
-1. **Create GitHub issue** for tracking:
+1. **Check for existing issue reference in feature_description:**
+   ```bash
+   # Parse for issue patterns: #N (first occurrence)
+   existing_issue=$(echo "<feature_description>" | grep -oE '#[0-9]+' | head -1 | tr -d '#')
+   ```
+
+   **If issue reference found**, validate and handle by state:
+
+   ```bash
+   if [[ -n "$existing_issue" ]]; then
+     issue_state=$(gh issue view "$existing_issue" --json state --jq .state 2>/dev/null)
+
+     if [[ "$issue_state" == "OPEN" ]]; then
+       # Use existing issue - skip creation, proceed to step 3
+       echo "Using existing issue: #$existing_issue"
+     elif [[ "$issue_state" == "CLOSED" ]]; then
+       # Warn and create new issue with reference
+       echo "Warning: Issue #$existing_issue is closed."
+       echo "Creating new issue with reference to closed one."
+       # Proceed to step 2, include "Replaces closed #$existing_issue" in body
+     else
+       # Issue not found - prompt user
+       echo "Warning: Issue #$existing_issue not found."
+       # Use AskUserQuestion: "Create new issue anyway?"
+       # If yes, proceed to step 2. If no, abort.
+     fi
+   fi
+   ```
+
+2. **Create GitHub issue** (only if no valid existing issue):
    ```bash
    gh issue create --title "feat: <Feature Title>" --body "..."
    ```
@@ -125,23 +154,40 @@ Ensure the brainstorms directory exists before writing.
    - Link to spec file
    - Branch name (`feat-<name>`)
    - Acceptance criteria (from brainstorm decisions)
+   - If replacing closed issue: "Replaces closed #$existing_issue"
 
-2. **Generate spec.md** using `spec-templates` skill template:
+3. **Update existing issue with artifact links** (if using existing issue):
+   ```bash
+   existing_body=$(gh issue view "$existing_issue" --json body --jq .body)
+   new_body="${existing_body}
+
+   ---
+   ## Artifacts
+   - Brainstorm: \`knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md\`
+   - Spec: \`knowledge-base/specs/feat-<name>/spec.md\`
+   - Branch: \`feat-<name>\`
+   "
+   gh issue edit "$existing_issue" --body "$new_body"
+   ```
+
+4. **Generate spec.md** using `spec-templates` skill template:
    - Fill in Problem Statement from brainstorm
    - Fill in Goals from brainstorm decisions
    - Fill in Non-Goals from what was explicitly excluded
    - Add Functional Requirements (FR1, FR2...) from key features
    - Add Technical Requirements (TR1, TR2...) from constraints
 
-3. **Save spec.md** to worktree: `${WORKTREE_PATH}/knowledge-base/specs/feat-<name>/spec.md`
+5. **Save spec.md** to worktree: `${WORKTREE_PATH}/knowledge-base/specs/feat-<name>/spec.md`
 
-4. **Switch to worktree:**
+6. **Switch to worktree:**
    ```bash
    cd .worktrees/feat-<name>
    ```
    **IMPORTANT:** All subsequent work for this feature should happen in the worktree, not the main repository. Announce the switch clearly to the user.
 
-5. **Announce:** "Spec saved. GitHub issue #N created. **Now working in worktree:** `.worktrees/feat-<name>`. Run `/soleur:plan` to create tasks."
+7. **Announce:**
+   - If using existing issue: "Spec saved. **Using existing issue: #N.** Now working in worktree: `.worktrees/feat-<name>`. Run `/soleur:plan` to create tasks."
+   - If created new issue: "Spec saved. GitHub issue #N created. **Now working in worktree:** `.worktrees/feat-<name>`. Run `/soleur:plan` to create tasks."
 
 **If knowledge-base/ does NOT exist:**
 - Brainstorm saved to `knowledge-base/brainstorms/` only (no worktree)
@@ -167,7 +213,7 @@ Brainstorm complete!
 
 Document: knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md
 Spec: knowledge-base/specs/feat-<name>/spec.md
-Issue: #N (if created)
+Issue: #N (using existing) | #N (created) | none
 Branch: feat-<name> (if worktree created)
 Working directory: .worktrees/feat-<name>/ (if worktree created)
 
@@ -177,6 +223,11 @@ Key decisions:
 
 Next: Run `/soleur:plan` when ready to implement.
 ```
+
+**Issue line format:**
+- `#N (using existing)` - When brainstorm started with an existing issue reference
+- `#N (created)` - When a new issue was created
+- `none` - When no worktree/issue was created
 
 ## Important Guidelines
 
