@@ -371,11 +371,12 @@ cleanup_merged_worktrees() {
     fi
 
     # Skip if worktree has uncommitted changes (safety check)
+    # Always print this warning since uncommitted changes need user attention
     if [[ -d "$worktree_path" ]]; then
       local status
       status=$(git -C "$worktree_path" status --porcelain 2>/dev/null)
       if [[ -n "$status" ]]; then
-        [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) $branch - has uncommitted changes${NC}"
+        echo -e "${YELLOW}(skip) $branch - has uncommitted changes${NC}"
         continue
       fi
     fi
@@ -400,9 +401,10 @@ cleanup_merged_worktrees() {
       fi
     fi
 
-    # Delete branch (safe delete - won't delete if has unmerged commits)
-    if ! git branch -d "$branch" 2>/dev/null; then
-      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not delete branch $branch (may have unmerged commits)${NC}"
+    # Delete branch - force delete since [gone] means remote was deleted (PR merged or intentionally deleted)
+    # Using -D because local main may be behind, causing -d to fail even for merged branches
+    if ! git branch -D "$branch" 2>/dev/null; then
+      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not delete branch $branch${NC}"
     fi
 
     cleaned+=("$branch")
