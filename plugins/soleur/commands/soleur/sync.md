@@ -114,18 +114,65 @@ Present only the top 20 findings by confidence. If more exist, inform user: "Fou
 
 ### Phase 2: Review
 
-**2.1 Check for Existing Entries (Idempotency)**
+**2.1 Load Existing Entries**
 
-Before presenting each finding, check if an identical entry already exists:
+Before reviewing findings, load existing knowledge-base content for deduplication:
+
+- **Constitution rules:** Parse `knowledge-base/constitution.md` and extract all bullet points under Always/Never/Prefer sections
+- **Learnings:** List files in `knowledge-base/learnings/` and extract titles from YAML frontmatter or first heading
+
+Store as a list of existing entry texts for comparison.
+
+**2.2 Check for Duplicates (Exact and Fuzzy)**
+
+For each finding, check for duplicates:
+
+**Exact match check:**
 
 - For constitution.md: Check if exact rule text exists in target section
 - For learnings/: Check if file with same title exists
+- If exact duplicate found, skip silently. Track count for summary.
 
-If duplicate found, skip silently. Track count for summary.
+**Fuzzy match check (Jaccard similarity):**
 
-**2.2 Sequential Review**
+Compute word-based Jaccard similarity between the finding and all existing entries:
 
-Present findings one at a time using the **AskUserQuestion tool**:
+```
+Jaccard(a, b) = |intersection(words_a, words_b)| / |union(words_a, words_b)|
+
+Where:
+- words_a = lowercase words from text a (split by whitespace)
+- words_b = lowercase words from text b (split by whitespace)
+```
+
+Find the existing entry with highest similarity score.
+
+**If max similarity > 0.8:**
+
+Use **AskUserQuestion** to prompt user:
+
+```text
+## Similar Entry Found
+
+**New finding:**
+[finding text]
+
+**Similar to existing:**
+[existing entry text]
+
+**Similarity:** [score as percentage]%
+```
+
+**Options:**
+
+1. **Skip** - Don't add this finding (likely a duplicate)
+2. **Keep** - Proceed to review this finding anyway
+
+If user selects **Skip**, continue to next finding. If user selects **Keep**, proceed to normal Accept/Skip/Edit review.
+
+**2.3 Sequential Review** (for findings that pass deduplication checks)
+
+Present remaining findings one at a time using the **AskUserQuestion tool**:
 
 **Format:**
 
@@ -214,8 +261,9 @@ After writing, display summary:
 ## Sync Complete
 
 **Created:** N new entries
-**Skipped:** M duplicates (already in knowledge-base)
-**User skipped:** P findings
+**Skipped:** M exact duplicates (already in knowledge-base)
+**Fuzzy duplicates:** F similar entries (user chose to skip)
+**User skipped:** P findings (during review)
 
 ### New Constitution Rules
 - [Rule 1] (Code Style > Prefer)
@@ -247,9 +295,11 @@ Analysis happens inline in this command rather than spawning separate agents. Th
 
 Each finding is reviewed one at a time with y/n/edit options. This is familiar UX with no custom query syntax to learn.
 
-### Exact Match Deduplication
+### Two-Stage Deduplication
 
-If an identical entry exists, skip silently. Users can recognize near-duplicates during review and skip manually.
+**Stage 1 (Exact match):** If an identical entry exists, skip silently.
+
+**Stage 2 (Fuzzy match):** If a similar entry exists (Jaccard similarity > 0.8), prompt user to skip or keep. Word-based Jaccard coefficient catches textual variations like "use const" vs "always use const" without external dependencies.
 
 ### Existing Learnings Schema
 
@@ -280,7 +330,7 @@ Uses the `compound-docs` YAML schema with `problem_type: best_practice` for non-
 ## Limitations (v1)
 
 - No PR analysis (requires GitHub token - deferred to v2)
-- No fuzzy deduplication (exact match only)
+- No semantic similarity (word-based Jaccard only - embeddings deferred)
 - No sampling for large codebases (analyze what fits)
 - No parallel agent execution (single-pass analysis)
 
