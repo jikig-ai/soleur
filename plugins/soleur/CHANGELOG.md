@@ -5,6 +5,20 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-02-06
+
+### Added
+
+- Project overview documentation system in `knowledge-base/overview/`
+  - `README.md` with project purpose, architecture diagram, and component index
+  - Component documentation files in `overview/components/` (agents, commands, skills, knowledge-base)
+  - Component template added to `spec-templates` skill
+- `overview` area for `/sync` command to generate/update project documentation
+  - Component detection heuristics based on architectural boundaries
+  - Preservation of user customizations via frontmatter
+  - Review phase with Accept/Skip/Edit for each component
+- Constitution conventions for overview vs constitution.md separation
+
 ## [1.3.0] - 2026-02-06
 
 ### Added

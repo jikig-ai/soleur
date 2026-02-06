@@ -154,7 +154,7 @@ Core workflow commands use `soleur:` prefix to avoid collisions with built-in co
 | `/soleur:brainstorm` | Explore requirements and approaches before planning |
 | `/soleur:plan` | Create implementation plans |
 | `/soleur:review` | Run comprehensive code reviews |
-| `/soleur:sync` | Analyze codebase and populate knowledge-base with conventions |
+| `/soleur:sync` | Analyze codebase and populate knowledge-base with conventions, patterns, and overview documentation |
 | `/soleur:work` | Execute work items systematically |
 | `/soleur:compound` | Document solved problems to compound team knowledge |
 
