@@ -1,6 +1,80 @@
-# Compounding Engineering Plugin
+# Soleur - Compounding Engineering Plugin
 
 AI-powered development tools that get smarter with every use. Make each unit of engineering work easier than the last.
+
+## Quick Start
+
+Install the plugin:
+
+```bash
+claude plugin install soleur
+```
+
+## The Soleur Workflow
+
+Soleur provides a structured workflow for feature development. Use these commands in order:
+
+```
+/soleur:brainstorm  -->  /soleur:plan  -->  /soleur:work  -->  /soleur:review  -->  /soleur:compound
+```
+
+### 1. Brainstorm (`/soleur:brainstorm`)
+
+Start here when you have a feature idea but need to explore it further. This command helps you:
+- Clarify what you're building through guided questions
+- Explore different approaches with pros/cons
+- Make key decisions before coding
+- Document the design in `knowledge-base/brainstorms/`
+
+**When to use:** New features, unclear requirements, multiple valid approaches.
+
+**Example:** `/soleur:brainstorm Add user authentication to the app`
+
+### 2. Plan (`/soleur:plan`)
+
+Once you know what to build, create an implementation plan. This command:
+- Analyzes your codebase for relevant patterns
+- Breaks the work into specific, actionable tasks
+- Creates a structured plan document
+- Optionally runs parallel research agents for deeper analysis
+
+**When to use:** After brainstorming, or when requirements are already clear.
+
+**Example:** `/soleur:plan` (auto-detects recent brainstorm) or `/soleur:plan path/to/spec.md`
+
+### 3. Work (`/soleur:work`)
+
+Execute the plan systematically. This command:
+- Reads your plan and sets up the environment
+- Tracks progress with TodoWrite
+- Makes incremental commits as logical units complete
+- Follows existing codebase patterns
+
+**When to use:** When you have a plan ready to execute.
+
+**Example:** `/soleur:work path/to/plan.md`
+
+### 4. Review (`/soleur:review`)
+
+Run comprehensive code review before creating a PR. This command:
+- Launches multiple specialized review agents in parallel
+- Checks for security, performance, patterns, and simplicity
+- Provides actionable feedback on your changes
+
+**When to use:** After completing implementation, before creating PR.
+
+**Example:** `/soleur:review`
+
+### 5. Compound (`/soleur:compound`)
+
+Capture learnings from your work. This command:
+- Documents debugging breakthroughs and non-obvious patterns
+- Saves knowledge to `knowledge-base/learnings/`
+- Makes future similar problems easier to solve
+
+**When to use:** Before creating PR, especially if you solved tricky problems.
+
+**Example:** `/soleur:compound` (or just say "that worked!" and it triggers automatically)
 
 ## Components
 
@@ -187,7 +261,7 @@ The `agent-browser` skill provides comprehensive documentation on usage.
 ## Installation
 
 ```bash
-claude /plugin install compound-engineering
+claude plugin install soleur
 ```
 
 ## Known Issues
