@@ -18,6 +18,36 @@ This command takes a work document (plan, specification, or todo file) and execu
 
 ## Execution Workflow
 
+### Phase 0: Load Knowledge Base Context (if exists)
+
+**Check for knowledge-base directory and load context:**
+
+```bash
+if [[ -d "knowledge-base" ]]; then
+  # Load constitution for implementation guidance
+  cat knowledge-base/constitution.md
+
+  # Detect feature from current branch
+  current_branch=$(git branch --show-current)
+  if [[ "$current_branch" == feat-* ]]; then
+    feature_name="$current_branch"
+    # Load tasks if they exist
+    if [[ -f "knowledge-base/specs/$feature_name/tasks.md" ]]; then
+      cat "knowledge-base/specs/$feature_name/tasks.md"
+    fi
+  fi
+fi
+```
+
+**If knowledge-base/ exists:**
+1. Read `knowledge-base/constitution.md` - apply principles during implementation
+2. Detect feature from current branch (`feat-<name>` pattern)
+3. Read `knowledge-base/specs/feat-<name>/tasks.md` if it exists - use as work checklist alongside TodoWrite
+4. Announce: "Loaded constitution and tasks for `feat-<name>`"
+
+**If knowledge-base/ does NOT exist:**
+- Continue with standard work flow (use input document only)
+
 ### Phase 1: Quick Start
 
 1. **Read Plan and Clarify**

@@ -78,6 +78,42 @@ Write a brainstorm document to `docs/brainstorms/YYYY-MM-DD-<topic>-brainstorm.m
 
 Ensure `docs/brainstorms/` directory exists before writing.
 
+### Phase 3.5: Create Spec (if knowledge-base/ exists)
+
+**Check for knowledge-base directory:**
+
+```bash
+if [[ -d "knowledge-base" ]]; then
+  # knowledge-base exists, create spec
+fi
+```
+
+**If knowledge-base/ exists:**
+
+1. **Get feature name** from user or derive from brainstorm topic (kebab-case)
+2. **Create worktree + spec directory:**
+   ```bash
+   ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh feature <name>
+   ```
+   This creates:
+   - `.worktrees/feat-<name>/` (worktree)
+   - `knowledge-base/specs/feat-<name>/` (spec directory)
+
+3. **Generate spec.md** using `spec-templates` skill template:
+   - Fill in Problem Statement from brainstorm
+   - Fill in Goals from brainstorm decisions
+   - Fill in Non-Goals from what was explicitly excluded
+   - Add Functional Requirements (FR1, FR2...) from key features
+   - Add Technical Requirements (TR1, TR2...) from constraints
+
+4. **Save spec.md** to `knowledge-base/specs/feat-<name>/spec.md`
+
+5. **Announce:** "Spec saved to `knowledge-base/specs/feat-<name>/spec.md`. Run `/soleur:plan` to create tasks."
+
+**If knowledge-base/ does NOT exist:**
+- Continue as current (brainstorm saved to `docs/brainstorms/` only)
+- No worktree or spec created
+
 ### Phase 4: Handoff
 
 Use **AskUserQuestion tool** to present next steps:
