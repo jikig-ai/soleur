@@ -122,6 +122,61 @@ create_worktree() {
   echo ""
 }
 
+# Create a worktree for a feature with spec directory
+# Simplified version: no prompts, just creates everything
+create_for_feature() {
+  local name="$1"
+  local from_branch="${2:-main}"
+
+  if [[ -z "$name" ]]; then
+    echo -e "${RED}Error: Feature name required${NC}"
+    echo "Usage: worktree-manager.sh feature <name> [from-branch]"
+    exit 1
+  fi
+
+  local branch_name="feat-$name"
+  local worktree_path="$WORKTREE_DIR/$branch_name"
+  local spec_dir="$GIT_ROOT/knowledge-base/specs/$branch_name"
+
+  # Check if worktree already exists
+  if [[ -d "$worktree_path" ]]; then
+    echo -e "${YELLOW}Worktree already exists: $worktree_path${NC}"
+    echo -e "${BLUE}Spec directory: $spec_dir${NC}"
+    return 0
+  fi
+
+  echo -e "${BLUE}Creating feature: $name${NC}"
+  echo "  Branch: $branch_name"
+  echo "  Worktree: $worktree_path"
+  echo "  Spec dir: $spec_dir"
+  echo ""
+
+  # Ensure directories exist
+  mkdir -p "$WORKTREE_DIR"
+  ensure_gitignore
+
+  # Create worktree with new branch
+  echo -e "${BLUE}Creating worktree...${NC}"
+  git worktree add -b "$branch_name" "$worktree_path" "$from_branch"
+
+  # Create spec directory in main repo (shared across worktrees)
+  if [[ -d "$GIT_ROOT/knowledge-base" ]]; then
+    mkdir -p "$spec_dir"
+    echo -e "${GREEN}Created spec directory: $spec_dir${NC}"
+  fi
+
+  # Copy environment files
+  copy_env_files "$worktree_path"
+
+  echo ""
+  echo -e "${GREEN}Feature setup complete!${NC}"
+  echo ""
+  echo "Next steps:"
+  echo -e "  1. ${BLUE}cd $worktree_path${NC}"
+  echo -e "  2. Create spec: ${BLUE}knowledge-base/specs/$branch_name/spec.md${NC}"
+  echo ""
+}
+
 # List all worktrees
 list_worktrees() {
   echo -e "${BLUE}Available worktrees:${NC}"
@@ -283,6 +338,9 @@ main() {
     create)
       create_worktree "$2" "$3"
       ;;
+    feature|feat)
+      create_for_feature "$2" "$3"
+      ;;
     list|ls)
       list_worktrees
       ;;
@@ -316,6 +374,8 @@ Usage: worktree-manager.sh <command> [options]
 Commands:
   create <branch-name> [from-branch]  Create new worktree (copies .env files automatically)
                                       (from-branch defaults to main)
+  feature | feat <name> [from-branch] Create worktree for feature with spec directory
+                                      (creates feat-<name> branch + knowledge-base/specs/feat-<name>/)
   list | ls                           List all worktrees
   switch | go [name]                  Switch to worktree
   copy-env | env [name]               Copy .env files from main repo to worktree
@@ -330,6 +390,7 @@ Environment Files:
   - Use 'copy-env' to refresh env files after main repo changes
 
 Examples:
+  worktree-manager.sh feature user-auth        # Creates feat-user-auth branch + spec dir
   worktree-manager.sh create feature-login
   worktree-manager.sh create feature-auth develop
   worktree-manager.sh switch feature-login
