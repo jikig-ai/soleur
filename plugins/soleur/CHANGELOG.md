@@ -5,6 +5,16 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-02-06
+
+### Added
+
+- `soleur:sync` command for analyzing existing codebases and populating knowledge-base
+  - Analyzes coding conventions, architecture patterns, testing practices, and technical debt
+  - Sequential review with approve/skip/edit per finding
+  - Idempotent operation (exact match deduplication)
+  - Supports area filtering: `/sync conventions`, `/sync architecture`, `/sync testing`, `/sync debt`, `/sync all`
+
 ## [1.2.0] - 2026-02-06
 
 ### Added
