@@ -28,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Project overview documentation system in `knowledge-base/overview/`
+  - `README.md` with project purpose, architecture diagram, and component index
+  - Component documentation files in `overview/components/` (agents, commands, skills, knowledge-base)
+  - Component template added to `spec-templates` skill
+- `overview` area for `/sync` command to generate/update project documentation
+  - Component detection heuristics based on architectural boundaries
+  - Preservation of user customizations via frontmatter
+  - Review phase with Accept/Skip/Edit for each component
+- Constitution conventions for overview vs constitution.md separation
 - `cleanup-merged` command in git-worktree skill for automatic worktree cleanup after PR merge
   - Detects merged branches via git's `[gone]` status using `git for-each-ref`
   - Archives spec directories to `knowledge-base/specs/archive/YYYY-MM-DD-HHMMSS-<name>/`

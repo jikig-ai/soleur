@@ -1,7 +1,7 @@
 ---
 name: soleur:sync
 description: Analyze codebase and populate knowledge-base with conventions, patterns, and technical debt
-argument-hint: "[area: conventions|architecture|testing|debt|all]"
+argument-hint: "[area: conventions|architecture|testing|debt|overview|all]"
 ---
 
 # Sync Codebase to Knowledge Base
@@ -17,7 +17,7 @@ Analyze an existing codebase and populate knowledge-base files with coding conve
 
 <sync_area> #$ARGUMENTS </sync_area>
 
-**Valid areas:** `conventions`, `architecture`, `testing`, `debt`, `all` (default)
+**Valid areas:** `conventions`, `architecture`, `testing`, `debt`, `overview`, `all` (default)
 
 ## Execution Flow
 
@@ -27,7 +27,7 @@ Analyze an existing codebase and populate knowledge-base files with coding conve
 
 ```bash
 if [[ ! -d "knowledge-base" ]]; then
-  mkdir -p knowledge-base/{learnings,brainstorms,specs,plans}
+  mkdir -p knowledge-base/{learnings,brainstorms,specs,plans,overview/components}
   echo "Created knowledge-base/ directory structure"
 fi
 ```
@@ -99,6 +99,34 @@ Look for technical debt by examining:
 - **Code smells**: Duplicate code patterns, long methods
 
 Extract as learnings in `learnings/technical-debt/` with severity tags.
+
+#### Overview Analysis
+
+Generate or update project overview documentation by examining:
+
+- **Project structure**: Top-level directories, entry points, main components
+- **Component boundaries**: Logical groupings of related code (not just directories)
+- **Data flow**: How information moves between components
+- **Dependencies**: Internal and external dependencies per component
+
+**Component Detection Heuristics:**
+
+1. Top-level directories under primary source path (e.g., `src/`, `plugins/`, `lib/`)
+2. Directories containing index files or multiple related modules
+3. Exclude: `tests/`, `dist/`, `node_modules/`, generated code
+
+**Output:**
+
+- `knowledge-base/overview/README.md` - Project purpose, architecture diagram, component index
+- `knowledge-base/overview/components/<name>.md` - One file per detected component
+
+**Component Template:** Use the template from the `spec-templates` skill.
+
+**Update Behavior:**
+
+- **New components**: Create new `.md` file from template
+- **Existing components**: Check if `updated` date is current; if not, offer to refresh
+- **Removed components**: Add `status: deprecated` to frontmatter (do not delete)
 
 **1.3 Assign Confidence Scores**
 
@@ -236,6 +264,8 @@ Run `/sync` again to discover additional patterns.
 | Architecture decisions | `knowledge-base/learnings/architecture/` |
 | Testing practices | `knowledge-base/constitution.md` (Testing section) |
 | Technical debt | `knowledge-base/learnings/technical-debt/` |
+| Project overview | `knowledge-base/overview/README.md` |
+| Component docs | `knowledge-base/overview/components/` |
 
 ## Design Decisions
 
@@ -275,6 +305,12 @@ Uses the `compound-docs` YAML schema with `problem_type: best_practice` for non-
 
 ```bash
 /sync debt
+```
+
+**Sync project overview:**
+
+```bash
+/sync overview
 ```
 
 ## Limitations (v1)
