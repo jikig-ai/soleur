@@ -67,8 +67,11 @@ Every problem you solve makes the next one easier. The plugin captures learnings
 /soleur:brainstorm --> /soleur:plan --> /soleur:work --> /soleur:review --> /soleur:compound
 ```
 
+**For existing codebases:** Run `/soleur:sync` first to populate your knowledge-base with conventions and patterns.
+
 | Command | Purpose |
 | ------- | ------- |
+| `/soleur:sync` | Analyze codebase and populate knowledge-base (run first for existing projects) |
 | `/soleur:brainstorm` | Explore ideas and make design decisions |
 | `/soleur:plan` | Create structured implementation plans |
 | `/soleur:work` | Execute plans systematically with incremental commits |
@@ -81,7 +84,7 @@ Every problem you solve makes the next one easier. The plugin captures learnings
 claude plugin install soleur
 ```
 
-See **[full documentation and component reference](./plugins/soleur/README.md)** for details on all 27 agents, 20 commands, and 14 skills.
+See **[full documentation and component reference](./plugins/soleur/README.md)** for details on all 27 agents, 21 commands, and 14 skills.
 
 ## Contributing
 
