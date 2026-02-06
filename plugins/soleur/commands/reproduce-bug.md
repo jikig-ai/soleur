@@ -28,8 +28,8 @@ If the bug is UI-related or involves user flows, use Playwright to visually repr
 ### Step 1: Verify Server is Running
 
 ```
-mcp__plugin_compound-engineering_pw__browser_navigate({ url: "http://localhost:3000" })
-mcp__plugin_compound-engineering_pw__browser_snapshot({})
+mcp__plugin_soleur_pw__browser_navigate({ url: "http://localhost:3000" })
+mcp__plugin_soleur_pw__browser_snapshot({})
 ```
 
 If server not running, inform user to start `bin/dev`.
@@ -39,8 +39,8 @@ If server not running, inform user to start `bin/dev`.
 Based on the issue description, navigate to the relevant page:
 
 ```
-mcp__plugin_compound-engineering_pw__browser_navigate({ url: "http://localhost:3000/[affected_route]" })
-mcp__plugin_compound-engineering_pw__browser_snapshot({})
+mcp__plugin_soleur_pw__browser_navigate({ url: "http://localhost:3000/[affected_route]" })
+mcp__plugin_soleur_pw__browser_snapshot({})
 ```
 
 ### Step 3: Capture Screenshots
@@ -48,7 +48,7 @@ mcp__plugin_compound-engineering_pw__browser_snapshot({})
 Take screenshots at each step of reproducing the bug:
 
 ```
-mcp__plugin_compound-engineering_pw__browser_take_screenshot({ filename: "bug-[issue]-step-1.png" })
+mcp__plugin_soleur_pw__browser_take_screenshot({ filename: "bug-[issue]-step-1.png" })
 ```
 
 ### Step 4: Follow User Flow
@@ -64,7 +64,7 @@ Reproduce the exact steps from the issue:
 
 3. **Check for console errors:**
    ```
-   mcp__plugin_compound-engineering_pw__browser_console_messages({ level: "error" })
+   mcp__plugin_soleur_pw__browser_console_messages({ level: "error" })
    ```
 
 ### Step 5: Capture Bug State
@@ -76,7 +76,7 @@ When you reproduce the bug:
 3. Document the exact steps that triggered it
 
 ```
-mcp__plugin_compound-engineering_pw__browser_take_screenshot({ filename: "bug-[issue]-reproduced.png" })
+mcp__plugin_soleur_pw__browser_take_screenshot({ filename: "bug-[issue]-reproduced.png" })
 ```
 
 ## Phase 3: Document Findings

@@ -4,7 +4,7 @@ description: Report a bug in the soleur plugin
 argument-hint: "[optional: brief description of the bug]"
 ---
 
-# Report a Compounding Engineering Plugin Bug
+# Report a Soleur Plugin Bug
 
 Report bugs encountered while using the soleur plugin. This command gathers structured information and creates a GitHub issue for the maintainer.
 
