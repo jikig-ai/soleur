@@ -151,6 +151,11 @@ create_for_feature() {
   echo "  Spec dir: $spec_dir"
   echo ""
 
+  # Update base branch before creating worktree
+  echo -e "${BLUE}Updating $from_branch...${NC}"
+  git checkout "$from_branch"
+  git pull origin "$from_branch" || true
+
   # Ensure directories exist
   mkdir -p "$WORKTREE_DIR"
   ensure_gitignore
@@ -330,6 +335,85 @@ cleanup_worktrees() {
   echo -e "${GREEN}Cleanup complete!${NC}"
 }
 
+# Clean up worktrees for merged branches (detects [gone] status)
+cleanup_merged_worktrees() {
+  # Determine output mode: verbose if TTY, quiet otherwise
+  local verbose=false
+  [[ -t 1 ]] && verbose=true
+
+  # Fetch to update remote tracking info
+  local fetch_error
+  if ! fetch_error=$(git fetch --prune 2>&1); then
+    [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not fetch from remote: $fetch_error${NC}"
+    return 0
+  fi
+
+  # Find branches with [gone] tracking (robust detection)
+  local gone_branches
+  gone_branches=$(git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads 2>/dev/null | grep '\[gone\]' | cut -d' ' -f1)
+
+  if [[ -z "$gone_branches" ]]; then
+    [[ "$verbose" == "true" ]] && echo -e "${GREEN}No merged branches to clean up${NC}"
+    return 0
+  fi
+
+  local cleaned=()
+
+  for branch in $gone_branches; do
+    local worktree_path="$WORKTREE_DIR/$branch"
+    local spec_dir="$GIT_ROOT/knowledge-base/specs/$branch"
+    local archive_dir="$GIT_ROOT/knowledge-base/specs/archive"
+
+    # Skip if active worktree
+    if [[ "$PWD" == "$worktree_path"* ]]; then
+      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) $branch - currently active${NC}"
+      continue
+    fi
+
+    # Skip if worktree has uncommitted changes (safety check)
+    if [[ -d "$worktree_path" ]]; then
+      local status
+      status=$(git -C "$worktree_path" status --porcelain 2>/dev/null)
+      if [[ -n "$status" ]]; then
+        [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) $branch - has uncommitted changes${NC}"
+        continue
+      fi
+    fi
+
+    # Archive spec directory if exists (timestamp prevents collisions)
+    if [[ -d "$spec_dir" ]]; then
+      local safe_branch=$(echo "$branch" | tr '/' '-')
+      local archive_name="$(date +%Y-%m-%d-%H%M%S)-$safe_branch"
+      local archive_path="$archive_dir/$archive_name"
+
+      mkdir -p "$archive_dir"
+      if ! mv "$spec_dir" "$archive_path" 2>/dev/null; then
+        [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not archive spec for $branch${NC}"
+      fi
+    fi
+
+    # Remove worktree if exists
+    if [[ -d "$worktree_path" ]]; then
+      if ! git worktree remove "$worktree_path" 2>/dev/null; then
+        [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not remove worktree for $branch${NC}"
+        continue
+      fi
+    fi
+
+    # Delete branch (safe delete - won't delete if has unmerged commits)
+    if ! git branch -d "$branch" 2>/dev/null; then
+      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not delete branch $branch (may have unmerged commits)${NC}"
+    fi
+
+    cleaned+=("$branch")
+  done
+
+  # Output summary
+  if [[ ${#cleaned[@]} -gt 0 ]]; then
+    echo -e "${GREEN}Cleaned ${#cleaned[@]} merged worktree(s): ${cleaned[*]}${NC}"
+  fi
+}
+
 # Main command handler
 main() {
   local command="${1:-list}"
@@ -352,6 +436,9 @@ main() {
       ;;
     cleanup|clean)
       cleanup_worktrees
+      ;;
+    cleanup-merged)
+      cleanup_merged_worktrees
       ;;
     help)
       show_help
@@ -381,6 +468,8 @@ Commands:
   copy-env | env [name]               Copy .env files from main repo to worktree
                                       (if name omitted, uses current worktree)
   cleanup | clean                     Clean up inactive worktrees
+  cleanup-merged                      Clean up worktrees for merged branches
+                                      (detects [gone] branches, archives specs)
   help                                Show this help message
 
 Environment Files:

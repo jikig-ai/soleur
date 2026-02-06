@@ -5,6 +5,25 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.2] - 2026-02-06
+
+### Fixed
+
+- `soleur:brainstorm` now detects existing GitHub issue references and skips duplicate creation
+  - Parses feature description for `#N` patterns
+  - Validates issue state (OPEN/CLOSED/NOT FOUND) before deciding
+  - Updates existing issue body with artifact links instead of creating new
+  - Shows "Using existing issue: #N" in output summary
+
+## [1.4.1] - 2026-02-06
+
+### Fixed
+
+- git-worktree `feature` command now pulls latest from remote before creating worktree
+  - Matches existing behavior in `create_worktree()` for consistency
+  - Prevents feature branches from being based on stale local refs
+  - Uses `|| true` for graceful failure when offline
+
 ## [1.4.0] - 2026-02-06
 
 ### Added
@@ -18,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Preservation of user customizations via frontmatter
   - Review phase with Accept/Skip/Edit for each component
 - Constitution conventions for overview vs constitution.md separation
+- `cleanup-merged` command in git-worktree skill for automatic worktree cleanup after PR merge
+  - Detects merged branches via git's `[gone]` status using `git for-each-ref`
+  - Archives spec directories to `knowledge-base/specs/archive/YYYY-MM-DD-HHMMSS-<name>/`
+  - Removes worktree and deletes local branch (safe delete)
+  - TTY detection: verbose output in terminal, quiet otherwise
+  - Safety checks: skips active worktrees and those with uncommitted changes
+- SessionStart hook to automatically run cleanup on session start
 
 ## [1.3.0] - 2026-02-06
 
