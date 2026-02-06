@@ -40,6 +40,7 @@ Project principles organized by domain. Add principles as you learn them.
 - For user approval flows, present items one at a time with Accept, Skip, and Edit options
 - Start with manual workflows; add automation only when users explicitly request it
 - Commands should check for knowledge-base/ existence and fall back gracefully when not present
+- Run `/soleur:plan_review` before implementing plans with new directories, external APIs, or complex algorithms
 
 ## Testing
 
