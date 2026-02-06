@@ -72,11 +72,11 @@ Use **AskUserQuestion tool** to ask which approach the user prefers.
 
 ### Phase 3: Capture the Design
 
-Write a brainstorm document to `docs/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`.
+Write a brainstorm document to `knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`.
 
 **Document structure:** See the `brainstorming` skill for the template format. Key sections: What We're Building, Why This Approach, Key Decisions, Open Questions.
 
-Ensure `docs/brainstorms/` directory exists before writing.
+Ensure `knowledge-base/brainstorms/` directory exists before writing.
 
 ### Phase 3.5: Create Spec (if knowledge-base/ exists)
 
@@ -99,26 +99,43 @@ fi
    - `.worktrees/feat-<name>/` (worktree)
    - `knowledge-base/specs/feat-<name>/` (spec directory)
 
-3. **Generate spec.md** using `spec-templates` skill template:
+3. **Create GitHub issue** for tracking:
+   ```bash
+   gh issue create --title "feat: <Feature Title>" --body "..."
+   ```
+   Include in the issue body:
+   - Summary of what's being built (from brainstorm)
+   - Link to brainstorm document
+   - Link to spec file
+   - Branch name (`feat-<name>`)
+   - Acceptance criteria (from brainstorm decisions)
+
+4. **Generate spec.md** using `spec-templates` skill template:
    - Fill in Problem Statement from brainstorm
    - Fill in Goals from brainstorm decisions
    - Fill in Non-Goals from what was explicitly excluded
    - Add Functional Requirements (FR1, FR2...) from key features
    - Add Technical Requirements (TR1, TR2...) from constraints
 
-4. **Save spec.md** to `knowledge-base/specs/feat-<name>/spec.md`
+5. **Save spec.md** to `knowledge-base/specs/feat-<name>/spec.md`
 
-5. **Announce:** "Spec saved to `knowledge-base/specs/feat-<name>/spec.md`. Run `/soleur:plan` to create tasks."
+6. **Switch to worktree:**
+   ```bash
+   cd .worktrees/feat-<name>
+   ```
+   **IMPORTANT:** All subsequent work for this feature should happen in the worktree, not the main repository. Announce the switch clearly to the user.
+
+7. **Announce:** "Spec saved. GitHub issue #N created. **Now working in worktree:** `.worktrees/feat-<name>`. Run `/soleur:plan` to create tasks."
 
 **If knowledge-base/ does NOT exist:**
-- Continue as current (brainstorm saved to `docs/brainstorms/` only)
+- Continue as current (brainstorm saved to `knowledge-base/brainstorms/` only)
 - No worktree or spec created
 
 ### Phase 4: Handoff
 
 Use **AskUserQuestion tool** to present next steps:
 
-**Question:** "Brainstorm captured. What would you like to do next?"
+**Question:** "Brainstorm captured. Now in worktree `feat-<name>`. What would you like to do next?"
 
 **Options:**
 1. **Proceed to planning** - Run `/soleur:plan` (will auto-detect this brainstorm)
@@ -132,7 +149,11 @@ When complete, display:
 ```
 Brainstorm complete!
 
-Document: docs/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md
+Document: knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md
+Spec: knowledge-base/specs/feat-<name>/spec.md
+Issue: #N (if created)
+Branch: feat-<name> (if worktree created)
+Working directory: .worktrees/feat-<name>/ (if worktree created)
 
 Key decisions:
 - [Decision 1]

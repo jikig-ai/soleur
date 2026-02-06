@@ -1,6 +1,6 @@
 # Critical Pattern Template
 
-Use this template when adding a pattern to `docs/solutions/patterns/critical-patterns.md`:
+Use this template when adding a pattern to `knowledge-base/learnings/patterns/critical-patterns.md`:
 
 ---
 
@@ -20,7 +20,7 @@ Use this template when adding a pattern to `docs/solutions/patterns/critical-pat
 
 **Placement/Context:** [When this applies]
 
-**Documented in:** `docs/solutions/[category]/[filename].md`
+**Documented in:** `knowledge-base/learnings/[category]/[filename].md`
 
 ---
 

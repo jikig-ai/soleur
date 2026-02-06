@@ -54,10 +54,10 @@ fi
 
 **Check for brainstorm output first:**
 
-Before asking questions, look for recent brainstorm documents in `docs/brainstorms/` that match this feature:
+Before asking questions, look for recent brainstorm documents in `knowledge-base/brainstorms/` that match this feature:
 
 ```bash
-ls -la docs/brainstorms/*.md 2>/dev/null | head -10
+ls -la knowledge-base/brainstorms/*.md 2>/dev/null | head -10
 ```
 
 **Relevance criteria:** A brainstorm is relevant if:
@@ -109,7 +109,7 @@ Run these agents **in parallel** to gather local context:
 
 **What to look for:**
 - **Repo research:** existing patterns, CLAUDE.md guidance, technology familiarity, pattern consistency
-- **Learnings:** documented solutions in `docs/solutions/` that might apply (gotchas, patterns, lessons learned)
+- **Learnings:** documented solutions in `knowledge-base/learnings/` that might apply (gotchas, patterns, lessons learned)
 
 These findings inform the next step.
 
@@ -143,7 +143,7 @@ Run these agents in parallel:
 After all research steps complete, consolidate findings:
 
 - Document relevant file paths from repo research (e.g., `app/services/example_service.rb:42`)
-- **Include relevant institutional learnings** from `docs/solutions/` (key insights, gotchas to avoid)
+- **Include relevant institutional learnings** from `knowledge-base/learnings/` (key insights, gotchas to avoid)
 - Note external documentation URLs and best practices (if external research was done)
 - List related issues or PRs discovered
 - Capture CLAUDE.md conventions
@@ -507,21 +507,21 @@ end
 **Filename:** Use the date and kebab-case filename from Step 2 Title & Categorization.
 
 ```
-docs/plans/YYYY-MM-DD-<type>-<descriptive-name>-plan.md
+knowledge-base/plans/YYYY-MM-DD-<type>-<descriptive-name>-plan.md
 ```
 
 Examples:
-- ✅ `docs/plans/2026-01-15-feat-user-authentication-flow-plan.md`
-- ✅ `docs/plans/2026-02-03-fix-checkout-race-condition-plan.md`
-- ✅ `docs/plans/2026-03-10-refactor-api-client-extraction-plan.md`
-- ❌ `docs/plans/2026-01-15-feat-thing-plan.md` (not descriptive - what "thing"?)
-- ❌ `docs/plans/2026-01-15-feat-new-feature-plan.md` (too vague - what feature?)
-- ❌ `docs/plans/2026-01-15-feat: user auth-plan.md` (invalid characters - colon and space)
-- ❌ `docs/plans/feat-user-auth-plan.md` (missing date prefix)
+- ✅ `knowledge-base/plans/2026-01-15-feat-user-authentication-flow-plan.md`
+- ✅ `knowledge-base/plans/2026-02-03-fix-checkout-race-condition-plan.md`
+- ✅ `knowledge-base/plans/2026-03-10-refactor-api-client-extraction-plan.md`
+- ❌ `knowledge-base/plans/2026-01-15-feat-thing-plan.md` (not descriptive - what "thing"?)
+- ❌ `knowledge-base/plans/2026-01-15-feat-new-feature-plan.md` (too vague - what feature?)
+- ❌ `knowledge-base/plans/2026-01-15-feat: user auth-plan.md` (invalid characters - colon and space)
+- ❌ `knowledge-base/plans/feat-user-auth-plan.md` (missing date prefix)
 
 ## Save Tasks to Knowledge Base (if exists)
 
-**After writing the plan to `docs/plans/`, also create tasks.md if knowledge-base/ exists:**
+**After writing the plan to `knowledge-base/plans/`, also create tasks.md if knowledge-base/ exists:**
 
 ```bash
 if [[ -d "knowledge-base" ]]; then
@@ -546,13 +546,13 @@ fi
 3. **Announce:** "Tasks saved to `knowledge-base/specs/feat-<name>/tasks.md`. Run `/soleur:work` to implement."
 
 **If knowledge-base/ does NOT exist or not on feature branch:**
-- Plan saved to `docs/plans/` only (current behavior)
+- Plan saved to `knowledge-base/plans/` only (current behavior)
 
 ## Post-Generation Options
 
 After writing the plan file, use the **AskUserQuestion tool** to present these options:
 
-**Question:** "Plan ready at `docs/plans/YYYY-MM-DD-<type>-<name>-plan.md`. What would you like to do next?"
+**Question:** "Plan ready at `knowledge-base/plans/YYYY-MM-DD-<type>-<name>-plan.md`. What would you like to do next?"
 
 **Options:**
 1. **Open plan in editor** - Open the plan file for review
@@ -564,11 +564,11 @@ After writing the plan file, use the **AskUserQuestion tool** to present these o
 7. **Simplify** - Reduce detail level
 
 Based on selection:
-- **Open plan in editor** → Run `open docs/plans/<plan_filename>.md` to open the file in the user's default editor
+- **Open plan in editor** → Run `open knowledge-base/plans/<plan_filename>.md` to open the file in the user's default editor
 - **`/deepen-plan`** → Call the /deepen-plan command with the plan file path to enhance with research
 - **`/plan_review`** → Call the /plan_review command with the plan file path
 - **`/soleur:work`** → Call the /soleur:work command with the plan file path
-- **`/soleur:work` on remote** → Run `/soleur:work docs/plans/<plan_filename>.md &` to start work in background for Claude Code web
+- **`/soleur:work` on remote** → Run `/soleur:work knowledge-base/plans/<plan_filename>.md &` to start work in background for Claude Code web
 - **Create Issue** → See "Issue Creation" section below
 - **Simplify** → Ask "What should I simplify?" then regenerate simpler version
 - **Other** (automatically provided) → Accept free text for rework or specific changes

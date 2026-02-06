@@ -10,7 +10,7 @@ Coordinate multiple subagents working in parallel to document a recently solved 
 
 ## Purpose
 
-Captures problem solutions while context is fresh, creating structured documentation in `docs/solutions/` with YAML frontmatter for searchability and future reference. Uses parallel subagents for maximum efficiency.
+Captures problem solutions while context is fresh, creating structured documentation in `knowledge-base/learnings/` with YAML frontmatter for searchability and future reference. Uses parallel subagents for maximum efficiency.
 
 **Why "compound"?** Each documented solution compounds your team's knowledge. The first time you solve a problem takes research. Document it, and the next occurrence takes minutes. Knowledge compounds.
 
@@ -38,7 +38,7 @@ This command launches multiple specialized subagents IN PARALLEL to maximize eff
    - Returns: Solution content block
 
 ### 3. **Related Docs Finder** (Parallel)
-   - Searches `specs/solutions/` for related documentation
+   - Searches `knowledge-base/learnings/` for related documentation
    - Identifies cross-references and links
    - Finds related GitHub issues
    - Returns: Links and relationships
@@ -50,7 +50,7 @@ This command launches multiple specialized subagents IN PARALLEL to maximize eff
    - Returns: Prevention/testing content
 
 ### 5. **Category Classifier** (Parallel)
-   - Determines optimal `specs/solutions/` category
+   - Determines optimal `knowledge-base/learnings/` category
    - Validates category against schema
    - Suggests filename based on slug
    - Returns: Final path and filename
@@ -80,8 +80,8 @@ if [[ -d "knowledge-base" ]]; then
   # Save learning to knowledge-base/learnings/
   learning_file="knowledge-base/learnings/$(date +%Y-%m-%d)-<topic>.md"
 else
-  # Fall back to docs/solutions/
-  learning_file="docs/solutions/<category>/<topic>.md"
+  # Fall back to knowledge-base/learnings/
+  learning_file="knowledge-base/learnings/<category>/<topic>.md"
 fi
 ```
 
@@ -161,7 +161,7 @@ git worktree remove .worktrees/feat-<name>
 
 **Organized documentation:**
 
-- File: `specs/solutions/[category]/[filename].md`
+- File: `knowledge-base/learnings/[category]/[filename].md`
 
 **Categories auto-detected from problem:**
 
@@ -185,7 +185,7 @@ Primary Subagent Results:
   ✓ Solution Extractor: Extracted 3 code fixes
   ✓ Related Docs Finder: Found 2 related issues
   ✓ Prevention Strategist: Generated test cases
-  ✓ Category Classifier: docs/solutions/performance-issues/
+  ✓ Category Classifier: knowledge-base/learnings/performance-issues/
   ✓ Documentation Writer: Created complete markdown
 
 Specialized Agent Reviews (Auto-Triggered):
@@ -195,7 +195,7 @@ Specialized Agent Reviews (Auto-Triggered):
   ✓ every-style-editor: Documentation style verified
 
 File created:
-- docs/solutions/performance-issues/n-plus-one-brief-generation.md
+- knowledge-base/learnings/performance-issues/n-plus-one-brief-generation.md
 
 This documentation will be searchable for future reference when similar
 issues occur in the Email Processing or Brief System modules.
@@ -213,7 +213,7 @@ What's next?
 This creates a compounding knowledge system:
 
 1. First time you solve "N+1 query in brief generation" → Research (30 min)
-2. Document the solution → docs/solutions/performance-issues/n-plus-one-briefs.md (5 min)
+2. Document the solution → knowledge-base/learnings/performance-issues/n-plus-one-briefs.md (5 min)
 3. Next time similar issue occurs → Quick lookup (2 min)
 4. Knowledge compounds → Team gets smarter
 
@@ -263,5 +263,5 @@ Based on problem type, these agents can enhance documentation:
 
 ## Related Commands
 
-- `/research [topic]` - Deep investigation (searches docs/solutions/ for patterns)
+- `/research [topic]` - Deep investigation (searches knowledge-base/learnings/ for patterns)
 - `/soleur:plan` - Planning workflow (references documented solutions)
