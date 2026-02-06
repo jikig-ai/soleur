@@ -3,5 +3,17 @@
     "allow": [
       "Bash(git checkout:*)"
     ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged"
+          }
+        ]
+      }
+    ]
   }
 }
