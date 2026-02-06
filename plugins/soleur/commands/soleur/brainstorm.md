@@ -72,11 +72,11 @@ Use **AskUserQuestion tool** to ask which approach the user prefers.
 
 ### Phase 3: Capture the Design
 
-Write a brainstorm document to `docs/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`.
+Write a brainstorm document to `knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`.
 
 **Document structure:** See the `brainstorming` skill for the template format. Key sections: What We're Building, Why This Approach, Key Decisions, Open Questions.
 
-Ensure `docs/brainstorms/` directory exists before writing.
+Ensure `knowledge-base/brainstorms/` directory exists before writing.
 
 ### Phase 3.5: Create Spec (if knowledge-base/ exists)
 
@@ -111,7 +111,7 @@ fi
 5. **Announce:** "Spec saved to `knowledge-base/specs/feat-<name>/spec.md`. Run `/soleur:plan` to create tasks."
 
 **If knowledge-base/ does NOT exist:**
-- Continue as current (brainstorm saved to `docs/brainstorms/` only)
+- Continue as current (brainstorm saved to `knowledge-base/brainstorms/` only)
 - No worktree or spec created
 
 ### Phase 4: Handoff
@@ -132,7 +132,7 @@ When complete, display:
 ```
 Brainstorm complete!
 
-Document: docs/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md
+Document: knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md
 
 Key decisions:
 - [Decision 1]

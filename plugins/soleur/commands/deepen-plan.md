@@ -24,8 +24,8 @@ The result is a deeply grounded, production-ready plan with concrete implementat
 <plan_path> #$ARGUMENTS </plan_path>
 
 **If the plan path above is empty:**
-1. Check for recent plans: `ls -la docs/plans/`
-2. Ask the user: "Which plan would you like to deepen? Please provide the path (e.g., `docs/plans/2026-01-15-feat-my-feature-plan.md`)."
+1. Check for recent plans: `ls -la knowledge-base/plans/`
+2. Ask the user: "Which plan would you like to deepen? Please provide the path (e.g., `knowledge-base/plans/2026-01-15-feat-my-feature-plan.md`)."
 
 Do not proceed until you have a valid plan file path.
 
@@ -151,7 +151,7 @@ Check for documented learnings from /soleur:compound. These are solved problems 
 **LEARNINGS LOCATION - Check these exact folders:**
 
 ```
-docs/solutions/           <-- PRIMARY: Project-level learnings (created by /soleur:compound)
+knowledge-base/learnings/           <-- PRIMARY: Project-level learnings (created by /soleur:compound)
 ├── performance-issues/
 │   └── *.md
 ├── debugging-patterns/
@@ -198,7 +198,7 @@ root_cause: "Missing includes on association"
 
 ```bash
 # Read first 20 lines of each learning (frontmatter + summary)
-head -20 docs/solutions/**/*.md
+head -20 knowledge-base/learnings/**/*.md
 ```
 
 **Step 3: Filter - only spawn sub-agents for LIKELY relevant learnings**
@@ -251,14 +251,14 @@ If NOT relevant after deeper analysis:
 # Found 15 learning files, plan is about "Rails API caching"
 
 # SPAWN (likely relevant):
-docs/solutions/performance-issues/n-plus-one-queries.md      # tags: [activerecord] ✓
-docs/solutions/performance-issues/redis-cache-stampede.md    # tags: [caching, redis] ✓
-docs/solutions/configuration-fixes/redis-connection-pool.md  # tags: [redis] ✓
+knowledge-base/learnings/performance-issues/n-plus-one-queries.md      # tags: [activerecord] ✓
+knowledge-base/learnings/performance-issues/redis-cache-stampede.md    # tags: [caching, redis] ✓
+knowledge-base/learnings/configuration-fixes/redis-connection-pool.md  # tags: [redis] ✓
 
 # SKIP (clearly not applicable):
-docs/solutions/deployment-issues/heroku-memory-quota.md      # not about caching
-docs/solutions/frontend-issues/stimulus-race-condition.md    # plan is API, not frontend
-docs/solutions/authentication-issues/jwt-expiry.md           # plan has no auth
+knowledge-base/learnings/deployment-issues/heroku-memory-quota.md      # not about caching
+knowledge-base/learnings/frontend-issues/stimulus-race-condition.md    # plan is API, not frontend
+knowledge-base/learnings/authentication-issues/jwt-expiry.md           # plan has no auth
 ```
 
 **Spawn sub-agents in PARALLEL for all filtered learnings.**
