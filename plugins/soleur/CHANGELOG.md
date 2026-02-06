@@ -5,6 +5,15 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-02-06
+
+### Fixed
+
+- git-worktree `feature` command now pulls latest from remote before creating worktree
+  - Matches existing behavior in `create_worktree()` for consistency
+  - Prevents feature branches from being based on stale local refs
+  - Uses `|| true` for graceful failure when offline
+
 ## [1.4.0] - 2026-02-06
 
 ### Added
