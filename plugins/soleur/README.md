@@ -18,6 +18,8 @@ Soleur provides a structured workflow for feature development. Use these command
 /soleur:brainstorm  -->  /soleur:plan  -->  /soleur:work  -->  /soleur:review  -->  /soleur:compound
 ```
 
+**For existing codebases:** Run `/soleur:sync` first to populate your knowledge-base with conventions and patterns before starting the workflow.
+
 ### 1. Brainstorm (`/soleur:brainstorm`)
 
 Start here when you have a feature idea but need to explore it further. This command helps you:
@@ -81,7 +83,7 @@ Capture learnings from your work. This command:
 | Component | Count |
 |-----------|-------|
 | Agents | 27 |
-| Commands | 20 |
+| Commands | 21 |
 | Skills | 14 |
 | MCP Servers | 1 |
 
@@ -152,6 +154,7 @@ Core workflow commands use `soleur:` prefix to avoid collisions with built-in co
 | `/soleur:brainstorm` | Explore requirements and approaches before planning |
 | `/soleur:plan` | Create implementation plans |
 | `/soleur:review` | Run comprehensive code reviews |
+| `/soleur:sync` | Analyze codebase and populate knowledge-base with conventions |
 | `/soleur:work` | Execute work items systematically |
 | `/soleur:compound` | Document solved problems to compound team knowledge |
 

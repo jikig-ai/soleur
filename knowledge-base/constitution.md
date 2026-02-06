@@ -6,15 +6,28 @@ Project principles organized by domain. Add principles as you learn them.
 
 ### Always
 
+- Skill descriptions must use third person ("This skill should be used when..." NOT "Use this skill when...")
+- Reference files in skills must use markdown links, not backticks (e.g., `[file.md](./references/file.md)`)
+
 ### Never
 
+- Avoid second person ("you should") - use objective language ("To accomplish X, do Y")
+
 ### Prefer
+
+- Prefer ASCII characters unless the file already contains Unicode
+- Use imperative/infinitive form for instructions (verb-first)
 
 ## Architecture
 
 ### Always
 
+- Core workflow commands use `soleur:` prefix to avoid collisions with built-in commands
+- Every plugin change must update three files: plugin.json (version), CHANGELOG.md, and README.md (counts/tables)
+
 ### Never
+
+- Never delete or overwrite user data; avoid destructive commands
 
 ### Prefer
 
