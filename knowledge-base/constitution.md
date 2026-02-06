@@ -31,8 +31,14 @@ Project principles organized by domain. Add principles as you learn them.
 ### Never
 
 - Never delete or overwrite user data; avoid destructive commands
+- Never state conventions in constitution.md without tooling enforcement (config files, pre-commit hooks, or CI checks)
 
 ### Prefer
+
+- Verify documentation against implementation reality before trusting it; treat docs about "what exists" as hypotheses to verify
+
+- `overview/` documents what the project does; `constitution.md` documents how to work on it
+- Component documentation in `overview/components/` should follow the component template from spec-templates skill
 
 - Use convention over configuration for paths: `feat-<name>` maps to `knowledge-base/specs/feat-<name>/` and `.worktrees/feat-<name>/`
 - Include sequence diagrams for complex flows
@@ -79,6 +85,7 @@ Project principles organized by domain. Add principles as you learn them.
 ### Always
 
 - Break tasks into chunks of max 2 hours
+- Definition of Done is "PR submitted," not "tasks checked off" - continue through /compound, commit, push, and PR creation
 
 ### Never
 
