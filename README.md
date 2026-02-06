@@ -75,4 +75,8 @@ See **[full documentation and component reference](./plugins/soleur/README.md)**
 
 ## Credits
 
-This work has been initially using the following Claude Code plugin as a starting point: https://github.com/EveryInc/compound-engineering-plugin
+This work builds on ideas and patterns from these excellent projects:
+
+- [Compound Engineering Plugin](https://github.com/EveryInc/compound-engineering-plugin) - The original Claude Code plugin that inspired this work
+- [OpenSpec](https://github.com/Fission-AI/OpenSpec) - Spec-driven development (SDD) for AI coding assistants
+- [Spec-Kit](https://github.com/github/spec-kit) - GitHub's toolkit for spec-driven development
