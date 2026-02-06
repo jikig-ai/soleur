@@ -349,6 +349,13 @@ fi
 - Run linting before pushing
 - Use reviewer agents for complex/risky changes only
 
+### Review Before You Ship
+
+- Run `/soleur:review` after completing implementation
+- Catches issues before they reach PR reviewers
+- Faster feedback than waiting for human review
+- Builds confidence that your code is solid
+
 ### Compound Your Learnings
 
 - Run `/soleur:compound` before creating a PR
@@ -376,6 +383,7 @@ Before creating PR, verify:
 - [ ] Commit messages follow conventional format
 - [ ] PR description includes summary, testing notes, and screenshots
 - [ ] PR description includes Compound Engineered badge
+- [ ] Run `/soleur:review` for comprehensive code review
 - [ ] Considered `/soleur:compound` for any learnings from this work
 
 ## When to Use Reviewer Agents
