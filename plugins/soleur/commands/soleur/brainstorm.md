@@ -70,21 +70,15 @@ Lead with your recommendation and explain why. Apply YAGNI—prefer simpler solu
 
 Use **AskUserQuestion tool** to ask which approach the user prefers.
 
-### Phase 3: Capture the Design
+### Phase 3: Create Worktree (if knowledge-base/ exists)
 
-Write a brainstorm document to `knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`.
-
-**Document structure:** See the `brainstorming` skill for the template format. Key sections: What We're Building, Why This Approach, Key Decisions, Open Questions.
-
-Ensure `knowledge-base/brainstorms/` directory exists before writing.
-
-### Phase 3.5: Create Spec (if knowledge-base/ exists)
+**IMPORTANT:** Create the worktree BEFORE writing any files so all artifacts go on the feature branch.
 
 **Check for knowledge-base directory:**
 
 ```bash
 if [[ -d "knowledge-base" ]]; then
-  # knowledge-base exists, create spec
+  # knowledge-base exists, create worktree first
 fi
 ```
 
@@ -97,9 +91,31 @@ fi
    ```
    This creates:
    - `.worktrees/feat-<name>/` (worktree)
-   - `knowledge-base/specs/feat-<name>/` (spec directory)
+   - `knowledge-base/specs/feat-<name>/` (spec directory in worktree)
 
-3. **Create GitHub issue** for tracking:
+3. **Set worktree path for subsequent file operations:**
+   ```
+   WORKTREE_PATH=".worktrees/feat-<name>"
+   ```
+   All files written after this point MUST use this path prefix.
+
+### Phase 3.5: Capture the Design
+
+Write the brainstorm document. **Use worktree path if created.**
+
+**File path:**
+- If worktree exists: `${WORKTREE_PATH}/knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`
+- If no worktree: `knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`
+
+**Document structure:** See the `brainstorming` skill for the template format. Key sections: What We're Building, Why This Approach, Key Decisions, Open Questions.
+
+Ensure the brainstorms directory exists before writing.
+
+### Phase 3.6: Create Spec and Issue (if worktree exists)
+
+**If worktree was created:**
+
+1. **Create GitHub issue** for tracking:
    ```bash
    gh issue create --title "feat: <Feature Title>" --body "..."
    ```
@@ -110,26 +126,26 @@ fi
    - Branch name (`feat-<name>`)
    - Acceptance criteria (from brainstorm decisions)
 
-4. **Generate spec.md** using `spec-templates` skill template:
+2. **Generate spec.md** using `spec-templates` skill template:
    - Fill in Problem Statement from brainstorm
    - Fill in Goals from brainstorm decisions
    - Fill in Non-Goals from what was explicitly excluded
    - Add Functional Requirements (FR1, FR2...) from key features
    - Add Technical Requirements (TR1, TR2...) from constraints
 
-5. **Save spec.md** to `knowledge-base/specs/feat-<name>/spec.md`
+3. **Save spec.md** to worktree: `${WORKTREE_PATH}/knowledge-base/specs/feat-<name>/spec.md`
 
-6. **Switch to worktree:**
+4. **Switch to worktree:**
    ```bash
    cd .worktrees/feat-<name>
    ```
    **IMPORTANT:** All subsequent work for this feature should happen in the worktree, not the main repository. Announce the switch clearly to the user.
 
-7. **Announce:** "Spec saved. GitHub issue #N created. **Now working in worktree:** `.worktrees/feat-<name>`. Run `/soleur:plan` to create tasks."
+5. **Announce:** "Spec saved. GitHub issue #N created. **Now working in worktree:** `.worktrees/feat-<name>`. Run `/soleur:plan` to create tasks."
 
 **If knowledge-base/ does NOT exist:**
-- Continue as current (brainstorm saved to `knowledge-base/brainstorms/` only)
-- No worktree or spec created
+- Brainstorm saved to `knowledge-base/brainstorms/` only (no worktree)
+- No spec or issue created
 
 ### Phase 4: Handoff
 
