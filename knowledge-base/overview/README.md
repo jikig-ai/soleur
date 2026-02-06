@@ -74,9 +74,9 @@ graph TB
 
 | Component | Count | Description |
 |-----------|-------|-------------|
-| [Agents](./components/agents.md) | 27 | AI agents for specialized tasks |
-| [Commands](./components/commands.md) | 21 | Slash commands for workflow |
-| [Skills](./components/skills.md) | 14 | Specialized capabilities |
+| [Agents](./components/agents.md) | 28 | AI agents for specialized tasks |
+| [Commands](./components/commands.md) | 25 | Slash commands for workflow |
+| [Skills](./components/skills.md) | 16 | Specialized capabilities |
 | [Knowledge Base](./components/knowledge-base.md) | 1 | Documentation system |
 
 ## Directory Structure

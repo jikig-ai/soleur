@@ -82,9 +82,9 @@ Capture learnings from your work. This command:
 
 | Component | Count |
 |-----------|-------|
-| Agents | 27 |
-| Commands | 21 |
-| Skills | 14 |
+| Agents | 28 |
+| Commands | 25 |
+| Skills | 16 |
 | MCP Servers | 1 |
 
 ## Agents
