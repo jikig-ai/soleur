@@ -80,8 +80,16 @@ Every problem you solve makes the next one easier. The plugin captures learnings
 
 ### Installation
 
+**From the registry (recommended):**
+
 ```bash
 claude plugin install soleur
+```
+
+**From GitHub (without cloning):**
+
+```bash
+claude plugin install --url https://github.com/jikig-ai/soleur/tree/main/plugins/soleur
 ```
 
 See **[full documentation and component reference](./plugins/soleur/README.md)** for details on all 27 agents, 21 commands, and 14 skills.
