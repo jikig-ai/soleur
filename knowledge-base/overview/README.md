@@ -15,12 +15,12 @@ graph TB
     end
 
     subgraph "Core Workflow"
-        BS[/soleur:brainstorm]
-        PL[/soleur:plan]
-        WK[/soleur:work]
-        RV[/soleur:review]
-        CP[/soleur:compound]
-        SY[/soleur:sync]
+        BS["/soleur:brainstorm"]
+        PL["/soleur:plan"]
+        WK["/soleur:work"]
+        RV["/soleur:review"]
+        CP["/soleur:compound"]
+        SY["/soleur:sync"]
     end
 
     subgraph "Components"
