@@ -5,6 +5,18 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-02-06
+
+### Added
+
+- `cleanup-merged` command in git-worktree skill for automatic worktree cleanup after PR merge
+  - Detects merged branches via git's `[gone]` status using `git for-each-ref`
+  - Archives spec directories to `knowledge-base/specs/archive/YYYY-MM-DD-HHMMSS-<name>/`
+  - Removes worktree and deletes local branch (safe delete)
+  - TTY detection: verbose output in terminal, quiet otherwise
+  - Safety checks: skips active worktrees and those with uncommitted changes
+- SessionStart hook to automatically run cleanup on session start
+
 ## [1.3.0] - 2026-02-06
 
 ### Added
