@@ -1,5 +1,15 @@
 # soleur
 
+## Table of Contents
+
+- [Overview](#overview)
+- [The Soleur Claude Code Plugin](#the-soleur-claude-code-plugin)
+  - [Key Concept: Compounding Engineering](#key-concept-compounding-engineering)
+  - [The Workflow](#the-workflow)
+  - [Installation](#installation)
+- [Contributing](#contributing)
+- [Credits](#credits)
+
 ## Overview
 
 Soleur is a "Company-as-a-Service" platform designed to collapse the friction between a startup idea and a $1B outcome. The world is moving toward infinite leverage. When code and AI can replicate labor at near-zero marginal cost, the only remaining bottlenecks are Judgment and Taste. Soleur is the vessel that allows those with unique insights to capture the non-linear rewards of the AI revolution.
@@ -72,6 +82,21 @@ claude plugin install soleur
 ```
 
 See **[full documentation and component reference](./plugins/soleur/README.md)** for details on all 27 agents, 20 commands, and 14 skills.
+
+## Contributing
+
+To run the plugin locally while developing:
+
+```bash
+# Clone the repository
+git clone https://github.com/jikig-ai/soleur.git
+cd soleur
+
+# Run Claude Code with the local plugin loaded
+claude --plugin-dir ./plugins/soleur
+```
+
+This loads the plugin directly without installation, so you can test changes immediately.
 
 ## Credits
 
