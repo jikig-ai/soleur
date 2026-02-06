@@ -263,8 +263,16 @@ The `agent-browser` skill provides comprehensive documentation on usage.
 
 ## Installation
 
+**From the registry (recommended):**
+
 ```bash
 claude plugin install soleur
+```
+
+**From GitHub (without cloning):**
+
+```bash
+claude plugin install --url https://github.com/jikig-ai/soleur/tree/main/plugins/soleur
 ```
 
 ## Known Issues
