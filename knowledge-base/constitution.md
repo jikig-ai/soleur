@@ -85,6 +85,7 @@ Project principles organized by domain. Add principles as you learn them.
 ### Always
 
 - Break tasks into chunks of max 2 hours
+- Definition of Done is "PR submitted," not "tasks checked off" - continue through /compound, commit, push, and PR creation
 
 ### Never
 
