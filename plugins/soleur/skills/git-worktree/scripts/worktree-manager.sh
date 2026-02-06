@@ -151,6 +151,11 @@ create_for_feature() {
   echo "  Spec dir: $spec_dir"
   echo ""
 
+  # Update base branch before creating worktree
+  echo -e "${BLUE}Updating $from_branch...${NC}"
+  git checkout "$from_branch"
+  git pull origin "$from_branch" || true
+
   # Ensure directories exist
   mkdir -p "$WORKTREE_DIR"
   ensure_gitignore
