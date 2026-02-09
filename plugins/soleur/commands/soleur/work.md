@@ -20,12 +20,23 @@ This command takes a work document (plan, specification, or todo file) and execu
 
 ### Phase 0: Load Knowledge Base Context (if exists)
 
+**Load project conventions:**
+
+```bash
+# Load project conventions
+if [[ -f "CLAUDE.md" ]]; then
+  cat CLAUDE.md
+fi
+```
+
 **Clean up merged worktrees (silent, runs in background):**
 
 ```bash
 # Clean up worktrees for merged branches (won't affect current worktree)
 cd $(git rev-parse --show-toplevel) && ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged 2>/dev/null || true
 ```
+
+Report cleanup results: how many worktrees were cleaned up, which branches remain active.
 
 **Check for knowledge-base directory and load context:**
 
@@ -47,10 +58,11 @@ fi
 ```
 
 **If knowledge-base/ exists:**
-1. Read `knowledge-base/overview/constitution.md` - apply principles during implementation
-2. Detect feature from current branch (`feat-<name>` pattern)
-3. Read `knowledge-base/specs/feat-<name>/tasks.md` if it exists - use as work checklist alongside TodoWrite
-4. Announce: "Loaded constitution and tasks for `feat-<name>`"
+1. Read `CLAUDE.md` if it exists - apply project conventions during implementation
+2. Read `knowledge-base/overview/constitution.md` - apply principles during implementation
+3. Detect feature from current branch (`feat-<name>` pattern)
+4. Read `knowledge-base/specs/feat-<name>/tasks.md` if it exists - use as work checklist alongside TodoWrite
+5. Announce: "Loaded constitution and tasks for `feat-<name>`"
 
 **If knowledge-base/ does NOT exist:**
 - Continue with standard work flow (use input document only)

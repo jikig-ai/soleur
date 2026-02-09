@@ -1,6 +1,6 @@
 ---
 name: compound-docs
-description: Capture solved problems as categorized documentation with YAML frontmatter for fast lookup
+description: This skill should be used when capturing solved problems as categorized documentation with YAML frontmatter for fast lookup. It auto-documents solutions after confirmation and builds searchable institutional knowledge. Triggers on "that worked", "it's fixed", "document this fix", "capture this solution", "problem solved", "/doc-fix".
 allowed-tools:
   - Read # Parse conversation context
   - Write # Create resolution docs

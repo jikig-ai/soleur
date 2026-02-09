@@ -1,6 +1,6 @@
 ---
 name: spec-templates
-description: This skill provides standardized templates for feature specifications (spec.md) and task tracking (tasks.md). It should be used when creating new features in the knowledge-base/specs/ directory.
+description: This skill should be used when creating structured feature specifications and task tracking documents. It provides standardized templates for spec.md, tasks.md, and component.md in the knowledge-base/ directory. Triggers on "create a spec", "write a feature spec", "create tasks for feature", "new feature template", "spec template", "component documentation".
 ---
 
 # Spec Templates

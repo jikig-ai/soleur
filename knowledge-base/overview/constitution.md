@@ -35,6 +35,7 @@ Project principles organized by domain. Add principles as you learn them.
 
 ### Prefer
 
+- Plugin infrastructure (agents, commands, skills) is intentionally static - behavior changes require editing markdown files, not runtime registration
 - Verify documentation against implementation reality before trusting it; treat docs about "what exists" as hypotheses to verify
 
 - `overview/` documents what the project does; `overview/constitution.md` documents how to work on it

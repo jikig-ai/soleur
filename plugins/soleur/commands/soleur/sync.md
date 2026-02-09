@@ -23,6 +23,17 @@ Analyze an existing codebase and populate knowledge-base files with coding conve
 
 ### Phase 0: Setup
 
+**Load project conventions:**
+
+```bash
+# Load project conventions
+if [[ -f "CLAUDE.md" ]]; then
+  cat CLAUDE.md
+fi
+```
+
+Read `CLAUDE.md` if it exists - apply project conventions during sync analysis.
+
 **Validate knowledge-base directory exists:**
 
 ```bash

@@ -22,6 +22,15 @@ Do not proceed until you have a clear feature description from the user.
 
 ### 0. Load Knowledge Base Context (if exists)
 
+**Load project conventions:**
+
+```bash
+# Load project conventions
+if [[ -f "CLAUDE.md" ]]; then
+  cat CLAUDE.md
+fi
+```
+
 **Check for knowledge-base directory and load context:**
 
 ```bash
@@ -42,10 +51,11 @@ fi
 ```
 
 **If knowledge-base/ exists:**
-1. Read `knowledge-base/overview/constitution.md` - use principles to guide planning decisions
-2. Detect feature from current branch (`feat-<name>` pattern)
-3. Read `knowledge-base/specs/feat-<name>/spec.md` if it exists - use as planning input
-4. Announce: "Loaded constitution and spec for `feat-<name>`"
+1. Read `CLAUDE.md` if it exists - apply project conventions during planning
+2. Read `knowledge-base/overview/constitution.md` - use principles to guide planning decisions
+3. Detect feature from current branch (`feat-<name>` pattern)
+4. Read `knowledge-base/specs/feat-<name>/spec.md` if it exists - use as planning input
+5. Announce: "Loaded constitution and spec for `feat-<name>`"
 
 **If knowledge-base/ does NOT exist:**
 - Continue with standard planning flow
@@ -606,5 +616,13 @@ When user selects "Create Issue", detect their project tracker from CLAUDE.md:
 5. **After creation:**
    - Display the issue URL
    - Ask if they want to proceed to `/soleur:work` or `/plan_review`
+
+## Managing Plan Documents
+
+**Update an existing plan:**
+If re-running `/soleur:plan` for the same feature, read the existing plan first. Update in place rather than creating a duplicate. Preserve prior content and mark changes with `[Updated YYYY-MM-DD]`.
+
+**Archive completed plans:**
+Move completed or superseded plans to `knowledge-base/plans/archive/`: `mkdir -p knowledge-base/plans/archive && git mv knowledge-base/plans/<file>.md knowledge-base/plans/archive/`. Commit with `git commit -m "plan: archive <topic>"`.
 
 NEVER CODE! Just research and write the plan.

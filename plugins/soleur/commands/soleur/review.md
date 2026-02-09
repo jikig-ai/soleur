@@ -23,6 +23,19 @@ argument-hint: "[PR number, GitHub URL, branch name, or latest]"
 
 ## Main Tasks
 
+### 0. Setup
+
+**Load project conventions:**
+
+```bash
+# Load project conventions
+if [[ -f "CLAUDE.md" ]]; then
+  cat CLAUDE.md
+fi
+```
+
+Read `CLAUDE.md` if it exists - apply project conventions during review.
+
 ### 1. Determine Review Target & Setup (ALWAYS FIRST)
 
 <review_target> #$ARGUMENTS </review_target>

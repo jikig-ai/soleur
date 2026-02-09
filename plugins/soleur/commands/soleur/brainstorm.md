@@ -22,7 +22,18 @@ Do not proceed until you have a feature description from the user.
 
 ## Execution Flow
 
-### Phase 0: Assess Requirements Clarity
+### Phase 0: Setup and Assess Requirements Clarity
+
+**Load project conventions:**
+
+```bash
+# Load project conventions
+if [[ -f "CLAUDE.md" ]]; then
+  cat CLAUDE.md
+fi
+```
+
+Read `CLAUDE.md` if it exists - apply project conventions during brainstorming.
 
 Evaluate whether brainstorming is needed based on the feature description.
 
@@ -228,6 +239,14 @@ Next: Run `/soleur:plan` when ready to implement.
 - `#N (using existing)` - When brainstorm started with an existing issue reference
 - `#N (created)` - When a new issue was created
 - `none` - When no worktree/issue was created
+
+## Managing Brainstorm Documents
+
+**Update an existing brainstorm:**
+If re-running brainstorm on the same topic, read the existing document first. Update in place rather than creating a duplicate. Preserve prior decisions and mark any changes with `[Updated YYYY-MM-DD]`.
+
+**Archive old brainstorms:**
+Move completed or superseded brainstorms to `knowledge-base/brainstorms/archive/`: `mkdir -p knowledge-base/brainstorms/archive && git mv knowledge-base/brainstorms/<file>.md knowledge-base/brainstorms/archive/`. Commit with `git commit -m "brainstorm: archive <topic>"`.
 
 ## Important Guidelines
 

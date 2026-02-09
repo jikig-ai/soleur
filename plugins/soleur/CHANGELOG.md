@@ -5,6 +5,21 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-02-09
+
+### Added
+
+- `/help` command listing all available commands, agents, and skills
+- CLAUDE.md auto-loading in Phase 0 of all 6 core workflow commands
+- Workspace state reporting after worktree cleanup in `/soleur:work`
+- CRUD management for knowledge-base entities:
+  - Learnings update/archive/delete in `/soleur:compound`
+  - Constitution rule edit/remove in `/soleur:compound`
+  - Brainstorm update/archive in `/soleur:brainstorm`
+  - Plan update/archive in `/soleur:plan`
+- Auto-invoke trigger documentation for all 16 skills (was 5/16)
+- Constitution rule documenting plugin infrastructure immutability
+
 ## [1.5.0] - 2026-02-06
 
 ### Added
