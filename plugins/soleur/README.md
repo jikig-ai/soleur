@@ -14,7 +14,7 @@ claude plugin install soleur
 
 Soleur provides a structured workflow for feature development. Use these commands in order:
 
-```
+```text
 /soleur:brainstorm  -->  /soleur:plan  -->  /soleur:work  -->  /soleur:review  -->  /soleur:compound
 ```
 
@@ -23,6 +23,7 @@ Soleur provides a structured workflow for feature development. Use these command
 ### 1. Brainstorm (`/soleur:brainstorm`)
 
 Start here when you have a feature idea but need to explore it further. This command helps you:
+
 - Clarify what you're building through guided questions
 - Explore different approaches with pros/cons
 - Make key decisions before coding
@@ -35,6 +36,7 @@ Start here when you have a feature idea but need to explore it further. This com
 ### 2. Plan (`/soleur:plan`)
 
 Once you know what to build, create an implementation plan. This command:
+
 - Analyzes your codebase for relevant patterns
 - Breaks the work into specific, actionable tasks
 - Creates a structured plan document
@@ -47,6 +49,7 @@ Once you know what to build, create an implementation plan. This command:
 ### 3. Work (`/soleur:work`)
 
 Execute the plan systematically. This command:
+
 - Reads your plan and sets up the environment
 - Tracks progress with TodoWrite
 - Makes incremental commits as logical units complete
@@ -59,6 +62,7 @@ Execute the plan systematically. This command:
 ### 4. Review (`/soleur:review`)
 
 Run comprehensive code review before creating a PR. This command:
+
 - Launches multiple specialized review agents in parallel
 - Checks for security, performance, patterns, and simplicity
 - Provides actionable feedback on your changes
@@ -70,6 +74,7 @@ Run comprehensive code review before creating a PR. This command:
 ### 5. Compound (`/soleur:compound`)
 
 Capture learnings from your work. This command:
+
 - Documents debugging breakthroughs and non-obvious patterns
 - Saves knowledge to `knowledge-base/learnings/`
 - Makes future similar problems easier to solve
@@ -226,12 +231,14 @@ Core workflow commands use `soleur:` prefix to avoid collisions with built-in co
 | `gemini-imagegen` | Generate and edit images using Google's Gemini API |
 
 **gemini-imagegen features:**
+
 - Text-to-image generation
 - Image editing and manipulation
 - Multi-turn refinement
 - Multiple reference image composition (up to 14 images)
 
 **Requirements:**
+
 - `GEMINI_API_KEY` environment variable
 - Python packages: `google-genai`, `pillow`
 
@@ -244,6 +251,7 @@ Core workflow commands use `soleur:` prefix to avoid collisions with built-in co
 ### Context7
 
 **Tools provided:**
+
 - `resolve-library-id` - Find library ID for a framework/package
 - `get-library-docs` - Get documentation for a specific library
 

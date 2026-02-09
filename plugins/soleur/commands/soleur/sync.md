@@ -176,7 +176,7 @@ For each finding, check for duplicates:
 
 Compute word-based Jaccard similarity between the finding and all existing entries:
 
-```
+```text
 Jaccard(a, b) = |intersection(words_a, words_b)| / |union(words_a, words_b)|
 
 Where:

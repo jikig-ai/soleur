@@ -95,6 +95,7 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 15. Task deployment-verification-agent(PR content) - Creates Go/No-Go deployment checklist with SQL verification queries
 
 **When to run migration agents:**
+
 - PR includes files matching `db/migrate/*.rb`
 - PR modifies columns that store IDs, enums, or mappings
 - PR includes data backfill scripts or rake tasks
@@ -102,6 +103,7 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 - PR title/body mentions: migration, backfill, data transformation, ID mapping
 
 **What these agents check:**
+
 - `data-migration-expert`: Verifies hard-coded mappings match production reality (prevents swapped IDs), checks for orphaned associations, validates dual-write patterns
 - `deployment-verification-agent`: Produces executable pre/post-deploy checklists with SQL queries, rollback procedures, and monitoring plans
 
@@ -298,7 +300,7 @@ Sub-agents can:
 
 4. Examples:
 
-   ```
+   ```text
    001-pending-p1-path-traversal-vulnerability.md
    002-pending-p1-api-response-validation.md
    003-pending-p2-concurrency-limit.md
@@ -323,7 +325,7 @@ Each todo must include:
 
 **File naming convention:**
 
-```
+```text
 {issue_id}-{status}-{priority}-{description}.md
 
 Examples:
@@ -436,8 +438,6 @@ After creating all todo files, present comprehensive summary:
 - Optimization opportunities
 - Documentation updates
 
-```
-
 ### 7. End-to-End Testing (Optional)
 
 <detect_project_type>
@@ -457,6 +457,7 @@ After creating all todo files, present comprehensive summary:
 After presenting the Summary Report, offer appropriate testing based on project type:
 
 **For Web Projects:**
+
 ```markdown
 **"Want to run browser tests on the affected pages?"**
 1. Yes - run `/test-browser`
@@ -464,6 +465,7 @@ After presenting the Summary Report, offer appropriate testing based on project 
 ```
 
 **For iOS Projects:**
+
 ```markdown
 **"Want to run Xcode simulator tests on the app?"**
 1. Yes - run `/xcode-test`
@@ -471,6 +473,7 @@ After presenting the Summary Report, offer appropriate testing based on project 
 ```
 
 **For Hybrid Projects (e.g., Rails + Hotwire Native):**
+
 ```markdown
 **"Want to run end-to-end tests?"**
 1. Web only - run `/test-browser`
@@ -485,11 +488,12 @@ After presenting the Summary Report, offer appropriate testing based on project 
 
 Spawn a subagent to run browser tests (preserves main context):
 
-```
+```text
 Task general-purpose("Run /test-browser for PR #[number]. Test all affected pages, check for console errors, handle failures by creating todos and fixing.")
 ```
 
 The subagent will:
+
 1. Identify pages affected by the PR
 2. Navigate to each page and capture snapshots (using Playwright MCP or agent-browser CLI)
 3. Check for console errors
@@ -504,11 +508,12 @@ The subagent will:
 
 Spawn a subagent to run Xcode tests (preserves main context):
 
-```
+```text
 Task general-purpose("Run /xcode-test for scheme [name]. Build for simulator, install, launch, take screenshots, check for crashes.")
 ```
 
 The subagent will:
+
 1. Verify XcodeBuildMCP is installed
 2. Discover project and schemes
 3. Build for iOS Simulator
@@ -524,4 +529,3 @@ The subagent will:
 ### Important: P1 Findings Block Merge
 
 Any **🔴 P1 (CRITICAL)** findings must be addressed before merging the PR. Present these prominently and ensure they're resolved before accepting the PR.
-```

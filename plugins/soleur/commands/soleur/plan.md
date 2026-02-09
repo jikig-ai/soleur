@@ -51,6 +51,7 @@ fi
 ```
 
 **If knowledge-base/ exists:**
+
 1. Read `CLAUDE.md` if it exists - apply project conventions during planning
 2. Read `knowledge-base/overview/constitution.md` - use principles to guide planning decisions
 3. Detect feature from current branch (`feat-<name>` pattern)
@@ -58,6 +59,7 @@ fi
 5. Announce: "Loaded constitution and spec for `feat-<name>`"
 
 **If knowledge-base/ does NOT exist:**
+
 - Continue with standard planning flow
 
 ### 0.5. Idea Refinement
@@ -71,11 +73,13 @@ ls -la knowledge-base/brainstorms/*.md 2>/dev/null | head -10
 ```
 
 **Relevance criteria:** A brainstorm is relevant if:
+
 - The topic (from filename or YAML frontmatter) semantically matches the feature description
 - Created within the last 14 days
 - If multiple candidates match, use the most recent one
 
 **If a relevant brainstorm exists:**
+
 1. Read the brainstorm document
 2. Announce: "Found brainstorm from [date]: [topic]. Using as context for planning."
 3. Extract key decisions, chosen approach, and open questions
@@ -118,6 +122,7 @@ Run these agents **in parallel** to gather local context:
 - Task learnings-researcher(feature_description)
 
 **What to look for:**
+
 - **Repo research:** existing patterns, CLAUDE.md guidance, technology familiarity, pattern consistency
 - **Learnings:** documented solutions in `knowledge-base/learnings/` that might apply (gotchas, patterns, lessons learned)
 
@@ -136,6 +141,7 @@ Based on signals from Step 0 and findings from Step 1, decide on external resear
 **Announce the decision and proceed.** Brief explanation, then continue. User can redirect if needed.
 
 Examples:
+
 - "Your codebase has solid patterns for this. Proceeding without external research."
 - "This involves payment processing, so I'll research current best practices first."
 
@@ -516,11 +522,12 @@ end
 
 **Filename:** Use the date and kebab-case filename from Step 2 Title & Categorization.
 
-```
+```text
 knowledge-base/plans/YYYY-MM-DD-<type>-<descriptive-name>-plan.md
 ```
 
 Examples:
+
 - ✅ `knowledge-base/plans/2026-01-15-feat-user-authentication-flow-plan.md`
 - ✅ `knowledge-base/plans/2026-02-03-fix-checkout-race-condition-plan.md`
 - ✅ `knowledge-base/plans/2026-03-10-refactor-api-client-extraction-plan.md`
@@ -556,6 +563,7 @@ fi
 3. **Announce:** "Tasks saved to `knowledge-base/specs/feat-<name>/tasks.md`. Run `/soleur:work` to implement."
 
 **If knowledge-base/ does NOT exist or not on feature branch:**
+
 - Plan saved to `knowledge-base/plans/` only (current behavior)
 
 ## Post-Generation Options
@@ -565,6 +573,7 @@ After writing the plan file, use the **AskUserQuestion tool** to present these o
 **Question:** "Plan ready at `knowledge-base/plans/YYYY-MM-DD-<type>-<name>-plan.md`. What would you like to do next?"
 
 **Options:**
+
 1. **Open plan in editor** - Open the plan file for review
 2. **Run `/deepen-plan`** - Enhance each section with parallel research agents (best practices, performance, UI)
 3. **Run `/plan_review`** - Get feedback from reviewers (DHH, Kieran, Simplicity)
@@ -574,6 +583,7 @@ After writing the plan file, use the **AskUserQuestion tool** to present these o
 7. **Simplify** - Reduce detail level
 
 Based on selection:
+
 - **Open plan in editor** → Run `open knowledge-base/plans/<plan_filename>.md` to open the file in the user's default editor
 - **`/deepen-plan`** → Call the /deepen-plan command with the plan file path to enhance with research
 - **`/plan_review`** → Call the /plan_review command with the plan file path

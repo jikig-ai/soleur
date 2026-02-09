@@ -102,4 +102,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `constitution.md` - Project principles (Always/Never/Prefer)
 - `spec-templates` skill with templates for spec.md and tasks.md
 - `feature` command in git-worktree skill to create worktree + spec directory
-
