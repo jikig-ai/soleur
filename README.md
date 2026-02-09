@@ -92,7 +92,7 @@ claude plugin install soleur
 claude plugin install --url https://github.com/jikig-ai/soleur/tree/main/plugins/soleur
 ```
 
-See **[full documentation and component reference](./plugins/soleur/README.md)** for details on all 27 agents, 21 commands, and 14 skills.
+See **[full documentation and component reference](./plugins/soleur/README.md)** for details on all 18 agents, 26 commands, and 17 skills.
 
 ## Contributing
 

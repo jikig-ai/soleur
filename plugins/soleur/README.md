@@ -87,7 +87,7 @@ Capture learnings from your work. This command:
 
 | Component | Count |
 |-----------|-------|
-| Agents | 28 |
+| Agents | 18 |
 | Commands | 26 |
 | Skills | 17 |
 | MCP Servers | 1 |
@@ -96,7 +96,7 @@ Capture learnings from your work. This command:
 
 Agents are organized into categories for easier discovery.
 
-### Review (14)
+### Review (11)
 
 | Agent | Description |
 |-------|-------------|
@@ -108,45 +108,26 @@ Agents are organized into categories for easier discovery.
 | `deployment-verification-agent` | Create Go/No-Go deployment checklists for risky data changes |
 | `dhh-rails-reviewer` | Rails review from DHH's perspective |
 | `kieran-rails-reviewer` | Rails code review with strict conventions |
-| `kieran-python-reviewer` | Python code review with strict conventions |
-| `kieran-typescript-reviewer` | TypeScript code review with strict conventions |
 | `pattern-recognition-specialist` | Analyze code for patterns and anti-patterns |
 | `performance-oracle` | Performance analysis and optimization |
 | `security-sentinel` | Security audits and vulnerability assessments |
-| `julik-frontend-races-reviewer` | Review JavaScript/Stimulus code for race conditions |
 
-### Research (4)
+### Research (5)
 
 | Agent | Description |
 |-------|-------------|
 | `best-practices-researcher` | Gather external best practices and examples |
 | `framework-docs-researcher` | Research framework documentation and best practices |
 | `git-history-analyzer` | Analyze git history and code evolution |
+| `learnings-researcher` | Search institutional learnings for relevant past solutions |
 | `repo-research-analyst` | Research repository structure and conventions |
 
-### Design (3)
+### Workflow (2)
 
 | Agent | Description |
 |-------|-------------|
-| `design-implementation-reviewer` | Verify UI implementations match Figma designs |
-| `design-iterator` | Iteratively refine UI through systematic design iterations |
-| `figma-design-sync` | Synchronize web implementations with Figma designs |
-
-### Workflow (5)
-
-| Agent | Description |
-|-------|-------------|
-| `bug-reproduction-validator` | Systematically reproduce and validate bug reports |
-| `every-style-editor` | Edit content to conform to Every's style guide |
-| `lint` | Run linting and code quality checks on Ruby and ERB files |
 | `pr-comment-resolver` | Address PR comments and implement fixes |
 | `spec-flow-analyzer` | Analyze user flows and identify gaps in specifications |
-
-### Docs (1)
-
-| Agent | Description |
-|-------|-------------|
-| `ankane-readme-writer` | Create READMEs following Ankane-style template for Ruby gems |
 
 ## Commands
 
