@@ -83,7 +83,7 @@ Capture learnings from your work. This command:
 | Component | Count |
 |-----------|-------|
 | Agents | 28 |
-| Commands | 25 |
+| Commands | 26 |
 | Skills | 16 |
 | MCP Servers | 1 |
 
@@ -162,6 +162,7 @@ Core workflow commands use `soleur:` prefix to avoid collisions with built-in co
 
 | Command | Description |
 |---------|-------------|
+| `/help` | List all available Soleur commands, agents, and skills |
 | `/deepen-plan` | Enhance plans with parallel research agents for each section |
 | `/changelog` | Create engaging changelogs for recent merges |
 | `/create-agent-skill` | Create or edit Claude Code skills |

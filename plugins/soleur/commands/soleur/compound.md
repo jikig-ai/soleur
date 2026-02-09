@@ -21,6 +21,19 @@ Captures problem solutions while context is fresh, creating structured documenta
 /soleur:compound [brief context]    # Provide additional context hint
 ```
 
+## Phase 0: Setup
+
+**Load project conventions:**
+
+```bash
+# Load project conventions
+if [[ -f "CLAUDE.md" ]]; then
+  cat CLAUDE.md
+fi
+```
+
+Read `CLAUDE.md` if it exists - apply project conventions during documentation.
+
 ## Execution Strategy: Parallel Subagents
 
 This command launches multiple specialized subagents IN PARALLEL to maximize efficiency:
@@ -120,6 +133,23 @@ After saving the learning, prompt the user:
 7. Commit: `git commit -m "constitution: add <domain> <category> principle"`
 
 **If user says no:** Continue to next step
+
+### Managing Learnings (Update/Archive/Delete)
+
+**Update an existing learning:**
+Read the file in `knowledge-base/learnings/`, apply changes, and commit with `git commit -m "learning: update <topic>"`.
+
+**Archive an outdated learning:**
+Move it to `knowledge-base/learnings/archive/`: `mkdir -p knowledge-base/learnings/archive && git mv knowledge-base/learnings/<category>/<file>.md knowledge-base/learnings/archive/`. Commit with `git commit -m "learning: archive <topic>"`.
+
+**Delete a learning:**
+Only with user confirmation. `git rm knowledge-base/learnings/<category>/<file>.md` and commit.
+
+### Managing Constitution Rules (Edit/Remove)
+
+**Edit a rule:** Read `knowledge-base/overview/constitution.md`, find the rule, modify it, commit with `git commit -m "constitution: update <domain> <category> rule"`.
+
+**Remove a rule:** Read `knowledge-base/overview/constitution.md`, remove the bullet point, commit with `git commit -m "constitution: remove <domain> <category> rule"`.
 
 ### Worktree Cleanup (Manual)
 
