@@ -69,7 +69,7 @@ description: Manage project constitution with domain-specific Always/Never/Prefe
 
 ## Reading the Constitution
 
-Read `knowledge-base/constitution.md` to understand project principles before:
+Read `knowledge-base/overview/constitution.md` to understand project principles before:
 - Planning new features
 - Reviewing code
 - Making architectural decisions
@@ -360,7 +360,7 @@ Full compound flow:
 
 ### Constitution
 - [ ] `plugins/soleur/skills/constitution/SKILL.md` exists
-- [ ] `knowledge-base/constitution.md` has 8 domain categories
+- [ ] `knowledge-base/overview/constitution.md` has 8 domain categories
 - [ ] Each domain has Always/Never/Prefer sections
 - [ ] Constitution can be read and updated by commands
 

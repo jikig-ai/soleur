@@ -52,7 +52,7 @@
 ### 3.1 OpenSpec Integration (FR5)
 
 - [x] **3.1.1** Read `openspec/config.yaml` and extract rules
-- [x] **3.1.2** Update `knowledge-base/constitution.md` with extracted rules:
+- [x] **3.1.2** Update `knowledge-base/overview/constitution.md` with extracted rules:
   - Add Proposal section with: rollback plan, affected teams, Non-goals requirement
   - Add Spec section with: Given/When/Then format
   - Add Design section with: sequence diagrams for complex flows

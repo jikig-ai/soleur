@@ -96,7 +96,7 @@ related_locations:
 - `src/<path>/file.ts` - [description]
 
 ## See Also
-- [constitution.md](../../constitution.md) for coding conventions
+- [constitution.md](../overview/constitution.md) for coding conventions
 ```
 
 ### /sync Integration
@@ -253,7 +253,7 @@ Extend `/sync` command:
 ### Internal References
 
 - Sync command: `plugins/soleur/commands/soleur/sync.md`
-- Constitution: `knowledge-base/constitution.md`
+- Constitution: `knowledge-base/overview/constitution.md`
 - Spec templates: `plugins/soleur/skills/spec-templates/SKILL.md`
 - External spec example: `knowledge-base/specs/external/claude-code.md`
 

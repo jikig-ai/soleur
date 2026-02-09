@@ -51,7 +51,7 @@ Following the implementation of the spec-driven workflow (issues #3 and #4), doc
 
 ### FR5: OpenSpec Integration
 - Extract rules from `openspec/config.yaml`
-- Integrate proposal, spec, design, and task rules into `knowledge-base/constitution.md`
+- Integrate proposal, spec, design, and task rules into `knowledge-base/overview/constitution.md`
 - Delete entire `openspec/` directory
 
 ### FR6: Learnings Documentation

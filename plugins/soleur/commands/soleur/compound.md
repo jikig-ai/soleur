@@ -116,7 +116,7 @@ After saving the learning, prompt the user:
 3. Ask: "Which domain? (Code Style / Architecture / Testing)"
 4. Ask: "Which category? (Always / Never / Prefer)"
 5. User writes the principle (one line, actionable)
-6. Append to `knowledge-base/constitution.md` under the correct section
+6. Append to `knowledge-base/overview/constitution.md` under the correct section
 7. Commit: `git commit -m "constitution: add <domain> <category> principle"`
 
 **If user says no:** Continue to next step

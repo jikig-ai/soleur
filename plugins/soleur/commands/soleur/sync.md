@@ -146,7 +146,7 @@ Present only the top 20 findings by confidence. If more exist, inform user: "Fou
 
 Before reviewing findings, load existing knowledge-base content for deduplication:
 
-- **Constitution rules:** Parse `knowledge-base/constitution.md` and extract all bullet points under Always/Never/Prefer sections
+- **Constitution rules:** Parse `knowledge-base/overview/constitution.md` and extract all bullet points under Always/Never/Prefer sections
 - **Learnings:** List files in `knowledge-base/learnings/` and extract titles from YAML frontmatter or first heading
 
 Store as a list of existing entry texts for comparison.
@@ -230,7 +230,7 @@ Use AskUserQuestion with a text input option to let user modify the finding text
 
 For accepted constitution findings:
 
-1. Read current `knowledge-base/constitution.md`
+1. Read current `knowledge-base/overview/constitution.md`
 2. Find the target section (Code Style, Architecture, Testing, etc.)
 3. Find the subsection (Always, Never, Prefer)
 4. Append the new rule as a bullet point: `- [Rule text]`
@@ -308,9 +308,9 @@ Run `/sync` again to discover additional patterns.
 
 | Finding Type | Destination |
 | ------------ | ----------- |
-| Coding conventions | `knowledge-base/constitution.md` |
+| Coding conventions | `knowledge-base/overview/constitution.md` |
 | Architecture decisions | `knowledge-base/learnings/architecture/` |
-| Testing practices | `knowledge-base/constitution.md` (Testing section) |
+| Testing practices | `knowledge-base/overview/constitution.md` (Testing section) |
 | Technical debt | `knowledge-base/learnings/technical-debt/` |
 | Project overview | `knowledge-base/overview/README.md` |
 | Component docs | `knowledge-base/overview/components/` |

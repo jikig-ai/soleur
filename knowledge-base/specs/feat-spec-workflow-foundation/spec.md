@@ -44,14 +44,15 @@ Create manually (no script needed):
 knowledge-base/
   specs/              # Feature specs (spec.md + tasks.md per feature)
   learnings/          # Session learnings (YYYY-MM-DD-topic.md)
-  constitution.md     # Always/Never/Prefer (3 domains)
+  overview/
+    constitution.md   # Always/Never/Prefer (3 domains)
 ```
 
 That's it. 3 items. No READMEs, no .gitkeep files.
 
 ### Phase 2: Constitution Scaffold
 
-Create `knowledge-base/constitution.md` with 3 domains (expand when needed):
+Create `knowledge-base/overview/constitution.md` with 3 domains (expand when needed):
 
 ```markdown
 # Project Constitution
@@ -177,7 +178,7 @@ create_for_feature() {
 | ---- | ------- |
 | `knowledge-base/specs/.gitkeep` | Track empty specs directory |
 | `knowledge-base/learnings/.gitkeep` | Track empty learnings directory |
-| `knowledge-base/constitution.md` | Project principles (3 domains) |
+| `knowledge-base/overview/constitution.md` | Project principles (3 domains) |
 | `plugins/soleur/skills/spec-templates/SKILL.md` | Templates for spec.md and tasks.md |
 
 ## Files to Modify

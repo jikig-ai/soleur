@@ -48,7 +48,7 @@ docs/plans/archive/*.md                   →   knowledge-base/specs/archive/
 docs/specs/*.md                           →   knowledge-base/specs/external/
 docs/solutions/*.md                       →   knowledge-base/learnings/
 docs/brainstorms/*.md                     →   knowledge-base/brainstorms/
-openspec/config.yaml (rules)              →   knowledge-base/constitution.md (merged)
+openspec/config.yaml (rules)              →   knowledge-base/overview/constitution.md (merged)
 openspec/                                 →   (deleted)
 docs/plans/, docs/specs/, etc.            →   (deleted after migration)
 ```
@@ -57,7 +57,8 @@ docs/plans/, docs/specs/, etc.            →   (deleted after migration)
 
 ```
 knowledge-base/
-├── constitution.md              (existing + openspec rules merged)
+├── overview/
+│   └── constitution.md      (existing + openspec rules merged)
 ├── brainstorms/
 │   └── 2026-02-05-unified-spec-workflow-brainstorm.md
 ├── learnings/

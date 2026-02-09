@@ -18,8 +18,9 @@ Consolidated all documentation into a unified `/knowledge-base/` structure:
 ```
 knowledge-base/
 ├── brainstorms/           # Feature exploration docs
-├── constitution.md        # Team principles + integrated openspec rules
 ├── learnings/             # Documented solutions (was docs/solutions/)
+├── overview/
+│   └── constitution.md    # Team principles + integrated openspec rules
 ├── plans/                 # Active plans (new)
 └── specs/
     ├── archive/           # Completed specs (was docs/plans/archive/)

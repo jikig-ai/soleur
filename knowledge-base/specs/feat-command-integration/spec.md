@@ -68,7 +68,7 @@ At the start of plan:
 2. If yes:
    - Detect feature from current branch (`feat-<name>` pattern)
    - Read `knowledge-base/specs/feat-<name>/spec.md` if exists
-   - Read `knowledge-base/constitution.md`
+   - Read `knowledge-base/overview/constitution.md`
    - Use as input for planning
 3. If no: Continue as current
 
@@ -94,7 +94,7 @@ At the start of work:
 2. If yes:
    - Detect feature from current branch
    - Read `knowledge-base/specs/feat-<name>/tasks.md` if exists
-   - Read `knowledge-base/constitution.md`
+   - Read `knowledge-base/overview/constitution.md`
    - Use tasks as work checklist (alongside TodoWrite)
 3. If no: Continue as current
 ```
@@ -123,7 +123,7 @@ After saving learning:
    - Ask: "Which domain? (Code Style / Architecture / Testing)"
    - Ask: "Which category? (Always / Never / Prefer)"
    - User writes the principle (one line)
-   - Append to `knowledge-base/constitution.md`
+   - Append to `knowledge-base/overview/constitution.md`
    - Commit: "constitution: add <domain> <category> principle"
 3. If no: Done
 

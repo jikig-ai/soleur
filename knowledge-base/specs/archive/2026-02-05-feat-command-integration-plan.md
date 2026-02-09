@@ -116,7 +116,7 @@ If `knowledge-base/` doesn't exist:
 ### Phase 0: Context Loading (NEW)
 
 1. **Detect feature:** Check current branch for `feat-<name>` pattern
-2. **Load constitution:** Read `knowledge-base/constitution.md`
+2. **Load constitution:** Read `knowledge-base/overview/constitution.md`
    - Use principles to guide planning decisions
 3. **Load spec:** Read `knowledge-base/specs/feat-<name>/spec.md`
    - Use requirements as planning input
@@ -167,7 +167,7 @@ If `knowledge-base/` doesn't exist:
 
 1. **Verify worktree:** Check if in `.worktrees/feat-<name>/`
    - If not, offer to switch: "Switch to feature worktree?"
-2. **Load constitution:** Read `knowledge-base/constitution.md`
+2. **Load constitution:** Read `knowledge-base/overview/constitution.md`
    - Apply principles during implementation
 3. **Load tasks:** Read `knowledge-base/specs/feat-<name>/tasks.md`
    - Use as work checklist

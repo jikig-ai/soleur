@@ -143,7 +143,7 @@ related_locations:
 
 ## See Also
 
-- [constitution.md](../../constitution.md) for coding conventions
+- [constitution.md](../constitution.md) for coding conventions
 - [Related component](./related.md)
 ```
 
