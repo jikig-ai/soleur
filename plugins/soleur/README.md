@@ -51,6 +51,7 @@ Once you know what to build, create an implementation plan. This command:
 Execute the plan systematically. This command:
 
 - Reads your plan and sets up the environment
+- Detects independent tasks and offers parallel execution via subagents (max 5)
 - Tracks progress with TodoWrite
 - Makes incremental commits as logical units complete
 - Follows existing codebase patterns

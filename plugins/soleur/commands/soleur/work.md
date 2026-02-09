@@ -135,7 +135,71 @@ fi
 
 ### Phase 2: Execute
 
-1. **Task Execution Loop**
+1. **Parallel Execution (optional)**
+
+   Before starting the sequential task loop, check for parallelization opportunities:
+
+   **Step 1: Analyze independence**
+
+   Read the TaskList. Identify tasks that have no `blockedBy` dependencies and reference
+   different files or modules (no obvious file overlap). Count the independent tasks.
+
+   **Step 2: Decide execution mode**
+
+   If fewer than 3 independent tasks exist, skip to the sequential task loop below.
+
+   If 3+ independent tasks exist, ask the user:
+
+   "I found N independent tasks that could run in parallel.
+   This uses more tokens but completes faster. Run in parallel?"
+
+   - If No: proceed to the sequential task loop below (existing behavior)
+   - If Yes: continue to Step 3
+
+   **Step 3: Group and spawn subagents**
+
+   Group independent tasks into clusters (max 5 groups). Each group gets one Task
+   general-purpose agent. Spawn all groups in parallel using a single message with
+   multiple Task tool calls:
+
+   ```text
+   Task general-purpose: "You are executing part of a work plan.
+
+   BRANCH: [current branch name]
+   WORKING DIRECTORY: [current working directory path]
+
+   YOUR TASKS:
+   [Task descriptions and relevant plan sections for this group]
+
+   REFERENCED FILES:
+   [List files this group needs to read or modify]
+
+   INSTRUCTIONS:
+   - Read referenced files before modifying them
+   - Follow existing codebase patterns and conventions
+   - Write tests for new functionality
+   - Run tests relevant to your changes
+   - Do NOT commit -- the lead will commit after reviewing all work
+   - Do NOT modify files outside your assigned scope
+   - Report back: what you completed, files modified, any issues encountered"
+   ```
+
+   **Step 4: Collect results and integrate**
+
+   Wait for all subagents to complete. Then:
+
+   - Review each subagent's report for completeness and issues
+   - If any subagent failed or reported issues: complete those tasks
+     sequentially using the task loop below
+   - Run the full test suite to verify integration across all parallel work
+   - If tests pass: create an incremental commit for the parallel batch
+   - If tests fail: fix integration issues, then commit
+   - Update TaskList to mark all completed tasks
+
+   Then proceed to the remaining dependent tasks (if any) using the sequential loop,
+   or skip directly to Phase 3 if all tasks are done.
+
+2. **Task Execution Loop**
 
    For each task in priority order:
 
@@ -154,7 +218,7 @@ fi
 
    **IMPORTANT**: Always update the original plan document by checking off completed items. Use the Edit tool to change `- [ ]` to `- [x]` for each task you finish. This keeps the plan as a living document showing progress and ensures no checkboxes are left unchecked.
 
-2. **Incremental Commits**
+3. **Incremental Commits**
 
    After completing each task, evaluate whether to create an incremental commit:
 
@@ -184,7 +248,7 @@ fi
 
    **Note:** Incremental commits use clean conventional messages without attribution footers. The final Phase 4 commit/PR includes the full attribution.
 
-3. **Follow Existing Patterns**
+4. **Follow Existing Patterns**
 
    - The plan should reference similar code - read those files first
    - Match naming conventions exactly
@@ -192,14 +256,14 @@ fi
    - Follow project coding standards (see CLAUDE.md)
    - When in doubt, grep for similar implementations
 
-4. **Test Continuously**
+5. **Test Continuously**
 
    - Run relevant tests after each significant change
    - Don't wait until the end to test
    - Fix failures immediately
    - Add new tests for new functionality
 
-5. **Track Progress**
+6. **Track Progress**
    - Keep TodoWrite updated as you complete tasks
    - Note any blockers or unexpected discoveries
    - Create new tasks if scope expands
