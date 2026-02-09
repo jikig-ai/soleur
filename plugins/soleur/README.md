@@ -89,7 +89,7 @@ Capture learnings from your work. This command:
 |-----------|-------|
 | Agents | 28 |
 | Commands | 26 |
-| Skills | 16 |
+| Skills | 17 |
 | MCP Servers | 1 |
 
 ## Agents
@@ -211,6 +211,7 @@ Core workflow commands use `soleur:` prefix to avoid collisions with built-in co
 | `every-style-editor` | Review copy for Every's style guide compliance |
 | `file-todos` | File-based todo tracking system |
 | `git-worktree` | Manage Git worktrees for parallel development |
+| `ship` | Enforce feature lifecycle checklist before creating PRs |
 
 ### File Transfer
 
