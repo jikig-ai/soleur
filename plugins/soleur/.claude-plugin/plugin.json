@@ -1,6 +1,6 @@
 {
   "name": "soleur",
-  "version": "1.9.1",
+  "version": "1.10.0",
   "description": "Soleur is the world's first model-agnostic Orchestration Engine designed to turn a single founder into a billion-dollar enterprise. It provides the architectural \"brain\" that organizes fragmented AI models into a cohesive, goal-oriented workforce, allowing a human CEO to manage a \"Swarm of Agents\" instead of a headcount of employees.",
   "author": {
     "name": "Jean Deruelle",

@@ -49,6 +49,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Start with manual workflows; add automation only when users explicitly request it
 - Commands should check for knowledge-base/ existence and fall back gracefully when not present
 - Run `/soleur:plan_review` before implementing plans with new directories, external APIs, or complex algorithms
+- Parallel subagent fan-out requires explicit user consent, bounded agent count (max 5), and lead-coordinated commits (subagents do not commit independently)
 
 ## Testing
 
