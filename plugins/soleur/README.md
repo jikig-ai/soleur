@@ -87,30 +87,39 @@ Capture learnings from your work. This command:
 
 | Component | Count |
 |-----------|-------|
-| Agents | 18 |
+| Agents | 22 |
 | Commands | 26 |
-| Skills | 17 |
+| Skills | 19 |
 | MCP Servers | 1 |
 
 ## Agents
 
 Agents are organized into categories for easier discovery.
 
-### Review (11)
+### Review (14)
 
 | Agent | Description |
 |-------|-------------|
 | `agent-native-reviewer` | Verify features are agent-native (action + context parity) |
 | `architecture-strategist` | Analyze architectural decisions and compliance |
+| `code-quality-analyst` | Formal quality reports with severity-scored smells and prioritized refactoring roadmaps |
 | `code-simplicity-reviewer` | Final pass for simplicity and minimalism |
 | `data-integrity-guardian` | Database migrations and data integrity |
 | `data-migration-expert` | Validate ID mappings match production, check for swapped values |
 | `deployment-verification-agent` | Create Go/No-Go deployment checklists for risky data changes |
 | `dhh-rails-reviewer` | Rails review from DHH's perspective |
 | `kieran-rails-reviewer` | Rails code review with strict conventions |
+| `legacy-code-expert` | Safely modify untested legacy code using Feathers' dependency-breaking techniques |
 | `pattern-recognition-specialist` | Analyze code for patterns and anti-patterns |
 | `performance-oracle` | Performance analysis and optimization |
 | `security-sentinel` | Security audits and vulnerability assessments |
+| `test-design-reviewer` | Score test quality using Farley's 8 properties with weighted rubric |
+
+### Design (1)
+
+| Agent | Description |
+|-------|-------------|
+| `ddd-architect` | Domain-Driven Design with strategic bounded contexts and tactical patterns |
 
 ### Research (5)
 
@@ -172,6 +181,13 @@ Core workflow commands use `soleur:` prefix to avoid collisions with built-in co
 | Skill | Description |
 |-------|-------------|
 | `agent-native-architecture` | Build AI agents using prompt-native architecture |
+
+### Engineering Methodology
+
+| Skill | Description |
+|-------|-------------|
+| `atdd-developer` | Acceptance Test Driven Development with RED/GREEN/REFACTOR permission gates |
+| `user-story-writer` | Decompose features into INVEST-compliant stories using Elephant Carpaccio |
 
 ### Development Tools
 

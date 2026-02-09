@@ -15,6 +15,7 @@ Brainstorming is valuable when:
 - Trade-offs need to be explored with the user
 - The user hasn't fully articulated what they want
 - The feature scope needs refinement
+- A complex problem needs deep analysis before any solution is proposed (use Problem Analysis Mode below)
 
 Brainstorming can be skipped when:
 - Requirements are explicit and detailed
@@ -163,6 +164,10 @@ Keep sections short—200-300 words maximum. After each section of output, pause
 - "Is this the direction you want to go?"
 
 This prevents wasted effort on misaligned designs.
+
+## Problem Analysis Mode
+
+When the request is "analyze this problem" rather than "brainstorm approaches," skip Phase 2 (Explore Approaches) and focus entirely on Phase 1 with deeper problem decomposition: stakeholders, pain points, constraints, risks, and success criteria. Output a `problem-analysis.md` instead of a brainstorm doc. Do not suggest implementation solutions -- focus on WHAT and WHY, not HOW.
 
 ## Anti-Patterns to Avoid
 
