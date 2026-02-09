@@ -170,6 +170,26 @@ PREOF
 
 Present the PR URL to the user.
 
+## Phase 8: Post-Merge Cleanup
+
+After the PR is created, ask the user:
+
+"PR created. Want to merge now, or merge later?"
+
+- **Merge now** -> Run `gh pr merge <number> --squash` then proceed to cleanup below
+- **Later** -> Stop here. Cleanup will happen via SessionStart hook next session.
+
+**If merged (either now or user says "merge PR" later in the session):**
+
+```bash
+# Clean up worktree and local branch for the merged PR
+cd $(git rev-parse --show-toplevel) && bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
+```
+
+This detects `[gone]` branches (where the remote was deleted after merge), removes their worktrees, archives spec directories, and deletes local branches.
+
+**If working from a worktree:** Navigate to the main repo root first, then run cleanup.
+
 ## Important Rules
 
 - **Never skip the versioning triad.** If plugin files changed, all three files must be updated.
