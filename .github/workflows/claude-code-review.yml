@@ -34,14 +34,17 @@ jobs:
       # Workaround: Pre-install Claude Code to avoid SDK AJV crash
       # See: https://github.com/anthropics/claude-code-action/issues/852
       - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code@latest
+        id: install-claude
+        run: |
+          npm install -g @anthropic-ai/claude-code@latest
+          echo "claude_path=$(which claude)" >> "$GITHUB_OUTPUT"
 
       - name: Run Claude Code Review
         id: claude-review
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          path_to_claude_code_executable: claude
+          path_to_claude_code_executable: ${{ steps.install-claude.outputs.claude_path }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
