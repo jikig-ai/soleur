@@ -32,7 +32,7 @@ cd $(git rev-parse --show-toplevel) && ./plugins/soleur/skills/git-worktree/scri
 ```bash
 if [[ -d "knowledge-base" ]]; then
   # Load constitution for implementation guidance
-  cat knowledge-base/constitution.md
+  cat knowledge-base/overview/constitution.md
 
   # Detect feature from current branch
   current_branch=$(git branch --show-current)
@@ -47,7 +47,7 @@ fi
 ```
 
 **If knowledge-base/ exists:**
-1. Read `knowledge-base/constitution.md` - apply principles during implementation
+1. Read `knowledge-base/overview/constitution.md` - apply principles during implementation
 2. Detect feature from current branch (`feat-<name>` pattern)
 3. Read `knowledge-base/specs/feat-<name>/tasks.md` if it exists - use as work checklist alongside TodoWrite
 4. Announce: "Loaded constitution and tasks for `feat-<name>`"

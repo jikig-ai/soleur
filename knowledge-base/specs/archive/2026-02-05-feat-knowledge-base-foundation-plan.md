@@ -32,7 +32,8 @@ knowledge-base/
   learnings/          # Session learnings (time-decaying, YYYY-MM-DD-topic.md)
   patterns/           # Extracted recurring patterns (permanent)
   reviews/            # Review feedback memory (time-decaying)
-  constitution.md     # Project principles (Always/Never/Prefer per domain)
+  overview/
+    constitution.md   # Project principles (Always/Never/Prefer per domain)
 ```
 
 ## Technical Approach
@@ -58,7 +59,8 @@ knowledge-base/
   reviews/
     README.md         # Review memory format
     .gitkeep
-  constitution.md     # Initial empty constitution with domain structure
+  overview/
+    constitution.md   # Initial empty constitution with domain structure
 ```
 
 ### Phase 2: Constitution Scaffold
@@ -90,7 +92,7 @@ This allows tools to detect and migrate older constitution formats automatically
 Document how existing artifacts can migrate:
 - `docs/solutions/` content → `knowledge-base/learnings/` (with date prefix)
 - `docs/specs/` content → `knowledge-base/specs/`
-- Principles from `AGENTS.md` → `knowledge-base/constitution.md`
+- Principles from `AGENTS.md` → `knowledge-base/overview/constitution.md`
 
 **Note:** Actual migration is optional and can be done incrementally.
 
@@ -172,7 +174,7 @@ If knowledge-base/ needs to be removed:
 | `knowledge-base/patterns/.gitkeep` | Track empty directory |
 | `knowledge-base/reviews/README.md` | Review memory format |
 | `knowledge-base/reviews/.gitkeep` | Track empty directory |
-| `knowledge-base/constitution.md` | Project principles scaffold |
+| `knowledge-base/overview/constitution.md` | Project principles scaffold |
 
 ## References
 

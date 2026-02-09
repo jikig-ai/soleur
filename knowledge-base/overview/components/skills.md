@@ -156,4 +156,4 @@ From `constitution.md`:
 ## See Also
 
 - [Commands](./commands.md) - Commands that invoke skills
-- [constitution.md](../../constitution.md) - Skill conventions
+- [constitution.md](../constitution.md) - Skill conventions

@@ -95,12 +95,12 @@ soleur/
     skills/                 # Specialized capabilities
     .claude-plugin/         # Plugin manifest
   knowledge-base/           # Project documentation
-    constitution.md         # Coding conventions
     learnings/              # Documented solutions
     specs/                  # Feature specifications
     brainstorms/            # Design explorations
     plans/                  # Implementation plans
     overview/               # This documentation
+      constitution.md       # Coding conventions
 ```
 
 ## Key Concepts
@@ -140,6 +140,6 @@ claude plugin install soleur
 
 ## See Also
 
-- [constitution.md](../constitution.md) - Coding conventions
+- [constitution.md](./constitution.md) - Coding conventions
 - [Plugin README](../../plugins/soleur/README.md) - Full component reference
 - [Installation](../../README.md) - Setup instructions

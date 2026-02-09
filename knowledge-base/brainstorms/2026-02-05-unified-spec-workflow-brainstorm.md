@@ -111,7 +111,8 @@ knowledge-base/
   learnings/       # Session learnings (time-decaying)
   patterns/        # Extracted recurring patterns
   reviews/         # Review feedback memory
-  constitution.md  # Project principles (top-level, always consulted)
+  overview/
+    constitution.md  # Project principles (always consulted)
 ```
 
 **Rationale:** `knowledge-base/` is agent-agnostic and can be used by any AI coding assistant. `docs/` stays reserved for external-facing documentation.

@@ -26,8 +26,8 @@ Compound engineering knowledge over time. Every solved problem, design decision,
 
 ```
 knowledge-base/
-  constitution.md         # Project conventions (Always/Never/Prefer)
   overview/               # Project overview documentation
+    constitution.md       # Project conventions (Always/Never/Prefer)
   learnings/              # Documented solutions and patterns
     implementation-patterns/
     architecture/
@@ -167,7 +167,7 @@ ls knowledge-base/specs/feat-*/
 **Read conventions:**
 
 ```bash
-cat knowledge-base/constitution.md
+cat knowledge-base/overview/constitution.md
 ```
 
 ## Conventions
@@ -181,7 +181,7 @@ From `constitution.md`:
 
 ## Related Files
 
-- `knowledge-base/constitution.md` - Project conventions
+- `knowledge-base/overview/constitution.md` - Project conventions
 - `knowledge-base/learnings/` - Documented solutions
 - `knowledge-base/specs/` - Feature specifications
 - `knowledge-base/brainstorms/` - Design explorations

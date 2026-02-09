@@ -145,4 +145,4 @@ Task security-sentinel("Audit permission checks")
 ## See Also
 
 - [Commands](./commands.md) - Commands that invoke agents
-- [constitution.md](../../constitution.md) - Agent organization conventions
+- [constitution.md](../constitution.md) - Agent organization conventions

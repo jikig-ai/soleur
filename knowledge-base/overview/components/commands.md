@@ -158,4 +158,4 @@ sequenceDiagram
 
 - [Agents](./agents.md) - Agents invoked by commands
 - [Skills](./skills.md) - Skills used by commands
-- [constitution.md](../../constitution.md) - Command conventions
+- [constitution.md](../constitution.md) - Command conventions
