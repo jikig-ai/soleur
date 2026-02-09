@@ -31,16 +31,7 @@ Break the problem into the thinnest possible vertical slices. Each slice must de
 
 ### 3. Write INVEST-Compliant Stories
 
-Every story must be:
-
-| Criterion | Meaning |
-|-----------|---------|
-| **Independent** | No dependencies on other stories |
-| **Negotiable** | Details can be discussed and refined |
-| **Valuable** | Delivers clear value to the end user |
-| **Estimable** | Scope is clear enough to estimate |
-| **Small** | Completable in a single sprint |
-| **Testable** | Has clear acceptance criteria |
+Every story must satisfy all six INVEST criteria (Independent, Negotiable, Valuable, Estimable, Small, Testable).
 
 ### 4. Structure Each Story
 
@@ -81,10 +72,3 @@ Produce a structured document containing:
 - Rationale for decomposition approach and sequencing
 - Summary of how stories collectively solve the original problem
 
-## Quality Checklist
-
-- Each story is small enough for a single sprint
-- Stories build incrementally toward the full solution
-- No technical tasks disguised as user stories
-- Edge cases and error scenarios are separate stories when significant
-- Different user personas and their unique needs are considered

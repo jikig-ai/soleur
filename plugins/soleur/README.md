@@ -96,17 +96,16 @@ Capture learnings from your work. This command:
 
 Agents are organized into categories for easier discovery.
 
-### Review (15)
+### Review (14)
 
 | Agent | Description |
 |-------|-------------|
 | `agent-native-reviewer` | Verify features are agent-native (action + context parity) |
 | `architecture-strategist` | Analyze architectural decisions and compliance |
-| `code-quality-analyst` | Structured code smell detection with Fowler's 5-phase framework and refactoring roadmap |
+| `code-quality-analyst` | Formal quality reports with severity-scored smells and prioritized refactoring roadmaps |
 | `code-simplicity-reviewer` | Final pass for simplicity and minimalism |
 | `data-integrity-guardian` | Database migrations and data integrity |
 | `data-migration-expert` | Validate ID mappings match production, check for swapped values |
-| `ddd-architect` | Domain-Driven Design with strategic bounded contexts and tactical patterns |
 | `deployment-verification-agent` | Create Go/No-Go deployment checklists for risky data changes |
 | `dhh-rails-reviewer` | Rails review from DHH's perspective |
 | `kieran-rails-reviewer` | Rails code review with strict conventions |
@@ -115,6 +114,12 @@ Agents are organized into categories for easier discovery.
 | `performance-oracle` | Performance analysis and optimization |
 | `security-sentinel` | Security audits and vulnerability assessments |
 | `test-design-reviewer` | Score test quality using Farley's 8 properties with weighted rubric |
+
+### Design (1)
+
+| Agent | Description |
+|-------|-------------|
+| `ddd-architect` | Domain-Driven Design with strategic bounded contexts and tactical patterns |
 
 ### Research (5)
 

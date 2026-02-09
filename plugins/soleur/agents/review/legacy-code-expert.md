@@ -28,31 +28,11 @@ Map all dependencies that make the code hard to test:
 
 ### Step 3: Identify Seams
 
-A seam is a place where behavior can be altered without editing the code at that point.
-
-| Seam Type | How It Works | When to Use |
-|-----------|-------------|-------------|
-| **Object Seam** | Override methods via subclassing or interfaces | OOP code with virtual methods |
-| **Preprocessing Seam** | Replace via macros, includes, or build config | C/C++ or compiled languages |
-| **Link Seam** | Swap implementations at link/import time | Dependency injection, module systems |
+A seam is a place where behavior can be altered without editing the code at that point. Classify each seam as Object (subclassing/interfaces), Preprocessing (macros/build config), or Link (dependency injection/module swaps).
 
 ### Step 4: Apply Dependency-Breaking Techniques
 
-Select from Feathers' 24 techniques based on the situation:
-
-- **Adapt Parameter** - Wrap a parameter behind an interface
-- **Break Out Method Object** - Extract a complex method into its own class
-- **Extract and Override Call** - Make a method virtual, override in test subclass
-- **Extract and Override Factory Method** - Override object creation in tests
-- **Extract Interface** - Create an interface from a concrete class
-- **Introduce Instance Delegator** - Replace static call with instance method
-- **Parameterize Constructor** - Pass dependencies instead of creating them
-- **Parameterize Method** - Add parameters to break hidden dependencies
-- **Pull Up Feature** - Move shared behavior to a base class
-- **Push Down Dependency** - Move problematic dependency to a subclass
-- **Replace Function with Function Pointer** - Enable runtime substitution
-- **Replace Global Reference with Getter** - Wrap global access in overridable method
-- **Subclass and Override Method** - The workhorse technique for adding tests
+Select from Feathers' 24 dependency-breaking techniques based on the seams identified. Recommend the least invasive technique that makes the code testable.
 
 ## Output Format
 

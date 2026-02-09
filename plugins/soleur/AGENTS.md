@@ -28,6 +28,7 @@ Before committing ANY changes:
 
 ```text
 agents/
+├── design/     # Design and architecture agents
 ├── review/     # Code review agents
 ├── research/   # Research and analysis agents
 └── workflow/   # Workflow automation agents

@@ -1,6 +1,6 @@
 ---
 name: test-design-reviewer
-description: "Use this agent when you need to evaluate test quality using Dave Farley's 8 properties of good tests. It produces a weighted Farley Score (1-10 per property) with letter grades and prioritized improvement recommendations. <example>Context: The user has written tests for a new feature and wants quality feedback.\\nuser: \"I've added tests for the new billing module. Are they any good?\"\\nassistant: \"I'll use the test-design-reviewer agent to score your tests against Farley's 8 properties and identify improvements.\"\\n<commentary>\\nThe user wants test quality assessment, not just coverage numbers. The test-design-reviewer provides a structured scoring framework.\\n</commentary>\\n</example>\\n\\n<example>\\nContext: The user is refactoring a test suite and wants to prioritize improvements.\\nuser: \"Our test suite is slow and flaky. Where should we focus cleanup efforts?\"\\nassistant: \"Let me launch the test-design-reviewer to score the suite across all 8 quality properties and prioritize the weakest areas.\"\\n<commentary>\\nFlaky and slow tests need systematic evaluation across multiple quality dimensions, which is exactly what the Farley Score provides.\\n</commentary>\\n</example>"
+description: "Use this agent when you need to evaluate test quality using Dave Farley's 8 properties of good tests. It produces a weighted Test Quality Score (1-10 per property) with letter grades and prioritized improvement recommendations. <example>Context: The user has written tests for a new feature and wants quality feedback.\\nuser: \"I've added tests for the new billing module. Are they any good?\"\\nassistant: \"I'll use the test-design-reviewer agent to score your tests against Farley's 8 properties and identify improvements.\"\\n<commentary>\\nThe user wants test quality assessment, not just coverage numbers. The test-design-reviewer provides a structured scoring framework.\\n</commentary>\\n</example>\\n\\n<example>\\nContext: The user is refactoring a test suite and wants to prioritize improvements.\\nuser: \"Our test suite is slow and flaky. Where should we focus cleanup efforts?\"\\nassistant: \"Let me launch the test-design-reviewer to score the suite across all 8 quality properties and prioritize the weakest areas.\"\\n<commentary>\\nFlaky and slow tests need systematic evaluation across multiple quality dimensions, which is exactly what the Test Quality Score provides.\\n</commentary>\\n</example>"
 model: inherit
 ---
 
@@ -23,10 +23,12 @@ Score each property 1-10:
 | **Fast** | Does the test run quickly enough for rapid feedback? |
 | **First (TDD)** | Was the test written before the implementation? |
 
-## Farley Score Formula
+## Test Quality Score
+
+Weighted average inspired by Farley's 8 properties (weights reflect relative impact on test suite health):
 
 ```
-Farley Score = (U*1.5 + M*1.5 + R*1.25 + A*1.0 + N*1.0 + G*1.0 + F*0.75 + T*1.0) / 9
+Score = (U + M + R + A + N + G + F + T) / 8
 ```
 
 ## Grade Bands
@@ -54,7 +56,7 @@ Farley Score = (U*1.5 + M*1.5 + R*1.25 + A*1.0 + N*1.0 + G*1.0 + F*0.75 + T*1.0)
 | Fast | X/10 | Brief justification |
 | First (TDD) | X/10 | Brief justification |
 
-**Farley Score: X.X / 10 (Grade: X)**
+**Test Quality Score: X.X / 10 (Grade: X)**
 
 ### Top 3 Recommendations
 
