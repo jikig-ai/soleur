@@ -58,6 +58,7 @@ fi
 ```
 
 **If knowledge-base/ exists:**
+
 1. Read `CLAUDE.md` if it exists - apply project conventions during implementation
 2. Read `knowledge-base/overview/constitution.md` - apply principles during implementation
 3. Detect feature from current branch (`feat-<name>` pattern)
@@ -65,6 +66,7 @@ fi
 5. Announce: "Loaded constitution and tasks for `feat-<name>`"
 
 **If knowledge-base/ does NOT exist:**
+
 - Continue with standard work flow (use input document only)
 
 ### Phase 1: Quick Start
@@ -99,13 +101,16 @@ fi
    **If on the default branch**, choose how to proceed:
 
    **Option A: Create a new branch**
+
    ```bash
    git pull origin [default_branch]
    git checkout -b feature-branch-name
    ```
+
    Use a meaningful name based on the work (e.g., `feat/user-authentication`, `fix/email-validation`).
 
    **Option B: Use a worktree (recommended for parallel development)**
+
    ```bash
    skill: git-worktree
    # The skill will create a new branch from the default branch in an isolated worktree
@@ -134,7 +139,7 @@ fi
 
    For each task in priority order:
 
-   ```
+   ```text
    while (tasks remain):
      - Mark task as in_progress in TodoWrite
      - Read any referenced files from the plan
@@ -163,6 +168,7 @@ fi
    **Heuristic:** "Can I write a commit message that describes a complete, valuable change? If yes, commit. If the message would be 'WIP' or 'partial X', wait."
 
    **Commit workflow:**
+
    ```bash
    # 1. Verify tests pass (use project's test command)
    # Examples: bin/rails test, npm test, pytest, go test, etc.
@@ -234,7 +240,7 @@ fi
 
    Run reviewers in parallel with Task tool:
 
-   ```
+   ```text
    Task(code-simplicity-reviewer): "Review changes for simplicity"
    Task(kieran-rails-reviewer): "Check Rails conventions"
    ```
@@ -276,19 +282,23 @@ fi
    For **any** design changes, new views, or UI modifications, you MUST capture and upload screenshots:
 
    **Step 1: Start dev server** (if not running)
+
    ```bash
    bin/dev  # Run in background
    ```
 
    **Step 2: Capture screenshots with agent-browser CLI**
+
    ```bash
    agent-browser open http://localhost:3000/[route]
    agent-browser snapshot -i
    agent-browser screenshot output.png
    ```
+
    See the `agent-browser` skill for detailed usage.
 
    **Step 3: Upload using imgup skill**
+
    ```bash
    skill: imgup
    # Then upload each screenshot:

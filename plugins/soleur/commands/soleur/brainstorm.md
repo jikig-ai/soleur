@@ -38,6 +38,7 @@ Read `CLAUDE.md` if it exists - apply project conventions during brainstorming.
 Evaluate whether brainstorming is needed based on the feature description.
 
 **Clear requirements indicators:**
+
 - Specific acceptance criteria provided
 - Referenced existing patterns to follow
 - Described exact expected behavior
@@ -61,6 +62,7 @@ Focus on: similar features, established patterns, CLAUDE.md guidance.
 Use the **AskUserQuestion tool** to ask questions **one at a time**.
 
 **Guidelines (see `brainstorming` skill for detailed techniques):**
+
 - Prefer multiple choice when natural options exist
 - Start broad (purpose, users) then narrow (constraints, edge cases)
 - Validate assumptions explicitly
@@ -73,6 +75,7 @@ Use the **AskUserQuestion tool** to ask questions **one at a time**.
 Propose **2-3 concrete approaches** based on research and conversation.
 
 For each approach, provide:
+
 - Brief description (2-3 sentences)
 - Pros and cons
 - When it's best suited
@@ -97,17 +100,21 @@ fi
 
 1. **Get feature name** from user or derive from brainstorm topic (kebab-case)
 2. **Create worktree + spec directory:**
+
    ```bash
    ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh feature <name>
    ```
+
    This creates:
    - `.worktrees/feat-<name>/` (worktree)
    - `knowledge-base/specs/feat-<name>/` (spec directory in worktree)
 
 3. **Set worktree path for subsequent file operations:**
-   ```
+
+   ```text
    WORKTREE_PATH=".worktrees/feat-<name>"
    ```
+
    All files written after this point MUST use this path prefix.
 
 ### Phase 3.5: Capture the Design
@@ -115,6 +122,7 @@ fi
 Write the brainstorm document. **Use worktree path if created.**
 
 **File path:**
+
 - If worktree exists: `${WORKTREE_PATH}/knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`
 - If no worktree: `knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`
 
@@ -127,6 +135,7 @@ Ensure the brainstorms directory exists before writing.
 **If worktree was created:**
 
 1. **Check for existing issue reference in feature_description:**
+
    ```bash
    # Parse for issue patterns: #N (first occurrence)
    existing_issue=$(echo "<feature_description>" | grep -oE '#[0-9]+' | head -1 | tr -d '#')
@@ -156,9 +165,11 @@ Ensure the brainstorms directory exists before writing.
    ```
 
 2. **Create GitHub issue** (only if no valid existing issue):
+
    ```bash
    gh issue create --title "feat: <Feature Title>" --body "..."
    ```
+
    Include in the issue body:
    - Summary of what's being built (from brainstorm)
    - Link to brainstorm document
@@ -168,6 +179,7 @@ Ensure the brainstorms directory exists before writing.
    - If replacing closed issue: "Replaces closed #$existing_issue"
 
 3. **Update existing issue with artifact links** (if using existing issue):
+
    ```bash
    existing_body=$(gh issue view "$existing_issue" --json body --jq .body)
    new_body="${existing_body}
@@ -191,9 +203,11 @@ Ensure the brainstorms directory exists before writing.
 5. **Save spec.md** to worktree: `${WORKTREE_PATH}/knowledge-base/specs/feat-<name>/spec.md`
 
 6. **Switch to worktree:**
+
    ```bash
    cd .worktrees/feat-<name>
    ```
+
    **IMPORTANT:** All subsequent work for this feature should happen in the worktree, not the main repository. Announce the switch clearly to the user.
 
 7. **Announce:**
@@ -201,6 +215,7 @@ Ensure the brainstorms directory exists before writing.
    - If created new issue: "Spec saved. GitHub issue #N created. **Now working in worktree:** `.worktrees/feat-<name>`. Run `/soleur:plan` to create tasks."
 
 **If knowledge-base/ does NOT exist:**
+
 - Brainstorm saved to `knowledge-base/brainstorms/` only (no worktree)
 - No spec or issue created
 
@@ -211,6 +226,7 @@ Use **AskUserQuestion tool** to present next steps:
 **Question:** "Brainstorm captured. Now in worktree `feat-<name>`. What would you like to do next?"
 
 **Options:**
+
 1. **Proceed to planning** - Run `/soleur:plan` (will auto-detect this brainstorm)
 2. **Refine design further** - Continue exploring
 3. **Done for now** - Return later
@@ -219,7 +235,7 @@ Use **AskUserQuestion tool** to present next steps:
 
 When complete, display:
 
-```
+```text
 Brainstorm complete!
 
 Document: knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md
@@ -236,6 +252,7 @@ Next: Run `/soleur:plan` when ready to implement.
 ```
 
 **Issue line format:**
+
 - `#N (using existing)` - When brainstorm started with an existing issue reference
 - `#N (created)` - When a new issue was created
 - `none` - When no worktree/issue was created
