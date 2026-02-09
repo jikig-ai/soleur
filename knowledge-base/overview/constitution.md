@@ -27,6 +27,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Every plugin change must update three files: plugin.json (version), CHANGELOG.md, and README.md (counts/tables)
 - Organize agents into category subdirectories (review/, research/, design/, workflow/, docs/)
 - Skills must have a SKILL.md file and may include scripts/, references/, and assets/ subdirectories
+- Lifecycle workflows with hooks must cover every state transition with a cleanup trigger; verify no gaps between create, ship, merge, and session-start
 
 ### Never
 
