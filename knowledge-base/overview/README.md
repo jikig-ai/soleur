@@ -79,6 +79,14 @@ graph TB
 | [Skills](./components/skills.md) | 16 | Specialized capabilities |
 | [Knowledge Base](./components/knowledge-base.md) | 1 | Documentation system |
 
+Each component has detailed documentation in [components/](./components/) covering its purpose, available items, usage patterns, and conventions. See individual component docs for full reference.
+
+## Constitution
+
+The [constitution](./constitution.md) defines project principles organized by domain (Code Style, Architecture, Testing, Proposals, Specs, Tasks). Each domain uses **Always/Never/Prefer** categories to express rules at different levels of strictness.
+
+Commands like `/soleur:plan` and `/soleur:work` read the constitution automatically to guide decisions. `/soleur:sync` discovers new conventions from the codebase and writes them as constitution rules. `/soleur:compound` promotes learnings to constitution principles when appropriate.
+
 ## Directory Structure
 
 ```
@@ -140,6 +148,10 @@ claude plugin install soleur
 
 ## See Also
 
-- [constitution.md](./constitution.md) - Coding conventions
+- [Constitution](./constitution.md) - Project principles (Always/Never/Prefer rules by domain)
+- [Agents](./components/agents.md) - AI agent categories and usage
+- [Commands](./components/commands.md) - Slash command reference
+- [Skills](./components/skills.md) - Specialized capabilities
+- [Knowledge Base](./components/knowledge-base.md) - Documentation system structure
 - [Plugin README](../../plugins/soleur/README.md) - Full component reference
 - [Installation](../../README.md) - Setup instructions
