@@ -74,9 +74,9 @@ graph TB
 
 | Component | Count | Description |
 |-----------|-------|-------------|
-| [Agents](./components/agents.md) | 28 | AI agents for specialized tasks |
-| [Commands](./components/commands.md) | 25 | Slash commands for workflow |
-| [Skills](./components/skills.md) | 16 | Specialized capabilities |
+| [Agents](./components/agents.md) | 18 | AI agents for specialized tasks |
+| [Commands](./components/commands.md) | 26 | Slash commands for workflow |
+| [Skills](./components/skills.md) | 17 | Specialized capabilities |
 | [Knowledge Base](./components/knowledge-base.md) | 1 | Documentation system |
 
 Each component has detailed documentation in [components/](./components/) covering its purpose, available items, usage patterns, and conventions. See individual component docs for full reference.
@@ -95,9 +95,7 @@ soleur/
     agents/                 # AI agents by category
       review/               # Code review agents
       research/             # Research and analysis
-      design/               # Design and UI agents
       workflow/             # Workflow automation
-      docs/                 # Documentation agents
     commands/               # Slash commands
       soleur/               # Core workflow commands
     skills/                 # Specialized capabilities
@@ -122,9 +120,7 @@ Every solved problem contributes to the knowledge base. Future similar problems 
 Agents are organized by function:
 - **Review agents** catch issues before PR
 - **Research agents** gather context and best practices
-- **Design agents** verify UI implementations
 - **Workflow agents** automate repetitive tasks
-- **Doc agents** generate documentation
 
 ### Convention Over Configuration
 

@@ -30,9 +30,7 @@ Before committing ANY changes:
 agents/
 ├── review/     # Code review agents
 ├── research/   # Research and analysis agents
-├── design/     # Design and UI agents
-├── workflow/   # Workflow automation agents
-└── docs/       # Documentation agents
+└── workflow/   # Workflow automation agents
 
 commands/
 ├── soleur/  # Core workflow commands (soleur:plan, soleur:review, etc.)
