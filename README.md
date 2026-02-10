@@ -8,6 +8,7 @@
   - [The Workflow](#the-workflow)
   - [Installation](#installation)
 - [Contributing](#contributing)
+- [Community](#community)
 - [Credits](#credits)
 
 ## Overview
@@ -108,6 +109,10 @@ claude --plugin-dir ./plugins/soleur
 ```
 
 This loads the plugin directly without installation, so you can test changes immediately.
+
+## Community
+
+Join the conversation on [Discord](https://discord.gg/PYZbPBKMUY).
 
 ## Credits
 
