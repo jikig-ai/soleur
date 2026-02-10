@@ -5,6 +5,18 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-02-10
+
+### Added
+
+- Consolidate & archive KB artifacts option in `/soleur:compound` decision menu (Option 2, `feat-*` branches only)
+  - Branch-name glob discovery for brainstorms, plans, and specs
+  - Single-agent knowledge extraction proposing updates to constitution, component docs, and overview README
+  - One-at-a-time approval flow with Accept/Skip/Edit and idempotency checking
+  - `git mv` archival with `YYYYMMDD-HHMMSS` timestamp prefix preserving git history
+  - Context-aware archival confirmation (different message when all proposals skipped)
+  - Single commit for all changes enabling clean `git revert`
+
 ## [1.10.0] - 2026-02-09
 
 ### Added

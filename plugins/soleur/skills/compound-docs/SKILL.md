@@ -242,14 +242,14 @@ If this issue has automatic indicators suggesting it might be critical:
 
 Then in the decision menu (Step 8), add a note:
 ```
-💡 This might be worth adding to Required Reading (Option 2)
+💡 This might be worth adding to Required Reading (Option 3)
 ```
 
-But **NEVER auto-promote**. User decides via decision menu (Option 2).
+But **NEVER auto-promote**. User decides via decision menu (Option 3).
 
 **Template for critical pattern addition:**
 
-When user selects Option 2 (Add to Required Reading), use the template from `assets/critical-pattern-template.md` to structure the pattern entry. Number it sequentially based on existing patterns in `knowledge-base/learnings/patterns/critical-patterns.md`.
+When user selects Option 3 (Add to Required Reading), use the template from `assets/critical-pattern-template.md` to structure the pattern entry. Number it sequentially based on existing patterns in `knowledge-base/learnings/patterns/critical-patterns.md`.
 </step>
 
 </critical_sequence>
@@ -270,12 +270,13 @@ File created:
 
 What's next?
 1. Continue workflow (recommended)
-2. Add to Required Reading - Promote to critical patterns (critical-patterns.md)
-3. Link related issues - Connect to similar problems
-4. Add to existing skill - Add to a learning skill (e.g., hotwire-native)
-5. Create new skill - Extract into new learning skill
-6. View documentation - See what was captured
-7. Other
+2. Consolidate & archive KB artifacts (feat-* branches only)
+3. Add to Required Reading - Promote to critical patterns (critical-patterns.md)
+4. Link related issues - Connect to similar problems
+5. Add to existing skill - Add to a learning skill (e.g., hotwire-native)
+6. Create new skill - Extract into new learning skill
+7. View documentation - See what was captured
+8. Other
 ```
 
 **Handle responses:**
@@ -285,7 +286,175 @@ What's next?
 - Return to calling skill/workflow
 - Documentation is complete
 
-**Option 2: Add to Required Reading** ⭐ PRIMARY PATH FOR CRITICAL PATTERNS
+**Option 2: Consolidate & archive KB artifacts** (feat-* branches only)
+
+Extracts key insights from feature artifacts into the knowledge-base overview, then archives the source documents.
+
+**Visibility gate:** Only show this option on `feat-*` branches. Detect via:
+
+```bash
+current_branch=$(git branch --show-current)
+if [[ "$current_branch" != feat-* ]]; then
+  # Hide this option from the menu
+fi
+```
+
+If selected while not on a `feat-*` branch, notify: "This option is only available on feature branches (feat-*)." and return to the menu.
+
+**Step 2a: Artifact Discovery**
+
+Extract the slug from the current branch name:
+
+```bash
+slug="${current_branch#feat-}"
+```
+
+Glob for related artifacts:
+
+```bash
+# Find brainstorms, plans, and specs matching the feature slug
+find knowledge-base/brainstorms/ -name "*${slug}*" -not -path "*/archive/*" 2>/dev/null
+find knowledge-base/plans/ -name "*${slug}*" -not -path "*/archive/*" 2>/dev/null
+if [[ -d "knowledge-base/specs/feat-${slug}" ]]; then
+  echo "knowledge-base/specs/feat-${slug}/"
+fi
+```
+
+**If no artifacts found:** Notify "No artifacts found for feat-${slug}." and return to the decision menu.
+
+**If artifacts found:** Present the discovered list:
+
+```text
+Found artifacts for feat-${slug}:
+
+1. knowledge-base/brainstorms/2026-02-09-${slug}-brainstorm.md
+2. knowledge-base/plans/2026-02-09-feat-${slug}-plan.md
+3. knowledge-base/specs/feat-${slug}/
+
+Proceed with these? (Y/n/add more)
+```
+
+If user selects "add more," prompt for additional file paths and append to the list. This handles naming mismatches where artifacts do not match the branch slug.
+
+**Step 2b: Knowledge Extraction**
+
+A single agent reads ALL discovered artifacts and proposes updates to:
+
+- `knowledge-base/overview/constitution.md` -- new Always/Never/Prefer rules under the appropriate domain
+- `knowledge-base/overview/components/*.md` -- new component documentation entries
+- `knowledge-base/overview/README.md` -- architectural insights or pattern notes
+
+The agent produces proposals as structured markdown blocks. Each proposal specifies:
+
+- **Target file**: Which overview file to update
+- **Section**: Where in the file to insert (e.g., "Architecture > Always")
+- **Content**: The exact text to add
+
+**Step 2c: Approval Flow**
+
+Present proposals one at a time:
+
+```text
+Proposal 1 of N:
+
+Target: knowledge-base/overview/constitution.md
+Section: Architecture > Always
+Content:
+- Archive completed feature artifacts after consolidation to prevent knowledge-base bloat
+
+Accept / Skip / Edit? _
+```
+
+**Accept:** Apply the proposal immediately (see Step 2d).
+
+**Skip:** Move to the next proposal. The skipped content is not applied.
+
+**Edit:** User provides corrected text. Re-display the edited proposal for Accept/Skip.
+
+**Idempotency check:** Before applying, perform a simple substring check against the target file. If similar content already exists, flag it:
+
+```text
+Similar content found in constitution.md:
+  "Archive outdated learnings to knowledge-base/learnings/archive/"
+
+Still apply this proposal? (Y/n)
+```
+
+Let the user decide whether to apply or skip.
+
+**Step 2d: Apply Accepted Proposals**
+
+Apply each accepted proposal immediately after approval (no summary confirmation):
+
+- **Constitution updates:** Append the rule to the correct domain/category section
+- **Component doc updates:** Add new entries to the relevant component file
+- **Overview README updates:** Add architectural notes to the appropriate section
+
+**Step 2e: Archival**
+
+Archive ALL discovered artifacts regardless of how many proposals were accepted or skipped.
+
+Create archive directories on first use:
+
+```bash
+mkdir -p knowledge-base/brainstorms/archive
+mkdir -p knowledge-base/plans/archive
+mkdir -p knowledge-base/specs/archive
+```
+
+Use `git mv` with timestamp prefix for each artifact:
+
+```bash
+timestamp=$(date +%Y%m%d-%H%M%S)
+
+# Brainstorms and plans: prefix with timestamp
+git mv "knowledge-base/brainstorms/original-name.md" \
+       "knowledge-base/brainstorms/archive/${timestamp}-original-name.md"
+
+git mv "knowledge-base/plans/original-name.md" \
+       "knowledge-base/plans/archive/${timestamp}-original-name.md"
+
+# Spec directories: move entire directory
+git mv "knowledge-base/specs/feat-${slug}" \
+       "knowledge-base/specs/archive/${timestamp}-feat-${slug}"
+```
+
+**If `git mv` fails** (untracked file), add first then retry:
+
+```bash
+git add "knowledge-base/brainstorms/original-name.md"
+git mv "knowledge-base/brainstorms/original-name.md" \
+       "knowledge-base/brainstorms/archive/${timestamp}-original-name.md"
+```
+
+**Context-aware archival confirmation:**
+
+If at least one proposal was accepted:
+
+```text
+Overview files updated. Archive the source artifacts? (Y/n)
+```
+
+If all proposals were skipped:
+
+```text
+No overview updates applied. Still archive the source artifacts? (Y/n)
+```
+
+**Step 2f: Commit**
+
+All changes (overview edits + archival moves) go into a single commit:
+
+```bash
+git add -A knowledge-base/
+git commit -m "compound: consolidate and archive feat-${slug} artifacts"
+```
+
+This ensures `git revert` restores everything in one operation.
+
+After commit, return to the decision menu.
+
+**Option 3: Add to Required Reading** ⭐ PRIMARY PATH FOR CRITICAL PATTERNS
 
 User selects this when:
 - System made this mistake multiple times across different modules
@@ -299,14 +468,14 @@ Action:
 4. Add cross-reference back to this doc
 5. Confirm: "✓ Added to Required Reading. All subagents will see this pattern before code generation."
 
-**Option 3: Link related issues**
+**Option 4: Link related issues**
 
 - Prompt: "Which doc to link? (provide filename or describe)"
 - Search knowledge-base/learnings/ for the doc
 - Add cross-reference to both docs
 - Confirm: "✓ Cross-reference added"
 
-**Option 4: Add to existing skill**
+**Option 5: Add to existing skill**
 
 User selects this when the documented solution relates to an existing learning skill:
 
@@ -320,7 +489,7 @@ Example: For Hotwire Native Tailwind variants solution:
 - Add to `hotwire-native/references/resources.md` under "Project-Specific Resources"
 - Add to `hotwire-native/references/examples.md` with link to solution doc
 
-**Option 5: Create new skill**
+**Option 6: Create new skill**
 
 User selects this when the solution represents the start of a new learning domain:
 
@@ -330,12 +499,12 @@ Action:
 3. Create initial reference files with this solution as first example
 4. Confirm: "✓ Created new [skill-name] skill with this solution as first example"
 
-**Option 6: View documentation**
+**Option 7: View documentation**
 
 - Display the created documentation
 - Present decision menu again
 
-**Option 7: Other**
+**Option 8: Other**
 
 - Ask what they'd like to do
 
@@ -480,7 +649,7 @@ Documentation is successful when ALL of the following are true:
 
 **Output:**
 
-```
+```text
 ✓ Solution documented
 
 File created:
@@ -488,12 +657,13 @@ File created:
 
 What's next?
 1. Continue workflow (recommended)
-2. Add to Required Reading - Promote to critical patterns (critical-patterns.md)
-3. Link related issues - Connect to similar problems
-4. Add to existing skill - Add to a learning skill (e.g., hotwire-native)
-5. Create new skill - Extract into new learning skill
-6. View documentation - See what was captured
-7. Other
+2. Consolidate & archive KB artifacts (feat-* branches only)
+3. Add to Required Reading - Promote to critical patterns (critical-patterns.md)
+4. Link related issues - Connect to similar problems
+5. Add to existing skill - Add to a learning skill (e.g., hotwire-native)
+6. Create new skill - Extract into new learning skill
+7. View documentation - See what was captured
+8. Other
 ```
 
 ---
