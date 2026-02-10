@@ -93,17 +93,17 @@ INSTRUCTIONS:
 
 ## Acceptance Criteria
 
-- [ ] Agent Teams tier added to work.md Phase 2, before existing subagent tier
-- [ ] Gated behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`
-- [ ] Consent prompt shows teammate count, assignments, and ~7x cost note
-- [ ] `spawnTeam` failure handled: cleanup stale team, retry, fall through
-- [ ] Falls through cleanly to subagent tier when unavailable or declined
-- [ ] Tests run after teammate completion, before commit
-- [ ] Plugin version bumped to 1.12.0, CHANGELOG and README updated
+- [x] Agent Teams tier added to work.md Phase 2, before existing subagent tier
+- [x] Gated behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`
+- [x] Consent prompt shows teammate count, assignments, and ~7x cost note
+- [x] `spawnTeam` failure handled: cleanup stale team, retry, fall through
+- [x] Falls through cleanly to subagent tier when unavailable or declined
+- [x] Tests run after teammate completion, before commit
+- [x] Plugin version bumped to 1.13.0, CHANGELOG and README updated
 
 ## References
 
 - Spec: `knowledge-base/specs/feat-agent-team/spec.md`
 - Brainstorm: `knowledge-base/brainstorms/2026-02-09-agent-team-brainstorm.md`
 - Existing subagent block: `plugins/soleur/commands/soleur/work.md:138-200`
-- Plugin version: `plugins/soleur/.claude-plugin/plugin.json` (1.11.0 -> 1.12.0)
+- Plugin version: `plugins/soleur/.claude-plugin/plugin.json` (1.12.0 -> 1.13.0)

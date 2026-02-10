@@ -7,20 +7,20 @@
 
 ### 1.1 Restructure Phase 2 section 1 as tiered execution mode selection
 
-- [ ] Rename "Parallel Execution (optional)" to "Execution Mode Selection"
-- [ ] Wrap existing subagent block as "Tier B: Subagent Fan-Out"
-- [ ] Add "Tier A: Agent Teams" block before Tier B (4 steps: check, ask, do, finish)
-- [ ] Add "Tier C: Sequential" label on the existing fallthrough to task loop
-- [ ] Include `spawnTeam` failure handling (cleanup stale, retry, fall through)
-- [ ] Include teammate spawn prompt template with file list and no-commit instructions
+- [x] Rename "Parallel Execution (optional)" to "Execution Mode Selection"
+- [x] Wrap existing subagent block as "Tier B: Subagent Fan-Out"
+- [x] Add "Tier A: Agent Teams" block before Tier B (4 steps: check, ask, do, finish)
+- [x] Add "Tier C: Sequential" label on the existing fallthrough to task loop
+- [x] Include `spawnTeam` failure handling (cleanup stale, retry, fall through)
+- [x] Include teammate spawn prompt template with file list and no-commit instructions
 
 ## Phase 2: Version Bump
 
 ### 2.1 Update plugin versioning triad
 
-- [ ] Bump `plugins/soleur/.claude-plugin/plugin.json` to 1.12.0
-- [ ] Add `[1.12.0]` entry to `plugins/soleur/CHANGELOG.md`
-- [ ] Verify `plugins/soleur/README.md` counts (no new commands/skills/agents)
+- [x] Bump `plugins/soleur/.claude-plugin/plugin.json` to 1.13.0
+- [x] Add `[1.13.0]` entry to `plugins/soleur/CHANGELOG.md`
+- [x] Verify `plugins/soleur/README.md` counts (no new commands/skills/agents)
 
 ## Phase 3: Validation
 
