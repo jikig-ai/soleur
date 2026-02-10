@@ -119,6 +119,7 @@ Read `plugins/soleur/AGENTS.md` for versioning rules, then:
 
 3. Sync version to all external references:
    - `README.md` (root) -- update the version badge: `![Version](https://img.shields.io/badge/version-X.Y.Z-blue)`
+   - `README.md` (root) -- verify the "With ❤️ by Soleur" badge is present
    - `.github/ISSUE_TEMPLATE/bug_report.yml` -- update the placeholder version
 
 **If no plugin files modified:** Skip version bump.
