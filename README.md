@@ -1,12 +1,16 @@
 # soleur
 
-Orchestration engine for Claude Code -- agents, workflows, and compounding knowledge.
+Soleur is a "Company-as-a-Service" platform designed to collapse the friction between a startup idea and a $1B outcome.
+
+Currently at phase of being an Orchestration engine for Claude Code -- agents, workflows, and compounding knowledge.
 
 [![Version](https://img.shields.io/badge/version-1.12.0-blue)](https://github.com/jikig-ai/soleur/releases)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Discord](https://img.shields.io/badge/Discord-community-5865F2?logo=discord&logoColor=white)](https://discord.gg/PYZbPBKMUY)
 
 ## What is Soleur?
+
+Soleur is a "Company-as-a-Service" platform designed to collapse the friction between a startup idea and a $1B outcome.
 
 AI-powered development tools for Claude Code that get smarter with every use. Soleur provides **22 agents**, **26 commands**, and **19 skills** that compound your engineering knowledge over time -- every problem you solve makes the next one easier.
 
