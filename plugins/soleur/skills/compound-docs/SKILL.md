@@ -240,12 +240,12 @@ If this issue has automatic indicators suggesting it might be critical:
 - Affects multiple modules OR foundational stage (Stage 2 or 3)
 - Non-obvious solution
 
-Then in the decision menu (Step 8), add a note:
+Then in the decision menu, add a note:
 ```
-💡 This might be worth adding to Required Reading (Option 3)
+💡 This might be worth adding to Required Reading (Option 2)
 ```
 
-But **NEVER auto-promote**. User decides via decision menu (Option 3).
+But **NEVER auto-promote**. User decides via decision menu (Option 2).
 
 **Template for critical pattern addition:**
 
@@ -256,52 +256,22 @@ When user selects Option 3 (Add to Required Reading), use the template from `ass
 
 ---
 
-<decision_gate name="post-documentation" wait_for_user="true">
+## Automatic Consolidation (feat-* branches)
 
-## Decision Menu After Capture
+After documentation is complete and before the decision menu, automatically consolidate and archive KB artifacts on feature branches. This replaces the former manual Option 2 in the decision menu.
 
-After successful documentation, present options and WAIT for user response:
-
-```
-✓ Solution documented
-
-File created:
-- knowledge-base/learnings/[category]/[filename].md
-
-What's next?
-1. Continue workflow (recommended)
-2. Consolidate & archive KB artifacts (feat-* branches only)
-3. Add to Required Reading - Promote to critical patterns (critical-patterns.md)
-4. Link related issues - Connect to similar problems
-5. Add to existing skill - Add to a learning skill (e.g., hotwire-native)
-6. Create new skill - Extract into new learning skill
-7. View documentation - See what was captured
-8. Other
-```
-
-**Handle responses:**
-
-**Option 1: Continue workflow**
-
-- Return to calling skill/workflow
-- Documentation is complete
-
-**Option 2: Consolidate & archive KB artifacts** (feat-* branches only)
-
-Extracts key insights from feature artifacts into the knowledge-base overview, then archives the source documents.
-
-**Visibility gate:** Only show this option on `feat-*` branches. Detect via:
+**Branch detection:**
 
 ```bash
 current_branch=$(git branch --show-current)
 if [[ "$current_branch" != feat-* ]]; then
-  # Hide this option from the menu
+  # Not a feature branch -- skip consolidation entirely
 fi
 ```
 
-If selected while not on a `feat-*` branch, notify: "This option is only available on feature branches (feat-*)." and return to the menu.
+**If on a `feat-*` branch, run the following steps automatically:**
 
-**Step 2a: Artifact Discovery**
+### Auto-Consolidation Step A: Artifact Discovery
 
 Extract the slug from the current branch name:
 
@@ -320,7 +290,7 @@ if [[ -d "knowledge-base/specs/feat-${slug}" ]]; then
 fi
 ```
 
-**If no artifacts found:** Notify "No artifacts found for feat-${slug}." and return to the decision menu.
+**If no artifacts found:** Skip consolidation silently and proceed to the decision menu.
 
 **If artifacts found:** Present the discovered list:
 
@@ -331,12 +301,12 @@ Found artifacts for feat-${slug}:
 2. knowledge-base/plans/2026-02-09-feat-${slug}-plan.md
 3. knowledge-base/specs/feat-${slug}/
 
-Proceed with these? (Y/n/add more)
+Proceed with consolidation? (Y/n/add more)
 ```
 
-If user selects "add more," prompt for additional file paths and append to the list. This handles naming mismatches where artifacts do not match the branch slug.
+If user selects "add more," prompt for additional file paths and append to the list.
 
-**Step 2b: Knowledge Extraction**
+### Auto-Consolidation Step B: Knowledge Extraction
 
 A single agent reads ALL discovered artifacts and proposes updates to:
 
@@ -350,7 +320,7 @@ The agent produces proposals as structured markdown blocks. Each proposal specif
 - **Section**: Where in the file to insert (e.g., "Architecture > Always")
 - **Content**: The exact text to add
 
-**Step 2c: Approval Flow**
+### Auto-Consolidation Step C: Approval Flow
 
 Present proposals one at a time:
 
@@ -365,7 +335,7 @@ Content:
 Accept / Skip / Edit? _
 ```
 
-**Accept:** Apply the proposal immediately (see Step 2d).
+**Accept:** Apply the proposal immediately (see Step D).
 
 **Skip:** Move to the next proposal. The skipped content is not applied.
 
@@ -380,17 +350,15 @@ Similar content found in constitution.md:
 Still apply this proposal? (Y/n)
 ```
 
-Let the user decide whether to apply or skip.
+### Auto-Consolidation Step D: Apply Accepted Proposals
 
-**Step 2d: Apply Accepted Proposals**
-
-Apply each accepted proposal immediately after approval (no summary confirmation):
+Apply each accepted proposal immediately after approval:
 
 - **Constitution updates:** Append the rule to the correct domain/category section
 - **Component doc updates:** Add new entries to the relevant component file
 - **Overview README updates:** Add architectural notes to the appropriate section
 
-**Step 2e: Archival**
+### Auto-Consolidation Step E: Archival
 
 Archive ALL discovered artifacts regardless of how many proposals were accepted or skipped.
 
@@ -441,7 +409,7 @@ If all proposals were skipped:
 No overview updates applied. Still archive the source artifacts? (Y/n)
 ```
 
-**Step 2f: Commit**
+### Auto-Consolidation Step F: Commit
 
 All changes (overview edits + archival moves) go into a single commit:
 
@@ -452,9 +420,42 @@ git commit -m "compound: consolidate and archive feat-${slug} artifacts"
 
 This ensures `git revert` restores everything in one operation.
 
-After commit, return to the decision menu.
+After commit, proceed to the decision menu.
 
-**Option 3: Add to Required Reading** ⭐ PRIMARY PATH FOR CRITICAL PATTERNS
+---
+
+<decision_gate name="post-documentation" wait_for_user="true">
+
+## Decision Menu After Capture
+
+After successful documentation, present options and WAIT for user response:
+
+```
+✓ Solution documented
+
+File created:
+- knowledge-base/learnings/[category]/[filename].md
+
+What's next?
+1. Continue workflow (recommended)
+2. Add to Required Reading - Promote to critical patterns (critical-patterns.md)
+3. Link related issues - Connect to similar problems
+4. Add to existing skill - Add to a learning skill (e.g., hotwire-native)
+5. Create new skill - Extract into new learning skill
+6. View documentation - See what was captured
+7. Other
+```
+
+**Note:** Consolidation and archival of KB artifacts now runs automatically before this menu on `feat-*` branches. See "Automatic Consolidation" section above.
+
+**Handle responses:**
+
+**Option 1: Continue workflow**
+
+- Return to calling skill/workflow
+- Documentation is complete
+
+**Option 2: Add to Required Reading** ⭐ PRIMARY PATH FOR CRITICAL PATTERNS
 
 User selects this when:
 - System made this mistake multiple times across different modules
@@ -468,14 +469,14 @@ Action:
 4. Add cross-reference back to this doc
 5. Confirm: "✓ Added to Required Reading. All subagents will see this pattern before code generation."
 
-**Option 4: Link related issues**
+**Option 3: Link related issues**
 
 - Prompt: "Which doc to link? (provide filename or describe)"
 - Search knowledge-base/learnings/ for the doc
 - Add cross-reference to both docs
 - Confirm: "✓ Cross-reference added"
 
-**Option 5: Add to existing skill**
+**Option 4: Add to existing skill**
 
 User selects this when the documented solution relates to an existing learning skill:
 
@@ -489,7 +490,7 @@ Example: For Hotwire Native Tailwind variants solution:
 - Add to `hotwire-native/references/resources.md` under "Project-Specific Resources"
 - Add to `hotwire-native/references/examples.md` with link to solution doc
 
-**Option 6: Create new skill**
+**Option 5: Create new skill**
 
 User selects this when the solution represents the start of a new learning domain:
 
@@ -499,12 +500,12 @@ Action:
 3. Create initial reference files with this solution as first example
 4. Confirm: "✓ Created new [skill-name] skill with this solution as first example"
 
-**Option 7: View documentation**
+**Option 6: View documentation**
 
 - Display the created documentation
 - Present decision menu again
 
-**Option 8: Other**
+**Option 7: Other**
 
 - Ask what they'd like to do
 
@@ -657,13 +658,12 @@ File created:
 
 What's next?
 1. Continue workflow (recommended)
-2. Consolidate & archive KB artifacts (feat-* branches only)
-3. Add to Required Reading - Promote to critical patterns (critical-patterns.md)
-4. Link related issues - Connect to similar problems
-5. Add to existing skill - Add to a learning skill (e.g., hotwire-native)
-6. Create new skill - Extract into new learning skill
-7. View documentation - See what was captured
-8. Other
+2. Add to Required Reading - Promote to critical patterns (critical-patterns.md)
+3. Link related issues - Connect to similar problems
+4. Add to existing skill - Add to a learning skill (e.g., hotwire-native)
+5. Create new skill - Extract into new learning skill
+6. View documentation - See what was captured
+7. Other
 ```
 
 ---

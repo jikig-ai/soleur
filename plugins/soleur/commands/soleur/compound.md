@@ -159,9 +159,11 @@ Only with user confirmation. `git rm knowledge-base/learnings/<category>/<file>.
 
 **Remove a rule:** Read `knowledge-base/overview/constitution.md`, remove the bullet point, commit with `git commit -m "constitution: remove <domain> <category> rule"`.
 
-### Consolidate & Archive KB Artifacts (feat-* branches)
+### Automatic Consolidation & Archival (feat-* branches)
 
-On `feat-*` branches, the decision menu includes a consolidation option that:
+On `feat-*` branches, consolidation runs automatically after the learning is documented and before the decision menu. This ensures artifacts are always cleaned up as part of the standard compound flow, rather than relying on a manual menu choice.
+
+The automatic consolidation:
 
 1. **Discovers artifacts** -- globs `knowledge-base/{brainstorms,plans}/*<slug>*` and `knowledge-base/specs/feat-<slug>/` (excluding `*/archive/`)
 2. **Extracts knowledge** -- a single agent reads all artifacts and proposes updates to `constitution.md`, component docs, and overview `README.md`
@@ -169,7 +171,7 @@ On `feat-*` branches, the decision menu includes a consolidation option that:
 4. **Archives sources** -- all discovered artifacts moved to `archive/` subdirectories via `git mv` with `YYYYMMDD-HHMMSS` timestamp prefix
 5. **Single commit** -- overview edits and archival moves committed together for clean `git revert`
 
-This flow is available as Option 2 in the post-documentation decision menu. See the `compound-docs` skill for full implementation details.
+If no artifacts are found for the feature slug, consolidation is skipped silently. See the `compound-docs` skill for full implementation details.
 
 ### Worktree Cleanup (Manual)
 
@@ -253,7 +255,7 @@ issues occur in the Email Processing or Brief System modules.
 
 What's next?
 1. Continue workflow (recommended)
-2. Consolidate & archive KB artifacts (feat-* branches only)
+2. Add to Required Reading
 3. Link related documentation
 4. Update other references
 5. View documentation

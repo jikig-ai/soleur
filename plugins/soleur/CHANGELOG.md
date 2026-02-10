@@ -5,6 +5,18 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.0] - 2026-02-10
+
+### Changed
+
+- `/soleur:compound` now auto-consolidates and archives KB artifacts on `feat-*` branches after documenting a learning -- consolidation is no longer a manual menu choice (Option 2 removed, menu renumbered 1-7)
+- `/ship` Phase 2 requires `/compound` when unarchived KB artifacts exist for the feature -- Skip option is withheld until artifacts are consolidated
+
+### Added
+
+- 2 architectural principles in constitution.md: multi-tiered parallel execution model and lead-coordinated commits across all tiers
+- Archived 5 stale KB artifacts (2 brainstorms, 2 plans, 1 spec directory) from agent-team and community-contributor-audit features
+
 ## [1.13.1] - 2026-02-10
 
 ### Fixed

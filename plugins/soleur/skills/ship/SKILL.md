@@ -68,7 +68,34 @@ ls knowledge-base/learnings/**/*${FEATURE}* 2>/dev/null
 git log --oneline --since="1 week ago" -- knowledge-base/learnings/
 ```
 
-**If no recent learning exists:** Ask the user:
+**If no recent learning exists:** Check for unarchived KB artifacts before offering a choice:
+
+```bash
+# Check for unarchived artifacts matching this feature
+BRAINSTORMS=$(find knowledge-base/brainstorms/ -name "*${FEATURE}*" -not -path "*/archive/*" 2>/dev/null)
+PLANS=$(find knowledge-base/plans/ -name "*${FEATURE}*" -not -path "*/archive/*" 2>/dev/null)
+SPECS=$(ls -d "knowledge-base/specs/feat-${FEATURE}" 2>/dev/null)
+HAS_ARTIFACTS=false
+if [[ -n "$BRAINSTORMS" || -n "$PLANS" || -n "$SPECS" ]]; then
+  HAS_ARTIFACTS=true
+fi
+```
+
+**If artifacts exist (`HAS_ARTIFACTS=true`):** Do NOT offer Skip. Explain:
+
+```text
+Unarchived KB artifacts found for this feature:
+${BRAINSTORMS}
+${PLANS}
+${SPECS}
+
+/compound must run to consolidate and archive these artifacts before shipping.
+Running /soleur:compound now...
+```
+
+Then run `/soleur:compound`. The compound flow will automatically consolidate and archive the artifacts on `feat-*` branches.
+
+**If no artifacts exist (`HAS_ARTIFACTS=false`):** Offer the standard choice:
 
 "No learnings documented for this feature. Run /compound to capture what you learned?"
 
