@@ -1,0 +1,46 @@
+#cloud-config
+package_update: true
+packages:
+  - curl
+  - jq
+
+runcmd:
+  # Install Docker
+  - curl -fsSL https://get.docker.com | sh
+
+  # Configure Docker log rotation
+  - |
+    cat > /etc/docker/daemon.json << 'DOCKEREOF'
+    {
+      "log-driver": "json-file",
+      "log-opts": {
+        "max-size": "10m",
+        "max-file": "3"
+      }
+    }
+    DOCKEREOF
+  - systemctl restart docker
+
+  # Mount volume (Hetzner pre-formats with ext4 via Terraform)
+  - mkdir -p /mnt/data
+  - mount /dev/disk/by-id/scsi-0HC_Volume_* /mnt/data || true
+  - echo '/dev/disk/by-id/scsi-0HC_Volume_* /mnt/data ext4 defaults 0 2' >> /etc/fstab
+
+  # Create .env placeholder
+  - touch /mnt/data/.env
+
+  # Pull and run container
+  - docker pull ${image_name}
+  - |
+    docker run -d \
+      --name soleur-bridge \
+      --restart unless-stopped \
+      --env-file /mnt/data/.env \
+      -v /mnt/data:/home/soleur/data \
+      -p 127.0.0.1:8080:8080 \
+      ${image_name}
+
+  # SSH hardening
+  - sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+  - sed -i 's/PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+  - systemctl restart sshd
