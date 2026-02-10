@@ -76,6 +76,7 @@ Run ALL or most of these agents at the same time:
 7. Task performance-oracle(PR content)
 8. Task data-integrity-guardian(PR content)
 9. Task agent-native-reviewer(PR content) - Verify new features are agent-accessible
+10. Task code-quality-analyst(PR content) - Detect code smells and produce refactoring roadmap
 
 </parallel_tasks>
 
@@ -87,8 +88,8 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 **If PR contains database migrations (db/migrate/*.rb files) or data backfills:**
 
-14. Task data-migration-expert(PR content) - Validates ID mappings match production, checks for swapped values, verifies rollback safety
-15. Task deployment-verification-agent(PR content) - Creates Go/No-Go deployment checklist with SQL verification queries
+11. Task data-migration-expert(PR content) - Validates ID mappings match production, checks for swapped values, verifies rollback safety
+12. Task deployment-verification-agent(PR content) - Creates Go/No-Go deployment checklist with SQL verification queries
 
 **When to run migration agents:**
 
@@ -102,6 +103,23 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 - `data-migration-expert`: Verifies hard-coded mappings match production reality (prevents swapped IDs), checks for orphaned associations, validates dual-write patterns
 - `deployment-verification-agent`: Produces executable pre/post-deploy checklists with SQL queries, rollback procedures, and monitoring plans
+
+**If PR contains test files:**
+
+13. Task test-design-reviewer(PR content) - Score test quality against Farley's 8 properties
+
+**When to run test review agent:**
+
+- PR includes files matching `*_test.rb`, `*_spec.rb`
+- PR includes files matching `test_*.py`, `*_test.py`
+- PR includes files matching `*.test.ts`, `*.test.js`, `*.spec.ts`, `*.spec.js`
+- PR includes files matching `*_test.go`
+- PR includes files matching `*_test.swift`, `*Tests.swift`
+- PR includes files in `__tests__/` or `spec/` or `test/` directories
+
+**What this agent checks:**
+
+- `test-design-reviewer`: Scores tests against Farley's 8 properties, produces a weighted Test Quality Score with letter grade and top 3 improvement recommendations
 
 </conditional_agents>
 
