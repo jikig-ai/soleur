@@ -159,6 +159,18 @@ Only with user confirmation. `git rm knowledge-base/learnings/<category>/<file>.
 
 **Remove a rule:** Read `knowledge-base/overview/constitution.md`, remove the bullet point, commit with `git commit -m "constitution: remove <domain> <category> rule"`.
 
+### Consolidate & Archive KB Artifacts (feat-* branches)
+
+On `feat-*` branches, the decision menu includes a consolidation option that:
+
+1. **Discovers artifacts** -- globs `knowledge-base/{brainstorms,plans}/*<slug>*` and `knowledge-base/specs/feat-<slug>/` (excluding `*/archive/`)
+2. **Extracts knowledge** -- a single agent reads all artifacts and proposes updates to `constitution.md`, component docs, and overview `README.md`
+3. **Approval flow** -- proposals presented one at a time with Accept/Skip/Edit; idempotency checked via substring match
+4. **Archives sources** -- all discovered artifacts moved to `archive/` subdirectories via `git mv` with `YYYYMMDD-HHMMSS` timestamp prefix
+5. **Single commit** -- overview edits and archival moves committed together for clean `git revert`
+
+This flow is available as Option 2 in the post-documentation decision menu. See the `compound-docs` skill for full implementation details.
+
 ### Worktree Cleanup (Manual)
 
 At the end, if on a feature branch:
@@ -241,10 +253,11 @@ issues occur in the Email Processing or Brief System modules.
 
 What's next?
 1. Continue workflow (recommended)
-2. Link related documentation
-3. Update other references
-4. View documentation
-5. Other
+2. Consolidate & archive KB artifacts (feat-* branches only)
+3. Link related documentation
+4. Update other references
+5. View documentation
+6. Other
 ```
 
 ## The Compounding Philosophy

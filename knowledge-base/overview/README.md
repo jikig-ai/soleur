@@ -122,6 +122,10 @@ Agents are organized by function:
 - **Research agents** gather context and best practices
 - **Workflow agents** automate repetitive tasks
 
+### Knowledge-Base Lifecycle
+
+Knowledge artifacts follow a lifecycle: **create** during brainstorm/plan, **use** during work/review, **consolidate** into overview during compound, and **archive** to `*/archive/` directories after the feature ships. The overview (constitution.md, component docs, README.md) serves as the single source of truth -- individual brainstorms, plans, and specs are working documents that get archived once their insights are distilled.
+
 ### Convention Over Configuration
 
 Paths follow predictable patterns:
