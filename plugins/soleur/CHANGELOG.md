@@ -5,6 +5,13 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.1] - 2026-02-10
+
+### Fixed
+
+- `/soleur:work` Phase 4 now delegates to `/ship` skill instead of duplicating shipping steps inline -- prevents skipping `/compound`, version bumps, and artifact validation
+- Removed duplicate Quality Checklist items that `/ship` already enforces
+
 ## [1.13.0] - 2026-02-10
 
 ### Added

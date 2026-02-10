@@ -424,97 +424,23 @@ fi
 
 ### Phase 4: Ship It
 
-1. **Create Commit**
+Delegate to the `/ship` skill, which enforces the complete shipping checklist:
 
-   ```bash
-   git add .
-   git status  # Review what's being committed
-   git diff --staged  # Check the changes
+```text
+skill: ship
+```
 
-   # Commit with conventional format
-   git commit -m "$(cat <<'EOF'
-   feat(scope): description of what and why
+The `/ship` skill handles all shipping steps in order:
 
-   Brief explanation if needed.
+1. Validate artifact trail (brainstorms, specs, plans committed)
+2. Capture learnings via `/soleur:compound` (asks if not already run)
+3. Verify documentation (README counts, tables)
+4. Version bump (plugin.json + CHANGELOG + README triad)
+5. Run tests
+6. Push and create PR (with screenshots for UI changes)
+7. Post-merge cleanup (worktree removal)
 
-   🤖 Generated with [Claude Code](https://claude.com/claude-code)
-
-   Co-Authored-By: Claude <noreply@anthropic.com>
-   EOF
-   )"
-   ```
-
-2. **Capture and Upload Screenshots for UI Changes** (REQUIRED for any UI work)
-
-   For **any** design changes, new views, or UI modifications, you MUST capture and upload screenshots:
-
-   **Step 1: Start dev server** (if not running)
-
-   ```bash
-   bin/dev  # Run in background
-   ```
-
-   **Step 2: Capture screenshots with agent-browser CLI**
-
-   ```bash
-   agent-browser open http://localhost:3000/[route]
-   agent-browser snapshot -i
-   agent-browser screenshot output.png
-   ```
-
-   See the `agent-browser` skill for detailed usage.
-
-   **Step 3: Upload using imgup skill**
-
-   ```bash
-   skill: imgup
-   # Then upload each screenshot:
-   imgup -h pixhost screenshot.png  # pixhost works without API key
-   # Alternative hosts: catbox, imagebin, beeimg
-   ```
-
-   **What to capture:**
-   - **New screens**: Screenshot of the new UI
-   - **Modified screens**: Before AND after screenshots
-   - **Design implementation**: Screenshot showing Figma design match
-
-   **IMPORTANT**: Always include uploaded image URLs in PR description. This provides visual context for reviewers and documents the change.
-
-3. **Create Pull Request**
-
-   ```bash
-   git push -u origin feature-branch-name
-
-   gh pr create --title "Feature: [Description]" --body "$(cat <<'EOF'
-   ## Summary
-   - What was built
-   - Why it was needed
-   - Key decisions made
-
-   ## Testing
-   - Tests added/modified
-   - Manual testing performed
-
-   ## Before / After Screenshots
-   | Before | After |
-   |--------|-------|
-   | ![before](URL) | ![after](URL) |
-
-   ## Figma Design
-   [Link if applicable]
-
-   ---
-
-   [![With love by Soleur](https://img.shields.io/badge/With_love-by_Soleur-6366f1)](https://github.com/jikig-ai/soleur) 🤖 Generated with [Claude Code](https://claude.com/claude-code)
-   EOF
-   )"
-   ```
-
-4. **Notify User**
-   - Summarize what was completed
-   - Link to PR
-   - Note any follow-up work needed
-   - Suggest next steps if applicable
+**Do not skip this delegation.** The `/ship` skill exists specifically to prevent missed steps like forgotten `/compound` runs, uncommitted artifacts, and missing version bumps. Running Phase 4 manually is how steps get skipped.
 
 ---
 
@@ -567,7 +493,7 @@ fi
 
 ## Quality Checklist
 
-Before creating PR, verify:
+Before entering Phase 4, verify these Phase 2-3 items are complete:
 
 - [ ] All clarifying questions asked and answered
 - [ ] All TodoWrite tasks marked completed
@@ -575,12 +501,8 @@ Before creating PR, verify:
 - [ ] Linting passes (use linting-agent)
 - [ ] Code follows existing patterns
 - [ ] Figma designs match implementation (if applicable)
-- [ ] Before/after screenshots captured and uploaded (for UI changes)
-- [ ] Commit messages follow conventional format
-- [ ] PR description includes summary, testing notes, and screenshots
-- [ ] PR description includes Soleur badge
-- [ ] Run `/soleur:review` for comprehensive code review
-- [ ] Considered `/soleur:compound` for any learnings from this work
+
+Phase 4 (`/ship`) handles the rest: `/compound`, version bump, screenshots, PR creation, and post-merge cleanup.
 
 ## When to Use Reviewer Agents
 
