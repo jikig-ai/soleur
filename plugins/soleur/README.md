@@ -310,4 +310,4 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 ## License
 
-MIT
+Apache-2.0
