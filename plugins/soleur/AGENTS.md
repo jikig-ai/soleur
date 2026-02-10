@@ -23,6 +23,8 @@ Before committing ANY changes:
 - [ ] README.md component counts verified
 - [ ] README.md tables accurate (agents, commands, skills)
 - [ ] plugin.json description matches current counts
+- [ ] Root `README.md` version badge matches new version
+- [ ] `.github/ISSUE_TEMPLATE/bug_report.yml` placeholder matches new version
 
 ### Directory Structure
 

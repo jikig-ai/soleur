@@ -117,6 +117,10 @@ Read `plugins/soleur/AGENTS.md` for versioning rules, then:
    - `plugins/soleur/CHANGELOG.md` (new entry with today's date)
    - `plugins/soleur/README.md` (verify component counts)
 
+3. Sync version to all external references:
+   - `README.md` (root) -- update the version badge: `![Version](https://img.shields.io/badge/version-X.Y.Z-blue)`
+   - `.github/ISSUE_TEMPLATE/bug_report.yml` -- update the placeholder version
+
 **If no plugin files modified:** Skip version bump.
 
 ## Phase 5: Final Checklist
@@ -130,6 +134,7 @@ Ship Checklist for [branch name]:
 - [x/skip] Learnings captured (/compound)
 - [x/skip] README updated (component counts)
 - [x/skip] Version bumped (plugin.json + CHANGELOG + README)
+- [x/skip] Version synced (root README badge + bug report template)
 - [ ] Tests pass
 - [ ] Push to remote
 - [ ] Create PR
