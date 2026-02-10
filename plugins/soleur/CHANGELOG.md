@@ -5,6 +5,18 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] - 2026-02-10
+
+### Added
+
+- Agent Teams execution tier in `/soleur:work` Phase 2 -- when `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set and 3+ independent tasks exist, offers persistent teammates with peer-to-peer messaging as the highest-capability parallel execution option
+  - Tier A (Agent Teams), Tier B (Subagent Fan-Out), Tier C (Sequential) selection flow
+  - `spawnTeam` initialization with stale-team cleanup and retry
+  - Teammate spawn prompt template with explicit file lists and no-commit instructions
+  - Lead-coordinated monitoring via `TaskList`, `write`/`broadcast` messaging
+  - `requestShutdown` and `cleanup` lifecycle management
+  - Graceful fallthrough from Tier A to Tier B when unavailable or declined
+
 ## [1.12.0] - 2026-02-10
 
 ### Changed
