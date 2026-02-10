@@ -36,6 +36,7 @@ Project principles organized by domain. Add principles as you learn them.
 
 - Never delete or overwrite user data; avoid destructive commands
 - Never state conventions in constitution.md without tooling enforcement (config files, pre-commit hooks, or CI checks)
+- Never commit local config files that may contain secrets (`.claude/settings.local.json`, `.env`, `*.local.*`) -- add them to `.gitignore` at project initialization
 
 ### Prefer
 
