@@ -23,9 +23,9 @@
 
 ## Functional Requirements
 
-### FR1: Environment Gate
+### FR1: Auto-Managed Feature Flag
 
-Verify `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` before offering Agent Teams. If not set, skip to existing subagent/sequential options.
+The `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` flag is activated automatically when the user accepts Agent Teams and deactivated after shutdown/cleanup or on spawnTeam failure. Users do not set it manually.
 
 ### FR2: Consent Flow
 

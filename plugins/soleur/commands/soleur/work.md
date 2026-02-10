@@ -156,17 +156,7 @@ fi
    Persistent teammates with peer-to-peer messaging for plans where tasks share context
    or integration points.
 
-   **Step A1: Check environment**
-
-   Verify `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set:
-
-   ```bash
-   echo "${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-not set}"
-   ```
-
-   If not set, skip to Tier B.
-
-   **Step A2: Offer Agent Teams**
+   **Step A1: Offer Agent Teams**
 
    Present the user with teammate count, task assignments, and cost context:
 
@@ -181,18 +171,30 @@ fi
    Run as Agent Team? (Or decline to try subagent fan-out instead)"
 
    - If declined: fall through to Tier B
-   - If accepted: continue to Step A3
+   - If accepted: continue to Step A2
 
-   **Step A3: Initialize team and spawn teammates**
+   **Step A2: Activate Agent Teams and initialize**
 
-   Initialize team directory with `spawnTeam`:
+   Enable the experimental Agent Teams feature and initialize the team:
+
+   ```bash
+   export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+   ```
+
+   Then initialize the team directory with `spawnTeam`:
 
    ```text
-   spawnTeam("soleur-{branch-name}")
+   spawnTeam("soleur-{branch}")
    ```
 
    If `spawnTeam` fails (stale team exists): attempt `cleanup`, retry once.
-   If retry fails, fall through to Tier B.
+   If retry still fails, deactivate the flag and fall through to Tier B:
+
+   ```bash
+   unset CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+   ```
+
+   **Step A3: Spawn teammates**
 
    Spawn teammates via Task tool with `team_name` parameter. Each teammate receives
    task-specific context and instructions:
@@ -236,6 +238,12 @@ fi
    - If tests fail: fix integration issues, then commit
    - Send `requestShutdown` to all teammates
    - Run `cleanup` to remove team config and task files
+   - Deactivate the experimental flag:
+
+     ```bash
+     unset CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+     ```
+
    - Update TaskList to mark all completed tasks
 
    Then proceed to the remaining dependent tasks (if any) using the sequential loop,

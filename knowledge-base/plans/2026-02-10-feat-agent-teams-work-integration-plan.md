@@ -88,13 +88,13 @@ INSTRUCTIONS:
 - **Pattern consistency:** 4-step structure mirrors the existing subagent tier.
 - **Peer-to-peer messaging:** `write`/`broadcast` differentiate Agent Teams from subagents -- teammates can coordinate on shared context and integration points.
 - **File conflict risk:** Accepted for v1. Lead assigns explicit file lists. Not enforced.
-- **Team naming:** `soleur-{branch-name}` convention.
+- **Team naming:** `soleur-{branch}` convention.
 - **spawnTeam failure:** Cleanup stale team, retry once, then fall through to Tier B.
 
 ## Acceptance Criteria
 
 - [x] Agent Teams tier added to work.md Phase 2, before existing subagent tier
-- [x] Gated behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`
+- [x] Flag auto-managed: activated on accept, deactivated on shutdown/failure
 - [x] Consent prompt shows teammate count, assignments, and ~7x cost note
 - [x] `spawnTeam` failure handled: cleanup stale team, retry, fall through
 - [x] Falls through cleanly to subagent tier when unavailable or declined
