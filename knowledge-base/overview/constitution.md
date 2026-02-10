@@ -28,6 +28,9 @@ Project principles organized by domain. Add principles as you learn them.
 - Organize agents into category subdirectories (review/, research/, design/, workflow/, docs/)
 - Skills must have a SKILL.md file and may include scripts/, references/, and assets/ subdirectories
 - Lifecycle workflows with hooks must cover every state transition with a cleanup trigger; verify no gaps between create, ship, merge, and session-start
+- Operations that modify the knowledge-base or move files must use `git mv` to preserve history and produce a single atomic commit that can be reverted with `git revert`
+- New commands must be idempotent -- running the same command twice must not create duplicates or corrupt state
+- Network and external service failures must degrade gracefully -- warn (if interactive) and continue rather than abort the workflow
 
 ### Never
 
@@ -50,6 +53,10 @@ Project principles organized by domain. Add principles as you learn them.
 - Commands should check for knowledge-base/ existence and fall back gracefully when not present
 - Run `/soleur:plan_review` before implementing plans with new directories, external APIs, or complex algorithms
 - Parallel subagent fan-out requires explicit user consent, bounded agent count (max 5), and lead-coordinated commits (subagents do not commit independently)
+- Design for v2, implement for v1 -- keep interfaces extensible but ship the simplest working version first (no multi-agent orchestration, no CLI flags, no caching until users request it)
+- When adopting external components (agents, skills, libraries), trim to essentials that leverage the model's built-in knowledge rather than embedding encyclopedic reference material
+- Run `/soleur:plan_review` after brainstorm-generated plans to catch scope bloat -- plans consistently shrink by 30-50% after review (e.g., 9 components to 6, 3 parallel agents to 1, multi-file to single-file)
+- When merging or consolidating duplicate functionality, prefer a single inline implementation over separate files/agents/skills until complexity demands extraction
 
 ## Testing
 
