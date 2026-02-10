@@ -7,7 +7,7 @@ Currently at phase of being an Orchestration engine for Claude Code -- agents, w
 [![Version](https://img.shields.io/badge/version-1.13.1-blue)](https://github.com/jikig-ai/soleur/releases)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Discord](https://img.shields.io/badge/Discord-community-5865F2?logo=discord&logoColor=white)](https://discord.gg/PYZbPBKMUY)
-[![With ❤️ by Soleur](https://img.shields.io/badge/with%20❤️%20by-Soleur-ff69b4)](https://github.com/jikig-ai/soleur)
+[![With ❤️ by Soleur](https://img.shields.io/badge/with%20❤️%20by-Soleur-yellow)](https://github.com/jikig-ai/soleur)
 
 ## What is Soleur?
 
