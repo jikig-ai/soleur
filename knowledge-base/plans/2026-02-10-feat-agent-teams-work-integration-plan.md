@@ -9,65 +9,53 @@ issue: "#26"
 
 ## Overview
 
-Add an Agent Teams execution block to Phase 2 of `work.md`, positioned before the existing subagent fan-out block. When `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set and 3+ independent tasks exist, offer Agent Teams as the highest-capability parallel execution tier.
+Add an Agent Teams execution tier to Phase 2 of `work.md`, positioned before the existing subagent fan-out tier. When `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set and 3+ independent tasks exist, offer Agent Teams as the highest-capability parallel execution option.
 
 ## Problem Statement
 
-The subagent fan-out tier (#31) uses fire-and-gather Task tool spawns that cannot communicate. For plans with tasks that share context or integration points, persistent teammates with peer-to-peer messaging provide better coordination.
+The subagent fan-out tier (#31) uses fire-and-gather spawns that cannot communicate. For plans with tasks that share context or integration points, persistent teammates with peer-to-peer messaging provide better coordination.
 
 ## Proposed Solution
 
-Insert a new Agent Teams block into `plugins/soleur/commands/soleur/work.md` Phase 2, following the same detect/offer/execute pattern as the existing subagent block. The block uses the native TeammateTool API and team-aware Task tools.
-
-### Phase 2 Flow After Change
+Restructure Phase 2 section 1 from "Parallel Execution (optional)" into an "Execution Mode Selection" section with three tiers:
 
 ```
-Step 0: Agent Teams (NEW)
-  -> Check env var
-  -> If available + 3+ independent tasks -> offer with cost context
-  -> If accepted -> ATDD: write tests first, then spawn team, execute, test, commit, cleanup
-  -> If declined -> fall through
+1. **Execution Mode Selection**
 
-Step 1: Subagent fan-out (EXISTING, unchanged)
-  -> If 3+ independent tasks -> offer
-  -> If accepted -> spawn, collect, test, commit
-  -> If declined -> fall through
+   **Tier A: Agent Teams** (NEW -- highest capability, ~7x cost)
+     -> Check env var + 3+ independent tasks -> offer -> execute or fall through
 
-Step 2-6: Sequential loop (EXISTING, unchanged)
+   **Tier B: Subagent Fan-Out** (EXISTING, unchanged)
+     -> 3+ independent tasks -> offer -> execute or fall through
+
+   **Tier C: Sequential** (EXISTING default)
+     -> Proceed to task loop
 ```
 
-### Agent Teams Block Structure
+### Agent Teams Tier (4 steps)
 
-The new block has 5 steps:
+Mirrors the existing subagent pattern: check, ask, do, finish.
 
-**Step 0.1: Check environment and analyze independence**
+**Step 1: Check environment and analyze independence**
 - Verify `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`
-- If not set, skip to Step 1 (existing subagent block)
-- Reuse the same independence analysis as Step 1 (TaskList, `blockedBy`, file overlap)
-- If fewer than 3 independent tasks, skip to Step 1
+- If not set, skip to Tier B
+- Reuse the same independence analysis (TaskList, `blockedBy`, file overlap)
+- If fewer than 3 independent tasks, skip to Tier B
 
-**Step 0.2: Offer Agent Teams**
+**Step 2: Offer Agent Teams**
 - Use AskUserQuestion with teammate count, task assignments, and ~7x cost note
-- If declined, fall through to Step 1 (subagent block)
+- If declined, fall through to Tier B
 
-**Step 0.3: Write acceptance tests (ATDD)**
-- Before spawning teammates, the lead writes acceptance tests for the tasks that will be parallelized
-- These tests define the expected behavior and serve as the integration verification gate
-- Tests should be failing (red) at this point -- teammates will make them pass
-
-**Step 0.4: Initialize team and spawn teammates**
+**Step 3: Initialize team and spawn teammates**
 - `spawnTeam` to initialize team directory
+- If `spawnTeam` fails (stale team exists): attempt `cleanup`, retry once, then fall through to Tier B
 - Spawn teammates via Task tool with `team_name` parameter
-- Each teammate receives: CLAUDE.md/constitution context, branch, working directory, assigned tasks, file list, instructions (no commits, mark tasks via TaskUpdate, do not modify unlisted files)
+- Teammates read CLAUDE.md/constitution from the working directory (not passed in prompt)
 
-**Step 0.5: Monitor, test, and shutdown**
+**Step 4: Monitor, test, commit, and shutdown**
 - Lead monitors progress via `TaskList`, coordinates via `write`/`broadcast`
-- If a teammate fails: retry once, then lead completes that task sequentially
-- When all tasks are marked complete: lead runs full test suite (while teammates are still alive)
-- If tests fail: lead coordinates fixes with teammates via `write`
-- If tests pass: lead creates incremental commits per logical unit
-- Lead sends `requestShutdown`, then runs `cleanup`
-- Proceed to remaining dependent tasks (sequential loop) or Phase 3
+- If a teammate fails, lead completes that task sequentially
+- When all tasks complete: run full test suite, create incremental commits, `requestShutdown`, `cleanup`
 
 ### Teammate Spawn Prompt Template
 
@@ -85,53 +73,37 @@ FILES YOU MAY MODIFY:
 [Explicit list of files this teammate is allowed to touch]
 
 INSTRUCTIONS:
-- Read referenced files before modifying them
+- Read CLAUDE.md and referenced files before modifying them
 - Follow existing codebase patterns and conventions
-- Make the failing acceptance tests pass for your assigned tasks
+- Write tests for new functionality
 - Run tests relevant to your changes
 - Do NOT commit -- the lead will commit after reviewing all work
 - Do NOT modify files outside the list above
-- Mark each task as completed via TaskUpdate when done
-- Message the lead via write if you need coordination or are blocked"
+- Mark each task as completed via TaskUpdate when done"
 ```
 
 ## Technical Considerations
 
-- **Single file change:** Only `work.md` needs modification. The Agent Teams API is native to Claude Code -- no plugin infrastructure needed.
-- **Pattern consistency:** Follows the same detect/offer/execute-or-fallthrough pattern as the subagent block.
-- **ATDD flow:** Lead writes failing tests first, teammates implement to pass them. This provides an integration safety net before the lead commits.
-- **File conflict risk:** Accepted for v1. Lead assigns explicit file lists to prevent overlap. Not enforced.
-- **Team naming:** `soleur-{branch-name}` convention for uniqueness.
+- **Single file change:** Only `work.md` needs modification.
+- **Pattern consistency:** 4-step structure mirrors the existing subagent tier.
+- **Peer-to-peer messaging:** `write`/`broadcast` differentiate Agent Teams from subagents -- teammates can coordinate on shared context and integration points.
+- **File conflict risk:** Accepted for v1. Lead assigns explicit file lists. Not enforced.
+- **Team naming:** `soleur-{branch-name}` convention.
+- **spawnTeam failure:** Cleanup stale team, retry once, then fall through to Tier B.
 
 ## Acceptance Criteria
 
-- [ ] Agent Teams block added to work.md Phase 2, before existing subagent block
-- [ ] Environment gate checks `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`
+- [ ] Agent Teams tier added to work.md Phase 2, before existing subagent tier
+- [ ] Gated behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`
 - [ ] Consent prompt shows teammate count, assignments, and ~7x cost note
-- [ ] ATDD step: lead writes acceptance tests before spawning teammates
-- [ ] Teammates spawned via Task tool with `team_name` parameter
-- [ ] Teammate prompt includes explicit file list and no-commit instructions
-- [ ] Lead monitors via TaskList, coordinates via write/broadcast
-- [ ] Failed teammate gets one retry, then lead completes sequentially
-- [ ] Tests run while teammates are alive (before shutdown)
-- [ ] Lead creates incremental commits per logical unit
-- [ ] Graceful shutdown: requestShutdown then cleanup
-- [ ] Falls through to subagent block when declined or unavailable
-- [ ] Plugin version bumped to 1.12.0
-- [ ] CHANGELOG.md updated
-- [ ] README.md counts verified
-
-## Dependencies & Risks
-
-- **Dependency:** `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` must be enabled by the user
-- **Risk:** Experimental API may change. Mitigated by keeping the block thin and isolated.
-- **Risk:** File conflicts in shared worktree. Mitigated by explicit file assignments (v1, best-effort).
-- **Risk:** ~7x token cost. Mitigated by consent prompt with cost context.
+- [ ] `spawnTeam` failure handled: cleanup stale team, retry, fall through
+- [ ] Falls through cleanly to subagent tier when unavailable or declined
+- [ ] Tests run after teammate completion, before commit
+- [ ] Plugin version bumped to 1.12.0, CHANGELOG and README updated
 
 ## References
 
 - Spec: `knowledge-base/specs/feat-agent-team/spec.md`
 - Brainstorm: `knowledge-base/brainstorms/2026-02-09-agent-team-brainstorm.md`
 - Existing subagent block: `plugins/soleur/commands/soleur/work.md:138-200`
-- Parallel execution learning: `knowledge-base/learnings/2026-02-09-parallel-subagent-fan-out-in-work-command.md`
 - Plugin version: `plugins/soleur/.claude-plugin/plugin.json` (1.11.0 -> 1.12.0)
