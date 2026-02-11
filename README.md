@@ -9,6 +9,16 @@ Currently at phase of being an Orchestration engine for Claude Code -- agents, w
 [![Discord](https://img.shields.io/badge/Discord-community-5865F2?logo=discord&logoColor=white)](https://discord.gg/PYZbPBKMUY)
 [![With ❤️ by Soleur](https://img.shields.io/badge/with%20❤️%20by-Soleur-yellow)](https://github.com/jikig-ai/soleur)
 
+## Table of Contents
+
+- [What is Soleur?](#what-is-soleur)
+- [Installation](#installation)
+- [The Workflow](#the-workflow)
+- [Contributing](#contributing)
+- [Community](#community)
+- [Credits](#credits)
+- [License](#license)
+
 ## What is Soleur?
 
 Soleur is a "Company-as-a-Service" platform designed to collapse the friction between a startup idea and a $1B outcome.
