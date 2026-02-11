@@ -5,8 +5,8 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends git curl openssh-client && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code CLI
-RUN curl -fsSL https://claude.ai/install.sh | sh
+# Install Claude Code CLI via npm (avoids curl-pipe-shell antipattern)
+RUN npm install -g @anthropic-ai/claude-code
 
 WORKDIR /app
 

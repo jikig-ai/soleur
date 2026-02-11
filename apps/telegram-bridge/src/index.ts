@@ -22,8 +22,11 @@ import { createHealthServer } from "./health";
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_ALLOWED_USER_ID = process.env.TELEGRAM_ALLOWED_USER_ID;
 const HEALTH_PORT = 8080;
-const CLI_RESTART_DELAY_MS = 5_000;
+const CLI_RESTART_BASE_MS = 5_000;
+const CLI_RESTART_MAX_MS = 5 * 60 * 1_000; // 5 minutes
 const PLUGIN_DIR = process.env.SOLEUR_PLUGIN_DIR ?? "";
+const CLAUDE_MODEL = process.env.CLAUDE_MODEL ?? "claude-opus-4-6";
+const SKIP_PERMISSIONS = process.env.SKIP_PERMISSIONS !== "false"; // default true for headless
 const STATUS_EDIT_INTERVAL_MS = 3_000; // Throttle status edits (Telegram allows ~20/min)
 const TYPING_INTERVAL_MS = 4_000; // Re-send typing action every 4s (lasts 5s)
 
@@ -65,6 +68,7 @@ const botApi: BotApi = {
 const bridge = new Bridge(botApi, {
   statusEditIntervalMs: STATUS_EDIT_INTERVAL_MS,
   typingIntervalMs: TYPING_INTERVAL_MS,
+  onTurnComplete: () => { consecutiveFailures = 0; },
 });
 
 // Process-level state (not part of Bridge)
@@ -76,6 +80,11 @@ const startTime = Date.now();
 // ---------------------------------------------------------------------------
 
 let cliGeneration = 0;
+let consecutiveFailures = 0;
+
+function getRestartDelay(): number {
+  return Math.min(CLI_RESTART_BASE_MS * Math.pow(2, consecutiveFailures), CLI_RESTART_MAX_MS);
+}
 
 function spawnCli(): void {
   bridge.cliState = "connecting";
@@ -87,12 +96,13 @@ function spawnCli(): void {
     "--verbose",
     "--output-format", "stream-json",
     "--input-format", "stream-json",
-    // Auto-approve all tool operations. In headless mode, control_request messages
-    // for Bash commands cause the bridge to hang since the approval UI is unreliable.
-    "--dangerously-skip-permissions",
-    "--model", "claude-opus-4-6",
+    "--model", CLAUDE_MODEL,
     "-p", "",
   ];
+
+  if (SKIP_PERMISSIONS) {
+    cliArgs.splice(1, 0, "--dangerously-skip-permissions");
+  }
 
   // Load Soleur plugin if path provided
   if (PLUGIN_DIR) {
@@ -121,21 +131,29 @@ function spawnCli(): void {
     if (!proc.stdout) return;
     const reader = proc.stdout.getReader();
     const decoder = new TextDecoder();
-    let buffer = "";
+    const bufferChunks: string[] = [];
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done || thisGeneration !== cliGeneration) break;
         const chunk = decoder.decode(value, { stream: true });
-        buffer += chunk;
+        bufferChunks.push(chunk);
 
-        // Process complete lines
+        // Process complete lines only when we see a newline
+        if (chunk.indexOf("\n") === -1) continue;
+
+        let buffer = bufferChunks.join("");
+        bufferChunks.length = 0;
+
         let newlineIdx: number;
         while ((newlineIdx = buffer.indexOf("\n")) !== -1) {
           const line = buffer.slice(0, newlineIdx).trim();
           buffer = buffer.slice(newlineIdx + 1);
           if (line && thisGeneration === cliGeneration) bridge.handleCliMessage(line);
         }
+
+        // Keep any remaining partial line
+        if (buffer) bufferChunks.push(buffer);
       }
     } catch (err) {
       if (thisGeneration === cliGeneration) console.error("CLI stdout reader error:", err);
@@ -159,7 +177,7 @@ function spawnCli(): void {
     }
   })();
 
-  // Watch for exit and auto-restart
+  // Watch for exit and auto-restart with exponential backoff
   proc.exited.then((code) => {
     console.error(`CLI process exited with code ${code}`);
     bridge.cliState = "error";
@@ -171,25 +189,27 @@ function spawnCli(): void {
     // Clean up any active status message
     bridge.cleanupTurnStatus().catch(() => {});
 
+    consecutiveFailures++;
+    const delay = getRestartDelay();
+
     // Notify user if chat is active
     if (bridge.activeChatId) {
       bot.api
-        .sendMessage(bridge.activeChatId, `CLI process exited (code ${code}). Restarting in ${CLI_RESTART_DELAY_MS / 1000}s...`)
+        .sendMessage(bridge.activeChatId, `CLI process exited (code ${code}). Restarting in ${Math.round(delay / 1000)}s...`)
         .catch(console.error);
     }
 
-    console.log(`Restarting CLI in ${CLI_RESTART_DELAY_MS / 1000}s...`);
-    setTimeout(spawnCli, CLI_RESTART_DELAY_MS);
+    console.log(`Restarting CLI in ${Math.round(delay / 1000)}s... (failure #${consecutiveFailures})`);
+    setTimeout(spawnCli, delay);
   });
 
   // Fallback: if no system/init or result arrives within 5s, mark ready anyway.
   // The CLI in --print mode with an empty prompt may not send system/init.
   setTimeout(() => {
     if (bridge.cliState === "connecting" && cliProcess && !cliProcess.killed) {
-      bridge.cliState = "ready";
       bridge.initialResultReceived = true;
-      console.log("CLI marked ready (timeout fallback)");
-      bridge.drainQueue();
+      consecutiveFailures = 0; // CLI started successfully
+      bridge.markReady("timeout fallback");
     }
   }, 5000);
 }
@@ -294,14 +314,20 @@ bot.on("message:text", async (ctx) => {
 
   // If CLI is not ready, queue with feedback
   if (bridge.cliState !== "ready" || !bridge.cliStdin) {
-    bridge.messageQueue.push({ chatId: ctx.chat.id, text });
+    if (!bridge.enqueue(ctx.chat.id, text)) {
+      await ctx.reply("Queue is full. Please wait for current messages to finish.");
+      return;
+    }
     await ctx.reply("Connecting to Claude... Your message is queued.");
     return;
   }
 
   // If currently processing another message, queue it
   if (bridge.processing) {
-    bridge.messageQueue.push({ chatId: ctx.chat.id, text });
+    if (!bridge.enqueue(ctx.chat.id, text)) {
+      await ctx.reply("Queue is full. Please wait for current messages to finish.");
+      return;
+    }
     await ctx.reply("Still processing previous request. Your message is queued.");
     return;
   }
