@@ -13,13 +13,12 @@ import { Bot, type Context } from "grammy";
 import { hydrateReply, type ParseModeFlavor } from "@grammyjs/parse-mode";
 import type { CliState, QueuedMessage, TurnStatus } from "./types";
 import {
-  escapeHtml,
   markdownToHtml,
   chunkMessage,
   stripHtmlTags,
   formatStatusText,
-  MAX_CHUNK_SIZE,
 } from "./helpers";
+import { createHealthServer } from "./health";
 
 // ---------------------------------------------------------------------------
 // 1. Configuration
@@ -552,27 +551,12 @@ bot.on("message:text", async (ctx) => {
 // 13. Health endpoint
 // ---------------------------------------------------------------------------
 
-const healthServer = Bun.serve({
-  port: HEALTH_PORT,
-  hostname: "127.0.0.1",
-  fetch(req) {
-    const url = new URL(req.url);
-    if (url.pathname === "/health" && req.method === "GET") {
-      const healthy = cliProcess !== null && cliState === "ready";
-      return Response.json(
-        {
-          status: healthy ? "ok" : "degraded",
-          cli: cliState,
-          bot: "running",
-          queue: messageQueue.length,
-          uptime: Math.floor((Date.now() - startTime) / 1000),
-          messagesProcessed,
-        },
-        { status: healthy ? 200 : 503 }
-      );
-    }
-    return new Response("Not found", { status: 404 });
-  },
+const healthServer = createHealthServer(HEALTH_PORT, {
+  get cliProcess() { return cliProcess; },
+  get cliState() { return cliState; },
+  messageQueue,
+  startTime,
+  get messagesProcessed() { return messagesProcessed; },
 });
 
 console.log(`Health endpoint listening on http://127.0.0.1:${HEALTH_PORT}/health`);
