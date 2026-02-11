@@ -1,14 +1,15 @@
 /**
  * Soleur Telegram Bridge
  *
- * Bridges a Telegram bot to a local Claude Code CLI process over WebSocket.
- * The CLI connects via --sdk-url and exchanges NDJSON messages.
+ * Bridges a Telegram bot to a local Claude Code CLI process over stdio.
+ * The CLI runs with --print --input-format stream-json --output-format stream-json
+ * and exchanges NDJSON messages via stdin/stdout.
  *
  * Architecture:
- *   Telegram <-> grammY bot <-> Bridge logic <-> WebSocket <-> Claude CLI
+ *   Telegram <-> grammY bot <-> Bridge logic <-> stdin/stdout <-> Claude CLI
  */
 
-import { Bot, type Context, InlineKeyboard } from "grammy";
+import { Bot, type Context } from "grammy";
 import { hydrateReply, type ParseModeFlavor } from "@grammyjs/parse-mode";
 
 // ---------------------------------------------------------------------------
@@ -17,10 +18,9 @@ import { hydrateReply, type ParseModeFlavor } from "@grammyjs/parse-mode";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_ALLOWED_USER_ID = process.env.TELEGRAM_ALLOWED_USER_ID;
-const WS_PORT = Number(process.env.WS_PORT ?? 8765);
 const HEALTH_PORT = 8080;
-const PERMISSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const CLI_RESTART_DELAY_MS = 5_000;
+const PLUGIN_DIR = process.env.SOLEUR_PLUGIN_DIR ?? "";
 
 if (!TELEGRAM_BOT_TOKEN) {
   console.error("FATAL: TELEGRAM_BOT_TOKEN is not set");
@@ -32,6 +32,10 @@ if (!TELEGRAM_ALLOWED_USER_ID) {
 }
 
 const allowedUserId = Number(TELEGRAM_ALLOWED_USER_ID);
+if (Number.isNaN(allowedUserId)) {
+  console.error("FATAL: TELEGRAM_ALLOWED_USER_ID is not a valid number");
+  process.exit(1);
+}
 
 // ---------------------------------------------------------------------------
 // 2. Types
@@ -40,15 +44,6 @@ const allowedUserId = Number(TELEGRAM_ALLOWED_USER_ID);
 type CliState = "connecting" | "ready" | "error";
 
 type BotContext = ParseModeFlavor<Context>;
-
-interface PendingPermission {
-  requestId: string;
-  toolName: string;
-  input: Record<string, unknown>;
-  toolUseId: string;
-  timer: Timer;
-  telegramMessageId?: number;
-}
 
 interface QueuedMessage {
   chatId: number;
@@ -60,13 +55,23 @@ interface QueuedMessage {
 // ---------------------------------------------------------------------------
 
 let cliState: CliState = "connecting";
-let cliWs: { send(data: string | ArrayBufferLike): void } | null = null;
+let cliStdin: { write(data: string | Uint8Array): number | Promise<number> } | null = null;
 let cliProcess: ReturnType<typeof Bun.spawn> | null = null;
 let messagesProcessed = 0;
 let startTime = Date.now();
 let processing = false;
+let initialResultReceived = false;
 const messageQueue: QueuedMessage[] = [];
-const pendingPermissions = new Map<string, PendingPermission>();
+
+// The chat ID for relaying messages; set when user first interacts
+let activeChatId: number | null = null;
+
+// Status message tracking for the current turn
+let statusMessageId: number | null = null;
+let turnStartTime = 0;
+let toolCallsSeen: string[] = [];
+let lastStatusUpdate = 0;
+let typingInterval: ReturnType<typeof setInterval> | null = null;
 
 // ---------------------------------------------------------------------------
 // 4. HTML formatting helpers
@@ -157,33 +162,37 @@ function chunkMessage(text: string): string[] {
   return chunks;
 }
 
+function stripHtmlTags(html: string): string {
+  return html.replace(/<[^>]+>/g, "");
+}
+
 async function sendChunked(chatId: number, html: string): Promise<void> {
   const chunks = chunkMessage(html);
   for (const chunk of chunks) {
     try {
       await bot.api.sendMessage(chatId, chunk, { parse_mode: "HTML" });
-    } catch (err) {
-      // If HTML parsing fails, try sending as plain text
-      console.error("Failed to send HTML message, retrying as plain text:", err);
+    } catch {
+      // HTML parsing failed (likely unclosed tags from chunking) -- send as plain text
       try {
-        await bot.api.sendMessage(chatId, chunk);
+        await bot.api.sendMessage(chatId, stripHtmlTags(chunk));
       } catch (err2) {
-        console.error("Failed to send plain text message:", err2);
+        console.error("Failed to send message:", err2);
       }
     }
   }
 }
 
 // ---------------------------------------------------------------------------
-// 6. WebSocket server (Bun.serve)
+// 6. CLI message handler
 // ---------------------------------------------------------------------------
 
-function handleCliMessage(raw: string, chatId: number): void {
+function handleCliMessage(raw: string): void {
   let msg: Record<string, unknown>;
   try {
     msg = JSON.parse(raw);
   } catch {
-    console.error("Failed to parse CLI message:", raw.slice(0, 200));
+    // Not JSON -- could be plain text output from CLI startup
+    if (raw.trim()) console.log("[CLI]", raw.trimEnd());
     return;
   }
 
@@ -191,210 +200,141 @@ function handleCliMessage(raw: string, chatId: number): void {
 
   switch (type) {
     case "system": {
-      if (msg.subtype === "init") {
+      if (msg.subtype === "init" && cliState === "connecting") {
         cliState = "ready";
-        console.log("CLI connected and initialized");
-        // Drain the message queue now that CLI is ready
+        console.log("CLI initialized (system/init received)");
         drainQueue();
       }
       break;
     }
 
     case "assistant": {
-      const message = msg.message as { content?: Array<{ type: string; text?: string }> } | undefined;
-      if (message?.content) {
-        const textParts = message.content
-          .filter((c) => c.type === "text" && c.text)
-          .map((c) => c.text as string);
-        if (textParts.length > 0) {
-          const html = markdownToHtml(textParts.join("\n"));
-          sendChunked(chatId, html);
-        }
+      if (!activeChatId) break; // No user to send to yet
+
+      const message = msg.message as {
+        content?: Array<{ type: string; text?: string; name?: string; input?: Record<string, unknown> }>;
+      } | undefined;
+      if (!message?.content) break;
+
+      // Track tool-use and update the single status message (throttled)
+      const toolUses = message.content.filter((c) => c.type === "tool_use");
+      for (const tool of toolUses) {
+        toolCallsSeen.push(tool.name ?? "unknown");
+      }
+      if (toolUses.length > 0) {
+        updateStatusMessage().catch((err) => console.error("Status update failed:", err));
+      }
+
+      // Send text content
+      const textParts = message.content
+        .filter((c) => c.type === "text" && c.text)
+        .map((c) => c.text as string);
+      if (textParts.length > 0) {
+        const html = markdownToHtml(textParts.join("\n"));
+        sendChunked(activeChatId, html).catch((err) => console.error("sendChunked failed:", err));
       }
       break;
     }
 
     case "result": {
+      if (!initialResultReceived) {
+        // Initial empty-prompt result -- CLI is now truly ready
+        initialResultReceived = true;
+        cliState = "ready";
+        console.log("CLI ready (initial result received)");
+        if (activeChatId) {
+          bot.api
+            .sendMessage(activeChatId, "Ready.")
+            .catch(console.error);
+        }
+        drainQueue();
+        break;
+      }
+      // Turn complete -- clean up status message and reset state
+      deleteStatusMessage().catch(() => {});
+      resetTurnState();
       messagesProcessed++;
       processing = false;
       console.log(`Turn complete (total processed: ${messagesProcessed})`);
-      // Process next queued message if any
       drainQueue();
       break;
     }
 
-    case "control_request": {
-      const request = msg.request as {
-        subtype?: string;
-        tool_name?: string;
-        input?: Record<string, unknown>;
-        tool_use_id?: string;
-      } | undefined;
-      const requestId = msg.request_id as string;
-
-      if (request?.subtype === "can_use_tool" && requestId) {
-        handlePermissionRequest(chatId, requestId, request);
-      }
-      break;
-    }
-
     default:
-      // Ignore unknown message types (e.g. progress)
+      // Log unknown types for debugging
+      if (type) console.log(`[CLI msg] type=${type}`, JSON.stringify(msg).slice(0, 200));
       break;
   }
 }
 
-function handlePermissionRequest(
-  chatId: number,
-  requestId: string,
-  request: { tool_name?: string; input?: Record<string, unknown>; tool_use_id?: string }
-): void {
-  const toolName = request.tool_name ?? "unknown";
-  const input = request.input ?? {};
-  const toolUseId = request.tool_use_id ?? "";
-
-  // Format a readable summary of the tool request
-  let summary = `<b>Permission requested: ${escapeHtml(toolName)}</b>\n`;
-  const inputStr = JSON.stringify(input, null, 2);
-  if (inputStr.length > 500) {
-    summary += `<pre>${escapeHtml(inputStr.slice(0, 500))}...</pre>`;
-  } else {
-    summary += `<pre>${escapeHtml(inputStr)}</pre>`;
-  }
-
-  const keyboard = new InlineKeyboard()
-    .text("Approve", `perm_approve:${requestId}`)
-    .text("Deny", `perm_deny:${requestId}`);
-
-  // Set up auto-deny timeout
-  const timer = setTimeout(() => {
-    const pending = pendingPermissions.get(requestId);
-    if (pending) {
-      pendingPermissions.delete(requestId);
-      sendPermissionResponse(requestId, "deny");
-      bot.api
-        .sendMessage(chatId, "Permission request timed out (5 min). Auto-denied.")
-        .catch(console.error);
-    }
-  }, PERMISSION_TIMEOUT_MS);
-
-  const pending: PendingPermission = {
-    requestId,
-    toolName,
-    input,
-    toolUseId,
-    timer,
-  };
-  pendingPermissions.set(requestId, pending);
-
-  bot.api
-    .sendMessage(chatId, summary, { parse_mode: "HTML", reply_markup: keyboard })
-    .then((sentMsg) => {
-      const p = pendingPermissions.get(requestId);
-      if (p) p.telegramMessageId = sentMsg.message_id;
-    })
-    .catch(console.error);
-}
-
-function sendPermissionResponse(requestId: string, behavior: "allow" | "deny"): void {
-  if (!cliWs) return;
-
-  const pending = pendingPermissions.get(requestId);
-  const response: Record<string, unknown> = {
-    type: "control_response",
-    response: {
-      subtype: "success",
-      request_id: requestId,
-      response:
-        behavior === "allow"
-          ? { behavior: "allow", updatedInput: pending?.input ?? {} }
-          : { behavior: "deny" },
-    },
-  };
-
-  cliWs.send(JSON.stringify(response) + "\n");
-}
-
-// The chat ID for relaying messages; set when user first interacts
-let activeChatId: number | null = null;
-
-const wsServer = Bun.serve({
-  port: WS_PORT,
-  hostname: "127.0.0.1",
-  fetch(req, server) {
-    // Upgrade WebSocket connections
-    if (server.upgrade(req)) {
-      return undefined;
-    }
-    return new Response("WebSocket upgrade required", { status: 426 });
-  },
-  websocket: {
-    open(ws) {
-      console.log("CLI WebSocket connected");
-      cliWs = ws;
-    },
-    message(ws, data) {
-      const raw = typeof data === "string" ? data : new TextDecoder().decode(data as unknown as ArrayBuffer);
-      // NDJSON: may contain multiple lines
-      const lines = raw.split("\n").filter((l) => l.trim());
-      for (const line of lines) {
-        handleCliMessage(line, activeChatId ?? 0);
-      }
-    },
-    close() {
-      console.log("CLI WebSocket disconnected");
-      cliWs = null;
-      cliState = "connecting";
-    },
-  },
-});
-
-console.log(`WebSocket server listening on ws://127.0.0.1:${WS_PORT}`);
-
 // ---------------------------------------------------------------------------
-// 7. CLI process management
+// 7. CLI process management (stdio transport)
 // ---------------------------------------------------------------------------
+
+let cliGeneration = 0;
 
 function spawnCli(): void {
   cliState = "connecting";
-  console.log("Spawning Claude CLI...");
+  console.log("Spawning Claude CLI (stdio mode)...");
+
+  const cliArgs = [
+    "claude",
+    "--print",
+    "--verbose",
+    "--output-format", "stream-json",
+    "--input-format", "stream-json",
+    // Auto-approve all tool operations. In headless mode, control_request messages
+    // for Bash commands cause the bridge to hang since the approval UI is unreliable.
+    "--dangerously-skip-permissions",
+    "--model", "claude-opus-4-6",
+    "-p", "",
+  ];
+
+  // Load Soleur plugin if path provided
+  if (PLUGIN_DIR) {
+    cliArgs.splice(1, 0, "--plugin-dir", PLUGIN_DIR);
+  }
 
   const proc = Bun.spawn(
-    [
-      "claude",
-      "--sdk-url",
-      `ws://127.0.0.1:${WS_PORT}`,
-      "--print",
-      "--output-format",
-      "stream-json",
-      "--input-format",
-      "stream-json",
-      "-p",
-      "",
-    ],
+    cliArgs,
     {
+      stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env },
+      env: (() => {
+        const { TELEGRAM_BOT_TOKEN: _, TELEGRAM_ALLOWED_USER_ID: __, ...safeEnv } = process.env;
+        return safeEnv;
+      })(),
     }
   );
 
   cliProcess = proc;
+  cliStdin = proc.stdin;
+  const thisGeneration = ++cliGeneration;
 
-  // Read stdout for diagnostics
+  // Read stdout for NDJSON messages (scoped buffer per generation)
   (async () => {
     if (!proc.stdout) return;
     const reader = proc.stdout.getReader();
     const decoder = new TextDecoder();
+    let buffer = "";
     try {
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
-        const text = decoder.decode(value, { stream: true });
-        if (text.trim()) console.log("[CLI stdout]", text.trimEnd());
+        if (done || thisGeneration !== cliGeneration) break;
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+
+        // Process complete lines
+        let newlineIdx: number;
+        while ((newlineIdx = buffer.indexOf("\n")) !== -1) {
+          const line = buffer.slice(0, newlineIdx).trim();
+          buffer = buffer.slice(newlineIdx + 1);
+          if (line && thisGeneration === cliGeneration) handleCliMessage(line);
+        }
       }
-    } catch {
-      // Stream closed
+    } catch (err) {
+      if (thisGeneration === cliGeneration) console.error("CLI stdout reader error:", err);
     }
   })();
 
@@ -420,21 +360,93 @@ function spawnCli(): void {
     console.error(`CLI process exited with code ${code}`);
     cliState = "error";
     cliProcess = null;
-    cliWs = null;
+    cliStdin = null;
     processing = false;
+    initialResultReceived = false;
+    resetTurnState();
+
+    // Notify user if chat is active
+    if (activeChatId) {
+      bot.api
+        .sendMessage(activeChatId, `CLI process exited (code ${code}). Restarting in ${CLI_RESTART_DELAY_MS / 1000}s...`)
+        .catch(console.error);
+    }
 
     console.log(`Restarting CLI in ${CLI_RESTART_DELAY_MS / 1000}s...`);
     setTimeout(spawnCli, CLI_RESTART_DELAY_MS);
   });
+
+  // Fallback: if no system/init or result arrives within 5s, mark ready anyway.
+  // The CLI in --print mode with an empty prompt may not send system/init.
+  setTimeout(() => {
+    if (cliState === "connecting" && cliProcess && !cliProcess.killed) {
+      cliState = "ready";
+      initialResultReceived = true;
+      console.log("CLI marked ready (timeout fallback)");
+      drainQueue();
+    }
+  }, 5000);
 }
 
 // ---------------------------------------------------------------------------
-// 8. Message relay helpers
+// 8. Status message helpers
+// ---------------------------------------------------------------------------
+
+const STATUS_UPDATE_INTERVAL_MS = 3_000;
+const TYPING_ACTION_INTERVAL_MS = 4_000;
+
+function buildStatusText(): string {
+  const elapsed = Math.floor((Date.now() - turnStartTime) / 1000);
+  if (toolCallsSeen.length === 0) {
+    return `Thinking... (${elapsed}s)`;
+  }
+  // Deduplicate tool names, keeping order of first appearance
+  const unique = [...new Set(toolCallsSeen)];
+  return `Working... (${elapsed}s · ${unique.join(", ")})`;
+}
+
+function resetTurnState(): void {
+  if (typingInterval) {
+    clearInterval(typingInterval);
+    typingInterval = null;
+  }
+  statusMessageId = null;
+  turnStartTime = 0;
+  toolCallsSeen = [];
+  lastStatusUpdate = 0;
+}
+
+async function deleteStatusMessage(): Promise<void> {
+  if (!activeChatId || !statusMessageId) return;
+  try {
+    await bot.api.deleteMessage(activeChatId, statusMessageId);
+  } catch {
+    // Message may already be deleted or too old
+  }
+  statusMessageId = null;
+}
+
+async function updateStatusMessage(): Promise<void> {
+  if (!activeChatId || !statusMessageId) return;
+  const now = Date.now();
+  if (now - lastStatusUpdate < STATUS_UPDATE_INTERVAL_MS) return;
+
+  lastStatusUpdate = now;
+  const text = buildStatusText();
+  try {
+    await bot.api.editMessageText(activeChatId, statusMessageId, text);
+  } catch {
+    // Edit may fail if message was deleted or content unchanged
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 9. Message relay helpers
 // ---------------------------------------------------------------------------
 
 function sendUserMessage(text: string): void {
-  if (!cliWs) {
-    console.error("Cannot send user message: CLI WebSocket not connected");
+  if (!cliStdin) {
+    console.error("Cannot send user message: CLI stdin not available");
     return;
   }
 
@@ -448,13 +460,51 @@ function sendUserMessage(text: string): void {
     session_id: "",
   };
 
-  cliWs.send(JSON.stringify(msg) + "\n");
+  const line = JSON.stringify(msg) + "\n";
+  console.log(`[Bridge -> CLI] Sending user message (${text.length} chars)`);
   processing = true;
+  turnStartTime = Date.now();
+  toolCallsSeen = [];
+  lastStatusUpdate = 0;
+
+  // Send initial status message and start typing indicator
+  if (activeChatId) {
+    const chatId = activeChatId;
+    bot.api.sendChatAction(chatId, "typing").catch(() => {});
+    bot.api
+      .sendMessage(chatId, "Thinking...")
+      .then((sent) => {
+        statusMessageId = sent.message_id;
+        lastStatusUpdate = Date.now();
+      })
+      .catch((err) => console.error("Failed to send status message:", err));
+
+    typingInterval = setInterval(() => {
+      bot.api.sendChatAction(chatId, "typing").catch(() => {});
+    }, TYPING_ACTION_INTERVAL_MS);
+  }
+
+  try {
+    const result = cliStdin.write(line);
+    if (result instanceof Promise) {
+      result.catch((err) => {
+        console.error("Failed to write user message to CLI stdin:", err);
+        processing = false;
+        resetTurnState();
+        drainQueue();
+      });
+    }
+  } catch (err) {
+    console.error("Failed to write user message to CLI stdin:", err);
+    processing = false;
+    resetTurnState();
+    drainQueue();
+  }
 }
 
 function drainQueue(): void {
   if (processing || messageQueue.length === 0) return;
-  if (cliState !== "ready" || !cliWs) return;
+  if (cliState !== "ready" || !cliStdin) return;
 
   const next = messageQueue.shift()!;
   activeChatId = next.chatId;
@@ -462,7 +512,7 @@ function drainQueue(): void {
 }
 
 // ---------------------------------------------------------------------------
-// 9. Telegram bot setup
+// 10. Telegram bot setup
 // ---------------------------------------------------------------------------
 
 const bot = new Bot<BotContext>(TELEGRAM_BOT_TOKEN);
@@ -470,8 +520,12 @@ const bot = new Bot<BotContext>(TELEGRAM_BOT_TOKEN);
 // Install parse-mode hydration
 bot.use(hydrateReply);
 
-// Auth middleware: reject non-owner users
+// Auth middleware: reject non-owner users and non-private chats
 bot.use(async (ctx, next) => {
+  if (ctx.chat && ctx.chat.type !== "private") {
+    await ctx.reply("This bot only works in private chats.");
+    return;
+  }
   if (ctx.from && ctx.from.id !== allowedUserId) {
     await ctx.reply("Unauthorized. This bot is private.");
     return;
@@ -480,7 +534,7 @@ bot.use(async (ctx, next) => {
 });
 
 // ---------------------------------------------------------------------------
-// 10. Bridge-native commands
+// 11. Bridge-native commands
 // ---------------------------------------------------------------------------
 
 bot.command("start", async (ctx) => {
@@ -505,18 +559,35 @@ bot.command("status", async (ctx) => {
   await ctx.reply(
     `<b>Bridge Status</b>\n\n` +
       `CLI state: <code>${cliState}</code>\n` +
-      `WebSocket: <code>${cliWs ? "connected" : "disconnected"}</code>\n` +
+      `Stdin: <code>${cliStdin ? "connected" : "disconnected"}</code>\n` +
       `Processing: <code>${processing ? "yes" : "no"}</code>\n` +
       `Queued messages: <code>${messageQueue.length}</code>\n` +
-      `Pending permissions: <code>${pendingPermissions.size}</code>\n` +
       `Messages processed: <code>${messagesProcessed}</code>\n` +
       `Uptime: <code>${uptimeStr}</code>`,
     { parse_mode: "HTML" }
   );
 });
 
-bot.command("cancel", async (ctx) => {
-  await ctx.reply("Cancel is not implemented in v1. The current request will complete normally.");
+bot.command("new", async (ctx) => {
+  activeChatId = ctx.chat.id;
+
+  // Clear message queue
+  messageQueue.length = 0;
+  processing = false;
+  initialResultReceived = false;
+
+  // Kill the current CLI process — the exit handler will auto-restart it
+  if (cliProcess) {
+    await ctx.reply("Clearing session and restarting CLI...");
+    try {
+      cliProcess.kill();
+    } catch (err) {
+      console.error("Failed to kill CLI process:", err);
+    }
+  } else {
+    await ctx.reply("No CLI process running. Spawning fresh...");
+    spawnCli();
+  }
 });
 
 bot.command("help", async (ctx) => {
@@ -524,53 +595,11 @@ bot.command("help", async (ctx) => {
     `<b>Available Commands</b>\n\n` +
       `/start - Welcome message with status\n` +
       `/status - CLI state, uptime, stats\n` +
-      `/cancel - Cancel current request (v2)\n` +
+      `/new - Clear session and restart CLI\n` +
       `/help - This message\n\n` +
-      `Send any text message to talk to Claude. ` +
-      `Tool permission requests will appear as inline buttons.`,
+      `Send any text message to talk to Claude.`,
     { parse_mode: "HTML" }
   );
-});
-
-// ---------------------------------------------------------------------------
-// 11. Permission callback handler
-// ---------------------------------------------------------------------------
-
-bot.on("callback_query:data", async (ctx) => {
-  const data = ctx.callbackQuery.data;
-
-  if (data.startsWith("perm_approve:") || data.startsWith("perm_deny:")) {
-    const [action, requestId] = data.split(":", 2) as [string, string];
-    const behavior = action === "perm_approve" ? "allow" : "deny";
-
-    const pending = pendingPermissions.get(requestId);
-    if (!pending) {
-      await ctx.answerCallbackQuery({ text: "Request already handled or expired." });
-      return;
-    }
-
-    // Clear timeout and remove from map
-    clearTimeout(pending.timer);
-    pendingPermissions.delete(requestId);
-
-    // Send response to CLI
-    sendPermissionResponse(requestId, behavior);
-
-    // Update the Telegram message to reflect the decision
-    const statusText = behavior === "allow" ? "APPROVED" : "DENIED";
-    try {
-      await ctx.editMessageText(
-        `${behavior === "allow" ? "Approved" : "Denied"}: <b>${escapeHtml(pending.toolName)}</b> [${statusText}]`,
-        { parse_mode: "HTML" }
-      );
-    } catch {
-      // Message may have been deleted or too old
-    }
-
-    await ctx.answerCallbackQuery({
-      text: `Tool ${behavior === "allow" ? "approved" : "denied"}.`,
-    });
-  }
 });
 
 // ---------------------------------------------------------------------------
@@ -582,7 +611,7 @@ bot.on("message:text", async (ctx) => {
   const text = ctx.message.text;
 
   // If CLI is not ready, queue with feedback
-  if (cliState !== "ready" || !cliWs) {
+  if (cliState !== "ready" || !cliStdin) {
     messageQueue.push({ chatId: ctx.chat.id, text });
     await ctx.reply("Connecting to Claude... Your message is queued.");
     return;
@@ -605,7 +634,7 @@ bot.on("message:text", async (ctx) => {
 
 const healthServer = Bun.serve({
   port: HEALTH_PORT,
-  hostname: "0.0.0.0",
+  hostname: "127.0.0.1",
   fetch(req) {
     const url = new URL(req.url);
     if (url.pathname === "/health" && req.method === "GET") {
@@ -621,7 +650,7 @@ const healthServer = Bun.serve({
   },
 });
 
-console.log(`Health endpoint listening on http://0.0.0.0:${HEALTH_PORT}/health`);
+console.log(`Health endpoint listening on http://127.0.0.1:${HEALTH_PORT}/health`);
 
 // ---------------------------------------------------------------------------
 // 14. Graceful shutdown
@@ -637,12 +666,6 @@ async function shutdown(signal: string): Promise<void> {
     // Already stopped
   }
 
-  // Clear all pending permission timeouts
-  for (const [, pending] of pendingPermissions) {
-    clearTimeout(pending.timer);
-  }
-  pendingPermissions.clear();
-
   // Kill CLI process
   if (cliProcess) {
     try {
@@ -652,8 +675,7 @@ async function shutdown(signal: string): Promise<void> {
     }
   }
 
-  // Close servers
-  wsServer.stop(true);
+  // Close health server
   healthServer.stop(true);
 
   console.log("Shutdown complete.");
@@ -667,8 +689,7 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 // 15. Startup
 // ---------------------------------------------------------------------------
 
-// Start WebSocket server first (already started above via Bun.serve),
-// then spawn CLI, then start Telegram bot.
+// Spawn CLI, then start Telegram bot.
 spawnCli();
 
 bot.start({
