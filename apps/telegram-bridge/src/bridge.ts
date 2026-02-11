@@ -9,11 +9,16 @@ import {
 export interface BridgeConfig {
   statusEditIntervalMs: number;
   typingIntervalMs: number;
+  turnTimeoutMs: number;
+  maxQueueSize: number;
+  onTurnComplete?: () => void;
 }
 
 const DEFAULT_CONFIG: BridgeConfig = {
   statusEditIntervalMs: 3_000,
   typingIntervalMs: 4_000,
+  turnTimeoutMs: 10 * 60 * 1_000, // 10 minutes
+  maxQueueSize: 20,
 };
 
 export class Bridge {
@@ -29,6 +34,7 @@ export class Bridge {
   activeChatId: number | null = null;
   turnStatus: TurnStatus | null = null;
   messageQueue: QueuedMessage[] = [];
+  private turnWatchdog: Timer | null = null;
 
   constructor(api: BotApi, config?: Partial<BridgeConfig>) {
     this.api = api;
@@ -124,6 +130,62 @@ export class Bridge {
     }
   }
 
+  markReady(source: string): void {
+    if (this.cliState === "ready") return; // idempotent
+    this.cliState = "ready";
+    console.log(`CLI marked ready (${source})`);
+    this.drainQueue();
+  }
+
+  private writeToStdin(data: string): void {
+    if (!this.cliStdin) {
+      console.error("Cannot write to CLI stdin: not available");
+      return;
+    }
+    try {
+      const result = this.cliStdin.write(data);
+      if (result instanceof Promise) {
+        result.catch((err) => {
+          console.error("Failed to write to CLI stdin:", err);
+          this.processing = false;
+          this.clearTurnWatchdog();
+          this.cleanupTurnStatus().catch(() => {});
+          this.drainQueue();
+        });
+      }
+    } catch (err) {
+      console.error("Failed to write to CLI stdin:", err);
+      this.processing = false;
+      this.clearTurnWatchdog();
+      this.cleanupTurnStatus().catch(() => {});
+      this.drainQueue();
+    }
+  }
+
+  private startTurnWatchdog(): void {
+    this.clearTurnWatchdog();
+    this.turnWatchdog = setTimeout(() => {
+      console.error(`Turn watchdog fired after ${this.config.turnTimeoutMs / 1000}s`);
+      this.processing = false;
+      this.cleanupTurnStatus().catch(() => {});
+
+      if (this.activeChatId) {
+        this.api
+          .sendMessage(this.activeChatId, "Turn timed out -- the CLI may be stuck. Accepting new messages.")
+          .catch(() => {});
+      }
+
+      this.drainQueue();
+    }, this.config.turnTimeoutMs);
+  }
+
+  private clearTurnWatchdog(): void {
+    if (this.turnWatchdog) {
+      clearTimeout(this.turnWatchdog);
+      this.turnWatchdog = null;
+    }
+  }
+
   handleCliMessage(raw: string): void {
     let msg: Record<string, unknown>;
     try {
@@ -139,9 +201,7 @@ export class Bridge {
     switch (type) {
       case "system": {
         if (msg.subtype === "init" && this.cliState === "connecting") {
-          this.cliState = "ready";
-          console.log("CLI initialized (system/init received)");
-          this.drainQueue();
+          this.markReady("system/init");
         }
         break;
       }
@@ -174,16 +234,17 @@ export class Bridge {
       }
 
       case "result": {
+        this.clearTurnWatchdog();
+
         if (!this.initialResultReceived) {
           this.initialResultReceived = true;
-          this.cliState = "ready";
-          console.log("CLI ready (initial result received)");
-          this.drainQueue();
+          this.markReady("initial result");
           break;
         }
         // Turn complete
         this.messagesProcessed++;
         this.processing = false;
+        this.config.onTurnComplete?.();
         console.log(`Turn complete (total processed: ${this.messagesProcessed})`);
 
         // Clean up status message if still present (no text response was sent)
@@ -197,6 +258,14 @@ export class Bridge {
         if (type) console.log(`[CLI msg] type=${type}`, JSON.stringify(msg).slice(0, 200));
         break;
     }
+  }
+
+  enqueue(chatId: number, text: string): boolean {
+    if (this.messageQueue.length >= this.config.maxQueueSize) {
+      return false;
+    }
+    this.messageQueue.push({ chatId, text });
+    return true;
   }
 
   sendUserMessage(text: string): void {
@@ -221,22 +290,8 @@ export class Bridge {
       this.startTurnStatus(this.activeChatId).catch((err) => console.error("Failed to start turn status:", err));
     }
 
-    try {
-      const result = this.cliStdin.write(line);
-      if (result instanceof Promise) {
-        result.catch((err) => {
-          console.error("Failed to write user message to CLI stdin:", err);
-          this.processing = false;
-          this.cleanupTurnStatus().catch(() => {});
-          this.drainQueue();
-        });
-      }
-    } catch (err) {
-      console.error("Failed to write user message to CLI stdin:", err);
-      this.processing = false;
-      this.cleanupTurnStatus().catch(() => {});
-      this.drainQueue();
-    }
+    this.startTurnWatchdog();
+    this.writeToStdin(line);
   }
 
   drainQueue(): void {

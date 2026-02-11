@@ -1,10 +1,10 @@
 # Soleur Telegram Bridge
 
-A lightweight bridge that connects Telegram to the Claude Code CLI via a
-WebSocket transport layer. Send messages to your Telegram bot, and they are
-forwarded to a Claude Code session running with the Soleur plugin. Responses
-stream back to Telegram in real time. The bot uses long-polling (outbound only),
-so no public HTTP endpoint or TLS certificate is required.
+A lightweight bridge that connects Telegram to the Claude Code CLI via
+stdin/stdout. Send messages to your Telegram bot, and they are forwarded to a
+Claude Code session running with the Soleur plugin. Responses stream back to
+Telegram in real time. The bot uses long-polling (outbound only), so no public
+HTTP endpoint or TLS certificate is required.
 
 ## Architecture
 
@@ -14,7 +14,7 @@ Telegram App
     v  (Telegram Bot API -- long polling)
 Bridge Server  (Bun + grammY)
     |
-    v  (WebSocket, localhost)
+    v  (stdin/stdout, NDJSON over stdio)
 Claude Code CLI + Soleur Plugin
     |
     v
@@ -134,8 +134,10 @@ export BRIDGE_HOST=<server_ip>
 
 ## Environment Variables
 
-| Variable                   | Required | Description                                      |
-|----------------------------|----------|--------------------------------------------------|
-| `TELEGRAM_BOT_TOKEN`       | Yes      | Bot API token from @BotFather                    |
-| `TELEGRAM_ALLOWED_USER_ID` | Yes      | Numeric Telegram user ID (single-user lockdown)  |
-| `WS_PORT`                  | No       | WebSocket port for CLI communication (default: 8765) |
+| Variable                   | Required | Default            | Description                                      |
+|----------------------------|----------|--------------------|--------------------------------------------------|
+| `TELEGRAM_BOT_TOKEN`       | Yes      | --                 | Bot API token from @BotFather                    |
+| `TELEGRAM_ALLOWED_USER_ID` | Yes      | --                 | Numeric Telegram user ID (single-user lockdown)  |
+| `SOLEUR_PLUGIN_DIR`        | No       | --                 | Path to Soleur plugin directory                  |
+| `CLAUDE_MODEL`             | No       | `claude-opus-4-6`  | Claude model to use for CLI                      |
+| `SKIP_PERMISSIONS`         | No       | `true`             | Set to `false` to disable `--dangerously-skip-permissions` |

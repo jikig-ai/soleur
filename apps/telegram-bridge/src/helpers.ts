@@ -3,10 +3,14 @@ import type { TurnStatus } from "./types";
 export const MAX_CHUNK_SIZE = 4000;
 
 export function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return text.replace(/[&<>]/g, (ch) => {
+    switch (ch) {
+      case "&": return "&amp;";
+      case "<": return "&lt;";
+      case ">": return "&gt;";
+      default: return ch;
+    }
+  });
 }
 
 export function markdownToHtml(text: string): string {
@@ -33,14 +37,7 @@ export function markdownToHtml(text: string): string {
   processed = processed.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
   processed = processed.replace(/__(.+?)__/g, "<b>$1</b>");
 
-  // Restore inline codes
-  processed = processed.replace(/\x00INLINE_(\d+)\x00/g, (_m, idx) => inlineCodes[Number(idx)]);
-
-  // Restore code blocks
-  processed = processed.replace(/\x00CODEBLOCK_(\d+)\x00/g, (_m, idx) => codeBlocks[Number(idx)]);
-
-  // Strip remaining markdown that Telegram HTML mode cannot render
-  // Headings: ### Heading -> <b>Heading</b>
+  // Headings: ### Heading -> <b>Heading</b> (before code restoration so placeholders aren't affected)
   processed = processed.replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>");
 
   // Italic: *text* (single asterisk, not bold)
@@ -49,6 +46,12 @@ export function markdownToHtml(text: string): string {
   // Strip image/link markdown: [text](url) -> text
   processed = processed.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
 
+  // Restore inline codes
+  processed = processed.replace(/\x00INLINE_(\d+)\x00/g, (_m, idx) => inlineCodes[Number(idx)]);
+
+  // Restore code blocks
+  processed = processed.replace(/\x00CODEBLOCK_(\d+)\x00/g, (_m, idx) => codeBlocks[Number(idx)]);
+
   return processed;
 }
 
@@ -56,25 +59,25 @@ export function chunkMessage(text: string): string[] {
   if (text.length <= MAX_CHUNK_SIZE) return [text];
 
   const chunks: string[] = [];
-  let remaining = text;
+  let pos = 0;
 
-  while (remaining.length > 0) {
-    if (remaining.length <= MAX_CHUNK_SIZE) {
-      chunks.push(remaining);
+  while (pos < text.length) {
+    if (text.length - pos <= MAX_CHUNK_SIZE) {
+      chunks.push(text.slice(pos));
       break;
     }
 
     // Try to split on double-newline within the limit
-    const window = remaining.slice(0, MAX_CHUNK_SIZE);
-    const splitIdx = window.lastIndexOf("\n\n");
+    const windowEnd = pos + MAX_CHUNK_SIZE;
+    const splitIdx = text.lastIndexOf("\n\n", windowEnd);
 
-    if (splitIdx > 0) {
-      chunks.push(remaining.slice(0, splitIdx));
-      remaining = remaining.slice(splitIdx + 2);
+    if (splitIdx > pos) {
+      chunks.push(text.slice(pos, splitIdx));
+      pos = splitIdx + 2;
     } else {
       // Hard-split at MAX_CHUNK_SIZE
-      chunks.push(remaining.slice(0, MAX_CHUNK_SIZE));
-      remaining = remaining.slice(MAX_CHUNK_SIZE);
+      chunks.push(text.slice(pos, windowEnd));
+      pos = windowEnd;
     }
   }
 
