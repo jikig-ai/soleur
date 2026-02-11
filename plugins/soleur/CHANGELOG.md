@@ -5,6 +5,18 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.1] - 2026-02-11
+
+### Changed
+
+- `/soleur:plan` now includes "Test Scenarios" section in all 3 detail templates (MINIMAL, MORE, A LOT) with Given/When/Then format
+- `/soleur:work` task execution loop rewritten with explicit RED/GREEN/REFACTOR steps and test-first enforcement
+- `/soleur:work` "Test Continuously" section updated with TDD guidance and `/atdd-developer` skill reference
+- `/soleur:work` quality checklist now requires test files for new source files
+- `/ship` Phase 5 checklist includes test existence verification
+- `/ship` Phase 6 checks for missing test files before running the suite, warns and asks before proceeding
+- Constitution Testing section expanded with ATDD rules: test file requirements, test scenario mandates, no-zero-tests gate, RED/GREEN/REFACTOR preference, and interface-level mocking guidance
+
 ## [1.15.0] - 2026-02-10
 
 ### Added
