@@ -236,6 +236,13 @@ date: YYYY-MM-DD
 - [ ] Core requirement 1
 - [ ] Core requirement 2
 
+## Test Scenarios
+
+Derive from acceptance criteria. Use Given/When/Then format:
+
+- Given [precondition], when [action], then [expected result]
+- Given [edge case], when [action], then [expected handling]
+
 ## Context
 
 [Any critical information]
@@ -304,6 +311,15 @@ date: YYYY-MM-DD
 - [ ] Detailed requirement 1
 - [ ] Detailed requirement 2
 - [ ] Testing requirements
+
+## Test Scenarios
+
+Translate each acceptance criterion into a testable scenario:
+
+- Given [precondition], when [action], then [expected result]
+- Given [error condition], when [action], then [graceful handling]
+
+Include regression scenarios for any bugs this work addresses.
 
 ## Success Metrics
 
@@ -404,6 +420,24 @@ date: YYYY-MM-DD
 - [ ] Test coverage requirements
 - [ ] Documentation completeness
 - [ ] Code review approval
+
+## Test Scenarios
+
+### Acceptance Tests (RED phase targets)
+
+For each functional requirement, write a Given/When/Then scenario:
+
+- Given [precondition], when [action], then [expected result]
+
+### Regression Tests
+
+For each bug fix included, write a scenario proving the fix:
+
+- Given [bug trigger condition], when [action], then [correct behavior]
+
+### Edge Cases
+
+- Given [boundary condition], when [action], then [expected handling]
 
 ## Success Metrics
 

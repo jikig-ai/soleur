@@ -69,10 +69,17 @@ Project principles organized by domain. Add principles as you learn them.
 
 - Run `bun test` before merging changes that affect parsing, conversion, or output
 - All markdown files must pass markdownlint checks before commit
+- New modules and source files must have corresponding test files before shipping
+- Plans must include a "Test Scenarios" section with Given/When/Then acceptance tests
 
 ### Never
 
+- Ship feature branches with zero test files for new source code
+
 ### Prefer
+
+- RED/GREEN/REFACTOR cycle over write-code-then-test -- use `/atdd-developer` skill for guided TDD
+- Interface-level mocking over implementation-level mocking -- define a minimal interface (e.g., BotApi) and inject it, enabling tests without external dependencies
 
 ## Proposals
 

@@ -321,13 +321,16 @@ fi
      - Mark task as in_progress in TodoWrite
      - Read any referenced files from the plan
      - Look for similar patterns in codebase
-     - Implement following existing conventions
-     - Write tests for new functionality
-     - Run tests after changes
+     - RED: Write failing test(s) for this task's acceptance criteria
+     - GREEN: Write minimum code to make the test(s) pass
+     - REFACTOR: Improve code while keeping tests green
+     - Run full test suite after changes
      - Mark task as completed in TodoWrite
      - Mark off the corresponding checkbox in the plan file ([ ] → [x])
      - Evaluate for incremental commit (see below)
    ```
+
+   **Test-First Enforcement**: If the plan includes a "Test Scenarios" section, write tests for each scenario BEFORE writing implementation code. If no test scenarios exist in the plan, derive them from acceptance criteria. For infrastructure-only tasks (config, CI, scaffolding), tests may be skipped.
 
    **IMPORTANT**: Always update the original plan document by checking off completed items. Use the Edit tool to change `- [ ]` to `- [x]` for each task you finish. This keeps the plan as a living document showing progress and ensures no checkboxes are left unchecked.
 
@@ -371,10 +374,12 @@ fi
 
 5. **Test Continuously**
 
-   - Run relevant tests after each significant change
-   - Don't wait until the end to test
-   - Fix failures immediately
-   - Add new tests for new functionality
+   - **RED**: Write a failing test before implementing any new behavior
+   - **GREEN**: Write the minimum code to make the test pass
+   - **REFACTOR**: Improve code while keeping tests green
+   - Run the full test suite after each RED/GREEN/REFACTOR cycle
+   - Fix failures immediately -- never move to the next task with failing tests
+   - When a class becomes hard to test (too many dependencies), extract an interface and inject dependencies. See the `/atdd-developer` skill for detailed TDD guidance.
 
 6. **Track Progress**
    - Keep TodoWrite updated as you complete tasks
@@ -498,6 +503,7 @@ Before entering Phase 4, verify these Phase 2-3 items are complete:
 - [ ] All clarifying questions asked and answered
 - [ ] All TodoWrite tasks marked completed
 - [ ] Tests pass (run project's test command)
+- [ ] New source files have corresponding test files
 - [ ] Linting passes (use linting-agent)
 - [ ] Code follows existing patterns
 - [ ] Figma designs match implementation (if applicable)

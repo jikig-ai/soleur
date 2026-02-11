@@ -163,6 +163,7 @@ Ship Checklist for [branch name]:
 - [x/skip] README updated (component counts)
 - [x/skip] Version bumped (plugin.json + CHANGELOG + README)
 - [x/skip] Version synced (root README badge + bug report template)
+- [x/skip] Tests exist for new source files
 - [ ] Tests pass
 - [ ] Push to remote
 - [ ] Create PR
@@ -170,7 +171,31 @@ Ship Checklist for [branch name]:
 
 ## Phase 6: Run Tests
 
-Run the project's test suite:
+First, verify that new source files have corresponding test files:
+
+```bash
+# Find new source files added in this branch (excluding tests, configs, docs)
+BASE=$(git merge-base HEAD origin/main)
+NEW_SRC=$(git diff --name-only --diff-filter=A "$BASE"..HEAD | grep -E '\.(ts|js|rb|py)$' | grep -v -E '(test|spec|config|\.d\.ts)')
+MISSING_TESTS=""
+
+for src in $NEW_SRC; do
+  # Derive expected test file path
+  test_file=$(echo "$src" | sed 's|/src/|/test/|; s|\.ts$|.test.ts|; s|\.js$|.test.js|; s|\.rb$|_test.rb|; s|\.py$|_test.py|')
+  alt_test=$(echo "$src" | sed 's|\.ts$|.spec.ts|; s|\.js$|.spec.js|; s|\.rb$|_spec.rb|')
+  if [ ! -f "$test_file" ] && [ ! -f "$alt_test" ]; then
+    MISSING_TESTS="$MISSING_TESTS\n  - $src (expected: $test_file)"
+  fi
+done
+
+if [ -n "$MISSING_TESTS" ]; then
+  echo "WARNING: New source files without test files:$MISSING_TESTS"
+fi
+```
+
+**If test files are missing:** Ask the user whether to write tests now or continue without them. Do not silently proceed.
+
+Then run the project's test suite:
 
 ```bash
 bun test
