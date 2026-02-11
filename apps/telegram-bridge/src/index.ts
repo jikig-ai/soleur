@@ -21,6 +21,8 @@ const TELEGRAM_ALLOWED_USER_ID = process.env.TELEGRAM_ALLOWED_USER_ID;
 const HEALTH_PORT = 8080;
 const CLI_RESTART_DELAY_MS = 5_000;
 const PLUGIN_DIR = process.env.SOLEUR_PLUGIN_DIR ?? "";
+const STATUS_EDIT_INTERVAL_MS = 3_000; // Throttle status edits (Telegram allows ~20/min)
+const TYPING_INTERVAL_MS = 4_000; // Re-send typing action every 4s (lasts 5s)
 
 if (!TELEGRAM_BOT_TOKEN) {
   console.error("FATAL: TELEGRAM_BOT_TOKEN is not set");
@@ -50,6 +52,15 @@ interface QueuedMessage {
   text: string;
 }
 
+interface TurnStatus {
+  chatId: number;
+  messageId: number; // 0 until sendMessage resolves
+  startTime: number;
+  tools: string[]; // Tool names seen this turn
+  lastEditTime: number; // Last time we edited the status message
+  typingTimer: Timer; // Periodic sendChatAction("typing")
+}
+
 // ---------------------------------------------------------------------------
 // 3. Global state
 // ---------------------------------------------------------------------------
@@ -66,12 +77,8 @@ const messageQueue: QueuedMessage[] = [];
 // The chat ID for relaying messages; set when user first interacts
 let activeChatId: number | null = null;
 
-// Status message tracking for the current turn
-let statusMessageId: number | null = null;
-let turnStartTime = 0;
-let toolCallsSeen: string[] = [];
-let lastStatusUpdate = 0;
-let typingInterval: ReturnType<typeof setInterval> | null = null;
+// Active turn status message (one at a time since we process sequentially)
+let turnStatus: TurnStatus | null = null;
 
 // ---------------------------------------------------------------------------
 // 4. HTML formatting helpers
@@ -183,7 +190,102 @@ async function sendChunked(chatId: number, html: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// 6. CLI message handler
+// 6. Turn status message (typing indicator + progress)
+// ---------------------------------------------------------------------------
+
+function formatStatusText(status: TurnStatus): string {
+  const elapsed = Math.floor((Date.now() - status.startTime) / 1000);
+  const toolList = status.tools.length > 0
+    ? status.tools.slice(-5).join(", ") // Show last 5 tools
+    : "";
+
+  if (elapsed < 2 && !toolList) {
+    return "Thinking...";
+  }
+
+  let text = `Working... (${elapsed}s`;
+  if (toolList) {
+    text += ` · ${toolList}`;
+  }
+  text += ")";
+  return text;
+}
+
+async function startTurnStatus(chatId: number): Promise<void> {
+  // Clean up any existing status
+  await cleanupTurnStatus();
+
+  // Start periodic typing indicator immediately (before message send)
+  const typingTimer = setInterval(() => {
+    bot.api.sendChatAction(chatId, "typing").catch(() => {});
+  }, TYPING_INTERVAL_MS);
+  bot.api.sendChatAction(chatId, "typing").catch(() => {});
+
+  // Create status object with messageId=0 (set once sendMessage resolves)
+  turnStatus = {
+    chatId,
+    messageId: 0,
+    startTime: Date.now(),
+    tools: [],
+    lastEditTime: Date.now(),
+    typingTimer,
+  };
+
+  // Send initial status message, then backfill the messageId
+  try {
+    const sent = await bot.api.sendMessage(chatId, "Thinking...");
+    if (turnStatus && turnStatus.typingTimer === typingTimer) {
+      turnStatus.messageId = sent.message_id;
+    }
+  } catch (err) {
+    console.error("Failed to send status message:", err);
+  }
+}
+
+function recordToolUse(toolName: string): void {
+  if (!turnStatus || turnStatus.messageId === 0) return;
+
+  // Deduplicate consecutive same-tool entries
+  if (turnStatus.tools[turnStatus.tools.length - 1] !== toolName) {
+    turnStatus.tools.push(toolName);
+  }
+
+  // Throttle edits: only update if enough time has passed
+  if (Date.now() - turnStatus.lastEditTime >= STATUS_EDIT_INTERVAL_MS) {
+    flushStatusEdit();
+  }
+}
+
+function flushStatusEdit(): void {
+  if (!turnStatus || turnStatus.messageId === 0) return;
+  turnStatus.lastEditTime = Date.now();
+
+  const text = formatStatusText(turnStatus);
+  bot.api
+    .editMessageText(turnStatus.chatId, turnStatus.messageId, text)
+    .catch((err) => console.error("Failed to edit status message:", err));
+}
+
+async function cleanupTurnStatus(): Promise<void> {
+  const status = turnStatus;
+  if (!status) return;
+
+  // Null out first to prevent concurrent calls from double-deleting
+  turnStatus = null;
+  clearInterval(status.typingTimer);
+
+  // Delete the status message (if it was ever sent)
+  if (status.messageId !== 0) {
+    try {
+      await bot.api.deleteMessage(status.chatId, status.messageId);
+    } catch {
+      // Message may already be deleted
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 7. CLI message handler
 // ---------------------------------------------------------------------------
 
 function handleCliMessage(raw: string): void {
@@ -216,13 +318,10 @@ function handleCliMessage(raw: string): void {
       } | undefined;
       if (!message?.content) break;
 
-      // Track tool-use and update the single status message (throttled)
+      // Record tool uses for the status message
       const toolUses = message.content.filter((c) => c.type === "tool_use");
       for (const tool of toolUses) {
-        toolCallsSeen.push(tool.name ?? "unknown");
-      }
-      if (toolUses.length > 0) {
-        updateStatusMessage().catch((err) => console.error("Status update failed:", err));
+        recordToolUse(tool.name ?? "unknown");
       }
 
       // Send text content
@@ -231,7 +330,9 @@ function handleCliMessage(raw: string): void {
         .map((c) => c.text as string);
       if (textParts.length > 0) {
         const html = markdownToHtml(textParts.join("\n"));
-        sendChunked(activeChatId, html).catch((err) => console.error("sendChunked failed:", err));
+        // Clean up status independently -- never block response delivery
+        cleanupTurnStatus().catch((err) => console.error("Status cleanup failed:", err));
+        sendChunked(activeChatId!, html).catch((err) => console.error("sendChunked failed:", err));
       }
       break;
     }
@@ -242,20 +343,17 @@ function handleCliMessage(raw: string): void {
         initialResultReceived = true;
         cliState = "ready";
         console.log("CLI ready (initial result received)");
-        if (activeChatId) {
-          bot.api
-            .sendMessage(activeChatId, "Ready.")
-            .catch(console.error);
-        }
         drainQueue();
         break;
       }
-      // Turn complete -- clean up status message and reset state
-      deleteStatusMessage().catch(() => {});
-      resetTurnState();
+      // Turn complete
       messagesProcessed++;
       processing = false;
       console.log(`Turn complete (total processed: ${messagesProcessed})`);
+
+      // Clean up status message if still present (no text response was sent)
+      cleanupTurnStatus().catch((err) => console.error("Status cleanup failed:", err));
+
       drainQueue();
       break;
     }
@@ -268,7 +366,7 @@ function handleCliMessage(raw: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// 7. CLI process management (stdio transport)
+// 8. CLI process management (stdio transport)
 // ---------------------------------------------------------------------------
 
 let cliGeneration = 0;
@@ -363,7 +461,9 @@ function spawnCli(): void {
     cliStdin = null;
     processing = false;
     initialResultReceived = false;
-    resetTurnState();
+
+    // Clean up any active status message
+    cleanupTurnStatus().catch(() => {});
 
     // Notify user if chat is active
     if (activeChatId) {
@@ -389,58 +489,6 @@ function spawnCli(): void {
 }
 
 // ---------------------------------------------------------------------------
-// 8. Status message helpers
-// ---------------------------------------------------------------------------
-
-const STATUS_UPDATE_INTERVAL_MS = 3_000;
-const TYPING_ACTION_INTERVAL_MS = 4_000;
-
-function buildStatusText(): string {
-  const elapsed = Math.floor((Date.now() - turnStartTime) / 1000);
-  if (toolCallsSeen.length === 0) {
-    return `Thinking... (${elapsed}s)`;
-  }
-  // Deduplicate tool names, keeping order of first appearance
-  const unique = [...new Set(toolCallsSeen)];
-  return `Working... (${elapsed}s · ${unique.join(", ")})`;
-}
-
-function resetTurnState(): void {
-  if (typingInterval) {
-    clearInterval(typingInterval);
-    typingInterval = null;
-  }
-  statusMessageId = null;
-  turnStartTime = 0;
-  toolCallsSeen = [];
-  lastStatusUpdate = 0;
-}
-
-async function deleteStatusMessage(): Promise<void> {
-  if (!activeChatId || !statusMessageId) return;
-  try {
-    await bot.api.deleteMessage(activeChatId, statusMessageId);
-  } catch {
-    // Message may already be deleted or too old
-  }
-  statusMessageId = null;
-}
-
-async function updateStatusMessage(): Promise<void> {
-  if (!activeChatId || !statusMessageId) return;
-  const now = Date.now();
-  if (now - lastStatusUpdate < STATUS_UPDATE_INTERVAL_MS) return;
-
-  lastStatusUpdate = now;
-  const text = buildStatusText();
-  try {
-    await bot.api.editMessageText(activeChatId, statusMessageId, text);
-  } catch {
-    // Edit may fail if message was deleted or content unchanged
-  }
-}
-
-// ---------------------------------------------------------------------------
 // 9. Message relay helpers
 // ---------------------------------------------------------------------------
 
@@ -463,25 +511,10 @@ function sendUserMessage(text: string): void {
   const line = JSON.stringify(msg) + "\n";
   console.log(`[Bridge -> CLI] Sending user message (${text.length} chars)`);
   processing = true;
-  turnStartTime = Date.now();
-  toolCallsSeen = [];
-  lastStatusUpdate = 0;
 
-  // Send initial status message and start typing indicator
+  // Start the status message + typing indicator
   if (activeChatId) {
-    const chatId = activeChatId;
-    bot.api.sendChatAction(chatId, "typing").catch(() => {});
-    bot.api
-      .sendMessage(chatId, "Thinking...")
-      .then((sent) => {
-        statusMessageId = sent.message_id;
-        lastStatusUpdate = Date.now();
-      })
-      .catch((err) => console.error("Failed to send status message:", err));
-
-    typingInterval = setInterval(() => {
-      bot.api.sendChatAction(chatId, "typing").catch(() => {});
-    }, TYPING_ACTION_INTERVAL_MS);
+    startTurnStatus(activeChatId).catch((err) => console.error("Failed to start turn status:", err));
   }
 
   try {
@@ -490,14 +523,14 @@ function sendUserMessage(text: string): void {
       result.catch((err) => {
         console.error("Failed to write user message to CLI stdin:", err);
         processing = false;
-        resetTurnState();
+        cleanupTurnStatus().catch(() => {});
         drainQueue();
       });
     }
   } catch (err) {
     console.error("Failed to write user message to CLI stdin:", err);
     processing = false;
-    resetTurnState();
+    cleanupTurnStatus().catch(() => {});
     drainQueue();
   }
 }
@@ -571,12 +604,13 @@ bot.command("status", async (ctx) => {
 bot.command("new", async (ctx) => {
   activeChatId = ctx.chat.id;
 
-  // Clear message queue
+  // Clear message queue and status
   messageQueue.length = 0;
   processing = false;
   initialResultReceived = false;
+  await cleanupTurnStatus();
 
-  // Kill the current CLI process — the exit handler will auto-restart it
+  // Kill the current CLI process -- the exit handler will auto-restart it
   if (cliProcess) {
     await ctx.reply("Clearing session and restarting CLI...");
     try {
@@ -638,13 +672,18 @@ const healthServer = Bun.serve({
   fetch(req) {
     const url = new URL(req.url);
     if (url.pathname === "/health" && req.method === "GET") {
-      return Response.json({
-        status: "ok",
-        cli: cliState,
-        bot: "running",
-        uptime: Math.floor((Date.now() - startTime) / 1000),
-        messagesProcessed,
-      });
+      const healthy = cliProcess !== null && cliState === "ready";
+      return Response.json(
+        {
+          status: healthy ? "ok" : "degraded",
+          cli: cliState,
+          bot: "running",
+          queue: messageQueue.length,
+          uptime: Math.floor((Date.now() - startTime) / 1000),
+          messagesProcessed,
+        },
+        { status: healthy ? 200 : 503 }
+      );
     }
     return new Response("Not found", { status: 404 });
   },
@@ -665,6 +704,9 @@ async function shutdown(signal: string): Promise<void> {
   } catch {
     // Already stopped
   }
+
+  // Clean up status message
+  await cleanupTurnStatus();
 
   // Kill CLI process
   if (cliProcess) {
