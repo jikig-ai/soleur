@@ -5,6 +5,24 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-02-12
+
+### Added
+
+- Automated test suite for plugin markdown components (`plugins/soleur/test/`)
+  - `helpers.ts`: Component discovery (agents, commands, skills) and YAML frontmatter parsing using `yaml` library
+  - `components.test.ts`: 443 tests validating frontmatter fields, naming conventions, description voice, and reference links
+- Lefthook pre-commit hook (`plugin-component-test`, priority 6) runs tests on `plugins/soleur/**/*.md` changes
+- Root `package.json` with `yaml` dev dependency for frontmatter parsing
+
+### Fixed
+
+- `agent-browser` skill description: changed to third-person voice ("This skill should be used when...")
+- `rclone` skill description: changed to third-person voice ("This skill should be used when...")
+- `help` command: added missing `argument-hint` frontmatter field
+- `one-shot` command: added missing `argument-hint` frontmatter field
+- `skill-creator` skill: converted 3 backtick file references to proper markdown links
+
 ## [2.0.1] - 2026-02-12
 
 ### Changed

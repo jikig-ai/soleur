@@ -1,6 +1,7 @@
 ---
 name: soleur:help
 description: "List all available Soleur commands, agents, and skills"
+argument-hint: ""
 ---
 
 # Soleur Help

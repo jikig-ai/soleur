@@ -1,6 +1,7 @@
 ---
 name: soleur:one-shot
 description: Full autonomous engineering workflow from plan to PR with video
+argument-hint: "[feature description or issue reference]"
 ---
 
 Run these slash commands in order. Do not do anything else.
