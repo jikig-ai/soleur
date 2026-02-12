@@ -28,19 +28,32 @@ Before committing ANY changes:
 
 ### Directory Structure
 
+Components are organized by domain. Cross-domain components stay at root level.
+Engineering-specific components live under `engineering/` subdirectories.
+
 ```text
 agents/
-├── design/     # Design and architecture agents
-├── review/     # Code review agents
-├── research/   # Research and analysis agents
-└── workflow/   # Workflow automation agents
+├── research/              # Cross-domain research agents
+├── workflow/              # Cross-domain workflow agents
+└── engineering/
+    ├── review/            # Engineering code review agents
+    └── design/            # Engineering architecture agents
 
 commands/
-└── soleur/  # All commands (soleur:plan, soleur:review, soleur:help, etc.)
+└── soleur/                # All commands (soleur:plan, soleur:review, etc.)
 
 skills/
-└── *.md        # All skills at root level
+└── <skill-name>/          # All skills at root level (flat)
 ```
+
+### Adding a New Domain
+
+To add a new domain (e.g., product, growth):
+
+1. Create `agents/<domain>/` for domain-specific agents
+2. Skills stay flat at root level (the skill loader does not recurse into subdirectories)
+3. Commands stay under `commands/soleur/` (they are domain-agnostic workflow orchestrators)
+4. The plugin loader discovers agents recursively -- no config changes needed
 
 ## Command Naming Convention
 

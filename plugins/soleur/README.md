@@ -95,9 +95,11 @@ Capture learnings from your work. This command:
 
 ## Agents
 
-Agents are organized into categories for easier discovery.
+Agents are organized by domain, then by function. Cross-domain agents stay at root level.
 
-### Review (14)
+### Engineering (15)
+
+#### Review (14)
 
 | Agent | Description |
 |-------|-------------|
@@ -116,13 +118,15 @@ Agents are organized into categories for easier discovery.
 | `security-sentinel` | Security audits and vulnerability assessments |
 | `test-design-reviewer` | Score test quality using Farley's 8 properties with weighted rubric |
 
-### Design (1)
+#### Design (1)
 
 | Agent | Description |
 |-------|-------------|
 | `ddd-architect` | Domain-Driven Design with strategic bounded contexts and tactical patterns |
 
-### Research (5)
+### Cross-domain (7)
+
+#### Research (5)
 
 | Agent | Description |
 |-------|-------------|
@@ -132,7 +136,7 @@ Agents are organized into categories for easier discovery.
 | `learnings-researcher` | Search institutional learnings for relevant past solutions |
 | `repo-research-analyst` | Research repository structure and conventions |
 
-### Workflow (2)
+#### Workflow (2)
 
 | Agent | Description |
 |-------|-------------|

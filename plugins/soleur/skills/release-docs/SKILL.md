@@ -22,13 +22,13 @@ First, count and list all current components:
 
 ```bash
 # Count agents
-ls plugins/soleur/agents/*.md | wc -l
+find plugins/soleur/agents -name "*.md" -not -name "README.md" | wc -l
 
 # Count commands
-ls plugins/soleur/commands/*.md | wc -l
+find plugins/soleur/commands -name "*.md" -not -name "README.md" | wc -l
 
 # Count skills
-ls -d plugins/soleur/skills/*/ 2>/dev/null | wc -l
+find plugins/soleur/skills -name "SKILL.md" | wc -l
 
 # Count MCP servers
 ls -d plugins/soleur/mcp-servers/*/ 2>/dev/null | wc -l
@@ -138,10 +138,10 @@ cat .claude-plugin/marketplace.json | jq .
 cat plugins/soleur/.claude-plugin/plugin.json | jq .
 
 # Verify counts match
-echo "Agents in files: $(ls plugins/soleur/agents/*.md | wc -l)"
+echo "Agents in files: $(find plugins/soleur/agents -name '*.md' -not -name 'README.md' | wc -l)"
 grep -o "[0-9]* specialized agents" plugins/soleur/docs/index.html
 
-echo "Commands in files: $(ls plugins/soleur/commands/*.md | wc -l)"
+echo "Commands in files: $(find plugins/soleur/commands -name '*.md' -not -name 'README.md' | wc -l)"
 grep -o "[0-9]* slash commands" plugins/soleur/docs/index.html
 ```
 
