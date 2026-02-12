@@ -32,7 +32,7 @@ find plugins/soleur/commands/soleur -name "*.md" -type f 2>/dev/null | wc -l
 find plugins/soleur/skills -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l
 
 # Count agent categories
-ls plugins/soleur/agents/ 2>/dev/null
+find plugins/soleur/agents -name "*.md" -not -name "README.md" 2>/dev/null | wc -l
 ```
 
 If the plugin paths above do not exist, fall back to the installed plugin paths under `~/.claude/plugins/`.

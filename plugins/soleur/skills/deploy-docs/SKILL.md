@@ -13,9 +13,9 @@ Run these checks:
 
 ```bash
 # Count components
-echo "Agents: $(ls plugins/soleur/agents/*.md | wc -l)"
-echo "Commands: $(ls plugins/soleur/commands/*.md | wc -l)"
-echo "Skills: $(ls -d plugins/soleur/skills/*/ 2>/dev/null | wc -l)"
+echo "Agents: $(find plugins/soleur/agents -name '*.md' -not -name 'README.md' | wc -l)"
+echo "Commands: $(find plugins/soleur/commands -name '*.md' -not -name 'README.md' | wc -l)"
+echo "Skills: $(find plugins/soleur/skills -name 'SKILL.md' | wc -l)"
 
 # Validate JSON
 cat .claude-plugin/marketplace.json | jq . > /dev/null && echo "✓ marketplace.json valid"

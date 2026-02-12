@@ -25,7 +25,7 @@ Project principles organized by domain. Add principles as you learn them.
 
 - Core workflow commands use `soleur:` prefix to avoid collisions with built-in commands
 - Every plugin change must update three files: plugin.json (version), CHANGELOG.md, and README.md (counts/tables)
-- Organize agents into category subdirectories (review/, research/, design/, workflow/, docs/)
+- Organize agents by domain first (engineering/, etc.), then by function (review/, design/). Cross-domain agents stay at root level (research/, workflow/)
 - Skills must have a SKILL.md file and may include scripts/, references/, and assets/ subdirectories
 - Lifecycle workflows with hooks must cover every state transition with a cleanup trigger; verify no gaps between create, ship, merge, and session-start
 - Operations that modify the knowledge-base or move files must use `git mv` to preserve history and produce a single atomic commit that can be reverted with `git revert`
@@ -66,6 +66,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Plans should specify version bump intent (MINOR/PATCH/MAJOR) not exact version numbers, to avoid conflicts between parallel feature branches
 - Experimental feature flags should self-manage within execution scope -- activate on user consent, deactivate on completion or failure -- never require manual setup for features that already have a consent prompt
 - Before designing new infrastructure (metadata schemas, detection engines, new directories), check if the existing codebase already has a pattern that solves the problem -- e.g., the review command's conditional agents section was sufficient for project-aware filtering without a metadata system
+- Before planning large directory restructures, run a Phase 0 loader test -- move one component, reload, verify it is still discoverable. Different component types have different recursion behavior (agents recurse, skills do not)
 
 ## Testing
 

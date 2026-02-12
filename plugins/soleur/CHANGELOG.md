@@ -5,6 +5,25 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-02-12
+
+### Changed
+
+- **BREAKING:** Engineering agents moved to domain-first directory structure
+  - 14 review agents: `agents/review/*.md` -> `agents/engineering/review/*.md`
+  - 1 design agent: `agents/design/*.md` -> `agents/engineering/design/*.md`
+  - Agent subagent_type names change (e.g., `soleur:review:code-simplicity-reviewer` -> `soleur:engineering:review:code-simplicity-reviewer`)
+- Cross-domain agents (research/, workflow/) remain at root level unchanged
+- README agent tables reorganized into Engineering and Cross-domain sections
+- AGENTS.md directory structure updated with domain-first layout and "Adding a New Domain" guide
+- Constitution updated: agents organized by domain first, then by function
+- Counting globs in help, release-docs, and deploy-docs skills updated from `ls` to recursive `find` for nested directories
+- Agent category references in deepen-plan skill updated to new paths
+
+### Removed
+
+- Empty `agents/review/` and `agents/design/` directories (content moved to `agents/engineering/`)
+
 ## [1.18.0] - 2026-02-12
 
 ### Added
