@@ -6,6 +6,9 @@ on:
     paths:
       - 'plugins/soleur/.claude-plugin/plugin.json'
 
+permissions:
+  contents: write
+
 jobs:
   release:
     runs-on: ubuntu-latest
