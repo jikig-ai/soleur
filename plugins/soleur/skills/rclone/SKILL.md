@@ -1,6 +1,6 @@
 ---
 name: rclone
-description: Upload, sync, and manage files across cloud storage providers using rclone. Use when uploading files (images, videos, documents) to S3, Cloudflare R2, Backblaze B2, Google Drive, Dropbox, or any S3-compatible storage. Triggers on "upload to S3", "sync to cloud", "rclone", "backup files", "upload video/image to bucket", or requests to transfer files to remote storage.
+description: This skill should be used when uploading, syncing, or managing files across cloud storage providers using rclone. It handles transfers to S3, Cloudflare R2, Backblaze B2, Google Drive, Dropbox, or any S3-compatible storage. Triggers on "upload to S3", "sync to cloud", "rclone", "backup files", "upload video/image to bucket", or requests to transfer files to remote storage.
 ---
 
 # rclone File Transfer Skill
