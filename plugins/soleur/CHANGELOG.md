@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Graceful degradation when Discord webhook is not configured or posting fails
 - `/ship` Phase 8 now invokes `/release-announce` after merge when plugin.json version was bumped
 
+## [2.1.1] - 2026-02-12
+
+### Changed
+
+- Brainstorm command Phase 0 now offers `/soleur:one-shot` as an option when requirements are clear (closes #64)
+- Replaces binary plan-or-brainstorm triage with three options: one-shot, plan, or brainstorm
+- One-shot option description accurately reflects full pipeline (plan, deepen, implement, review, resolve, test, video, PR)
+
 ## [2.1.0] - 2026-02-12
 
 ### Added

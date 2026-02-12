@@ -45,7 +45,14 @@ Evaluate whether brainstorming is needed based on the feature description.
 - Constrained, well-defined scope
 
 **If requirements are already clear:**
-Use **AskUserQuestion tool** to suggest: "Your requirements seem detailed enough to proceed directly to planning. Should I run `/soleur:plan` instead, or would you like to explore the idea further?"
+Use **AskUserQuestion tool** to suggest: "Your requirements seem clear enough to skip brainstorming. How would you like to proceed?"
+
+Options:
+1. **One-shot it** - Run `/soleur:one-shot` for full autonomous execution (plan, deepen, implement, review, resolve todos, browser test, feature video, PR). Best for simple, single-session tasks like bug fixes or small improvements.
+2. **Plan first** - Run `/soleur:plan` to create a plan before implementing
+3. **Brainstorm anyway** - Continue exploring the idea
+
+If one-shot is selected, pass the original feature description (including any issue references) to `/soleur:one-shot` and stop brainstorm execution. Note: this skips brainstorm capture (Phase 3.5), worktree creation (Phase 3), and spec/issue creation (Phase 3.6) -- the one-shot pipeline handles setup through `/soleur:plan`.
 
 ### Phase 1: Understand the Idea
 
