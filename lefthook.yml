@@ -20,3 +20,7 @@ pre-commit:
       glob: "*.md"
       run: npx --yes markdownlint-cli {staged_files}
       stage_fixed: true
+    bun-test:
+      priority: 5
+      glob: "*.{ts,tsx,js,jsx}"
+      run: bun test

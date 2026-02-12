@@ -74,9 +74,9 @@ graph TB
 
 | Component | Count | Description |
 |-----------|-------|-------------|
-| [Agents](./components/agents.md) | 18 | AI agents for specialized tasks |
-| [Commands](./components/commands.md) | 26 | Slash commands for workflow |
-| [Skills](./components/skills.md) | 17 | Specialized capabilities |
+| [Agents](./components/agents.md) | 22 | AI agents for specialized tasks |
+| [Commands](./components/commands.md) | 8 | Slash commands for workflow |
+| [Skills](./components/skills.md) | 35 | Specialized capabilities |
 | [Knowledge Base](./components/knowledge-base.md) | 1 | Documentation system |
 
 Each component has detailed documentation in [components/](./components/) covering its purpose, available items, usage patterns, and conventions. See individual component docs for full reference.
@@ -93,7 +93,9 @@ Commands like `/soleur:plan` and `/soleur:work` read the constitution automatica
 soleur/
   plugins/soleur/           # The Claude Code plugin
     agents/                 # AI agents by category
-      review/               # Code review agents
+      engineering/
+        review/             # Code review agents
+        design/             # Design agents
       research/             # Research and analysis
       workflow/             # Workflow automation
     commands/               # Slash commands

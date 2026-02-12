@@ -9,6 +9,10 @@ Project principles organized by domain. Add principles as you learn them.
 - Skill descriptions must use third person ("This skill should be used when..." NOT "Use this skill when...")
 - Reference files in skills must use markdown links, not backticks (e.g., `[file.md](./references/file.md)`)
 - All skill, command, and agent markdown files must include YAML frontmatter with `name` and `description` fields
+- Use kebab-case for all file and directory names (agents, skills, commands, learnings, plans)
+- Agent descriptions must include at least one `<example>` block with context, user/assistant dialogue, and `<commentary>` explaining the selection rationale
+- Agent frontmatter must include a `model` field (`inherit`, `haiku`, `sonnet`, or `opus`) to control execution model
+- Command frontmatter must include an `argument-hint` field describing expected arguments
 
 ### Never
 
@@ -18,6 +22,7 @@ Project principles organized by domain. Add principles as you learn them.
 
 - Prefer ASCII characters unless the file already contains Unicode
 - Use imperative/infinitive form for instructions (verb-first)
+- Prefer numbered phase sections (Phase 1, Phase 2) in SKILL.md for multi-step workflows, with XML semantic tags (`<critical_sequence>`, `<decision_gate>`, `<validation_gate>`) to mark control flow
 
 ## Architecture
 
@@ -85,6 +90,9 @@ Project principles organized by domain. Add principles as you learn them.
 
 - RED/GREEN/REFACTOR cycle over write-code-then-test -- use `/atdd-developer` skill for guided TDD
 - Interface-level mocking over implementation-level mocking -- define a minimal interface (e.g., BotApi) and inject it, enabling tests without external dependencies
+- Prefer Bun's built-in test framework (`bun:test`) with describe/test/expect pattern over external test runners
+- Prefer factory functions (e.g., `createMockApi()`, `makeStatus(overrides)`) over inline test data for reusable test fixtures
+- Prefer labeling regression tests with their original issue ID (e.g., `P2-014 regression`) for traceability
 
 ## Proposals
 
