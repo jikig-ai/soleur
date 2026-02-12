@@ -36,8 +36,7 @@ agents/
 └── workflow/   # Workflow automation agents
 
 commands/
-├── soleur/  # Core workflow commands (soleur:plan, soleur:review, etc.)
-└── *.md        # Utility commands
+└── soleur/  # All commands (soleur:plan, soleur:review, soleur:help, etc.)
 
 skills/
 └── *.md        # All skills at root level

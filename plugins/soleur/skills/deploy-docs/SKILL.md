@@ -1,6 +1,6 @@
 ---
 name: deploy-docs
-description: Validate and prepare documentation for GitHub Pages deployment
+description: "This skill should be used when validating and preparing documentation for GitHub Pages deployment. It checks HTML pages, JSON validity, component counts, and provides deployment instructions. Triggers on \"deploy docs\", \"publish documentation\", \"GitHub Pages\", \"validate docs site\"."
 ---
 
 # Deploy Documentation Command

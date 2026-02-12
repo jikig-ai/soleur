@@ -1,12 +1,11 @@
 ---
 name: report-bug
-description: Report a bug in the soleur plugin
-argument-hint: "[optional: brief description of the bug]"
+description: "This skill should be used when reporting a bug in the Soleur plugin. It gathers structured bug information through guided questions, collects environment details automatically, and creates a GitHub issue with proper formatting and labels. Triggers on \"report bug\", \"file bug\", \"plugin bug\", \"something is broken\", \"report issue\"."
 ---
 
 # Report a Soleur Plugin Bug
 
-Report bugs encountered while using the soleur plugin. This command gathers structured information and creates a GitHub issue for the maintainer.
+Report bugs encountered while using the soleur plugin. This skill gathers structured information and creates a GitHub issue for the maintainer.
 
 ## Step 1: Gather Bug Information
 
@@ -91,7 +90,7 @@ Create a well-structured bug report with:
 [Any other relevant information]
 
 ---
-*Reported via `/report-bug` command*
+*Reported via `/report-bug` skill*
 ```
 
 ## Step 4: Create GitHub Issue
@@ -124,7 +123,7 @@ After the issue is created:
 ## Output Format
 
 ```
-✅ Bug report submitted successfully!
+Bug report submitted successfully!
 
 Issue: https://github.com/jikig-ai/soleur/issues/[NUMBER]
 Title: [soleur] Bug: [description]
@@ -141,7 +140,7 @@ The maintainer will review your report and respond as soon as possible.
 
 ## Privacy Notice
 
-This command does NOT collect:
+This skill does NOT collect:
 - Personal information
 - API keys or credentials
 - Private code from your projects

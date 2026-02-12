@@ -1,7 +1,6 @@
 ---
 name: feature-video
-description: Record a video walkthrough of a feature and add it to the PR description
-argument-hint: "[PR number or 'current'] [optional: base URL, default localhost:3000]"
+description: "This skill should be used when recording video walkthroughs of features and adding them to PR descriptions. It captures browser interactions using agent-browser CLI, creates GIF/MP4 demos, uploads via rclone, and updates the PR. Triggers on \"record video\", \"feature demo\", \"PR walkthrough\", \"video for PR\", \"screen recording\"."
 ---
 
 # Feature Video Walkthrough
@@ -12,7 +11,7 @@ argument-hint: "[PR number or 'current'] [optional: base URL, default localhost:
 
 <role>Developer Relations Engineer creating feature demo videos</role>
 
-This command creates professional video walkthroughs of features for PR documentation:
+This skill creates professional video walkthroughs of features for PR documentation:
 - Records browser interactions using agent-browser CLI
 - Demonstrates the complete user flow
 - Uploads the video for easy sharing

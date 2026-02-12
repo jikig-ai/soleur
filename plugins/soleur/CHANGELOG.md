@@ -5,6 +5,26 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.18.0] - 2026-02-12
+
+### Added
+
+- 6 new skills converted from remaining utility commands: `agent-native-audit`, `deploy-docs`, `feature-video`, `heal-skill`, `report-bug`, `triage`
+- `soleur:help` command (replaces top-level `/help`)
+- `soleur:one-shot` command (replaces top-level `/lfg`)
+
+### Removed
+
+- 9 top-level utility command files (all converted to skills or moved to `commands/soleur/`)
+- `generate_command` command (redundant with `skill-creator` skill)
+
+### Changed
+
+- Command count: 15 -> 8 (all now `soleur:` namespaced, zero top-level utility commands)
+- Skill count: 29 -> 35 (6 added)
+- `soleur:help` body rewritten to reflect post-consolidation state (dynamic skill listing)
+- `soleur:one-shot` stale references fixed (`/deepen-plan`, `/resolve-todo-parallel`, `/test-browser`, `/feature-video`)
+
 ## [1.17.0] - 2026-02-12
 
 ### Added
