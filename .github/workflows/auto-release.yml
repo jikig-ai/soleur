@@ -1,0 +1,101 @@
+name: Auto Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/soleur/.claude-plugin/plugin.json'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version from plugin.json
+        id: version
+        run: |
+          VERSION=$(jq -r '.version' plugins/soleur/.claude-plugin/plugin.json)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check if release already exists
+        id: check
+        run: |
+          if gh release view "$TAG" &>/dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+
+      - name: Extract changelog
+        if: steps.check.outputs.exists == 'false'
+        id: changelog
+        run: |
+          # Extract the section for this version (between ## [$VERSION] and next ## [)
+          BODY=$(awk "/^## \[${VERSION}\]/{found=1; next} /^## \[/{if(found) exit} found{print}" plugins/soleur/CHANGELOG.md)
+
+          if [ -z "$BODY" ]; then
+            BODY="Release v${VERSION}"
+          fi
+
+          # Use delimiter for multiline output
+          echo "body<<CHANGELOG_EOF" >> $GITHUB_OUTPUT
+          echo "$BODY" >> $GITHUB_OUTPUT
+          echo "CHANGELOG_EOF" >> $GITHUB_OUTPUT
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          echo "$RELEASE_BODY" > /tmp/release-notes.md
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file /tmp/release-notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_BODY: ${{ steps.changelog.outputs.body }}
+
+      # Post to Discord directly because releases created by GITHUB_TOKEN
+      # do not trigger other workflows (release-announce.yml won't fire)
+      - name: Post to Discord
+        if: steps.check.outputs.exists == 'false'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TAG: ${{ steps.version.outputs.tag }}
+          BODY: ${{ steps.changelog.outputs.body }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "DISCORD_WEBHOOK_URL secret not set, skipping Discord notification"
+            exit 0
+          fi
+
+          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+          RELEASE_URL="${REPO_URL}/releases/tag/${TAG}"
+
+          # Truncate body to 1900 chars for Discord's 2000 char limit
+          if [ ${#BODY} -gt 1900 ]; then
+            BODY="${BODY:0:1897}..."
+          fi
+
+          MESSAGE=$(printf '**Soleur %s released!**\n\n%s\n\nFull release notes: %s' \
+            "$TAG" "$BODY" "$RELEASE_URL")
+
+          PAYLOAD=$(jq -n --arg content "$MESSAGE" '{content: $content}')
+
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL")
+
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Discord notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Discord notification failed (HTTP $HTTP_CODE)"
+          fi

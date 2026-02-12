@@ -314,13 +314,9 @@ After the PR is created, ask the user:
 
 **If merged (either now or user says "merge PR" later in the session):**
 
-1. Check if a plugin version bump was part of this branch:
+1. **Release creation is automatic.** When a merge to main includes a plugin.json version change, the `auto-release.yml` GitHub Actions workflow creates a GitHub Release and posts to Discord. No manual step needed.
 
-   ```bash
-   git diff --name-only $(git merge-base HEAD origin/main)..HEAD -- plugins/soleur/.claude-plugin/plugin.json
-   ```
-
-   If plugin.json was modified: run `/release-announce` to post announcements to Discord and create a GitHub Release. The skill operates via APIs (webhook + `gh release create`) so it works from the worktree.
+   If the workflow did not fire (e.g., path filter didn't match), run `/release-announce` manually as a fallback.
 
 2. Clean up worktree and local branch:
 

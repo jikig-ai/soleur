@@ -5,6 +5,20 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - 2026-02-12
+
+### Added
+
+- `auto-release.yml` GitHub Actions workflow -- automatically creates GitHub Releases and posts to Discord when plugin.json version changes on merge to main
+  - Reads version from plugin.json, extracts changelog section, creates release via `gh release create`
+  - Posts to Discord directly (GITHUB_TOKEN releases don't trigger other workflows)
+  - Idempotent: skips if release already exists
+
+### Changed
+
+- `/ship` Phase 8: release creation is now automatic via CI; manual `/release-announce` retained as fallback
+- `release-announce.yml`: added comment clarifying it handles manually-created releases only
+
 ## [2.3.0] - 2026-02-12
 
 ### Added
