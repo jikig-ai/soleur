@@ -239,10 +239,19 @@ After the PR is created, ask the user:
 
 **If merged (either now or user says "merge PR" later in the session):**
 
-```bash
-# Clean up worktree and local branch for the merged PR
-cd $(git rev-parse --show-toplevel) && bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
-```
+1. Check if a plugin version bump was part of this branch:
+
+   ```bash
+   git diff --name-only $(git merge-base HEAD origin/main)..HEAD -- plugins/soleur/.claude-plugin/plugin.json
+   ```
+
+   If plugin.json was modified: run `/release-announce` to post announcements to Discord and create a GitHub Release. The skill operates via APIs (webhook + `gh release create`) so it works from the worktree.
+
+2. Clean up worktree and local branch:
+
+   ```bash
+   cd $(git rev-parse --show-toplevel) && bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
+   ```
 
 This detects `[gone]` branches (where the remote was deleted after merge), removes their worktrees, archives spec directories, and deletes local branches.
 

@@ -108,7 +108,7 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 |-----------|-------|
 | Agents | 22 |
 | Commands | 8 |
-| Skills | 34 |
+| Skills | 35 |
 | MCP Servers | 1 |
 
 ## Agents
@@ -210,6 +210,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `deepen-plan` | Enhance plans with parallel research agents |
 | `deploy-docs` | Validate and prepare documentation for deployment |
 | `plan-review` | Multi-agent plan review in parallel |
+| `release-announce` | Announce releases to Discord and GitHub Releases |
 | `release-docs` | Build and update documentation site with current components |
 
 ### Resolution & Automation
