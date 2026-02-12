@@ -1,7 +1,7 @@
 ---
 component: commands
-updated: 2026-02-06
-primary_location: plugins/soleur/commands/
+updated: 2026-02-12
+primary_location: plugins/soleur/commands/soleur/
 ---
 
 # Commands
@@ -59,11 +59,9 @@ graph LR
 4. Command reads/writes knowledge base files
 5. Results returned to user
 
-## Categories
+## Commands (8)
 
-### Core Workflow (6 commands)
-
-The main development workflow commands use `soleur:` prefix:
+All commands use the `soleur:` prefix to avoid collisions with built-in commands. There are no top-level utility commands -- former utility commands were converted to skills in v1.17.0-v1.18.0.
 
 | Command | Purpose |
 |---------|---------|
@@ -73,32 +71,8 @@ The main development workflow commands use `soleur:` prefix:
 | `/soleur:review` | Multi-agent code review before PR |
 | `/soleur:compound` | Capture learnings for future work |
 | `/soleur:sync` | Populate knowledge base from existing codebase |
-
-### Utility Commands (15 commands)
-
-Supporting commands for specific tasks:
-
-| Command | Purpose |
-|---------|---------|
-| `/agent-native-audit` | Audit codebase for agent-native architecture |
-| `/changelog` | Generate changelogs from recent merges |
-| `/create-agent-skill` | Create or edit Claude Code skills |
-| `/deepen-plan` | Enhance plans with parallel research |
-| `/deploy-docs` | Validate docs for GitHub Pages deployment |
-| `/feature-video` | Record video walkthroughs for PR |
-| `/generate_command` | Generate new slash commands |
-| `/heal-skill` | Fix skill documentation issues |
-| `/lfg` | Full autonomous engineering workflow |
-| `/plan_review` | Multi-agent plan review in parallel |
-| `/release-docs` | Build and update documentation site |
-| `/report-bug` | Report bugs in the plugin |
-| `/reproduce-bug` | Reproduce bugs with logs and screenshots |
-| `/resolve_parallel` | Resolve TODO comments in parallel |
-| `/resolve_pr_parallel` | Resolve PR comments in parallel |
-| `/resolve_todo_parallel` | Resolve CLI todos in parallel |
-| `/test-browser` | Run browser tests on PR-affected pages |
-| `/triage` | Triage and categorize issues |
-| `/xcode-test` | Build and test iOS apps on simulator |
+| `/soleur:help` | List all available Soleur commands, agents, and skills |
+| `/soleur:one-shot` | Full autonomous engineering workflow from plan to PR |
 
 ## Workflow Sequence
 
@@ -150,9 +124,7 @@ sequenceDiagram
 
 ## Related Files
 
-- `plugins/soleur/commands/soleur/` - Core workflow commands
-- `plugins/soleur/commands/*.md` - Utility commands
-- `plugins/soleur/AGENTS.md` - Command naming conventions
+- `plugins/soleur/commands/soleur/` - All command definitions
 
 ## See Also
 

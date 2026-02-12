@@ -1,6 +1,6 @@
 ---
 component: skills
-updated: 2026-02-06
+updated: 2026-02-12
 primary_location: plugins/soleur/skills/
 ---
 
@@ -65,7 +65,7 @@ graph LR
 4. Claude's capabilities enhanced for the domain
 5. Higher quality output in that domain
 
-## Categories
+## Categories (35 skills)
 
 ### Architecture & Design
 
@@ -74,34 +74,83 @@ graph LR
 | `agent-native-architecture` | Build AI agents with prompt-native architecture |
 | `frontend-design` | Create production-grade frontend interfaces |
 
-### Development Patterns
+### Engineering Methodology
+
+| Skill | Purpose |
+|-------|---------|
+| `atdd-developer` | Acceptance Test Driven Development with RED/GREEN/REFACTOR permission gates |
+| `user-story-writer` | Decompose features into INVEST-compliant stories using Elephant Carpaccio |
+
+### Development Tools
 
 | Skill | Purpose |
 |-------|---------|
 | `andrew-kane-gem-writer` | Write Ruby gems following Andrew Kane's patterns |
+| `compound-docs` | Capture solved problems as categorized documentation |
+| `create-agent-skills` | Expert guidance for creating Claude Code skills |
 | `dhh-rails-style` | Write Ruby/Rails in DHH's 37signals style |
 | `dspy-ruby` | Build type-safe LLM applications with DSPy.rb |
+| `skill-creator` | Guide for creating effective skills |
 
-### Workflow & Documentation
+### Planning & Review
+
+| Skill | Purpose |
+|-------|---------|
+| `changelog` | Create engaging changelogs for recent merges |
+| `deepen-plan` | Enhance plans with parallel research agents |
+| `deploy-docs` | Validate and prepare documentation for deployment |
+| `plan-review` | Multi-agent plan review in parallel |
+| `release-docs` | Build and update documentation site with current components |
+
+### Resolution & Automation
+
+| Skill | Purpose |
+|-------|---------|
+| `resolve-parallel` | Resolve TODO comments in parallel |
+| `resolve-pr-parallel` | Resolve PR comments in parallel |
+| `resolve-todo-parallel` | Resolve CLI todos in parallel |
+| `triage` | Triage and categorize findings for the CLI todo system |
+
+### Testing & QA
+
+| Skill | Purpose |
+|-------|---------|
+| `agent-native-audit` | Run comprehensive agent-native architecture review |
+| `feature-video` | Record video walkthroughs and add to PR description |
+| `heal-skill` | Fix skill documentation issues |
+| `report-bug` | Report a bug in the plugin |
+| `reproduce-bug` | Reproduce bugs using logs, console, and browser screenshots |
+| `test-browser` | Run browser tests on PR-affected pages |
+| `xcode-test` | Build and test iOS apps on simulator |
+
+### Content & Workflow
 
 | Skill | Purpose |
 |-------|---------|
 | `brainstorming` | Question techniques for effective brainstorming |
-| `compound-docs` | Capture solved problems as categorized documentation |
-| `create-agent-skills` | Expert guidance for creating Claude Code skills |
-| `every-style-editor` | Review copy for Every's style guide |
+| `every-style-editor` | Review copy for Every's style guide compliance |
 | `file-todos` | File-based todo tracking system |
-| `skill-creator` | Guide for creating effective skills |
+| `git-worktree` | Manage Git worktrees for parallel development |
+| `ship` | Enforce feature lifecycle checklist before creating PRs |
 | `spec-templates` | Templates for specs and tasks |
 
-### Tools & Utilities
+### File Transfer
 
 | Skill | Purpose |
 |-------|---------|
-| `agent-browser` | CLI-based browser automation |
-| `gemini-imagegen` | Generate images with Google Gemini API |
-| `git-worktree` | Manage Git worktrees for parallel development |
-| `rclone` | Upload files to cloud storage |
+| `rclone` | Upload files to S3, Cloudflare R2, Backblaze B2, and cloud storage |
+
+### Browser Automation
+
+| Skill | Purpose |
+|-------|---------|
+| `agent-browser` | CLI-based browser automation using Vercel's agent-browser |
+
+### Image Generation
+
+| Skill | Purpose |
+|-------|---------|
+| `gemini-imagegen` | Generate and edit images using Google's Gemini API |
 
 ## Skill Structure Example
 
@@ -147,6 +196,7 @@ From `constitution.md`:
 - Skill descriptions MUST use third person ("This skill should be used when...")
 - Reference files MUST use markdown links, not backticks
 - All skills MUST include YAML frontmatter with `name` and `description`
+- All skills live flat under `skills/` (the loader does not recurse into subdirectories)
 
 ## Related Files
 

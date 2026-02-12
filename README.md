@@ -57,6 +57,8 @@ claude plugin install --url https://github.com/jikig-ai/soleur/tree/main/plugins
 | `/soleur:work` | Execute plans with incremental commits |
 | `/soleur:review` | Run comprehensive code review with specialized agents |
 | `/soleur:compound` | Capture learnings for future work |
+| `/soleur:help` | List all available Soleur commands, agents, and skills |
+| `/soleur:one-shot` | Full autonomous engineering workflow from plan to PR |
 
 See **[full component reference](./plugins/soleur/README.md)** for all agents, commands, and skills.
 

@@ -84,6 +84,24 @@ Capture learnings from your work. This command:
 
 **Example:** `/soleur:compound` (or just say "that worked!" and it triggers automatically)
 
+### Sync (`/soleur:sync`)
+
+Analyze an existing codebase and populate the knowledge-base with conventions, architecture patterns, testing practices, and technical debt. Run this before starting the workflow on a project that already has code.
+
+**Example:** `/soleur:sync` or `/soleur:sync conventions`
+
+### Help (`/soleur:help`)
+
+List all available Soleur commands, agents, and skills with descriptions and usage hints.
+
+**Example:** `/soleur:help`
+
+### One-Shot (`/soleur:one-shot`)
+
+Full autonomous engineering workflow that goes from plan to PR in a single command. Combines plan, work, review, and compound into one continuous flow.
+
+**Example:** `/soleur:one-shot Add dark mode support`
+
 ## Components
 
 | Component | Count |

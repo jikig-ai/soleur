@@ -68,6 +68,14 @@ graph TB
 | 4. Review | `/soleur:review` | Multi-agent code review before PR |
 | 5. Learn | `/soleur:compound` | Capture learnings for future work |
 
+**Additional commands:**
+
+| Command | Purpose |
+|---------|---------|
+| `/soleur:sync` | Populate knowledge-base from existing codebase |
+| `/soleur:help` | List all available Soleur commands, agents, and skills |
+| `/soleur:one-shot` | Full autonomous engineering workflow from plan to PR |
+
 **For existing codebases:** Run `/soleur:sync` first to populate knowledge-base with conventions.
 
 ## Components
