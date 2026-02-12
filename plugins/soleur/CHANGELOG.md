@@ -5,6 +5,26 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1] - 2026-02-12
+
+### Added
+
+- `/ship` Phase 7.5: automatic PR health check after push
+  - Mergeability: fetches origin/main, checks `gh pr view --json mergeable`, auto-resolves conflicts
+  - CI status: watches checks with `gh pr checks --watch --fail-fast`, investigates failures
+  - Falls back to user assistance for unresolvable conflicts or flaky CI
+
+## [2.2.0] - 2026-02-12
+
+### Added
+
+- `release-announce` skill for automated release announcements to Discord and GitHub Releases
+  - Parses CHANGELOG.md version section and generates AI-powered summary
+  - Posts to Discord via webhook (`DISCORD_WEBHOOK_URL` env var)
+  - Creates GitHub Release via `gh release create` with idempotency check
+  - Graceful degradation when Discord webhook is not configured or posting fails
+- `/ship` Phase 8 now invokes `/release-announce` after merge when plugin.json version was bumped
+
 ## [2.1.1] - 2026-02-12
 
 ### Changed

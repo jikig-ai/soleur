@@ -167,6 +167,8 @@ Ship Checklist for [branch name]:
 - [ ] Tests pass
 - [ ] Push to remote
 - [ ] Create PR
+- [ ] PR is mergeable (no conflicts)
+- [ ] CI checks pass
 ```
 
 ## Phase 6: Run Tests
@@ -228,6 +230,79 @@ PREOF
 
 Present the PR URL to the user.
 
+## Phase 7.5: Verify PR Mergeability
+
+After pushing (or after any subsequent push), verify the PR has no merge conflicts with the base branch:
+
+```bash
+# Fetch latest base branch
+git fetch origin main
+
+# Check PR mergeability
+gh pr view --json mergeable,mergeStateStatus --jq '{mergeable, mergeStateStatus}'
+```
+
+**If `mergeable` is `MERGEABLE`:** Continue to Phase 8.
+
+**If `mergeable` is `CONFLICTING`:**
+
+1. Merge the base branch locally to surface conflicts:
+
+   ```bash
+   git merge origin/main --no-commit --no-ff
+   ```
+
+2. Identify conflicted files:
+
+   ```bash
+   git diff --name-only --diff-filter=U
+   ```
+
+3. Read each conflicted file and resolve. Common conflict patterns:
+   - **Version numbers** (plugin.json, README badge, bug_report.yml): Keep the higher version from the feature branch
+   - **CHANGELOG entries**: Keep both entries in descending version order
+   - **Component counts**: Use the feature branch count (it includes the new additions)
+   - **Code conflicts**: Resolve based on intent of both changes
+
+4. Stage resolved files and commit the merge:
+
+   ```bash
+   git add <resolved files>
+   git commit -m "Merge origin/main -- resolve conflicts"
+   ```
+
+5. Push and re-verify:
+
+   ```bash
+   git push
+   gh pr view --json mergeable --jq '.mergeable'
+   ```
+
+6. If still `CONFLICTING` after resolution: stop and ask the user for help.
+
+**If `mergeable` is `UNKNOWN`:** Wait 5 seconds and re-check (GitHub may still be computing). After 3 retries, warn and continue.
+
+### CI Status Check
+
+After confirming mergeability, verify CI checks pass:
+
+```bash
+gh pr checks --watch --fail-fast
+```
+
+**If all checks pass:** Continue to Phase 8.
+
+**If a check fails:**
+
+1. Read the failure details:
+
+   ```bash
+   gh pr checks --json name,state,description --jq '.[] | select(.state != "SUCCESS")'
+   ```
+
+2. If the failure is in tests: investigate the failing test, fix locally, commit, push, and re-run this phase.
+3. If the failure is in a flaky or unrelated check: warn the user and ask whether to proceed or wait for a re-run.
+
 ## Phase 8: Post-Merge Cleanup
 
 After the PR is created, ask the user:
@@ -239,10 +314,19 @@ After the PR is created, ask the user:
 
 **If merged (either now or user says "merge PR" later in the session):**
 
-```bash
-# Clean up worktree and local branch for the merged PR
-cd $(git rev-parse --show-toplevel) && bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
-```
+1. Check if a plugin version bump was part of this branch:
+
+   ```bash
+   git diff --name-only $(git merge-base HEAD origin/main)..HEAD -- plugins/soleur/.claude-plugin/plugin.json
+   ```
+
+   If plugin.json was modified: run `/release-announce` to post announcements to Discord and create a GitHub Release. The skill operates via APIs (webhook + `gh release create`) so it works from the worktree.
+
+2. Clean up worktree and local branch:
+
+   ```bash
+   cd $(git rev-parse --show-toplevel) && bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
+   ```
 
 This detects `[gone]` branches (where the remote was deleted after merge), removes their worktrees, archives spec directories, and deletes local branches.
 

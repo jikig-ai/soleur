@@ -72,6 +72,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Experimental feature flags should self-manage within execution scope -- activate on user consent, deactivate on completion or failure -- never require manual setup for features that already have a consent prompt
 - Before designing new infrastructure (metadata schemas, detection engines, new directories), check if the existing codebase already has a pattern that solves the problem -- e.g., the review command's conditional agents section was sufficient for project-aware filtering without a metadata system
 - Before planning large directory restructures, run a Phase 0 loader test -- move one component, reload, verify it is still discoverable. Different component types have different recursion behavior (agents recurse, skills do not)
+- Extend `/ship` with conditional skill invocations rather than inlining domain logic -- ship should remain a thin orchestration layer
 
 ## Testing
 
