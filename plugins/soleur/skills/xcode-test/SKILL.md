@@ -1,10 +1,9 @@
 ---
 name: xcode-test
-description: Build and test iOS apps on simulator using XcodeBuildMCP
-argument-hint: "[scheme name or 'current' to use default]"
+description: This skill should be used when building and testing iOS apps on the simulator using XcodeBuildMCP. It handles building, installing, launching, screenshot capture, and log analysis for iOS/macOS apps. Triggers on "xcode test", "test iOS app", "simulator test", "build and test iOS", "run on simulator".
 ---
 
-# Xcode Test Command
+# Xcode Test
 
 <command_purpose>Build, install, and test iOS apps on the simulator using XcodeBuildMCP. Captures screenshots, logs, and verifies app behavior.</command_purpose>
 
@@ -12,7 +11,7 @@ argument-hint: "[scheme name or 'current' to use default]"
 
 <role>iOS QA Engineer specializing in simulator-based testing</role>
 
-This command tests iOS/macOS apps by:
+This skill tests iOS/macOS apps by:
 - Building for simulator
 - Installing and launching the app
 - Taking screenshots of key screens
@@ -233,7 +232,7 @@ When a test fails:
    Logs: [relevant error messages]
 
    How to proceed?
-   1. Fix now - I'll help debug and fix
+   1. Fix now - help debug and fix
    2. Create todo - Add to todos/ for later
    3. Skip - Continue testing other screens
    ```
@@ -256,29 +255,29 @@ When a test fails:
 After all tests complete, present summary:
 
 ```markdown
-## 📱 Xcode Test Results
+## Xcode Test Results
 
 **Project:** [project name]
 **Scheme:** [scheme name]
 **Simulator:** [simulator name]
 
-### Build: ✅ Success / ❌ Failed
+### Build: Success / Failed
 
 ### Screens Tested: [count]
 
 | Screen | Status | Notes |
 |--------|--------|-------|
-| Launch | ✅ Pass | |
-| Home | ✅ Pass | |
-| Settings | ❌ Fail | Crash on tap |
-| Profile | ⏭️ Skip | Requires login |
+| Launch | Pass | |
+| Home | Pass | |
+| Settings | Fail | Crash on tap |
+| Profile | Skip | Requires login |
 
 ### Console Errors: [count]
 - [List any errors found]
 
 ### Human Verifications: [count]
-- Sign in with Apple: ✅ Confirmed
-- Push notifications: ✅ Confirmed
+- Sign in with Apple: Confirmed
+- Push notifications: Confirmed
 
 ### Failures: [count]
 - Settings screen - crash on navigation

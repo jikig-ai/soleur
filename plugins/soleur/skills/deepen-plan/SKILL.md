@@ -1,7 +1,6 @@
 ---
 name: deepen-plan
-description: Enhance a plan with parallel research agents for each section to add depth, best practices, and implementation details
-argument-hint: "[path to plan file]"
+description: This skill should be used when enhancing an existing plan with parallel research agents for each section to add depth, best practices, and implementation details. It discovers all available skills, agents, and learnings, then spawns parallel sub-agents to enrich each plan section. Triggers on "deepen plan", "enhance plan", "research plan sections", "add depth to plan", "ground the plan".
 ---
 
 # Deepen Plan - Power Enhancement Mode
@@ -10,7 +9,7 @@ argument-hint: "[path to plan file]"
 
 **Note: The current year is 2026.** Use this when searching for recent documentation and best practices.
 
-This command takes an existing plan (from `/soleur:plan`) and enhances each section with parallel research agents. Each major element gets its own dedicated research sub-agent to find:
+This skill takes an existing plan (from `/soleur:plan`) and enhances each section with parallel research agents. Each major element gets its own dedicated research sub-agent to find:
 - Best practices and industry patterns
 - Performance optimizations
 - UI/UX improvements (if applicable)
@@ -27,7 +26,7 @@ The result is a deeply grounded, production-ready plan with concrete implementat
 1. Check for recent plans: `ls -la knowledge-base/plans/`
 2. Ask the user: "Which plan would you like to deepen? Please provide the path (e.g., `knowledge-base/plans/2026-01-15-feat-my-feature-plan.md`)."
 
-Do not proceed until you have a valid plan file path.
+Do not proceed until a valid plan file path is provided.
 
 ## Main Tasks
 
@@ -210,9 +209,9 @@ Compare each learning's frontmatter against the plan:
 - `symptom:` / `root_cause:` - Could this problem occur with the plan?
 
 **SKIP learnings that are clearly not applicable:**
-- Plan is frontend-only → skip `database-migrations/` learnings
-- Plan is Python → skip `rails-specific/` learnings
-- Plan has no auth → skip `authentication-issues/` learnings
+- Plan is frontend-only -> skip `database-migrations/` learnings
+- Plan is Python -> skip `rails-specific/` learnings
+- Plan has no auth -> skip `authentication-issues/` learnings
 
 **SPAWN sub-agents for learnings that MIGHT apply:**
 - Any tag overlap with plan technologies
@@ -244,21 +243,6 @@ If relevant:
 If NOT relevant after deeper analysis:
 - Say 'Not applicable: [reason]'
 "
-```
-
-**Example filtering:**
-```
-# Found 15 learning files, plan is about "Rails API caching"
-
-# SPAWN (likely relevant):
-knowledge-base/learnings/performance-issues/n-plus-one-queries.md      # tags: [activerecord] ✓
-knowledge-base/learnings/performance-issues/redis-cache-stampede.md    # tags: [caching, redis] ✓
-knowledge-base/learnings/configuration-fixes/redis-connection-pool.md  # tags: [redis] ✓
-
-# SKIP (clearly not applicable):
-knowledge-base/learnings/deployment-issues/heroku-memory-quota.md      # not about caching
-knowledge-base/learnings/frontend-issues/stimulus-race-condition.md    # plan is API, not frontend
-knowledge-base/learnings/authentication-issues/jwt-expiry.md           # plan has no auth
 ```
 
 **Spawn sub-agents in PARALLEL for all filtered learnings.**
@@ -455,7 +439,7 @@ At the top of the plan, add a summary section:
 
 **Write the enhanced plan:**
 - Preserve original filename
-- Add `-deepened` suffix if user prefers a new file
+- Add `-deepened` suffix if the user prefers a new file
 - Update any timestamps or metadata
 
 ## Output Format
@@ -486,11 +470,11 @@ After writing the enhanced plan, use the **AskUserQuestion tool** to present the
 5. **Revert** - Restore original plan (if backup exists)
 
 Based on selection:
-- **View diff** → Run `git diff [plan_path]` or show before/after
-- **`/plan_review`** → Call the /plan_review command with the plan file path
-- **`/soleur:work`** → Call the /soleur:work command with the plan file path
-- **Deepen further** → Ask which sections need more research, then re-run those agents
-- **Revert** → Restore from git or backup
+- **View diff** -> Run `git diff [plan_path]` or show before/after
+- **`/plan_review`** -> Call the /plan_review command with the plan file path
+- **`/soleur:work`** -> Call the /soleur:work command with the plan file path
+- **Deepen further** -> Ask which sections need more research, then re-run those agents
+- **Revert** -> Restore from git or backup
 
 ## Example Enhancement
 
@@ -501,7 +485,7 @@ Based on selection:
 Use React Query for data fetching with optimistic updates.
 ```
 
-**After (from /soleur:deepen-plan):**
+**After (from /deepen-plan):**
 ```markdown
 ## Technical Approach
 
@@ -542,5 +526,3 @@ const queryClient = new QueryClient({
 - https://tanstack.com/query/latest/docs/react/guides/optimistic-updates
 - https://tkdodo.eu/blog/practical-react-query
 ```
-
-NEVER CODE! Just research and enhance the plan.

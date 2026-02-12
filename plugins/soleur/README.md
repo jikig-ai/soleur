@@ -89,8 +89,8 @@ Capture learnings from your work. This command:
 | Component | Count |
 |-----------|-------|
 | Agents | 22 |
-| Commands | 26 |
-| Skills | 19 |
+| Commands | 15 |
+| Skills | 29 |
 | MCP Servers | 1 |
 
 ## Agents
@@ -158,22 +158,15 @@ Core workflow commands use `soleur:` prefix to avoid collisions with built-in co
 
 | Command | Description |
 |---------|-------------|
-| `/help` | List all available Soleur commands, agents, and skills |
-| `/deepen-plan` | Enhance plans with parallel research agents for each section |
-| `/changelog` | Create engaging changelogs for recent merges |
-| `/create-agent-skill` | Create or edit Claude Code skills |
+| `/agent-native-audit` | Run comprehensive agent-native architecture review |
+| `/deploy-docs` | Validate and prepare documentation for deployment |
+| `/feature-video` | Record video walkthroughs and add to PR description |
 | `/generate_command` | Generate new slash commands |
 | `/heal-skill` | Fix skill documentation issues |
-| `/plan_review` | Multi-agent plan review in parallel |
+| `/help` | List all available Soleur commands, agents, and skills |
+| `/lfg` | Full autonomous engineering workflow |
 | `/report-bug` | Report a bug in the plugin |
-| `/reproduce-bug` | Reproduce bugs using logs and console |
-| `/resolve_parallel` | Resolve TODO comments in parallel |
-| `/resolve_pr_parallel` | Resolve PR comments in parallel |
-| `/resolve_todo_parallel` | Resolve todos in parallel |
 | `/triage` | Triage and prioritize issues |
-| `/test-browser` | Run browser tests on PR-affected pages |
-| `/xcode-test` | Build and test iOS apps on simulator |
-| `/feature-video` | Record video walkthroughs and add to PR description |
 
 ## Skills
 
@@ -201,6 +194,31 @@ Core workflow commands use `soleur:` prefix to avoid collisions with built-in co
 | `dspy-ruby` | Build type-safe LLM applications with DSPy.rb |
 | `frontend-design` | Create production-grade frontend interfaces |
 | `skill-creator` | Guide for creating effective Claude Code skills |
+
+### Planning & Review
+
+| Skill | Description |
+|-------|-------------|
+| `changelog` | Create engaging changelogs for recent merges |
+| `deepen-plan` | Enhance plans with parallel research agents |
+| `plan-review` | Multi-agent plan review in parallel |
+| `release-docs` | Build and update documentation site with current components |
+
+### Resolution & Automation
+
+| Skill | Description |
+|-------|-------------|
+| `resolve-parallel` | Resolve TODO comments in parallel |
+| `resolve-pr-parallel` | Resolve PR comments in parallel |
+| `resolve-todo-parallel` | Resolve CLI todos in parallel |
+
+### Testing & QA
+
+| Skill | Description |
+|-------|-------------|
+| `reproduce-bug` | Reproduce bugs using logs, console, and browser screenshots |
+| `test-browser` | Run browser tests on PR-affected pages |
+| `xcode-test` | Build and test iOS apps on simulator |
 
 ### Content & Workflow
 

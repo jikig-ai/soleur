@@ -1,12 +1,11 @@
 ---
 name: release-docs
-description: Build and update the documentation site with current plugin components
-argument-hint: "[optional: --dry-run to preview changes without writing]"
+description: This skill should be used when building and updating the documentation site with current plugin components. It inventories all agents, commands, skills, and MCP servers, then updates HTML documentation pages and metadata files with accurate counts and component listings. Triggers on "update docs", "release documentation", "sync docs site", "regenerate docs", "documentation release".
 ---
 
-# Release Documentation Command
+# Release Documentation
 
-You are a documentation generator for the soleur plugin. Your job is to ensure the documentation site at `plugins/soleur/docs/` is always up-to-date with the actual plugin components.
+Generate and update the documentation site for the soleur plugin, ensuring `plugins/soleur/docs/` is always up-to-date with the actual plugin components.
 
 ## Overview
 
@@ -201,11 +200,11 @@ After successful release:
 
 ```bash
 # Full documentation release
-claude /release-docs
+/release-docs
 
 # Preview changes without writing
-claude /release-docs --dry-run
+/release-docs --dry-run
 
 # After adding new agents
-claude /release-docs
+/release-docs
 ```

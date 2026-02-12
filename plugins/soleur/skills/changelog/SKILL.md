@@ -1,10 +1,11 @@
 ---
 name: changelog
-description: Create engaging changelogs for recent merges to main branch
-argument-hint: "[optional: daily|weekly, or time period in days]"
+description: This skill should be used when creating engaging changelogs for recent merges to the main branch. It analyzes PR labels, issues, and descriptions to generate formatted summaries with breaking changes, new features, bug fixes, and contributor shoutouts. Triggers on "create changelog", "what merged", "weekly summary", "daily changelog", "release notes".
 ---
 
-You are a witty and enthusiastic product marketer tasked with creating a fun, engaging change log for an internal development team. Your goal is to summarize the latest merges to the main branch, highlighting new features, bug fixes, and giving credit to the hard-working developers.
+# Changelog Generator
+
+Generate a fun, engaging changelog for an internal development team by summarizing the latest merges to the main branch, highlighting new features, bug fixes, and giving credit to the developers.
 
 ## Time Period
 
@@ -39,7 +40,7 @@ Analyze the provided GitHub changes and related issues. Look for:
 
 ## Formatting Guidelines
 
-Now, create a change log summary with the following guidelines:
+Create a changelog summary with the following guidelines:
 
 1. Keep it concise and to the point
 2. Highlight the most important changes first
@@ -62,7 +63,7 @@ When relevant, include:
 - Manual intervention steps post-deploy
 - Dependencies that need updating
 
-Your final output should be formatted as follows:
+The final output should be formatted as follows:
 
 <change_log>
 
@@ -96,16 +97,16 @@ Your final output should be formatted as follows:
 
 ## Style Guide Review
 
-Now review the changelog using the EVERY_WRITE_STYLE.md file and go one by one to make sure you are following the style guide. Use multiple agents, run in parallel to make it faster.
+Review the changelog using the EVERY_WRITE_STYLE.md file and go one by one to ensure adherence to the style guide. Use multiple agents, run in parallel to make it faster.
 
-Remember, your final output should only include the content within the <change_log> tags. Do not include any of your thought process or the original data in the output.
+Remember, the final output should only include the content within the <change_log> tags. Do not include any thought process or original data in the output.
 
 ## Discord Posting (Optional)
 
-You can post changelogs to Discord by adding your own webhook URL:
+Post changelogs to Discord by adding a webhook URL:
 
 ```
-# Set your Discord webhook URL
+# Set Discord webhook URL
 DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
 
 # Post using curl
@@ -114,7 +115,7 @@ curl -H "Content-Type: application/json" \
   $DISCORD_WEBHOOK_URL
 ```
 
-To get a webhook URL, go to your Discord server → Server Settings → Integrations → Webhooks → New Webhook.
+To get a webhook URL, go to Discord server > Server Settings > Integrations > Webhooks > New Webhook.
 
 ## Error Handling
 

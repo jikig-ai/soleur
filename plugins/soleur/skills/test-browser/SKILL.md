@@ -1,10 +1,9 @@
 ---
 name: test-browser
-description: Run browser tests on pages affected by current PR or branch
-argument-hint: "[PR number, branch name, or 'current' for current branch]"
+description: This skill should be used when running end-to-end browser tests on pages affected by a PR or branch changes. It uses the agent-browser CLI to map changed files to routes, test pages, and capture screenshots. Triggers on "browser test", "test browser", "e2e test", "test affected pages", "run browser tests".
 ---
 
-# Browser Test Command
+# Browser Test
 
 <command_purpose>Run end-to-end browser tests on pages affected by a PR or branch changes using agent-browser CLI.</command_purpose>
 
@@ -12,15 +11,15 @@ argument-hint: "[PR number, branch name, or 'current' for current branch]"
 
 **DO NOT use Chrome MCP tools (mcp__claude-in-chrome__*).**
 
-This command uses the `agent-browser` CLI exclusively. The agent-browser CLI is a Bash-based tool from Vercel that runs headless Chromium. It is NOT the same as Chrome browser automation via MCP.
+This skill uses the `agent-browser` CLI exclusively. The agent-browser CLI is a Bash-based tool from Vercel that runs headless Chromium. It is NOT the same as Chrome browser automation via MCP.
 
-If you find yourself calling `mcp__claude-in-chrome__*` tools, STOP. Use `agent-browser` Bash commands instead.
+If calling `mcp__claude-in-chrome__*` tools, STOP. Use `agent-browser` Bash commands instead.
 
 ## Introduction
 
 <role>QA Engineer specializing in browser-based end-to-end testing</role>
 
-This command tests affected pages in a real browser, catching issues that unit tests miss:
+This skill tests affected pages in a real browser, catching issues that unit tests miss:
 - JavaScript integration bugs
 - CSS/layout regressions
 - User workflow breakages
@@ -65,12 +64,12 @@ If installation fails, inform the user and stop.
 
 <ask_browser_mode>
 
-Before starting tests, ask user if they want to watch the browser:
+Before starting tests, ask the user if they want to watch the browser:
 
 Use AskUserQuestion with:
 - Question: "Do you want to watch the browser tests run?"
 - Options:
-  1. **Headed (watch)** - Opens visible browser window so you can see tests run
+  1. **Headed (watch)** - Opens visible browser window so tests can be observed
   2. **Headless (faster)** - Runs in background, faster but invisible
 
 Store the choice and use `--headed` flag when user selects "Headed".
@@ -137,7 +136,7 @@ If server is not running, inform user:
 ```markdown
 **Server not running**
 
-Please start your development server:
+Please start the development server:
 - Rails: `bin/dev` or `rails server`
 - Node/Next.js: `npm run dev`
 
@@ -194,9 +193,9 @@ Pause for human input when testing touches:
 | Flow Type | What to Ask |
 |-----------|-------------|
 | OAuth | "Please sign in with [provider] and confirm it works" |
-| Email | "Check your inbox for the test email and confirm receipt" |
+| Email | "Check inbox for the test email and confirm receipt" |
 | Payments | "Complete a test purchase in sandbox mode" |
-| SMS | "Verify you received the SMS code" |
+| SMS | "Verify the SMS code was received" |
 | External APIs | "Confirm the [service] integration is working" |
 
 Use AskUserQuestion:
@@ -232,7 +231,7 @@ When a test fails:
    Console errors: [if any]
 
    How to proceed?
-   1. Fix now - I'll help debug and fix
+   1. Fix now - help debug and fix
    2. Create todo - Add to todos/ for later
    3. Skip - Continue testing other pages
    ```

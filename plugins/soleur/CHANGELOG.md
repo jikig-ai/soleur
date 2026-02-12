@@ -5,6 +5,23 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.0] - 2026-02-12
+
+### Added
+
+- 10 new skills converted from command-only items for agent discoverability: `changelog`, `deepen-plan`, `plan-review`, `release-docs`, `reproduce-bug`, `resolve-parallel`, `resolve-pr-parallel`, `resolve-todo-parallel`, `test-browser`, `xcode-test`
+
+### Removed
+
+- 10 command files replaced by skills above (commands -> skills migration)
+- `create-agent-skill` command (pure wrapper; `create-agent-skills` skill already exists)
+
+### Changed
+
+- Command count: 26 -> 15 (11 removed)
+- Skill count: 19 -> 29 (10 added)
+- Underscore-based command names normalized to kebab-case skill names (e.g., `plan_review` -> `plan-review`)
+
 ## [1.16.1] - 2026-02-12
 
 ### Changed
