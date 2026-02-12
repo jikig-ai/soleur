@@ -21,35 +21,41 @@ Core workflow:
 
 ## Worktree Awareness
 
-When working with git worktrees, ALWAYS make edits in the worktree directory, NOT the main repo directory. Before editing any file, verify the correct worktree path.
+HARD RULE: When a worktree is active for the current task, ALL file edits and git operations MUST happen in the worktree directory. Editing files in the main repo while a worktree exists is a blocking error -- stop immediately and switch.
 
-- Run `pwd` to check the current directory before writing files.
-- If in `.worktrees/<name>`, proceed with edits there.
-- If in the main repo root while a worktree is active for the task, warn and offer to switch.
-- Never write brainstorm, spec, or plan files to main when a feature worktree exists.
+Before EVERY file write or git command:
+
+1. Run `pwd` to verify the current directory.
+2. If in `.worktrees/<name>`, proceed.
+3. If in the main repo root while a worktree is active, STOP. Do not write the file. Warn the user and switch to the worktree path before continuing.
+
+This applies to ALL files -- code, brainstorms, specs, plans, learnings, configs. No exceptions.
 
 ## Workflow Completion Protocol
 
-After completing implementation work, follow this checklist before creating a PR:
+MANDATORY checklist after completing implementation work. Every step MUST be completed in order. Do not skip steps. Do not propose committing until steps 1-2 are done.
 
-1. Run code review on unstaged changes (catch issues before commit).
-2. Run `/soleur:compound` to capture learnings (ask user first).
-3. Commit all artifacts (brainstorms, specs, plans, learnings).
-4. Update `plugins/soleur/README.md` if new commands, skills, or agents were added.
-5. Bump version per plugin `AGENTS.md` rules.
-6. Push and create PR.
+1. **Review** -- Run code review on unstaged changes. Do not skip this.
+2. **Compound** -- Run `/soleur:compound` to capture learnings. Ask the user first, but do not silently skip it.
+3. **Stage ALL artifacts** -- Brainstorms, specs, plans, learnings, AND code. Historically missed: forgetting to stage non-code files. Run `git status` and verify nothing is left behind.
+4. **README** -- If any new command, skill, or agent was added, update `plugins/soleur/README.md`. Check, don't assume.
+5. **Version bump** -- If files under `plugins/soleur/` changed, bump the version. See Plugin Versioning below.
+6. **Commit** -- This is the gate. Everything above must be done first.
+7. **Push and create PR** -- Do not stop after committing. Push and open the PR in the same step.
 
-**The commit is the gate.** Review and compound must happen before step 3, not after. Do not propose committing until review and compound are done.
+FAILURE MODE TO AVOID: Committing code, then forgetting to push, forgetting to create the PR, or forgetting to include spec/plan files. If you catch yourself about to skip a step, stop and complete it.
 
 Use the `/ship` skill to automate this checklist.
 
 ## Interaction Style
 
-When the user gives a brainstorm or planning request, do NOT launch parallel research tasks or ask excessive clarifying questions before the user has confirmed the direction.
+HARD RULE: When the user gives a brainstorm or planning request, do NOT spawn any Task agents or launch parallel research before the user has confirmed the direction. Zero agents until the user says go.
 
-- Present a concise summary first (2-3 sentences), then ask if they want to go deeper.
-- Bad: Immediately spawning 5 research agents without user confirmation.
-- Good: "Here's my initial take: [summary]. Want me to research deeper?"
+1. Present a concise summary first (2-3 sentences).
+2. Ask if they want to go deeper.
+3. Only AFTER user confirmation, launch research agents.
+
+FAILURE MODE TO AVOID: The user says "let's brainstorm X" and you immediately spawn 5 research agents. This has caused session rewinds multiple times. Wait for confirmation.
 
 ## Communication Style
 
@@ -59,9 +65,15 @@ When the user gives a brainstorm or planning request, do NOT launch parallel res
 
 ## Plugin Versioning
 
-When modifying files under `plugins/soleur/`, always check `plugins/soleur/AGENTS.md` for the versioning triad before committing. Version bumps are mandatory for feature changes.
+HARD RULE: If ANY file under `plugins/soleur/` was modified, you MUST bump the version before committing. No exceptions. This is the most frequently missed step historically.
 
-- New skill/command/agent: MINOR bump (1.6.0 -> 1.7.0).
-- Bug fix or docs update: PATCH bump (1.6.0 -> 1.6.1).
-- Breaking change: MAJOR bump (1.6.0 -> 2.0.0).
-- All three files must be updated together: `plugin.json`, `CHANGELOG.md`, `README.md`.
+Before committing, self-check:
+1. Did I modify files under `plugins/soleur/`? If yes, continue. If no, skip this section.
+2. Read `plugins/soleur/plugin.json` to get the current version.
+3. Determine bump type:
+   - New skill/command/agent: MINOR bump (1.6.0 -> 1.7.0).
+   - Bug fix or docs update: PATCH bump (1.6.0 -> 1.6.1).
+   - Breaking change: MAJOR bump (1.6.0 -> 2.0.0).
+4. Update ALL THREE files together -- `plugin.json`, `CHANGELOG.md`, `README.md`. Missing any one of these is a failed version bump.
+
+FAILURE MODE TO AVOID: Committing plugin changes without bumping the version, or updating `plugin.json` but forgetting `CHANGELOG.md`.
