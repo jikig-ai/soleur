@@ -30,6 +30,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Lifecycle workflows with hooks must cover every state transition with a cleanup trigger; verify no gaps between create, ship, merge, and session-start
 - Operations that modify the knowledge-base or move files must use `git mv` to preserve history and produce a single atomic commit that can be reverted with `git revert`
 - New commands must be idempotent -- running the same command twice must not create duplicates or corrupt state
+- Run code review and `/soleur:compound` before committing -- the commit is the gate, not the PR
 - Network and external service failures must degrade gracefully -- warn (if interactive) and continue rather than abort the workflow
 
 ### Never
