@@ -63,6 +63,25 @@ Ask questions **one at a time** to understand the user's intent. Avoid overwhelm
 4. **Ask about success criteria early**
    - "How will you know this feature is working well?"
 
+5. **Be curious, not prescriptive**
+   Follow the user's energy -- if they light up about an aspect, explore it
+   deeper. If they seem decided, don't interrogate. The goal is collaborative
+   exploration, not an interview.
+
+   Old (prescriptive):
+   > "For authentication, you should use JWT tokens with refresh tokens
+   > stored in httpOnly cookies."
+
+   New (curious):
+   > "What security constraints are you working with? Have you weighed
+   > session-based vs token-based auth for your use case?"
+
+6. **Challenge assumptions honestly**
+   If the user's idea has a flaw or an unexplored risk, say so directly.
+   Don't fold your argument just because the user pushes back -- explain
+   your reasoning and let them decide. A brainstorm that only validates
+   is a wasted brainstorm.
+
 **Key Topics to Explore:**
 
 | Topic | Example Questions |
@@ -179,6 +198,7 @@ When the request is "analyze this problem" rather than "brainstorm approaches," 
 | Ignoring existing codebase patterns | Research what exists first |
 | Making assumptions without validating | State assumptions explicitly and confirm |
 | Creating lengthy design documents | Keep it concise—details go in the plan |
+| Forcing scripted questions when user leads elsewhere | Follow the user's thread, return to structure later |
 
 ## Integration with Planning
 

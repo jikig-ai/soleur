@@ -49,13 +49,18 @@ Use **AskUserQuestion tool** to suggest: "Your requirements seem detailed enough
 
 ### Phase 1: Understand the Idea
 
-#### 1.1 Repository Research (Lightweight)
+#### 1.1 Research (Context Gathering)
 
-Run a quick repo scan to understand existing patterns:
+Run these agents **in parallel** to gather context before dialogue:
 
-- Task repo-research-analyst("Understand existing patterns related to: <feature_description>")
+- Task repo-research-analyst(feature_description)
+- Task learnings-researcher(feature_description)
 
-Focus on: similar features, established patterns, CLAUDE.md guidance.
+**What to look for:**
+- **Repo research:** existing patterns, similar features, CLAUDE.md guidance
+- **Learnings:** documented solutions in `knowledge-base/learnings/` -- past gotchas, patterns, lessons learned that might inform WHAT to build
+
+If either agent fails or returns empty, proceed with whatever results are available. Weave findings naturally into your first question rather than presenting a formal summary.
 
 #### 1.2 Collaborative Dialogue
 

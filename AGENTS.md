@@ -32,11 +32,14 @@ When working with git worktrees, ALWAYS make edits in the worktree directory, NO
 
 After completing implementation work, follow this checklist before creating a PR:
 
-1. Run `/soleur:compound` to capture learnings (ask user first).
-2. Commit all artifacts (brainstorms, specs, plans, learnings).
-3. Update `plugins/soleur/README.md` if new commands, skills, or agents were added.
-4. Bump version per plugin `AGENTS.md` rules.
-5. Push and create PR.
+1. Run code review on unstaged changes (catch issues before commit).
+2. Run `/soleur:compound` to capture learnings (ask user first).
+3. Commit all artifacts (brainstorms, specs, plans, learnings).
+4. Update `plugins/soleur/README.md` if new commands, skills, or agents were added.
+5. Bump version per plugin `AGENTS.md` rules.
+6. Push and create PR.
+
+**The commit is the gate.** Review and compound must happen before step 3, not after. Do not propose committing until review and compound are done.
 
 Use the `/ship` skill to automate this checklist.
 
@@ -47,6 +50,12 @@ When the user gives a brainstorm or planning request, do NOT launch parallel res
 - Present a concise summary first (2-3 sentences), then ask if they want to go deeper.
 - Bad: Immediately spawning 5 research agents without user confirmation.
 - Good: "Here's my initial take: [summary]. Want me to research deeper?"
+
+## Communication Style
+
+- Challenge reasoning instead of validating by default -- explain the counter-argument, then let the user decide.
+- Stop excessive validation. If something looks wrong, say so directly.
+- Avoid flattery or unnecessary praise. Acknowledge good work briefly, then move on.
 
 ## Plugin Versioning
 

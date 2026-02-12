@@ -5,6 +5,20 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.16.0] - 2026-02-12
+
+### Added
+
+- `learnings-researcher` wired into `/soleur:brainstorm` Phase 1.1 alongside `repo-research-analyst` -- past gotchas and documented solutions now inform brainstorming dialogue
+- "Challenge assumptions honestly" technique added to brainstorming skill -- brainstorms now push back on flawed reasoning instead of only validating
+
+### Changed
+
+- `/soleur:brainstorm` Phase 1.1 runs 2 research agents in parallel (repo-research + learnings) instead of 1
+- Brainstorming skill Question Techniques updated with "Be curious, not prescriptive" guidance and before/after example
+- Brainstorming skill Anti-Patterns table includes "forcing scripted questions" row
+- `AGENTS.md` adds project-wide "Communication Style" section: challenge reasoning, stop excessive validation, avoid flattery
+
 ## [1.15.1] - 2026-02-11
 
 ### Changed
