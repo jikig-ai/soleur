@@ -43,4 +43,4 @@ description: This skill should be used when announcing a new plugin release. It 
 
 5. Report results:
    - Print the GitHub Release URL if created
-   - Note that Discord notification will be posted automatically by CI
+   - Note that Discord notification will be posted automatically by CI (requires `DISCORD_WEBHOOK_URL` repository secret)
