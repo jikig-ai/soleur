@@ -1,6 +1,6 @@
 # soleur
 
-Soleur is a "Company-as-a-Service" platform designed to collapse the friction between a startup idea and a $1B outcome.
+Soleur is meant to be a "Company-as-a-Service" platform designed to allow solo founders (soloentrepreneurs) to collapse the friction between a startup idea and a $1B outcome
 
 Currently at phase of being an Orchestration engine for Claude Code -- agents, workflows, and compounding knowledge.
 
@@ -22,9 +22,10 @@ Currently at phase of being an Orchestration engine for Claude Code -- agents, w
 
 ## What is Soleur?
 
-Soleur is a "Company-as-a-Service" platform designed to collapse the friction between a startup idea and a $1B outcome.
+Soleur is meant to be a "Company-as-a-Service" platform designed to allow solo founders (soloentrepreneurs) to collapse the friction between a startup idea and a $1B outcome
 
-AI-powered development tools for Claude Code that get smarter with every use. Soleur provides **22 agents**, **26 commands**, and **19 skills** that compound your engineering knowledge over time -- every problem you solve makes the next one easier.
+AI-powered company orchestration for Claude Code (and Bring Your Own Model later) that get smarter with every use. 
+Soleur currently provides **22 agents**, **26 commands**, and **19 skills** that compound your company knowledge (currently only engineering so far) over time -- every problem you solve makes the next one easier.
 
 ## Installation
 
