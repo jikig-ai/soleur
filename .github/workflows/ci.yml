@@ -23,3 +23,7 @@ jobs:
 
       - name: Run tests
         run: bun test
+
+      - name: Enforce telegram-bridge coverage
+        run: bun test --coverage
+        working-directory: apps/telegram-bridge
