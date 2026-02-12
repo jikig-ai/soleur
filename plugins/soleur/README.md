@@ -108,7 +108,7 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 |-----------|-------|
 | Agents | 22 |
 | Commands | 8 |
-| Skills | 35 |
+| Skills | 34 |
 | MCP Servers | 1 |
 
 ## Agents
@@ -197,11 +197,10 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 |-------|-------------|
 | `andrew-kane-gem-writer` | Write Ruby gems following Andrew Kane's patterns |
 | `compound-docs` | Capture solved problems as categorized documentation |
-| `create-agent-skills` | Expert guidance for creating Claude Code skills |
 | `dhh-rails-style` | Write Ruby/Rails code in DHH's 37signals style |
 | `dspy-ruby` | Build type-safe LLM applications with DSPy.rb |
 | `frontend-design` | Create production-grade frontend interfaces |
-| `skill-creator` | Guide for creating effective Claude Code skills |
+| `skill-creator` | Create, refine, audit, and package Claude Code skills |
 
 ### Planning & Review
 

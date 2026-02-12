@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-description: This skill should be used when users want to create a new skill (or update an existing skill) that extends Claude's capabilities with specialized knowledge, workflows, or tool integrations. Triggers on "create a new skill", "build a skill", "package a skill", "init skill", "skill creation guide", "update this skill".
+description: This skill should be used when creating, writing, refining, or auditing Claude Code Skills. It provides expert guidance on SKILL.md files, creating new skills from scratch, improving existing skills, packaging skills for distribution, and understanding skill structure and best practices. Triggers on "create a new skill", "build a skill", "package a skill", "init skill", "skill creation guide", "update this skill", "audit skill", "improve this skill", "skill best practices", "write a SKILL.md", "how to write skills".
 license: Complete terms in LICENSE.txt
 ---
 
@@ -50,7 +50,7 @@ skill-name/
 Executable code (Python/Bash/etc.) for tasks that require deterministic reliability or are repeatedly rewritten.
 
 - **When to include**: When the same code is being rewritten repeatedly or deterministic reliability is needed
-- **Example**: [rotate_pdf.py](./scripts/rotate_pdf.py) for PDF rotation tasks
+- **Example**: [rotate_pdf.py](./scripts/rotate_pdf.py) for PDF rotation tasks (illustrative -- not included in this skill)
 - **Benefits**: Token efficient, deterministic, may be executed without loading into context
 - **Note**: Scripts may still need to be read by Claude for patching or environment-specific adjustments
 
@@ -207,3 +207,47 @@ After testing the skill, users may request improvements. Often this happens righ
 2. Notice struggles or inefficiencies
 3. Identify how SKILL.md or bundled resources should be updated
 4. Implement changes and test again
+
+## Auditing Existing Skills
+
+For auditing and improving existing skills, see the [audit-skill workflow](./workflows/audit-skill.md).
+
+## Reference Files
+
+For detailed guidance on skill authoring, see:
+
+- [official-spec.md](./references/official-spec.md) - Anthropic's official skill specification
+- [best-practices.md](./references/best-practices.md) - Skill authoring best practices
+- [core-principles.md](./references/core-principles.md) - Core principles for skill design
+- [skill-structure.md](./references/skill-structure.md) - Skill structure and organization
+- [recommended-structure.md](./references/recommended-structure.md) - Recommended file structure
+- [common-patterns.md](./references/common-patterns.md) - Common skill patterns (template, workflow, conditional)
+- [be-clear-and-direct.md](./references/be-clear-and-direct.md) - Writing clear skill instructions
+- [executable-code.md](./references/executable-code.md) - Working with executable code in skills
+- [using-scripts.md](./references/using-scripts.md) - Using scripts in skills
+- [using-templates.md](./references/using-templates.md) - Using templates in skills
+- [iteration-and-testing.md](./references/iteration-and-testing.md) - Iteration and testing guidance
+- [workflows-and-validation.md](./references/workflows-and-validation.md) - Workflow and validation patterns
+- [api-security.md](./references/api-security.md) - API security considerations
+
+## Workflows
+
+Step-by-step guides for specific skill authoring tasks:
+
+- [create-new-skill.md](./workflows/create-new-skill.md) - Create a new skill from scratch
+- [audit-skill.md](./workflows/audit-skill.md) - Audit an existing skill against best practices
+- [add-reference.md](./workflows/add-reference.md) - Add a reference file to a skill
+- [add-script.md](./workflows/add-script.md) - Add a script to a skill
+- [add-template.md](./workflows/add-template.md) - Add a template to a skill
+- [add-workflow.md](./workflows/add-workflow.md) - Add a workflow to a skill
+- [create-domain-expertise-skill.md](./workflows/create-domain-expertise-skill.md) - Create a domain expertise skill
+- [upgrade-to-router.md](./workflows/upgrade-to-router.md) - Upgrade a simple skill to a router skill
+- [verify-skill.md](./workflows/verify-skill.md) - Verify a skill meets requirements
+- [get-guidance.md](./workflows/get-guidance.md) - Get guidance on skill design decisions
+
+## Templates
+
+Starter templates for common skill types:
+
+- [simple-skill.md](./templates/simple-skill.md) - Template for a simple single-file skill
+- [router-skill.md](./templates/router-skill.md) - Template for a multi-workflow router skill
