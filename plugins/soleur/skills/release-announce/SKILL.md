@@ -1,13 +1,13 @@
 ---
 name: release-announce
-description: This skill should be used when announcing a new plugin release to Discord and GitHub Releases. It parses CHANGELOG.md, generates an AI-powered summary, and posts to configured channels. Triggers on "announce release", "post release", "release announcement", "/release-announce".
+description: This skill should be used when announcing a new plugin release. It parses CHANGELOG.md, generates an AI-powered summary, and creates a GitHub Release. Discord notification is handled automatically by CI on release publish. Triggers on "announce release", "post release", "release announcement", "/release-announce".
 ---
 
 # release-announce Skill
 
-**Purpose:** Generate a release announcement from CHANGELOG.md and post it to Discord (webhook) and GitHub Releases (`gh release create`).
+**Purpose:** Generate a release announcement from CHANGELOG.md and create a GitHub Release. Discord notification is handled by the `release-announce` GitHub Actions workflow, triggered automatically when the release is published.
 
-## Step 1: Read Version, Changelog, and Generate Summary
+## Step 1: Read Version and Changelog
 
 1. Read the current version from `plugins/soleur/.claude-plugin/plugin.json`:
 
@@ -21,40 +21,9 @@ description: This skill should be used when announcing a new plugin release to D
 3. Generate a detailed summary of the extracted changelog section:
    - Include all categories present (Added, Changed, Fixed, Removed)
    - Tone: enthusiastic but professional
-   - This summary is used for both Discord (truncated) and GitHub Release (full)
+   - This summary is used as the GitHub Release body
 
-## Step 2: Post to Discord
-
-1. Check for the `DISCORD_WEBHOOK_URL` environment variable:
-
-   ```bash
-   echo "${DISCORD_WEBHOOK_URL:-(not set)}"
-   ```
-
-2. If `DISCORD_WEBHOOK_URL` is not set: warn "DISCORD_WEBHOOK_URL not set, skipping Discord" and continue to Step 3.
-
-3. Build the Discord message. Truncate the summary to 1900 characters if needed, then format:
-
-   ```text
-   **Soleur vX.Y.Z released!**
-
-   <summary, max 1900 chars>
-
-   Full release notes: https://github.com/jikig-ai/soleur/releases/tag/vX.Y.Z
-   ```
-
-4. Post via curl:
-
-   ```bash
-   curl -s -o /dev/null -w "%{http_code}" \
-     -H "Content-Type: application/json" \
-     -d '{"content": "<message>"}' \
-     "$DISCORD_WEBHOOK_URL"
-   ```
-
-5. If the HTTP response is not 2xx: warn with the status code and continue to Step 3.
-
-## Step 3: Create GitHub Release
+## Step 2: Create GitHub Release
 
 1. Check if a release for this version already exists:
 
@@ -62,7 +31,7 @@ description: This skill should be used when announcing a new plugin release to D
    gh release view "v$VERSION" 2>/dev/null
    ```
 
-2. If the release already exists: warn "Release v$VERSION already exists, skipping" and continue to results.
+2. If the release already exists: warn "Release v$VERSION already exists, skipping" and stop.
 
 3. Create the release:
 
@@ -73,5 +42,5 @@ description: This skill should be used when announcing a new plugin release to D
 4. If the command fails: warn with the error message.
 
 5. Report results:
-   - Print status for each channel: posted / skipped / failed
    - Print the GitHub Release URL if created
+   - Note that Discord notification will be posted automatically by CI
