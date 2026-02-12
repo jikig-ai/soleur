@@ -5,6 +5,14 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.3] - 2026-02-12
+
+### Fixed
+
+- `release-announce` workflow: `DISCORD_WEBHOOK_URL` changed from repository variable to secret
+  - Secrets cannot be checked in job-level `if` conditions, so the check moves inside the step
+  - Workflow now always runs and shows "success" instead of "skipped" when secret is absent
+
 ## [2.2.2] - 2026-02-12
 
 ### Changed

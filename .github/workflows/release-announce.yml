@@ -7,16 +7,20 @@ on:
 jobs:
   discord:
     runs-on: ubuntu-latest
-    if: vars.DISCORD_WEBHOOK_URL != ''
 
     steps:
       - name: Post to Discord
         env:
-          DISCORD_WEBHOOK_URL: ${{ vars.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           RELEASE_BODY: ${{ github.event.release.body }}
           RELEASE_URL: ${{ github.event.release.html_url }}
         run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "DISCORD_WEBHOOK_URL secret not set, skipping Discord notification"
+            exit 0
+          fi
+
           # Truncate body to 1900 chars for Discord's 2000 char limit
           if [ ${#RELEASE_BODY} -gt 1900 ]; then
             RELEASE_BODY="${RELEASE_BODY:0:1897}..."
