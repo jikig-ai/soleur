@@ -1,5 +1,9 @@
 name: Release Announce
 
+# Handles Discord notifications for manually-created releases.
+# Automated releases on merge are handled by auto-release.yml (which posts
+# to Discord directly, since GITHUB_TOKEN releases don't trigger this workflow).
+
 on:
   release:
     types: [published]
