@@ -67,16 +67,14 @@ Ensure that the code is ready for analysis (either in worktree or on current bra
 
 Run ALL or most of these agents at the same time:
 
-1. Task kieran-rails-reviewer(PR content)
-2. Task dhh-rails-reviewer(PR title)
-3. Task git-history-analyzer(PR content)
-4. Task pattern-recognition-specialist(PR content)
-5. Task architecture-strategist(PR content)
-6. Task security-sentinel(PR content)
-7. Task performance-oracle(PR content)
-8. Task data-integrity-guardian(PR content)
-9. Task agent-native-reviewer(PR content) - Verify new features are agent-accessible
-10. Task code-quality-analyst(PR content) - Detect code smells and produce refactoring roadmap
+1. Task git-history-analyzer(PR content)
+2. Task pattern-recognition-specialist(PR content)
+3. Task architecture-strategist(PR content)
+4. Task security-sentinel(PR content)
+5. Task performance-oracle(PR content)
+6. Task data-integrity-guardian(PR content)
+7. Task agent-native-reviewer(PR content) - Verify new features are agent-accessible
+8. Task code-quality-analyst(PR content) - Detect code smells and produce refactoring roadmap
 
 </parallel_tasks>
 
@@ -84,7 +82,23 @@ Run ALL or most of these agents at the same time:
 
 <conditional_agents>
 
-These agents are run ONLY when the PR matches specific criteria. Check the PR files list to determine if they apply:
+These agents are run ONLY when the PR matches specific criteria. Check the PR files list and project structure to determine if they apply:
+
+**If project is a Rails app (Gemfile AND config/routes.rb exist at repo root):**
+
+9. Task kieran-rails-reviewer(PR content) - Rails conventions and quality bar
+10. Task dhh-rails-reviewer(PR title) - Rails philosophy and anti-patterns
+
+**When to run Rails review agents:**
+
+- Repository root contains both `Gemfile` and `config/routes.rb`
+- PR modifies Ruby files (*.rb)
+- PR title/body mentions: Rails, Ruby, controller, model, migration, ActiveRecord
+
+**What these agents check:**
+
+- `kieran-rails-reviewer`: Strict Rails conventions, naming clarity, controller complexity, Turbo patterns
+- `dhh-rails-reviewer`: Rails philosophy adherence, JavaScript framework contamination, unnecessary abstraction
 
 **If PR contains database migrations (db/migrate/*.rb files) or data backfills:**
 
