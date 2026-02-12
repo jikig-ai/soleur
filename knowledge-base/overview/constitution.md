@@ -64,6 +64,7 @@ Project principles organized by domain. Add principles as you learn them.
 - When merging or consolidating duplicate functionality, prefer a single inline implementation over separate files/agents/skills until complexity demands extraction
 - Plans should specify version bump intent (MINOR/PATCH/MAJOR) not exact version numbers, to avoid conflicts between parallel feature branches
 - Experimental feature flags should self-manage within execution scope -- activate on user consent, deactivate on completion or failure -- never require manual setup for features that already have a consent prompt
+- Before designing new infrastructure (metadata schemas, detection engines, new directories), check if the existing codebase already has a pattern that solves the problem -- e.g., the review command's conditional agents section was sufficient for project-aware filtering without a metadata system
 
 ## Testing
 

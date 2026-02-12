@@ -47,9 +47,27 @@ All three converged on the same verdict: rewrite with 90% less complexity.
 
 Feature shipped in PR #23, fully functional.
 
+## Second Case: Runtime Agent Discovery (#46) [Updated 2026-02-12]
+
+Same pattern, same outcome. Plan for making review agents project-aware:
+
+| Aspect | Original | After Review |
+|--------|----------|--------------|
+| Scope | 2 phases (local filtering + tessl.io integration) | 1 phase (conditional section edit) |
+| New metadata | `frameworks` + `languages` on all 14 agents | None |
+| New commands | `/soleur:discover` | None |
+| New directories | `plugins/soleur/agents/community/` | None |
+| Files modified | 14+ agent files + review.md + new command | 1 file (review.md) |
+
+DHH's verdict: "You have 2 agents out of 10 that are Rails-specific. The plan proposes a metadata schema, a detection engine, a filtering pipeline, a community agent directory, a tessl.io integration, and a new command. This is solving a $2 problem with a $200 solution."
+
+The fix: move 2 agents into the existing conditional section of review.md, using the same pattern already established for migration and test agents.
+
 ## Key Insight
 
 **Parallel specialized reviews are force multipliers.** A single reviewer sees some issues. Three reviewers with different perspectives (architecture, technical accuracy, simplicity) catch nearly everything. Same wall-clock time, dramatically better outcome.
+
+This pattern has now been confirmed across 2 features (#12, #46). Both times the plan shrunk by 70-90% after review.
 
 ## Prevention
 
@@ -58,6 +76,7 @@ Before implementing any plan with:
 - External API dependencies
 - Multiple CLI flags
 - Complex algorithms (clustering, caching)
+- New metadata schemas or configuration systems
 
 Run `/soleur:plan_review` first. Cost: 5 minutes. Savings: hours of wasted implementation.
 
