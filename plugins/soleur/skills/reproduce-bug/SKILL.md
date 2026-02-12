@@ -1,16 +1,15 @@
 ---
 name: reproduce-bug
-description: Reproduce and investigate a bug using logs, console inspection, and browser screenshots
-argument-hint: "[GitHub issue number]"
+description: This skill should be used when reproducing and investigating a bug using logs, console inspection, and browser screenshots. It systematically investigates GitHub issues through log analysis, code inspection, and visual reproduction with Playwright. Triggers on "reproduce bug", "investigate issue", "debug issue", "reproduce #", "bug investigation".
 ---
 
-# Reproduce Bug Command
+# Reproduce Bug
 
 Look at github issue #$ARGUMENTS and read the issue description and comments.
 
 ## Phase 1: Log Investigation
 
-Think about the places it could go wrong looking at the codebase. Look for logging output we can look for.
+Think about the places it could go wrong looking at the codebase. Look for logging output to search for.
 
 Search application logs, error tracking, and recent git history for clues:
 
@@ -18,7 +17,7 @@ Search application logs, error tracking, and recent git history for clues:
 2. Search for error messages or stack traces in logs
 3. Inspect the relevant code paths for potential failure points
 
-Keep investigating until you have a good idea of what is going on.
+Keep investigating until a good understanding of the situation is reached.
 
 ## Phase 2: Visual Reproduction with Playwright
 
@@ -68,7 +67,7 @@ Reproduce the exact steps from the issue:
 
 ### Step 5: Capture Bug State
 
-When you reproduce the bug:
+When the bug is reproduced:
 
 1. Take a screenshot of the bug state
 2. Capture console errors
@@ -91,8 +90,8 @@ mcp__plugin_soleur_pw__browser_take_screenshot({ filename: "bug-[issue]-reproduc
 
 Add a comment to the issue with:
 
-1. **Findings** - What you discovered about the cause
+1. **Findings** - What was discovered about the cause
 2. **Reproduction Steps** - Exact steps to reproduce (verified)
 3. **Screenshots** - Visual evidence of the bug (upload captured screenshots)
 4. **Relevant Code** - File paths and line numbers
-5. **Suggested Fix** - If you have one
+5. **Suggested Fix** - If one exists

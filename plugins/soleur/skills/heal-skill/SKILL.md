@@ -1,8 +1,6 @@
 ---
 name: heal-skill
-description: Fix incorrect SKILL.md files when a skill has wrong instructions or outdated API references
-argument-hint: [optional: specific issue to fix]
-allowed-tools: [Read, Edit, Bash(ls:*), Bash(git:*)]
+description: "This skill should be used when a skill has incorrect SKILL.md instructions, outdated API references, or wrong parameters discovered during execution. It detects the affected skill from conversation context, proposes specific fixes with before/after diffs, and applies changes after user approval. Triggers on \"fix skill\", \"heal skill\", \"skill is broken\", \"wrong instructions\", \"outdated API in skill\"."
 ---
 
 <objective>

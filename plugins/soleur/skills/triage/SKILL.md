@@ -1,7 +1,6 @@
 ---
 name: triage
-description: Triage and categorize findings for the CLI todo system
-argument-hint: "[findings list or source type]"
+description: "This skill should be used when triaging and categorizing findings for the CLI todo system. It presents code review findings, security audit results, or performance analysis items one by one for approval, skip, or customization, then creates structured todo files. Triggers on \"triage findings\", \"categorize issues\", \"review todos\", \"process audit results\", \"triage\"."
 ---
 
 - First set the /model to Haiku
@@ -11,7 +10,7 @@ Present all findings, decisions, or issues here one by one for triage. The goal 
 
 **IMPORTANT: DO NOT CODE ANYTHING DURING TRIAGE!**
 
-This command is for:
+This skill is for:
 
 - Triaging code review findings
 - Processing security audit results
@@ -28,7 +27,7 @@ For each finding, present in this format:
 ---
 Issue #X: [Brief Title]
 
-Severity: 🔴 P1 (CRITICAL) / 🟡 P2 (IMPORTANT) / 🔵 P3 (NICE-TO-HAVE)
+Severity: P1 (CRITICAL) / P2 (IMPORTANT) / P3 (NICE-TO-HAVE)
 
 Category: [Security/Performance/Architecture/Bug/Feature/etc.]
 
@@ -60,8 +59,8 @@ Do you want to add this to the todo list?
 
    If todo already exists (from code review):
 
-   - Rename file from `{id}-pending-{priority}-{desc}.md` → `{id}-ready-{priority}-{desc}.md`
-   - Update YAML frontmatter: `status: pending` → `status: ready`
+   - Rename file from `{id}-pending-{priority}-{desc}.md` -> `{id}-ready-{priority}-{desc}.md`
+   - Update YAML frontmatter: `status: pending` -> `status: ready`
    - Keep issue_id, priority, and description unchanged
 
    If creating new todo:
@@ -72,9 +71,9 @@ Do you want to add this to the todo list?
 
    Priority mapping:
 
-   - 🔴 P1 (CRITICAL) → `p1`
-   - 🟡 P2 (IMPORTANT) → `p2`
-   - 🔵 P3 (NICE-TO-HAVE) → `p3`
+   - P1 (CRITICAL) -> `p1`
+   - P2 (IMPORTANT) -> `p2`
+   - P3 (NICE-TO-HAVE) -> `p3`
 
    Example: `042-ready-p1-transaction-boundaries.md`
 
@@ -134,7 +133,7 @@ Do you want to add this to the todo list?
    **By:** Claude Triage System
    **Actions:**
    - Issue approved during triage session
-   - Status changed from pending → ready
+   - Status changed from pending -> ready
    - Ready to be picked up and worked on
 
    **Learnings:**
@@ -144,7 +143,7 @@ Do you want to add this to the todo list?
    Source: Triage session on {date}
    ```
 
-4. **Confirm approval:** "✅ Approved: `{new_filename}` (Issue #{issue_id}) - Status: **ready** → Ready to work on"
+4. **Confirm approval:** "Approved: `{new_filename}` (Issue #{issue_id}) - Status: **ready** -> Ready to work on"
 
 **When user says "next":**
 
@@ -188,7 +187,7 @@ After all items processed:
 
 During triage, the following status updates occurred:
 
-- **Pending → Ready:** Filenames and frontmatter updated to reflect approved status
+- **Pending -> Ready:** Filenames and frontmatter updated to reflect approved status
 - **Deleted:** Todo files for skipped findings removed from todos/ directory
 - Each approved file now has `status: ready` in YAML frontmatter
 
@@ -203,14 +202,14 @@ During triage, the following status updates occurred:
 2. Start work on approved items:
 
    ```bash
-   /resolve_todo_parallel  # Work on multiple approved items efficiently
+   /resolve-todo-parallel  # Work on multiple approved items efficiently
    ```
 
 3. Or pick individual items to work on
 
 4. As you work, update todo status:
-   - Ready → In Progress (in your local context as you work)
-   - In Progress → Complete (rename file: ready → complete, update frontmatter)
+   - Ready -> In Progress (in your local context as you work)
+   - In Progress -> Complete (rename file: ready -> complete, update frontmatter)
 
 ```
 
@@ -222,7 +221,7 @@ During triage, the following status updates occurred:
 
 Issue #5: Missing Transaction Boundaries for Multi-Step Operations
 
-Severity: 🔴 P1 (CRITICAL)
+Severity: P1 (CRITICAL)
 
 Category: Data Integrity / Security
 
@@ -265,10 +264,10 @@ Do you want to add this to the todo list?
 ### Status Transitions During Triage
 
 **When "yes" is selected:**
-1. Rename file: `{id}-pending-{priority}-{desc}.md` → `{id}-ready-{priority}-{desc}.md`
-2. Update YAML frontmatter: `status: pending` → `status: ready`
+1. Rename file: `{id}-pending-{priority}-{desc}.md` -> `{id}-ready-{priority}-{desc}.md`
+2. Update YAML frontmatter: `status: pending` -> `status: ready`
 3. Update Work Log with triage approval entry
-4. Confirm: "✅ Approved: `{filename}` (Issue #{issue_id}) - Status: **ready**"
+4. Confirm: "Approved: `{filename}` (Issue #{issue_id}) - Status: **ready**"
 
 **When "next" is selected:**
 1. Delete the todo file from todos/ directory
@@ -291,12 +290,12 @@ Progress: 3/10 completed | Estimated time: ~2 minutes remaining
 
 ### Do Not Code During Triage
 
-- ✅ Present findings
-- ✅ Make yes/next/custom decisions
-- ✅ Update todo files (rename, frontmatter, work log)
-- ❌ Do NOT implement fixes or write code
-- ❌ Do NOT add detailed implementation details
-- ❌ That's for /resolve_todo_parallel phase
+- Present findings
+- Make yes/next/custom decisions
+- Update todo files (rename, frontmatter, work log)
+- Do NOT implement fixes or write code
+- Do NOT add detailed implementation details
+- That's for /resolve-todo-parallel phase
 ```
 
 When done give these options
@@ -304,7 +303,7 @@ When done give these options
 ```markdown
 What would you like to do next?
 
-1. run /resolve_todo_parallel to resolve the todos
+1. run /resolve-todo-parallel to resolve the todos
 2. commit the todos
 3. nothing, go chill
 ```

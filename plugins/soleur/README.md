@@ -89,8 +89,8 @@ Capture learnings from your work. This command:
 | Component | Count |
 |-----------|-------|
 | Agents | 22 |
-| Commands | 26 |
-| Skills | 19 |
+| Commands | 8 |
+| Skills | 35 |
 | MCP Servers | 1 |
 
 ## Agents
@@ -141,39 +141,18 @@ Agents are organized into categories for easier discovery.
 
 ## Commands
 
-### Workflow Commands
-
-Core workflow commands use `soleur:` prefix to avoid collisions with built-in commands:
+All commands use the `soleur:` prefix to avoid collisions with built-in commands:
 
 | Command | Description |
 |---------|-------------|
 | `/soleur:brainstorm` | Explore requirements and approaches before planning |
 | `/soleur:plan` | Create implementation plans |
-| `/soleur:review` | Run comprehensive code reviews |
-| `/soleur:sync` | Analyze codebase and populate knowledge-base with conventions, patterns, and overview documentation |
 | `/soleur:work` | Execute work items systematically |
+| `/soleur:review` | Run comprehensive code reviews |
 | `/soleur:compound` | Document solved problems to compound team knowledge |
-
-### Utility Commands
-
-| Command | Description |
-|---------|-------------|
-| `/help` | List all available Soleur commands, agents, and skills |
-| `/deepen-plan` | Enhance plans with parallel research agents for each section |
-| `/changelog` | Create engaging changelogs for recent merges |
-| `/create-agent-skill` | Create or edit Claude Code skills |
-| `/generate_command` | Generate new slash commands |
-| `/heal-skill` | Fix skill documentation issues |
-| `/plan_review` | Multi-agent plan review in parallel |
-| `/report-bug` | Report a bug in the plugin |
-| `/reproduce-bug` | Reproduce bugs using logs and console |
-| `/resolve_parallel` | Resolve TODO comments in parallel |
-| `/resolve_pr_parallel` | Resolve PR comments in parallel |
-| `/resolve_todo_parallel` | Resolve todos in parallel |
-| `/triage` | Triage and prioritize issues |
-| `/test-browser` | Run browser tests on PR-affected pages |
-| `/xcode-test` | Build and test iOS apps on simulator |
-| `/feature-video` | Record video walkthroughs and add to PR description |
+| `/soleur:sync` | Analyze codebase and populate knowledge-base with conventions, patterns, and overview documentation |
+| `/soleur:help` | List all available Soleur commands, agents, and skills |
+| `/soleur:one-shot` | Full autonomous engineering workflow from plan to PR |
 
 ## Skills
 
@@ -201,6 +180,37 @@ Core workflow commands use `soleur:` prefix to avoid collisions with built-in co
 | `dspy-ruby` | Build type-safe LLM applications with DSPy.rb |
 | `frontend-design` | Create production-grade frontend interfaces |
 | `skill-creator` | Guide for creating effective Claude Code skills |
+
+### Planning & Review
+
+| Skill | Description |
+|-------|-------------|
+| `changelog` | Create engaging changelogs for recent merges |
+| `deepen-plan` | Enhance plans with parallel research agents |
+| `deploy-docs` | Validate and prepare documentation for deployment |
+| `plan-review` | Multi-agent plan review in parallel |
+| `release-docs` | Build and update documentation site with current components |
+
+### Resolution & Automation
+
+| Skill | Description |
+|-------|-------------|
+| `resolve-parallel` | Resolve TODO comments in parallel |
+| `resolve-pr-parallel` | Resolve PR comments in parallel |
+| `resolve-todo-parallel` | Resolve CLI todos in parallel |
+| `triage` | Triage and categorize findings for the CLI todo system |
+
+### Testing & QA
+
+| Skill | Description |
+|-------|-------------|
+| `agent-native-audit` | Run comprehensive agent-native architecture review |
+| `feature-video` | Record video walkthroughs and add to PR description |
+| `heal-skill` | Fix skill documentation issues |
+| `report-bug` | Report a bug in the plugin |
+| `reproduce-bug` | Reproduce bugs using logs, console, and browser screenshots |
+| `test-browser` | Run browser tests on PR-affected pages |
+| `xcode-test` | Build and test iOS apps on simulator |
 
 ### Content & Workflow
 

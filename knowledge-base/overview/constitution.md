@@ -43,6 +43,7 @@ Project principles organized by domain. Add principles as you learn them.
 ### Prefer
 
 - Plugin infrastructure (agents, commands, skills) is intentionally static - behavior changes require editing markdown files, not runtime registration
+- Use skills for agent-discoverable capabilities; use commands only for multi-phase orchestration workflows or actions requiring human judgment -- commands are invisible to agents
 - Verify documentation against implementation reality before trusting it; treat docs about "what exists" as hypotheses to verify
 
 - `overview/` documents what the project does; `overview/constitution.md` documents how to work on it
