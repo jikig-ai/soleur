@@ -74,6 +74,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Before planning large directory restructures, run a Phase 0 loader test -- move one component, reload, verify it is still discoverable. Different component types have different recursion behavior (agents recurse, skills do not)
 - Extend `/ship` with conditional skill invocations rather than inlining domain logic -- ship should remain a thin orchestration layer
 - Mechanical notifications (webhooks, emails) belong in CI workflows; keep local skills for AI-powered work that needs Claude -- secrets live in GitHub Actions, not local env vars
+- When one agent/skill produces a structured document consumed by others, define a heading-level contract (exact `##` names, required/optional flags) in the producer -- consumers parse by heading name, not by position
 
 ## Testing
 

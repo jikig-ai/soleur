@@ -106,14 +106,20 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 | Component | Count |
 |-----------|-------|
-| Agents | 22 |
+| Agents | 23 |
 | Commands | 8 |
-| Skills | 35 |
+| Skills | 36 |
 | MCP Servers | 1 |
 
 ## Agents
 
 Agents are organized by domain, then by function. Cross-domain agents stay at root level.
+
+### Marketing (1)
+
+| Agent | Description |
+|-------|-------------|
+| `brand-architect` | Interactive brand identity workshop producing structured brand guides |
 
 ### Engineering (15)
 
@@ -238,6 +244,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 
 | Skill | Description |
 |-------|-------------|
+| `discord-content` | Create and post brand-consistent community content to Discord |
 | `every-style-editor` | Review copy for Every's style guide compliance |
 | `file-todos` | File-based todo tracking system |
 | `git-worktree` | Manage Git worktrees for parallel development |

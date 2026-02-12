@@ -63,11 +63,29 @@ DHH's verdict: "You have 2 agents out of 10 that are Rails-specific. The plan pr
 
 The fix: move 2 agents into the existing conditional section of review.md, using the same pattern already established for migration and test agents.
 
+## Third Case: Brand Marketing Tools (#71) [Updated 2026-02-12]
+
+Same pattern, third confirmation. Plan for brand vision and marketing tools:
+
+| Aspect | Original | After Review |
+|--------|----------|--------------|
+| Phases | 5 | 2 |
+| New agents | 2 (brand-architect + brand-voice-reviewer) | 1 (brand-architect) |
+| New skills | 2 (discord-content + github-presence) | 1 (discord-content) |
+| Total components | 4 | 2 |
+
+All three reviewers converged again:
+- **DHH**: "brand-voice-reviewer is premature -- inline it. github-presence conflates two unrelated things."
+- **Kieran**: "Brand guide parsing contract underspecified. Skill-to-agent invocation unresolved."
+- **Simplicity**: "Cut reviewer (inline instead), defer github-presence, slim brand guide to 3 sections. ~50% scope reduction."
+
+Key cut: brand voice validation moved from a separate agent to an inline step within the discord-content skill. Simpler, no cross-component invocation needed.
+
 ## Key Insight
 
 **Parallel specialized reviews are force multipliers.** A single reviewer sees some issues. Three reviewers with different perspectives (architecture, technical accuracy, simplicity) catch nearly everything. Same wall-clock time, dramatically better outcome.
 
-This pattern has now been confirmed across 2 features (#12, #46). Both times the plan shrunk by 70-90% after review.
+This pattern has now been confirmed across 3 features (#12, #46, #71). Every time the plan shrunk by 50-90% after review.
 
 ## Prevention
 

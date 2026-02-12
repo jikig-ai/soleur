@@ -5,6 +5,15 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-02-12
+
+### Added
+
+- New `agents/marketing/` domain for brand and marketing agents
+- `brand-architect` agent -- interactive brand identity workshop that produces a structured brand guide document at `knowledge-base/overview/brand-guide.md`, covering identity, voice, visual direction, and channel notes
+- `discord-content` skill -- creates and posts brand-consistent community content to Discord via webhook, with inline brand voice validation and user approval before posting
+- Brand Guide Contract defining exact `##` heading names that downstream tools depend on
+
 ## [2.2.3] - 2026-02-12
 
 ### Fixed
