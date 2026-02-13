@@ -5,12 +5,26 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.4.0] - 2026-02-13
+## [2.5.0] - 2026-02-13
 
 ### Added
 
 - Brainstorm command detects brand/marketing topics and offers to route to the brand-architect agent (#76)
 - New "Specialized Domain Routing" pattern in brainstorm Phase 0 for future domain extensions
+
+## [2.4.0] - 2026-02-13
+
+### Added
+
+- `deploy` skill (`/soleur:deploy`) for container deployment to remote servers (closes #40)
+  - Four-phase workflow: validate env/Docker/SSH, show plan, execute build+push+deploy, verify health
+  - Generalized from `apps/telegram-bridge/scripts/deploy.sh` with configurable env vars
+  - Health check with fixed 3s interval retries (5 attempts)
+  - First-time setup guide in `references/hetzner-setup.md`
+
+### Fixed
+
+- `/soleur:one-shot` missing `/soleur:compound` step -- learnings were silently skipped
 
 ## [2.3.1] - 2026-02-12
 
