@@ -106,7 +106,7 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 | Component | Count |
 |-----------|-------|
-| Agents | 23 |
+| Agents | 24 |
 | Commands | 8 |
 | Skills | 37 |
 | MCP Servers | 1 |
@@ -121,7 +121,7 @@ Agents are organized by domain, then by function. Cross-domain agents stay at ro
 |-------|-------------|
 | `brand-architect` | Interactive brand identity workshop producing structured brand guides |
 
-### Engineering (15)
+### Engineering (16)
 
 #### Review (14)
 
@@ -147,6 +147,12 @@ Agents are organized by domain, then by function. Cross-domain agents stay at ro
 | Agent | Description |
 |-------|-------------|
 | `ddd-architect` | Domain-Driven Design with strategic bounded contexts and tactical patterns |
+
+#### Infra (1)
+
+| Agent | Description |
+|-------|-------------|
+| `terraform-architect` | Generate and review Terraform configurations for Hetzner Cloud and AWS |
 
 ### Cross-domain (7)
 

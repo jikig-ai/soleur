@@ -5,6 +5,17 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-02-13
+
+### Added
+
+- `terraform-architect` agent (`soleur:engineering:infra:terraform-architect`) for generating and reviewing Terraform configurations for Hetzner Cloud and AWS (closes #39)
+  - Generation protocol with modular file structure, Hetzner firewall/SSH/labels requirements, AWS VPC/S3/encryption requirements
+  - Review protocol with severity-based findings (Critical/High/Medium/Low) and remediation HCL
+  - State management advisory (S3 native locking for TF 1.10+, Hetzner Object Storage backend)
+  - Cost optimization with ARM instance preference and pricing disclaimers
+- New `agents/engineering/infra/` subdirectory for infrastructure agents
+
 ## [2.5.0] - 2026-02-13
 
 ### Added
