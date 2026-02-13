@@ -5,6 +5,13 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] - 2026-02-13
+
+### Added
+
+- Brainstorm command detects brand/marketing topics and offers to route to the brand-architect agent (#76)
+- New "Specialized Domain Routing" pattern in brainstorm Phase 0 for future domain extensions
+
 ## [2.4.0] - 2026-02-13
 
 ### Added
