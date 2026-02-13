@@ -28,10 +28,10 @@ Four directions were explored as hero section mockups. Each interprets "solar en
 
 - **Palette:** Deep black (#0A0A0A) + warm gold (#C9A962) accent + white text
 - **Typography:** Cormorant Garamond (serif) for headlines, Inter for UI, JetBrains Mono for data
-- **Logo:** Bordered square "S" mark in gold on black, spaced-out "SOLEUR" wordmark
+- **Logo:** Gold Circle — circular gold stroke with serif S, spaced-out "SOLEUR" wordmark
 - **Corners:** Sharp (0px radius) — architectural precision
 - **CTA:** Gold gradient buttons (#D4B36A → #B8923E)
-- **Headline:** "Infinite Leverage. One Founder."
+- **Headline:** "Build a Billion-Dollar Company. Alone."
 - **Feel:** Premium, powerful, concentrated. The darkness isn't brooding — it's the backdrop that makes the light hit harder.
 
 **Pros:**
@@ -119,6 +119,45 @@ Four directions were explored as hero section mockups. Each interprets "solar en
 3. **Name identity:** Solar + Solo — intentional dual meaning
 4. **Leading direction:** Solar Forge (Concept 1) with Solar Radiance (Concept 4) as the light counterpart
 5. **Gold gradient CTAs:** Added to Solar Forge for warmth without losing restraint
+6. **Logo:** Gold Circle (variant B) — circular gold stroke with serif S
+7. **Primary direction confirmed:** Solar Forge
+
+## Final Messaging (Solar Forge Landing Page)
+
+### Hero
+- **Badge:** The Company-as-a-Service Platform
+- **Headline:** "Build a Billion-Dollar Company.\nAlone."
+- **Subheadline:** "Everything you need to build, ship, and scale — powered by AI teams.\nFor founders who think in billions."
+- **CTA:** Start Building (links to GitHub)
+
+### Stats Strip
+- 1 Automated Workflow / 23+ AI Agents / 36+ Skills / ∞ Compounding Knowledge
+
+### Problem Section
+- **Label:** THIS IS THE WAY
+- **Title:** "One founder powered by a full-stack AI organization."
+- **Subtitle:** "Not a copilot. Not an assistant. A full AI organization that reviews, plans, builds, and remembers. Every decision you make teaches the system. Every project starts faster than the last."
+- **Cards:** You Decide / Agents Execute / Knowledge Compounds
+  - You Decide: "Taste, vision, and timing. The things no machine can replace. You set the direction — everything else follows."
+  - Agents Execute: "Engineering, marketing, legal, operations — every department, running autonomously on your command."
+  - Knowledge Compounds: "Solutions compound into patterns. Patterns compound into playbooks. Your AI organization gets smarter with every project — permanently."
+
+### Quote
+- "The first trillion-dollar company run by one person isn't science fiction. It's an engineering problem. We're solving it." — The Soleur Thesis
+
+### Features (YOUR AI ORGANIZATION)
+- **Title:** "Every department. From idea to shipped."
+- **Left column (Departments):** Strategy / Product / Engineering / Marketing / Customer Support
+- **Right column (Workflow):** Think / Plan / Build / Ship / Learn & Grow
+
+### Final CTA
+- **Title:** "Ready to build at scale?"
+- **Subtitle:** "Your AI organization is ready. Are you?"
+- **CTA:** Start Building
+
+### Footer
+- [S] SOLEUR + GitHub / Discord / Docs links
+- "Designed, built, and shipped by Soleur — using Soleur."
 
 ## Open Questions (For External Feedback)
 
@@ -130,8 +169,9 @@ Four directions were explored as hero section mockups. Each interprets "solar en
 
 ## Next Steps
 
-- [ ] Gather external feedback on the 4 concepts
-- [ ] Finalize primary direction
+- [x] Gather external feedback on the 4 concepts
+- [x] Finalize primary direction (Solar Forge)
+- [x] Refine full landing page messaging
 - [ ] Run the `brand-architect` agent to produce the formal brand guide at `knowledge-base/overview/brand-guide.md`
 - [ ] Design the documentation site using the chosen identity
 - [ ] Create logo variations (favicon, social preview, etc.)
