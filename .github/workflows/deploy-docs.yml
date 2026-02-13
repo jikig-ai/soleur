@@ -26,6 +26,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate docs
+        run: |
+          test -f plugins/soleur/docs/index.html || { echo "Missing index.html"; exit 1; }
+          for page in agents commands skills mcp-servers changelog getting-started; do
+            test -f "plugins/soleur/docs/pages/${page}.html" || { echo "Missing ${page}.html"; exit 1; }
+          done
+          echo "All required pages present"
+
       - name: Setup Pages
         uses: actions/configure-pages@v4
 

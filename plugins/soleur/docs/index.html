@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="AI-powered development tools for Claude Code that get smarter with every use.">
+  <meta property="og:title" content="Soleur - Claude Code Plugin">
+  <meta property="og:description" content="AI-powered development tools for Claude Code that get smarter with every use.">
+  <meta property="og:url" content="https://jikig-ai.github.io/soleur/">
+  <meta property="og:type" content="website">
+  <base href="/soleur/">
+  <title>Soleur - AI-Powered Development Tools for Claude Code</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script>const t=localStorage.getItem('theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');document.documentElement.dataset.theme=t;</script>
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+  <header class="site-header">
+    <a href="index.html" class="logo">Soleur <span class="version-badge">v2.6.2</span></a>
+    <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-hidden="true">
+    <label for="nav-toggle" class="nav-toggle-label" aria-label="Toggle navigation">&#9776;</label>
+    <ul class="nav-links">
+      <li><a href="pages/agents.html">Agents</a></li>
+      <li><a href="pages/commands.html">Commands</a></li>
+      <li><a href="pages/skills.html">Skills</a></li>
+      <li><a href="pages/mcp-servers.html">MCP</a></li>
+      <li><a href="pages/changelog.html">Changelog</a></li>
+      <li><a href="pages/getting-started.html">Get Started</a></li>
+      <li><a href="https://github.com/jikig-ai/soleur" target="_blank" rel="noopener">GitHub</a></li>
+      <li><button class="theme-toggle" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark';localStorage.setItem('theme',document.documentElement.dataset.theme)" aria-label="Toggle theme"><span class="icon-dark">&#9790;</span><span class="icon-light">&#9728;</span></button></li>
+    </ul>
+  </header>
+
+  <main id="main-content">
+    <section class="hero">
+      <h1>Soleur</h1>
+      <p class="hero-subtitle">AI-powered development tools for Claude Code that get smarter with every use.</p>
+    </section>
+
+    <section class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-number">24</span>
+        <span class="stat-label">Agents</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">8</span>
+        <span class="stat-label">Commands</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">37</span>
+        <span class="stat-label">Skills</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number">1</span>
+        <span class="stat-label">MCP Server</span>
+      </div>
+    </section>
+
+    <section class="workflow-section">
+      <h2>Development Workflow</h2>
+      <div class="workflow-pipeline">
+        <div class="workflow-node">
+          <span class="workflow-icon">brainstorm</span>
+        </div>
+        <div class="workflow-connector"></div>
+        <div class="workflow-node">
+          <span class="workflow-icon">plan</span>
+        </div>
+        <div class="workflow-connector"></div>
+        <div class="workflow-node">
+          <span class="workflow-icon">work</span>
+        </div>
+        <div class="workflow-connector"></div>
+        <div class="workflow-node">
+          <span class="workflow-icon">review</span>
+        </div>
+        <div class="workflow-connector"></div>
+        <div class="workflow-node">
+          <span class="workflow-icon">compound</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="quick-start">
+      <h2>Quick Start</h2>
+      <pre><code>claude plugin install soleur</code></pre>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>Built with <a href="index.html">Soleur</a> | <a href="https://github.com/jikig-ai/soleur" target="_blank" rel="noopener">GitHub</a></p>
+    <p>Licensed under Apache-2.0</p>
+  </footer>
+</body>
+</html>

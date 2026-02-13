@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <base href="/soleur/">
+  <script>const t=localStorage.getItem('theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');document.documentElement.dataset.theme=t;</script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Changelog - All notable changes to the Soleur plugin.">
+  <title>Changelog - Soleur</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+  <header class="site-header">
+    <a href="index.html" class="logo">Soleur <span class="version-badge">v2.6.2</span></a>
+    <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-hidden="true">
+    <label for="nav-toggle" class="nav-toggle-label" aria-label="Toggle navigation">&#9776;</label>
+    <ul class="nav-links">
+      <li><a href="pages/agents.html">Agents</a></li>
+      <li><a href="pages/commands.html">Commands</a></li>
+      <li><a href="pages/skills.html">Skills</a></li>
+      <li><a href="pages/mcp-servers.html">MCP</a></li>
+      <li><a href="pages/changelog.html" aria-current="page">Changelog</a></li>
+      <li><a href="pages/getting-started.html">Get Started</a></li>
+      <li><a href="https://github.com/jikig-ai/soleur" target="_blank" rel="noopener">GitHub</a></li>
+      <li><button class="theme-toggle" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark';localStorage.setItem('theme',document.documentElement.dataset.theme)" aria-label="Toggle theme"><span class="icon-dark">&#9790;</span><span class="icon-light">&#9728;</span></button></li>
+    </ul>
+  </header>
+
+  <main id="main-content">
+    <section class="hero">
+      <div class="container">
+        <h1>Changelog</h1>
+        <p class="subtitle">All notable changes to the Soleur plugin.</p>
+      </div>
+    </section>
+
+    <section class="content">
+      <div class="container">
+
+        <div class="changelog-entry">
+          <h2>[2.6.2] - 2026-02-13</h2>
+          <h3>Added</h3>
+          <ul>
+            <li>GitHub Pages documentation site with 7 pages</li>
+            <li>Deploy workflow validation step</li>
+          </ul>
+        </div>
+
+        <div class="changelog-entry">
+          <h2>[2.6.1] - 2026-02-13</h2>
+          <h3>Fixed</h3>
+          <ul>
+            <li>/ship Phase 7 pre-push gate blocks when unarchived KB artifacts exist</li>
+          </ul>
+        </div>
+
+        <div class="changelog-entry">
+          <h2>[2.6.0] - 2026-02-13</h2>
+          <h3>Added</h3>
+          <ul>
+            <li>terraform-architect agent for Hetzner and AWS Terraform configs</li>
+          </ul>
+        </div>
+
+        <div class="changelog-entry">
+          <h2>[2.5.0] - 2026-02-13</h2>
+          <h3>Added</h3>
+          <ul>
+            <li>Brainstorm domain routing for brand/marketing topics</li>
+          </ul>
+        </div>
+
+        <div class="changelog-entry">
+          <h2>[2.4.0] - 2026-02-13</h2>
+          <h3>Added</h3>
+          <ul>
+            <li>deploy skill for container deployment to remote servers</li>
+          </ul>
+        </div>
+
+        <div class="changelog-entry">
+          <h2>[2.3.1] - 2026-02-12</h2>
+          <h3>Added</h3>
+          <ul>
+            <li>auto-release.yml GitHub Actions workflow</li>
+          </ul>
+        </div>
+
+        <p class="changelog-note">For the full changelog, see <a href="https://github.com/jikig-ai/soleur/blob/main/CHANGELOG.md">CHANGELOG.md on GitHub</a>.</p>
+
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>Built with Soleur &middot; <a href="https://github.com/jikig-ai/soleur">GitHub</a> &middot; Apache-2.0</p>
+    </div>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="24 specialized agents for code review, research, architecture, and workflow automation.">
+  <meta property="og:title" content="Agents - Soleur">
+  <meta property="og:description" content="24 specialized agents for code review, research, architecture, and workflow automation.">
+  <meta property="og:url" content="https://jikig-ai.github.io/soleur/pages/agents.html">
+  <meta property="og:type" content="website">
+  <base href="/soleur/">
+  <title>Agents - Soleur</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script>const t=localStorage.getItem('theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');document.documentElement.dataset.theme=t;</script>
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+  <header class="site-header">
+    <a href="index.html" class="logo">Soleur <span class="version-badge">v2.6.2</span></a>
+    <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-hidden="true">
+    <label for="nav-toggle" class="nav-toggle-label" aria-label="Toggle navigation">&#9776;</label>
+    <ul class="nav-links">
+      <li><a href="pages/agents.html" aria-current="page">Agents</a></li>
+      <li><a href="pages/commands.html">Commands</a></li>
+      <li><a href="pages/skills.html">Skills</a></li>
+      <li><a href="pages/mcp-servers.html">MCP</a></li>
+      <li><a href="pages/changelog.html">Changelog</a></li>
+      <li><a href="pages/getting-started.html">Get Started</a></li>
+      <li><a href="https://github.com/jikig-ai/soleur" target="_blank" rel="noopener">GitHub</a></li>
+      <li><button class="theme-toggle" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark';localStorage.setItem('theme',document.documentElement.dataset.theme)" aria-label="Toggle theme"><span class="icon-dark">&#9790;</span><span class="icon-light">&#9728;</span></button></li>
+    </ul>
+  </header>
+
+  <main id="main-content">
+    <section class="page-hero">
+      <div class="container">
+        <h1>Agents</h1>
+        <p>24 specialized agents for code review, research, architecture, and workflow automation.</p>
+      </div>
+    </section>
+
+    <div class="container">
+      <nav class="category-nav" aria-label="Agent categories">
+        <a href="#engineering-review" class="category-pill">Engineering / Review</a>
+        <a href="#engineering-design" class="category-pill">Engineering / Design</a>
+        <a href="#engineering-infra" class="category-pill">Engineering / Infra</a>
+        <a href="#research" class="category-pill">Research</a>
+        <a href="#workflow" class="category-pill">Workflow</a>
+        <a href="#marketing" class="category-pill">Marketing</a>
+      </nav>
+
+      <!-- Engineering / Review -->
+      <section id="engineering-review" class="category-section">
+        <div class="category-header">
+          <h2 class="category-title">Engineering / Review</h2>
+          <span class="category-count">14 agents</span>
+        </div>
+        <div class="catalog-grid">
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-review)"></span>
+              <span class="card-category">Engineering / Review</span>
+            </div>
+            <h3 class="card-title">agent-native-reviewer</h3>
+            <p class="card-description">Ensures features are agent-native with user-agent parity</p>
+          </article>
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-review)"></span>
+              <span class="card-category">Engineering / Review</span>
+            </div>
+            <h3 class="card-title">architecture-strategist</h3>
+            <p class="card-description">Analyzes code from architectural perspective</p>
+          </article>
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-review)"></span>
+              <span class="card-category">Engineering / Review</span>
+            </div>
+            <h3 class="card-title">code-quality-analyst</h3>
+            <p class="card-description">Formal quality reports with severity scoring and refactoring roadmaps</p>
+          </article>
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-review)"></span>
+              <span class="card-category">Engineering / Review</span>
+            </div>
+            <h3 class="card-title">code-simplicity-reviewer</h3>
+            <p class="card-description">Final review for simplicity and YAGNI compliance</p>
+          </article>
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-review)"></span>
+              <span class="card-category">Engineering / Review</span>
+            </div>
+            <h3 class="card-title">data-integrity-guardian</h3>
+            <p class="card-description">Reviews database migrations and data model changes</p>
+          </article>
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-review)"></span>
+              <span class="card-category">Engineering / Review</span>
+            </div>
+            <h3 class="card-title">data-migration-expert</h3>
+            <p class="card-description">Validates ID mappings, rollback safety for data migrations</p>
+          </article>
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-review)"></span>
+              <span class="card-category">Engineering / Review</span>
+            </div>
+            <h3 class="card-title">deployment-verification-agent</h3>
+            <p class="card-description">Pre/post deploy checklists for risky data changes</p>
+          </article>
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-review)"></span>
+              <span class="card-category">Engineering / Review</span>
+            </div>
+            <h3 class="card-title">dhh-rails-reviewer</h3>
+            <p class="card-description">Rails code review from DHH perspective</p>
+          </article>
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-review)"></span>
+              <span class="card-category">Engineering / Review</span>
+            </div>
+            <h3 class="card-title">kieran-rails-reviewer</h3>
+            <p class="card-description">Rails code review with extremely high quality bar</p>
+          </article>
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-review)"></span>
+              <span class="card-category">Engineering / Review</span>
+            </div>
+            <h3 class="card-title">legacy-code-expert</h3>
+            <p class="card-description">Safely modifies untested legacy code using Feathers' techniques</p>
+          </article>
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-review)"></span>
+              <span class="card-category">Engineering / Review</span>
+            </div>
+            <h3 class="card-title">pattern-recognition-specialist</h3>
+            <p class="card-description">Analyzes code for design patterns and anti-patterns</p>
+          </article>
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-review)"></span>
+              <span class="card-category">Engineering / Review</span>
+            </div>
+            <h3 class="card-title">performance-oracle</h3>
+            <p class="card-description">Performance analysis, bottleneck identification, scalability</p>
+          </article>
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-review)"></span>
+              <span class="card-category">Engineering / Review</span>
+            </div>
+            <h3 class="card-title">security-sentinel</h3>
+            <p class="card-description">Security audits, vulnerability assessments, OWASP compliance</p>
+          </article>
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-review)"></span>
+              <span class="card-category">Engineering / Review</span>
+            </div>
+            <h3 class="card-title">test-design-reviewer</h3>
+            <p class="card-description">Test quality scoring using Farley's 8 properties</p>
+          </article>
+        </div>
+      </section>
+
+      <!-- Engineering / Design -->
+      <section id="engineering-design" class="category-section">
+        <div class="category-header">
+          <h2 class="category-title">Engineering / Design</h2>
+          <span class="category-count">1 agent</span>
+        </div>
+        <div class="catalog-grid">
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-design)"></span>
+              <span class="card-category">Engineering / Design</span>
+            </div>
+            <h3 class="card-title">ddd-architect</h3>
+            <p class="card-description">Domain-Driven Design with bounded contexts and aggregate design</p>
+          </article>
+        </div>
+      </section>
+
+      <!-- Engineering / Infra -->
+      <section id="engineering-infra" class="category-section">
+        <div class="category-header">
+          <h2 class="category-title">Engineering / Infra</h2>
+          <span class="category-count">1 agent</span>
+        </div>
+        <div class="catalog-grid">
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-infra)"></span>
+              <span class="card-category">Engineering / Infra</span>
+            </div>
+            <h3 class="card-title">terraform-architect</h3>
+            <p class="card-description">Terraform configurations for Hetzner and AWS</p>
+          </article>
+        </div>
+      </section>
+
+      <!-- Research -->
+      <section id="research" class="category-section">
+        <div class="category-header">
+          <h2 class="category-title">Research</h2>
+          <span class="category-count">5 agents</span>
+        </div>
+        <div class="catalog-grid">
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-research)"></span>
+              <span class="card-category">Research</span>
+            </div>
+            <h3 class="card-title">best-practices-researcher</h3>
+            <p class="card-description">External best practices and documentation research</p>
+          </article>
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-research)"></span>
+              <span class="card-category">Research</span>
+            </div>
+            <h3 class="card-title">framework-docs-researcher</h3>
+            <p class="card-description">Framework documentation and implementation patterns</p>
+          </article>
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-research)"></span>
+              <span class="card-category">Research</span>
+            </div>
+            <h3 class="card-title">git-history-analyzer</h3>
+            <p class="card-description">Git archaeological analysis for code evolution</p>
+          </article>
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-research)"></span>
+              <span class="card-category">Research</span>
+            </div>
+            <h3 class="card-title">learnings-researcher</h3>
+            <p class="card-description">Searches institutional learnings for past solutions</p>
+          </article>
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-research)"></span>
+              <span class="card-category">Research</span>
+            </div>
+            <h3 class="card-title">repo-research-analyst</h3>
+            <p class="card-description">Repository structure, conventions, and pattern research</p>
+          </article>
+        </div>
+      </section>
+
+      <!-- Workflow -->
+      <section id="workflow" class="category-section">
+        <div class="category-header">
+          <h2 class="category-title">Workflow</h2>
+          <span class="category-count">2 agents</span>
+        </div>
+        <div class="catalog-grid">
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-workflow)"></span>
+              <span class="card-category">Workflow</span>
+            </div>
+            <h3 class="card-title">pr-comment-resolver</h3>
+            <p class="card-description">Addresses PR review comments with code changes</p>
+          </article>
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-workflow)"></span>
+              <span class="card-category">Workflow</span>
+            </div>
+            <h3 class="card-title">spec-flow-analyzer</h3>
+            <p class="card-description">User flow analysis and gap identification for specs</p>
+          </article>
+        </div>
+      </section>
+
+      <!-- Marketing -->
+      <section id="marketing" class="category-section">
+        <div class="category-header">
+          <h2 class="category-title">Marketing</h2>
+          <span class="category-count">1 agent</span>
+        </div>
+        <div class="catalog-grid">
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: var(--cat-marketing)"></span>
+              <span class="card-category">Marketing</span>
+            </div>
+            <h3 class="card-title">brand-architect</h3>
+            <p class="card-description">Interactive brand identity workshop</p>
+          </article>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>Built with Soleur &middot; <a href="https://github.com/jikig-ai/soleur">GitHub</a> &middot; Apache-2.0</p>
+    </div>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <base href="/soleur/">
+  <script>const t=localStorage.getItem('theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');document.documentElement.dataset.theme=t;</script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MCP Servers - Model Context Protocol servers that extend Claude's capabilities with Soleur.">
+  <title>MCP Servers - Soleur</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+  <header class="site-header">
+    <a href="index.html" class="logo">Soleur <span class="version-badge">v2.6.2</span></a>
+    <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-hidden="true">
+    <label for="nav-toggle" class="nav-toggle-label" aria-label="Toggle navigation">&#9776;</label>
+    <ul class="nav-links">
+      <li><a href="pages/agents.html">Agents</a></li>
+      <li><a href="pages/commands.html">Commands</a></li>
+      <li><a href="pages/skills.html">Skills</a></li>
+      <li><a href="pages/mcp-servers.html" aria-current="page">MCP</a></li>
+      <li><a href="pages/changelog.html">Changelog</a></li>
+      <li><a href="pages/getting-started.html">Get Started</a></li>
+      <li><a href="https://github.com/jikig-ai/soleur" target="_blank" rel="noopener">GitHub</a></li>
+      <li><button class="theme-toggle" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark';localStorage.setItem('theme',document.documentElement.dataset.theme)" aria-label="Toggle theme"><span class="icon-dark">&#9790;</span><span class="icon-light">&#9728;</span></button></li>
+    </ul>
+  </header>
+
+  <main id="main-content">
+    <section class="hero">
+      <div class="container">
+        <h1>MCP Servers</h1>
+        <p class="subtitle">Model Context Protocol servers that extend Claude's capabilities.</p>
+      </div>
+    </section>
+
+    <section class="content">
+      <div class="container">
+        <div class="card">
+          <h2>context7</h2>
+          <span class="badge">HTTP</span>
+          <p class="card-description">Retrieves up-to-date documentation and code examples for any programming library or framework via Context7.</p>
+          <div class="card-meta">
+            <strong>URL:</strong> <code>https://mcp.context7.com/mcp</code>
+          </div>
+          <div class="card-tools">
+            <h3>Tools</h3>
+            <ul>
+              <li><code>resolve-library-id</code> -- Resolves a package name to a Context7-compatible library ID</li>
+              <li><code>query-docs</code> -- Retrieves documentation and code examples for a given library</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>Built with Soleur &middot; <a href="https://github.com/jikig-ai/soleur">GitHub</a> &middot; Apache-2.0</p>
+    </div>
+  </footer>
+</body>
+</html>
