@@ -172,6 +172,6 @@ Four directions were explored as hero section mockups. Each interprets "solar en
 - [x] Gather external feedback on the 4 concepts
 - [x] Finalize primary direction (Solar Forge)
 - [x] Refine full landing page messaging
-- [ ] Run the `brand-architect` agent to produce the formal brand guide at `knowledge-base/overview/brand-guide.md`
+- [x] Run the `brand-architect` agent to produce the formal brand guide at `knowledge-base/overview/brand-guide.md`
 - [ ] Design the documentation site using the chosen identity
-- [ ] Create logo variations (favicon, social preview, etc.)
+- [x] Create logo variations (favicon, square avatar, mark only, horizontal dark/light, OG image)
