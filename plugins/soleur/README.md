@@ -108,7 +108,7 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 |-----------|-------|
 | Agents | 23 |
 | Commands | 8 |
-| Skills | 36 |
+| Skills | 37 |
 | MCP Servers | 1 |
 
 ## Agents
@@ -249,6 +249,12 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `file-todos` | File-based todo tracking system |
 | `git-worktree` | Manage Git worktrees for parallel development |
 | `ship` | Enforce feature lifecycle checklist before creating PRs |
+
+### Deployment
+
+| Skill | Description |
+|-------|-------------|
+| `deploy` | Deploy containerized applications via Docker build, GHCR push, and SSH |
 
 ### File Transfer
 
