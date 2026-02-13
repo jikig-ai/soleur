@@ -5,7 +5,7 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.6.0] - 2026-02-13
+## [2.7.0] - 2026-02-13
 
 ### Added
 
@@ -20,6 +20,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Solar Forge theme: dark (#0A0A0A) + gold (#C9A962), Cormorant Garamond headlines, Inter body, JetBrains Mono code
   - Responsive design with mobile nav toggle and sticky sidebar
   - Deploys automatically via existing GitHub Pages workflow
+
+## [2.6.1] - 2026-02-13
+
+### Fixed
+
+- `/ship` Phase 7: add pre-push gate that blocks when unarchived KB artifacts exist -- prevents skipping `/compound` by re-verifying artifact consolidation before `git push`
+
+## [2.6.0] - 2026-02-13
+
+### Added
+
+- `terraform-architect` agent (`soleur:engineering:infra:terraform-architect`) for generating and reviewing Terraform configurations for Hetzner Cloud and AWS (closes #39)
+  - Generation protocol with modular file structure, Hetzner firewall/SSH/labels requirements, AWS VPC/S3/encryption requirements
+  - Review protocol with severity-based findings (Critical/High/Medium/Low) and remediation HCL
+  - State management advisory (S3 native locking for TF 1.10+, Hetzner Object Storage backend)
+  - Cost optimization with ARM instance preference and pricing disclaimers
+- New `agents/engineering/infra/` subdirectory for infrastructure agents
 
 ## [2.5.0] - 2026-02-13
 
