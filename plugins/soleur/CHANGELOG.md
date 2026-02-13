@@ -12,8 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `deploy` skill (`/soleur:deploy`) for container deployment to remote servers (closes #40)
   - Four-phase workflow: validate env/Docker/SSH, show plan, execute build+push+deploy, verify health
   - Generalized from `apps/telegram-bridge/scripts/deploy.sh` with configurable env vars
-  - Health check with exponential backoff (1s to 10s cap, 10 attempts)
+  - Health check with fixed 3s interval retries (5 attempts)
   - First-time setup guide in `references/hetzner-setup.md`
+
+### Fixed
+
+- `/soleur:one-shot` missing `/soleur:compound` step -- learnings were silently skipped
 
 ## [2.3.1] - 2026-02-12
 
