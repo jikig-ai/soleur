@@ -5,6 +5,22 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-02-13
+
+### Added
+
+- Documentation site at `plugins/soleur/docs/` with Solar Forge brand identity
+  - Landing page with hero, stats strip, and overview cards
+  - Getting Started guide with installation and core workflow
+  - Agents reference (23 agents across 5 categories)
+  - Skills reference (37 skills across 8 categories)
+  - Commands reference (8 workflow commands)
+  - Changelog page (v1.17.0 through v2.5.0)
+  - MCP Servers page (Context7)
+  - Solar Forge theme: dark (#0A0A0A) + gold (#C9A962), Cormorant Garamond headlines, Inter body, JetBrains Mono code
+  - Responsive design with mobile nav toggle and sticky sidebar
+  - Deploys automatically via existing GitHub Pages workflow
+
 ## [2.5.0] - 2026-02-13
 
 ### Added

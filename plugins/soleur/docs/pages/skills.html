@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Skills - Soleur</title>
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+  <nav class="nav">
+    <a href="../index.html" class="nav-logo">
+      <div class="nav-logo-mark">S</div>
+      <span class="nav-logo-text">SOLEUR</span>
+    </a>
+    <div class="nav-links">
+      <a href="getting-started.html">Get Started</a>
+      <a href="agents.html">Agents</a>
+      <a href="skills.html" class="active">Skills</a>
+      <a href="commands.html">Commands</a>
+      <a href="changelog.html">Changelog</a>
+      <div class="nav-icons">
+        <a href="https://github.com/jikig-ai/soleur" target="_blank" aria-label="GitHub">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>
+        </a>
+      </div>
+      <a href="https://github.com/jikig-ai/soleur" class="nav-cta" target="_blank">Start Building</a>
+    </div>
+    <button class="nav-toggle" aria-label="Toggle navigation">
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+    </button>
+  </nav>
+
+  <div class="page-layout">
+    <aside class="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">Categories</div>
+        <ul class="sidebar-links">
+          <li><a href="#workflow" class="active">Workflow (8)</a></li>
+          <li><a href="#engineering">Engineering (9)</a></li>
+          <li><a href="#code-style">Code Style (4)</a></li>
+          <li><a href="#architecture">Architecture (3)</a></li>
+          <li><a href="#browser-testing">Browser &amp; Testing (4)</a></li>
+          <li><a href="#devops">DevOps (4)</a></li>
+          <li><a href="#design-content">Design &amp; Content (3)</a></li>
+          <li><a href="#planning">Planning (2)</a></li>
+        </ul>
+      </div>
+    </aside>
+
+    <main class="content">
+      <div class="section-label">Reference</div>
+      <h1>Skills</h1>
+      <p class="content-subtitle">37 slash commands across 8 domains.</p>
+
+      <h2 id="workflow">Workflow</h2>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">brainstorming</span>
+          <span class="component-card-badge">Workflow</span>
+        </div>
+        <p>Explore user intent, approaches, and design decisions before planning. Guides collaborative dialogue with multiple valid interpretations.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">deepen-plan</span>
+          <span class="component-card-badge">Workflow</span>
+        </div>
+        <p>Enhance an existing plan with parallel research agents for each section, adding depth, best practices, and implementation details.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">plan-review</span>
+          <span class="component-card-badge">Workflow</span>
+        </div>
+        <p>Have multiple specialized agents review a plan in parallel. Spawns DHH, Kieran, and code simplicity reviewers.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">ship</span>
+          <span class="component-card-badge">Workflow</span>
+        </div>
+        <p>Enforce the complete feature lifecycle checklist: artifacts, documentation, learnings, version bump, and PR creation.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">compound-docs</span>
+          <span class="component-card-badge">Workflow</span>
+        </div>
+        <p>Capture solved problems as categorized documentation with YAML frontmatter for fast lookup and institutional knowledge.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">changelog</span>
+          <span class="component-card-badge">Workflow</span>
+        </div>
+        <p>Create engaging changelogs for recent merges with breaking changes, new features, bug fixes, and contributor shoutouts.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">release-announce</span>
+          <span class="component-card-badge">Workflow</span>
+        </div>
+        <p>Announce a new plugin release. Parses CHANGELOG.md, generates an AI-powered summary, and creates a GitHub Release.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">release-docs</span>
+          <span class="component-card-badge">Workflow</span>
+        </div>
+        <p>Build and update the documentation site with current plugin components, accurate counts, and component listings.</p>
+      </div>
+
+      <h2 id="engineering">Engineering</h2>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">atdd-developer</span>
+          <span class="component-card-badge">Engineering</span>
+        </div>
+        <p>Implement features using Acceptance Test Driven Development with RED/GREEN/REFACTOR cycle and explicit permission gates.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">reproduce-bug</span>
+          <span class="component-card-badge">Engineering</span>
+        </div>
+        <p>Reproduce and investigate bugs using logs, console inspection, and browser screenshots with systematic analysis.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">report-bug</span>
+          <span class="component-card-badge">Engineering</span>
+        </div>
+        <p>Report bugs with structured information gathering, automatic environment details, and GitHub issue creation.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">resolve-parallel</span>
+          <span class="component-card-badge">Engineering</span>
+        </div>
+        <p>Resolve all TODO comments in the codebase using parallel processing with dependency analysis and mermaid flow diagrams.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">resolve-pr-parallel</span>
+          <span class="component-card-badge">Engineering</span>
+        </div>
+        <p>Resolve all PR comments using parallel processing. Spawns parallel agents and verifies all threads are resolved.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">resolve-todo-parallel</span>
+          <span class="component-card-badge">Engineering</span>
+        </div>
+        <p>Resolve all pending CLI todos from the /todos/ directory using parallel processing with dependency analysis.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">heal-skill</span>
+          <span class="component-card-badge">Engineering</span>
+        </div>
+        <p>Fix skills with incorrect instructions, outdated API references, or wrong parameters. Proposes specific fixes with before/after diffs.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">triage</span>
+          <span class="component-card-badge">Engineering</span>
+        </div>
+        <p>Triage and categorize findings for the CLI todo system. Presents items one by one for approval, skip, or customization.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">file-todos</span>
+          <span class="component-card-badge">Engineering</span>
+        </div>
+        <p>Manage the file-based todo tracking system with workflows for creating, managing status, conducting triage, and integrating with code review.</p>
+      </div>
+
+      <h2 id="code-style">Code Style</h2>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">dhh-rails-style</span>
+          <span class="component-card-badge">Code Style</span>
+        </div>
+        <p>Write Ruby and Rails code in DHH's distinctive 37signals style. REST purity, fat models, thin controllers, Hotwire patterns.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">andrew-kane-gem-writer</span>
+          <span class="component-card-badge">Code Style</span>
+        </div>
+        <p>Write Ruby gems following Andrew Kane's proven patterns. Clean, minimal, production-ready library code.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">every-style-editor</span>
+          <span class="component-card-badge">Code Style</span>
+        </div>
+        <p>Review or edit copy to ensure adherence to Every's style guide. Systematic line-by-line review for grammar, punctuation, and mechanics.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">dspy-ruby</span>
+          <span class="component-card-badge">Code Style</span>
+        </div>
+        <p>Work with DSPy.rb, a Ruby framework for building type-safe, composable LLM applications with signatures, modules, and providers.</p>
+      </div>
+
+      <h2 id="architecture">Architecture</h2>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">agent-native-architecture</span>
+          <span class="component-card-badge">Architecture</span>
+        </div>
+        <p>Design agent-native applications where agents are first-class citizens. MCP tools, self-modifying systems, autonomous agents.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">agent-native-audit</span>
+          <span class="component-card-badge">Architecture</span>
+        </div>
+        <p>Comprehensive agent-native architecture review with scored principles. 8 parallel sub-agents audit action parity, tools, and context.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">skill-creator</span>
+          <span class="component-card-badge">Architecture</span>
+        </div>
+        <p>Create, write, refine, or audit Claude Code Skills. Expert guidance on SKILL.md files, packaging, and best practices.</p>
+      </div>
+
+      <h2 id="browser-testing">Browser &amp; Testing</h2>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">agent-browser</span>
+          <span class="component-card-badge">Testing</span>
+        </div>
+        <p>Automate browser interactions via agent-browser CLI. Web page navigation, form filling, screenshots, and data scraping.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">test-browser</span>
+          <span class="component-card-badge">Testing</span>
+        </div>
+        <p>Run end-to-end browser tests on pages affected by a PR. Maps changed files to routes, tests pages, and captures screenshots.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">xcode-test</span>
+          <span class="component-card-badge">Testing</span>
+        </div>
+        <p>Build and test iOS apps on the simulator using XcodeBuildMCP. Building, installing, launching, screenshot capture, and log analysis.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">feature-video</span>
+          <span class="component-card-badge">Testing</span>
+        </div>
+        <p>Record video walkthroughs of features and add them to PR descriptions. Creates GIF/MP4 demos and uploads via rclone.</p>
+      </div>
+
+      <h2 id="devops">DevOps</h2>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">deploy</span>
+          <span class="component-card-badge">DevOps</span>
+        </div>
+        <p>Deploy containerized applications to remote servers. Docker image build, GHCR push, SSH deployment with health verification.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">deploy-docs</span>
+          <span class="component-card-badge">DevOps</span>
+        </div>
+        <p>Validate and prepare documentation for GitHub Pages deployment. Checks HTML pages, JSON validity, and component counts.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">git-worktree</span>
+          <span class="component-card-badge">DevOps</span>
+        </div>
+        <p>Manage Git worktrees for isolated parallel development. Creating, listing, switching, and cleaning up worktrees.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">rclone</span>
+          <span class="component-card-badge">DevOps</span>
+        </div>
+        <p>Upload, sync, or manage files across cloud storage providers. S3, Cloudflare R2, Backblaze B2, Google Drive, and more.</p>
+      </div>
+
+      <h2 id="design-content">Design &amp; Content</h2>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">frontend-design</span>
+          <span class="component-card-badge">Design</span>
+        </div>
+        <p>Create distinctive, production-grade frontend interfaces with high design quality. Avoids generic AI aesthetics.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">gemini-imagegen</span>
+          <span class="component-card-badge">Design</span>
+        </div>
+        <p>Generate and edit images using the Gemini API. Text-to-image, style transfers, logos, stickers, and product mockups.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">discord-content</span>
+          <span class="component-card-badge">Design</span>
+        </div>
+        <p>Create and post brand-consistent community content to Discord via webhook with inline brand voice validation.</p>
+      </div>
+
+      <h2 id="planning">Planning</h2>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">spec-templates</span>
+          <span class="component-card-badge">Planning</span>
+        </div>
+        <p>Create structured feature specifications and task tracking documents with standardized templates.</p>
+      </div>
+
+      <div class="component-card">
+        <div class="component-card-header">
+          <span class="component-card-name">user-story-writer</span>
+          <span class="component-card-badge">Planning</span>
+        </div>
+        <p>Decompose feature requirements into granular, implementable user stories using Elephant Carpaccio and INVEST criteria.</p>
+      </div>
+    </main>
+  </div>
+
+  <footer class="footer">
+    <div class="footer-left">
+      <div class="footer-mark">S</div>
+      <span class="footer-name">SOLEUR</span>
+    </div>
+    <div class="footer-links">
+      <a href="https://github.com/jikig-ai/soleur" target="_blank">GitHub</a>
+      <a href="https://discord.gg/soleur" target="_blank">Discord</a>
+    </div>
+    <span class="footer-tagline">Designed, built, and shipped by Soleur &mdash; using Soleur.</span>
+  </footer>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>
