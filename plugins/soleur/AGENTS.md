@@ -37,7 +37,8 @@ agents/
 ├── workflow/              # Cross-domain workflow agents
 └── engineering/
     ├── review/            # Engineering code review agents
-    └── design/            # Engineering architecture agents
+    ├── design/            # Engineering architecture agents
+    └── infra/             # Engineering infrastructure agents
 
 commands/
 └── soleur/                # All commands (soleur:plan, soleur:review, etc.)

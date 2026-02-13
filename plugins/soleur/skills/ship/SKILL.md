@@ -207,6 +207,31 @@ bun test
 
 ## Phase 7: Push and Create PR
 
+### Pre-Push Gate: Verify /compound completed
+
+Before pushing, re-verify that unarchived KB artifacts have been consolidated. This is a hard gate -- do not proceed if it fails.
+
+```bash
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+FEATURE=$(echo "$BRANCH" | sed 's/^feat-//' | sed 's/^feature\///' | sed 's/^fix-//' | sed 's/^fix\///')
+
+BRAINSTORMS=$(find knowledge-base/brainstorms/ -name "*${FEATURE}*" -not -path "*/archive/*" 2>/dev/null)
+PLANS=$(find knowledge-base/plans/ -name "*${FEATURE}*" -not -path "*/archive/*" 2>/dev/null)
+SPECS=$(ls -d "knowledge-base/specs/feat-${FEATURE}" 2>/dev/null)
+
+if [[ -n "$BRAINSTORMS" || -n "$PLANS" || -n "$SPECS" ]]; then
+  echo "BLOCKED: Unarchived KB artifacts found. Run /soleur:compound before pushing."
+  echo "$BRAINSTORMS"
+  echo "$PLANS"
+  echo "$SPECS"
+  exit 1
+fi
+```
+
+**If blocked:** Stop. Run `/soleur:compound` to consolidate and archive artifacts, then return to this phase. Do NOT bypass this check.
+
+**If clear:** Proceed to push.
+
 ```bash
 # Push branch to remote
 git push -u origin $(git rev-parse --abbrev-ref HEAD)
