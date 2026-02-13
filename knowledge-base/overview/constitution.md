@@ -78,6 +78,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Mechanical notifications (webhooks, emails) belong in CI workflows; keep local skills for AI-powered work that needs Claude -- secrets live in GitHub Actions, not local env vars
 - When one agent/skill produces a structured document consumed by others, define a heading-level contract (exact `##` names, required/optional flags) in the producer -- consumers parse by heading name, not by position
 - Route users to specialized agents through existing commands (e.g., brainstorm routes to brand-architect) rather than creating new entry points -- keeps the user workflow unified and avoids proliferating slash commands
+- Inventory component counts and descriptions from source file frontmatter rather than hardcoding -- docs stay accurate when the same files the plugin loader reads are the source of truth
 
 ## Testing
 
