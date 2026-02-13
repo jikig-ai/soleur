@@ -22,6 +22,8 @@ Project principles organized by domain. Add principles as you learn them.
 
 - Prefer ASCII characters unless the file already contains Unicode
 - Use imperative/infinitive form for instructions (verb-first)
+- When spawning parallel subagents to generate HTML pages, provide an explicit CSS class name reference list (not the full CSS file) -- subagents independently invent class names that don't match the shared stylesheet
+- After version bumps, grep all HTML docs for hardcoded version strings (`grep -r "vX.Y.Z" plugins/soleur/docs/`) and update them -- the versioning triad extends to any file displaying version badges
 - Prefer numbered phase sections (Phase 1, Phase 2) in SKILL.md for multi-step workflows, with XML semantic tags (`<critical_sequence>`, `<decision_gate>`, `<validation_gate>`) to mark control flow
 
 ## Architecture
