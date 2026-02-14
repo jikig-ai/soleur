@@ -5,6 +5,16 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.0] - 2026-02-14
+
+### Added
+
+- New `ux-design-lead` agent under `agents/design/` for visual design in .pen files using Pencil MCP
+- New `design/` top-level agent domain for cross-cutting visual design work
+- `knowledge-base/design/brand/` with .pen design file from brand identity brainstorm
+- Brainstorm command Phase 4 handoff now includes "Create visual designs" option
+- `.playwright-mcp/` added to .gitignore (ephemeral browser session artifacts)
+
 ## [2.7.0] - 2026-02-13
 
 ### Added
