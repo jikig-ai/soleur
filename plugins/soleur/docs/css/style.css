@@ -787,6 +787,10 @@
     font-size: var(--text-sm);
     color: var(--color-text-secondary);
   }
+  .workflow-steps code {
+    font-weight: 600;
+    color: var(--color-accent);
+  }
   .workflow-steps strong { color: var(--color-text); }
   .commands-list {
     display: grid;
