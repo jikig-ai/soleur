@@ -26,3 +26,4 @@ node_modules/
 .codex/
 .worktrees
 .claude/settings.local.json
+.playwright-mcp/
