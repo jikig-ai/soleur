@@ -5,6 +5,19 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.1] - 2026-02-14
+
+### Changed
+
+- Rewrite docs site with Solar Forge brand identity landing page
+  - Hero section with tagline, stats strip, problem cards, quote, feature grid, and CTA
+  - Self-hosted Cormorant Garamond and Inter fonts (woff2)
+  - Favicon and OG image generated from brand .pen file
+  - Dark-only theme (removed light/dark toggle and localStorage script)
+  - Unified footer across all pages
+  - Deleted dead `js/main.js`
+  - WCAG AA contrast compliance (tertiary text #737373)
+
 ## [2.9.0] - 2026-02-14
 
 ### Added
