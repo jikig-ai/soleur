@@ -311,8 +311,9 @@ Use **AskUserQuestion tool** to present next steps:
 **Options:**
 
 1. **Proceed to planning** - Run `/soleur:plan` (will auto-detect this brainstorm)
-2. **Refine design further** - Continue exploring
-3. **Done for now** - Return later
+2. **Create visual designs** - Run ux-design-lead agent for .pen file design (requires Pencil extension)
+3. **Refine design further** - Continue exploring
+4. **Done for now** - Return later
 
 ## Output Summary
 
