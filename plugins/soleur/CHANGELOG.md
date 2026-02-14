@@ -5,6 +5,19 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.0] - 2026-02-14
+
+### Added
+
+- `ops-advisor` agent (`soleur:operations:ops-advisor`) for tracking operational expenses, managing domain registrations, and advising on hosting
+  - Reads and updates `knowledge-base/ops/expenses.md` (recurring and one-time cost ledger)
+  - Reads and updates `knowledge-base/ops/domains.md` (domain registry with renewal dates and DNS)
+  - Summarizes monthly/annual spend by category, flags upcoming renewals within 30 days
+  - Advisory only (no live API calls, no automated purchases)
+  - Auto-creates data files with headers on first use
+- New `agents/operations/` subdirectory for operations domain agents
+- New `knowledge-base/ops/` directory with structured markdown data files for expense and domain tracking
+
 ## [2.7.0] - 2026-02-13
 
 ### Added
