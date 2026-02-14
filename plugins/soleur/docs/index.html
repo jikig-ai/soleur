@@ -1,22 +1,23 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="AI-powered development tools for Claude Code that get smarter with every use.">
-  <meta property="og:title" content="Soleur - Claude Code Plugin">
-  <meta property="og:description" content="AI-powered development tools for Claude Code that get smarter with every use.">
+  <meta name="description" content="The company-as-a-service platform. Build, ship, and scale powered by AI teams.">
+  <meta property="og:title" content="Soleur - The Company-as-a-Service Platform">
+  <meta property="og:description" content="Build, ship, and scale powered by AI teams. For founders who think in billions.">
   <meta property="og:url" content="https://jikig-ai.github.io/soleur/">
   <meta property="og:type" content="website">
+  <meta property="og:image" content="https://jikig-ai.github.io/soleur/images/og-image.png">
+  <link rel="icon" type="image/png" href="images/favicon.png">
   <base href="/soleur/">
-  <title>Soleur - AI-Powered Development Tools for Claude Code</title>
+  <title>Soleur - The Company-as-a-Service Platform</title>
   <link rel="stylesheet" href="css/style.css">
-  <script>const t=localStorage.getItem('theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');document.documentElement.dataset.theme=t;</script>
 </head>
 <body>
   <a href="#main-content" class="skip-link">Skip to main content</a>
   <header class="site-header">
-    <a href="index.html" class="logo">Soleur <span class="version-badge">v2.7.0</span></a>
+    <a href="index.html" class="logo">Soleur <span class="version-badge">v2.7.1</span></a>
     <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-hidden="true">
     <label for="nav-toggle" class="nav-toggle-label" aria-label="Toggle navigation">&#9776;</label>
     <ul class="nav-links">
@@ -27,69 +28,159 @@
       <li><a href="pages/changelog.html">Changelog</a></li>
       <li><a href="pages/getting-started.html">Get Started</a></li>
       <li><a href="https://github.com/jikig-ai/soleur" target="_blank" rel="noopener">GitHub</a></li>
-      <li><button class="theme-toggle" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark';localStorage.setItem('theme',document.documentElement.dataset.theme)" aria-label="Toggle theme"><span class="icon-dark">&#9790;</span><span class="icon-light">&#9728;</span></button></li>
     </ul>
   </header>
 
   <main id="main-content">
-    <section class="hero">
-      <h1>Soleur</h1>
-      <p class="hero-subtitle">AI-powered development tools for Claude Code that get smarter with every use.</p>
-    </section>
-
-    <section class="stats-grid">
-      <div class="stat-card">
-        <span class="stat-number">24</span>
-        <span class="stat-label">Agents</span>
+    <!-- Hero -->
+    <section class="landing-hero">
+      <div class="hero-badge">
+        <span class="hero-badge-dot"></span>
+        The Company-as-a-Service Platform
       </div>
-      <div class="stat-card">
-        <span class="stat-number">8</span>
-        <span class="stat-label">Commands</span>
-      </div>
-      <div class="stat-card">
-        <span class="stat-number">37</span>
-        <span class="stat-label">Skills</span>
-      </div>
-      <div class="stat-card">
-        <span class="stat-number">1</span>
-        <span class="stat-label">MCP Server</span>
+      <h1>Build a Billion-Dollar Company. Alone.</h1>
+      <p class="hero-sub">Everything you need to build, ship, and scale &mdash; powered by AI teams. For founders who think in billions.</p>
+      <div class="hero-cta">
+        <a href="pages/getting-started.html" class="btn btn-primary">Start Building</a>
+        <a href="pages/agents.html" class="btn btn-secondary">Read the Docs</a>
       </div>
     </section>
 
-    <section class="workflow-section">
-      <h2>Development Workflow</h2>
-      <div class="workflow-pipeline">
-        <div class="workflow-node">
-          <span class="workflow-icon">brainstorm</span>
-        </div>
-        <div class="workflow-connector"></div>
-        <div class="workflow-node">
-          <span class="workflow-icon">plan</span>
-        </div>
-        <div class="workflow-connector"></div>
-        <div class="workflow-node">
-          <span class="workflow-icon">work</span>
-        </div>
-        <div class="workflow-connector"></div>
-        <div class="workflow-node">
-          <span class="workflow-icon">review</span>
-        </div>
-        <div class="workflow-connector"></div>
-        <div class="workflow-node">
-          <span class="workflow-icon">compound</span>
+    <!-- Stats Strip -->
+    <section class="landing-stats" aria-label="Platform statistics">
+      <div class="landing-stat">
+        <div class="landing-stat-value">1</div>
+        <div class="landing-stat-label">Automated Workflow</div>
+      </div>
+      <div class="landing-stat">
+        <div class="landing-stat-value">23+</div>
+        <div class="landing-stat-label">AI Agents</div>
+      </div>
+      <div class="landing-stat">
+        <div class="landing-stat-value">36+</div>
+        <div class="landing-stat-label">Skills</div>
+      </div>
+      <div class="landing-stat">
+        <div class="landing-stat-value">&infin;</div>
+        <div class="landing-stat-label">Compounding Knowledge</div>
+      </div>
+    </section>
+
+    <!-- Problem Section -->
+    <section class="landing-section">
+      <div class="landing-section-inner">
+        <p class="section-label">This Is the Way</p>
+        <h2 class="section-title">One founder powered by a full-stack AI organization.</h2>
+        <p class="section-desc">Not a copilot. Not an assistant. A full AI organization that reviews, plans, builds, and remembers. Every decision you make teaches the system. Every project starts faster than the last.</p>
+        <div class="problem-cards">
+          <div class="problem-card">
+            <div class="problem-card-icon" aria-hidden="true">&#x1F9E0;</div>
+            <h3>You Decide</h3>
+            <p>Taste, vision, and timing. The things no machine can replace. You set the direction &mdash; everything else follows.</p>
+          </div>
+          <div class="problem-card">
+            <div class="problem-card-icon" aria-hidden="true">&#x26A1;</div>
+            <h3>Agents Execute</h3>
+            <p>Engineering, marketing, legal, operations &mdash; every department, running autonomously on your command.</p>
+          </div>
+          <div class="problem-card">
+            <div class="problem-card-icon" aria-hidden="true">&#x1F504;</div>
+            <h3>Knowledge Compounds</h3>
+            <p>Solutions compound into patterns. Patterns compound into playbooks. Your AI organization gets smarter with every project &mdash; permanently.</p>
+          </div>
         </div>
       </div>
     </section>
 
-    <section class="quick-start">
-      <h2>Quick Start</h2>
-      <pre><code>claude plugin install soleur</code></pre>
+    <!-- Quote Section -->
+    <section class="landing-quote">
+      <blockquote>
+        &ldquo;The first trillion-dollar company run by one person isn&rsquo;t science fiction. It&rsquo;s an engineering problem. We&rsquo;re solving it.&rdquo;
+      </blockquote>
+      <cite>&mdash; The Soleur Thesis</cite>
+    </section>
+
+    <!-- Features Section -->
+    <section class="landing-section">
+      <div class="landing-section-inner">
+        <p class="section-label">Your AI Organization</p>
+        <h2 class="section-title">Every department. From idea to shipped.</h2>
+        <div class="feature-grid">
+          <div class="feature-card">
+            <div class="feature-card-icon" aria-hidden="true">&#x1F3AF;</div>
+            <h3>Strategy</h3>
+            <p>Vision, positioning, market analysis. The strategic foundation that guides every decision your AI organization makes.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-card-icon" aria-hidden="true">&#x1F4DA;</div>
+            <h3>Product</h3>
+            <p>Product management, competitive analysis, planning &amp; specs, UX design. From market insight to shipped experience.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-card-icon" aria-hidden="true">&#x1F4BB;</div>
+            <h3>Engineering</h3>
+            <p>Code review, architecture, security, quality testing. Specialized agents shipping production-grade code on your command.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-card-icon" aria-hidden="true">&#x1F4E3;</div>
+            <h3>Marketing</h3>
+            <p>Brand identity, community content, release announcements. Your public presence runs on autopilot.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-card-icon" aria-hidden="true">&#x1F3A7;</div>
+            <h3>Support</h3>
+            <p>Troubleshooting, documentation, issue triage. AI-powered support that resolves problems before they escalate.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-card-icon" aria-hidden="true">&#x1F4A1;</div>
+            <h3>Think</h3>
+            <p>Brainstorm, explore, challenge assumptions. Structured dialogue before any commitment.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-card-icon" aria-hidden="true">&#x1F9ED;</div>
+            <h3>Plan</h3>
+            <p>Specs, architecture, task breakdowns. Every detail mapped before execution begins.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-card-icon" aria-hidden="true">&#x1F528;</div>
+            <h3>Build</h3>
+            <p>Parallel agents writing, reviewing, and refining code. Production-grade engineering on your command.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-card-icon" aria-hidden="true">&#x1F680;</div>
+            <h3>Ship</h3>
+            <p>One command. Tests, review, commit, deploy, announce. Done.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-card-icon" aria-hidden="true">&#x1F4C8;</div>
+            <h3>Learn &amp; Grow</h3>
+            <p>Every decision captured, every pattern compounded. Your organization gets smarter with every project &mdash; permanently.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Final CTA -->
+    <section class="landing-cta">
+      <h2>Ready to build at scale?</h2>
+      <p>Your AI organization is ready. Are you?</p>
+      <a href="pages/getting-started.html" class="btn btn-primary">Start Building</a>
     </section>
   </main>
 
   <footer class="site-footer">
-    <p>Built with <a href="index.html">Soleur</a> | <a href="https://github.com/jikig-ai/soleur" target="_blank" rel="noopener">GitHub</a></p>
-    <p>Licensed under Apache-2.0</p>
+    <div class="footer-inner">
+      <div class="footer-left">
+        <div class="footer-mark">S</div>
+        <span class="footer-name">Soleur</span>
+      </div>
+      <ul class="footer-links">
+        <li><a href="https://github.com/jikig-ai/soleur" target="_blank" rel="noopener">GitHub</a></li>
+        <li><a href="pages/agents.html">Docs</a></li>
+        <li><a href="pages/getting-started.html">Get Started</a></li>
+      </ul>
+      <span class="footer-tagline">Designed, built, and shipped by Soleur &mdash; using Soleur.</span>
+    </div>
   </footer>
 </body>
 </html>

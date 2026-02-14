@@ -1,18 +1,19 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en">
 <head>
-  <base href="/soleur/">
-  <script>const t=localStorage.getItem('theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');document.documentElement.dataset.theme=t;</script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="MCP Servers - Model Context Protocol servers that extend Claude's capabilities with Soleur.">
+  <meta property="og:image" content="https://jikig-ai.github.io/soleur/images/og-image.png">
+  <link rel="icon" type="image/png" href="images/favicon.png">
+  <base href="/soleur/">
   <title>MCP Servers - Soleur</title>
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
   <a href="#main-content" class="skip-link">Skip to main content</a>
   <header class="site-header">
-    <a href="index.html" class="logo">Soleur <span class="version-badge">v2.7.0</span></a>
+    <a href="index.html" class="logo">Soleur <span class="version-badge">v2.7.1</span></a>
     <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-hidden="true">
     <label for="nav-toggle" class="nav-toggle-label" aria-label="Toggle navigation">&#9776;</label>
     <ul class="nav-links">
@@ -23,7 +24,6 @@
       <li><a href="pages/changelog.html">Changelog</a></li>
       <li><a href="pages/getting-started.html">Get Started</a></li>
       <li><a href="https://github.com/jikig-ai/soleur" target="_blank" rel="noopener">GitHub</a></li>
-      <li><button class="theme-toggle" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark';localStorage.setItem('theme',document.documentElement.dataset.theme)" aria-label="Toggle theme"><span class="icon-dark">&#9790;</span><span class="icon-light">&#9728;</span></button></li>
     </ul>
   </header>
 
@@ -57,8 +57,17 @@
   </main>
 
   <footer class="site-footer">
-    <div class="container">
-      <p>Built with Soleur &middot; <a href="https://github.com/jikig-ai/soleur">GitHub</a> &middot; Apache-2.0</p>
+    <div class="footer-inner">
+      <div class="footer-left">
+        <div class="footer-mark">S</div>
+        <span class="footer-name">Soleur</span>
+      </div>
+      <ul class="footer-links">
+        <li><a href="https://github.com/jikig-ai/soleur" target="_blank" rel="noopener">GitHub</a></li>
+        <li><a href="pages/agents.html">Docs</a></li>
+        <li><a href="pages/getting-started.html">Get Started</a></li>
+      </ul>
+      <span class="footer-tagline">Designed, built, and shipped by Soleur &mdash; using Soleur.</span>
     </div>
   </footer>
 </body>
