@@ -4,7 +4,7 @@ Soleur is meant to be a "Company-as-a-Service" platform designed to allow solo f
 
 Currently at phase of being an Orchestration engine for Claude Code -- agents, workflows, and compounding knowledge.
 
-[![Version](https://img.shields.io/badge/version-2.9.3-blue)](https://github.com/jikig-ai/soleur/releases)
+[![Version](https://img.shields.io/badge/version-2.9.4-blue)](https://github.com/jikig-ai/soleur/releases)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Discord](https://img.shields.io/badge/Discord-community-5865F2?logo=discord&logoColor=white)](https://discord.gg/PYZbPBKMUY)
 [![With ❤️ by Soleur](https://img.shields.io/badge/with%20❤️%20by-Soleur-yellow)](https://github.com/jikig-ai/soleur)
