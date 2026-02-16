@@ -4,8 +4,10 @@ This repository contains the Soleur Claude Code plugin -- an orchestration engin
 
 ## Working Agreement
 
-- **Branching:** Create a feature branch for any non-trivial change. If already on the correct branch for the task, keep using it; do not create additional branches or worktrees unless explicitly requested.
-- **Safety:** Do not delete or overwrite user data. Avoid destructive commands.
+- **Branching:** HARD RULE: Never commit directly to main. Create a feature branch for every change. If already on the correct branch for the task, keep using it; do not create additional branches or worktrees unless explicitly requested.
+- **Safety:** Do not delete or overwrite user data. Avoid destructive commands. Specific prohibitions:
+  - Never `rm -rf` on the current working directory, a worktree path (`.worktrees/`), or the repository root.
+  - Never `gh pr merge --delete-branch` while a worktree exists for that branch -- remove the worktree first, then merge.
 - **ASCII-first:** Use ASCII unless the file already contains Unicode.
 
 ## Browser Automation
@@ -31,6 +33,16 @@ Before EVERY file write or git command:
 
 This applies to ALL files -- code, brainstorms, specs, plans, learnings, configs. No exceptions.
 
+## Diagnostic-First Rule
+
+Before implementing a fix for any bug or error, verify the root cause first. Do not assume the first hypothesis is correct.
+
+1. Reproduce the error or read the exact error output.
+2. Run the simplest possible diagnostic to confirm the cause.
+3. Only after confirming the root cause, propose and implement the fix.
+
+FAILURE MODE TO AVOID: Seeing an error message and immediately changing code based on a guess. This has led to fixes that mask the real problem or break unrelated functionality. Check the simple things first (expired keys, wrong branch, missing config) before pursuing complex debugging.
+
 ## Workflow Completion Protocol
 
 MANDATORY checklist after completing implementation work. Every step MUST be completed in order. Do not skip steps. Do not propose committing until steps 1-2 are done.
@@ -42,6 +54,7 @@ MANDATORY checklist after completing implementation work. Every step MUST be com
 5. **Version bump** -- If files under `plugins/soleur/` changed, bump the version. See Plugin Versioning below.
 6. **Commit** -- This is the gate. Everything above must be done first.
 7. **Push and create PR** -- Do not stop after committing. Push and open the PR in the same step.
+8. **Post-merge cleanup** -- After the PR is merged: remove the worktree with `worktree-manager.sh cleanup-merged`, delete stale local branches. See `/ship` Phase 8 for the full procedure.
 
 FAILURE MODE TO AVOID: Committing code, then forgetting to push, forgetting to create the PR, or forgetting to include spec/plan files. If you catch yourself about to skip a step, stop and complete it.
 
@@ -62,6 +75,16 @@ FAILURE MODE TO AVOID: The user says "let's brainstorm X" and you immediately sp
 - Challenge reasoning instead of validating by default -- explain the counter-argument, then let the user decide.
 - Stop excessive validation. If something looks wrong, say so directly.
 - Avoid flattery or unnecessary praise. Acknowledge good work briefly, then move on.
+
+## Feature Lifecycle
+
+The full lifecycle for a feature is: brainstorm, plan, implement, review, ship. Small fixes can skip brainstorm and plan, but for non-trivial work follow this sequence:
+
+1. **Brainstorm** (`/soleur:brainstorm`) -- Explore the problem space. Output: `knowledge-base/brainstorms/`.
+2. **Plan** (`/soleur:plan`) -- Design the implementation. Output: `knowledge-base/plans/`.
+3. **Implement** (`/soleur:work`) -- Build it on a feature branch.
+4. **Review** (`/soleur:review`) -- Code review before shipping.
+5. **Ship** (`/ship`) -- Automates the Workflow Completion Protocol above.
 
 ## Plugin Versioning
 

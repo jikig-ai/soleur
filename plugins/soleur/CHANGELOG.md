@@ -5,11 +5,27 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.9.4] - 2026-02-16
+## [2.10.2] - 2026-02-16
 
 ### Added
 
 - Discord server invite link to docs site navigation header and footer on all 8 HTML pages
+
+## [2.10.1] - 2026-02-16
+
+### Changed
+
+- `/soleur:plan` now automatically runs plan review (DHH, Kieran, Simplicity reviewers) after plan generation instead of offering it as an optional post-generation choice
+
+## [2.10.0] - 2026-02-16
+
+### Added
+
+- `ops-research` agent for domain, hosting, tools/SaaS research and cost optimization with browser automation support
+
+### Changed
+
+- Updated `ops-advisor` to delegate live research to `ops-research` (replaced Advisory Limitations with Research Delegation section)
 
 ## [2.9.3] - 2026-02-16
 
