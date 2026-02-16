@@ -600,27 +600,41 @@ fi
 
 - Plan saved to `knowledge-base/plans/` only (current behavior)
 
+## Plan Review (Always Runs)
+
+After writing the plan file, automatically run `/plan_review <plan_file_path>` to get feedback from three specialized reviewers in parallel:
+
+- **DHH Rails Reviewer** - Challenges overengineering, enforces simplicity
+- **Kieran Rails Reviewer** - Checks correctness, completeness, convention adherence
+- **Code Simplicity Reviewer** - Ensures YAGNI, flags unnecessary complexity
+
+**After review completes:**
+
+1. Present consolidated feedback (agreements first, then disagreements)
+2. Ask: "Apply these changes?" (Yes / Partially / Skip)
+3. If Yes: apply all changes to the plan file
+4. If Partially: ask which changes to apply, then apply selected changes
+5. If Skip: continue unchanged
+
 ## Post-Generation Options
 
-After writing the plan file, use the **AskUserQuestion tool** to present these options:
+After plan review, use the **AskUserQuestion tool** to present these options:
 
-**Question:** "Plan ready at `knowledge-base/plans/YYYY-MM-DD-<type>-<name>-plan.md`. What would you like to do next?"
+**Question:** "Plan reviewed and ready at `knowledge-base/plans/YYYY-MM-DD-<type>-<name>-plan.md`. What would you like to do next?"
 
 **Options:**
 
 1. **Open plan in editor** - Open the plan file for review
 2. **Run `/deepen-plan`** - Enhance each section with parallel research agents (best practices, performance, UI)
-3. **Run `/plan_review`** - Get feedback from reviewers (DHH, Kieran, Simplicity)
-4. **Start `/soleur:work`** - Begin implementing this plan locally
-5. **Start `/soleur:work` on remote** - Begin implementing in Claude Code on the web (use `&` to run in background)
-6. **Create Issue** - Create issue in project tracker (GitHub/Linear)
-7. **Simplify** - Reduce detail level
+3. **Start `/soleur:work`** - Begin implementing this plan locally
+4. **Start `/soleur:work` on remote** - Begin implementing in Claude Code on the web (use `&` to run in background)
+5. **Create Issue** - Create issue in project tracker (GitHub/Linear)
+6. **Simplify** - Reduce detail level
 
 Based on selection:
 
 - **Open plan in editor** → Run `open knowledge-base/plans/<plan_filename>.md` to open the file in the user's default editor
 - **`/deepen-plan`** → Call the /deepen-plan command with the plan file path to enhance with research
-- **`/plan_review`** → Call the /plan_review command with the plan file path
 - **`/soleur:work`** → Call the /soleur:work command with the plan file path
 - **`/soleur:work` on remote** → Run `/soleur:work knowledge-base/plans/<plan_filename>.md &` to start work in background for Claude Code web
 - **Create Issue** → See "Issue Creation" section below
@@ -629,7 +643,7 @@ Based on selection:
 
 **Note:** If running `/soleur:plan` with ultrathink enabled, automatically run `/deepen-plan` after plan creation for maximum depth and grounding.
 
-Loop back to options after Simplify or Other changes until user selects `/soleur:work` or `/plan_review`.
+Loop back to options after Simplify or Other changes until user selects `/soleur:work`.
 
 ## Issue Creation
 
