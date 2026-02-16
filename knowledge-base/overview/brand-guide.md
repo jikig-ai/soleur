@@ -14,7 +14,7 @@ The name Soleur is a portmanteau of Solo and Solar -- entrepreneur energy and li
 
 ### Target Audience
 
-Solo founders who think in billions. Technical builders who refuse to accept that scale requires headcount. People who see the trillion-dollar solo company not as science fiction, but as an engineering problem waiting to be solved.
+Solo founders who think in billions. Technical builders who refuse to accept that scale requires headcount. People who see the billion-dollar solo company not as science fiction, but as an engineering problem waiting to be solved.
 
 ### Positioning
 
@@ -22,7 +22,7 @@ Soleur is not a copilot. Not an assistant. It is a full AI organization -- 23+ a
 
 **Tagline:** The Company-as-a-Service Platform
 
-**Thesis:** "The first trillion-dollar company run by one person isn't science fiction. It's an engineering problem. We're solving it."
+**Thesis:** "The first billion-dollar company run by one person isn't science fiction. It's an engineering problem. We're solving it."
 
 ## Voice
 

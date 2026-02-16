@@ -15,6 +15,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Updated `ops-advisor` to delegate live research to `ops-research` (replaced Advisory Limitations with Research Delegation section)
 
+## [2.9.3] - 2026-02-16
+
+### Fixed
+
+- Consistent messaging: changed "trillion-dollar" to "billion-dollar" in thesis quote across brand guide, docs site, brainstorm doc, and design file to match the hero headline
+
+### Changed
+
+- Removed version badge from docs site header (no more per-release HTML updates across 8 files)
+- Changelog page now fetches CHANGELOG.md from GitHub at runtime instead of static HTML duplication
+- Removed `.version-badge` CSS class
+
+## [2.9.2] - 2026-02-14
+
+### Fixed
+
+- Changelog page now includes all releases (v1.1.0 through v2.9.1), was stuck at v2.6.2
+- Favicon regenerated at higher quality with properly centered S using Cormorant Garamond
+- Anchor links on agents and skills pages no longer redirect to home page (`<base>` tag interference)
+- Workflow step commands on getting-started page now match quick commands styling (gold accent)
+
 ## [2.9.1] - 2026-02-14
 
 ### Changed

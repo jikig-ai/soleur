@@ -225,7 +225,8 @@
               "lineHeight": 1.6,
               "textAlign": "center",
               "fontFamily": "Inter",
-              "fontSize": 18
+              "fontSize": 18,
+              "fontWeight": "normal"
             },
             {
               "type": "frame",
@@ -670,11 +671,12 @@
               "fill": "#FFFFFF",
               "textGrowth": "fixed-width",
               "width": 800,
-              "content": "“The first trillion-dollar company run by one person\nisn't science fiction. It's an engineering problem.\nWe're solving it.”",
+              "content": "“The first billion-dollar company run by one person\nisn’t science fiction. It’s an engineering problem.\nWe’re solving it.”",
               "lineHeight": 1.5,
               "textAlign": "center",
               "fontFamily": "Cormorant Garamond",
               "fontSize": 28,
+              "fontWeight": "normal",
               "fontStyle": "italic"
             },
             {
@@ -1458,6 +1460,7 @@
               "content": "Designed, built, and shipped by Soleur — using Soleur.",
               "fontFamily": "Inter",
               "fontSize": 12,
+              "fontWeight": "normal",
               "fontStyle": "italic"
             }
           ]
@@ -1679,7 +1682,8 @@
               "lineHeight": 1.6,
               "textAlign": "center",
               "fontFamily": "Inter",
-              "fontSize": 18
+              "fontSize": 18,
+              "fontWeight": "normal"
             },
             {
               "type": "frame",
@@ -1984,7 +1988,8 @@
                   "fill": "#71717A",
                   "content": "Weight contrast (800 vs 400)",
                   "fontFamily": "Inter",
-                  "fontSize": 12
+                  "fontSize": 12,
+                  "fontWeight": "normal"
                 }
               ]
             }
@@ -2091,7 +2096,8 @@
                   "fill": "#8A8A8A",
                   "content": "Platform",
                   "fontFamily": "Inter",
-                  "fontSize": 14
+                  "fontSize": 14,
+                  "fontWeight": "normal"
                 },
                 {
                   "type": "text",
@@ -2100,7 +2106,8 @@
                   "fill": "#8A8A8A",
                   "content": "Docs",
                   "fontFamily": "Inter",
-                  "fontSize": 14
+                  "fontSize": 14,
+                  "fontWeight": "normal"
                 },
                 {
                   "type": "text",
@@ -2109,7 +2116,8 @@
                   "fill": "#8A8A8A",
                   "content": "Community",
                   "fontFamily": "Inter",
-                  "fontSize": 14
+                  "fontSize": 14,
+                  "fontWeight": "normal"
                 },
                 {
                   "type": "frame",
@@ -2242,7 +2250,8 @@
               "lineHeight": 1.6,
               "textAlign": "center",
               "fontFamily": "Inter",
-              "fontSize": 18
+              "fontSize": 18,
+              "fontWeight": "normal"
             },
             {
               "type": "frame",
@@ -2323,7 +2332,8 @@
                       "fill": "#8A8A8A",
                       "content": "Read the Docs",
                       "fontFamily": "Inter",
-                      "fontSize": 15
+                      "fontSize": 15,
+                      "fontWeight": "normal"
                     }
                   ]
                 }
@@ -2552,7 +2562,8 @@
                   "fill": "#8A8A8A",
                   "content": "Inter — UI / Body",
                   "fontFamily": "Inter",
-                  "fontSize": 12
+                  "fontSize": 12,
+                  "fontWeight": "normal"
                 }
               ]
             }
@@ -2815,7 +2826,8 @@
               "lineHeight": 1.6,
               "textAlign": "center",
               "fontFamily": "DM Sans",
-              "fontSize": 18
+              "fontSize": 18,
+              "fontWeight": "normal"
             },
             {
               "type": "frame",
@@ -3104,7 +3116,8 @@
                   "fill": "#78716C",
                   "content": "Warm, geometric, humanist",
                   "fontFamily": "DM Sans",
-                  "fontSize": 12
+                  "fontSize": 12,
+                  "fontWeight": "normal"
                 }
               ]
             }
@@ -3647,7 +3660,8 @@
                   "fill": "#848484",
                   "content": "Inter — UI / Body",
                   "fontFamily": "Inter",
-                  "fontSize": 12
+                  "fontSize": 12,
+                  "fontWeight": "normal"
                 },
                 {
                   "type": "text",
@@ -3656,7 +3670,8 @@
                   "fill": "#848484",
                   "content": "JetBrains Mono — Data",
                   "fontFamily": "JetBrains Mono",
-                  "fontSize": 12
+                  "fontSize": 12,
+                  "fontWeight": "normal"
                 }
               ]
             }
