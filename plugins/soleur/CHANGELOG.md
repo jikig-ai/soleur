@@ -5,6 +5,15 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.2] - 2026-02-16
+
+### Changed
+
+- Update docs site with 3 missing agents: infra-security, ops-advisor, ops-research
+- Add Operations category to agents page
+- Update agent count from 25 to 28 across all pages
+- Update landing page stats to 28 agents and 37 skills
+
 ## [2.11.1] - 2026-02-16
 
 ### Changed
