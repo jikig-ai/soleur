@@ -161,14 +161,6 @@
     gap: var(--space-2);
   }
   .site-header .logo:hover { color: var(--color-text); text-decoration: none; }
-  .version-badge {
-    font-family: var(--font-mono);
-    font-size: var(--text-xs);
-    color: var(--color-text-tertiary);
-    background: var(--color-bg-tertiary);
-    padding: 0.1em 0.5em;
-    border-radius: 4px;
-  }
   .nav-links { display: flex; align-items: center; gap: var(--space-4); list-style: none; }
   .nav-links a {
     font-size: var(--text-sm);

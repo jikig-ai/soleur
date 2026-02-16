@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Consistent messaging: changed "trillion-dollar" to "billion-dollar" in thesis quote across brand guide, docs site, brainstorm doc, and design file to match the hero headline
 
+### Changed
+
+- Removed version badge from docs site header (no more per-release HTML updates across 8 files)
+- Changelog page now fetches CHANGELOG.md from GitHub at runtime instead of static HTML duplication
+- Removed `.version-badge` CSS class
+
 ## [2.9.2] - 2026-02-14
 
 ### Fixed
