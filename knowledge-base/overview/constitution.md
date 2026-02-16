@@ -38,6 +38,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Operations that modify the knowledge-base or move files must use `git mv` to preserve history and produce a single atomic commit that can be reverted with `git revert`
 - New commands must be idempotent -- running the same command twice must not create duplicates or corrupt state
 - Run code review and `/soleur:compound` before committing -- the commit is the gate, not the PR
+- Infrastructure agents that wire external services (DNS, SSL, Pages) must own the full verification loop -- use `gh` CLI, `openssl`, `curl`, and `agent-browser` to verify each step programmatically instead of asking the user to check manually; only stop for genuine decisions, not mechanical verification
 - Network and external service failures must degrade gracefully -- warn (if interactive) and continue rather than abort the workflow
 - Plans that create worktrees and invoke Task agents must include explicit `cd ${WORKTREE_PATH}` + `pwd` verification between worktree creation and agent invocation
 
