@@ -106,7 +106,7 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 | Component | Count |
 |-----------|-------|
-| Agents | 27 |
+| Agents | 28 |
 | Commands | 8 |
 | Skills | 37 |
 | MCP Servers | 1 |
@@ -127,7 +127,7 @@ Agents are organized by domain, then by function. Cross-domain agents stay at ro
 |-------|-------------|
 | `ux-design-lead` | Visual design in .pen files using Pencil MCP (wireframes, screens, components). Requires [Pencil extension](https://docs.pencil.dev/getting-started/installation). |
 
-### Engineering (16)
+### Engineering (17)
 
 #### Review (14)
 
@@ -154,10 +154,11 @@ Agents are organized by domain, then by function. Cross-domain agents stay at ro
 |-------|-------------|
 | `ddd-architect` | Domain-Driven Design with strategic bounded contexts and tactical patterns |
 
-#### Infra (1)
+#### Infra (2)
 
 | Agent | Description |
 |-------|-------------|
+| `infra-security` | Audit domain security posture, configure DNS records, and wire domains to services via Cloudflare API |
 | `terraform-architect` | Generate and review Terraform configurations for Hetzner Cloud and AWS |
 
 ### Operations (2)
