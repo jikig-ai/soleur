@@ -27,3 +27,4 @@ node_modules/
 .worktrees
 .claude/settings.local.json
 .playwright-mcp/
+.env
