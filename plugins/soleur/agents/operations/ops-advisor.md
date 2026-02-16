@@ -71,8 +71,6 @@ When summarizing annual spend:
 
 When flagging renewals, report entries with Renewal Date within 30 days of today. Sort by date ascending (soonest first).
 
-## Advisory Limitations
+## Research Delegation
 
-- Cannot check live domain availability -- advise the user to check manually, then record the result
-- Cannot check live hosting pricing -- recommend the user verify current pricing at the provider's site
-- Recommendations for hosting and domain registrars use training data, not real-time lookups
+This agent tracks and records operational data but does not perform live web research. For live domain availability, hosting pricing, SaaS evaluation, or cost optimization research, the ops-research agent should be used instead. After the user completes a purchase researched by ops-research, the transaction is recorded directly in the ops data files following the conventions documented above.
