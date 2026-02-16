@@ -1,9 +1,9 @@
 ---
-last_updated: 2026-02-14
+last_updated: 2026-02-16
 ---
 
 # Domains
 
 | Domain | Registrar | Renewal Date | Nameservers | Notes |
 |--------|-----------|--------------|-------------|-------|
-| soleur.dev | Cloudflare | 2027-02-01 | ns1.cloudflare.com, ns2.cloudflare.com | Primary project domain |
+| soleur.ai | Cloudflare | 2028-02-16 | ns1.cloudflare.com, ns2.cloudflare.com | Primary brand domain |
