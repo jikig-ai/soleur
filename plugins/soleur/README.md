@@ -106,7 +106,7 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 | Component | Count |
 |-----------|-------|
-| Agents | 26 |
+| Agents | 27 |
 | Commands | 8 |
 | Skills | 37 |
 | MCP Servers | 1 |
@@ -160,11 +160,12 @@ Agents are organized by domain, then by function. Cross-domain agents stay at ro
 |-------|-------------|
 | `terraform-architect` | Generate and review Terraform configurations for Hetzner Cloud and AWS |
 
-### Operations (1)
+### Operations (2)
 
 | Agent | Description |
 |-------|-------------|
 | `ops-advisor` | Track expenses, manage domains, advise on hosting |
+| `ops-research` | Research domains, hosting, tools/SaaS, and cost optimization with browser automation |
 
 ### Cross-domain (7)
 
