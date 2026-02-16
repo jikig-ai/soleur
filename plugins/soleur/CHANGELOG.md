@@ -5,6 +5,18 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.3] - 2026-02-16
+
+### Fixed
+
+- Consistent messaging: changed "trillion-dollar" to "billion-dollar" in thesis quote across brand guide, docs site, brainstorm doc, and design file to match the hero headline
+
+### Changed
+
+- Removed version badge from docs site header (no more per-release HTML updates across 8 files)
+- Changelog page now fetches CHANGELOG.md from GitHub at runtime instead of static HTML duplication
+- Removed `.version-badge` CSS class
+
 ## [2.9.2] - 2026-02-14
 
 ### Fixed

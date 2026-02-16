@@ -143,7 +143,7 @@ Four directions were explored as hero section mockups. Each interprets "solar en
   - Knowledge Compounds: "Solutions compound into patterns. Patterns compound into playbooks. Your AI organization gets smarter with every project — permanently."
 
 ### Quote
-- "The first trillion-dollar company run by one person isn't science fiction. It's an engineering problem. We're solving it." — The Soleur Thesis
+- "The first billion-dollar company run by one person isn't science fiction. It's an engineering problem. We're solving it." — The Soleur Thesis
 
 ### Features (YOUR AI ORGANIZATION)
 - **Title:** "Every department. From idea to shipped."
