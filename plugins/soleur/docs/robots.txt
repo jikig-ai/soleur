@@ -1,3 +1,3 @@
 User-agent: *
 Allow: /
-Sitemap: https://jikig-ai.github.io/soleur/sitemap.xml
+Sitemap: https://soleur.ai/sitemap.xml
