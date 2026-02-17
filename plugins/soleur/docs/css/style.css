@@ -191,8 +191,8 @@
       position: fixed;
       top: var(--header-h);
       right: 0;
-      bottom: 0;
       width: 260px;
+      height: calc(100vh - var(--header-h));
       flex-direction: column;
       align-items: stretch;
       gap: 0;
@@ -201,9 +201,22 @@
       padding: var(--space-4);
       transform: translateX(100%);
       transition: transform 0.2s ease;
+      z-index: 2;
     }
     .nav-links a { padding: var(--space-3) var(--space-4); border-bottom: none; }
     .nav-toggle:checked ~ .nav-links { transform: translateX(0); }
+    /* Backdrop overlay -- uses viewport units because backdrop-filter on header
+       creates a containing block that breaks bottom:0 on fixed children */
+    .nav-toggle:checked ~ .nav-toggle-label::before {
+      content: '';
+      position: fixed;
+      top: var(--header-h);
+      left: 0;
+      width: 100vw;
+      height: calc(100vh - var(--header-h));
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 1;
+    }
   }
 
   /* Stat cards (docs pages) */
@@ -301,7 +314,7 @@
   }
   .command-card:hover { border-color: var(--color-border-strong); }
   @media (min-width: 640px) {
-    .command-card { grid-template-columns: 200px 1fr; }
+    .command-card { grid-template-columns: auto 1fr; }
   }
   .command-name {
     font-family: var(--font-mono);
@@ -335,6 +348,8 @@
     padding: var(--space-4) 0;
     overflow-x: auto;
     scrollbar-width: none;
+    mask-image: linear-gradient(to right, black calc(100% - 2rem), transparent);
+    -webkit-mask-image: linear-gradient(to right, black calc(100% - 2rem), transparent);
   }
   .category-nav::-webkit-scrollbar { display: none; }
   .category-pill {
@@ -480,6 +495,7 @@
   .problem-card {
     padding: var(--space-6);
     border: 1px solid var(--color-border);
+    border-radius: 8px;
   }
   .problem-card-icon {
     color: var(--color-accent);
@@ -525,7 +541,7 @@
   /* Landing page: Feature grid */
   .feature-grid {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     gap: var(--space-5);
     max-width: 1200px;
     margin-inline: auto;
@@ -533,6 +549,7 @@
   .feature-card {
     padding: var(--space-5);
     border: 1px solid var(--color-border);
+    border-radius: 8px;
   }
   .feature-card-icon {
     color: var(--color-accent);
@@ -594,6 +611,7 @@
   /* Badge */
   .badge {
     display: inline-block;
+    align-self: flex-start;
     font-family: var(--font-mono);
     font-size: var(--text-xs);
     padding: 0.1em 0.5em;
@@ -796,22 +814,32 @@
     background: var(--color-bg-secondary);
     border-radius: 8px;
   }
-  .command-item code { font-weight: 600; white-space: nowrap; }
+  .command-item code { font-weight: 600; white-space: nowrap; color: var(--color-accent); }
   .learn-more-links {
     list-style: none;
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: var(--space-3);
     margin-top: var(--space-5);
   }
   .learn-more-links a {
-    padding: var(--space-2) var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-4);
     border: 1px solid var(--color-border);
     border-radius: 8px;
     font-size: var(--text-sm);
+    font-weight: 600;
     transition: border-color 0.15s;
   }
   .learn-more-links a:hover { border-color: var(--color-accent); text-decoration: none; }
+  .learn-more-desc {
+    display: block;
+    font-weight: 400;
+    font-size: var(--text-xs);
+    color: var(--color-text-secondary);
+  }
 
   /* Changelog note */
   .changelog-note {
@@ -831,7 +859,6 @@
     .landing-hero h1 { font-size: var(--text-3xl); }
     .landing-stats { flex-direction: column; gap: var(--space-6); }
     .problem-cards { grid-template-columns: 1fr; }
-    .feature-grid { grid-template-columns: 1fr; }
     .landing-quote blockquote { font-size: var(--text-xl); }
     .section-title { font-size: var(--text-2xl); }
     .footer-inner { flex-direction: column; gap: var(--space-4); text-align: center; }
@@ -839,7 +866,6 @@
 
   @media (min-width: 769px) and (max-width: 1024px) {
     .problem-cards { grid-template-columns: 1fr 1fr; }
-    .feature-grid { grid-template-columns: repeat(3, 1fr); }
   }
 }
 
