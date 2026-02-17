@@ -5,6 +5,24 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.3] - 2026-02-17
+
+### Fixed
+
+- Fix color mismatch between Quick Commands (white) and Workflow (gold) on Getting Started page
+- Fix command card text overlap on Commands page by switching from fixed to auto grid columns
+- Fix mobile nav panel and backdrop not spanning full viewport height (backdrop-filter containing block issue)
+- Add mobile nav backdrop overlay with click-to-dismiss
+- Fix MCP badge stretching full width inside flex container
+- Remove empty usage code element from /soleur:help command card
+
+### Changed
+
+- Add border-radius to problem cards and feature cards for visual consistency
+- Add scroll fade indicator to category pill navigation
+- Restyle Learn More links as card grid on Getting Started page
+- Switch feature grid from rigid 5-column to responsive auto-fill layout
+
 ## [2.11.2] - 2026-02-16
 
 ### Changed
