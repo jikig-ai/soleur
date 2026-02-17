@@ -204,107 +204,62 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 
 ## Skills
 
-### Architecture & Design
+### Content & Release
+
+| Skill | Description |
+|-------|-------------|
+| `brainstorming` | Explore intent, approaches, and design decisions |
+| `changelog` | Create engaging changelogs for recent merges |
+| `compound-docs` | Capture solved problems as categorized documentation |
+| `deploy-docs` | Validate and prepare documentation for deployment |
+| `discord-content` | Create and post brand-consistent community content to Discord |
+| `every-style-editor` | Review copy for Every's style guide compliance |
+| `feature-video` | Record video walkthroughs and add to PR description |
+| `file-todos` | File-based todo tracking system |
+| `gemini-imagegen` | Generate and edit images using Google's Gemini API |
+| `release-announce` | Announce releases to Discord and GitHub Releases |
+| `release-docs` | Build and update documentation site with current components |
+| `triage` | Triage and categorize findings for the CLI todo system |
+
+### Development
 
 | Skill | Description |
 |-------|-------------|
 | `agent-native-architecture` | Build AI agents using prompt-native architecture |
-
-### Engineering Methodology
-
-| Skill | Description |
-|-------|-------------|
-| `atdd-developer` | Acceptance Test Driven Development with RED/GREEN/REFACTOR permission gates |
-| `user-story-writer` | Decompose features into INVEST-compliant stories using Elephant Carpaccio |
-
-### Development Tools
-
-| Skill | Description |
-|-------|-------------|
+| `agent-native-audit` | Run comprehensive agent-native architecture review |
 | `andrew-kane-gem-writer` | Write Ruby gems following Andrew Kane's patterns |
-| `compound-docs` | Capture solved problems as categorized documentation |
+| `atdd-developer` | Acceptance Test Driven Development with RED/GREEN/REFACTOR permission gates |
 | `dhh-rails-style` | Write Ruby/Rails code in DHH's 37signals style |
 | `dspy-ruby` | Build type-safe LLM applications with DSPy.rb |
 | `frontend-design` | Create production-grade frontend interfaces |
 | `skill-creator` | Create, refine, audit, and package Claude Code skills |
+| `spec-templates` | Structured feature specifications and task tracking |
+| `user-story-writer` | Decompose features into INVEST-compliant stories using Elephant Carpaccio |
 
-### Planning & Review
+### Review & Planning
 
 | Skill | Description |
 |-------|-------------|
-| `changelog` | Create engaging changelogs for recent merges |
 | `deepen-plan` | Enhance plans with parallel research agents |
-| `deploy-docs` | Validate and prepare documentation for deployment |
-| `plan-review` | Multi-agent plan review in parallel |
-| `release-announce` | Announce releases to Discord and GitHub Releases |
-| `release-docs` | Build and update documentation site with current components |
-
-### Resolution & Automation
-
-| Skill | Description |
-|-------|-------------|
-| `resolve-parallel` | Resolve TODO comments in parallel |
-| `resolve-pr-parallel` | Resolve PR comments in parallel |
-| `resolve-todo-parallel` | Resolve CLI todos in parallel |
-| `triage` | Triage and categorize findings for the CLI todo system |
-
-### Testing & QA
-
-| Skill | Description |
-|-------|-------------|
-| `agent-native-audit` | Run comprehensive agent-native architecture review |
-| `feature-video` | Record video walkthroughs and add to PR description |
 | `heal-skill` | Fix skill documentation issues |
+| `plan-review` | Multi-agent plan review in parallel |
 | `report-bug` | Report a bug in the plugin |
-| `reproduce-bug` | Reproduce bugs using logs, console, and browser screenshots |
-| `test-browser` | Run browser tests on PR-affected pages |
-| `xcode-test` | Build and test iOS apps on simulator |
 
-### Content & Workflow
-
-| Skill | Description |
-|-------|-------------|
-| `discord-content` | Create and post brand-consistent community content to Discord |
-| `every-style-editor` | Review copy for Every's style guide compliance |
-| `file-todos` | File-based todo tracking system |
-| `git-worktree` | Manage Git worktrees for parallel development |
-| `ship` | Enforce feature lifecycle checklist before creating PRs |
-
-### Deployment
-
-| Skill | Description |
-|-------|-------------|
-| `deploy` | Deploy containerized applications via Docker build, GHCR push, and SSH |
-
-### File Transfer
-
-| Skill | Description |
-|-------|-------------|
-| `rclone` | Upload files to S3, Cloudflare R2, Backblaze B2, and cloud storage |
-
-### Browser Automation
+### Workflow
 
 | Skill | Description |
 |-------|-------------|
 | `agent-browser` | CLI-based browser automation using Vercel's agent-browser |
-
-### Image Generation
-
-| Skill | Description |
-|-------|-------------|
-| `gemini-imagegen` | Generate and edit images using Google's Gemini API |
-
-**gemini-imagegen features:**
-
-- Text-to-image generation
-- Image editing and manipulation
-- Multi-turn refinement
-- Multiple reference image composition (up to 14 images)
-
-**Requirements:**
-
-- `GEMINI_API_KEY` environment variable
-- Python packages: `google-genai`, `pillow`
+| `deploy` | Deploy containerized applications via Docker build, GHCR push, and SSH |
+| `git-worktree` | Manage Git worktrees for parallel development |
+| `rclone` | Upload files to S3, Cloudflare R2, Backblaze B2, and cloud storage |
+| `reproduce-bug` | Reproduce bugs using logs, console, and browser screenshots |
+| `resolve-parallel` | Resolve TODO comments in parallel |
+| `resolve-pr-parallel` | Resolve PR comments in parallel |
+| `resolve-todo-parallel` | Resolve CLI todos in parallel |
+| `ship` | Enforce feature lifecycle checklist before creating PRs |
+| `test-browser` | Run browser tests on PR-affected pages |
+| `xcode-test` | Build and test iOS apps on simulator |
 
 ## MCP Servers
 
