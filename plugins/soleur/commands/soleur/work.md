@@ -98,9 +98,9 @@ fi
    - If continuing, proceed to step 3
    - If creating new, follow Option A or B below
 
-   **If on the default branch**, choose how to proceed:
+   **If on the default branch**, you MUST create a branch before proceeding. Never edit files on the default branch -- parallel agents cause silent merge conflicts.
 
-   **Option A: Create a new branch**
+   **Option A: Create a new branch (default)**
 
    ```bash
    git pull origin [default_branch]
@@ -116,15 +116,7 @@ fi
    # The skill will create a new branch from the default branch in an isolated worktree
    ```
 
-   **Option C: Continue on the default branch**
-   - Requires explicit user confirmation
-   - Only proceed after user explicitly says "yes, commit to [default_branch]"
-   - Never commit directly to the default branch without explicit permission
-
-   **Recommendation**: Use worktree if:
-   - You want to work on multiple features simultaneously
-   - You want to keep the default branch clean while experimenting
-   - You plan to switch between branches frequently
+   Prefer worktree if other worktrees already exist or multiple features are in-flight.
 
 3. **Create Todo List**
    - Use TodoWrite to break plan into actionable tasks
