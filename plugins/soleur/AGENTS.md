@@ -28,17 +28,20 @@ Before committing ANY changes:
 
 ### Directory Structure
 
-Components are organized by domain. Cross-domain components stay at root level.
-Engineering-specific components live under `engineering/` subdirectories.
+Components are organized by domain, then by function.
 
 ```text
 agents/
-├── research/              # Cross-domain research agents
-├── workflow/              # Cross-domain workflow agents
-└── engineering/
-    ├── review/            # Engineering code review agents
-    ├── design/            # Engineering architecture agents
-    └── infra/             # Engineering infrastructure agents
+├── design/                # UX design agents
+├── engineering/
+│   ├── design/            # Architecture agents
+│   ├── infra/             # Infrastructure agents
+│   ├── research/          # Engineering research agents
+│   ├── review/            # Code review agents
+│   └── workflow/          # Engineering workflow agents
+├── marketing/             # Brand and marketing agents
+├── operations/            # Ops and expense agents
+└── product/               # Product analysis agents
 
 commands/
 └── soleur/                # All commands (soleur:plan, soleur:review, etc.)

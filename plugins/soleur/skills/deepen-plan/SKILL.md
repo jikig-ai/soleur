@@ -310,15 +310,15 @@ cat ~/.claude/plugins/installed_plugins.json
 **Important:** Check EVERY source. Include agents from:
 - Project `.claude/agents/`
 - User's `~/.claude/agents/`
-- soleur plugin (but SKIP workflow/ agents - only use engineering/ and research/)
+- soleur plugin (but SKIP engineering/workflow/ agents - only use review, research, and design)
 - ALL other installed plugins (agent-sdk-dev, frontend-design, etc.)
 - Any local plugins
 
 **For soleur plugin specifically:**
 - USE: `agents/engineering/review/*` (all reviewers)
-- USE: `agents/research/*` (all researchers)
+- USE: `agents/engineering/research/*` (all researchers)
 - USE: `agents/engineering/design/*` (design agents)
-- SKIP: `agents/workflow/*` (these are workflow orchestrators, not reviewers)
+- SKIP: `agents/engineering/workflow/*` (workflow orchestrators, not reviewers)
 
 **Step 2: For each discovered agent, read its description**
 

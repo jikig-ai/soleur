@@ -5,6 +5,17 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.0] - 2026-02-17
+
+### Changed
+
+- Consolidate agent categories from 6 to 5 real company domains: Design, Engineering, Marketing, Operations, Product
+- Move 5 research agents from `agents/research/` to `agents/engineering/research/`
+- Move `pr-comment-resolver` from `agents/workflow/` to `agents/engineering/workflow/`
+- Move `spec-flow-analyzer` from `agents/workflow/` to new `agents/product/` domain
+- Remove "Cross-domain" grouping from README -- all agents now belong to a domain
+- Update docs agents page to reflect new category structure
+
 ## [2.12.5] - 2026-02-17
 
 ### Fixed
