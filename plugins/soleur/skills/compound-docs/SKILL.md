@@ -25,7 +25,7 @@ This skill captures problem solutions immediately after confirmation, creating s
 
 <critical_sequence name="documentation-capture" enforce_order="strict">
 
-## 7-Step Process
+## Documentation Capture Process
 
 <step number="1" required="true">
 ### Step 1: Detect Confirmation
@@ -250,6 +250,52 @@ But **NEVER auto-promote**. User decides via decision menu (Option 2).
 **Template for critical pattern addition:**
 
 When user selects Option 3 (Add to Required Reading), use the template from [critical-pattern-template.md](./assets/critical-pattern-template.md) to structure the pattern entry. Number it sequentially based on existing patterns in `knowledge-base/learnings/patterns/critical-patterns.md`.
+</step>
+
+<step number="8" required="false" depends_on="6">
+### Step 8: Route Learning to Definition
+
+After capturing and cross-referencing the learning, route the insight to the skill, agent, or command definition that needs it. This ensures definitions improve over time with sharp-edge gotchas that prevent repeated mistakes.
+
+**Skip this step if:**
+- `plugins/soleur/` directory does not exist
+- No skills, agents, or commands were invoked in this session
+
+#### 8.1 Detect Active Components
+
+Identify which skills, agents, or commands were invoked in this session by examining the conversation history.
+
+Map detected component names to file paths:
+- Skill `foo` -> `plugins/soleur/skills/foo/SKILL.md`
+- Agent `soleur:engineering:review:baz` -> `plugins/soleur/agents/engineering/review/baz.md`
+- Command `soleur:bar` -> `plugins/soleur/commands/soleur/bar.md`
+
+If no components detected, skip to the decision menu.
+
+#### 8.2 Select Target
+
+If one component detected: propose it as the routing target.
+
+If multiple detected: use **AskUserQuestion** to present a numbered list ordered by relevance to the learning content. Include an option to skip.
+
+If the target file does not exist at the expected path, warn and skip.
+
+#### 8.3 Propose Edit
+
+1. Read the target definition file
+2. Find the most relevant existing section for a new bullet -- do not create new sections
+3. If no section with bullets exists in the target file, warn and skip this target
+4. Draft a one-line bullet capturing the sharp edge -- non-obvious gotcha only, skip if the insight is general knowledge the model already knows
+5. Display the proposed edit showing the section name, existing bullets, and the new bullet
+
+#### 8.4 Confirm
+
+Use **AskUserQuestion** with options:
+- **Accept** -- Apply the edit to the definition file
+- **Skip** -- Do not modify the definition; the learning is still captured in knowledge-base/learnings/
+- **Edit** -- Modify the bullet text, then re-display for confirmation
+
+If accepted, write the edit to the file. Do NOT commit or version-bump -- the edit is staged for the normal workflow completion protocol.
 </step>
 
 </critical_sequence>
