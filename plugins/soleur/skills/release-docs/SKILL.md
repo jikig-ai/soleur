@@ -86,7 +86,7 @@ Regenerate the complete agents reference page:
 ### 2c. Update `docs/pages/skills.html`
 
 Regenerate the complete skills reference page:
-- Group skills by category (Development Tools, Content & Workflow, Image Generation)
+- Group skills by category (Content & Release, Development, Review & Planning, Workflow)
 - Include for each skill:
   - Name and description
   - Usage: `claude skill [skill-name]`
