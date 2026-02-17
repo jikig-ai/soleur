@@ -5,6 +5,25 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.1] - 2026-02-17
+
+### Changed
+
+- Restructure docs site navigation: Get Started first, remove Commands and MCP pages
+- Collapse 3 Engineering sub-categories into single Engineering section on Agents page
+- Add Common Workflows section to Getting Started page with use case scenarios
+- Convert Getting Started workflow steps to card treatment for visual consistency
+- Update Learn More links to reference Agents, Skills, and Changelog
+- Remove `.workflow-steps` CSS (replaced by `.command-item` cards)
+- Update release-docs skill to remove commands.html and mcp-servers.html references
+- Update deploy-docs workflow validation to match remaining pages
+
+### Removed
+
+- Delete `commands.html` page (redundant with Getting Started)
+- Delete `mcp-servers.html` page (minimal content)
+- Remove Commands and MCP links from sitemap.xml
+
 ## [2.12.0] - 2026-02-17
 
 ### Added

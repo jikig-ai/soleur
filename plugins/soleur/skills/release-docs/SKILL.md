@@ -9,12 +9,11 @@ Generate and update the documentation site for the soleur plugin, ensuring `plug
 
 ## Overview
 
-The documentation site is a static HTML/CSS/JS site based on the Evil Martians LaunchKit template. It needs to be regenerated whenever:
+The documentation site is a static HTML/CSS/JS site. It needs to be regenerated whenever:
 
 - Agents are added, removed, or modified
 - Commands are added, removed, or modified
 - Skills are added, removed, or modified
-- MCP servers are added, removed, or modified
 
 ## Step 1: Inventory Current Components
 
@@ -84,17 +83,7 @@ Regenerate the complete agents reference page:
   - Usage example: `claude agent [agent-name] "your message"`
   - Use cases
 
-### 2c. Update `docs/pages/commands.html`
-
-Regenerate the complete commands reference page:
-- Group commands by type (Workflow, Utility)
-- Include for each command:
-  - Name and description
-  - Arguments (if any)
-  - Process/workflow steps
-  - Example usage
-
-### 2d. Update `docs/pages/skills.html`
+### 2c. Update `docs/pages/skills.html`
 
 Regenerate the complete skills reference page:
 - Group skills by category (Development Tools, Content & Workflow, Image Generation)
@@ -102,15 +91,6 @@ Regenerate the complete skills reference page:
   - Name and description
   - Usage: `claude skill [skill-name]`
   - Features and capabilities
-
-### 2e. Update `docs/pages/mcp-servers.html`
-
-Regenerate the MCP servers reference page:
-- For each server:
-  - Name and purpose
-  - Tools provided
-  - Configuration details
-  - Supported frameworks/services
 
 ## Step 3: Update Metadata Files
 
@@ -161,9 +141,7 @@ Provide a summary of what was updated:
 ### Files Updated
 - docs/index.html - Updated stats and component summaries
 - docs/pages/agents.html - Regenerated with X agents
-- docs/pages/commands.html - Regenerated with X commands
 - docs/pages/skills.html - Regenerated with X skills
-- docs/pages/mcp-servers.html - Regenerated with X servers
 - plugin.json - Updated counts and component lists
 - marketplace.json - Updated description
 - README.md - Updated component lists
