@@ -142,6 +142,18 @@ After saving the learning, prompt the user:
 
 **If user says no:** Continue to next step
 
+### Route Learning to Definition
+
+After constitution promotion, compound routes the captured learning to the skill, agent, or command definition that was active in the session. This feeds insights back into the instructions that directly govern behavior, preventing repeated mistakes.
+
+1. Detect which skills, agents, or commands were invoked in this conversation
+2. Propose a one-line bullet edit to the most relevant section of the target definition file
+3. User confirms with Accept/Skip/Edit
+
+See compound-docs Step 8 for the full flow.
+
+**Graceful degradation:** Skips if `plugins/soleur/` does not exist or no components detected in the session.
+
 ### Managing Learnings (Update/Archive/Delete)
 
 **Update an existing learning:**
