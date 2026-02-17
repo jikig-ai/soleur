@@ -38,7 +38,7 @@ Read all component files to get their metadata:
 ### Agents
 For each agent file in `plugins/soleur/agents/*.md`:
 - Extract the frontmatter (name, description)
-- Note the category (Review, Research, Workflow, Design, Docs)
+- Note the domain (Design, Engineering, Marketing, Operations, Product) and sub-category if applicable
 - Get key responsibilities from the content
 
 ### Commands
@@ -76,7 +76,7 @@ Ensure the component summary sections list key components accurately.
 ### 2b. Update `docs/pages/agents.html`
 
 Regenerate the complete agents reference page:
-- Group agents by category (Review, Research, Workflow, Design, Docs)
+- Group agents by domain (Design, Engineering, Marketing, Operations, Product)
 - Include for each agent:
   - Name and description
   - Key responsibilities (bullet list)

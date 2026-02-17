@@ -4,7 +4,7 @@ This repository contains the Soleur Claude Code plugin -- an orchestration engin
 
 ## Working Agreement
 
-- **Branching:** HARD RULE: Never commit directly to main. Create a feature branch for every change. If already on the correct branch for the task, keep using it; do not create additional branches or worktrees unless explicitly requested.
+- **Branching:** HARD RULE: Never commit directly to main. For every feature change, create a worktree: `git worktree add .worktrees/feat-<name> -b feat/<name>` from the repo root, then work exclusively inside that worktree. If a worktree already exists for the task, use it; do not create a second one.
 - **Safety:** Do not delete or overwrite user data. Avoid destructive commands. Specific prohibitions:
   - Never `rm -rf` on the current working directory, a worktree path (`.worktrees/`), or the repository root.
   - Never `gh pr merge --delete-branch` while a worktree exists for that branch -- remove the worktree first, then merge.
