@@ -88,6 +88,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Agents that depend on external MCP servers (stdio binaries from IDE extensions) must include a graceful degradation check -- only HTTP MCP servers can be bundled in plugin.json; stdio servers require separate installation and the agent must detect unavailability and stop with clear installation instructions
 - When a workflow captures domain-specific knowledge, route it to the closest instruction file (skill, agent, command) rather than only centralizing in constitution.md -- domain-specific gotchas belong in domain-specific instructions
 - When reviewing docs site changes, audit information architecture separately from visual polish -- check navigation order matches user journey, every page justifies its existence, same-level sections have consistent visual treatment, and first-time users can orient in 30 seconds
+- Consolidate catalog categories to ~4-6 groups with 5+ items each; keep category names and ordering consistent across docs pages, README tables, and release tooling
 
 ## Testing
 
