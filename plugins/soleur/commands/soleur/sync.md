@@ -315,6 +315,75 @@ After writing, display summary:
 Run `/sync` again to discover additional patterns.
 ```
 
+### Phase 4: Definition Sync
+
+Scan accumulated learnings against skill, agent, and command definitions. Propose one-line bullet edits to route institutional knowledge to the definitions that need it. This complements the per-session routing in compound-docs Step 8 by catching cross-cutting learnings, retroactive learnings, and learnings from sessions where the relevant definition was not directly invoked.
+
+**4.1 Gate**
+
+Skip Phase 4 with an info message if any of these conditions are true:
+
+- Area is a specific scope (`conventions`, `architecture`, `testing`, `debt`, `overview`) -- Phase 4 only runs when area is `all` or unspecified
+- `knowledge-base/learnings/` directory does not exist
+- `plugins/soleur/` directory does not exist
+
+**4.2 Load**
+
+List all learning files from `knowledge-base/learnings/` recursively, excluding `archive/` and `patterns/` directories. For each learning, extract:
+
+- Title (from first `#` heading)
+- Tags or metadata (from YAML frontmatter, ad-hoc tags sections, or title keywords -- any format)
+- `synced_to` array from YAML frontmatter (treat as empty if absent)
+
+List all definitions by name:
+
+- Skills: `plugins/soleur/skills/*/SKILL.md` (flat, one level)
+- Agents: `plugins/soleur/agents/**/*.md` (recursive)
+- Commands: `plugins/soleur/commands/soleur/*.md` (flat)
+
+**4.3 Match**
+
+For each learning, determine which definitions it is relevant to. Skip pairs where the definition name is already in the learning's `synced_to` array.
+
+For each relevant pair, read the full learning content and the full definition content. Draft a one-line bullet capturing the sharp-edge gotcha -- non-obvious insight only, skip if the point is general knowledge. Check the definition does not already contain a bullet covering this topic -- if it does, discard silently.
+
+**4.4 Review**
+
+Present proposals one at a time using **AskUserQuestion** with options:
+
+```text
+## Definition Sync (1/N)
+
+**Learning:** [learning-title]
+**Definition:** [definition-name] ([skill|agent|command])
+**Section:** [target-section-name]
+**Proposed bullet:** "- [one-line bullet text]"
+```
+
+**Options:**
+
+1. **Accept** - Write the bullet to the definition file and add the definition name to the learning's `synced_to` frontmatter. If the learning has no YAML frontmatter block, prepend a minimal `---` block with only `synced_to: [definition-name]`.
+2. **Skip** - Move to next proposal. No tracking written (proposal may reappear on next run).
+3. **Edit** - Modify the bullet text, then re-display for final Accept/Skip.
+4. **Done reviewing** - Stop Phase 4. Unreviewed proposals reappear on next `/sync` run.
+
+**4.5 Summary**
+
+```text
+## Definition Sync Complete
+
+- Learnings scanned: N
+- Proposals generated: P
+- Accepted: A
+- Skipped: S
+- Not reviewed: U (will reappear next run)
+
+### Definitions Updated
+- [definition-name]: +N bullets
+```
+
+If zero proposals were generated: "Phase 4: All learnings already synced to relevant definitions (N learnings, M definitions scanned)."
+
 ## Output Locations
 
 | Finding Type | Destination |
@@ -325,6 +394,7 @@ Run `/sync` again to discover additional patterns.
 | Technical debt | `knowledge-base/learnings/technical-debt/` |
 | Project overview | `knowledge-base/overview/README.md` |
 | Component docs | `knowledge-base/overview/components/` |
+| Definition sync bullets | `plugins/soleur/{skills,agents,commands}/*.md` |
 
 ## Design Decisions
 
@@ -374,11 +444,13 @@ Uses the `compound-docs` YAML schema with `problem_type: best_practice` for non-
 /sync overview
 ```
 
-## Limitations (v1)
+## Limitations
 
-- No PR analysis (requires GitHub token - deferred to v2)
+- No PR analysis (requires GitHub token - deferred)
 - No semantic similarity (word-based Jaccard only - embeddings deferred)
 - No sampling for large codebases (analyze what fits)
 - No parallel agent execution (single-pass analysis)
+- No constitution cross-check (deferred - separate concern)
+- Definition sync skips when area is scoped (only runs on `all` or default)
 
 Run `/sync` multiple times to discover more patterns as the codebase evolves.

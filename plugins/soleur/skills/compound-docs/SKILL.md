@@ -295,7 +295,13 @@ Use **AskUserQuestion** with options:
 - **Skip** -- Do not modify the definition; the learning is still captured in knowledge-base/learnings/
 - **Edit** -- Modify the bullet text, then re-display for confirmation
 
-If accepted, write the edit to the file. Do NOT commit or version-bump -- the edit is staged for the normal workflow completion protocol.
+If accepted, write the edit to the definition file. Then update the learning file's `synced_to` frontmatter to prevent `/soleur:sync` from re-proposing this pair:
+
+- If `synced_to` array exists in frontmatter: append the definition name
+- If frontmatter exists but `synced_to` is absent: add `synced_to: [definition-name]`
+- If no YAML frontmatter block exists: prepend a minimal `---` block with only `synced_to: [definition-name]`
+
+Do NOT commit or version-bump -- the edits are staged for the normal workflow completion protocol.
 </step>
 
 </critical_sequence>

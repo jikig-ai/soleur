@@ -86,7 +86,7 @@ Capture learnings from your work. This command:
 
 ### Sync (`/soleur:sync`)
 
-Analyze an existing codebase and populate the knowledge-base with conventions, architecture patterns, testing practices, and technical debt. Run this before starting the workflow on a project that already has code.
+Analyze an existing codebase and populate the knowledge-base with conventions, architecture patterns, testing practices, and technical debt. Also scans accumulated learnings against skill/agent/command definitions and proposes one-line bullet edits. Run this before starting the workflow on a project that already has code.
 
 **Example:** `/soleur:sync` or `/soleur:sync conventions`
 

@@ -5,6 +5,20 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.3] - 2026-02-17
+
+### Fixed
+
+- Sort agent categories alphabetically on Agents page (Design, Engineering, Marketing, Operations, Research, Workflow)
+- Fix "Fixing a Bug" workflow on Getting Started to recommend one-shot instead of manual work/review/compound
+
+## [2.12.2] - 2026-02-17
+
+### Added
+
+- Sync command now includes Phase 4: Definition Sync -- scans learnings against skill/agent/command definitions and proposes one-line bullet edits (#110)
+- Compound-docs Step 8 now writes `synced_to` to learning frontmatter after routing, enabling idempotent sync across both systems
+
 ## [2.12.1] - 2026-02-17
 
 ### Changed
