@@ -17,12 +17,10 @@
     <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-hidden="true">
     <label for="nav-toggle" class="nav-toggle-label" aria-label="Toggle navigation">&#9776;</label>
     <ul class="nav-links">
-      <li><a href="pages/agents.html">Agents</a></li>
-      <li><a href="pages/commands.html">Commands</a></li>
-      <li><a href="pages/skills.html">Skills</a></li>
-      <li><a href="pages/mcp-servers.html">MCP</a></li>
-      <li><a href="pages/changelog.html">Changelog</a></li>
       <li><a href="pages/getting-started.html" aria-current="page">Get Started</a></li>
+      <li><a href="pages/agents.html">Agents</a></li>
+      <li><a href="pages/skills.html">Skills</a></li>
+      <li><a href="pages/changelog.html">Changelog</a></li>
       <li><a href="https://github.com/jikig-ai/soleur" target="_blank" rel="noopener">GitHub</a></li>
       <li><a href="https://discord.gg/PYZbPBKMUY" target="_blank" rel="noopener">Discord</a></li>
     </ul>
@@ -46,28 +44,28 @@
 
         <h2>The Workflow</h2>
         <p>Soleur follows a structured 5-step workflow for software development:</p>
-        <ol class="workflow-steps">
-          <li>
-            <code>/soleur:brainstorm</code>
-            <span>Explore what to build</span>
-          </li>
-          <li>
-            <code>/soleur:plan</code>
-            <span>Create a structured implementation plan</span>
-          </li>
-          <li>
-            <code>/soleur:work</code>
-            <span>Execute the plan with quality checks</span>
-          </li>
-          <li>
-            <code>/soleur:review</code>
-            <span>Run multi-agent code review</span>
-          </li>
-          <li>
-            <code>/soleur:compound</code>
-            <span>Document learnings for future reference</span>
-          </li>
-        </ol>
+        <div class="commands-list">
+          <div class="command-item">
+            <code>1. /soleur:brainstorm</code>
+            <p>Explore what to build</p>
+          </div>
+          <div class="command-item">
+            <code>2. /soleur:plan</code>
+            <p>Create a structured implementation plan</p>
+          </div>
+          <div class="command-item">
+            <code>3. /soleur:work</code>
+            <p>Execute the plan with quality checks</p>
+          </div>
+          <div class="command-item">
+            <code>4. /soleur:review</code>
+            <p>Run multi-agent code review</p>
+          </div>
+          <div class="command-item">
+            <code>5. /soleur:compound</code>
+            <p>Document learnings for future reference</p>
+          </div>
+        </div>
 
         <h2>Quick Commands</h2>
         <div class="commands-list">
@@ -85,11 +83,27 @@
           </div>
         </div>
 
+        <h2>Common Workflows</h2>
+        <div class="commands-list">
+          <div class="command-item">
+            <code>Building a Feature</code>
+            <p>brainstorm &rarr; plan &rarr; work &rarr; review &rarr; compound</p>
+          </div>
+          <div class="command-item">
+            <code>Fixing a Bug</code>
+            <p>work (directly on the fix) &rarr; review &rarr; compound</p>
+          </div>
+          <div class="command-item">
+            <code>Reviewing a PR</code>
+            <p>review (run multi-agent review on existing PR)</p>
+          </div>
+        </div>
+
         <h2>Learn More</h2>
         <ul class="learn-more-links">
           <li><a href="pages/agents.html">Agents <span class="learn-more-desc">Specialized AI agents for engineering, research, and workflow</span></a></li>
-          <li><a href="pages/commands.html">Commands <span class="learn-more-desc">Quick-access commands for common operations</span></a></li>
           <li><a href="pages/skills.html">Skills <span class="learn-more-desc">Multi-step skills for complex workflows</span></a></li>
+          <li><a href="pages/changelog.html">Changelog <span class="learn-more-desc">All notable changes to the Soleur plugin</span></a></li>
         </ul>
 
       </div>
@@ -103,10 +117,9 @@
         <span class="footer-name">Soleur</span>
       </div>
       <ul class="footer-links">
+        <li><a href="pages/getting-started.html">Get Started</a></li>
         <li><a href="https://github.com/jikig-ai/soleur" target="_blank" rel="noopener">GitHub</a></li>
         <li><a href="https://discord.gg/PYZbPBKMUY" target="_blank" rel="noopener">Discord</a></li>
-        <li><a href="pages/agents.html">Docs</a></li>
-        <li><a href="pages/getting-started.html">Get Started</a></li>
       </ul>
       <span class="footer-tagline">Designed, built, and shipped by Soleur &mdash; using Soleur.</span>
     </div>

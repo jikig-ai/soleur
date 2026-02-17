@@ -788,20 +788,6 @@
   .content { padding: var(--space-8) 0; }
 
   /* Getting started extras */
-  .workflow-steps {
-    padding-left: var(--space-5);
-    margin: var(--space-5) 0;
-  }
-  .workflow-steps li {
-    margin-bottom: var(--space-4);
-    font-size: var(--text-sm);
-    color: var(--color-text-secondary);
-  }
-  .workflow-steps code {
-    font-weight: 600;
-    color: var(--color-accent);
-  }
-  .workflow-steps strong { color: var(--color-text); }
   .commands-list {
     display: grid;
     gap: var(--space-3);

@@ -49,6 +49,20 @@ Use the **AskUserQuestion tool** to clarify the design scope:
 2. Save the .pen file to `knowledge-base/design/{domain}/{descriptive-name}.pen` (e.g., `design/brand/landing-page.pen`, `design/onboarding/signup-flow.pen`).
 3. Announce the file location.
 
+## UX Audit (Existing HTML Pages)
+
+When reviewing existing HTML pages (not creating new .pen designs), audit information architecture:
+
+- **Navigation order** matches the user journey (install -> learn -> reference, not reference-first)
+- **Page necessity** -- every page justifies its existence; pages with fewer than 3 items should be merged
+- **Content consistency** -- same-level sections use consistent visual treatment (not plain lists next to styled cards)
+- **First-time user orientation** -- a new user can understand what to do within 30 seconds
+- **Category granularity** -- prefer fewer top-level categories with sub-headers over many granular categories
+
+## Design-Implementation Sync
+
+After HTML/CSS changes to pages that have corresponding .pen design files in `knowledge-base/design/`, update the .pen files to reflect the new structure. This keeps the design source of truth consistent with the live implementation. Check for matching .pen files by searching `knowledge-base/design/` for filenames related to the changed pages.
+
 ## Important Guidelines
 
 - Only use Pencil MCP tools for .pen file operations -- do not read .pen files with the Read tool
