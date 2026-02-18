@@ -106,20 +106,21 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 | Component | Count |
 |-----------|-------|
-| Agents | 29 |
+| Agents | 30 |
 | Commands | 8 |
-| Skills | 37 |
+| Skills | 38 |
 | MCP Servers | 1 |
 
 ## Agents
 
 Agents are organized by domain, then by function.
 
-### Marketing (1)
+### Marketing (2)
 
 | Agent | Description |
 |-------|-------------|
 | `brand-architect` | Interactive brand identity workshop producing structured brand guides |
+| `community-manager` | Analyze community engagement, generate weekly digests, and report health metrics across Discord and GitHub |
 
 ### Design (1)
 
@@ -127,7 +128,7 @@ Agents are organized by domain, then by function.
 |-------|-------------|
 | `ux-design-lead` | Visual design in .pen files using Pencil MCP (wireframes, screens, components). Requires [Pencil extension](https://docs.pencil.dev/getting-started/installation). |
 
-### Engineering (24)
+### Engineering (25)
 
 #### Review (14)
 
@@ -219,8 +220,10 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 |-------|-------------|
 | `brainstorming` | Explore intent, approaches, and design decisions |
 | `changelog` | Create engaging changelogs for recent merges |
+| `community` | Manage community engagement across Discord and GitHub (digests, health, welcome) |
 | `compound-docs` | Capture solved problems as categorized documentation |
 | `deploy-docs` | Validate and prepare documentation for deployment |
+| `docs-site` | Scaffold Eleventy documentation sites with data-driven catalogs |
 | `discord-content` | Create and post brand-consistent community content to Discord |
 | `every-style-editor` | Review copy for Every's style guide compliance |
 | `feature-video` | Record video walkthroughs and add to PR description |

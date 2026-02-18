@@ -12,11 +12,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New `agent-finder` agent for community agent/skill discovery via external registries
 - New `agents/community/` directory for community-installed agents
 - Community discovery check in `/plan` command (Phase 1.5) -- detects uncovered stacks and offers to install community agents from trusted registries
+- New `docs-site` skill for scaffolding Eleventy documentation sites with data-driven catalog pages
+- Migrate documentation site from hand-maintained HTML to Markdown + Eleventy v3 (11ty)
+- Auto-generate agent and skill catalog pages from source file frontmatter at build time
+- Build-time data injection for version strings and component counts (eliminates hardcoded values)
+- Auto-generated sitemap.xml from page collection
+- Eleventy config (`eleventy.config.js`) and npm scripts (`docs:dev`, `docs:build`)
+- New community-manager agent (`agents/marketing/community-manager.md`) for analyzing Discord and GitHub activity, generating weekly digests, and reporting community health metrics
+- New community skill (`skills/community/SKILL.md`) with sub-commands: digest, health, post, welcome
+- Shell scripts for Discord Bot API (`discord-community.sh`) and GitHub API (`github-community.sh`) data collection
 
 ### Changed
 
 - Add `stack: rails` field to `dhh-rails-reviewer` and `kieran-rails-reviewer` agents for gap detection
 - Renumber `/plan` phases: Research Decision (1.5 -> 1.6), External Research (1.5b -> 1.6b), Consolidate (1.6 -> 1.7)
+- Refactor `release-docs` skill to remove HTML editing instructions (catalog pages now auto-generate)
+- Refactor `deploy-docs` skill for Eleventy build workflow and `_site/` output validation
+- Update deploy-docs GitHub Actions workflow with Node.js build step and expanded path triggers
+
+### Removed
+
+- Delete 7 hand-maintained HTML source files (replaced by Nunjucks/Markdown templates)
 
 ## [2.13.1] - 2026-02-18
 

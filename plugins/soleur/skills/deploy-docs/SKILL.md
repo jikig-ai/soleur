@@ -1,112 +1,82 @@
 ---
 name: deploy-docs
-description: "This skill should be used when validating and preparing documentation for GitHub Pages deployment. It checks HTML pages, JSON validity, component counts, and provides deployment instructions. Triggers on \"deploy docs\", \"publish documentation\", \"GitHub Pages\", \"validate docs site\"."
+description: "This skill should be used when validating the documentation build and preparing for GitHub Pages deployment. It runs the Eleventy build, validates output, checks component counts, and provides deployment instructions. Triggers on \"deploy docs\", \"publish documentation\", \"GitHub Pages\", \"validate docs site\"."
 ---
 
 # Deploy Documentation Command
 
-Validate the documentation site and prepare it for GitHub Pages deployment.
+Validate the documentation build and prepare it for GitHub Pages deployment.
 
-## Step 1: Validate Documentation
-
-Run these checks:
+## Step 1: Build and Validate
 
 ```bash
-# Count components
-echo "Agents: $(find plugins/soleur/agents -name '*.md' -not -name 'README.md' | wc -l)"
-echo "Commands: $(find plugins/soleur/commands -name '*.md' -not -name 'README.md' | wc -l)"
-echo "Skills: $(find plugins/soleur/skills -name 'SKILL.md' | wc -l)"
+# Install dependencies (if needed)
+npm ci
 
-# Validate JSON
-cat .claude-plugin/marketplace.json | jq . > /dev/null && echo "✓ marketplace.json valid"
-cat plugins/soleur/.claude-plugin/plugin.json | jq . > /dev/null && echo "✓ plugin.json valid"
+# Run Eleventy build
+npx @11ty/eleventy
 
-# Check all HTML files exist
-for page in index agents commands skills mcp-servers changelog getting-started; do
-  if [ -f "plugins/soleur/docs/pages/${page}.html" ] || [ -f "plugins/soleur/docs/${page}.html" ]; then
-    echo "✓ ${page}.html exists"
-  else
-    echo "✗ ${page}.html MISSING"
-  fi
+# Verify build output
+test -f _site/index.html && echo "OK index.html"
+for page in agents skills changelog getting-started; do
+  test -f "_site/pages/${page}.html" && echo "OK ${page}.html"
 done
+test -f _site/404.html && echo "OK 404.html"
+test -f _site/css/style.css && echo "OK style.css"
+test -f _site/CNAME && echo "OK CNAME"
+test -f _site/sitemap.xml && echo "OK sitemap.xml"
 ```
 
-## Step 2: Check for Uncommitted Changes
+## Step 2: Verify Component Counts
 
 ```bash
-git status --porcelain plugins/soleur/docs/
+echo "Agent cards: $(grep -c 'component-card' _site/pages/agents.html)"
+echo "Skill cards: $(grep -c 'component-card' _site/pages/skills.html)"
+
+# Compare with source
+echo "Agent files: $(find plugins/soleur/agents -name '*.md' -not -name 'README.md' | wc -l)"
+echo "Skill files: $(find plugins/soleur/skills -name 'SKILL.md' | wc -l)"
+```
+
+Cards in the output must match source file counts exactly.
+
+## Step 3: Check for Uncommitted Changes
+
+```bash
+git status --porcelain plugins/soleur/docs/ eleventy.config.js package.json
 ```
 
 If there are uncommitted changes, warn the user to commit first.
 
-## Step 3: Deployment Instructions
+## Step 4: Deployment
 
-Since GitHub Pages deployment requires a workflow file with special permissions, provide these instructions:
+Deployment is automated via `.github/workflows/deploy-docs.yml`:
 
-### First-time Setup
+- **Trigger:** Push to `main` that changes docs, agents, skills, commands, plugin.json, or eleventy.config.js
+- **Manual:** Go to Actions > "Deploy Documentation to GitHub Pages" > "Run workflow"
 
-1. Create `.github/workflows/deploy-docs.yml` with the GitHub Pages workflow
-2. Go to repository Settings > Pages
-3. Set Source to "GitHub Actions"
+The workflow:
+1. Checks out the repo
+2. Installs Node.js 20 and npm dependencies
+3. Runs `npx @11ty/eleventy` to build
+4. Verifies all required files are present
+5. Uploads `_site/` as a Pages artifact
+6. Deploys to GitHub Pages
 
-### Deploying
-
-After merging to `main`, the docs will auto-deploy. Or:
-
-1. Go to Actions tab
-2. Select "Deploy Documentation to GitHub Pages"
-3. Click "Run workflow"
-
-### Workflow File Content
-
-```yaml
-name: Deploy Documentation to GitHub Pages
-
-on:
-  push:
-    branches: [main]
-    paths:
-      - 'plugins/soleur/docs/**'
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
-
-jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v4
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: 'plugins/soleur/docs'
-      - uses: actions/deploy-pages@v4
-```
-
-## Step 4: Report Status
+## Step 5: Report Status
 
 Provide a summary:
 
 ```
 ## Deployment Readiness
 
-✓ All HTML pages present
-✓ JSON files valid
-✓ Component counts match
+OK All HTML pages present
+OK CSS and fonts present
+OK Component counts match source
+OK CNAME and sitemap present
 
 ### Next Steps
 - [ ] Commit any pending changes
 - [ ] Push to main branch
-- [ ] Verify GitHub Pages workflow exists
-- [ ] Check deployment at https://jikig-ai.github.io/soleur/
+- [ ] Verify deployment at https://soleur.ai/
 ```
