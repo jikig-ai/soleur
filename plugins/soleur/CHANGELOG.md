@@ -5,6 +5,14 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.14.0] - 2026-02-18
+
+### Added
+
+- New community-manager agent (`agents/marketing/community-manager.md`) for analyzing Discord and GitHub activity, generating weekly digests, and reporting community health metrics
+- New community skill (`skills/community/SKILL.md`) with sub-commands: digest, health, post, welcome
+- Shell scripts for Discord Bot API (`discord-community.sh`) and GitHub API (`github-community.sh`) data collection
+
 ## [2.13.1] - 2026-02-18
 
 ### Changed

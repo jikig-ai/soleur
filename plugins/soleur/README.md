@@ -115,11 +115,12 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 Agents are organized by domain, then by function.
 
-### Marketing (1)
+### Marketing (2)
 
 | Agent | Description |
 |-------|-------------|
 | `brand-architect` | Interactive brand identity workshop producing structured brand guides |
+| `community-manager` | Analyze community engagement, generate weekly digests, and report health metrics across Discord and GitHub |
 
 ### Design (1)
 
@@ -213,6 +214,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 |-------|-------------|
 | `brainstorming` | Explore intent, approaches, and design decisions |
 | `changelog` | Create engaging changelogs for recent merges |
+| `community` | Manage community engagement across Discord and GitHub (digests, health, welcome) |
 | `compound-docs` | Capture solved problems as categorized documentation |
 | `deploy-docs` | Validate and prepare documentation for deployment |
 | `discord-content` | Create and post brand-consistent community content to Discord |
