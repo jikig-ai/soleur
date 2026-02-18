@@ -128,7 +128,49 @@ Run these agents **in parallel** to gather local context:
 
 These findings inform the next step.
 
-### 1.5. Research Decision
+### 1.5. Community Discovery Check (Conditional)
+
+After local research completes, check whether the project uses a stack not covered by built-in agents. If so, offer to install community agents from trusted registries.
+
+**Step 1: Detect project stacks** using file-signature heuristics:
+
+| Files Present | Detected Stack |
+|---------------|---------------|
+| `pubspec.yaml` + `*.dart` | flutter |
+| `Cargo.toml` + `*.rs` | rust |
+| `mix.exs` + `*.ex` | elixir |
+| `go.mod` + `*.go` | go |
+| `Package.swift` + `*.swift` | swift |
+| `build.gradle` + `*.kt` | kotlin |
+| `composer.json` + `*.php` | php |
+
+Run Glob checks for each stack's signature files. Stacks already covered by built-in agents (Rails, TypeScript, general security/architecture) are excluded.
+
+**Step 2: Check for coverage gaps** by searching agent frontmatter:
+
+```bash
+# Replace <detected_stack> with the actual stack name, e.g.:
+grep -rl "stack: flutter" plugins/soleur/agents/ 2>/dev/null
+```
+
+If any agent file has a matching `stack:` field, that stack is covered -- skip it. Collect uncovered stacks.
+
+**Step 3: Spawn agent-finder** if any gaps exist:
+
+```
+Task agent-finder: "Detected stacks: [list]. Uncovered stacks: [list].
+Search registries for community agents/skills matching these uncovered stacks
+and present suggestions for user approval."
+```
+
+**Step 4: Handle results.** After agent-finder returns:
+- If artifacts were installed: announce "Installed N community artifacts for [stacks]. They will be available in subsequent commands."
+- If all suggestions were skipped: continue silently.
+- If agent-finder failed (network errors): continue silently. Discovery must never block planning.
+
+**Skip condition:** If no uncovered stacks are detected, skip this phase entirely with no output.
+
+### 1.6. Research Decision
 
 Based on signals from Step 0 and findings from Step 1, decide on external research.
 
@@ -145,16 +187,16 @@ Examples:
 - "Your codebase has solid patterns for this. Proceeding without external research."
 - "This involves payment processing, so I'll research current best practices first."
 
-### 1.5b. External Research (Conditional)
+### 1.6b. External Research (Conditional)
 
-**Only run if Step 1.5 indicates external research is valuable.**
+**Only run if Step 1.6 indicates external research is valuable.**
 
 Run these agents in parallel:
 
 - Task best-practices-researcher(feature_description)
 - Task framework-docs-researcher(feature_description)
 
-### 1.6. Consolidate Research
+### 1.7. Consolidate Research
 
 After all research steps complete, consolidate findings:
 

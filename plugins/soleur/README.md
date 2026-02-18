@@ -106,7 +106,7 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 | Component | Count |
 |-----------|-------|
-| Agents | 28 |
+| Agents | 30 |
 | Commands | 8 |
 | Skills | 38 |
 | MCP Servers | 1 |
@@ -128,7 +128,7 @@ Agents are organized by domain, then by function.
 |-------|-------------|
 | `ux-design-lead` | Visual design in .pen files using Pencil MCP (wireframes, screens, components). Requires [Pencil extension](https://docs.pencil.dev/getting-started/installation). |
 
-### Engineering (23)
+### Engineering (25)
 
 #### Review (14)
 
@@ -148,6 +148,12 @@ Agents are organized by domain, then by function.
 | `performance-oracle` | Performance analysis and optimization |
 | `security-sentinel` | Security audits and vulnerability assessments |
 | `test-design-reviewer` | Score test quality using Farley's 8 properties with weighted rubric |
+
+#### Discovery (1)
+
+| Agent | Description |
+|-------|-------------|
+| `agent-finder` | Find and install community agents/skills from trusted registries for uncovered stacks |
 
 #### Design (1)
 
