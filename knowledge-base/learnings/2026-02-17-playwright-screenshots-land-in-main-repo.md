@@ -29,7 +29,21 @@ Playwright MCP resolves its output directory relative to the project root (the g
 - Easy to miss during cleanup because `git status` in the worktree won't show them
 - Can accidentally get committed if a future `git add .` is run from main
 
-## Workaround
+## Solution
+
+**Prevention:** Pass absolute paths to Playwright MCP tools when in a worktree. Use `$(pwd)/filename.png` or the full worktree path as the `filename` parameter:
+
+```bash
+# WRONG - relative path lands in main repo root
+browser_take_screenshot(filename: "homepage.png")
+
+# RIGHT - absolute path lands in worktree
+browser_take_screenshot(filename: "/path/to/worktree/tmp/screenshots/homepage.png")
+```
+
+This rule is codified in `AGENTS.md` under **Worktree Awareness > MCP tool file paths**.
+
+## Cleanup (if prevention was missed)
 
 After completing browser-based visual verification, clean up **both** locations in the main repo:
 
@@ -44,4 +58,4 @@ rm /path/to/main-repo/*.png  # review first with ls *.png to avoid deleting legi
 
 ## Key Takeaway
 
-Add screenshot cleanup to the post-merge checklist alongside worktree removal and branch deletion. Always check the main repo root for loose `.png` files after any Playwright-based visual verification session -- they will NOT appear in the worktree's `git status`.
+MCP servers resolve relative paths from their own process CWD (main repo root), not the Bash session CWD. Always use absolute paths for MCP tool file outputs when working in a worktree. Bash CLI tools (e.g., `agent-browser screenshot`) are unaffected since they inherit the shell CWD.
