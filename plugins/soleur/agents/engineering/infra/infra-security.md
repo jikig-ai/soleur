@@ -86,6 +86,8 @@ Wire a domain to GitHub Pages. This recipe handles the Cloudflare side only.
 
 **Post-wiring verification:** Run `dig +short <domain>` and `curl -sI https://<domain>` to confirm DNS propagation and HTTPS response. Note that propagation may take minutes to hours depending on TTL and resolver caching.
 
+**Detailed workflow:** For the complete 10-step autonomous sequence including cert provisioning, DNS proxy toggling, and common blockers, see `knowledge-base/learnings/integration-issues/2026-02-16-github-pages-cloudflare-wiring-workflow.md`.
+
 ## Scope
 
 This agent handles live infrastructure configuration and security auditing. Out of scope:
