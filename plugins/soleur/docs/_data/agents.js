@@ -12,7 +12,7 @@ const DOMAIN_LABELS = {
 
 const SUB_LABELS = {
   design: "Design",
-  infra: "Infrastructure",
+  infra: "Infra",
   research: "Research",
   review: "Review",
   workflow: "Workflow",
@@ -36,23 +36,47 @@ function parseFrontmatter(content) {
 }
 
 function extractSummary(body) {
-  // Get first non-empty paragraph line from body as a short summary
+  // Get a clean, short summary from the agent body text
   const lines = body.split("\n");
   for (const line of lines) {
     const trimmed = line.trim();
-    if (trimmed && !trimmed.startsWith("#") && !trimmed.startsWith("---")) {
-      let desc = trimmed;
-      // Strip common agent-prompt prefixes
-      desc = desc
-        .replace(/^You are an?\s+/i, "")
-        .replace(/^An?\s+/i, "");
-      // Take first sentence
-      const sentence = desc.split(". ")[0];
-      // Remove trailing period
-      const cleaned = sentence.endsWith(".") ? sentence.slice(0, -1) : sentence;
-      // Capitalize first letter
-      return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+    // Skip empty lines, headings, dividers, and note lines
+    if (
+      !trimmed ||
+      trimmed.startsWith("#") ||
+      trimmed.startsWith("---") ||
+      /^\*\*Note:/i.test(trimmed) ||
+      /^\*\*Your Core/i.test(trimmed) ||
+      /^Core responsibilities/i.test(trimmed)
+    ) {
+      continue;
     }
+
+    let desc = trimmed;
+    // Strip bold markdown wrappers
+    desc = desc.replace(/\*\*([^*]+)\*\*/g, "$1");
+    // Strip "You are <Name>, <title>..." patterns (e.g. "You are David Heinemeier Hansson, creator of...")
+    desc = desc.replace(
+      /^You are\s+(?:the\s+)?(?:[A-Z][\w-]*(?:\s+[A-Z][\w-]*)*)(?:,\s*(?:an?|the)\s+|\.\s*|\s*[-–]\s*)/i,
+      ""
+    );
+    // Strip simpler "You are a/an/the ..." prefixes
+    desc = desc.replace(/^You are\s+(?:a|an|the)\s+/i, "");
+    // Strip leftover "You are " if still present
+    desc = desc.replace(/^You are\s+/i, "");
+    // Strip system-prompt "Your ..." prefixes
+    desc = desc.replace(/^Your (?:mission|role|primary responsibility) is to\s+/i, "");
+    desc = desc.replace(/^Your expertise lies in\s+/i, "");
+    desc = desc.replace(/^You think like\s+/i, "Thinks like ");
+
+    // Take first sentence only
+    const sentence = desc.split(/\.\s/)[0];
+    // Remove trailing period
+    const cleaned = sentence.replace(/\.$/, "").trim();
+    if (!cleaned) continue;
+
+    // Capitalize first letter
+    return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
   }
   return "";
 }
@@ -114,7 +138,7 @@ export default function () {
 
   // Sort and structure output
   const domainOrder = ["design", "engineering", "marketing", "operations", "product"];
-  const subOrder = ["design", "infra", "research", "review", "workflow"];
+  const subOrder = ["review", "design", "infra", "research", "workflow"];
 
   const domains = [];
   for (const key of domainOrder) {
