@@ -11,6 +11,7 @@ Manage community engagement across Discord and GitHub. This skill routes to sub-
 
 | Command | Description |
 |---------|-------------|
+| `/soleur:community setup` | Configure Discord bot and write .env |
 | `/soleur:community digest` | Generate weekly community digest |
 | `/soleur:community health` | Display community health metrics |
 | `/soleur:community post <topic>` | Redirect to discord-content skill |
@@ -32,12 +33,7 @@ Before executing any sub-command, validate environment variables.
 if [[ -z "${DISCORD_BOT_TOKEN:-}" ]]; then
   echo "DISCORD_BOT_TOKEN is not set."
   echo ""
-  echo "To configure:"
-  echo "  1. Go to https://discord.com/developers/applications"
-  echo "  2. Select your bot application > Bot > Copy token"
-  echo "  3. export DISCORD_BOT_TOKEN=\"your-token-here\""
-  echo ""
-  echo "Bot permissions required: SERVER MEMBERS INTENT, MESSAGE CONTENT INTENT"
+  echo "Run /soleur:community setup to configure Discord automatically."
   # Stop execution
 fi
 ```
@@ -46,10 +42,7 @@ fi
 if [[ -z "${DISCORD_GUILD_ID:-}" ]]; then
   echo "DISCORD_GUILD_ID is not set."
   echo ""
-  echo "To configure:"
-  echo "  1. Enable Developer Mode in Discord (Settings > Advanced)"
-  echo "  2. Right-click your server name > Copy Server ID"
-  echo "  3. export DISCORD_GUILD_ID=\"your-server-id\""
+  echo "Run /soleur:community setup to configure Discord automatically."
   # Stop execution
 fi
 ```
@@ -60,11 +53,7 @@ fi
 if [[ -z "${DISCORD_WEBHOOK_URL:-}" ]]; then
   echo "DISCORD_WEBHOOK_URL is not set."
   echo ""
-  echo "To configure:"
-  echo "  1. Open Discord server > Server Settings > Integrations > Webhooks"
-  echo "  2. Click 'New Webhook' and configure the target channel"
-  echo "  3. Copy the webhook URL"
-  echo "  4. export DISCORD_WEBHOOK_URL=\"https://discord.com/api/webhooks/...\""
+  echo "Run /soleur:community setup to configure Discord automatically."
   # Stop execution
 fi
 ```
@@ -78,6 +67,141 @@ Check if `knowledge-base/overview/brand-guide.md` exists. If missing and the sub
 Continue without brand guide (do not stop execution).
 
 </critical_sequence>
+
+---
+
+## Sub-command: setup
+
+Automate Discord bot configuration. Opens the Discord Developer Portal for the user, guides them through bot creation, then automates guild discovery, webhook creation, and .env persistence via the Discord API.
+
+**This sub-command bypasses Phase 0 env var checks** -- it creates the env vars that Phase 0 validates.
+
+Setup script: [discord-setup.sh](./scripts/discord-setup.sh)
+
+### Phase 0: Check Existing Config
+
+```bash
+if [[ -n "${DISCORD_BOT_TOKEN:-}" ]] && [[ -n "${DISCORD_GUILD_ID:-}" ]] && [[ -n "${DISCORD_WEBHOOK_URL:-}" ]]; then
+  # All three vars present
+fi
+```
+
+If all three are set, use **AskUserQuestion**:
+
+- **Reconfigure** -- Overwrite existing Discord configuration
+- **Keep current** -- Exit setup, keep existing configuration
+
+If "Keep current": exit. If any var is missing: proceed.
+
+### Phase 1: Create Bot (browser + instructions)
+
+1. Open the Discord Developer Portal in a headed browser:
+
+```bash
+agent-browser open "https://discord.com/developers/applications" --headed
+```
+
+2. Display instructions:
+
+> **Create a Discord Bot Application:**
+>
+> 1. Click "New Application" -- name it (e.g., "soleur-community") -- click Create
+> 2. Go to the **Bot** tab in the left sidebar
+> 3. Click **Reset Token** -- copy the token that appears
+> 4. Scroll down to **Privileged Gateway Intents**
+> 5. Enable **SERVER MEMBERS INTENT** and **MESSAGE CONTENT INTENT**
+> 6. Click **Save Changes**
+
+3. Use **AskUserQuestion**: "Paste your bot token"
+
+4. Validate the token securely:
+
+```bash
+DISCORD_BOT_TOKEN_INPUT="$token" plugins/soleur/skills/community/scripts/discord-setup.sh validate-token
+```
+
+- On success: capture app ID from stdout (first line)
+- On failure: display "Invalid or expired token. Re-copy from the Bot tab in the portal." and re-prompt once with AskUserQuestion
+
+### Phase 2: Invite Bot
+
+1. Build the OAuth2 URL using the app ID from Phase 1:
+
+```
+https://discord.com/oauth2/authorize?client_id={APP_ID}&scope=bot&permissions=536939520
+```
+
+Permission 536939520 = View Channels + Send Messages + Read Message History + Manage Webhooks.
+
+2. Navigate the browser to the OAuth2 URL:
+
+```bash
+agent-browser open "{OAUTH2_URL}" --headed
+```
+
+3. Display: "Select your server in the dropdown and click **Authorize**."
+
+4. Use **AskUserQuestion**: "Continue after authorizing the bot"
+
+### Phase 3: Configure
+
+**Step 1: Discover guilds**
+
+```bash
+DISCORD_BOT_TOKEN_INPUT="$token" plugins/soleur/skills/community/scripts/discord-setup.sh discover-guilds
+```
+
+- If 0 guilds: "Bot is not in any servers. Complete the authorization step first." Exit.
+- If 1 guild: auto-select, display the guild name
+- If 2+ guilds: use **AskUserQuestion** with guild names as options
+
+**Step 2: List channels**
+
+```bash
+DISCORD_BOT_TOKEN_INPUT="$token" plugins/soleur/skills/community/scripts/discord-setup.sh list-channels <guild_id>
+```
+
+Use **AskUserQuestion** with channel names (first 10 text channels) as options. Recommend `#general` or the first channel if no obvious default.
+
+**Step 3: Create webhook**
+
+```bash
+DISCORD_BOT_TOKEN_INPUT="$token" plugins/soleur/skills/community/scripts/discord-setup.sh create-webhook <channel_id>
+```
+
+- On success (exit 0): capture webhook URL from stdout
+- On exit code 2 (webhook limit): "This channel has too many webhooks. Pick a different channel." Return to Step 2.
+- On exit code 1 (other error): display error and exit setup.
+
+### Phase 4: Persist and Verify
+
+**Step 1: Write .env**
+
+```bash
+DISCORD_BOT_TOKEN_INPUT="$token" plugins/soleur/skills/community/scripts/discord-setup.sh write-env <guild_id> <webhook_url>
+```
+
+**Step 2: Verify**
+
+```bash
+plugins/soleur/skills/community/scripts/discord-setup.sh verify
+```
+
+- On success: capture guild name (line 1) and member count (line 2) from stdout
+- On failure: exit with error
+
+**Step 3: Display summary**
+
+```
+Setup complete!
+
+Guild: <name> (<count> members)
+Channel: #<channel_name>
+Webhook: soleur-community
+Config: .env (3 variables written, permissions 600)
+
+Next: Run /soleur:community health to see metrics.
+```
 
 ---
 

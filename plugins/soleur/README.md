@@ -220,7 +220,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 |-------|-------------|
 | `brainstorming` | Explore intent, approaches, and design decisions |
 | `changelog` | Create engaging changelogs for recent merges |
-| `community` | Manage community engagement across Discord and GitHub (digests, health, welcome) |
+| `community` | Manage community engagement across Discord and GitHub (setup, digests, health, welcome) |
 | `compound-docs` | Capture solved problems as categorized documentation |
 | `deploy-docs` | Validate and prepare documentation for deployment |
 | `docs-site` | Scaffold Eleventy documentation sites with data-driven catalogs |

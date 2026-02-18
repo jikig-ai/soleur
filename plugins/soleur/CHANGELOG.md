@@ -5,6 +5,21 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.14.1] - 2026-02-18
+
+### Added
+
+- New `setup` sub-command for the community skill that automates Discord bot configuration
+- New `discord-setup.sh` script with sub-commands: validate-token, discover-guilds, list-channels, create-webhook, write-env, verify
+- Bot token passed via `DISCORD_BOT_TOKEN_INPUT` env var (never as CLI argument) for security
+- .env written with chmod 600 permissions (owner-only read/write)
+- Browser-guided bot creation via agent-browser (opens Discord Developer Portal)
+
+### Changed
+
+- Community skill Phase 0 env var errors now direct users to `/soleur:community setup`
+- Community-manager agent prerequisites now reference the setup sub-command
+
 ## [2.14.0] - 2026-02-18
 
 ### Added
