@@ -25,7 +25,7 @@ Currently at phase of being an Orchestration engine for Claude Code -- agents, w
 Soleur is meant to be a "Company-as-a-Service" platform designed to allow solo founders (soloentrepreneurs) to collapse the friction between a startup idea and a $1B outcome
 
 AI-powered company orchestration for Claude Code (and Bring Your Own Model later) that get smarter with every use. 
-Soleur currently provides **25 agents**, **8 commands**, and **37 skills** that compound your company knowledge (currently only engineering so far) over time -- every problem you solve makes the next one easier.
+Soleur currently provides **29 agents**, **8 commands**, and **38 skills** that compound your company knowledge (currently only engineering so far) over time -- every problem you solve makes the next one easier.
 
 ## Installation
 
