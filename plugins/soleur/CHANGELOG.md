@@ -5,6 +5,19 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.14.0] - 2026-02-18
+
+### Added
+
+- New `agent-finder` agent for community agent/skill discovery via external registries
+- New `agents/community/` directory for community-installed agents
+- Community discovery check in `/plan` command (Phase 1.5) -- detects uncovered stacks and offers to install community agents from trusted registries
+
+### Changed
+
+- Add `stack: rails` field to `dhh-rails-reviewer` and `kieran-rails-reviewer` agents for gap detection
+- Renumber `/plan` phases: Research Decision (1.5 -> 1.6), External Research (1.5b -> 1.6b), Consolidate (1.6 -> 1.7)
+
 ## [2.13.1] - 2026-02-18
 
 ### Changed
