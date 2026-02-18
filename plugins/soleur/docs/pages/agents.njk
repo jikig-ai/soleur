@@ -1,0 +1,61 @@
+---
+title: Agents
+description: "Specialized agents for code review, architecture, infrastructure, operations, product, design, and engineering workflows."
+layout: base.njk
+permalink: pages/agents.html
+---
+
+    <section class="page-hero">
+      <div class="container">
+        <h1>Agents</h1>
+        <p>{{ stats.agents }} specialized agents for code review, architecture, infrastructure, operations, product, design, and engineering workflows.</p>
+      </div>
+    </section>
+
+    <div class="container">
+      <nav class="category-nav" aria-label="Agent categories">
+        {%- for domain in agents.domains %}
+        <a href="pages/agents.html#{{ domain.key }}" class="category-pill">{{ domain.name }}</a>
+        {%- endfor %}
+      </nav>
+
+      {%- for domain in agents.domains %}
+      <section id="{{ domain.key }}" class="category-section">
+        <div class="category-header">
+          <h2 class="category-title">{{ domain.name }}</h2>
+          <span class="category-count">{{ domain.count }} agent{{ "s" if domain.count != 1 }}</span>
+        </div>
+
+        {%- if domain.subcategories.length > 0 %}
+          {%- for sub in domain.subcategories %}
+        <h3 style="font-size: var(--text-base); color: var(--color-text-secondary); margin-bottom: var(--space-4);">{{ sub.name }}</h3>
+        <div class="catalog-grid">
+            {%- for agent in sub.agents %}
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: {{ domain.cssVar }}"></span>
+              <span class="card-category">{{ domain.name }} / {{ sub.name }}</span>
+            </div>
+            <h3 class="card-title">{{ agent.name }}</h3>
+            <p class="card-description">{{ agent.description }}</p>
+          </article>
+            {%- endfor %}
+        </div>
+          {%- endfor %}
+        {%- else %}
+        <div class="catalog-grid">
+          {%- for agent in domain.agents %}
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: {{ domain.cssVar }}"></span>
+              <span class="card-category">{{ domain.name }}</span>
+            </div>
+            <h3 class="card-title">{{ agent.name }}</h3>
+            <p class="card-description">{{ agent.description }}</p>
+          </article>
+          {%- endfor %}
+        </div>
+        {%- endif %}
+      </section>
+      {%- endfor %}
+    </div>

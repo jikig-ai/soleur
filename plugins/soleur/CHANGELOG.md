@@ -5,6 +5,27 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.14.0] - 2026-02-18
+
+### Added
+
+- New `docs-site` skill for scaffolding Eleventy documentation sites with data-driven catalog pages
+- Migrate documentation site from hand-maintained HTML to Markdown + Eleventy v3 (11ty)
+- Auto-generate agent and skill catalog pages from source file frontmatter at build time
+- Build-time data injection for version strings and component counts (eliminates hardcoded values)
+- Auto-generated sitemap.xml from page collection
+- Eleventy config (`eleventy.config.js`) and npm scripts (`docs:dev`, `docs:build`)
+
+### Changed
+
+- Refactor `release-docs` skill to remove HTML editing instructions (catalog pages now auto-generate)
+- Refactor `deploy-docs` skill for Eleventy build workflow and `_site/` output validation
+- Update deploy-docs GitHub Actions workflow with Node.js build step and expanded path triggers
+
+### Removed
+
+- Delete 7 hand-maintained HTML source files (replaced by Nunjucks/Markdown templates)
+
 ## [2.13.0] - 2026-02-17
 
 ### Changed

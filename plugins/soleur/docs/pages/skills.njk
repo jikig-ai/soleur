@@ -1,0 +1,42 @@
+---
+title: Skills
+description: "Specialized skills for development, content, deployment, and more."
+layout: base.njk
+permalink: pages/skills.html
+---
+
+    <section class="page-hero">
+      <div class="container">
+        <h1>Skills</h1>
+        <p>{{ stats.skills }} specialized skills for development, content, deployment, and more.</p>
+      </div>
+    </section>
+
+    <div class="container">
+      <nav class="category-nav" aria-label="Skill categories">
+        {%- for category in skills.categories %}
+        <a href="pages/skills.html#{{ category.slug }}" class="category-pill">{{ category.name }}</a>
+        {%- endfor %}
+      </nav>
+
+      {%- for category in skills.categories %}
+      <section id="{{ category.slug }}" class="category-section">
+        <div class="category-header">
+          <h2 class="category-title">{{ category.name }}</h2>
+          <span class="category-count">{{ category.count }} skill{{ "s" if category.count != 1 }}</span>
+        </div>
+        <div class="catalog-grid">
+          {%- for skill in category.skills %}
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: {{ category.cssVar }}"></span>
+              <span class="card-category">{{ category.name }}</span>
+            </div>
+            <h3 class="card-title">{{ skill.name }}</h3>
+            <p class="card-description">{{ skill.description }}</p>
+          </article>
+          {%- endfor %}
+        </div>
+      </section>
+      {%- endfor %}
+    </div>

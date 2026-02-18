@@ -28,3 +28,4 @@ node_modules/
 .claude/settings.local.json
 .playwright-mcp/
 .env
+_site/

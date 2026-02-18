@@ -1,6 +1,12 @@
 {
+  "type": "module",
+  "scripts": {
+    "docs:dev": "npx @11ty/eleventy --serve",
+    "docs:build": "npx @11ty/eleventy"
+  },
   "dependencies": {},
   "devDependencies": {
+    "@11ty/eleventy": "^3.0.0",
     "yaml": "^2.8.2"
   }
 }

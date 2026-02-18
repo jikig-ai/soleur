@@ -108,7 +108,7 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 |-----------|-------|
 | Agents | 28 |
 | Commands | 8 |
-| Skills | 37 |
+| Skills | 38 |
 | MCP Servers | 1 |
 
 ## Agents
@@ -215,6 +215,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `changelog` | Create engaging changelogs for recent merges |
 | `compound-docs` | Capture solved problems as categorized documentation |
 | `deploy-docs` | Validate and prepare documentation for deployment |
+| `docs-site` | Scaffold Eleventy documentation sites with data-driven catalogs |
 | `discord-content` | Create and post brand-consistent community content to Discord |
 | `every-style-editor` | Review copy for Every's style guide compliance |
 | `feature-video` | Record video walkthroughs and add to PR description |

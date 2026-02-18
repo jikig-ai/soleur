@@ -1,0 +1,19 @@
+{
+  "name": "Soleur",
+  "url": "https://soleur.ai",
+  "tagline": "The Company-as-a-Service Platform",
+  "description": "Build, ship, and scale powered by AI teams.",
+  "github": "https://github.com/jikig-ai/soleur",
+  "discord": "https://discord.gg/PYZbPBKMUY",
+  "nav": [
+    { "label": "Get Started", "url": "pages/getting-started.html" },
+    { "label": "Agents", "url": "pages/agents.html" },
+    { "label": "Skills", "url": "pages/skills.html" },
+    { "label": "Changelog", "url": "pages/changelog.html" }
+  ],
+  "footerLinks": [
+    { "label": "Get Started", "url": "pages/getting-started.html" },
+    { "label": "GitHub", "url": "https://github.com/jikig-ai/soleur", "external": true },
+    { "label": "Discord", "url": "https://discord.gg/PYZbPBKMUY", "external": true }
+  ]
+}
