@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Add reference to GitHub Pages wiring learning in infra-security agent prompt
-- Document MCP integration audit findings: Cloudflare MCP servers not viable for DNS management (OAuth required, no DNS CRUD tools)
+- Document MCP integration audit findings: Cloudflare and GitHub MCP servers not viable for plugin bundling (OAuth/PAT required, no `headers` field in plugin.json)
 
 ## [2.13.0] - 2026-02-17
 
