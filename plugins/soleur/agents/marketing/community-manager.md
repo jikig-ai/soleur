@@ -14,12 +14,12 @@ Before executing any workflow, verify these environment variables:
 2. **DISCORD_GUILD_ID** -- Required for Discord API access
 3. **DISCORD_WEBHOOK_URL** -- Required for posting digests to Discord
 
-If any required variable is missing, display setup instructions and stop. Use the same instruction format as the scripts:
+If any required variable is missing, direct the user to run `/soleur:community setup` and stop.
 
 ```bash
 # Check prerequisites
 if [[ -z "${DISCORD_BOT_TOKEN:-}" ]]; then
-  echo "DISCORD_BOT_TOKEN is not set. See discord-community.sh for setup."
+  echo "DISCORD_BOT_TOKEN is not set. Run /soleur:community setup to configure."
   # Stop
 fi
 ```
@@ -206,6 +206,7 @@ Display 3-5 content suggestions with:
 
 ## Important Guidelines
 
+- For initial setup, direct users to `/soleur:community setup` which handles bot creation, token validation, and .env configuration via `discord-setup.sh`
 - All Discord API calls go through `discord-community.sh` -- do not call the API directly
 - All GitHub API calls go through `github-community.sh` -- do not call `gh` directly
 - Do not store raw message content in digest files -- summarize and aggregate
