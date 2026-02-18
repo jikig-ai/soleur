@@ -5,6 +5,12 @@ on:
     branches: [main]
     paths:
       - 'plugins/soleur/docs/**'
+      - 'plugins/soleur/agents/**'
+      - 'plugins/soleur/skills/**'
+      - 'plugins/soleur/commands/**'
+      - 'plugins/soleur/CHANGELOG.md'
+      - 'plugins/soleur/.claude-plugin/plugin.json'
+      - 'eleventy.config.js'
   workflow_dispatch:
 
 permissions:
@@ -26,13 +32,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate docs
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build docs
+        run: npx @11ty/eleventy
+
+      - name: Verify build output
         run: |
-          test -f plugins/soleur/docs/index.html || { echo "Missing index.html"; exit 1; }
+          test -f _site/index.html || { echo "Missing index.html"; exit 1; }
           for page in agents skills changelog getting-started; do
-            test -f "plugins/soleur/docs/pages/${page}.html" || { echo "Missing ${page}.html"; exit 1; }
+            test -f "_site/pages/${page}.html" || { echo "Missing ${page}.html"; exit 1; }
           done
-          echo "All required pages present"
+          test -f _site/404.html || { echo "Missing 404.html"; exit 1; }
+          test -f _site/css/style.css || { echo "Missing css/style.css"; exit 1; }
+          test -f _site/CNAME || { echo "Missing CNAME"; exit 1; }
+          echo "All required files present"
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
@@ -40,7 +61,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: 'plugins/soleur/docs'
+          path: '_site'
 
       - name: Deploy to GitHub Pages
         id: deployment

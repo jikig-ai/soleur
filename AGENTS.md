@@ -33,6 +33,8 @@ Before EVERY file write or git command:
 
 This applies to ALL files -- code, brainstorms, specs, plans, learnings, configs. No exceptions.
 
+**MCP tool file paths:** MCP servers (e.g., Playwright) resolve relative filenames from their own process CWD, which is the main repo root -- NOT the Bash session CWD. When working in a worktree, always pass **absolute paths** to MCP tools that write files (screenshots, downloads, exports). Use `$(pwd)/filename.png` or the full worktree path. Bash CLI tools (e.g., `agent-browser screenshot`) are unaffected since they inherit the shell CWD.
+
 ## Diagnostic-First Rule
 
 Before implementing a fix for any bug or error, verify the root cause first. Do not assume the first hypothesis is correct.

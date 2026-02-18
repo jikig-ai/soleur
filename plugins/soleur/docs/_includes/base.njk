@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="{{ description }}">
+  <meta property="og:title" content="{{ title }}{% if title != site.name %} - {{ site.name }}{% endif %}">
+  <meta property="og:description" content="{{ description }}">
+  <meta property="og:url" content="{{ site.url }}{{ page.url }}">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="{{ site.url }}/images/og-image.png">
+  <base href="/">
+  <link rel="icon" type="image/png" href="images/favicon.png">
+  <title>{% if title == site.name %}{{ site.name }} - {{ site.tagline }}{% else %}{{ title }} - {{ site.name }}{% endif %}</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+  <header class="site-header">
+    <a href="index.html" class="logo">{{ site.name }}</a>
+    <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-hidden="true">
+    <label for="nav-toggle" class="nav-toggle-label" aria-label="Toggle navigation">&#9776;</label>
+    <ul class="nav-links">
+      {%- for item in site.nav %}
+      <li><a href="{{ item.url }}"{% if page.url == ('/' + item.url) %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
+      {%- endfor %}
+      <li><a href="{{ site.github }}" target="_blank" rel="noopener">GitHub</a></li>
+      <li><a href="{{ site.discord }}" target="_blank" rel="noopener">Discord</a></li>
+    </ul>
+  </header>
+
+  <main id="main-content"{% if mainClass %} class="{{ mainClass }}"{% endif %}>
+    {{ content | safe }}
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-left">
+        <div class="footer-mark">S</div>
+        <span class="footer-name">{{ site.name }}</span>
+      </div>
+      <ul class="footer-links">
+        {%- for link in site.footerLinks %}
+        <li><a href="{{ link.url }}"{% if link.external %} target="_blank" rel="noopener"{% endif %}>{{ link.label }}</a></li>
+        {%- endfor %}
+      </ul>
+      <span class="footer-tagline">Designed, built, and shipped by {{ site.name }} &mdash; using {{ site.name }}.</span>
+    </div>
+  </footer>
+</body>
+</html>

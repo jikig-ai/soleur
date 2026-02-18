@@ -1,36 +1,10 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="The company-as-a-service platform. Build, ship, and scale powered by AI teams.">
-  <meta property="og:title" content="Soleur - The Company-as-a-Service Platform">
-  <meta property="og:description" content="Build, ship, and scale powered by AI teams. For founders who think in billions.">
-  <meta property="og:url" content="https://soleur.ai/">
-  <meta property="og:type" content="website">
-  <meta property="og:image" content="https://soleur.ai/images/og-image.png">
-  <link rel="icon" type="image/png" href="images/favicon.png">
-  <base href="/">
-  <title>Soleur - The Company-as-a-Service Platform</title>
-  <link rel="stylesheet" href="css/style.css">
-</head>
-<body>
-  <a href="#main-content" class="skip-link">Skip to main content</a>
-  <header class="site-header">
-    <a href="index.html" class="logo">Soleur</a>
-    <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-hidden="true">
-    <label for="nav-toggle" class="nav-toggle-label" aria-label="Toggle navigation">&#9776;</label>
-    <ul class="nav-links">
-      <li><a href="pages/getting-started.html">Get Started</a></li>
-      <li><a href="pages/agents.html">Agents</a></li>
-      <li><a href="pages/skills.html">Skills</a></li>
-      <li><a href="pages/changelog.html">Changelog</a></li>
-      <li><a href="https://github.com/jikig-ai/soleur" target="_blank" rel="noopener">GitHub</a></li>
-      <li><a href="https://discord.gg/PYZbPBKMUY" target="_blank" rel="noopener">Discord</a></li>
-    </ul>
-  </header>
+---
+title: Soleur
+description: "The company-as-a-service platform. Build, ship, and scale powered by AI teams."
+layout: base.njk
+permalink: index.html
+---
 
-  <main id="main-content">
     <!-- Hero -->
     <section class="landing-hero">
       <div class="hero-badge">
@@ -52,11 +26,11 @@
         <div class="landing-stat-label">Automated Workflow</div>
       </div>
       <div class="landing-stat">
-        <div class="landing-stat-value">28</div>
+        <div class="landing-stat-value">{{ stats.agents }}</div>
         <div class="landing-stat-label">AI Agents</div>
       </div>
       <div class="landing-stat">
-        <div class="landing-stat-value">37</div>
+        <div class="landing-stat-value">{{ stats.skills }}</div>
         <div class="landing-stat-label">Skills</div>
       </div>
       <div class="landing-stat">
@@ -165,21 +139,3 @@
       <p>Your AI organization is ready. Are you?</p>
       <a href="pages/getting-started.html" class="btn btn-primary">Start Building</a>
     </section>
-  </main>
-
-  <footer class="site-footer">
-    <div class="footer-inner">
-      <div class="footer-left">
-        <div class="footer-mark">S</div>
-        <span class="footer-name">Soleur</span>
-      </div>
-      <ul class="footer-links">
-        <li><a href="pages/getting-started.html">Get Started</a></li>
-        <li><a href="https://github.com/jikig-ai/soleur" target="_blank" rel="noopener">GitHub</a></li>
-        <li><a href="https://discord.gg/PYZbPBKMUY" target="_blank" rel="noopener">Discord</a></li>
-      </ul>
-      <span class="footer-tagline">Designed, built, and shipped by Soleur &mdash; using Soleur.</span>
-    </div>
-  </footer>
-</body>
-</html>
