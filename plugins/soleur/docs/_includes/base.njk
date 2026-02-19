@@ -74,8 +74,6 @@
       {%- for item in site.nav %}
       <li><a href="{{ item.url }}"{% if page.url == ('/' + item.url) %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
       {%- endfor %}
-      <li><a href="{{ site.github }}" target="_blank" rel="noopener">GitHub</a></li>
-      <li><a href="{{ site.discord }}" target="_blank" rel="noopener">Discord</a></li>
     </ul>
   </header>
 
