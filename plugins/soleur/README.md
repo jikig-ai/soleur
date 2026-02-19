@@ -106,21 +106,22 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 | Component | Count |
 |-----------|-------|
-| Agents | 31 |
+| Agents | 32 |
 | Commands | 8 |
-| Skills | 40 |
+| Skills | 41 |
 | MCP Servers | 1 |
 
 ## Agents
 
 Agents are organized by domain, then by function.
 
-### Marketing (3)
+### Marketing (4)
 
 | Agent | Description |
 |-------|-------------|
 | `brand-architect` | Interactive brand identity workshop producing structured brand guides |
 | `community-manager` | Analyze community engagement, generate weekly digests, and report health metrics across Discord and GitHub |
+| `growth-strategist` | Content strategy analysis: keyword research, content auditing, gap analysis, and AI agent consumability |
 | `seo-aeo-analyst` | Audit Eleventy docs sites for SEO and AEO (AI Engine Optimization) issues |
 
 ### Design (1)
@@ -230,6 +231,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `feature-video` | Record video walkthroughs and add to PR description |
 | `file-todos` | File-based todo tracking system |
 | `gemini-imagegen` | Generate and edit images using Google's Gemini API |
+| `growth` | Content strategy: keyword research, content auditing, gap analysis, AI agent consumability |
 | `release-announce` | Announce releases to Discord and GitHub Releases |
 | `release-docs` | Build and update documentation site with current components |
 | `seo-aeo` | Audit, fix, and validate SEO/AEO for Eleventy docs sites |
