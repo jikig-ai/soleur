@@ -338,6 +338,8 @@ After the PR is created, ask the user:
 - **Merge now** -> Run `gh pr merge <number> --squash` then proceed to cleanup below
 - **Later** -> Stop here. Cleanup will happen via SessionStart hook next session.
 
+**CRITICAL: Do NOT use `--delete-branch` on merge.** The worktree is still active and the guardrails hook will block it. Merge with `--squash` only, then `cleanup-merged` handles branch deletion after removing the worktree.
+
 **If merged (either now or user says "merge PR" later in the session):**
 
 1. **Release creation is automatic.** When a merge to main includes a plugin.json version change, the `auto-release.yml` GitHub Actions workflow creates a GitHub Release and posts to Discord. No manual step needed.
