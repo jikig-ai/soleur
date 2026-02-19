@@ -25,6 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Changelog page now renders at build time instead of fetching from GitHub raw at runtime
 - 404 page excluded from collections (was appearing in sitemap)
 
+## [2.14.2] - 2026-02-19
+
+### Added
+
+- Hi-res 512x512 brand logo mark (`logo-mark-512.png`) for Discord and social platform avatars
+- Updated brand guide component counts from 23+ agents/36+ skills to 30+ agents/39+ skills
+
+### Fixed
+
+- Plugin description skill count corrected from 38 to 39
+
 ## [2.14.1] - 2026-02-18
 
 ### Added
