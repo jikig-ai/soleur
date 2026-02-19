@@ -11,6 +11,7 @@ Project principles organized by domain. Add principles as you learn them.
 - All skill, command, and agent markdown files must include YAML frontmatter with `name` and `description` fields
 - Use kebab-case for all file and directory names (agents, skills, commands, learnings, plans)
 - Agent descriptions must include at least one `<example>` block with context, user/assistant dialogue, and `<commentary>` explaining the selection rationale
+- Agent prompts must contain only instructions the LLM would get wrong without them -- omit general domain knowledge, error handling, and boilerplate the model already knows
 - Agent frontmatter must include a `model` field (`inherit`, `haiku`, `sonnet`, or `opus`) to control execution model
 - Command frontmatter must include an `argument-hint` field describing expected arguments
 
@@ -32,6 +33,8 @@ Project principles organized by domain. Add principles as you learn them.
 
 - Core workflow commands use `soleur:` prefix to avoid collisions with built-in commands
 - Every plugin change must update three files: plugin.json (version), CHANGELOG.md, and README.md (counts/tables)
+- When adding a new skill, manually register it in `docs/_data/skills.js` SKILL_CATEGORIES -- skill discovery does not recurse and the docs site will silently omit unregistered skills
+- After version bumps, diff root README agent/skill counts against plugin README counts -- they drift independently and have diverged multiple times
 - Organize agents by domain first (engineering/, etc.), then by function (review/, design/). Cross-domain agents stay at root level (research/, workflow/)
 - Skills must have a SKILL.md file and may include scripts/, references/, and assets/ subdirectories
 - Lifecycle workflows with hooks must cover every state transition with a cleanup trigger; verify no gaps between create, ship, merge, and session-start
@@ -92,6 +95,7 @@ Project principles organized by domain. Add principles as you learn them.
 - When a workflow captures domain-specific knowledge, route it to the closest instruction file (skill, agent, command) rather than only centralizing in constitution.md -- domain-specific gotchas belong in domain-specific instructions
 - When reviewing docs site changes, audit information architecture separately from visual polish -- check navigation order matches user journey, every page justifies its existence, same-level sections have consistent visual treatment, and first-time users can orient in 30 seconds
 - Consolidate catalog categories to ~4-6 groups with 5+ items each; keep category names and ordering consistent across docs pages, README tables, and release tooling
+- If skill sub-commands are always run in sequence with no branching decisions between them, merge them into a single sub-command
 - Add CSS classes to `style.css` `@layer components` instead of inline styles in Nunjucks templates
 - Add test/temp build output directories (e.g., `_site_test/`) to `.gitignore` when introducing new build commands
 
