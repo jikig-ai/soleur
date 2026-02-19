@@ -40,6 +40,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Run code review and `/soleur:compound` before committing -- the commit is the gate, not the PR
 - Infrastructure agents that wire external services (DNS, SSL, Pages) must own the full verification loop -- use `gh` CLI, `openssl`, `curl`, and `agent-browser` to verify each step programmatically instead of asking the user to check manually; only stop for genuine decisions, not mechanical verification
 - Network and external service failures must degrade gracefully -- warn (if interactive) and continue rather than abort the workflow
+- All Discord webhook payloads must include explicit `username` and `avatar_url` fields rather than relying on webhook defaults -- webhook messages freeze author identity at post time; only delete+repost changes identity on existing messages
 - Plans that create worktrees and invoke Task agents must include explicit `cd ${WORKTREE_PATH}` + `pwd` verification between worktree creation and agent invocation
 
 ### Never

@@ -105,9 +105,11 @@ Post via webhook:
 ```bash
 curl -s -o /dev/null -w "%{http_code}" \
   -H "Content-Type: application/json" \
-  -d "{\"content\": \"ESCAPED_CONTENT\"}" \
+  -d "{\"content\": \"ESCAPED_CONTENT\", \"username\": \"Sol\", \"avatar_url\": \"AVATAR_URL\"}" \
   "$DISCORD_WEBHOOK_URL"
 ```
+
+Set `avatar_url` to the hosted logo URL (e.g., the GitHub-hosted `logo-mark-512.png`). Webhook messages freeze author identity at post time -- these fields ensure consistent branding.
 
 If the webhook POST fails, display the digest content so it can be posted manually. Do not retry automatically.
 
@@ -213,3 +215,4 @@ Display 3-5 content suggestions with:
 - Do not post to Discord without user approval (the skill handles the approval flow)
 - Digest posting requires brand guide check for voice alignment
 - If scripts fail (missing env vars, API errors), report the error clearly and stop
+- When posting via webhook, always include `username` and `avatar_url` fields to ensure consistent bot identity -- webhook messages freeze author identity at post time

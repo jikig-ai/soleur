@@ -79,9 +79,11 @@ On acceptance, post the content via webhook:
 ```bash
 curl -s -o /dev/null -w "%{http_code}" \
   -H "Content-Type: application/json" \
-  -d "{\"content\": \"ESCAPED_CONTENT\"}" \
+  -d "{\"content\": \"ESCAPED_CONTENT\", \"username\": \"Sol\", \"avatar_url\": \"AVATAR_URL\"}" \
   "$DISCORD_WEBHOOK_URL"
 ```
+
+Set `avatar_url` to the hosted logo URL (e.g., the GitHub-hosted `logo-mark-512.png`). Webhook messages freeze author identity at post time -- these fields ensure consistent branding.
 
 **Content must be properly JSON-escaped** before inserting into the payload. Escape double quotes, backslashes, and newlines.
 
@@ -110,3 +112,4 @@ Display the draft so the user can post it manually. Do not retry automatically.
 - JSON-escape all content before inserting into the webhook payload
 - If the brand guide's `## Channel Notes > ### Discord` section is missing, generate content using only the `## Voice` section (no error)
 - If the user selects "Edit", incorporate their feedback and regenerate -- do not present the same draft
+- When posting via webhook, always include `username` and `avatar_url` fields to ensure consistent bot identity -- webhook messages freeze author identity at post time

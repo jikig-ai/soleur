@@ -337,9 +337,11 @@ On acceptance, post via webhook:
 ```bash
 curl -s -o /dev/null -w "%{http_code}" \
   -H "Content-Type: application/json" \
-  -d "{\"content\": \"ESCAPED_CONTENT\"}" \
+  -d "{\"content\": \"ESCAPED_CONTENT\", \"username\": \"Sol\", \"avatar_url\": \"AVATAR_URL\"}" \
   "$DISCORD_WEBHOOK_URL"
 ```
+
+Set `avatar_url` to the hosted logo URL (e.g., the GitHub-hosted `logo-mark-512.png`). Webhook messages freeze author identity at post time -- these fields ensure consistent branding.
 
 JSON-escape all content before inserting into the payload.
 
@@ -357,3 +359,4 @@ JSON-escape all content before inserting into the payload.
 - If brand guide is missing, warn but continue (do not block execution)
 - Environment variable validation happens once in Phase 0, not per sub-command
 - Scripts are at `plugins/soleur/skills/community/scripts/` relative to repo root
+- When posting via webhook, always include `username` and `avatar_url` fields to ensure consistent bot identity -- webhook messages freeze author identity at post time
