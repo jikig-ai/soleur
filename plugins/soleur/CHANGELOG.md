@@ -5,6 +5,14 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.15.1] - 2026-02-19
+
+### Changed
+
+- All Discord webhook payloads now include `username` and `avatar_url` fields in community skill, community-manager agent, and discord-content skill
+- Added webhook identity guideline to Important Guidelines sections across all Discord-posting components
+- Added webhook identity rule to constitution (Architecture > Always)
+
 ## [2.15.0] - 2026-02-19
 
 ### Added
