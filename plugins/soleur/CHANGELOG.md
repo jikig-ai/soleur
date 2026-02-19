@@ -5,6 +5,15 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.18.1] - 2026-02-19
+
+### Fixed
+
+- Landing page feature grid cards now maintain logical groupings on mobile and tablet viewports (#160)
+- Split single feature grid into separate department and workflow grids with "The Workflow" sublabel
+- Added 2-column mobile responsive override to preserve card pairing on narrow screens
+- Changed sublabel from `<p>` to `<h3>` for proper heading hierarchy and screen reader navigation
+
 ## [2.18.0] - 2026-02-19
 
 ### Added
