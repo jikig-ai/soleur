@@ -3,7 +3,6 @@ import { join, resolve, relative } from "node:path";
 import yaml from "yaml";
 
 const DOMAIN_LABELS = {
-  design: "Design",
   engineering: "Engineering",
   marketing: "Marketing",
   operations: "Operations",
@@ -20,7 +19,6 @@ const SUB_LABELS = {
 
 // CSS variable name for category dot color
 const DOMAIN_CSS_VARS = {
-  design: "var(--cat-design, var(--accent))",
   engineering: "var(--cat-review)",
   marketing: "var(--cat-content)",
   operations: "var(--cat-workflow)",
@@ -137,7 +135,7 @@ export default function () {
   }
 
   // Sort and structure output
-  const domainOrder = ["design", "engineering", "marketing", "operations", "product"];
+  const domainOrder = ["engineering", "marketing", "operations", "product"];
   const subOrder = ["review", "design", "infra", "research", "workflow"];
 
   const domains = [];

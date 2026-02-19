@@ -124,12 +124,6 @@ Agents are organized by domain, then by function.
 | `growth-strategist` | Content strategy analysis: keyword research, content auditing, gap analysis, and AI agent consumability |
 | `seo-aeo-analyst` | Audit Eleventy docs sites for SEO and AEO (AI Engine Optimization) issues |
 
-### Design (1)
-
-| Agent | Description |
-|-------|-------------|
-| `ux-design-lead` | Visual design in .pen files using Pencil MCP (wireframes, screens, components). Requires [Pencil extension](https://docs.pencil.dev/getting-started/installation). |
-
 ### Engineering (25)
 
 #### Review (14)
@@ -194,11 +188,17 @@ Agents are organized by domain, then by function.
 | `ops-advisor` | Track expenses, manage domains, advise on hosting |
 | `ops-research` | Research domains, hosting, tools/SaaS, and cost optimization with browser automation |
 
-### Product (1)
+### Product (2)
 
 | Agent | Description |
 |-------|-------------|
 | `spec-flow-analyzer` | Analyze user flows and identify gaps in specifications |
+
+#### Design (1)
+
+| Agent | Description |
+|-------|-------------|
+| `ux-design-lead` | Visual design in .pen files using Pencil MCP (wireframes, screens, components). Requires [Pencil extension](https://docs.pencil.dev/getting-started/installation). |
 
 ## Commands
 

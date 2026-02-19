@@ -5,12 +5,21 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.17.0] - 2026-02-19
+## [2.18.0] - 2026-02-19
 
 ### Added
 
 - New `functional-discovery` agent under engineering/discovery for detecting community tools with similar functionality to features being planned
 - Phase 1.5b in `/soleur:plan` command to spawn functional-discovery after stack-gap check, searching registries before building redundant features
+
+## [2.17.0] - 2026-02-19
+
+### Changed
+
+- Merged Design domain under Product domain: `agents/design/ux-design-lead.md` moved to `agents/product/design/ux-design-lead.md`
+- Agent renamed from `soleur:design:ux-design-lead` to `soleur:product:design:ux-design-lead`
+- Reduced top-level agent domains from 5 to 4 (Engineering, Marketing, Operations, Product)
+- Removed `--cat-design` CSS variable from docs (replaced by `--cat-tools` for product domain)
 
 ## [2.16.0] - 2026-02-19
 

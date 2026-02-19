@@ -32,7 +32,6 @@ Components are organized by domain, then by function.
 
 ```text
 agents/
-├── design/                # UX design agents
 ├── engineering/
 │   ├── design/            # Architecture agents
 │   ├── infra/             # Infrastructure agents
@@ -41,7 +40,8 @@ agents/
 │   └── workflow/          # Engineering workflow agents
 ├── marketing/             # Brand and marketing agents
 ├── operations/            # Ops and expense agents
-└── product/               # Product analysis agents
+└── product/               # Product analysis and design agents
+    └── design/            # UX design agents
 
 commands/
 └── soleur/                # All commands (soleur:plan, soleur:review, etc.)
