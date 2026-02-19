@@ -170,6 +170,27 @@ and present suggestions for user approval."
 
 **Skip condition:** If no uncovered stacks are detected, skip this phase entirely with no output.
 
+### 1.5b. Functional Overlap Check
+
+After the stack-gap check, search community registries for skills/agents that functionally overlap with the feature being planned. This prevents redundant development when community tools already cover the planned functionality.
+
+**Always runs** -- unlike Phase 1.5 which is conditional on stack gaps. Any feature could have community overlap regardless of technology stack.
+
+**Step 1:** Extract the feature description from the `<feature_description>` tag.
+
+**Step 2:** Spawn the functional-discovery agent:
+
+```
+Task functional-discovery: "Feature description: [feature_description text].
+Search community registries for skills/agents with similar functionality
+and present install/skip suggestions."
+```
+
+**Step 3: Handle results.**
+- If artifacts were installed: announce "Installed N community artifacts with similar functionality. They will be available in subsequent commands."
+- If all suggestions were skipped or zero results: continue silently.
+- If functional-discovery failed (network errors): continue silently. Discovery must never block planning.
+
 ### 1.6. Research Decision
 
 Based on signals from Step 0 and findings from Step 1, decide on external research.

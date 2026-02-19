@@ -5,6 +5,13 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.18.0] - 2026-02-19
+
+### Added
+
+- New `functional-discovery` agent under engineering/discovery for detecting community tools with similar functionality to features being planned
+- Phase 1.5b in `/soleur:plan` command to spawn functional-discovery after stack-gap check, searching registries before building redundant features
+
 ## [2.17.0] - 2026-02-19
 
 ### Changed
