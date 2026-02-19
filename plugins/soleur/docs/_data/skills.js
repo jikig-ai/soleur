@@ -10,6 +10,7 @@ const SKILL_CATEGORIES = {
   brainstorming: "Content & Release",
   changelog: "Content & Release",
   "compound-docs": "Content & Release",
+  "content-writer": "Content & Release",
   "deploy-docs": "Content & Release",
   "discord-content": "Content & Release",
   "every-style-editor": "Content & Release",

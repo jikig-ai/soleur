@@ -1,17 +1,18 @@
 ---
 name: growth
-description: "This skill should be used when performing content strategy analysis, keyword research, content auditing for search intent alignment, content gap analysis, content planning, or AI agent consumability auditing. Triggers on \"keyword research\", \"content strategy\", \"content audit\", \"content plan\", \"growth audit\", \"growth plan\", \"aeo content\", \"search intent\"."
+description: "This skill should be used when performing content strategy analysis, keyword research, content auditing for search intent alignment, content gap analysis, content planning, AI agent consumability auditing, or applying content fixes. Triggers on \"keyword research\", \"content strategy\", \"content audit\", \"content plan\", \"growth audit\", \"growth plan\", \"growth fix\", \"aeo content\", \"search intent\", \"fix content\"."
 ---
 
 # Growth Strategy
 
-Analyze content for keyword alignment, plan content to capture search traffic, and audit AI agent consumability. This skill delegates to the growth-strategist agent for content-level analysis.
+Analyze content for keyword alignment, plan content to capture search traffic, audit AI agent consumability, and apply content fixes. This skill delegates to the growth-strategist agent for content-level analysis and execution.
 
 ## Sub-commands
 
 | Command | Description |
 |---------|-------------|
 | `growth audit <url-or-path>` | Audit existing content for keyword alignment and search intent match |
+| `growth fix <path>` | Audit and apply keyword/copy/AEO fixes to local source files |
 | `growth plan <topic> [--site <url-or-path>] [--competitors url1,url2]` | Research keywords, analyze gaps, and produce a prioritized content plan |
 | `growth aeo <url-or-path>` | Audit content for AI agent consumability (conversational readiness, FAQ structure, citation quality) |
 
@@ -46,6 +47,39 @@ Analyze existing site content for keyword alignment, search intent match, and re
    ```
 
 4. Present the agent's report to the user.
+
+---
+
+## Sub-command: fix
+
+Audit existing content and apply fixes to local source files. Combines analysis and execution in one pass, following the `seo-aeo fix` pattern.
+
+### Steps
+
+1. Parse the argument as a local file or directory path. If the argument starts with `http://` or `https://`, display: "growth fix works on local files only. For URL analysis, use `growth audit`." Stop execution.
+
+2. Check for brand guide:
+
+   ```bash
+   if [[ -f "knowledge-base/overview/brand-guide.md" ]]; then
+     echo "Brand guide found. Will validate rewrites against brand voice."
+   fi
+   ```
+
+3. Launch the growth-strategist agent via the Task tool:
+
+   ```
+   Task growth-strategist: "Audit the content at <path> for keyword alignment,
+   search intent match, readability, and AEO gaps. For each issue found, apply
+   a fix to the source files. Read each file before editing.
+   <if brand guide exists: Read knowledge-base/overview/brand-guide.md and
+   validate all rewrites against the brand voice before applying.>
+   After all fixes, build the site to verify changes compile.
+   Report what was changed per file."
+   ```
+
+4. Present the agent's report showing changes made.
+5. If the build failed, show the error and suggest: "Run `git checkout -- <file>` to revert changes, or fix the build error manually."
 
 ---
 
@@ -116,5 +150,6 @@ Audit content for AI agent consumability at the content level. Checks whether AI
 
 - Each sub-command is independent. No sub-command requires a prior run of another.
 - The `plan` sub-command performs its own keyword research internally -- no need to run a separate research step first.
-- All output is inline (displayed in the conversation). No files are written to disk.
+- The `audit`, `plan`, and `aeo` sub-commands produce inline output only. The `fix` sub-command modifies source files directly.
 - The growth-strategist agent handles content-level analysis. For technical SEO (meta tags, JSON-LD, sitemaps, llms.txt), direct users to the `seo-aeo` skill instead.
+- For generating new articles from content plans, direct users to the `content-writer` skill.
