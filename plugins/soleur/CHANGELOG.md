@@ -5,6 +5,19 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.15.2] - 2026-02-19
+
+### Added
+
+- Community hub page on docs site at `pages/community.html` with Discord, GitHub, contributing, support, and code of conduct sections
+
+### Changed
+
+- Header nav: replaced hardcoded GitHub/Discord external links with single data-driven "Community" link
+- Footer nav: replaced GitHub/Discord entries with Community page link
+- Added `_site_test/` to `.gitignore` for test build output
+- Added `.community-card-link` and `.community-text` CSS classes to avoid inline styles
+
 ## [2.15.1] - 2026-02-19
 
 ### Changed

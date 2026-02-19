@@ -29,3 +29,4 @@ node_modules/
 .playwright-mcp/
 .env
 _site/
+_site_test/
