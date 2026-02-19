@@ -1,7 +1,7 @@
 {
   "name": "soleur",
-  "version": "2.14.1",
-  "description": "AI-powered development tools for Claude Code that get smarter with every use. 30 agents, 8 commands, and 38 skills that compound your engineering knowledge over time.",
+  "version": "2.15.0",
+  "description": "AI-powered development tools for Claude Code that get smarter with every use. 31 agents, 8 commands, and 40 skills that compound your engineering knowledge over time.",
   "author": {
     "name": "Jean Deruelle",
     "email": "jean.deruelle@jikigai.com",

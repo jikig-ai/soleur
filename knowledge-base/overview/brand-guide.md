@@ -18,7 +18,7 @@ Solo founders who think in billions. Technical builders who refuse to accept tha
 
 ### Positioning
 
-Soleur is not a copilot. Not an assistant. It is a full AI organization -- 23+ agents, 36+ skills, and compounding knowledge -- that operates as every department from strategy to shipping. The brand energy mirrors Tesla and SpaceX: audacious, mission-driven, future-focused. We lead with the ambitious platform vision, never the plugin description.
+Soleur is not a copilot. Not an assistant. It is a full AI organization -- 31 agents, 40 skills, and compounding knowledge -- that operates as every department from strategy to shipping. The brand energy mirrors Tesla and SpaceX: audacious, mission-driven, future-focused. We lead with the ambitious platform vision, never the plugin description.
 
 **Tagline:** The Company-as-a-Service Platform
 
@@ -37,7 +37,7 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 | Context | Tone | Example |
 |---------|------|---------|
 | Marketing / Hero | Maximum ambition, declarative | "Build a Billion-Dollar Company. Alone." |
-| Product announcements | Confident, concrete | "23 agents. Every department. From idea to shipped." |
+| Product announcements | Confident, concrete | "31 agents. Every department. From idea to shipped." |
 | Technical docs | Clear, precise, no fluff | "The compound skill chains two agents sequentially." |
 | Community / Discord | Direct, collaborative, still bold | "Shipped. Try it and tell us what breaks." |
 | Error messages | Honest, actionable | "Agent failed. Here's the log. Here's the fix." |
@@ -48,7 +48,7 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 - Lead with what becomes possible, not what the tool does
 - Use declarative statements ("Build at scale" not "Try building at scale")
 - Frame the founder as the decision-maker, the system as the executor
-- Use concrete numbers when available (23+ agents, 36+ skills)
+- Use concrete numbers when available (31 agents, 40 skills)
 - Write like the future is already here
 - Use "we" when speaking as Soleur, "you" when addressing the founder
 - Keep sentences short and punchy in marketing copy
@@ -132,7 +132,7 @@ The visual identity follows the **Solar Forge** direction: raw power being shape
 - Keep messages concise. If it needs a wall of text, link to docs instead.
 - Announcements should still carry the brand energy: declarative, concrete, forward-looking.
 - Engage with the community as equals who are building the future together.
-- Example announcement: "New: 4 agents for marketing workflows. Strategy to published content in one command. Ship it."
+- Example announcement: "New: SEO + AEO for your docs site. One skill, three sub-commands. Ship it."
 - Example reply: "Good question. The compound skill handles that -- docs here: [link]"
 
 ### GitHub

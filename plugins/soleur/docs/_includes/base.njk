@@ -4,11 +4,61 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="{{ description }}">
+  <link rel="canonical" href="{{ site.url }}{{ page.url }}">
   <meta property="og:title" content="{{ title }}{% if title != site.name %} - {{ site.name }}{% endif %}">
   <meta property="og:description" content="{{ description }}">
   <meta property="og:url" content="{{ site.url }}{{ page.url }}">
   <meta property="og:type" content="website">
+  <meta property="og:site_name" content="{{ site.name }}">
+  <meta property="og:locale" content="en_US">
   <meta property="og:image" content="{{ site.url }}/images/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="{{ site.name }} - {{ site.tagline }}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ title }}{% if title != site.name %} - {{ site.name }}{% endif %}">
+  <meta name="twitter:description" content="{{ description }}">
+  <meta name="twitter:image" content="{{ site.url }}/images/og-image.png">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "name": "{{ site.name }}",
+        "url": "{{ site.url }}",
+        "description": "{{ site.description }}"
+      },
+      {
+        "@type": "WebPage",
+        "name": "{{ title }}",
+        "description": "{{ description }}",
+        "url": "{{ site.url }}{{ page.url }}"
+      }{% if page.url == "/" or page.url == "/index.html" %},
+      {
+        "@type": "SoftwareApplication",
+        "name": "{{ site.name }}",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "macOS, Linux, Windows",
+        "softwareVersion": "{{ plugin.version }}",
+        "softwareRequirements": "Claude Code CLI",
+        "downloadUrl": "{{ site.github }}",
+        "releaseNotes": "{{ site.url }}/pages/changelog.html",
+        "featureList": "AI Agents, Skills, Commands, Knowledge Compounding, Code Review, Planning, Deployment",
+        "author": {
+          "@type": "Organization",
+          "name": "{{ site.name }}",
+          "url": "{{ site.url }}"
+        },
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        }
+      }{% endif %}
+    ]
+  }
+  </script>
   <base href="/">
   <link rel="icon" type="image/png" href="images/favicon.png">
   <title>{% if title == site.name %}{{ site.name }} - {{ site.tagline }}{% else %}{{ title }} - {{ site.name }}{% endif %}</title>

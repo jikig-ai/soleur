@@ -1,6 +1,11 @@
 const INPUT = "plugins/soleur/docs";
 
 export default function (eleventyConfig) {
+  // Date filter for sitemap lastmod
+  eleventyConfig.addFilter("dateToRfc3339", (date) => {
+    return new Date(date).toISOString().split("T")[0];
+  });
+
   // Passthrough static assets -- paths relative to project root, mapped to output
   eleventyConfig.addPassthroughCopy({ [`${INPUT}/css`]: "css" });
   eleventyConfig.addPassthroughCopy({ [`${INPUT}/fonts`]: "fonts" });
