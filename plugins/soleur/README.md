@@ -106,7 +106,7 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 | Component | Count |
 |-----------|-------|
-| Agents | 32 |
+| Agents | 33 |
 | Commands | 8 |
 | Skills | 41 |
 | MCP Servers | 1 |
@@ -151,11 +151,12 @@ Agents are organized by domain, then by function.
 | `security-sentinel` | Security audits and vulnerability assessments |
 | `test-design-reviewer` | Score test quality using Farley's 8 properties with weighted rubric |
 
-#### Discovery (1)
+#### Discovery (2)
 
 | Agent | Description |
 |-------|-------------|
 | `agent-finder` | Find and install community agents/skills from trusted registries for uncovered stacks |
+| `functional-discovery` | Search community registries for skills/agents with similar functionality to prevent redundant development |
 
 #### Design (1)
 
