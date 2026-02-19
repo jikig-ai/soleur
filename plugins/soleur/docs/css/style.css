@@ -300,6 +300,14 @@
     display: inline-block;
     word-break: break-all;
   }
+  /* Community page */
+  .community-card-link { text-decoration: none; color: inherit; }
+  .community-text {
+    color: var(--color-text-secondary);
+    line-height: 1.6;
+    max-width: 65ch;
+  }
+  .community-text a { color: var(--color-accent); }
 
   /* Command cards (wider) */
   .command-card {
