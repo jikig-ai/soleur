@@ -5,13 +5,33 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.14.3] - 2026-02-19
+## [2.15.1] - 2026-02-19
 
 ### Changed
 
 - All Discord webhook payloads now include `username` and `avatar_url` fields in community skill, community-manager agent, and discord-content skill
 - Added webhook identity guideline to Important Guidelines sections across all Discord-posting components
 - Added webhook identity rule to constitution (Architecture > Always)
+
+## [2.15.0] - 2026-02-19
+
+### Added
+
+- New `seo-aeo-analyst` agent under marketing domain for auditing Eleventy docs sites
+- New `seo-aeo` skill with audit/fix/validate sub-commands for SEO and AEO
+- New `validate-seo.sh` CI validation script checking canonical URLs, JSON-LD, OG tags, Twitter cards, llms.txt, and sitemap
+- SEO meta tags: canonical URL, og:locale, Twitter/X cards, enhanced OG tags on all pages
+- JSON-LD structured data: WebSite + WebPage on all pages, SoftwareApplication on homepage
+- `llms.txt` template following llms-txt.org spec for AI model discoverability
+- Build-time changelog rendering using markdown-it (replaces client-side JS fetch)
+- Collection-based `sitemap.xml` with `lastmod` dates using `dateToRfc3339` filter
+- SEO validation step in `deploy-docs.yml` CI pipeline
+- Tests for `validate-seo.sh` and `changelog.js`
+
+### Changed
+
+- Changelog page now renders at build time instead of fetching from GitHub raw at runtime
+- 404 page excluded from collections (was appearing in sitemap)
 
 ## [2.14.2] - 2026-02-19
 

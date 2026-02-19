@@ -20,6 +20,7 @@ The documentation site auto-generates agent and skill catalog pages from source 
 - `plugins/soleur/.claude-plugin/plugin.json` description with counts
 - `.claude-plugin/marketplace.json` description with counts
 - `plugins/soleur/README.md` component tables and counts
+- `knowledge-base/overview/brand-guide.md` agent/skill counts (if it exists)
 
 ## Step 1: Inventory Current Components
 

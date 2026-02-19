@@ -119,6 +119,7 @@ git diff --name-status $(git merge-base HEAD origin/main)..HEAD -- \
 1. Verify `plugins/soleur/README.md` component counts are accurate
 2. Verify new entries appear in the correct tables
 3. If counts are wrong, fix them
+4. If `knowledge-base/overview/brand-guide.md` exists, check for stale agent/skill counts and update them
 
 **If no new components:** Skip this step.
 
