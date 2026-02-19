@@ -545,11 +545,24 @@
     color: var(--color-accent);
   }
 
-  /* Landing page: Feature grid */
-  .feature-grid {
+  /* Landing page: Feature grids (departments + workflow) */
+  .feature-grid-departments,
+  .feature-grid-workflow {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     gap: var(--space-5);
+    max-width: 1200px;
+    margin-inline: auto;
+  }
+  .feature-grid-sublabel {
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 3px;
+    color: var(--color-accent);
+    text-transform: uppercase;
+    text-align: center;
+    margin-top: var(--space-8);
+    margin-bottom: var(--space-4);
     max-width: 1200px;
     margin-inline: auto;
   }
@@ -852,6 +865,9 @@
     .landing-hero h1 { font-size: var(--text-3xl); }
     .landing-stats { flex-direction: column; gap: var(--space-6); }
     .problem-cards { grid-template-columns: 1fr; }
+    .feature-grid-departments,
+    .feature-grid-workflow { grid-template-columns: repeat(2, 1fr); }
+    .feature-grid-sublabel { font-size: var(--text-xs); margin-bottom: var(--space-3); }
     .landing-quote blockquote { font-size: var(--text-xl); }
     .section-title { font-size: var(--text-2xl); }
     .footer-inner { flex-direction: column; gap: var(--space-4); text-align: center; }
