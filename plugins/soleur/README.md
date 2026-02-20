@@ -106,7 +106,7 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 | Component | Count |
 |-----------|-------|
-| Agents | 35 |
+| Agents | 36 |
 | Commands | 8 |
 | Skills | 44 |
 | MCP Servers | 1 |
@@ -131,9 +131,9 @@ Agents are organized by domain, then by function.
 | `legal-document-generator` | Generate draft legal documents (Terms, Privacy Policy, Cookie Policy, GDPR, AUP, DPA, Disclaimer) |
 | `legal-compliance-auditor` | Audit legal documents for compliance gaps, outdated clauses, and cross-document consistency |
 
-### Engineering (25)
+### Engineering (26)
 
-#### Review (14)
+#### Review (15)
 
 | Agent | Description |
 |-------|-------------|
@@ -150,6 +150,7 @@ Agents are organized by domain, then by function.
 | `pattern-recognition-specialist` | Analyze code for patterns and anti-patterns |
 | `performance-oracle` | Performance analysis and optimization |
 | `security-sentinel` | Security audits and vulnerability assessments |
+| `semgrep-sast` | Deterministic SAST scanning using semgrep CLI for known vulnerability patterns |
 | `test-design-reviewer` | Score test quality using Farley's 8 properties with weighted rubric |
 
 #### Discovery (2)

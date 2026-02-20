@@ -28,10 +28,13 @@ const homepageHtml = `<!DOCTYPE html>
 <body></body>
 </html>`;
 
-function setupSite(overrides?: { skipLlms?: boolean; skipCanonical?: boolean; skipSitemap?: boolean }) {
+function setupSite(overrides?: { skipLlms?: boolean; skipCanonical?: boolean; skipSitemap?: boolean; skipRobots?: boolean; robotsContent?: string }) {
   mkdirSync(`${TMP_DIR}/pages`, { recursive: true });
   if (!overrides?.skipLlms) {
     writeFileSync(`${TMP_DIR}/llms.txt`, "# Test\n> description\n");
+  }
+  if (!overrides?.skipRobots) {
+    writeFileSync(`${TMP_DIR}/robots.txt`, overrides?.robotsContent ?? "User-agent: *\nAllow: /\n");
   }
   if (!overrides?.skipSitemap) {
     writeFileSync(`${TMP_DIR}/sitemap.xml`, '<urlset><url><loc>https://example.com/</loc><lastmod>2026-01-01</lastmod></url></urlset>');
@@ -85,5 +88,40 @@ describe("validate-seo.sh", () => {
     const stdout = await new Response(proc.stdout).text();
     expect(exitCode).toBe(1);
     expect(stdout).toContain("missing lastmod");
+  });
+
+  test("fails when robots.txt is missing", async () => {
+    setupSite({ skipRobots: true });
+    const proc = Bun.spawn(["bash", SCRIPT, TMP_DIR], { stdout: "pipe", stderr: "pipe" });
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("robots.txt missing");
+  });
+
+  test("fails when robots.txt blocks an AI bot", async () => {
+    setupSite({ robotsContent: "User-agent: GPTBot\nDisallow: /\n" });
+    const proc = Bun.spawn(["bash", SCRIPT, TMP_DIR], { stdout: "pipe", stderr: "pipe" });
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("robots.txt blocks GPTBot");
+  });
+
+  test("does not flag wildcard User-agent block (known limitation)", async () => {
+    setupSite({ robotsContent: "User-agent: *\nDisallow: /\n" });
+    const proc = Bun.spawn(["bash", SCRIPT, TMP_DIR], { stdout: "pipe", stderr: "pipe" });
+    const exitCode = await proc.exited;
+    // Script only checks named AI bots, not wildcard rules
+    expect(exitCode).toBe(0);
+  });
+
+  test("passes when robots.txt has partial path block (not root)", async () => {
+    setupSite({ robotsContent: "User-agent: GPTBot\nDisallow: /private/\n" });
+    const proc = Bun.spawn(["bash", SCRIPT, TMP_DIR], { stdout: "pipe", stderr: "pipe" });
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("robots.txt does not block GPTBot");
   });
 });

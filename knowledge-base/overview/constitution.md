@@ -41,6 +41,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Operations that modify the knowledge-base or move files must use `git mv` to preserve history and produce a single atomic commit that can be reverted with `git revert`
 - New commands must be idempotent -- running the same command twice must not create duplicates or corrupt state
 - Run code review and `/soleur:compound` before committing -- the commit is the gate, not the PR
+- When modifying agent instructions (adding checks, changing behavior), also update any skill Task prompts that reference the agent with hardcoded check lists -- stale prompts silently ignore new agent capabilities
 - Infrastructure agents that wire external services (DNS, SSL, Pages) must own the full verification loop -- use `gh` CLI, `openssl`, `curl`, and `agent-browser` to verify each step programmatically instead of asking the user to check manually; only stop for genuine decisions, not mechanical verification
 - Network and external service failures must degrade gracefully -- warn (if interactive) and continue rather than abort the workflow
 - All Discord webhook payloads must include explicit `username` and `avatar_url` fields rather than relying on webhook defaults -- webhook messages freeze author identity at post time; only delete+repost changes identity on existing messages

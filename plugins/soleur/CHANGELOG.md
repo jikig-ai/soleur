@@ -5,7 +5,7 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.20.0] - 2026-02-19
+## [2.21.0] - 2026-02-20
 
 ### Added
 
@@ -13,6 +13,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New `legal-generate` skill for drafting legal documents (Terms, Privacy Policy, Cookie Policy, GDPR, AUP, DPA, Disclaimer)
 - New `legal-audit` skill for auditing existing legal documents for compliance gaps
 - Legal domain CSS variable (`--cat-legal`) and docs integration (agents.js, skills.js)
+
+## [2.20.1] - 2026-02-20
+
+### Changed
+
+- Enhanced growth-strategist agent with Princeton GEO techniques: source citations check, statistics/specificity check, and GEO impact prioritization ordering
+- Added AI crawler access verification (GPTBot, PerplexityBot, ClaudeBot, Google-Extended) to seo-aeo-analyst agent checklist
+- Extended validate-seo.sh CI script with robots.txt AI bot blocking checks
+- Updated growth skill Task prompts (aeo, fix sub-commands) to include new GEO checks
+- Added constitution principle: update skill Task prompts when agent instructions change
+
+## [2.20.0] - 2026-02-20
+
+### Added
+
+- New `semgrep-sast` review agent for deterministic SAST scanning using semgrep CLI, complementing security-sentinel's LLM-based architectural review
+- Conditional semgrep invocation in `/soleur:review` command (runs when semgrep CLI is installed and PR modifies source code)
 
 ## [2.19.0] - 2026-02-19
 
