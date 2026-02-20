@@ -123,6 +123,19 @@ git diff --name-status $(git merge-base HEAD origin/main)..HEAD -- \
 
 **If no new components:** Skip this step.
 
+## Phase 3.5: Merge Main Before Version Bump
+
+Merge the latest main branch to ensure version bumps start from the current version, reducing merge conflicts on version files:
+
+```bash
+git fetch origin main
+git merge origin/main
+```
+
+**If merge conflicts arise:** Resolve them now (before version bump). This is cheaper than resolving version conflicts after bumping.
+
+**If merge is clean:** Proceed to Phase 4.
+
 ## Phase 4: Version Bump
 
 Check if plugin files were modified in this branch:
@@ -329,14 +342,20 @@ gh pr checks --watch --fail-fast
 2. If the failure is in tests: investigate the failing test, fix locally, commit, push, and re-run this phase.
 3. If the failure is in a flaky or unrelated check: warn the user and ask whether to proceed or wait for a re-run.
 
-## Phase 8: Post-Merge Cleanup
+## Phase 8: Wait for CI, Merge, and Cleanup
 
-After the PR is created, ask the user:
+After the PR is created and Phase 7.5 confirms mergeability and CI status, merge the PR. Do NOT ask "merge now or later?" -- always wait for CI to pass first.
 
-"PR created. Want to merge now, or merge later?"
+```bash
+# If CI hasn't been checked yet (e.g., Phase 7.5 was skipped), run it now:
+gh pr checks --watch --fail-fast
+```
 
-- **Merge now** -> Run `gh pr merge <number> --squash` then proceed to cleanup below
-- **Later** -> Stop here. Cleanup will happen via SessionStart hook next session.
+**Once CI passes:** Merge immediately.
+
+```bash
+gh pr merge <number> --squash
+```
 
 **CRITICAL: Do NOT use `--delete-branch` on merge.** The worktree is still active and the guardrails hook will block it. Merge with `--squash` only, then `cleanup-merged` handles branch deletion after removing the worktree.
 
