@@ -1,6 +1,6 @@
 # Soleur
 
-AI-powered development tools that get smarter with every use. Make each unit of engineering work easier than the last.
+A full AI organization that reviews, plans, builds, remembers, and self-improves. Every feature or project gets better and faster than the last.
 
 ## Quick Start
 

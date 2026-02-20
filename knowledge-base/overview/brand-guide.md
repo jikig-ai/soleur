@@ -8,7 +8,7 @@ last_updated: 2026-02-19
 
 ### Mission
 
-Soleur exists to solve one engineering problem: enabling a single founder to build, ship, and scale a billion-dollar company. We are building the Company-as-a-Service platform -- a full-stack AI organization that reviews, plans, builds, and remembers. Every decision the founder makes teaches the system. Every project starts faster than the last.
+Soleur exists to solve one engineering problem: enabling a single founder to build, ship, and scale a billion-dollar company. We are building the Company-as-a-Service platform -- a full-stack AI organization that reviews, plans, builds, remembers, and self-improves. Every decision the founder makes teaches the system. Every feature or project gets better and faster than the last.
 
 The name Soleur is a portmanteau of Solo and Solar -- entrepreneur energy and light to better the world.
 
@@ -72,7 +72,7 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 
 **Product descriptions:**
 - "You decide. Agents execute. Knowledge compounds."
-- "Not a copilot. Not an assistant. A full AI organization that reviews, plans, builds, and remembers."
+- "Not a copilot. Not an assistant. A full AI organization that reviews, plans, builds, remembers, and self-improves."
 - "Designed, built, and shipped by Soleur -- using Soleur."
 
 **Community replies:**
