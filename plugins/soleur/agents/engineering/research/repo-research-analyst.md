@@ -1,6 +1,6 @@
 ---
 name: repo-research-analyst
-description: "Use this agent when you need to conduct thorough research on a repository's structure, documentation, and patterns. This includes analyzing architecture files, examining GitHub issues for patterns, reviewing contribution guidelines, checking for templates, and searching codebases for implementation patterns. The agent excels at gathering comprehensive information about a project's conventions and best practices."
+description: "Use this agent when you need to conduct thorough research on a repository's structure, documentation, and patterns. This includes analyzing architecture files, examining GitHub issues for patterns, reviewing contribution guidelines, checking for templates, and searching codebases for implementation patterns. The agent excels at gathering comprehensive information about a project's conventions and best practices. Unlike git-history-analyzer (commit history), this agent examines repo structure, docs, issues, and templates."
 model: inherit
 ---
 

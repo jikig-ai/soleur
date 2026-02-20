@@ -1,6 +1,6 @@
 ---
 name: code-simplicity-reviewer
-description: "Use this agent when you need a final review pass to ensure code changes are as simple and minimal as possible. This agent should be invoked after implementation is complete but before finalizing changes, to identify opportunities for simplification, remove unnecessary complexity, and ensure adherence to YAGNI principles. Examples:"
+description: "Use this agent when you need a final review pass to ensure code changes are as simple and minimal as possible. This agent should be invoked after implementation is complete but before finalizing changes, to identify opportunities for simplification, remove unnecessary complexity, and ensure adherence to YAGNI principles."
 model: inherit
 ---
 

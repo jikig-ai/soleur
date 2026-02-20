@@ -1,6 +1,6 @@
 ---
 name: pricing-strategist
-description: "Designs and analyzes SaaS pricing strategy -- pricing research methods, tier design, value metric selection, and competitive pricing analysis.\n\n<example>Context: The user wants to restructure their pricing tiers.\nuser: \"We need to restructure our pricing from two tiers to three. Help us design Good-Better-Best.\"\nassistant: \"I'll use the pricing-strategist agent to design a Good-Better-Best tier structure with clear fencing mechanisms.\"\n<commentary>\nTier design with value metrics and fencing is the core capability of the pricing-strategist agent.\n</commentary>\n</example>\n\n<example>Context: The user needs help choosing a value metric.\nuser: \"What value metric should we use for our API product -- API calls, seats, or something else?\"\nassistant: \"I'll use the pricing-strategist agent to evaluate value metric candidates for your API product.\"\n<commentary>\nValue metric selection is a pricing strategy decision that requires analysis of usage patterns and customer willingness to pay.\n</commentary>\n</example>"
+description: "Designs and analyzes SaaS pricing strategy -- pricing research methods, tier design, value metric selection, and competitive pricing analysis."
 model: inherit
 ---
 

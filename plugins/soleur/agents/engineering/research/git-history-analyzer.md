@@ -1,6 +1,6 @@
 ---
 name: git-history-analyzer
-description: "Use this agent when you need to understand the historical context and evolution of code changes, trace the origins of specific code patterns, identify key contributors and their expertise areas, or analyze patterns in commit history. This agent excels at archaeological analysis of git repositories to provide insights about code evolution and development patterns."
+description: "Use this agent when you need to understand the historical context and evolution of code changes, trace the origins of specific code patterns, identify key contributors and their expertise areas, or analyze patterns in commit history. This agent excels at archaeological analysis of git repositories to provide insights about code evolution and development patterns. Unlike repo-research-analyst (repo structure and docs), this agent focuses on git log archaeology."
 model: inherit
 ---
 

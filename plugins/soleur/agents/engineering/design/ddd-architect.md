@@ -1,6 +1,6 @@
 ---
 name: ddd-architect
-description: "Use this agent when you need expert guidance on Domain-Driven Design. It applies Eric Evans' strategic and tactical DDD patterns: bounded contexts, context mapping, aggregate design, domain events, and architectural patterns. Produces design documents with Mermaid diagrams."
+description: "Use this agent when you need expert guidance on Domain-Driven Design. It applies Eric Evans' strategic and tactical DDD patterns: bounded contexts, context mapping, aggregate design, domain events, and architectural patterns. Produces design documents with Mermaid diagrams. Use architecture-strategist for general architectural compliance; use this agent for bounded context and aggregate design."
 model: inherit
 ---
 

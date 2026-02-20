@@ -1,6 +1,6 @@
 ---
 name: data-migration-expert
-description: "Use this agent when reviewing PRs that touch database migrations, data backfills, or any code that transforms production data. This agent validates ID mappings against production reality, checks for swapped values, verifies rollback safety, and ensures data integrity during schema changes. Essential for any migration that involves ID mappings, column renames, or data transformations."
+description: "Use this agent when reviewing PRs that touch database migrations, data backfills, or any code that transforms production data. This agent validates ID mappings against production reality, checks for swapped values, verifies rollback safety, and ensures data integrity during schema changes. Essential for any migration that involves ID mappings, column renames, or data transformations. Use data-integrity-guardian for general migration safety review; use this agent specifically when ID mappings or value swaps need validation."
 model: inherit
 ---
 

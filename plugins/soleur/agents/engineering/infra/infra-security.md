@@ -1,6 +1,6 @@
 ---
 name: infra-security
-description: "Use this agent when you need to audit domain security posture, configure DNS records and security settings, or wire domains to services like GitHub Pages or Hetzner servers. This agent uses the Cloudflare REST API for configuration and CLI tools (dig, openssl) for verification."
+description: "Use this agent when you need to audit domain security posture, configure DNS records and security settings, or wire domains to services like GitHub Pages or Hetzner servers. This agent uses the Cloudflare REST API for configuration and CLI tools (dig, openssl) for verification. Use terraform-architect for IaC generation; use this agent for live domain configuration and security auditing."
 model: inherit
 ---
 

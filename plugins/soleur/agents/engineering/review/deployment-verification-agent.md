@@ -1,6 +1,6 @@
 ---
 name: deployment-verification-agent
-description: "Use this agent when a PR touches production data, migrations, or any behavior that could silently discard or duplicate records. Produces a concrete pre/post-deploy checklist with SQL verification queries, rollback procedures, and monitoring plans. Essential for risky data changes where you need a Go/No-Go decision."
+description: "Use this agent when a PR touches production data, migrations, or any behavior that could silently discard or duplicate records. Produces a concrete pre/post-deploy checklist with SQL verification queries, rollback procedures, and monitoring plans. Essential for risky data changes where you need a Go/No-Go decision. Use data-integrity-guardian to review the migration code; use this agent to produce the deploy-day checklist."
 model: inherit
 ---
 

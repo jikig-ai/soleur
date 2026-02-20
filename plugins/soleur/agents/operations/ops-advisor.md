@@ -1,6 +1,6 @@
 ---
 name: ops-advisor
-description: "Use this agent when you need to track operational expenses, manage domain registrations, or get hosting recommendations. This agent reads and updates structured markdown files in knowledge-base/ops/ to maintain an operational ledger for recurring costs, one-time purchases, and domain registrations."
+description: "Use this agent when you need to track operational expenses, manage domain registrations, or get hosting recommendations. This agent reads and updates structured markdown files in knowledge-base/ops/ to maintain an operational ledger for recurring costs, one-time purchases, and domain registrations. Use ops-research for live web research and provider comparison; use this agent for reading and updating the expense ledger."
 model: inherit
 ---
 

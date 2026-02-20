@@ -1,6 +1,6 @@
 ---
 name: agent-finder
-description: "Use this agent when running /plan and the project uses a stack not covered by built-in agents. This agent queries external registries for community agents and skills matching the detected stack gap, presents trusted suggestions, and installs approved artifacts with provenance tracking.\n\n"
+description: "Use this agent when running /plan and the project uses a stack not covered by built-in agents. This agent queries external registries for community agents and skills matching the detected stack gap, presents trusted suggestions, and installs approved artifacts with provenance tracking. Use functional-discovery to check if a planned feature already exists; use this agent to find agents for a missing tech stack."
 model: inherit
 ---
 

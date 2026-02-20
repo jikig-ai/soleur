@@ -1,6 +1,6 @@
 ---
 name: data-integrity-guardian
-description: "Use this agent when you need to review database migrations, data models, or any code that manipulates persistent data. This includes checking migration safety, validating data constraints, ensuring transaction boundaries are correct, and verifying that referential integrity and privacy requirements are maintained."
+description: "Use this agent when you need to review database migrations, data models, or any code that manipulates persistent data. This includes checking migration safety, validating data constraints, ensuring transaction boundaries are correct, and verifying that referential integrity and privacy requirements are maintained. Use data-migration-expert for ID mapping validation; use deployment-verification-agent for deploy checklists."
 model: inherit
 ---
 
