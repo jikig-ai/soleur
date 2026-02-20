@@ -106,7 +106,7 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 | Component | Count |
 |-----------|-------|
-| Agents | 33 |
+| Agents | 34 |
 | Commands | 8 |
 | Skills | 42 |
 | MCP Servers | 1 |
@@ -124,9 +124,9 @@ Agents are organized by domain, then by function.
 | `growth-strategist` | Content strategy analysis and execution: keyword research, content auditing, gap analysis, AI agent consumability, and applying fixes |
 | `seo-aeo-analyst` | Audit Eleventy docs sites for SEO and AEO (AI Engine Optimization) issues |
 
-### Engineering (25)
+### Engineering (26)
 
-#### Review (14)
+#### Review (15)
 
 | Agent | Description |
 |-------|-------------|
@@ -143,6 +143,7 @@ Agents are organized by domain, then by function.
 | `pattern-recognition-specialist` | Analyze code for patterns and anti-patterns |
 | `performance-oracle` | Performance analysis and optimization |
 | `security-sentinel` | Security audits and vulnerability assessments |
+| `semgrep-sast` | Deterministic SAST scanning using semgrep CLI for known vulnerability patterns |
 | `test-design-reviewer` | Score test quality using Farley's 8 properties with weighted rubric |
 
 #### Discovery (2)

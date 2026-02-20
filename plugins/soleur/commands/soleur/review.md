@@ -135,6 +135,20 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 - `test-design-reviewer`: Scores tests against Farley's 8 properties, produces a weighted Test Quality Score with letter grade and top 3 improvement recommendations
 
+**If semgrep CLI is installed (`which semgrep` succeeds) and PR modifies source code files:**
+
+14. Task semgrep-sast(PR content) - Deterministic SAST scanning for known vulnerability patterns
+
+**When to run SAST agent:**
+
+- `which semgrep` returns 0 (semgrep binary found in PATH)
+- PR modifies source code files (*.py, *.js, *.ts, *.rb, *.go, *.java, *.rs, *.swift, *.kt, etc.)
+- Not needed for documentation-only or config-only changes
+
+**What this agent checks:**
+
+- `semgrep-sast`: Known vulnerability signatures (CWE patterns), hardcoded secrets, insecure function calls, taint analysis. Complements security-sentinel's LLM-based architectural review with deterministic rule-based scanning.
+
 </conditional_agents>
 
 ### 4. Ultra-Thinking Deep Dive Phases
