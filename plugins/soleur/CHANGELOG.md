@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Enforced CI-must-pass gate before merge in ship skill and Workflow Completion Protocol -- removed "merge now or later?" prompt, always wait for CI
+- Added "merge main" step before version bump to reduce version conflicts on parallel branches
 
 ## [2.22.2] - 2026-02-20
 

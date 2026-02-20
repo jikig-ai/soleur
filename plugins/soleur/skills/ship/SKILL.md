@@ -123,6 +123,19 @@ git diff --name-status $(git merge-base HEAD origin/main)..HEAD -- \
 
 **If no new components:** Skip this step.
 
+## Phase 3.5: Merge Main Before Version Bump
+
+Merge the latest main branch to ensure version bumps start from the current version, reducing merge conflicts on version files:
+
+```bash
+git fetch origin main
+git merge origin/main
+```
+
+**If merge conflicts arise:** Resolve them now (before version bump). This is cheaper than resolving version conflicts after bumping.
+
+**If merge is clean:** Proceed to Phase 4.
+
 ## Phase 4: Version Bump
 
 Check if plugin files were modified in this branch:

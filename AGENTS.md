@@ -53,11 +53,12 @@ MANDATORY checklist after completing implementation work. Every step MUST be com
 2. **Compound** -- HARD RULE: Run `/soleur:compound` to capture learnings. Ask the user "Should we run /soleur:compound before committing?" -- if they decline, proceed. But you must NEVER silently skip this step. Skipping without asking is a protocol violation.
 3. **Stage ALL artifacts** -- Brainstorms, specs, plans, learnings, AND code. Historically missed: forgetting to stage non-code files. Run `git status` and verify nothing is left behind.
 4. **README** -- If any new command, skill, or agent was added, update `plugins/soleur/README.md`. Check, don't assume.
-5. **Version bump** -- If files under `plugins/soleur/` changed, bump the version. See Plugin Versioning below.
-6. **Commit** -- This is the gate. Everything above must be done first.
-7. **Push and create PR** -- Do not stop after committing. Push and open the PR in the same step.
-8. **Wait for CI** -- Run `gh pr checks --watch --fail-fast` and wait for all checks to pass before merging. Do NOT ask "merge now or later?" -- always wait for CI first. If a check fails, investigate and fix before proceeding.
-9. **Merge and cleanup** -- After CI passes, merge with `gh pr merge <number> --squash`. Then remove the worktree with `worktree-manager.sh cleanup-merged` and delete stale local branches. See `/ship` Phase 8 for the full procedure.
+5. **Merge main** -- Run `git fetch origin main && git merge origin/main` before bumping versions. This ensures the version bump starts from the latest version on main, reducing merge conflicts on version files.
+6. **Version bump** -- If files under `plugins/soleur/` changed, bump the version. See Plugin Versioning below.
+7. **Commit** -- This is the gate. Everything above must be done first.
+8. **Push and create PR** -- Do not stop after committing. Push and open the PR in the same step.
+9. **Wait for CI** -- Run `gh pr checks --watch --fail-fast` and wait for all checks to pass before merging. Do NOT ask "merge now or later?" -- always wait for CI first. If a check fails, investigate and fix before proceeding.
+10. **Merge and cleanup** -- After CI passes, merge with `gh pr merge <number> --squash`. Then remove the worktree with `worktree-manager.sh cleanup-merged` and delete stale local branches. See `/ship` Phase 8 for the full procedure.
 
 FAILURE MODE TO AVOID: Committing code, then forgetting to push, forgetting to create the PR, forgetting to include spec/plan files, or silently skipping compound. The compound step is the most frequently skipped -- it has caused missing learnings and undocumented constitution updates. If you catch yourself about to skip a step, stop and complete it.
 
