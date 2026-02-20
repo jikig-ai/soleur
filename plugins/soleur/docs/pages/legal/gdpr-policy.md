@@ -197,7 +197,7 @@ For questions about this GDPR Policy or data protection matters:
 
 To exercise your data subject rights under GDPR, send a written request to legal@jikigai.com. We will acknowledge your request within 5 business days and respond substantively within one month, as required by GDPR Article 12.
 
-Soleur is an open-source project maintained by Jikigai, a company incorporated in France.
+Soleur is an open-source project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France.
 
 Soleur's limited data processing (standard web hosting, community repository interactions) does not meet the thresholds requiring a Data Protection Officer (DPO) under Article 37 of the GDPR: the processing is not core business activity involving regular and systematic monitoring of data subjects at large scale, nor does it involve large-scale processing of special categories of data. Accordingly, no DPO has been appointed. Should this assessment change, DPO contact information will be added to this policy.
 

@@ -140,7 +140,7 @@ If we introduce new categories of cookies (such as analytics or functional cooki
 
 ## 10. Legal Entity and Contact Us
 
-Soleur is an open-source project maintained by Jikigai, a company incorporated in France.
+Soleur is an open-source project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France.
 
 If you have questions about this Cookie Policy or our data practices, you can reach us through:
 

@@ -244,7 +244,7 @@ These Terms do not confer any rights on any third party unless expressly stated.
 
 ## 16. Legal Entity and Contact Information
 
-Soleur is an open-source project maintained by Jikigai, a company incorporated in France. These Terms are offered by Jikigai on behalf of the Soleur project.
+Soleur is an open-source project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France. These Terms are offered by Jikigai on behalf of the Soleur project.
 
 For questions or concerns regarding these Terms, please contact us through:
 

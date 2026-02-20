@@ -191,7 +191,7 @@ We reserve the right to modify this Disclaimer at any time. Changes will be post
 
 ## 10. Legal Entity and Contact Information
 
-Soleur is an open-source project maintained by Jikigai, a company incorporated in France.
+Soleur is an open-source project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France.
 
 If you have questions about this Disclaimer, you may contact us through:
 

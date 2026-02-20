@@ -215,7 +215,7 @@ If any provision of this Policy is found to be unenforceable or invalid under ap
 
 ## 10. Legal Entity and Contact
 
-Soleur is an open-source project maintained by Jikigai, a company incorporated in France.
+Soleur is an open-source project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France.
 
 For questions about this Policy, please contact us through:
 
