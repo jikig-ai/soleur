@@ -1,6 +1,6 @@
 ---
 name: retention-strategist
-description: "Designs churn prevention flows, payment recovery sequences, referral programs, and free tool strategies for customer retention and growth loops.\n\n<example>Context: The user has high churn and needs a cancellation flow.\nuser: \"Our monthly churn is 8% -- help me design a cancellation flow to reduce it.\"\nassistant: \"I'll use the retention-strategist agent to map the cancellation flow and design targeted save offers based on churn reasons.\"\n<commentary>\nCancellation flow design with reason-based save offers is a core retention-strategist capability.\n</commentary>\n</example>\n\n<example>Context: The user wants to build a referral program.\nuser: \"Design a referral program for our B2B SaaS product.\"\nassistant: \"I'll use the retention-strategist agent to design the incentive structure, referral mechanism, and viral coefficient targets.\"\n<commentary>\nReferral program design with two-sided incentives and K-factor modeling belongs to the retention-strategist agent.\n</commentary>\n</example>"
+description: "Designs churn prevention flows, payment recovery sequences, referral programs, and free tool strategies for customer retention and growth loops. Use marketing-strategist for overall strategy; use this agent for post-acquisition retention and expansion."
 model: inherit
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: marketing-strategist
-description: "Develops marketing strategy for SaaS products -- ideation, launch planning, behavioral psychology application, and product marketing context documentation.\n\n<example>Context: The user needs a go-to-market plan for a new feature.\nuser: \"We need a go-to-market plan for our new API monitoring feature launching next month.\"\nassistant: \"I'll use the marketing-strategist agent to create a structured GTM plan with pre-launch, launch, and post-launch phases.\"\n<commentary>\nThe user needs launch strategy with channel and metric planning, which is a core capability of the marketing-strategist agent.\n</commentary>\n</example>\n\n<example>Context: The user wants to apply behavioral science to marketing.\nuser: \"What marketing psychology principles could we use to increase trial-to-paid conversion?\"\nassistant: \"I'll use the marketing-strategist agent to identify specific cognitive biases and behavioral principles applicable to your conversion funnel.\"\n<commentary>\nMarketing psychology with named principles and specific application recommendations belongs to the marketing-strategist agent.\n</commentary>\n</example>"
+description: "Develops marketing strategy for SaaS products -- ideation, launch planning, behavioral psychology application, and product marketing context documentation. Use conversion-optimizer for specific page/flow optimization; use retention-strategist for churn prevention; use this agent for overall marketing strategy."
 model: inherit
 ---
 

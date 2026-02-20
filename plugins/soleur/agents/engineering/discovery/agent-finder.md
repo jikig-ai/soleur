@@ -1,6 +1,6 @@
 ---
 name: agent-finder
-description: "Use this agent when running /plan and the project uses a stack not covered by built-in agents. This agent queries external registries for community agents and skills matching the detected stack gap, presents trusted suggestions, and installs approved artifacts with provenance tracking.\n\n<example>\nContext: The /plan command detected a Flutter project with no built-in Flutter agents.\nuser: \"Plan: add push notifications to our Flutter app\"\nassistant: \"I'll use the agent-finder to search for community Flutter agents from trusted registries.\"\n<commentary>\nSince the project uses Flutter (detected via pubspec.yaml + *.dart) and no agents have stack: flutter in their frontmatter, the agent-finder should query registries for Flutter-specific agents.\n</commentary>\n</example>"
+description: "Use this agent when running /plan and the project uses a stack not covered by built-in agents. This agent queries external registries for community agents and skills matching the detected stack gap, presents trusted suggestions, and installs approved artifacts with provenance tracking. Use functional-discovery to check if a planned feature already exists; use this agent to find agents for a missing tech stack."
 model: inherit
 ---
 

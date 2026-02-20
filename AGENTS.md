@@ -50,7 +50,7 @@ FAILURE MODE TO AVOID: Seeing an error message and immediately changing code bas
 MANDATORY checklist after completing implementation work. Every step MUST be completed in order. Do not skip steps. Do not propose committing until steps 1-2 are done.
 
 1. **Review** -- Run code review on unstaged changes. Do not skip this.
-2. **Compound** -- Run `/soleur:compound` to capture learnings. Ask the user first, but do not silently skip it.
+2. **Compound** -- HARD RULE: Run `/soleur:compound` to capture learnings. Ask the user "Should we run /soleur:compound before committing?" -- if they decline, proceed. But you must NEVER silently skip this step. Skipping without asking is a protocol violation.
 3. **Stage ALL artifacts** -- Brainstorms, specs, plans, learnings, AND code. Historically missed: forgetting to stage non-code files. Run `git status` and verify nothing is left behind.
 4. **README** -- If any new command, skill, or agent was added, update `plugins/soleur/README.md`. Check, don't assume.
 5. **Version bump** -- If files under `plugins/soleur/` changed, bump the version. See Plugin Versioning below.
@@ -58,9 +58,9 @@ MANDATORY checklist after completing implementation work. Every step MUST be com
 7. **Push and create PR** -- Do not stop after committing. Push and open the PR in the same step.
 8. **Post-merge cleanup** -- After the PR is merged: remove the worktree with `worktree-manager.sh cleanup-merged`, delete stale local branches. See `/ship` Phase 8 for the full procedure.
 
-FAILURE MODE TO AVOID: Committing code, then forgetting to push, forgetting to create the PR, or forgetting to include spec/plan files. If you catch yourself about to skip a step, stop and complete it.
+FAILURE MODE TO AVOID: Committing code, then forgetting to push, forgetting to create the PR, forgetting to include spec/plan files, or silently skipping compound. The compound step is the most frequently skipped -- it has caused missing learnings and undocumented constitution updates. If you catch yourself about to skip a step, stop and complete it.
 
-Use the `/ship` skill to automate this checklist.
+Use the `/ship` skill to automate this checklist. Prefer `/ship` over manual commit/push/PR -- it enforces compound and review gates that manual workflows silently bypass.
 
 ## Interaction Style
 

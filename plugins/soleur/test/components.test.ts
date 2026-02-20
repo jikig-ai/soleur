@@ -44,9 +44,9 @@ describe("Agent frontmatter", () => {
         expect(VALID_MODELS).toContain(frontmatter.model);
       });
 
-      test("description contains <example> block", () => {
+      test("description does not contain <example> block", () => {
         const desc = String(frontmatter.description);
-        expect(desc).toContain("<example>");
+        expect(desc).not.toContain("<example>");
       });
 
       test("has non-empty body", () => {

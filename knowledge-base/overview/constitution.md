@@ -10,7 +10,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Reference files in skills must use markdown links, not backticks (e.g., `[file.md](./references/file.md)`)
 - All skill, command, and agent markdown files must include YAML frontmatter with `name` and `description` fields
 - Use kebab-case for all file and directory names (agents, skills, commands, learnings, plans)
-- Agent descriptions must include at least one `<example>` block with context, user/assistant dialogue, and `<commentary>` explaining the selection rationale
+- Agent descriptions must be 1-3 sentences of routing text only (when to use this agent) -- no `<example>` blocks, no `<commentary>`, no protocol details. Examples bloat the system prompt on every turn; routing accuracy comes from concise descriptions plus disambiguation sentences for sibling agents
 - Agent prompts must contain only instructions the LLM would get wrong without them -- omit general domain knowledge, error handling, and boilerplate the model already knows
 - Agent frontmatter must include a `model` field (`inherit`, `haiku`, `sonnet`, or `opus`) to control execution model
 - Command frontmatter must include an `argument-hint` field describing expected arguments
@@ -40,12 +40,14 @@ Project principles organized by domain. Add principles as you learn them.
 - Lifecycle workflows with hooks must cover every state transition with a cleanup trigger; verify no gaps between create, ship, merge, and session-start
 - Operations that modify the knowledge-base or move files must use `git mv` to preserve history and produce a single atomic commit that can be reverted with `git revert`
 - New commands must be idempotent -- running the same command twice must not create duplicates or corrupt state
-- Run code review and `/soleur:compound` before committing -- the commit is the gate, not the PR
+- Run code review and `/soleur:compound` before committing -- the commit is the gate, not the PR; compound must be explicitly offered to the user before every commit, never silently skipped
 - When modifying agent instructions (adding checks, changing behavior), also update any skill Task prompts that reference the agent with hardcoded check lists -- stale prompts silently ignore new agent capabilities
 - Infrastructure agents that wire external services (DNS, SSL, Pages) must own the full verification loop -- use `gh` CLI, `openssl`, `curl`, and `agent-browser` to verify each step programmatically instead of asking the user to check manually; only stop for genuine decisions, not mechanical verification
 - Network and external service failures must degrade gracefully -- warn (if interactive) and continue rather than abort the workflow
 - All Discord webhook payloads must include explicit `username` and `avatar_url` fields rather than relying on webhook defaults -- webhook messages freeze author identity at post time; only delete+repost changes identity on existing messages
 - Plans that create worktrees and invoke Task agents must include explicit `cd ${WORKTREE_PATH}` + `pwd` verification between worktree creation and agent invocation
+- When adding or integrating new agents, verify the cumulative agent description token count stays under 15k tokens -- agent descriptions are injected into the system prompt on every turn and bloated descriptions degrade all conversations
+- Agent descriptions for agents with overlapping scope must include a one-line disambiguation sentence: "Use [sibling] for [its scope]; use this agent for [this scope]."
 
 ### Never
 
@@ -56,6 +58,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Never allow agents to work directly on the default branch -- create a worktree (`git worktree add .worktrees/feat-<name> -b feat/<name>`) before the first file edit, even for trivial fixes; bare branches on the main checkout block parallel work
 - Never persist aggregated security findings (audit reports, posture assessments) to files in an open-source repository -- output inline in conversation only; the aggregation is the risk, not the individual facts
 - Never design skills that invoke other skills programmatically -- skills are user-invoked entry points with no inter-skill API; redirect users to the target skill or route through an agent via Task tool
+- Never put `<example>` blocks or `<commentary>` tags in agent description frontmatter -- these belong in the agent body (after `---`) which is only loaded on invocation; descriptions are loaded into the system prompt on every turn and their cumulative size must stay minimal
 
 ### Prefer
 

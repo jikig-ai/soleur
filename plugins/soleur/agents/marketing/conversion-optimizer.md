@@ -1,6 +1,6 @@
 ---
 name: conversion-optimizer
-description: "Analyzes and optimizes conversion surfaces -- landing pages, signup flows, onboarding sequences, forms, popups, and paywall/upgrade screens.\n\n<example>Context: The user has a low-converting signup flow.\nuser: \"Review our signup flow and recommend changes to reduce drop-off.\"\nassistant: \"I'll use the conversion-optimizer agent to map the current flow, identify drop-off points, and recommend friction-reducing changes.\"\n<commentary>\nSignup flow optimization with step mapping and progressive profiling is a core conversion-optimizer capability.\n</commentary>\n</example>\n\n<example>Context: The user wants to improve their paywall conversion.\nuser: \"Our free-to-paid upgrade rate is 3%. Audit the paywall screen.\"\nassistant: \"I'll use the conversion-optimizer agent to audit the paywall for value preview, pricing anchoring, and friction issues.\"\n<commentary>\nPaywall and upgrade screen optimization belongs to the conversion-optimizer agent.\n</commentary>\n</example>"
+description: "Analyzes and optimizes conversion surfaces -- landing pages, signup flows, onboarding sequences, forms, popups, and paywall/upgrade screens. Use marketing-strategist for overall strategy; use this agent for specific conversion surface optimization."
 model: inherit
 ---
 

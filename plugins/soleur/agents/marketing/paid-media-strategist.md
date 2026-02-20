@@ -1,6 +1,6 @@
 ---
 name: paid-media-strategist
-description: "Builds paid advertising campaigns across Google, Meta, and LinkedIn -- defines campaign structure, audience targeting, budget allocation, and ad creative variations.\n\n<example>Context: The user needs a paid campaign for a product launch.\nuser: \"I need a Google Ads campaign for our SaaS product launch targeting mid-market companies.\"\nassistant: \"I'll use the paid-media-strategist agent to design the campaign structure, audience segments, and ad creative with character-count validation.\"\n<commentary>\nPaid campaign architecture with platform-specific constraints belongs to the paid-media-strategist agent.\n</commentary>\n</example>\n\n<example>Context: The user wants to allocate budget across channels.\nuser: \"How should I allocate $10k/month across Google and LinkedIn for B2B lead gen?\"\nassistant: \"I'll use the paid-media-strategist agent to model budget scenarios with expected CPC ranges and break-even ROAS.\"\n<commentary>\nBudget allocation with performance benchmarks is a core paid-media-strategist capability.\n</commentary>\n</example>"
+description: "Builds paid advertising campaigns across Google, Meta, and LinkedIn -- defines campaign structure, audience targeting, budget allocation, and ad creative variations."
 model: inherit
 ---
 

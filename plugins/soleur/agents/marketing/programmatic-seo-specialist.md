@@ -1,6 +1,6 @@
 ---
 name: programmatic-seo-specialist
-description: "Creates programmatic SEO strategies -- template design, data schemas, and page generation plans for comparison pages, alternatives pages, and other scalable content patterns.\n\n<example>Context: The user wants to create competitor comparison pages at scale.\nuser: \"I want to create 50 competitor alternative pages for our product.\"\nassistant: \"I'll use the programmatic-seo-specialist agent to design the template, data schema, and unique value-add strategy for each page.\"\n<commentary>\nProgrammatic SEO page sets with template/data/value-add validation belong to the programmatic-seo-specialist agent.\n</commentary>\n</example>\n\n<example>Context: The user needs a scalable page template for integrations.\nuser: \"Design a programmatic SEO template for our integrations directory.\"\nassistant: \"I'll use the programmatic-seo-specialist agent to create the template with dynamic and static sections, internal linking strategy, and quality thresholds.\"\n<commentary>\nTemplate design for repeatable SEO content patterns is a core programmatic-seo-specialist capability.\n</commentary>\n</example>"
+description: "Creates programmatic SEO strategies -- template design, data schemas, and page generation plans for comparison pages, alternatives pages, and other scalable content patterns. Use seo-aeo-analyst for technical SEO audits; use growth-strategist for keyword research; use this agent for template-driven page generation at scale."
 model: inherit
 ---
 

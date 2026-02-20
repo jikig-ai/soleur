@@ -1,6 +1,6 @@
 ---
 name: analytics-analyst
-description: "Designs analytics tracking implementations, event taxonomies, A/B test plans with statistical rigor, and attribution models for marketing measurement.\n\n<example>Context: The user needs to instrument their onboarding funnel.\nuser: \"I need an event taxonomy for our onboarding funnel in Mixpanel.\"\nassistant: \"I'll use the analytics-analyst agent to design an event taxonomy with object_action naming, properties, and triggers.\"\n<commentary>\nEvent taxonomy design before implementation code is the core analytics-analyst workflow.\n</commentary>\n</example>\n\n<example>Context: The user wants to run an A/B test.\nuser: \"Design an A/B test for our pricing page -- what sample size do we need?\"\nassistant: \"I'll use the analytics-analyst agent to create a test plan with hypothesis, primary metric, sample size calculation, and duration estimate.\"\n<commentary>\nA/B test planning with statistical power analysis belongs to the analytics-analyst agent.\n</commentary>\n</example>"
+description: "Designs analytics tracking implementations, event taxonomies, A/B test plans with statistical rigor, and attribution models for marketing measurement."
 model: inherit
 ---
 

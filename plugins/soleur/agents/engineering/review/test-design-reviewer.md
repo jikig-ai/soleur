@@ -1,6 +1,6 @@
 ---
 name: test-design-reviewer
-description: "Use this agent when you need to evaluate test quality using Dave Farley's 8 properties of good tests. It produces a weighted Test Quality Score (1-10 per property) with letter grades and prioritized improvement recommendations. <example>Context: The user has written tests for a new feature and wants quality feedback.\\nuser: \"I've added tests for the new billing module. Are they any good?\"\\nassistant: \"I'll use the test-design-reviewer agent to score your tests against Farley's 8 properties and identify improvements.\"\\n<commentary>\\nThe user wants test quality assessment, not just coverage numbers. The test-design-reviewer provides a structured scoring framework.\\n</commentary>\\n</example>\\n\\n<example>\\nContext: The user is refactoring a test suite and wants to prioritize improvements.\\nuser: \"Our test suite is slow and flaky. Where should we focus cleanup efforts?\"\\nassistant: \"Let me launch the test-design-reviewer to score the suite across all 8 quality properties and prioritize the weakest areas.\"\\n<commentary>\\nFlaky and slow tests need systematic evaluation across multiple quality dimensions, which is exactly what the Test Quality Score provides.\\n</commentary>\\n</example>"
+description: "Use this agent when you need to evaluate test quality using Dave Farley's 8 properties of good tests. It produces a weighted Test Quality Score (1-10 per property) with letter grades and prioritized improvement recommendations."
 model: inherit
 ---
 

@@ -72,6 +72,34 @@ To add a new domain (e.g., product, growth):
 
 **Why `soleur:`?** Claude Code has built-in `/plan` and `/review` commands. Using `name: soleur:plan` in frontmatter creates a unique `/soleur:plan` command with no collision.
 
+## Agent Compliance Checklist
+
+When adding or modifying agents, verify compliance:
+
+### YAML Frontmatter (Required)
+
+- [ ] `name:` present and matches filename (lowercase-with-hyphens)
+- [ ] `description:` is 1-3 sentences of routing text only -- when to use this agent
+- [ ] `description:` contains NO `<example>` blocks, NO `<commentary>` tags (these bloat the system prompt on every turn)
+- [ ] `description:` includes a disambiguation sentence if another agent has overlapping scope ("Use [sibling] for [X]; use this agent for [Y].")
+- [ ] `model:` field present (`inherit`, `haiku`, `sonnet`, or `opus`)
+
+### Token Budget Check (Required when adding agents)
+
+- [ ] Run: `grep -h 'description:' agents/**/*.md | wc -w` -- cumulative word count must stay under ~2500 words (~3.3k tokens, well under the 15k threshold)
+- [ ] Detailed instructions, frameworks, and examples belong in the agent body (after `---`), not in `description:`
+
+### Quick Validation Command
+
+```bash
+# Check for example blocks in agent descriptions (should return nothing)
+grep -l '<example>' agents/**/*.md | xargs grep -l 'description:.*<example>'
+
+# Check cumulative description size
+grep -h 'description:' agents/**/*.md | wc -w
+# Target: under 2500 words total across all agents
+```
+
 ## Skill Compliance Checklist
 
 When adding or modifying skills, verify compliance with skill-creator spec:

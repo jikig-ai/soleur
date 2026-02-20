@@ -1,6 +1,6 @@
 ---
 name: copywriter
-description: "Writes and edits marketing copy -- landing pages, email sequences, cold outreach, social content, and copy editing. Covers any marketing text that is not a blog article.\n\n<example>Context: The user needs landing page copy for a product launch.\nuser: \"Write a landing page for our new CI/CD pipeline product targeting DevOps engineers.\"\nassistant: \"I'll use the copywriter agent to create modular landing page copy with hero, social proof, problem, solution, and CTA sections.\"\n<commentary>\nLanding page copy with modular sections belongs to the copywriter agent. Blog articles go to content-writer.\n</commentary>\n</example>\n\n<example>Context: The user wants an automated email sequence.\nuser: \"Create a 5-email onboarding sequence for new trial users of our analytics platform.\"\nassistant: \"I'll use the copywriter agent to design the sequence structure and write each email.\"\n<commentary>\nEmail sequences with cadence planning and per-email goals are a core copywriter capability.\n</commentary>\n</example>"
+description: "Writes and edits marketing copy -- landing pages, email sequences, cold outreach, social content, and copy editing. Covers any marketing text that is not a blog article. Use the content-writer skill for blog articles; use this agent for landing pages, emails, and short-form copy."
 model: inherit
 ---
 

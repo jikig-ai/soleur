@@ -1,6 +1,6 @@
 ---
 name: legal-compliance-auditor
-description: "Use this agent when you need to audit existing legal documents for compliance gaps, outdated clauses, missing disclosures, and cross-document consistency. It produces a structured findings report with severity ratings. <example>Context: The user wants to check their privacy policy for GDPR compliance.\\nuser: \"Audit our privacy policy for GDPR compliance gaps\"\\nassistant: \"I'll use the legal-compliance-auditor agent to analyze the privacy policy against GDPR requirements.\"\\n<commentary>\\nThe user has an existing legal document that needs compliance review. The auditor checks for gaps, missing disclosures, and jurisdiction-specific requirements.\\n</commentary>\\n</example>\\n\\n<example>Context: The user has multiple legal documents and wants a consistency check.\\nuser: \"Check if our privacy policy and cookie policy are consistent with each other\"\\nassistant: \"I'll use the legal-compliance-auditor agent to cross-reference both documents for consistency.\"\\n<commentary>\\nCross-document consistency checking is a core capability. The auditor verifies that claims, data practices, and contact info align across documents.\\n</commentary>\\n</example>"
+description: "Use this agent when you need to audit existing legal documents for compliance gaps, outdated clauses, missing disclosures, and cross-document consistency. It produces a structured findings report with severity ratings. Use legal-document-generator to create new documents; use this agent to audit existing ones."
 model: inherit
 ---
 
