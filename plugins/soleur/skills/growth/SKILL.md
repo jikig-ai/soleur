@@ -14,7 +14,7 @@ Analyze content for keyword alignment, plan content to capture search traffic, a
 | `growth audit <url-or-path>` | Audit existing content for keyword alignment and search intent match |
 | `growth fix <path>` | Audit and apply keyword/copy/AEO fixes to local source files |
 | `growth plan <topic> [--site <url-or-path>] [--competitors url1,url2]` | Research keywords, analyze gaps, and produce a prioritized content plan |
-| `growth aeo <url-or-path>` | Audit content for AI agent consumability (conversational readiness, FAQ structure, citation quality) |
+| `growth aeo <url-or-path>` | Audit content for GEO/AEO optimization (source citations, statistics, conversational readiness, FAQ structure, citation quality) |
 
 If no sub-command is provided, display the table above and ask which sub-command to run.
 
@@ -70,7 +70,7 @@ Audit existing content and apply fixes to local source files. Combines analysis 
 
    ```
    Task growth-strategist: "Audit the content at <path> for keyword alignment,
-   search intent match, readability, and AEO gaps. For each issue found, apply
+   search intent match, readability, and GEO/AEO gaps. For each issue found, apply
    a fix to the source files. Read each file before editing.
    <if brand guide exists: Read knowledge-base/overview/brand-guide.md and
    validate all rewrites against the brand voice before applying.>
@@ -133,9 +133,10 @@ Audit content for AI agent consumability at the content level. Checks whether AI
 2. Launch the growth-strategist agent via the Task tool:
 
    ```
-   Task growth-strategist: "Audit the content at <url-or-path> for AI agent consumability.
-   Check conversational readiness, FAQ structure quality, definition extractability,
-   summary quality, and citation-friendly paragraph structure.
+   Task growth-strategist: "Audit the content at <url-or-path> for GEO/AEO optimization.
+   Check source citation presence, statistics/specificity, conversational readiness,
+   FAQ structure quality, definition extractability, summary quality, and
+   citation-friendly paragraph structure.
    Do NOT check JSON-LD, meta tags, sitemaps, or llms.txt format -- those belong to
    the seo-aeo-analyst agent. Focus only on content-level checks.
    Use WebFetch for URLs or Read/Glob for local paths."

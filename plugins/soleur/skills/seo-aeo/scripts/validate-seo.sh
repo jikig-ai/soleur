@@ -25,6 +25,24 @@ else
   fail "llms.txt missing"
 fi
 
+# ── robots.txt AI bot access ──────────────────────────────────────────────────
+# Limitation: checks only the line immediately after User-agent for Disallow.
+# Multi-line stanzas with comments between directives may be misdetected.
+
+if [[ -f "$SITE_DIR/robots.txt" ]]; then
+  pass "robots.txt exists"
+  for bot in GPTBot PerplexityBot ClaudeBot Google-Extended; do
+    if grep -qi "User-agent: $bot" "$SITE_DIR/robots.txt" && \
+       grep -A1 -i "User-agent: $bot" "$SITE_DIR/robots.txt" | grep -qiE "Disallow: /\s*$"; then
+      fail "robots.txt blocks $bot"
+    else
+      pass "robots.txt does not block $bot"
+    fi
+  done
+else
+  fail "robots.txt missing"
+fi
+
 # ── sitemap.xml ───────────────────────────────────────────────────────────────
 
 if [[ -f "$SITE_DIR/sitemap.xml" ]]; then
