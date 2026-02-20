@@ -5,6 +5,13 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.20.0] - 2026-02-20
+
+### Added
+
+- New `semgrep-sast` review agent for deterministic SAST scanning using semgrep CLI, complementing security-sentinel's LLM-based architectural review
+- Conditional semgrep invocation in `/soleur:review` command (runs when semgrep CLI is installed and PR modifies source code)
+
 ## [2.19.0] - 2026-02-19
 
 ### Added
