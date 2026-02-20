@@ -14,7 +14,7 @@ The agent evaluates these categories in order of impact:
 |----------|--------|----------|
 | Structured Data | JSON-LD present and valid, correct @type usage, required properties | High |
 | Meta Tags | Canonical URL, OG tags, Twitter/X cards, og:locale, description | High |
-| AI Discoverability | llms.txt exists and follows spec, content is crawlable (no JS-only) | High |
+| AI Discoverability | llms.txt exists and follows spec, content is crawlable (no JS-only), robots.txt allows AI crawlers | High |
 | Sitemap | All pages present, lastmod dates, valid XML | Medium |
 | Content Quality | Heading hierarchy, descriptive link text, alt attributes | Medium |
 | Technical SEO | robots.txt, HTTPS, page speed indicators | Low |
@@ -49,6 +49,7 @@ For each category in the checklist, analyze the relevant source files:
 - Check for `llms.txt` template with correct permalink
 - Verify llms.txt follows the spec: title, description, docs section with links
 - Check that all page content is available at build time (no client-side-only rendering)
+- Check robots.txt for User-agent rules that block AI crawlers (GPTBot, PerplexityBot, ClaudeBot, Google-Extended). If a bot is explicitly blocked with Disallow: /, flag as a warning. Absence of a rule is sufficient -- explicit Allow is better but not required.
 
 **Sitemap:**
 - Verify sitemap template uses collections (not hand-maintained URLs)

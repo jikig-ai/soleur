@@ -5,6 +5,16 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.20.1] - 2026-02-20
+
+### Changed
+
+- Enhanced growth-strategist agent with Princeton GEO techniques: source citations check, statistics/specificity check, and GEO impact prioritization ordering
+- Added AI crawler access verification (GPTBot, PerplexityBot, ClaudeBot, Google-Extended) to seo-aeo-analyst agent checklist
+- Extended validate-seo.sh CI script with robots.txt AI bot blocking checks
+- Updated growth skill Task prompts (aeo, fix sub-commands) to include new GEO checks
+- Added constitution principle: update skill Task prompts when agent instructions change
+
 ## [2.20.0] - 2026-02-20
 
 ### Added
