@@ -68,6 +68,17 @@ Extract from conversation history:
 - **Solution**: What fixed it (code/config changes)
 - **Prevention**: How to avoid in future
 
+**Session errors (beyond the target problem):**
+
+Scan conversation history for errors unrelated to the main problem investigation documented above. Only capture errors that are NOT part of the investigation attempts. Skip trivial errors immediately corrected (typos in commands, expected test failures during TDD).
+
+Extract for each error found:
+- Describe what went wrong (1 sentence)
+- Note what was done to recover
+- Suggest how to prevent it in future sessions (1 sentence)
+
+If no session errors are found, skip this extraction silently.
+
 **Environment details:**
 
 - Rails version

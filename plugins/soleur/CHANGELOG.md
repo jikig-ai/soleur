@@ -5,6 +5,12 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.22.3] - 2026-02-20
+
+### Changed
+
+- Extended compound skill to capture session-level errors (failed commands, wrong approaches, process mistakes) alongside the target problem documentation (#168)
+
 ## [2.22.2] - 2026-02-20
 
 ### Changed

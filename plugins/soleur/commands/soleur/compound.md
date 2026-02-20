@@ -206,6 +206,7 @@ git worktree remove .worktrees/feat-<name>
 - **Root cause analysis**: Technical explanation
 - **Working solution**: Step-by-step fix with code examples
 - **Prevention strategies**: How to avoid in future
+- **Session errors**: Process mistakes, failed commands, and wrong approaches from the session
 - **Cross-references**: Links to related issues and docs
 
 ## Preconditions
