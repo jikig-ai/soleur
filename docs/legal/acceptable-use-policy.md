@@ -205,7 +205,7 @@ If any provision of this Policy is found to be unenforceable or invalid under ap
 
 ## 10. Legal Entity and Contact
 
-Soleur is an open-source project maintained by Jikig AI. At this time, Soleur is not a separately incorporated legal entity.
+Soleur is an open-source project maintained by Jikigai. At this time, Soleur is not a separately incorporated legal entity.
 
 For questions about this Policy, please contact us through:
 

@@ -244,7 +244,7 @@ These Terms do not confer any rights on any third party unless expressly stated.
 
 ## 16. Legal Entity and Contact Information
 
-Soleur is an open-source project maintained by Jikig AI. At this time, Soleur is not a separately incorporated legal entity. These Terms are offered by the maintainers of the Soleur project operating under the Jikig AI organization.
+Soleur is an open-source project maintained by Jikigai. At this time, Soleur is not a separately incorporated legal entity. These Terms are offered by the maintainers of the Soleur project operating under the Jikigai organization.
 
 For questions or concerns regarding these Terms, please contact us through:
 

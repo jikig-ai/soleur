@@ -201,7 +201,7 @@ We reserve the right to modify this Disclaimer at any time. Changes will be post
 
 ## 10. Legal Entity and Contact Information
 
-Soleur is an open-source project maintained by Jikig AI. At this time, Soleur is not a separately incorporated legal entity.
+Soleur is an open-source project maintained by Jikigai. At this time, Soleur is not a separately incorporated legal entity.
 
 If you have questions about this Disclaimer, you may contact us through:
 

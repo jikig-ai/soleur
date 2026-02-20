@@ -130,7 +130,7 @@ If we introduce new categories of cookies (such as analytics or functional cooki
 
 ## 10. Legal Entity and Contact Us
 
-Soleur is an open-source project maintained by Jikig AI. At this time, Soleur is not a separately incorporated legal entity.
+Soleur is an open-source project maintained by Jikigai. At this time, Soleur is not a separately incorporated legal entity.
 
 If you have questions about this Cookie Policy or our data practices, you can reach us through:
 
