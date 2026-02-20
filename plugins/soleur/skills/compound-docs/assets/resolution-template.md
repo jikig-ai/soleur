@@ -42,6 +42,16 @@ tags: [keyword1, keyword2, keyword3]
 [If nothing else was attempted first, write:]
 **Direct solution:** The problem was identified and fixed on the first attempt.
 
+## Session Errors
+
+[Process mistakes and command failures encountered during this session, beyond the main problem investigation. Omit this section entirely if no session errors occurred.]
+
+**[Brief error description]**
+- **Recovery:** [What fixed it]
+- **Prevention:** [How to avoid in future]
+
+[Repeat for each session error]
+
 ## Solution
 
 [The actual fix that worked - provide specific details]
