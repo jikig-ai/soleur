@@ -5,6 +5,15 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.21.0] - 2026-02-20
+
+### Added
+
+- New Legal domain with 2 agents: `legal-document-generator` and `legal-compliance-auditor`
+- New `legal-generate` skill for drafting legal documents (Terms, Privacy Policy, Cookie Policy, GDPR, AUP, DPA, Disclaimer)
+- New `legal-audit` skill for auditing existing legal documents for compliance gaps
+- Legal domain CSS variable (`--cat-legal`) and docs integration (agents.js, skills.js)
+
 ## [2.20.1] - 2026-02-20
 
 ### Changed
