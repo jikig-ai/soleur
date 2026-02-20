@@ -38,6 +38,7 @@ agents/
 │   ├── research/          # Engineering research agents
 │   ├── review/            # Code review agents
 │   └── workflow/          # Engineering workflow agents
+├── legal/                 # Legal document and compliance agents
 ├── marketing/             # Brand and marketing agents
 ├── operations/            # Ops and expense agents
 └── product/               # Product analysis and design agents

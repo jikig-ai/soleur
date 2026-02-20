@@ -106,9 +106,9 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 | Component | Count |
 |-----------|-------|
-| Agents | 33 |
+| Agents | 35 |
 | Commands | 8 |
-| Skills | 41 |
+| Skills | 44 |
 | MCP Servers | 1 |
 
 ## Agents
@@ -123,6 +123,13 @@ Agents are organized by domain, then by function.
 | `community-manager` | Analyze community engagement, generate weekly digests, and report health metrics across Discord and GitHub |
 | `growth-strategist` | Content strategy analysis: keyword research, content auditing, gap analysis, and AI agent consumability |
 | `seo-aeo-analyst` | Audit Eleventy docs sites for SEO and AEO (AI Engine Optimization) issues |
+
+### Legal (2)
+
+| Agent | Description |
+|-------|-------------|
+| `legal-document-generator` | Generate draft legal documents (Terms, Privacy Policy, Cookie Policy, GDPR, AUP, DPA, Disclaimer) |
+| `legal-compliance-auditor` | Audit legal documents for compliance gaps, outdated clauses, and cross-document consistency |
 
 ### Engineering (25)
 
@@ -233,6 +240,8 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `file-todos` | File-based todo tracking system |
 | `gemini-imagegen` | Generate and edit images using Google's Gemini API |
 | `growth` | Content strategy: keyword research, content auditing, gap analysis, AI agent consumability |
+| `legal-audit` | Audit legal documents for compliance gaps, outdated clauses, and cross-document consistency |
+| `legal-generate` | Generate draft legal documents from company context (7 document types, 3 jurisdictions) |
 | `release-announce` | Announce releases to Discord and GitHub Releases |
 | `release-docs` | Build and update documentation site with current components |
 | `seo-aeo` | Audit, fix, and validate SEO/AEO for Eleventy docs sites |
