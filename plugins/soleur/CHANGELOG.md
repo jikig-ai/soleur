@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New `legal-audit` skill for auditing existing legal documents for compliance gaps
 - Legal domain CSS variable (`--cat-legal`) and docs integration (agents.js, skills.js)
 
+## [2.19.0] - 2026-02-19
+
+### Added
+
+- New `content-writer` skill for generating full article drafts with brand-consistent voice, Eleventy frontmatter, JSON-LD, and FAQ schema
+- New `growth fix` sub-command on the `growth` skill to audit and apply keyword/copy/AEO fixes to local source files
+- Execution capability added to `growth-strategist` agent (keyword injection, FAQ generation, definition paragraphs, meta description rewrites)
+
 ## [2.18.1] - 2026-02-19
 
 ### Fixed
