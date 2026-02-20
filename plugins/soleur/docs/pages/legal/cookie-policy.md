@@ -140,14 +140,14 @@ If we introduce new categories of cookies (such as analytics or functional cooki
 
 ## 10. Legal Entity and Contact Us
 
-Soleur is an open-source project maintained by Jikigai. At this time, Soleur is not a separately incorporated legal entity.
+Soleur is an open-source project maintained by Jikigai, a company incorporated in France.
 
 If you have questions about this Cookie Policy or our data practices, you can reach us through:
 
-- **Email:** legal@soleur.ai
+- **Email:** legal@jikigai.com
 - **GitHub Repository:** [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur)
 - **Website:** [soleur.ai](https://soleur.ai)
-- **GDPR / Data Protection Inquiries:** legal@soleur.ai (include "GDPR" in the subject line)
+- **GDPR / Data Protection Inquiries:** legal@jikigai.com (include "GDPR" in the subject line)
 
 ---
 

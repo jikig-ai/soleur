@@ -244,17 +244,17 @@ These Terms do not confer any rights on any third party unless expressly stated.
 
 ## 16. Legal Entity and Contact Information
 
-Soleur is an open-source project maintained by Jikigai. At this time, Soleur is not a separately incorporated legal entity. These Terms are offered by the maintainers of the Soleur project operating under the Jikigai organization.
+Soleur is an open-source project maintained by Jikigai, a company incorporated in France. These Terms are offered by Jikigai on behalf of the Soleur project.
 
 For questions or concerns regarding these Terms, please contact us through:
 
-- **Email:** legal@soleur.ai
+- **Email:** legal@jikigai.com
 - **GitHub Repository:** [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur)
 - **Website:** [soleur.ai](https://soleur.ai)
 - **Issues:** [github.com/jikig-ai/soleur/issues](https://github.com/jikig-ai/soleur/issues)
-- **GDPR / Data Protection Inquiries:** legal@soleur.ai (include "GDPR" in the subject line)
+- **GDPR / Data Protection Inquiries:** legal@jikigai.com (include "GDPR" in the subject line)
 
-To exercise your data subject rights under GDPR, send a written request to legal@soleur.ai. We will acknowledge your request within 5 business days and respond substantively within one month, as required by GDPR Article 12.
+To exercise your data subject rights under GDPR, send a written request to legal@jikigai.com. We will acknowledge your request within 5 business days and respond substantively within one month, as required by GDPR Article 12.
 
 ---
 

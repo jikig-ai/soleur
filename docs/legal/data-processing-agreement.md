@@ -21,7 +21,7 @@ This Data Protection Disclosure ("DPD") describes the data processing relationsh
 
 This DPD supplements our [Terms and Conditions](/docs/legal/terms-and-conditions.md) and [Privacy Policy](/docs/legal/privacy-policy.md) and transparently describes the data processing relationship under the General Data Protection Regulation (EU) 2016/679 ("GDPR"). Because Soleur is not a data processor (see Section 2), this is not a Data Processing Agreement under Article 28. It is a disclosure document that clarifies data handling responsibilities.
 
-Soleur is an open-source project maintained by Jikigai.
+Soleur is an open-source project maintained by Jikigai, a company incorporated in France.
 
 ---
 
@@ -245,7 +245,7 @@ Users who wish to have their data removed from the Soleur GitHub repository (e.g
 
 For questions, concerns, or requests related to this DPD:
 
-- **Email:** legal@soleur.ai
+- **Email:** legal@jikigai.com
 - **GitHub Repository:** [https://github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur)
 - **Website:** [https://soleur.ai](https://soleur.ai)
 

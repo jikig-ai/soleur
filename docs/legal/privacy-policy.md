@@ -159,18 +159,18 @@ For material changes, we will make reasonable efforts to notify users (e.g., thr
 
 ## 14. Legal Entity and Contact Us
 
-Soleur is an open-source project maintained by Jikigai. At this time, Soleur is not a separately incorporated legal entity.
+Soleur is an open-source project maintained by Jikigai, a company incorporated in France.
 
-Under GDPR Article 27, a representative in the EU is required for controllers not established in the EU that process personal data of EU residents. Because the Plugin does not collect or process personal data and the Docs Site processing is limited to standard GitHub Pages hosting (where GitHub is the data controller), we have determined that Article 27 does not currently apply. Should this assessment change, we will appoint an EU representative and update this policy.
+GDPR Article 27 requires a representative in the EU for controllers not established in the EU. Because Jikigai is incorporated in France, Article 27 does not apply.
 
 If you have questions about this Privacy Policy or our data practices, you can reach us through:
 
-- **Email:** legal@soleur.ai
+- **Email:** legal@jikigai.com
 - **GitHub:** Open an issue at [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur)
 - **Website:** [soleur.ai](https://soleur.ai)
-- **GDPR / Data Protection Inquiries:** legal@soleur.ai (include "GDPR" in the subject line)
+- **GDPR / Data Protection Inquiries:** legal@jikigai.com (include "GDPR" in the subject line)
 
-To exercise your data subject rights under GDPR, send a written request to legal@soleur.ai. We will acknowledge your request within 5 business days and respond substantively within one month, as required by GDPR Article 12.
+To exercise your data subject rights under GDPR, send a written request to legal@jikigai.com. We will acknowledge your request within 5 business days and respond substantively within one month, as required by GDPR Article 12.
 
 ---
 

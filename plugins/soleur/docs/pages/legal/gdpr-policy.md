@@ -190,14 +190,14 @@ We encourage users to review this policy periodically.
 
 For questions about this GDPR Policy or data protection matters:
 
-- **Email:** legal@soleur.ai
+- **Email:** legal@jikigai.com
 - **GitHub Repository:** [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur) (open an issue)
 - **Website:** [soleur.ai](https://soleur.ai)
-- **GDPR / Data Protection Inquiries:** legal@soleur.ai (include "GDPR" in the subject line)
+- **GDPR / Data Protection Inquiries:** legal@jikigai.com (include "GDPR" in the subject line)
 
-To exercise your data subject rights under GDPR, send a written request to legal@soleur.ai. We will acknowledge your request within 5 business days and respond substantively within one month, as required by GDPR Article 12.
+To exercise your data subject rights under GDPR, send a written request to legal@jikigai.com. We will acknowledge your request within 5 business days and respond substantively within one month, as required by GDPR Article 12.
 
-Soleur is an open-source project maintained by Jikigai. At this time, Soleur is not a separately incorporated legal entity.
+Soleur is an open-source project maintained by Jikigai, a company incorporated in France.
 
 Soleur's limited data processing (standard web hosting, community repository interactions) does not meet the thresholds requiring a Data Protection Officer (DPO) under Article 37 of the GDPR: the processing is not core business activity involving regular and systematic monitoring of data subjects at large scale, nor does it involve large-scale processing of special categories of data. Accordingly, no DPO has been appointed. Should this assessment change, DPO contact information will be added to this policy.
 
