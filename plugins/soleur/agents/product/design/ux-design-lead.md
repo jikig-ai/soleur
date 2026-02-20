@@ -1,6 +1,6 @@
 ---
 name: ux-design-lead
-description: "Use this agent when you need to create visual designs in .pen files using Pencil MCP tools. It handles wireframes, high-fidelity screens, and component design, optionally reading brand-guide.md for design tokens. Requires the Pencil extension (VS Code/Cursor). <example>Context: The user wants to create a landing page design after defining their brand identity.\nuser: \"Create a visual design for our landing page based on the brand guide.\"\nassistant: \"I'll use the ux-design-lead agent to create a .pen design using the brand tokens from your brand guide.\"\n<commentary>\nThe user wants visual design artifacts (.pen files), not code. The ux-design-lead handles Pencil MCP design work.\n</commentary>\n</example>\n\n<example>\nContext: The user wants wireframes for a new feature's screens.\nuser: \"Design the onboarding flow -- I need wireframes for the 3-step signup.\"\nassistant: \"I'll launch the ux-design-lead agent to create wireframe designs in .pen format.\"\n<commentary>\nScreen design and wireframing in .pen files is the core use case for ux-design-lead.\n</commentary>\n</example>"
+description: "Use this agent when you need to create visual designs in .pen files using Pencil MCP tools. It handles wireframes, high-fidelity screens, and component design, optionally reading brand-guide.md for design tokens. Requires the Pencil extension (VS Code/Cursor)."
 model: inherit
 ---
 

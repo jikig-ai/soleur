@@ -1,6 +1,6 @@
 ---
 name: functional-discovery
-description: "This agent should be used when running /plan to check whether community registries already have skills or agents with similar functionality to the feature being planned. It queries external registries using the feature description, applies trust filtering, and presents install/skip suggestions to prevent redundant development.\n\n<example>\nContext: The /plan command is planning a content strategy skill.\nuser: \"Plan: build a content strategy skill for SEO optimization\"\nassistant: \"I'll use the functional-discovery agent to check if community registries already have content strategy or SEO tools.\"\n<commentary>\nSince the user is planning a new skill that might already exist in community registries, the functional-discovery agent should search for functionally similar tools before development begins.\n</commentary>\n</example>"
+description: "This agent should be used when running /plan to check whether community registries already have skills or agents with similar functionality to the feature being planned. It queries external registries using the feature description, applies trust filtering, and presents install/skip suggestions to prevent redundant development.\n\n"
 model: inherit
 ---
 

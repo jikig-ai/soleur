@@ -1,6 +1,6 @@
 ---
 name: seo-aeo-analyst
-description: "This agent analyzes Eleventy documentation sites for SEO and AEO (AI Engine Optimization) opportunities. It audits structured data, meta tags, AI discoverability signals, and content quality, then produces actionable reports or generates fixes. <example>Context: The user wants to check their docs site for SEO issues before launch.\\nuser: \"Audit the SEO on our docs site before we ship.\"\\nassistant: \"I'll use the seo-aeo-analyst agent to audit the site for SEO and AEO issues.\"\\n<commentary>\\nThe user wants a pre-launch SEO check. The seo-aeo-analyst audits structured data, meta tags, and AI discoverability.\\n</commentary>\\n</example>\\n\\n<example>Context: The user wants to improve AI model discoverability of their documentation.\\nuser: \"How can we make our docs more discoverable by AI models like ChatGPT and Claude?\"\\nassistant: \"I'll launch the seo-aeo-analyst agent to analyze AI Engine Optimization opportunities for the site.\"\\n<commentary>\\nAEO analysis covers llms.txt, structured data, and content patterns that help AI models cite the documentation.\\n</commentary>\\n</example>"
+description: "This agent analyzes Eleventy documentation sites for SEO and AEO (AI Engine Optimization) opportunities. It audits structured data, meta tags, AI discoverability signals, and content quality, then produces actionable reports or generates fixes."
 model: inherit
 ---
 

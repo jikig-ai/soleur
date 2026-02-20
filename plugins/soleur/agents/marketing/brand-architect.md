@@ -1,6 +1,6 @@
 ---
 name: brand-architect
-description: "Use this agent when you need to define or refine a brand identity. It guides an interactive workshop covering company identity, positioning, voice and tone, visual direction, and channel-specific guidelines. Outputs a structured brand guide document to knowledge-base/overview/brand-guide.md. <example>Context: The user wants to establish brand identity for their project.\\nuser: \"We need to define our brand voice and visual identity before launching marketing.\"\\nassistant: \"I'll use the brand-architect agent to guide a brand identity workshop and produce a brand guide.\"\\n<commentary>\\nThe user needs a structured brand identity definition, which is the core purpose of the brand-architect agent.\\n</commentary>\\n</example>\\n\\n<example>Context: The user wants to update their existing brand guide.\\nuser: \"Our positioning has evolved. I want to update the brand guide.\"\\nassistant: \"I'll launch the brand-architect agent to review and update the existing brand guide section by section.\"\\n<commentary>\\nThe brand architect detects existing brand guides and offers section-by-section updates rather than starting from scratch.\\n</commentary>\\n</example>"
+description: "Use this agent when you need to define or refine a brand identity. It guides an interactive workshop covering company identity, positioning, voice and tone, visual direction, and channel-specific guidelines. Outputs a structured brand guide document to knowledge-base/overview/brand-guide.md."
 model: inherit
 ---
 
