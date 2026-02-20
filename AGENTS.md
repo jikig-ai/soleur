@@ -56,7 +56,8 @@ MANDATORY checklist after completing implementation work. Every step MUST be com
 5. **Version bump** -- If files under `plugins/soleur/` changed, bump the version. See Plugin Versioning below.
 6. **Commit** -- This is the gate. Everything above must be done first.
 7. **Push and create PR** -- Do not stop after committing. Push and open the PR in the same step.
-8. **Post-merge cleanup** -- After the PR is merged: remove the worktree with `worktree-manager.sh cleanup-merged`, delete stale local branches. See `/ship` Phase 8 for the full procedure.
+8. **Wait for CI** -- Run `gh pr checks --watch --fail-fast` and wait for all checks to pass before merging. Do NOT ask "merge now or later?" -- always wait for CI first. If a check fails, investigate and fix before proceeding.
+9. **Merge and cleanup** -- After CI passes, merge with `gh pr merge <number> --squash`. Then remove the worktree with `worktree-manager.sh cleanup-merged` and delete stale local branches. See `/ship` Phase 8 for the full procedure.
 
 FAILURE MODE TO AVOID: Committing code, then forgetting to push, forgetting to create the PR, forgetting to include spec/plan files, or silently skipping compound. The compound step is the most frequently skipped -- it has caused missing learnings and undocumented constitution updates. If you catch yourself about to skip a step, stop and complete it.
 
