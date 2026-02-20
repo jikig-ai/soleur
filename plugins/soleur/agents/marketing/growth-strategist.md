@@ -30,13 +30,23 @@ Self-contained workflow that performs keyword research, gap analysis, and conten
 - Content gaps: topics/keywords where the site has no coverage or only partial coverage, compared against target keywords and optionally against competitor sites
 - Prioritized content plan: content pieces ranked P1 (high impact) / P2 (medium) / P3 (future), each with content type, target keywords, search intent, and outline
 
+**Content architecture:** Organize content using a pillar/cluster model:
+
+- **Pillar pages:** comprehensive hub pages targeting broad, high-volume keywords (e.g., "API monitoring guide")
+- **Cluster pages:** focused articles targeting long-tail keywords that link back to the pillar (e.g., "how to monitor REST API latency")
+- Each cluster page must link to its pillar and at least one sibling cluster page
+
+Classify each planned content piece as **searchable** (targets search traffic via keywords) or **shareable** (targets social distribution via novelty, opinion, or data). Most content plans need both. If a plan is 100% searchable, flag that shareable content is missing.
+
+Use a scoring matrix to prioritize content: customer impact (does this topic matter to ICP?), content-market fit (can we write this credibly?), search potential (volume + keyword difficulty), and resource cost. Score each 1-5 and rank by total.
+
 ### GEO/AEO Content Audit
 
-Audit content for AI agent consumability and generative engine optimization at the content level.
+Audit content for AI agent consumability and generative engine optimization using the Structure/Authority/Presence (SAP) framework.
 
 Prioritize findings by GEO impact: source citations > statistics/numbers > quotations > definitions > readability. Keyword density is counterproductive for AI visibility -- flag keyword-stuffed content as a negative signal.
 
-**Checks to perform:**
+**Structure** -- Is content machine-extractable?
 
 - **Source citations:** Do pages cite authoritative external sources inline? Are claims backed by data, studies, or official documentation? Uncited claims reduce AI citation probability.
 - **Statistics and specificity:** Are concrete numbers used instead of vague qualifiers? ("31 agents across 4 domains" not "many agents"). Vague claims are less likely to be cited by AI engines.
@@ -45,6 +55,17 @@ Prioritize findings by GEO impact: source citations > statistics/numbers > quota
 - **Definition extractability:** Are key terms defined in clear, quotable sentences near their first usage? Can definitions be understood without surrounding context?
 - **Summary quality:** Does each page have a clear summary paragraph (first or last)? Are summaries factual (not marketing fluff)? Can AI models quote them as authoritative statements?
 - **Citation-friendly structure:** Do paragraphs make standalone claims? Are key facts in plain text (not embedded in images or JS)? Does content use semantic heading hierarchy?
+
+**Authority** -- Does content signal expertise?
+
+- **Statistics and data:** Pages with original data, benchmarks, or quantitative claims are cited more frequently by AI models. Flag pages that make claims without supporting numbers.
+- **Expert attribution:** Content attributed to named experts or with clear methodology descriptions is weighted higher. Flag anonymous or unattributed claims.
+- **E-E-A-T signals at content level:** Does the content demonstrate first-hand Experience, Expertise, Authoritativeness, and Trustworthiness? Flag generic content that could have been written by anyone.
+
+**Presence** -- Is the brand visible in AI-generated answers?
+
+- **Third-party mentions:** Are there external sources (reviews, comparisons, forums) that mention the product? If not, recommend outreach or content seeding strategies.
+- **Citation monitoring:** Recommend tools or manual processes to track when AI models cite the brand (e.g., testing queries in ChatGPT, Perplexity, Claude).
 
 ## Brand Guide Integration
 

@@ -5,6 +5,19 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.22.0] - 2026-02-20
+
+### Added
+
+- 8 new marketing agents consolidated from coreyhaines31/marketingskills (MIT): marketing-strategist, pricing-strategist, copywriter, conversion-optimizer, paid-media-strategist, analytics-analyst, retention-strategist, programmatic-seo-specialist
+- NOTICE file with MIT attribution for adopted material
+
+### Changed
+
+- Expanded growth-strategist with content pillar/cluster planning, searchable vs shareable content classification, scoring matrix, and SAP (Structure/Authority/Presence) AEO framework
+- Expanded seo-aeo-analyst with E-E-A-T signal checks, Core Web Vitals source-level indicators, and JavaScript-injected schema detection warning
+- Marketing agent count 4 -> 12, total agent count 36 -> 44
+
 ## [2.21.0] - 2026-02-20
 
 ### Added

@@ -106,7 +106,7 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 | Component | Count |
 |-----------|-------|
-| Agents | 36 |
+| Agents | 44 |
 | Commands | 8 |
 | Skills | 44 |
 | MCP Servers | 1 |
@@ -115,13 +115,21 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 Agents are organized by domain, then by function.
 
-### Marketing (4)
+### Marketing (12)
 
 | Agent | Description |
 |-------|-------------|
+| `analytics-analyst` | Analytics tracking setup, event taxonomy design, A/B test planning, and attribution modeling |
 | `brand-architect` | Interactive brand identity workshop producing structured brand guides |
 | `community-manager` | Analyze community engagement, generate weekly digests, and report health metrics across Discord and GitHub |
+| `conversion-optimizer` | Analyze and optimize conversion surfaces: landing pages, signup flows, onboarding, forms, popups, paywalls |
+| `copywriter` | Marketing copy for landing pages, email sequences, cold outreach, social content, and copy editing |
 | `growth-strategist` | Content strategy analysis and execution: keyword research, content auditing, gap analysis, AI agent consumability, and applying fixes |
+| `marketing-strategist` | Marketing strategy for SaaS: ideation, launch planning, behavioral psychology, and product marketing context |
+| `paid-media-strategist` | Paid advertising campaigns across Google, Meta, and LinkedIn: structure, targeting, budget, and creative |
+| `pricing-strategist` | SaaS pricing strategy: research methods, tier design, value metric selection, and competitive analysis |
+| `programmatic-seo-specialist` | Template-based SEO page generation at scale: comparison pages, alternatives, integrations |
+| `retention-strategist` | Churn prevention, payment recovery, referral programs, and free tool strategy |
 | `seo-aeo-analyst` | Audit Eleventy docs sites for SEO and AEO (AI Engine Optimization) issues |
 
 ### Legal (2)
