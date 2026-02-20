@@ -12,11 +12,13 @@ The agent evaluates these categories in order of impact:
 
 | Category | Checks | Severity |
 |----------|--------|----------|
-| Structured Data | JSON-LD present and valid, correct @type usage, required properties | High |
+| Structured Data | JSON-LD present and valid, correct @type usage, required properties, JS-injection check | High |
 | Meta Tags | Canonical URL, OG tags, Twitter/X cards, og:locale, description | High |
 | AI Discoverability | llms.txt exists and follows spec, content is crawlable (no JS-only), robots.txt allows AI crawlers | High |
+| E-E-A-T Signals | Author attribution, publish dates, expertise indicators, trust signals | High |
 | Sitemap | All pages present, lastmod dates, valid XML | Medium |
 | Content Quality | Heading hierarchy, descriptive link text, alt attributes | Medium |
+| Core Web Vitals | LCP, INP, CLS indicators from source analysis | Medium |
 | Technical SEO | robots.txt, HTTPS, page speed indicators | Low |
 
 ## Workflow
@@ -38,6 +40,7 @@ For each category in the checklist, analyze the relevant source files:
 - Check `base.njk` for `<script type="application/ld+json">` blocks
 - Validate JSON-LD structure against schema.org types
 - Verify conditional logic (e.g., SoftwareApplication only on homepage)
+- **JS-injection warning:** If structured data is injected via client-side JavaScript (not present in the initial HTML source), flag this. Search engine crawlers and AI models may not execute JS, meaning the structured data is invisible to them. Check the built output in `_site/` to verify JSON-LD appears in static HTML, not only after JS execution.
 
 **Meta Tags:**
 - Check for `<link rel="canonical">` with dynamic URL
@@ -56,9 +59,22 @@ For each category in the checklist, analyze the relevant source files:
 - Check for lastmod dates on all entries
 - Verify excluded pages (`eleventyExcludeFromCollections: true`) are not in sitemap
 
+**E-E-A-T Signals:**
+- Check for author attribution on content pages (author name, bio, or link to author page)
+- Verify publish dates and last-modified dates are present and visible
+- Check for expertise indicators: credentials, methodology descriptions, data sources cited
+- Look for trust signals: privacy policy link, contact information, about page
+- Flag pages that lack any E-E-A-T signals -- these are at risk for Google's helpful content system
+
 **Content Quality:**
 - Scan pages for proper heading hierarchy (h1 > h2 > h3, no skips)
 - Check for descriptive link text (no "click here" or bare URLs)
+
+**Core Web Vitals (source-level indicators):**
+- **LCP (Largest Contentful Paint):** Check for render-blocking resources in the head, unoptimized hero images (missing width/height, no lazy loading), large CSS files loaded synchronously
+- **INP (Interaction to Next Paint):** Check for heavy JavaScript bundles, long-running scripts in the critical path, lack of code splitting
+- **CLS (Cumulative Layout Shift):** Check for images without explicit dimensions, dynamically injected content above the fold, fonts loaded without font-display: swap
+- Note: These are source-level heuristics, not lab measurements. Recommend running Lighthouse or PageSpeed Insights for actual scores.
 
 ### Step 3: Report
 
