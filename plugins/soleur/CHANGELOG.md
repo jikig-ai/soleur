@@ -5,6 +5,22 @@ All notable changes to the Soleur plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+## [2.22.5] - 2026-02-20
+
+### Added
+
+- 7 legal document pages on the docs site (Terms & Conditions, Privacy Policy, Cookie Policy, GDPR Policy, Acceptable Use Policy, Data Protection Disclosure, Disclaimer)
+- Legal landing page with card grid linking to all 7 documents
+- "Legal" link in site footer
+
+### Fixed
+
+- Replaced all `soleur.dev` references with `soleur.ai` across legal documents
+- Corrected legal entity name to Jikigai (incorporated in France)
+- Updated contact email to `legal@jikigai.com`
+- Added registered office address (25 rue de Ponthieu, 75008 Paris, France)
+
 ## [2.22.4] - 2026-02-20
 
 ### Changed
