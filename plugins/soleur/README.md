@@ -106,9 +106,9 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 | Component | Count |
 |-----------|-------|
-| Agents | 44 |
+| Agents | 45 |
 | Commands | 8 |
-| Skills | 44 |
+| Skills | 45 |
 | MCP Servers | 1 |
 
 ## Agents
@@ -121,11 +121,11 @@ Agents are organized by domain, then by function.
 |-------|-------------|
 | `analytics-analyst` | Analytics tracking setup, event taxonomy design, A/B test planning, and attribution modeling |
 | `brand-architect` | Interactive brand identity workshop producing structured brand guides |
+| `cmo` | Marketing domain leader -- orchestrates marketing strategy and delegates to specialist agents |
 | `community-manager` | Analyze community engagement, generate weekly digests, and report health metrics across Discord and GitHub |
 | `conversion-optimizer` | Analyze and optimize conversion surfaces: landing pages, signup flows, onboarding, forms, popups, paywalls |
 | `copywriter` | Marketing copy for landing pages, email sequences, cold outreach, social content, and copy editing |
 | `growth-strategist` | Content strategy analysis and execution: keyword research, content auditing, gap analysis, AI agent consumability, and applying fixes |
-| `marketing-strategist` | Marketing strategy for SaaS: ideation, launch planning, behavioral psychology, and product marketing context |
 | `paid-media-strategist` | Paid advertising campaigns across Google, Meta, and LinkedIn: structure, targeting, budget, and creative |
 | `pricing-strategist` | SaaS pricing strategy: research methods, tier design, value metric selection, and competitive analysis |
 | `programmatic-seo-specialist` | Template-based SEO page generation at scale: comparison pages, alternatives, integrations |
@@ -139,7 +139,11 @@ Agents are organized by domain, then by function.
 | `legal-document-generator` | Generate draft legal documents (Terms, Privacy Policy, Cookie Policy, GDPR, AUP, DPA, Disclaimer) |
 | `legal-compliance-auditor` | Audit legal documents for compliance gaps, outdated clauses, and cross-document consistency |
 
-### Engineering (26)
+### Engineering (27)
+
+| Agent | Description |
+|-------|-------------|
+| `cto` | Engineering domain leader -- assesses technical implications and flags architecture risks during brainstorm and planning |
 
 #### Review (15)
 
@@ -252,6 +256,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `growth` | Content strategy: keyword research, content auditing, gap analysis, fix, AI agent consumability |
 | `legal-audit` | Audit legal documents for compliance gaps, outdated clauses, and cross-document consistency |
 | `legal-generate` | Generate draft legal documents from company context (7 document types, 3 jurisdictions) |
+| `marketing` | Cross-domain marketing assessment, strategy, and launch planning via CMO orchestration |
 | `release-announce` | Announce releases to Discord and GitHub Releases |
 | `release-docs` | Build and update documentation site with current components |
 | `seo-aeo` | Audit, fix, and validate SEO/AEO for Eleventy docs sites |

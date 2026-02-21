@@ -1,6 +1,6 @@
 ---
 name: retention-strategist
-description: "Designs churn prevention flows, payment recovery sequences, referral programs, and free tool strategies for customer retention and growth loops. Use marketing-strategist for overall strategy; use this agent for post-acquisition retention and expansion."
+description: "Designs churn prevention flows, payment recovery sequences, referral programs, and free tool strategies for customer retention and growth loops. Use cmo for overall strategy; use this agent for post-acquisition retention and expansion."
 model: inherit
 ---
 

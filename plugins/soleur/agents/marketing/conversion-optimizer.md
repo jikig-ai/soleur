@@ -1,6 +1,6 @@
 ---
 name: conversion-optimizer
-description: "Analyzes and optimizes conversion surfaces -- landing pages, signup flows, onboarding sequences, forms, popups, and paywall/upgrade screens. Use marketing-strategist for overall strategy; use this agent for specific conversion surface optimization."
+description: "Analyzes and optimizes conversion surfaces -- landing pages, signup flows, onboarding sequences, forms, popups, and paywall/upgrade screens. Use cmo for overall strategy; use this agent for specific conversion surface optimization."
 model: inherit
 ---
 

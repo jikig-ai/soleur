@@ -103,6 +103,7 @@ Project principles organized by domain. Add principles as you learn them.
 - If skill sub-commands are always run in sequence with no branching decisions between them, merge them into a single sub-command
 - Add CSS classes to `style.css` `@layer components` instead of inline styles in Nunjucks templates
 - Add test/temp build output directories (e.g., `_site_test/`) to `.gitignore` when introducing new build commands
+- When extending commands that run inside an LLM, prefer semantic assessment questions over keyword substring matching -- LLMs are better at understanding intent than pattern matching, and semantic questions are more extensible (one question per domain vs. a keyword table)
 
 ## Testing
 
