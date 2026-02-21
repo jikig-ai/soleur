@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.22.6] - 2026-02-21
+
+### Added
+
+- Session-Start Hygiene section in AGENTS.md -- runs `cleanup-merged` at the start of every session to remove stale worktrees from prior sessions
+- Constitution rule enforcing session-start worktree cleanup as recovery mechanism
+- Safety note in ship/SKILL.md Phase 8 about deferred cleanup being handled by next session
+
+### Changed
+
+- Updated Workflow Completion Protocol step 10 to name the merge-then-session-end gap explicitly
+
 ## [2.22.5] - 2026-02-20
 
 ### Added
