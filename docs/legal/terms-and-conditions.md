@@ -13,13 +13,13 @@ generated-date: 2026-02-20
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** February 20, 2026
+**Last Updated:** February 21, 2026
 
 ---
 
 ## 1. Introduction and Acceptance
 
-These Terms & Conditions ("Terms") govern your access to and use of the Soleur platform ("Soleur," "the Plugin," "the Service"), a Company-as-a-Service product developed and maintained by Soleur ("we," "us," "our"). Soleur is a Claude Code plugin that provides AI-powered agents, skills, commands, and a compounding knowledge base for structured software development workflows.
+These Terms & Conditions ("Terms") govern your access to and use of the Soleur platform ("Soleur," "the Plugin," "the Service"), a Company-as-a-Service product developed and maintained by Jikigai ("we," "us," "our"), a company incorporated in France with its registered office at 25 rue de Ponthieu, 75008 Paris, France. Soleur is a Claude Code plugin that provides AI-powered agents, skills, commands, and a compounding knowledge base for structured software development workflows.
 
 By installing, accessing, or using Soleur, you ("User," "you," "your") agree to be bound by these Terms. If you do not agree to these Terms, do not install or use the Plugin.
 
@@ -254,7 +254,7 @@ For questions or concerns regarding these Terms, please contact us through:
 - **Issues:** [github.com/jikig-ai/soleur/issues](https://github.com/jikig-ai/soleur/issues)
 - **GDPR / Data Protection Inquiries:** legal@jikigai.com (include "GDPR" in the subject line)
 
-To exercise your data subject rights under GDPR, send a written request to legal@jikigai.com. We will acknowledge your request within 5 business days and respond substantively within one month, as required by GDPR Article 12.
+To exercise your data subject rights under GDPR, send a written request to legal@jikigai.com. We will acknowledge your request within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3).
 
 ---
 
@@ -262,9 +262,9 @@ To exercise your data subject rights under GDPR, send a written request to legal
 
 ---
 
-> **Related documents:** This Terms & Conditions document references privacy practices, data handling, cookies, and acceptable use policies. Consider reviewing the companion documents for consistency:
-> - **Privacy Policy** (`privacy-policy`) -- details data practices referenced in Section 7
-> - **Acceptable Use Policy** (`acceptable-use-policy`) -- expands on the acceptable use provisions in Section 8
-> - **Cookie Policy** (`cookie-policy`) -- covers cookies used by the documentation site
-> - **Disclaimer / Limitation of Liability** (`disclaimer`) -- standalone version of warranty and liability provisions
-> - **GDPR Policy** (`gdpr-policy`) -- detailed GDPR-specific policy for EU/EEA users
+> **Related documents:** This Terms & Conditions document references privacy practices, data handling, cookies, and acceptable use policies. Please review the companion documents:
+> - [Privacy Policy](privacy-policy.md) -- details data practices referenced in Section 7
+> - [Acceptable Use Policy](acceptable-use-policy.md) -- expands on the acceptable use provisions in Section 8
+> - [Cookie Policy](cookie-policy.md) -- covers cookies used by the documentation site
+> - [Disclaimer](disclaimer.md) -- standalone version of warranty and liability provisions
+> - [GDPR Policy](gdpr-policy.md) -- detailed GDPR-specific policy for EU/EEA users
