@@ -66,7 +66,7 @@ jobs:
           RELEASE_BODY: ${{ steps.changelog.outputs.body }}
 
       # Post to Discord directly because releases created by GITHUB_TOKEN
-      # do not trigger other workflows (release-announce.yml won't fire)
+      # do not trigger the release event for other workflows
       - name: Post to Discord
         if: steps.check.outputs.exists == 'false'
         env:
