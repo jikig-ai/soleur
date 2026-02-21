@@ -1,3 +1,7 @@
+---
+synced_to: [legal-document-generator]
+---
+
 # Learning: Legal Agent Dogfooding -- Cross-Document Consistency
 
 ## Problem

@@ -1,3 +1,7 @@
+---
+synced_to: [skill-creator]
+---
+
 # Learning: Growth Strategist Agent & Skill Development
 
 ## Problem

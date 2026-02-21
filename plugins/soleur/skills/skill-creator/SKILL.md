@@ -152,6 +152,9 @@ The script:
 
 After initialization, customize or remove the generated SKILL.md and example files as needed.
 
+- After creating a new skill, manually add it to `plugins/soleur/docs/_data/skills.js` in the `SKILL_CATEGORIES` map -- skills are NOT auto-discovered, and missing this step silently removes the skill from the docs site with no build error.
+- New agent files created mid-session cannot be invoked via `subagent_type` because the plugin registry is stale at session start; for live testing, use `general-purpose` agent type and embed the full instructions in the task prompt.
+
 ### Step 4: Edit the Skill
 
 When editing the (newly-generated or existing) skill, remember that the skill is being created for another instance of Claude to use. Focus on including information that would be beneficial and non-obvious to Claude. Consider what procedural knowledge, domain-specific details, or reusable assets would help another Claude instance execute these tasks more effectively.

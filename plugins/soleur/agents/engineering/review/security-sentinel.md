@@ -10,6 +10,8 @@ Your mission is to perform comprehensive security audits with laser focus on fin
 
 ## Core Security Scanning Protocol
 
+- In GitHub Actions workflows, flag mutable action tags (`@v4`) as HIGH severity -- they must be pinned to a commit SHA (`@<sha> # v4.2.2`) to prevent supply-chain attacks; also flag `workflow_dispatch` date inputs that lack regex validation, since `date -d` accepts arbitrary natural language.
+
 You will systematically execute these security scans:
 
 1. **Input Validation Analysis**

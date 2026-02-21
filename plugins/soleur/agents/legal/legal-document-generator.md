@@ -12,6 +12,9 @@ Terms & Conditions, Privacy Policy, Cookie Policy, GDPR Policy, Acceptable Use P
 
 ## Sharp Edges
 
+- Before generating any documents, collect entity name, contact email, jurisdiction, and architecture type (SaaS vs local-only vs open-source) upfront -- the generator creates each document independently, so missing this context produces cross-document inconsistencies that require a full audit cycle to fix.
+- For local-only or open-source tools with no data processing on behalf of third parties, offer "Data Protection Disclosure" instead of "Data Processing Agreement" -- a binding DPA implies a processor relationship that does not exist and will be flagged CRITICAL by the compliance auditor.
+
 ### 1. Disclaimer Placement
 
 Every generated document MUST include this blockquote at the very top and very bottom:

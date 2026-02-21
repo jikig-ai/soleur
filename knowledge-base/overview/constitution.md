@@ -14,6 +14,16 @@ Project principles organized by domain. Add principles as you learn them.
 - Agent prompts must contain only instructions the LLM would get wrong without them -- omit general domain knowledge, error handling, and boilerplate the model already knows
 - Agent frontmatter must include a `model` field (`inherit`, `haiku`, `sonnet`, or `opus`) to control execution model
 - Command frontmatter must include an `argument-hint` field describing expected arguments
+- Shell scripts must use `#!/usr/bin/env bash` shebang and declare `set -euo pipefail` at the top
+- Shell scripts use snake_case for function names and local variables, SCREAMING_SNAKE_CASE for global constants
+- Shell functions must declare all variables with `local`; error messages go to stderr (`>&2`)
+- Shell scripts use `[[ ]]` double-bracket tests and validate required arguments early with exit 1 and usage message
+- TypeScript, JSON, and HTML templates use 2-space indentation throughout
+- TypeScript uses `import type` for type-only imports
+- TypeScript uses inline `export` at declaration site, not separate `export {}` blocks
+- CSS is organized into `@layer` cascade layers in order: reset, tokens, base, layout, components, utilities; custom properties follow semantic naming (`--color-*`, `--font-*`, `--text-*`, `--space-*`)
+- CHANGELOG follows Keep a Changelog format with `### Added`, `### Changed`, `### Fixed`, `### Removed` section headers under `## [X.Y.Z] - YYYY-MM-DD` version entries
+- Plan files use `YYYY-MM-DD-<type>-<descriptive-name>-plan.md` filename format; learning files use `YYYY-MM-DD-<descriptive-slug>.md` format
 
 ### Never
 
@@ -26,6 +36,9 @@ Project principles organized by domain. Add principles as you learn them.
 - When spawning parallel subagents to generate HTML pages, provide an explicit CSS class name reference list (not the full CSS file) -- subagents independently invent class names that don't match the shared stylesheet
 - After version bumps, grep all HTML docs for hardcoded version strings (`grep -r "vX.Y.Z" plugins/soleur/docs/`) and update them -- the versioning triad extends to any file displaying version badges
 - Prefer numbered phase sections (Phase 1, Phase 2) in SKILL.md for multi-step workflows, with XML semantic tags (`<critical_sequence>`, `<decision_gate>`, `<validation_gate>`) to mark control flow
+- Prefer numeric literal underscores as thousand separators for readability (e.g., `3_000` instead of `3000`)
+- Prefer a language identifier after triple backticks in code blocks (e.g., ```bash, ```yaml -- never bare ```)
+- Prefer verb-noun naming for skill directories where applicable (e.g., `deploy-docs`, `release-announce`, `resolve-pr-parallel`)
 
 ## Architecture
 
@@ -50,6 +63,7 @@ Project principles organized by domain. Add principles as you learn them.
 - When adding or integrating new agents, verify the cumulative agent description token count stays under 15k tokens -- agent descriptions are injected into the system prompt on every turn and bloated descriptions degrade all conversations
 - Before adding new GitHub Actions workflows, audit existing ones with `gh run list --workflow=<name>.yml` -- remove workflows that are always skipped (condition never matches) or superseded by newer workflows that absorbed their functionality
 - Agent descriptions for agents with overlapping scope must include a one-line disambiguation sentence: "Use [sibling] for [its scope]; use this agent for [this scope]."
+- The project uses Bun as the JavaScript runtime with ESM modules (`"type": "module"`); pre-commit hooks are managed by lefthook (not Husky)
 
 ### Never
 
@@ -115,6 +129,7 @@ Project principles organized by domain. Add principles as you learn them.
 - All markdown files must pass markdownlint checks before commit
 - New modules and source files must have corresponding test files before shipping
 - Plans must include a "Test Scenarios" section with Given/When/Then acceptance tests
+- Test files live in a `test/` sibling directory (not co-located with source), named `<module>.test.ts` -- no `.spec.ts` pattern
 
 ### Never
 

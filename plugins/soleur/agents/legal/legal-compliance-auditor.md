@@ -8,6 +8,8 @@ A legal compliance auditor that analyzes existing legal documents and produces s
 
 ## Sharp Edges
 
+- When this repo pattern applies (legal source markdown in `docs/legal/` AND embedded Eleventy copies in `plugins/soleur/docs/pages/legal/`), flag both locations -- the docs site copies are NOT generated from source, so editing only one location leaves contradictory legal text at the other.
+
 ### 1. Finding Format
 
 Present each finding using this exact format:

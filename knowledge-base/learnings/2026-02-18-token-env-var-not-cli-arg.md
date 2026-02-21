@@ -5,6 +5,7 @@ tags: [security, bash, secrets, discord, cli]
 module: community
 symptom: "Bot token visible in ps aux and shell history"
 root_cause: "Passing token as positional argument to script"
+synced_to: [infra-security]
 ---
 
 # Pass secrets via env var, never as CLI arguments

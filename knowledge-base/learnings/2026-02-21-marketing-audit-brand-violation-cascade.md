@@ -1,3 +1,7 @@
+---
+synced_to: [cmo]
+---
+
 # Marketing Audit: Brand Violation Cascade Patterns
 
 Date: 2026-02-21
