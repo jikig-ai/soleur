@@ -30,3 +30,7 @@ node_modules/
 .env
 _site/
 _site_test/
+
+# Article 30 register (private -- do not commit)
+article-30-register*.md
+knowledge-base/private/
