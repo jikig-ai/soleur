@@ -21,6 +21,17 @@ Core workflow:
 3. `agent-browser click @e1` / `fill @e2 "text"` - Interact using refs
 4. Re-snapshot after page changes
 
+## Session-Start Hygiene
+
+At the start of every session, before any other work, run:
+
+```bash
+cd $(git rev-parse --show-toplevel) && bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
+git worktree list
+```
+
+This detects and removes worktrees whose remote branches are `[gone]` (merged PRs from prior sessions). Report what was cleaned. If nothing was cleaned, continue normally. This prevents stale worktrees from accumulating across sessions where cleanup was deferred past the merge step.
+
 ## Worktree Awareness
 
 HARD RULE: When a worktree is active for the current task, ALL file edits and git operations MUST happen in the worktree directory. Editing files in the main repo while a worktree exists is a blocking error -- stop immediately and switch.
@@ -58,9 +69,9 @@ MANDATORY checklist after completing implementation work. Every step MUST be com
 7. **Commit** -- This is the gate. Everything above must be done first.
 8. **Push and create PR** -- Do not stop after committing. Push and open the PR in the same step.
 9. **Wait for CI** -- Run `gh pr checks --watch --fail-fast` and wait for all checks to pass before merging. Do NOT ask "merge now or later?" -- always wait for CI first. If a check fails, investigate and fix before proceeding.
-10. **Merge and cleanup** -- After CI passes, merge with `gh pr merge <number> --squash`. Then remove the worktree with `worktree-manager.sh cleanup-merged` and delete stale local branches. See `/ship` Phase 8 for the full procedure.
+10. **Merge and cleanup** -- After CI passes, merge with `gh pr merge <number> --squash`. Then immediately run `worktree-manager.sh cleanup-merged` from the repo root. Do not defer cleanup to the next session -- if this session ends before cleanup runs, the worktree becomes stale. See `/ship` Phase 8 for the full procedure.
 
-FAILURE MODE TO AVOID: Committing code, then forgetting to push, forgetting to create the PR, forgetting to include spec/plan files, or silently skipping compound. The compound step is the most frequently skipped -- it has caused missing learnings and undocumented constitution updates. If you catch yourself about to skip a step, stop and complete it.
+FAILURE MODE TO AVOID: Committing code, then forgetting to push, forgetting to create the PR, forgetting to include spec/plan files, or silently skipping compound. The compound step is the most frequently skipped -- it has caused missing learnings and undocumented constitution updates. The merge-then-session-end gap is another known recurrence: if cleanup is skipped because a session ends after merge, the next session's Session-Start Hygiene check will catch it. If you catch yourself about to skip a step, stop and complete it.
 
 Use the `/ship` skill to automate this checklist. Prefer `/ship` over manual commit/push/PR -- it enforces compound and review gates that manual workflows silently bypass.
 
