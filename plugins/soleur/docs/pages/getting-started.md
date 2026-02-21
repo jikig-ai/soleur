@@ -15,6 +15,10 @@ permalink: pages/getting-started.html
 <section class="content">
   <div class="container">
 
+## Why Soleur
+
+Soleur gives a single founder the leverage of a full organization. **45 agents** across engineering, marketing, legal, operations, and product -- plus **45 skills** and **8 commands** -- that compound your company knowledge over time. Every problem you solve makes the next one easier.
+
 ## Installation
 
 <div class="quickstart-code">
@@ -87,7 +91,7 @@ Soleur follows a structured 5-step workflow for software development:
 <ul class="learn-more-links">
   <li><a href="pages/agents.html">Agents <span class="learn-more-desc">Specialized AI agents for engineering, research, and workflow</span></a></li>
   <li><a href="pages/skills.html">Skills <span class="learn-more-desc">Multi-step skills for complex workflows</span></a></li>
-  <li><a href="pages/changelog.html">Changelog <span class="learn-more-desc">All notable changes to the Soleur plugin</span></a></li>
+  <li><a href="pages/changelog.html">Changelog <span class="learn-more-desc">All notable changes to Soleur</span></a></li>
 </ul>
 
   </div>

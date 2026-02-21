@@ -43,7 +43,7 @@ If the plugin paths above do not exist, fall back to the installed plugin paths 
 Present the following formatted overview. Replace placeholder counts with actual values from Step 2.
 
 ```text
-Soleur - AI-powered development workflow
+Soleur - The Company-as-a-Service Platform
 
 COMMANDS (all soleur: namespaced):
   /soleur:brainstorm <idea>   Explore requirements and approaches

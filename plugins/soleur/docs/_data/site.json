@@ -10,11 +10,13 @@
     { "label": "Agents", "url": "pages/agents.html" },
     { "label": "Skills", "url": "pages/skills.html" },
     { "label": "Community", "url": "pages/community.html" },
+    { "label": "Vision", "url": "pages/vision.html" },
     { "label": "Changelog", "url": "pages/changelog.html" }
   ],
   "footerLinks": [
     { "label": "Get Started", "url": "pages/getting-started.html" },
     { "label": "Community", "url": "pages/community.html" },
+    { "label": "Vision", "url": "pages/vision.html" },
     { "label": "Legal", "url": "pages/legal.html" }
   ]
 }
