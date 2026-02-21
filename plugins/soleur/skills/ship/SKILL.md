@@ -375,6 +375,8 @@ This detects `[gone]` branches (where the remote was deleted after merge), remov
 
 **If working from a worktree:** Navigate to the main repo root first, then run cleanup.
 
+**If the session ends before cleanup runs:** The next session will handle it automatically via the Session-Start Hygiene check in AGENTS.md. The `cleanup-merged` script is idempotent and safe to run at any time.
+
 ## Important Rules
 
 - **Never skip the versioning triad.** If plugin files changed, all three files must be updated.

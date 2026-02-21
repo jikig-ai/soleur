@@ -38,6 +38,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Organize agents by domain first (engineering/, etc.), then by function (review/, design/). Cross-domain agents stay at root level (research/, workflow/)
 - Skills must have a SKILL.md file and may include scripts/, references/, and assets/ subdirectories
 - Lifecycle workflows with hooks must cover every state transition with a cleanup trigger; verify no gaps between create, ship, merge, and session-start
+- At session start, run `worktree-manager.sh cleanup-merged` to remove worktrees whose remote branches are [gone]; this is the recovery mechanism for the merge-then-session-end gap where cleanup was deferred
 - Operations that modify the knowledge-base or move files must use `git mv` to preserve history and produce a single atomic commit that can be reverted with `git revert`
 - New commands must be idempotent -- running the same command twice must not create duplicates or corrupt state
 - Run code review and `/soleur:compound` before committing -- the commit is the gate, not the PR; compound must be explicitly offered to the user before every commit, never silently skipped
