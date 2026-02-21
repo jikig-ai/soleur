@@ -307,6 +307,9 @@
     line-height: 1.6;
     max-width: 65ch;
   }
+  .community-text + .community-text {
+    margin-top: var(--space-4);
+  }
   .community-text a { color: var(--color-accent); }
 
   /* Command cards (wider) */
@@ -760,7 +763,44 @@
     color: var(--color-text-tertiary);
   }
 
-  /* Changelog */
+  /* Prose reading width and vertical rhythm */
+  .prose {
+    max-width: 75ch;
+  }
+  .prose h2,
+  .prose h3 {
+    margin-top: var(--space-6);
+    margin-bottom: var(--space-3);
+  }
+  .prose p {
+    margin-bottom: var(--space-4);
+  }
+  .prose ul,
+  .prose ol {
+    margin-bottom: var(--space-4);
+    padding-left: var(--space-5);
+  }
+  .prose li {
+    margin-bottom: var(--space-2);
+  }
+
+  /* Changelog overrides -- applied alongside .prose on #changelog-content */
+  #changelog-content h2 {
+    font-family: var(--font-mono);
+    font-size: var(--text-xl);
+    border-bottom: 1px solid var(--color-border);
+    padding-bottom: var(--space-2);
+    margin-top: var(--space-8);
+  }
+  #changelog-content h2:first-child {
+    margin-top: 0;
+  }
+  #changelog-content h3 {
+    font-size: var(--text-base);
+    margin-top: var(--space-5);
+  }
+
+  /* Changelog (legacy class -- kept for backward compatibility) */
   .changelog-entry { margin-bottom: var(--space-8); }
   .changelog-entry h2 {
     font-family: var(--font-mono);
