@@ -48,6 +48,7 @@ Project principles organized by domain. Add principles as you learn them.
 - All Discord webhook payloads must include explicit `username` and `avatar_url` fields rather than relying on webhook defaults -- webhook messages freeze author identity at post time; only delete+repost changes identity on existing messages
 - Plans that create worktrees and invoke Task agents must include explicit `cd ${WORKTREE_PATH}` + `pwd` verification between worktree creation and agent invocation
 - When adding or integrating new agents, verify the cumulative agent description token count stays under 15k tokens -- agent descriptions are injected into the system prompt on every turn and bloated descriptions degrade all conversations
+- Before adding new GitHub Actions workflows, audit existing ones with `gh run list --workflow=<name>.yml` -- remove workflows that are always skipped (condition never matches) or superseded by newer workflows that absorbed their functionality
 - Agent descriptions for agents with overlapping scope must include a one-line disambiguation sentence: "Use [sibling] for [its scope]; use this agent for [this scope]."
 
 ### Never
