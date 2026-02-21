@@ -7,6 +7,7 @@ tags:
   - ci-cd
 module: infrastructure
 date: 2026-02-21
+synced_to: [security-sentinel]
 ---
 
 # Learning: GitHub Actions Workflow Security Patterns

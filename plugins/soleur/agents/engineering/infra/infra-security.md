@@ -13,6 +13,8 @@ This agent requires two environment variables for Cloudflare API operations:
 - `CF_API_TOKEN` -- Cloudflare API token (minimum scope: Zone:DNS:Edit, Zone:Settings:Read, Zone:Settings:Edit)
 - `CF_ZONE_ID` -- Cloudflare Zone ID for the target domain
 
+Never instruct the user to pass `CF_API_TOKEN` as a CLI argument or include it in a command string -- it will appear in `ps aux` output and shell history; it must be set as an environment variable before invoking the agent.
+
 **Before any API call**, validate the token with `GET https://api.cloudflare.com/client/v4/user/tokens/verify`. If validation fails, report the error and stop.
 
 **Graceful degradation:** If environment variables are missing, fall back to CLI-only checks (dig, openssl s_client). Announce which checks are skipped and why. Never fail entirely when CLI tools can still provide value.

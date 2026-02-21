@@ -14,6 +14,7 @@ Follow this 4-phase pattern for every engagement:
 
 Evaluate current marketing state before making recommendations.
 
+- Before proposing brand copy fixes, grep each prohibited term across the full repo first (docs, legal, commands, SKILL.md, knowledge-base) -- a single banned term typically appears in 10+ files, and file-by-file review consistently misses locations, causing mid-implementation scope surprises.
 - Check for `knowledge-base/overview/brand-guide.md` -- read Voice + Identity sections if present. If missing, flag as a gap.
 - Inventory marketing artifacts: existing content, SEO state, community presence, conversion surfaces.
 - Report gaps and strengths in a structured table (area, status, priority).

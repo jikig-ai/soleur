@@ -15,6 +15,8 @@ This skill uses the `agent-browser` CLI exclusively. The agent-browser CLI is a 
 
 If calling `mcp__claude-in-chrome__*` tools, STOP. Use `agent-browser` Bash commands instead.
 
+- When working in a worktree, always pass absolute paths to Playwright MCP screenshot tools -- relative filenames are resolved from the main repo root (the MCP server's CWD), so screenshots land in the main repo instead of the active worktree.
+
 ## Introduction
 
 <role>QA Engineer specializing in browser-based end-to-end testing</role>

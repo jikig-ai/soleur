@@ -3,6 +3,7 @@ title: Playwright MCP screenshots write to main repo, not active worktree
 date: 2026-02-17
 category: workflow
 tags: [playwright, worktree, screenshots, browser-testing, cleanup]
+synced_to: [test-browser]
 module: docs
 symptoms: [screenshots-in-wrong-directory, playwright-mcp-in-main-repo, loose-png-files-in-repo-root]
 ---

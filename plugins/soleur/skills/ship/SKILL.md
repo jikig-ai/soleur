@@ -357,7 +357,7 @@ gh pr checks --watch --fail-fast
 gh pr merge <number> --squash
 ```
 
-**CRITICAL: Do NOT use `--delete-branch` on merge.** The worktree is still active and the guardrails hook will block it. Merge with `--squash` only, then `cleanup-merged` handles branch deletion after removing the worktree.
+**CRITICAL: Do NOT use `--delete-branch` on merge.** The guardrails hook blocks `--delete-branch` whenever ANY worktree exists in the repo -- not just the one for the branch being merged -- so the restriction applies unconditionally during parallel development. Merge with `--squash` only, then `cleanup-merged` handles branch deletion after removing the worktree.
 
 **If merged (either now or user says "merge PR" later in the session):**
 

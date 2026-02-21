@@ -1,3 +1,7 @@
+---
+synced_to: [ship]
+---
+
 # Learning: Never use --delete-branch with parallel worktrees
 
 ## Problem

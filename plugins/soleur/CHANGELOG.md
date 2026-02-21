@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.23.13] - 2026-02-21
+
+### Changed
+
+- Sync codebase conventions to constitution: 16 new rules (shell, TypeScript, CSS, changelog, filename formats)
+- Sync learnings to 8 definitions: skill-creator, test-browser, legal-document-generator, legal-compliance-auditor, security-sentinel, cmo, ship, infra-security
+- Add `synced_to` frontmatter to 7 learnings for definition sync tracking
+
 ## [2.23.12] - 2026-02-21
 
 ### Changed
