@@ -111,11 +111,12 @@
     padding: var(--space-10) 0 var(--space-8);
     margin-top: var(--header-h);
     position: relative;
+    text-align: center;
     border-bottom: 1px solid var(--color-border);
   }
   .page-hero .container { position: relative; z-index: 1; }
   .page-hero h1 { font-size: var(--text-4xl); margin-bottom: var(--space-4); letter-spacing: -0.02em; }
-  .page-hero p { font-size: var(--text-lg); color: var(--color-text-secondary); max-width: 600px; }
+  .page-hero p { font-size: var(--text-lg); color: var(--color-text-secondary); max-width: 600px; margin-inline: auto; }
 
   .page-section { padding: var(--space-8) 0; }
   .page-section + .page-section { border-top: 1px solid var(--color-border); }
@@ -781,6 +782,7 @@
   /* Prose reading width and vertical rhythm */
   .prose {
     max-width: 75ch;
+    margin: 0 auto;
   }
   .prose h2,
   .prose h3 {

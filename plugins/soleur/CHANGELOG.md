@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.23.10] - 2026-02-21
+
+### Changed
+
+- Center `.prose` content with `margin: 0 auto` for balanced reading layout on desktop
+- Center `.page-hero` text and subtitle paragraphs to match `.hero` section styling
+
 ## [2.23.9] - 2026-02-21
 
 ### Added
