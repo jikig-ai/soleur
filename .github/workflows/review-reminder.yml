@@ -1,0 +1,117 @@
+name: Review Reminders
+
+on:
+  schedule:
+    - cron: '0 0 1 * *'
+  workflow_dispatch:
+    inputs:
+      date_override:
+        description: 'Override today date (YYYY-MM-DD) for testing'
+        required: false
+        type: string
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check-reviews:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Scan for due reviews
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DATE_OVERRIDE: ${{ inputs.date_override }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO_NAME: ${{ github.repository }}
+        run: |
+          # Validate date_override format if provided
+          if [[ -n "$DATE_OVERRIDE" ]]; then
+            if ! [[ "$DATE_OVERRIDE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+              echo "::error::date_override must be YYYY-MM-DD, got: $DATE_OVERRIDE"
+              exit 1
+            fi
+            today="$DATE_OVERRIDE"
+          else
+            today=$(date -u +%Y-%m-%d)
+          fi
+          echo "Using date: $today"
+
+          today_epoch=$(date -d "$today" +%s)
+          created=0
+          skipped=0
+
+          # Ensure label exists (once, before loop)
+          gh label create review-reminder --description "Auto-created review reminder" --color "0E8A16" 2>/dev/null || true
+
+          while IFS= read -r file; do
+            # Extract next_review from YAML frontmatter
+            next_review=$(sed -n '/^---$/,/^---$/{ /^next_review:/{ s/.*: *//; p; q; } }' "$file")
+
+            if [[ -z "$next_review" ]]; then
+              continue
+            fi
+
+            # Validate that next_review is a parseable date
+            if ! review_epoch=$(date -d "$next_review" +%s 2>/dev/null); then
+              echo "::warning::Skipping $file -- invalid next_review date: $next_review"
+              continue
+            fi
+
+            days_until=$(( (review_epoch - today_epoch) / 86400 ))
+
+            if [[ $days_until -lt 0 || $days_until -gt 7 ]]; then
+              continue
+            fi
+
+            # Build deterministic title from filename
+            slug=$(basename "$file" .md)
+            expected_title="Review Reminder: $slug"
+
+            # Check for existing open issue with exact title match
+            match=$(gh issue list --label review-reminder --state open --json title --jq '.[].title' | grep -cxF "$expected_title" || true)
+            if [[ "$match" -gt 0 ]]; then
+              echo "Skipping $file -- open issue already exists"
+              skipped=$((skipped + 1))
+              continue
+            fi
+
+            # Extract title from frontmatter (fallback to slug)
+            doc_title=$(sed -n '/^---$/,/^---$/{ /^title:/{ s/.*: *//; p; q; } }' "$file")
+            if [[ -z "$doc_title" ]]; then
+              doc_title="$slug"
+            fi
+
+            # Create issue
+            repo_url="${SERVER_URL}/${REPO_NAME}"
+            file_link="${repo_url}/blob/main/${file}"
+
+            issue_body="## Review Due: ${doc_title}
+
+          **Review date:** ${next_review}
+          **Source:** [${file}](${file_link})
+
+          When complete:
+          - [ ] Update \`next_review\` in the source document's YAML frontmatter
+          - [ ] Close this issue
+
+          _Auto-created by the [review-reminder workflow](${repo_url}/actions/workflows/review-reminder.yml)._"
+
+            if gh issue create \
+              --title "$expected_title" \
+              --body "$issue_body" \
+              --label "review-reminder"; then
+              echo "Created issue: $expected_title"
+              created=$((created + 1))
+            else
+              echo "::error::Failed to create issue for $file"
+              exit 1
+            fi
+
+          done < <(find knowledge-base/learnings -name '*.md' -type f 2>/dev/null)
+
+          echo ""
+          echo "Summary: created=$created, skipped=$skipped"
