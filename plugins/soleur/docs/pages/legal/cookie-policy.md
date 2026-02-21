@@ -142,7 +142,7 @@ Currently, as we do not set non-essential cookies, no consent mechanism is requi
 
 ## 8. Do Not Track Signals
 
-Some browsers transmit "Do Not Track" (DNT) signals. Since we do not deploy tracking cookies or analytics, DNT signals do not require any change in our behavior. We honor the spirit of DNT by not tracking users.
+Some browsers transmit "Do Not Track" (DNT) signals. While we use Plausible Analytics for cookie-free, privacy-respecting website analytics, Plausible does not track users across sites and does not respond to DNT signals because it has no cross-site tracking to disable. We honor the spirit of DNT by using analytics that collect no personally identifiable information.
 
 ## 9. Changes to This Cookie Policy
 
