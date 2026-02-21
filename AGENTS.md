@@ -9,6 +9,7 @@ This repository contains the Soleur Claude Code plugin -- an orchestration engin
   - Never `rm -rf` on the current working directory, a worktree path (`.worktrees/`), or the repository root.
   - Never use `--delete-branch` with `gh pr merge`. The guardrails hook blocks it whenever **any** worktree exists (not just the one for the branch being merged). In parallel development, other worktrees will almost always be active. Instead: `gh pr merge <number> --squash` (no `--delete-branch`), then run `cleanup-merged` which safely removes worktrees and branches together.
 - **ASCII-first:** Use ASCII unless the file already contains Unicode.
+- **Markdown-first:** Use markdown tables (not YAML files) for structured data unless explicitly told otherwise. Follow existing repo conventions for file formats.
 
 ## Browser Automation
 
@@ -64,7 +65,7 @@ MANDATORY checklist after completing implementation work. Every step MUST be com
 2. **Compound** -- HARD RULE: Run `/soleur:compound` to capture learnings. Ask the user "Should we run /soleur:compound before committing?" -- if they decline, proceed. But you must NEVER silently skip this step. Skipping without asking is a protocol violation.
 3. **Stage ALL artifacts** -- Brainstorms, specs, plans, learnings, AND code. Historically missed: forgetting to stage non-code files. Run `git status` and verify nothing is left behind.
 4. **README** -- If any new command, skill, or agent was added, update `plugins/soleur/README.md`. Check, don't assume.
-5. **Merge main** -- Run `git fetch origin main && git merge origin/main` before bumping versions. This ensures the version bump starts from the latest version on main, reducing merge conflicts on version files.
+5. **Merge main** -- Run `git fetch origin main && git merge origin/main` before bumping versions. This ensures the version bump starts from the latest version on main, reducing merge conflicts on version files. If merge conflicts arise on version files, read the current version from main (`git show origin/main:plugins/soleur/plugin.json`) and bump from that -- do not assume the branch version is current.
 6. **Version bump** -- If files under `plugins/soleur/` changed, bump the version. See Plugin Versioning below.
 7. **Commit** -- This is the gate. Everything above must be done first.
 8. **Push and create PR** -- Do not stop after committing. Push and open the PR in the same step.
