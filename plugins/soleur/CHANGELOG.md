@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.23.5] - 2026-02-21
+
+### Changed
+
+- Correct GDPR policy GitHub DPA reference: formal DPA applies to paid plans only, free-plan orgs covered by GitHub ToS + Privacy Statement (#203)
+
 ## [2.23.4] - 2026-02-21
 
 ### Changed
