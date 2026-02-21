@@ -8,7 +8,7 @@ permalink: pages/legal/gdpr-policy.html
 <section class="page-hero">
   <div class="container">
     <h1>GDPR Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated February 21, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated February 22, 2026</p>
   </div>
 </section>
 
@@ -22,7 +22,7 @@ permalink: pages/legal/gdpr-policy.html
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** February 21, 2026
+**Last Updated:** February 22, 2026
 
 ---
 
@@ -49,7 +49,7 @@ Jikigai acts as a **data controller** for: (a) the documentation site hosted on 
 Users should be aware that interacting with Soleur may involve third-party services that have their own data controller or processor roles:
 
 - **Anthropic (Claude API):** When users invoke Soleur agents and skills, requests are sent to Anthropic's Claude API using the user's own API key. Anthropic acts as an independent data controller or processor under its own terms and privacy policy. Soleur does not intermediate, intercept, or store any data exchanged between the user and Anthropic.
-- **GitHub Pages (Documentation Site):** The Soleur documentation site at [soleur.ai](https://soleur.ai) is hosted on GitHub Pages. GitHub acts as a **data processor** for the hosting service, collecting IP addresses, browser metadata, and other standard web server logs on Jikigai's behalf. GitHub's processing is governed by the [GitHub Data Protection Agreement](https://github.com/customer-terms/github-data-protection-agreement) and the [GitHub Customer Agreement](https://github.com/customer-terms).
+- **GitHub Pages (Documentation Site):** The Soleur documentation site at [soleur.ai](https://soleur.ai) is hosted on GitHub Pages. GitHub acts as a **data processor** for the hosting service, collecting IP addresses, browser metadata, and other standard web server logs on Jikigai's behalf. GitHub's processing is governed by the [GitHub Terms of Service](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service) and the [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement), which include GDPR compliance commitments. Note: GitHub's formal [Data Protection Agreement](https://github.com/customer-terms/github-data-protection-agreement) applies to paid plans (Enterprise Cloud, Teams) only; Jikigai's free-plan organization is covered by GitHub's standard terms, under which GitHub acknowledges processor obligations and maintains EU-US Data Privacy Framework certification and Standard Contractual Clauses.
 - **GitHub (Repository):** Users who interact with the Soleur repository (issues, pull requests, discussions) do so under GitHub's terms and privacy policies. For repository interactions, GitHub and Jikigai act as independent controllers of the data involved in community participation.
 
 ---
