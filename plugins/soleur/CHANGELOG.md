@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.23.3] - 2026-02-21
+
+### Changed
+
+- Fix brand voice violations across 15+ public-facing files (remove "AI-powered", "meant to be", "leverage")
+- Update component counts from 31/40 to 45/45 in brand guide, legal docs, and overview
+- Add "plugin" boundary exception rule to brand guide
+- Restructure root README: remove vision manifesto, add website badge and Learn More links
+- Create /vision page on website with restructured manifesto content
+- Add "Why Soleur" section to getting-started page
+- Update GitHub metadata: homepage to soleur.ai, declarative description, high-traffic topics
+- Update plugin.json homepage to soleur.ai
+
 ## [2.23.2] - 2026-02-21
 
 ### Fixed
