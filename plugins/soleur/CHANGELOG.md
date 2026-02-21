@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.23.8] - 2026-02-21
+
+### Changed
+
+- Replace header logo image with CSS-styled mark matching footer (gold-bordered S + uppercase spaced wordmark)
+
 ## [2.23.7] - 2026-02-21
 
 ### Changed
