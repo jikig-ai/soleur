@@ -87,6 +87,7 @@ The following data may be processed by third-party services when users interact 
 | IP address, browser metadata | GitHub (via GitHub Pages) | Hosting documentation site |
 | Prompts, code context | Anthropic (via Claude API) | Powering AI agent responses (user authenticates with own credentials) |
 | GitHub account data | GitHub (via repository) | Issue tracking, contributions |
+| Name, email, inquiry content | Proton AG (via Proton Mail) | Handling legal and GDPR inquiries (legal@jikigai.com) |
 
 Users are responsible for reviewing the privacy policies of these third-party services.
 
@@ -199,7 +200,7 @@ In the event of a personal data breach affecting data for which Jikigai acts as 
 
 ### 11.2 Practical Context
 
-Given Jikigai's minimal processing activities, the most likely breach scenario would involve unauthorized access to the email provider handling legal@jikigai.com or a compromise of the GitHub organization. In both cases, the third-party provider (email service, GitHub) would typically be the first to detect and communicate the breach.
+Given Jikigai's minimal processing activities, the most likely breach scenario would involve unauthorized access to Proton AG (Proton Mail), the email provider handling legal@jikigai.com, or a compromise of the GitHub organization. In both cases, the third-party provider (Proton Mail, GitHub) would typically be the first to detect and communicate the breach.
 
 ---
 
