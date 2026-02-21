@@ -29,7 +29,7 @@ permalink: pages/legal/acceptable-use-policy.html
 
 ## 1. Introduction
 
-This Acceptable Use Policy ("AUP" or "Policy") governs your use of the Soleur platform ("Soleur," "the Platform," "the Plugin"), a Claude Code plugin providing AI-powered agents for software development workflows, including code generation, review, planning, deployment, and browser automation. Soleur is developed and maintained by the Soleur project ("we," "us," "our") and is available at [soleur.ai](https://soleur.ai) and through the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur).
+This Acceptable Use Policy ("AUP" or "Policy") governs your use of the Soleur platform ("Soleur," "the Platform," "the Plugin"), a Claude Code plugin providing agents for software development workflows, including code generation, review, planning, deployment, and browser automation. Soleur is developed and maintained by the Soleur project ("we," "us," "our") and is available at [soleur.ai](https://soleur.ai) and through the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur).
 
 By installing, configuring, or using Soleur, you ("User," "you," "your") agree to comply with this Policy. If you do not agree, you must discontinue use of the Platform immediately.
 
@@ -41,7 +41,7 @@ This Policy applies to all users globally, with specific provisions addressing c
 
 This Policy applies to all use of the Soleur platform, including but not limited to:
 
-- Interaction with Soleur's 31 AI agents and 40 skills;
+- Interaction with Soleur's 45 AI agents and 45 skills;
 - Execution of shell commands, code generation, and file manipulation through agents;
 - Browser automation via the agent-browser subsystem;
 - API interactions initiated by or through Soleur agents;
