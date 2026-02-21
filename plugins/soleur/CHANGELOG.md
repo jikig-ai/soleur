@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.23.4] - 2026-02-21
+
+### Changed
+
+- Add Article 30 section and breach notification to GDPR policy
+- Affirm Jikigai as data controller (was "may act as controller")
+- Add GitHub DPA reference and characterize processor relationship
+- Update international transfers to reference EU-US Data Privacy Framework
+- Add retention period for GDPR inquiry correspondence
+- Add controller identity to Privacy Policy Section 2
+- Clarify Jikigai as contracting party in Terms and Conditions
+- Fix GDPR response timeline (one month from receipt per Art. 12(3))
+- Update related document links to use direct links across all legal docs
+
 ## [2.23.3] - 2026-02-21
 
 ### Changed
