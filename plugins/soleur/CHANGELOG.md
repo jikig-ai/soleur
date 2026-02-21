@@ -6,6 +6,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.23.9] - 2026-02-21
+
+### Added
+
+- Add Plausible Analytics (cookie-free, GDPR-compliant) to docs site via `<script async>` in base layout
+- Add Website Analytics Data section (4.3) to GDPR policy with Art. 6(1)(f) three-part test and ePrivacy exemption
+- Add analytics as fourth processing activity in GDPR Article 30 register
+- Add cookie-free analytics legal update pattern to learnings
+
+### Changed
+
+- Update cookie policy to disclose Plausible as cookie-free analytics provider
+- Update privacy policy with Plausible analytics disclosure and legal basis
+- Update data protection disclosure to include analytics alongside hosting
+- Update all root legal doc copies to mirror Eleventy source changes
+
+## [2.23.8] - 2026-02-21
+
+### Changed
+
+- Replace header logo image with CSS-styled mark matching footer (gold-bordered S + uppercase spaced wordmark)
+
+## [2.23.7] - 2026-02-21
+
+### Changed
+
+- Add `.prose` CSS utility class for reading-width content (max-width: 75ch) with vertical rhythm
+- Add gold S logo mark image to site header alongside "Soleur" wordmark
+- Fix changelog styling with `#changelog-content` overrides (mono font, border-bottom, spacing)
+- Add `.prose` wrapper to all 7 legal pages, changelog, and getting started page
+- Add paragraph spacing for vision page community text sections
+
+## [2.23.6] - 2026-02-21
+
+### Changed
+
+- Name Proton AG (Proton Mail) as email provider in GDPR policy and Article 30 register (#204)
+- Add Proton Mail to third-party data table in GDPR policy Section 4.2
+- Update Article 30 register Treatment N.3 with provider details, DPA reference, and adequacy decision
+- Mark audit report Recommendation 3 (email provider clarification) as resolved
+
+## [2.23.5] - 2026-02-21
+
+### Changed
+
+- Correct GDPR policy GitHub DPA reference: formal DPA applies to paid plans only, free-plan orgs covered by GitHub ToS + Privacy Statement (#203)
+
 ## [2.23.4] - 2026-02-21
 
 ### Changed

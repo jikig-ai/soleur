@@ -14,6 +14,7 @@ permalink: pages/getting-started.html
 
 <section class="content">
   <div class="container">
+    <div class="prose">
 
 ## Why Soleur
 
@@ -94,5 +95,6 @@ Soleur follows a structured 5-step workflow for software development:
   <li><a href="pages/changelog.html">Changelog <span class="learn-more-desc">All notable changes to Soleur</span></a></li>
 </ul>
 
+    </div>
   </div>
 </section>

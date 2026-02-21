@@ -12,7 +12,7 @@ generated-date: 2026-02-20
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** February 21, 2026 (analytics disclosure)
+**Last Updated:** February 22, 2026 (analytics disclosure)
 
 ---
 
@@ -39,7 +39,7 @@ Jikigai acts as a **data controller** for: (a) the documentation site hosted on 
 Users should be aware that interacting with Soleur may involve third-party services that have their own data controller or processor roles:
 
 - **Anthropic (Claude API):** When users invoke Soleur agents and skills, requests are sent to Anthropic's Claude API using the user's own API key. Anthropic acts as an independent data controller or processor under its own terms and privacy policy. Soleur does not intermediate, intercept, or store any data exchanged between the user and Anthropic.
-- **GitHub Pages (Documentation Site):** The Soleur documentation site at [soleur.ai](https://soleur.ai) is hosted on GitHub Pages. GitHub acts as a **data processor** for the hosting service, collecting IP addresses, browser metadata, and other standard web server logs on Jikigai's behalf. GitHub's processing is governed by the [GitHub Data Protection Agreement](https://github.com/customer-terms/github-data-protection-agreement) and the [GitHub Customer Agreement](https://github.com/customer-terms).
+- **GitHub Pages (Documentation Site):** The Soleur documentation site at [soleur.ai](https://soleur.ai) is hosted on GitHub Pages. GitHub acts as a **data processor** for the hosting service, collecting IP addresses, browser metadata, and other standard web server logs on Jikigai's behalf. GitHub's processing is governed by the [GitHub Terms of Service](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service) and the [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement), which include GDPR compliance commitments. Note: GitHub's formal [Data Protection Agreement](https://github.com/customer-terms/github-data-protection-agreement) applies to paid plans (Enterprise Cloud, Teams) only; Jikigai's free-plan organization is covered by GitHub's standard terms, under which GitHub acknowledges processor obligations and maintains EU-US Data Privacy Framework certification and Standard Contractual Clauses.
 - **GitHub (Repository):** Users who interact with the Soleur repository (issues, pull requests, discussions) do so under GitHub's terms and privacy policies. For repository interactions, GitHub and Jikigai act as independent controllers of the data involved in community participation.
 
 ---
@@ -88,6 +88,7 @@ The following data may be processed by third-party services when users interact 
 | IP address, browser metadata | GitHub (via GitHub Pages) | Hosting documentation site |
 | Prompts, code context | Anthropic (via Claude API) | Powering AI agent responses (user authenticates with own credentials) |
 | GitHub account data | GitHub (via repository) | Issue tracking, contributions |
+| Name, email, inquiry content | Proton AG (via Proton Mail) | Handling legal and GDPR inquiries (legal@jikigai.com) |
 
 Users are responsible for reviewing the privacy policies of these third-party services.
 
@@ -219,7 +220,7 @@ In the event of a personal data breach affecting data for which Jikigai acts as 
 
 ### 11.2 Practical Context
 
-Given Jikigai's minimal processing activities, the most likely breach scenario would involve unauthorized access to the email provider handling legal@jikigai.com or a compromise of the GitHub organization. In both cases, the third-party provider (email service, GitHub) would typically be the first to detect and communicate the breach.
+Given Jikigai's minimal processing activities, the most likely breach scenario would involve unauthorized access to Proton AG (Proton Mail), the email provider handling legal@jikigai.com, or a compromise of the GitHub organization. In both cases, the third-party provider (Proton Mail, GitHub) would typically be the first to detect and communicate the breach.
 
 ---
 

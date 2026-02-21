@@ -159,7 +159,7 @@ Note: The Eleventy source is named `data-protection-disclosure.md` while the roo
 - [x] Analytics script added to base layout template
 - [x] Legal documents updated in both locations (`docs/legal/` and `plugins/soleur/docs/pages/legal/`)
 - [x] GDPR Article 30 register updated with analytics processing activity (count updated to four)
-- [ ] Site verified with `agent-browser` that analytics script loads correctly
+- [x] Site verified with `agent-browser` that analytics script loads correctly
 - [ ] Post-merge: Close issue #188 with rationale (cookie-free analytics removes consent banner need)
 
 ## Test Scenarios
