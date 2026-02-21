@@ -34,6 +34,26 @@ fi
 
 Read `CLAUDE.md` if it exists - apply project conventions during documentation.
 
+## Phase 0.5: Session Error Inventory (MANDATORY)
+
+HARD RULE: Before writing any learning, enumerate ALL errors encountered in this session. Output a numbered list to the user. This step cannot be skipped even if the session felt clean.
+
+Include:
+
+- Skill or command not found errors (e.g., wrong plugin namespace)
+- Wrong file paths, directories, or branch confusion
+- Failed bash commands or unexpected exit codes
+- API errors or unexpected responses
+- Wrong assumptions that required backtracking
+- Tools or agents that returned errors
+- Permission denials or hook rejections
+
+If genuinely no errors occurred, output: "Session error inventory: none detected."
+
+This list feeds directly into the Session Errors section of the learning document. Every item on this list MUST appear in the final output unless the user explicitly excludes it.
+
+FAILURE MODE THIS PREVENTS: Compound runs in pipeline mode, the model judges the session as "clean," and silently drops errors that happened earlier in the conversation (e.g., a skill-not-found error from one-shot Step 1 gets omitted because compound focuses only on the main implementation task).
+
 ## Execution Strategy: Parallel Subagents
 
 This command launches multiple specialized subagents IN PARALLEL to maximize efficiency:
