@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.23.12] - 2026-02-21
+
+### Changed
+
+- Remove max-width constraint from `.community-text` so paragraphs fill full section width and align naturally
+
 ## [2.23.11] - 2026-02-21
 
 ### Changed

@@ -321,7 +321,6 @@
   .community-text {
     color: var(--color-text-secondary);
     line-height: 1.6;
-    max-width: 65ch;
   }
   .community-text + .community-text {
     margin-top: var(--space-4);
