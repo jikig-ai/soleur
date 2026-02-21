@@ -8,7 +8,7 @@ permalink: pages/legal/data-protection-disclosure.html
 <section class="page-hero">
   <div class="container">
     <h1>Data Protection Disclosure</h1>
-    <p>Effective February 20, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated February 21, 2026</p>
   </div>
 </section>
 
@@ -21,7 +21,7 @@ permalink: pages/legal/data-protection-disclosure.html
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** February 20, 2026
+**Last Updated:** February 21, 2026
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -87,7 +87,7 @@ The User is solely responsible for:
 
 Soleur's data processing activities are limited to:
 
-- **(a)** **Docs Site hosting:** The Soleur documentation website is hosted on GitHub Pages. GitHub may collect standard web server logs, including IP addresses, browser user-agent strings, and page request data. This processing is governed by [GitHub's Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
+- **(a)** **Docs Site hosting and analytics:** The Soleur documentation website is hosted on GitHub Pages. GitHub may collect standard web server logs, including IP addresses, browser user-agent strings, and page request data. This processing is governed by [GitHub's Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement). Additionally, the Docs Site uses **Plausible Analytics** ([plausible.io](https://plausible.io)) for privacy-respecting website analytics. Plausible is cookie-free, does not store IP addresses, and collects only aggregated, anonymous data (page URLs, referrer URLs, country, device type, browser type).
 - **(b)** **GitHub repository interaction:** Users who submit issues, pull requests, or participate in discussions on the Soleur GitHub repository interact with GitHub's platform. This processing is governed by GitHub's terms and privacy policies.
 - **(c)** **Plugin distribution:** The Plugin is distributed via GitHub and npm. Download and installation telemetry is handled by those respective platforms under their own privacy policies.
 

@@ -8,7 +8,7 @@ permalink: pages/legal/cookie-policy.html
 <section class="page-hero">
   <div class="container">
     <h1>Cookie Policy</h1>
-    <p>Effective February 20, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated February 21, 2026</p>
   </div>
 </section>
 
@@ -21,7 +21,7 @@ permalink: pages/legal/cookie-policy.html
 
 **Soleur -- Company-as-a-Service Platform**
 
-**Last updated:** February 20, 2026
+**Last updated:** February 21, 2026
 
 ## 1. Introduction
 
@@ -43,7 +43,7 @@ The Soleur plugin itself **does not use cookies**. It operates as a Claude Code 
 
 ### 3.2 The Documentation Website (soleur.ai)
 
-Our documentation website is hosted on **GitHub Pages**. We do not deploy any first-party analytics, advertising, or tracking cookies on the documentation site.
+Our documentation website is hosted on **GitHub Pages**. We use **Plausible Analytics** for privacy-respecting website analytics. Plausible is a cookie-free analytics service -- it does not set, read, or require any cookies on your device. No advertising or tracking cookies are deployed on the documentation site.
 
 However, GitHub Pages, as our hosting provider, may set certain cookies necessary for the operation and security of the platform. These are third-party cookies controlled by GitHub (Microsoft Corporation). We do not control the cookies set by GitHub Pages.
 
@@ -59,9 +59,21 @@ These cookies are essential for the website to function and cannot be switched o
 |-----------------|---------|----------|
 | GitHub Pages | Platform operation, security, and abuse prevention | Varies (session or persistent) |
 
-### 4.2 Analytics Cookies
+### 4.2 Analytics
 
-**We do not currently use any analytics cookies.** No first-party or third-party analytics services (such as Google Analytics, Plausible, or similar) are active on soleur.ai.
+We use **Plausible Analytics** ([plausible.io](https://plausible.io)) for website analytics. Plausible **does not use cookies** of any kind -- no session cookies, no persistent cookies, no first-party or third-party cookies. It does not use local storage, fingerprinting, or any other mechanism that stores information on your device.
+
+Plausible collects the following anonymous, aggregated data without cookies:
+
+| Data Point | Purpose |
+|------------|---------|
+| Page URL | Understanding which pages are visited |
+| Referrer URL | Understanding how visitors find the site |
+| Country (derived from IP, not stored) | Geographic distribution of visitors |
+| Device type (desktop/mobile/tablet) | Understanding how visitors access the site |
+| Browser and operating system | Technical compatibility insights |
+
+IP addresses are used only for country-level geolocation and are **not stored** by Plausible. No personally identifiable information is collected or retained.
 
 ### 4.3 Advertising and Tracking Cookies
 

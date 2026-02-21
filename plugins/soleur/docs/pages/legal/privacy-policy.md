@@ -20,7 +20,7 @@ permalink: pages/legal/privacy-policy.html
 
 
 **Effective Date:** February 20, 2026
-**Last Updated:** February 21, 2026
+**Last Updated:** February 21, 2026 (analytics disclosure)
 
 ## 1. Introduction
 
@@ -64,16 +64,17 @@ All of this data remains on your machine. We have no access to it.
 
 ### 4.3 Data Collected by the Docs Site
 
-The Soleur documentation site at [soleur.ai](https://soleur.ai) is hosted on **GitHub Pages**. We do not add analytics, tracking pixels, or cookies to the Docs Site beyond what GitHub Pages provides by default.
+The Soleur documentation site at [soleur.ai](https://soleur.ai) is hosted on **GitHub Pages**. We use **Plausible Analytics** ([plausible.io](https://plausible.io)) for privacy-respecting website analytics. Plausible does not use cookies, local storage, or fingerprinting. It collects the following anonymous, aggregated data:
 
-However, GitHub, as the hosting provider, may collect certain technical data when you visit the Docs Site, including:
+- Page URLs visited
+- Referrer URLs (how visitors find the site)
+- Country (derived from IP address, which is not stored)
+- Device type (desktop, mobile, tablet)
+- Browser and operating system
 
-- IP addresses
-- Browser type and version
-- Pages visited and timestamps
-- Referring URLs
+IP addresses are used only for country-level geolocation and are **not stored** by Plausible. No personally identifiable information is collected or retained by Plausible. The legal basis for this processing is **legitimate interest** (Article 6(1)(f) GDPR) -- understanding website traffic to improve documentation.
 
-This data collection is governed by [GitHub's Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement). We do not control or have direct access to this data.
+Additionally, GitHub, as the hosting provider, may collect certain technical data when you visit the Docs Site, including IP addresses, browser metadata, and page request data. This data collection is governed by [GitHub's Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement). We do not control or have direct access to data collected by GitHub.
 
 ### 4.4 Data Collected by the GitHub Repository
 
