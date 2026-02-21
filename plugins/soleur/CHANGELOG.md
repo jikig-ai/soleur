@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.23.6] - 2026-02-21
+
+### Changed
+
+- Name Proton AG (Proton Mail) as email provider in GDPR policy and Article 30 register (#204)
+- Add Proton Mail to third-party data table in GDPR policy Section 4.2
+- Update Article 30 register Treatment N.3 with provider details, DPA reference, and adequacy decision
+- Mark audit report Recommendation 3 (email provider clarification) as resolved
+
 ## [2.23.5] - 2026-02-21
 
 ### Changed

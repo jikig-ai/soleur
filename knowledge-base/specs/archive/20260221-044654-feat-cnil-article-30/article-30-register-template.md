@@ -13,8 +13,8 @@
 - Adresse: 25 rue de Ponthieu, 75008 Paris, France
 - Contact: legal@jikigai.com
 
-**Date de creation:** [DATE]
-**Derniere mise a jour:** [DATE]
+**Date de creation:** 2026-02-21
+**Derniere mise a jour:** 2026-02-21
 
 ---
 
@@ -56,10 +56,11 @@
 | Base legale | Obligation legale (Art. 6(1)(c)) pour les demandes RGPD; interet legitime (Art. 6(1)(f)) pour les autres |
 | Categories de personnes concernees | Personnes soumettant des demandes |
 | Categories de donnees | Nom, adresse email, contenu de la demande |
-| Destinataires | Personnel interne Jikigai; fournisseur email |
-| Transferts hors UE | Selon fournisseur email pour legal@jikigai.com |
+| Destinataires | Personnel interne Jikigai; Proton AG (Proton Mail) -- sous-traitant email |
+| Transferts hors UE | Suisse (decision d'adequation CE 2000/518/CE); donnees stockees en Suisse et dans l'UE (Allemagne) par Proton AG |
 | Delai de conservation | Duree necessaire pour resoudre la demande + 3 ans (prescription civile francaise) |
-| Mesures de securite | Securite email; acces restreint au personnel autorise |
+| Mesures de securite | Chiffrement de bout en bout (Proton Mail); acces restreint au personnel autorise |
+| Sous-traitant | Proton AG, Route de la Galaise 32, 1228 Plan-les-Ouates, Geneve, Suisse (CHE-354.686.492); DPA: https://proton.me/legal/dpa |
 
 ---
 
