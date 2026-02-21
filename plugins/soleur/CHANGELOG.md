@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.23.7] - 2026-02-21
+
+### Changed
+
+- Add `.prose` CSS utility class for reading-width content (max-width: 75ch) with vertical rhythm
+- Add gold S logo mark image to site header alongside "Soleur" wordmark
+- Fix changelog styling with `#changelog-content` overrides (mono font, border-bottom, spacing)
+- Add `.prose` wrapper to all 7 legal pages, changelog, and getting started page
+- Add paragraph spacing for vision page community text sections
+
 ## [2.23.6] - 2026-02-21
 
 ### Changed
