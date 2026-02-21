@@ -12,7 +12,7 @@ generated-date: 2026-02-20
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** February 20, 2026
+**Last Updated:** February 21, 2026
 
 ---
 
@@ -32,15 +32,15 @@ Soleur operates as a **locally installed CLI plugin**. All data generated, proce
 
 As a result, **Soleur does not act as a data processor** within the meaning of Article 4(8) of the GDPR with respect to user content, knowledge-base files, or any data created through the plugin's operation.
 
-However, Soleur may act as a **data controller** in a limited capacity for: (a) the documentation site hosted on GitHub Pages, where standard web server logs (IP addresses, browser metadata) may be collected via GitHub's infrastructure, and (b) the GitHub repository, where issue reports and contributions involve processing of GitHub profile data. In both cases, the processing is minimal and relies on third-party infrastructure (GitHub).
+Jikigai acts as a **data controller** for: (a) the documentation site hosted on GitHub Pages, where standard web server logs (IP addresses, browser metadata) are collected via GitHub's infrastructure, and (b) the GitHub repository, where issue reports and contributions involve processing of GitHub profile data. In both cases, the processing is minimal and relies on third-party infrastructure (GitHub).
 
 ### 2.2 Third-Party Services
 
 Users should be aware that interacting with Soleur may involve third-party services that have their own data controller or processor roles:
 
 - **Anthropic (Claude API):** When users invoke Soleur agents and skills, requests are sent to Anthropic's Claude API using the user's own API key. Anthropic acts as an independent data controller or processor under its own terms and privacy policy. Soleur does not intermediate, intercept, or store any data exchanged between the user and Anthropic.
-- **GitHub Pages (Documentation Site):** The Soleur documentation site at [soleur.ai](https://soleur.ai) is hosted on GitHub Pages. GitHub may collect IP addresses, browser metadata, and other standard web server logs. GitHub acts as the data controller for this data under its own privacy statement.
-- **GitHub (Repository):** Users who interact with the Soleur repository (issues, pull requests, discussions) do so under GitHub's terms and privacy policies. GitHub is the data controller for repository interaction data.
+- **GitHub Pages (Documentation Site):** The Soleur documentation site at [soleur.ai](https://soleur.ai) is hosted on GitHub Pages. GitHub acts as a **data processor** for the hosting service, collecting IP addresses, browser metadata, and other standard web server logs on Jikigai's behalf. GitHub's processing is governed by the [GitHub Data Protection Agreement](https://github.com/customer-terms/github-data-protection-agreement) and the [GitHub Customer Agreement](https://github.com/customer-terms).
+- **GitHub (Repository):** Users who interact with the Soleur repository (issues, pull requests, discussions) do so under GitHub's terms and privacy policies. For repository interactions, GitHub and Jikigai act as independent controllers of the data involved in community participation.
 
 ---
 
@@ -53,6 +53,14 @@ Because Soleur processes all data locally on the user's device and does not tran
 ### 3.2 Documentation Site
 
 To the extent that GitHub Pages collects data when users visit soleur.ai, the lawful basis is **legitimate interest** (Article 6(1)(f)) -- specifically, the interest in providing and maintaining accessible product documentation. Users are directed to GitHub's own privacy documentation for specifics on data collected by GitHub Pages.
+
+### 3.3 Repository Interactions
+
+For processing of GitHub profile data when users contribute to the Soleur repository (issues, pull requests, discussions), the lawful basis is **legitimate interest** (Article 6(1)(f)) -- facilitating community participation in the open-source project. The balancing test considers: (a) the processing is limited to publicly available GitHub profile data voluntarily shared by the user, (b) the user initiated the interaction, (c) the processing is necessary for the stated purpose, and (d) users can withdraw by deleting their GitHub contributions.
+
+### 3.4 Legal and GDPR Inquiry Handling
+
+For processing personal data contained in data subject rights requests and legal inquiries sent to legal@jikigai.com, the lawful basis is **legal obligation** (Article 6(1)(c)) for GDPR requests (fulfilling our obligations under Articles 12-22) and **legitimate interest** (Article 6(1)(f)) for other legal inquiries.
 
 ---
 
@@ -112,8 +120,8 @@ Data subjects have the right to lodge a complaint with a supervisory authority i
 
 Soleur itself does not transfer personal data internationally. However, users should be aware that:
 
-- **Anthropic Claude API:** API requests may be processed in the United States or other jurisdictions where Anthropic operates. Users should review Anthropic's data processing terms regarding international transfer safeguards (e.g., Standard Contractual Clauses, adequacy decisions).
-- **GitHub Pages / GitHub:** GitHub infrastructure is located globally, including in the United States. GitHub relies on Standard Contractual Clauses and other transfer mechanisms. See GitHub's Global Privacy Practices documentation.
+- **Anthropic Claude API:** API requests may be processed in the United States or other jurisdictions where Anthropic operates. Users should review Anthropic's data processing terms regarding international transfer safeguards.
+- **GitHub Pages / GitHub:** GitHub infrastructure is located globally, including in the United States. GitHub (Microsoft Corporation) is certified under the **EU-US Data Privacy Framework** (adequacy decision C(2023) 4745), which provides the primary transfer mechanism. GitHub also maintains Standard Contractual Clauses as a supplementary safeguard. See [GitHub's Global Privacy Practices](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement#githubs-global-privacy-practices).
 
 Users who are subject to the GDPR and have concerns about international data transfers should review the relevant third-party policies before using these services.
 
@@ -148,7 +156,11 @@ To maintain data protection when using Soleur, we recommend:
 
 Soleur does not impose any retention period on locally stored data. Files persist on the user's machine until the user deletes them. Users have full control over the lifecycle of all locally stored artifacts.
 
-### 8.2 Third-Party Retention
+### 8.2 Legal and GDPR Inquiry Correspondence
+
+Personal data contained in data subject rights requests and legal inquiries (names, email addresses, inquiry content) is retained for the duration necessary to resolve the inquiry, plus three years to comply with the French civil statute of limitations (prescription civile). After this period, correspondence is securely deleted.
+
+### 8.3 Third-Party Retention
 
 Retention periods for data held by Anthropic and GitHub are governed by their respective privacy policies and data retention schedules.
 
@@ -162,13 +174,42 @@ Given that Soleur's own data processing is limited to standard web hosting (via 
 
 ---
 
-## 10. Children's Data
+## 10. Record of Processing Activities (Article 30)
+
+Jikigai maintains an internal record of processing activities as required by Article 30(1) of the GDPR. The SME exemption under Article 30(5) does not apply because, although Jikigai has fewer than 250 employees, the documentation site hosting constitutes non-occasional processing (continuous web hosting).
+
+The register documents three processing activities:
+
+1. **Documentation website hosting** (soleur.ai via GitHub Pages) -- IP addresses, browser metadata of visitors
+2. **Open-source repository management** (GitHub) -- contributor profile data, issue reporters
+3. **Legal and GDPR inquiry handling** (legal@jikigai.com) -- names, email addresses, inquiry content
+
+The register is maintained internally and is available on request to the competent supervisory authority (CNIL for France). Since the 2018 reform of the Loi Informatique et Libertes, no registration or prior declaration to the CNIL is required.
+
+---
+
+## 11. Data Breach Notification
+
+### 11.1 Controller Obligations
+
+In the event of a personal data breach affecting data for which Jikigai acts as controller, Jikigai will:
+
+- Notify the competent supervisory authority (CNIL) without undue delay and, where feasible, within 72 hours of becoming aware of the breach, as required by Article 33 GDPR, unless the breach is unlikely to result in a risk to the rights and freedoms of natural persons.
+- Where the breach is likely to result in a high risk to the rights and freedoms of natural persons, notify the affected data subjects without undue delay, as required by Article 34 GDPR.
+
+### 11.2 Practical Context
+
+Given Jikigai's minimal processing activities, the most likely breach scenario would involve unauthorized access to the email provider handling legal@jikigai.com or a compromise of the GitHub organization. In both cases, the third-party provider (email service, GitHub) would typically be the first to detect and communicate the breach.
+
+---
+
+## 12. Children's Data
 
 Soleur is designed for professional use by solo founders and technical builders. It is not directed at children under the age of 16. We do not knowingly collect personal data from children. Because Soleur does not collect personal data from any users, no specific age-verification mechanism is implemented.
 
 ---
 
-## 11. Changes to This Policy
+## 13. Changes to This Policy
 
 We may update this GDPR Policy from time to time to reflect changes in our practices, third-party services, or applicable law. Updates will be published in the Soleur GitHub repository at [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur) and, where significant, noted in the project changelog.
 
@@ -176,7 +217,7 @@ We encourage users to review this policy periodically.
 
 ---
 
-## 12. Contact Information
+## 14. Contact Information
 
 For questions about this GDPR Policy or data protection matters:
 
@@ -185,7 +226,7 @@ For questions about this GDPR Policy or data protection matters:
 - **Website:** [soleur.ai](https://soleur.ai)
 - **GDPR / Data Protection Inquiries:** legal@jikigai.com (include "GDPR" in the subject line)
 
-To exercise your data subject rights under GDPR, send a written request to legal@jikigai.com. We will acknowledge your request within 5 business days and respond substantively within one month, as required by GDPR Article 12.
+To exercise your data subject rights under GDPR, send a written request to legal@jikigai.com. We will acknowledge your request within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3).
 
 Soleur is an open-source project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France.
 
@@ -193,6 +234,6 @@ Soleur's limited data processing (standard web hosting, community repository int
 
 ---
 
-> **Related documents:** This GDPR Policy references data processing practices that may warrant a companion **Privacy Policy** for broader privacy disclosures and a **Cookie Policy** if cookies or tracking technologies are introduced on soleur.ai. If Soleur begins processing data on behalf of users in the future, a **Data Processing Agreement** should also be generated to formalize controller-processor relationships.
+> **Related documents:** This GDPR Policy should be read alongside the companion [Privacy Policy](privacy-policy.md) for broader privacy disclosures and the [Cookie Policy](cookie-policy.md) for information about cookies used by the documentation site.
 
 > **DRAFT -- This document was generated by AI and requires professional legal review before use. It does not constitute legal advice.**
