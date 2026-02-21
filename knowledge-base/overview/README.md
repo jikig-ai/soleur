@@ -1,10 +1,10 @@
 # Soleur Project Overview
 
-Soleur is a Claude Code plugin providing AI-powered development tools that compound engineering knowledge over time. Every problem solved makes the next one easier.
+Soleur is a Company-as-a-Service platform providing development tools that compound engineering knowledge over time. Every problem solved makes the next one easier.
 
 ## Purpose
 
-Transform feature development from ad-hoc coding into a structured, repeatable workflow. The plugin captures learnings, patterns, and solutions in a knowledge base that grows with the project.
+Transform feature development from ad-hoc coding into a structured, repeatable workflow. The platform captures learnings, patterns, and solutions in a knowledge base that grows with the project.
 
 ## Architecture
 
@@ -82,9 +82,9 @@ graph TB
 
 | Component | Count | Description |
 |-----------|-------|-------------|
-| [Agents](./components/agents.md) | 22 | AI agents for specialized tasks |
+| [Agents](./components/agents.md) | 45 | AI agents for specialized tasks |
 | [Commands](./components/commands.md) | 8 | Slash commands for workflow |
-| [Skills](./components/skills.md) | 35 | Specialized capabilities |
+| [Skills](./components/skills.md) | 45 | Specialized capabilities |
 | [Knowledge Base](./components/knowledge-base.md) | 1 | Documentation system |
 
 Each component has detailed documentation in [components/](./components/) covering its purpose, available items, usage patterns, and conventions. See individual component docs for full reference.

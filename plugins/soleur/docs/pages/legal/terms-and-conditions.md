@@ -29,7 +29,7 @@ permalink: pages/legal/terms-and-conditions.html
 
 ## 1. Introduction and Acceptance
 
-These Terms & Conditions ("Terms") govern your access to and use of the Soleur platform ("Soleur," "the Plugin," "the Service"), a Company-as-a-Service product developed and maintained by Soleur ("we," "us," "our"). Soleur is a Claude Code plugin that provides AI-powered agents, skills, commands, and a compounding knowledge base for structured software development workflows.
+These Terms & Conditions ("Terms") govern your access to and use of the Soleur platform ("Soleur," "the Plugin," "the Service"), a Company-as-a-Service product developed and maintained by Soleur ("we," "us," "our"). Soleur is a Claude Code plugin that provides agents, skills, commands, and a compounding knowledge base for structured software development workflows.
 
 By installing, accessing, or using Soleur, you ("User," "you," "your") agree to be bound by these Terms. If you do not agree to these Terms, do not install or use the Plugin.
 
@@ -53,8 +53,8 @@ If you are using the Plugin on behalf of an organization, you represent and warr
 
 Soleur is a locally installed Claude Code plugin that provides:
 
-- **31 AI agents** organized across five domains (Engineering, Legal, Marketing, Operations, Product)
-- **40 skills** for structured software development workflows
+- **45 AI agents** organized across five domains (Engineering, Legal, Marketing, Operations, Product)
+- **45 skills** for structured software development workflows
 - A **compounding knowledge base** that stores project context locally
 - **Commands** for orchestrating development workflows (brainstorm, plan, review, work, ship)
 

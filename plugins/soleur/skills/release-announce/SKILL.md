@@ -1,6 +1,6 @@
 ---
 name: release-announce
-description: This skill should be used when announcing a new plugin release. It parses CHANGELOG.md, generates an AI-powered summary, and creates a GitHub Release. Discord notification is handled automatically by CI on release publish. Triggers on "announce release", "post release", "release announcement", "/release-announce".
+description: This skill should be used when announcing a new release. It parses CHANGELOG.md, generates a summary, and creates a GitHub Release. Discord notification is handled automatically by CI on release publish. Triggers on "announce release", "post release", "release announcement", "/release-announce".
 ---
 
 # release-announce Skill

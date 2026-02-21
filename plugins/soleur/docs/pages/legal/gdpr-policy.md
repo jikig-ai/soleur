@@ -28,7 +28,7 @@ permalink: pages/legal/gdpr-policy.html
 
 ## 1. Introduction
 
-This GDPR Policy explains how Soleur ("we", "us", "our") approaches data protection and privacy in compliance with the General Data Protection Regulation (EU) 2016/679 ("GDPR") and related European data protection legislation. Soleur is a Company-as-a-Service platform delivered as a Claude Code plugin, providing a full-stack AI organization with 31 agents, 40 skills, and a compounding knowledge base for solo founders and technical builders.
+This GDPR Policy explains how Soleur ("we", "us", "our") approaches data protection and privacy in compliance with the General Data Protection Regulation (EU) 2016/679 ("GDPR") and related European data protection legislation. Soleur is a Company-as-a-Service platform delivered as a Claude Code plugin, providing a full-stack AI organization with 45 agents, 45 skills, and a compounding knowledge base for solo founders and technical builders.
 
 This policy applies to all individuals located in the European Economic Area ("EEA") who use or interact with Soleur, including the plugin software, documentation site, and GitHub repository.
 

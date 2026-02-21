@@ -17,7 +17,7 @@ generated-date: 2026-02-20
 
 This Cookie Policy explains how Soleur ("we," "us," or "our") uses cookies and similar tracking technologies on our documentation website at [soleur.ai](https://soleur.ai) and in connection with our Company-as-a-Service platform (the "Service"). This policy is designed to comply with the EU General Data Protection Regulation (GDPR), the ePrivacy Directive, and applicable US privacy laws.
 
-Soleur is a Claude Code plugin providing a full-stack AI organization with 31 agents, 40 skills, and a compounding knowledge base, designed for solo founders and technical builders.
+Soleur is a Claude Code plugin providing a full-stack AI organization with 45 agents, 45 skills, and a compounding knowledge base, designed for solo founders and technical builders.
 
 ## 2. What Are Cookies?
 
