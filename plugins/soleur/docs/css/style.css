@@ -781,7 +781,7 @@
 
   /* Prose reading width and vertical rhythm */
   .prose {
-    max-width: 75ch;
+    max-width: 85ch;
     margin: 0 auto;
   }
   .prose h2,
