@@ -54,31 +54,59 @@ Options:
 
 If one-shot is selected, pass the original feature description (including any issue references) to `/soleur:one-shot` and stop brainstorm execution. Note: this skips brainstorm capture (Phase 3.5), worktree creation (Phase 3), and spec/issue creation (Phase 3.6) -- the one-shot pipeline handles setup through `/soleur:plan`.
 
-### Phase 0.5: Specialized Domain Routing
+### Phase 0.5: Domain Leader Assessment
 
-Check if the feature description matches a specialized domain that has a dedicated agent.
+Assess whether the feature description has implications for specific business domains. Domain leaders participate in brainstorming when their domain is relevant.
 
-<!-- To add a new domain: copy the Brand / Marketing block below, change keywords, agent name, and output summary -->
+<!-- To add a new domain: add a numbered assessment question below, a routing block, and a participation section -->
 
-#### Brand / Marketing
+#### Assessment
 
-**Keywords:** brand, brand identity, brand guide, voice and tone, brand workshop
+Read the feature description and assess domain relevance:
 
-Scan the feature description text (case-insensitive) for any of these keywords using substring matching. If any keyword appears anywhere in the description, it is a match.
+1. **Marketing implications** -- Does this feature involve content changes, audience targeting, brand impact, go-to-market activities, SEO/AEO concerns, pricing communication, or public-facing messaging?
 
-**If no keywords match:** Continue to Phase 1 (no routing offered).
+2. **Engineering architecture implications** -- Does this feature require significant architectural decisions, infrastructure changes, system design, or technical debt resolution beyond normal implementation?
 
-**If keywords match:**
+3. **Brand-specific work** -- Is this specifically about brand identity definition, brand guide creation, or voice and tone development? (This is a special case within marketing.)
 
-Use **AskUserQuestion tool** to ask: "This looks like a brand/marketing topic. Would you like to run the brand identity workshop instead?"
+If no domains are relevant, continue to Phase 1.
+
+#### Routing
+
+**If brand-specific work is detected:**
+
+Use **AskUserQuestion tool** to ask: "This looks like it has brand and marketing relevance. How would you like to proceed?"
 
 Options:
+
 1. **Start brand workshop** - Run the brand-architect agent to create or update a brand guide
-2. **Brainstorm normally** - Continue with the standard brainstorm flow
+2. **Include marketing perspective** - CMO joins the brainstorm to add marketing context
+3. **Brainstorm normally** - Continue with the standard brainstorm flow
 
-**If brainstorm normally is selected:** Continue to Phase 1 as usual.
+**If general marketing relevance is detected (not brand-specific):**
 
-**If brand workshop is selected:**
+Use **AskUserQuestion tool** to ask: "This feature has marketing implications. Include marketing perspective?"
+
+Options:
+
+1. **Include marketing perspective** - CMO joins the brainstorm to add marketing context
+2. **Brainstorm normally** - Continue without marketing input
+
+**If engineering architecture relevance is detected:**
+
+Use **AskUserQuestion tool** to ask: "This feature has architectural implications. Include technical assessment?"
+
+Options:
+
+1. **Include technical assessment** - CTO joins the brainstorm to assess technical implications
+2. **Brainstorm normally** - Continue without CTO input
+
+**If both marketing and engineering are relevant:** Ask about each domain separately.
+
+**If the user declines all domain leaders:** Continue to Phase 1 as usual.
+
+#### Brand Workshop (if selected)
 
 1. **Create worktree:**
    - Derive feature name: use the first 2-3 descriptive words from the feature description in kebab-case (e.g., "define our brand identity" -> `brand-identity`). If the description is fewer than 3 words, default to `brand-guide`.
@@ -124,6 +152,30 @@ Options:
    ```
 
    End brainstorm execution after displaying this message.
+
+#### Domain Leader Participation (if accepted)
+
+When a domain leader is accepted, they participate in Phase 1.2 (Collaborative Dialogue):
+
+**CMO participation:** After repo research completes, spawn the CMO agent in parallel:
+
+```text
+Task cmo: "Assess the marketing implications of this feature: <feature_description>.
+Identify marketing concerns, opportunities, and questions the user should consider
+during brainstorming. Output a brief structured assessment (not a full strategy)."
+```
+
+Weave the CMO's assessment into the brainstorm dialogue alongside repo research findings.
+
+**CTO participation:** After repo research completes, spawn the CTO agent in parallel:
+
+```text
+Task cto: "Assess the technical implications of this feature: <feature_description>.
+Identify architecture risks, complexity concerns, and technical questions the user
+should consider during brainstorming. Output a brief structured assessment."
+```
+
+Weave the CTO's assessment into the brainstorm dialogue alongside repo research findings.
 
 ### Phase 1: Understand the Idea
 

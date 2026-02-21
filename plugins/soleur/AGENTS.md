@@ -133,6 +133,32 @@ grep -E '^description:' skills/*/SKILL.md | grep -v 'This skill'
 # Should return nothing if all use third person
 ```
 
+## Domain Leader Interface
+
+Domain leaders are agents that orchestrate a business domain's specialist team. Each leader follows a 4-phase contract:
+
+| Phase | Responsibility | Description |
+|-------|---------------|-------------|
+| **Assess** | Evaluate current domain state | Check existing artifacts, inventory gaps, report status |
+| **Recommend** | Propose domain-specific actions | Prioritize initiatives with structured output |
+| **Delegate** | Spawn specialist agents via Task tool | Parallel dispatch for independent analyses, sequential for dependencies |
+| **Review** | Validate output against domain standards | Cross-agent coherence, quality checks |
+
+### Current Domain Leaders
+
+| Leader | Domain | Agents Orchestrated | Entry Point |
+|--------|--------|-------------------|-------------|
+| `cmo` | Marketing | 11 specialists | `/soleur:marketing` skill or auto-consulted via brainstorm domain detection |
+| `cto` | Engineering | Research, review, design agents | Auto-consulted via brainstorm domain detection |
+
+### Adding a New Domain Leader
+
+1. Create `agents/<domain>/<role>.md` at the domain root level
+2. Follow the 4-phase contract in the agent body
+3. Add a domain assessment question to the brainstorm command's Phase 0.5
+4. Optionally create a `/soleur:<domain>` skill as standalone entry point
+5. Update README counts and CHANGELOG
+
 ## Documentation
 
 See `knowledge-base/learnings/plugin-versioning-requirements.md` for detailed versioning workflow.

@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.23.0] - 2026-02-21
+
+### Added
+
+- Domain Leader pattern with documented interface contract (assess/recommend/delegate/review)
+- CMO agent (`cmo`) -- marketing domain leader orchestrating 11 specialist agents, replaces `marketing-strategist`
+- CTO agent (`cto`) -- engineering domain leader for brainstorm and planning participation
+- `/soleur:marketing` skill with `audit`, `strategy`, and `launch` sub-commands
+- LLM-based domain detection in brainstorm command Phase 0.5, replacing keyword substring matching
+
+### Changed
+
+- Brainstorm command Phase 0.5 rewritten from keyword-based brand routing to semantic domain assessment with marketing and engineering routing
+- Brand workshop preserved as special case within marketing domain detection
+- Updated disambiguation sentences in `conversion-optimizer` and `retention-strategist` (marketing-strategist -> cmo)
+- Agent count 44 -> 45 (removed marketing-strategist, added cmo + cto), skill count 44 -> 45
+
+### Removed
+
+- `marketing-strategist` agent (absorbed into `cmo` with all sharp edges preserved)
+
 ## [2.22.5] - 2026-02-20
 
 ### Added

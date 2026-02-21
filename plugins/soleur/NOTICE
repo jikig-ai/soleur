@@ -13,7 +13,7 @@ coreyhaines31/marketingskills
   URL: https://github.com/coreyhaines31/marketingskills
   Description: 29 marketing skills for Claude Code covering CRO,
     content strategy, SEO, paid ads, pricing, retention, and more.
-  Used in: agents/marketing/ (marketing-strategist, pricing-strategist,
+  Used in: agents/marketing/ (cmo, pricing-strategist,
     copywriter, conversion-optimizer, paid-media-strategist,
     analytics-analyst, retention-strategist, programmatic-seo-specialist)
   Portions adopted: Prompt patterns, frameworks, and checklists were
