@@ -20,7 +20,7 @@ if [ "$current_branch" = "$default_branch" ]; then
 fi
 ```
 
-1. `/ralph-wiggum:ralph-loop "finish all slash commands" --completion-promise "DONE"`
+1. `/ralph-loop:ralph-loop "finish all slash commands" --completion-promise "DONE"`
 2. `/soleur:plan $ARGUMENTS`
 3. `/deepen-plan`
 4. `/soleur:work`
