@@ -8,7 +8,7 @@ permalink: pages/legal/gdpr-policy.html
 <section class="page-hero">
   <div class="container">
     <h1>GDPR Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated February 22, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated February 22, 2026 (analytics disclosure)</p>
   </div>
 </section>
 
@@ -22,7 +22,7 @@ permalink: pages/legal/gdpr-policy.html
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** February 22, 2026
+**Last Updated:** February 22, 2026 (analytics disclosure)
 
 ---
 
@@ -64,6 +64,8 @@ Because Soleur processes all data locally on the user's device and does not tran
 
 To the extent that GitHub Pages collects data when users visit soleur.ai, the lawful basis is **legitimate interest** (Article 6(1)(f)) -- specifically, the interest in providing and maintaining accessible product documentation. Users are directed to GitHub's own privacy documentation for specifics on data collected by GitHub Pages.
 
+For website analytics via Plausible Analytics, the lawful basis is **legitimate interest** (Article 6(1)(f)) -- understanding documentation traffic patterns to improve content and user experience. This processing is cookie-free, stores no personal data, and does not require consent under the ePrivacy Directive (Article 5(3) does not apply as no information is stored on or accessed from the user's device). See Section 4.3 for details.
+
 ### 3.3 Repository Interactions
 
 For processing of GitHub profile data when users contribute to the Soleur repository (issues, pull requests, discussions), the lawful basis is **legitimate interest** (Article 6(1)(f)) -- facilitating community participation in the open-source project. The balancing test considers: (a) the processing is limited to publicly available GitHub profile data voluntarily shared by the user, (b) the user initiated the interaction, (c) the processing is necessary for the stated purpose, and (d) users can withdraw by deleting their GitHub contributions.
@@ -85,7 +87,6 @@ Soleur does not collect, store, or process the following categories of personal 
 - IP addresses or device identifiers
 - Location data
 - Financial or payment information
-- Usage analytics or telemetry
 - Content generated through the plugin (knowledge-base files, brainstorms, plans, code)
 
 ### 4.2 Data That May Be Processed by Third Parties
@@ -100,6 +101,24 @@ The following data may be processed by third-party services when users interact 
 | Name, email, inquiry content | Proton AG (via Proton Mail) | Handling legal and GDPR inquiries (legal@jikigai.com) |
 
 Users are responsible for reviewing the privacy policies of these third-party services.
+
+### 4.3 Website Analytics Data
+
+The Docs Site uses **Plausible Analytics** ([plausible.io](https://plausible.io)), a cookie-free, privacy-respecting analytics service. Plausible collects the following anonymous, aggregated data:
+
+| Data Point | Storage | Purpose |
+|------------|---------|---------|
+| Page URL | Aggregated | Understanding which pages are visited |
+| Referrer URL | Aggregated | Understanding how visitors find the site |
+| Country | Derived from IP (IP not stored) | Geographic distribution |
+| Device type | Aggregated | Desktop/mobile/tablet breakdown |
+| Browser and OS | Aggregated | Technical compatibility |
+
+**What Plausible does NOT collect:** IP addresses (discarded after geolocation), cookies, local storage, device fingerprints, cross-site tracking identifiers, or any personally identifiable information.
+
+**Legal basis:** Legitimate interest (Article 6(1)(f) GDPR). The three-part test is satisfied: (1) understanding documentation traffic patterns is a legitimate interest of the website operator; (2) cookie-free analytics is the least intrusive means -- no personal data is stored, no cross-site tracking, no device fingerprinting; (3) users' rights are not overridden because no identifying information is collected or retained.
+
+**ePrivacy Directive:** Article 5(3) of the ePrivacy Directive does not apply because Plausible does not store information on or access information from the user's device (no cookies, no local storage).
 
 ---
 
@@ -189,11 +208,12 @@ Given that Soleur's own data processing is limited to standard web hosting (via 
 
 Jikigai maintains an internal record of processing activities as required by Article 30(1) of the GDPR. The SME exemption under Article 30(5) does not apply because, although Jikigai has fewer than 250 employees, the documentation site hosting constitutes non-occasional processing (continuous web hosting).
 
-The register documents three processing activities:
+The register documents four processing activities:
 
 1. **Documentation website hosting** (soleur.ai via GitHub Pages) -- IP addresses, browser metadata of visitors
-2. **Open-source repository management** (GitHub) -- contributor profile data, issue reporters
-3. **Legal and GDPR inquiry handling** (legal@jikigai.com) -- names, email addresses, inquiry content
+2. **Website analytics** (soleur.ai via Plausible Analytics) -- page URLs, referrer URLs, country (derived from IP, not stored), device type, browser type. Legal basis: legitimate interest (Article 6(1)(f)). No personal data is stored; IP addresses are discarded after geolocation. Plausible Analytics is hosted in the EU.
+3. **Open-source repository management** (GitHub) -- contributor profile data, issue reporters
+4. **Legal and GDPR inquiry handling** (legal@jikigai.com) -- names, email addresses, inquiry content
 
 The register is maintained internally and is available on request to the competent supervisory authority (CNIL for France). Since the 2018 reform of the Loi Informatique et Libertes, no registration or prior declaration to the CNIL is required.
 

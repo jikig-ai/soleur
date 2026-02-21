@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.23.9] - 2026-02-21
+
+### Added
+
+- Add Plausible Analytics (cookie-free, GDPR-compliant) to docs site via `<script async>` in base layout
+- Add Website Analytics Data section (4.3) to GDPR policy with Art. 6(1)(f) three-part test and ePrivacy exemption
+- Add analytics as fourth processing activity in GDPR Article 30 register
+- Add cookie-free analytics legal update pattern to learnings
+
+### Changed
+
+- Update cookie policy to disclose Plausible as cookie-free analytics provider
+- Update privacy policy with Plausible analytics disclosure and legal basis
+- Update data protection disclosure to include analytics alongside hosting
+- Update all root legal doc copies to mirror Eleventy source changes
+
 ## [2.23.8] - 2026-02-21
 
 ### Changed
