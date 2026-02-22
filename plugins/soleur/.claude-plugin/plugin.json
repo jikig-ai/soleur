@@ -1,7 +1,7 @@
 {
   "name": "soleur",
-  "version": "2.31.5",
-  "description": "A full AI organization across engineering, marketing, legal, operations, and product. 54 agents, 8 commands, and 46 skills that compound your company knowledge over time.",
+  "version": "2.32.0",
+  "description": "A full AI organization across engineering, marketing, legal, operations, and product. 54 agents, 8 commands, 46 skills, and 2 MCP servers that compound your company knowledge over time.",
   "author": {
     "name": "Jean Deruelle",
     "email": "jean.deruelle@jikigai.com",
@@ -22,6 +22,10 @@
     "context7": {
       "type": "http",
       "url": "https://mcp.context7.com/mcp"
+    },
+    "vercel": {
+      "type": "http",
+      "url": "https://mcp.vercel.com"
     }
   }
 }

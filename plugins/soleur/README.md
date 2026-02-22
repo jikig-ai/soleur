@@ -109,7 +109,7 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 | Agents | 54 |
 | Commands | 8 |
 | Skills | 46 |
-| MCP Servers | 1 |
+| MCP Servers | 2 |
 
 ## Agents
 
@@ -322,6 +322,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | Server | Description |
 |--------|-------------|
 | `context7` | Framework documentation lookup via Context7 |
+| `vercel` | Vercel platform access (deployments, projects, logs, domains) via OAuth |
 
 ### Context7
 
@@ -331,6 +332,19 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 - `get-library-docs` - Get documentation for a specific library
 
 Supports 100+ frameworks including Rails, React, Next.js, Vue, Django, Laravel, and more.
+
+### Vercel
+
+**Tools provided:**
+
+- `search_documentation` - Search Vercel and Next.js documentation (no auth required)
+- `list_teams`, `list_projects`, `get_project` - Project management
+- `list_deployments`, `get_deployment`, `get_deployment_build_logs`, `get_runtime_logs` - Deployment monitoring
+- `check_domain_availability_and_price`, `buy_domain` - Domain management
+- `get_access_to_vercel_url`, `web_fetch_vercel_url` - URL access
+- `use_vercel_cli`, `deploy_to_vercel` - CLI and deployment
+
+Requires OAuth authentication for most tools (Claude Code handles this automatically on first use). Documentation search works without authentication.
 
 MCP servers start automatically when the plugin is enabled.
 
@@ -363,9 +377,9 @@ claude plugin install --url https://github.com/jikig-ai/soleur/tree/main/plugins
 
 ### MCP Servers Not Auto-Loading
 
-**Issue:** The bundled Context7 MCP server may not load automatically when the plugin is installed.
+**Issue:** The bundled MCP servers (Context7, Vercel) may not load automatically when the plugin is installed.
 
-**Workaround:** Manually add it to your project's `.claude/settings.json`:
+**Workaround:** Manually add them to your project's `.claude/settings.json`:
 
 ```json
 {
@@ -373,12 +387,16 @@ claude plugin install --url https://github.com/jikig-ai/soleur/tree/main/plugins
     "context7": {
       "type": "http",
       "url": "https://mcp.context7.com/mcp"
+    },
+    "vercel": {
+      "type": "http",
+      "url": "https://mcp.vercel.com"
     }
   }
 }
 ```
 
-Or add it globally in `~/.claude/settings.json` for all projects.
+Or add them globally in `~/.claude/settings.json` for all projects.
 
 ## Version History
 
