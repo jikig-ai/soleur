@@ -189,13 +189,13 @@ Only with user confirmation. `git rm knowledge-base/learnings/<category>/<file>.
 
 **Remove a rule:** Read `knowledge-base/overview/constitution.md`, remove the bullet point, commit with `git commit -m "constitution: remove <domain> <category> rule"`.
 
-### Automatic Consolidation & Archival (feat-* branches)
+### Automatic Consolidation & Archival (feature branches)
 
-On `feat-*` branches, consolidation runs automatically after the learning is documented and before the decision menu. This ensures artifacts are always cleaned up as part of the standard compound flow, rather than relying on a manual menu choice.
+On feature branches (`feat-*`, `feat/*`, `fix-*`, or `fix/*`), consolidation runs automatically after the learning is documented and before the decision menu. This ensures artifacts are always cleaned up as part of the standard compound flow, rather than relying on a manual menu choice.
 
 The automatic consolidation:
 
-1. **Discovers artifacts** -- globs `knowledge-base/{brainstorms,plans}/*<slug>*` and `knowledge-base/specs/feat-<slug>/` (excluding `*/archive/`)
+1. **Discovers artifacts** -- extracts the feature slug by stripping `feat/`, `feat-`, `fix/`, or `fix-` prefix from the branch name, then globs `knowledge-base/{brainstorms,plans}/*<slug>*` and `knowledge-base/specs/feat-<slug>/` (excluding `*/archive/`)
 2. **Extracts knowledge** -- a single agent reads all artifacts and proposes updates to `constitution.md`, component docs, and overview `README.md`
 3. **Approval flow** -- proposals presented one at a time with Accept/Skip/Edit; idempotency checked via substring match
 4. **Archives sources** -- all discovered artifacts moved to `archive/` subdirectories via `git mv` with `YYYYMMDD-HHMMSS` timestamp prefix
