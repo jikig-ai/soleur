@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.24.0] - 2026-02-22
+
+### Added
+
+- Bundle ralph-loop into Soleur plugin -- `/soleur:one-shot` no longer depends on external ralph-loop plugin (#221)
+- New `hooks/` directory with stop hook for Ralph loop session interception
+- New `scripts/` directory with ralph-loop setup script
+
+### Changed
+
+- Update `/soleur:one-shot` to run ralph-loop setup script directly via `!` code block instead of invoking external command
+
 ## [2.23.18] - 2026-02-22
 
 ### Fixed
