@@ -1,6 +1,6 @@
 ---
 name: release-docs
-description: This skill should be used when updating documentation metadata after adding or removing plugin components. It updates plugin.json description, marketplace.json, and README.md counts, then verifies the Eleventy build produces correct output. Triggers on "update docs", "release documentation", "sync docs site", "regenerate docs", "documentation release".
+description: This skill should be used when updating documentation metadata after adding or removing plugin components. It updates plugin.json description and README.md counts, then verifies the Eleventy build produces correct output. Triggers on "update docs", "release documentation", "sync docs site", "regenerate docs", "documentation release".
 ---
 
 # Release Documentation
@@ -18,7 +18,6 @@ The documentation site auto-generates agent and skill catalog pages from source 
 
 **What still needs manual updates:**
 - `plugins/soleur/.claude-plugin/plugin.json` description with counts
-- `.claude-plugin/marketplace.json` description with counts
 - `plugins/soleur/README.md` component tables and counts
 - `knowledge-base/overview/brand-guide.md` agent/skill counts (if it exists)
 
@@ -39,10 +38,7 @@ Ensure counts are consistent across:
 1. **`plugins/soleur/.claude-plugin/plugin.json`**
    - Update `description` with correct counts
 
-2. **`.claude-plugin/marketplace.json`**
-   - Update plugin `description` with correct counts
-
-3. **`plugins/soleur/README.md`**
+2. **`plugins/soleur/README.md`**
    - Update intro paragraph with counts
    - Update component lists and tables
 
@@ -84,7 +80,6 @@ Provide a summary of what was updated:
 
 ### Files Updated
 - plugin.json - Updated counts
-- marketplace.json - Updated description
 - README.md - Updated component lists
 - _data/skills.js - Updated category mapping (if applicable)
 ```

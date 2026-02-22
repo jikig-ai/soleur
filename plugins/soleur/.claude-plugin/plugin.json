@@ -1,6 +1,6 @@
 {
   "name": "soleur",
-  "version": "2.23.15",
+  "version": "2.23.16",
   "description": "A full AI organization that reviews, plans, builds, remembers, and self-improves. 45 agents, 8 commands, and 45 skills that compound your engineering knowledge over time.",
   "author": {
     "name": "Jean Deruelle",

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.23.16] - 2026-02-22
+
+### Fixed
+
+- Remove non-existent `marketplace.json` references from release-docs skill (#218)
+
 ## [2.23.15] - 2026-02-22
 
 ### Fixed
