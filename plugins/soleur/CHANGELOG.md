@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 If you previously invoked `/soleur:brainstorm`, `/soleur:plan`, `/soleur:work`, `/soleur:review`, `/soleur:compound`, or `/soleur:one-shot` directly, use `/soleur:go` instead. All workflow stages are now skills invoked automatically through the router. The `skill: soleur:<name>` invocation syntax continues to work unchanged.
 
+## [2.36.2] - 2026-02-22
+
+### Changed
+
+- Rewrite Vision page "The Road Ahead" section as "Master Plan" with 3 milestones: Automate Software Companies, Automate Hardware Companies, Multiplanetary Companies
+
 ## [2.36.1] - 2026-02-22
 
 ### Changed
