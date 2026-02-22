@@ -201,11 +201,12 @@ Agents are organized by domain, then by function.
 |-------|-------------|
 | `pr-comment-resolver` | Address PR comments and implement fixes |
 
-### Operations (2)
+### Operations (3)
 
 | Agent | Description |
 |-------|-------------|
 | `ops-advisor` | Track expenses, manage domains, advise on hosting |
+| `ops-provisioner` | Guide SaaS tool account setup, purchase, configuration, and verification |
 | `ops-research` | Research domains, hosting, tools/SaaS, and cost optimization with browser automation |
 
 ### Product (2)
