@@ -4,7 +4,7 @@ import yaml from "yaml";
 
 // Category mapping -- update here when skills are added/reorganized
 // Source of truth: plugins/soleur/docs/pages/skills.html
-// Last verified: 2026-02-22 (4 categories, 52 skills)
+// Last verified: 2026-02-22 (4 categories, 50 skills)
 const SKILL_CATEGORIES = {
   // Content & Release (16)
   "brainstorm-techniques": "Review & Planning",
@@ -39,18 +39,16 @@ const SKILL_CATEGORIES = {
   "spec-templates": "Development",
   "user-story-writer": "Development",
 
-  // Review & Planning (7)
+  // Review & Planning (6)
   brainstorm: "Review & Planning",
   "deepen-plan": "Review & Planning",
   "heal-skill": "Review & Planning",
   plan: "Review & Planning",
   "plan-review": "Review & Planning",
-  "report-bug": "Review & Planning",
   review: "Review & Planning",
 
-  // Workflow (16)
+  // Workflow (15)
   "agent-browser": "Workflow",
-  community: "Workflow",
   deploy: "Workflow",
   "git-worktree": "Workflow",
   "merge-pr": "Workflow",

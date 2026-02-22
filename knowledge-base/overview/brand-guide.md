@@ -18,7 +18,7 @@ Solo founders who think in billions. Technical builders who refuse to accept tha
 
 ### Positioning
 
-Soleur is not a copilot. Not an assistant. It is a full AI organization -- 60 agents, 52 skills, and compounding knowledge -- that operates as every department from strategy to shipping. The brand energy mirrors Tesla and SpaceX: audacious, mission-driven, future-focused. We lead with the ambitious platform vision, never the plugin description.
+Soleur is not a copilot. Not an assistant. It is a full AI organization -- 60 agents, 50 skills, and compounding knowledge -- that operates as every department from strategy to shipping. The brand energy mirrors Tesla and SpaceX: audacious, mission-driven, future-focused. We lead with the ambitious platform vision, never the plugin description.
 
 **Tagline:** The Company-as-a-Service Platform
 
@@ -48,7 +48,7 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 - Lead with what becomes possible, not what the tool does
 - Use declarative statements ("Build at scale" not "Try building at scale")
 - Frame the founder as the decision-maker, the system as the executor
-- Use concrete numbers when available (60 agents, 52 skills)
+- Use concrete numbers when available (60 agents, 50 skills)
 - Write like the future is already here
 - Use "we" when speaking as Soleur, "you" when addressing the founder
 - Keep sentences short and punchy in marketing copy

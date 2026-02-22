@@ -41,7 +41,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 |-----------|-------|
 | Agents | 60 |
 | Commands | 3 |
-| Skills | 52 |
+| Skills | 50 |
 | MCP Servers | 3 |
 
 ## Agents
@@ -201,7 +201,6 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 |-------|-------------|
 | `brainstorm-techniques` | Explore intent, approaches, and design decisions |
 | `changelog` | Create engaging changelogs for recent merges |
-| `community` | Manage community engagement across Discord and GitHub (setup, digests, health, welcome) |
 | `compound` | Document solved problems to compound team knowledge |
 | `compound-capture` | Capture solved problems as categorized documentation |
 | `deploy-docs` | Validate and prepare documentation for deployment |
@@ -244,7 +243,6 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `heal-skill` | Fix skill documentation issues |
 | `plan` | Create structured implementation plans |
 | `plan-review` | Multi-agent plan review in parallel |
-| `report-bug` | Report a bug in the plugin |
 | `review` | Run comprehensive code review with specialized agents |
 
 ### Workflow
