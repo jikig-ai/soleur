@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dogfood: run business-validator on Soleur itself (verdict: PIVOT)
 - Constitution: add workshop archetype principle and agent count reconciliation principle
 
+## [2.28.3] - 2026-02-22
+
+### Fixed
+
+- Replace `!` code block in one-shot command with explicit LLM-executed Bash step -- the `!` auto-execution syntax fails permission checks even with `allowed-tools` frontmatter (#241 follow-up)
+- Remove unused `allowed-tools` frontmatter from one-shot command
+- Update bundle-ralph-loop learning to document `!` block permission failure pattern
+
 ## [2.28.2] - 2026-02-22
 
 ### Fixed

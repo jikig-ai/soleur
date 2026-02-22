@@ -17,11 +17,13 @@ synced_to: [soleur:compound, constitution]
 
 ## Solution
 
-Ported the essential mechanism (stop hook + setup script) into Soleur's `hooks/` and `scripts/` directories. The one-shot command uses a `!` code block to run the setup script directly at command load time, avoiding the need for a separate command.
+Ported the essential mechanism (stop hook + setup script) into Soleur's `hooks/` and `scripts/` directories. The one-shot command instructs the LLM to run the setup script as its first step via the Bash tool.
 
-### Key Pattern: `!` Code Block for Script Execution
+### Key Pattern: LLM-Executed Script in Command Instructions
 
-Commands can embed script execution using triple-backtick blocks with `!`:
+Commands should instruct the LLM to run scripts via the Bash tool rather than using `!` code blocks. The `!` block syntax triggers auto-execution at command load time, which fails permission checks because it bypasses the normal tool approval flow. The `allowed-tools` frontmatter field also does not resolve this.
+
+**Do NOT use (fails permission check even with allowed-tools):**
 
 ```markdown
 \`\`\`!
@@ -29,7 +31,16 @@ Commands can embed script execution using triple-backtick blocks with `!`:
 \`\`\`
 ```
 
-This executes at command load time (before the LLM processes instructions). The script output becomes part of the prompt context. `${CLAUDE_PLUGIN_ROOT}` is expanded by the plugin loader.
+**Use instead (LLM runs via Bash tool with normal approval):**
+
+```markdown
+**Step 0: Setup.** Run this command via the Bash tool:
+\`\`\`bash
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/setup-ralph-loop.sh "args here"
+\`\`\`
+```
+
+`${CLAUDE_PLUGIN_ROOT}` is expanded by the plugin loader in all command/skill text, not just `!` blocks.
 
 ### Files Added
 
@@ -39,7 +50,7 @@ This executes at command load time (before the LLM processes instructions). The 
 
 ### Files Modified
 
-- `plugins/soleur/commands/soleur/one-shot.md` -- Uses `!` block instead of external command
+- `plugins/soleur/commands/soleur/one-shot.md` -- Explicit LLM step instead of `!` block
 
 ## Key Insight
 
@@ -49,6 +60,7 @@ When bundling external plugins, prefer embedding the mechanism (hooks, scripts) 
 
 1. **Over-scoped without confirmation** -- Created 2 new commands that the user did not ask for. Had to revert. Automated pipelines suppress design checkpoints; always confirm scope-expanding decisions.
 2. **`$?` check under `set -e` is dead code** -- In the original ralph-loop stop-hook.sh, `$?` after a command substitution with `2>&1` is always 0 under `set -e`. Fixed by using `|| true` and checking emptiness instead.
+3. **`!` code block fails permission check** -- The `!` auto-execution syntax bypasses the normal Bash tool approval flow. Claude Code's permission system blocks it with "This command requires approval". Two prior fixes (#225 `$()` removal, #241 `allowed-tools` frontmatter) did not resolve this. Fixed by converting to an explicit LLM instruction step that runs via the Bash tool.
 
 ## Prevention
 
