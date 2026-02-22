@@ -1,6 +1,6 @@
 # Soleur
 
-A full AI organization across engineering, marketing, legal, operations, and product. Every decision you make teaches the system. Every project gets better and faster than the last.
+A full AI organization across engineering, marketing, legal, operations, product, and sales. Every decision you make teaches the system. Every project gets better and faster than the last.
 
 ## Quick Start
 

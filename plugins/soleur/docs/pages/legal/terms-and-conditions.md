@@ -53,8 +53,8 @@ If you are using the Plugin on behalf of an organization, you represent and warr
 
 Soleur is a locally installed Claude Code plugin that provides:
 
-- **45 AI agents** organized across five domains (Engineering, Legal, Marketing, Operations, Product)
-- **45 skills** for structured software development workflows
+- **54 AI agents** organized across six domains (Engineering, Legal, Marketing, Operations, Product, Sales)
+- **46 skills** for structured software development workflows
 - A **compounding knowledge base** that stores project context locally
 - **Commands** for orchestrating development workflows (brainstorm, plan, review, work, ship)
 

@@ -1,6 +1,6 @@
 ---
 name: ops-research
-description: "Use this agent when you need to research domains, hosting providers, tools/SaaS options, or find cost optimization opportunities. Use ops-advisor for reading and updating the expense ledger; use ops-provisioner for guided account setup and configuration; use coo for cross-cutting operations strategy; use this agent for live research and price comparison."
+description: "Use this agent when you need to research domains, hosting providers, tools, or find cost optimization opportunities. Use ops-advisor for the expense ledger; use ops-provisioner for account setup; use coo for cross-cutting operations strategy; use this agent for live research and price comparison."
 model: inherit
 ---
 

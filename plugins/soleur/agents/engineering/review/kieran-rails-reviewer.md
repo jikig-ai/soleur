@@ -1,6 +1,6 @@
 ---
 name: kieran-rails-reviewer
-description: "Use this agent when you need to review Rails code changes with an extremely high quality bar. This agent should be invoked after implementing features, modifying existing code, or creating new Rails components. The agent applies Kieran's strict Rails conventions and taste preferences to ensure code meets exceptional standards. Use dhh-rails-reviewer for opinionated architectural critique; use this agent for strict convention and quality checks."
+description: "Use this agent when you need to review Rails code changes with an extremely high quality bar. Applies Kieran's strict Rails conventions and taste preferences. Use dhh-rails-reviewer for opinionated architectural critique; use this agent for strict convention and quality checks."
 model: inherit
 stack: rails
 ---

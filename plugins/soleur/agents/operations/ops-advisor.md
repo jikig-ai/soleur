@@ -1,6 +1,6 @@
 ---
 name: ops-advisor
-description: "Use this agent when you need to track operational expenses, manage domain registrations, or get hosting recommendations. Use ops-research for live web research and provider comparison; use ops-provisioner for guided account setup and configuration; use coo for cross-cutting operations strategy; use this agent for reading and updating the expense ledger."
+description: "Use this agent when you need to track operational expenses, manage domain registrations, or get hosting recommendations. Use ops-research for live research and provider comparison; use ops-provisioner for account setup; use this agent for reading and updating the expense ledger."
 model: inherit
 ---
 

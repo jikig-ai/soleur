@@ -58,98 +58,29 @@ If one-shot is selected, pass the original feature description (including any is
 
 Assess whether the feature description has implications for specific business domains. Domain leaders participate in brainstorming when their domain is relevant.
 
-<!-- To add a new domain: add a numbered assessment question below, a routing block, and a participation section. Consider table-driven refactor at 5+ domains. -->
+<!-- To add a new domain: add a row to the Domain Config table below. No other structural edits needed. -->
 
-#### Assessment
+#### Domain Config
 
-Read the feature description and assess domain relevance:
+Read the feature description and assess relevance against each domain in the table below. For each relevant domain, use **AskUserQuestion tool** with the routing prompt and options from the table.
 
-1. **Marketing implications** -- Does this feature involve content changes, audience targeting, brand impact, go-to-market activities, SEO/AEO concerns, pricing communication, or public-facing messaging?
+| Domain | Assessment Question | Leader | Routing Prompt | Options | Task Prompt |
+|--------|-------------------|--------|----------------|---------|-------------|
+| Marketing | Does this feature involve content changes, audience targeting, brand impact, brand identity definition, brand guide creation, voice and tone development, go-to-market activities, SEO/AEO concerns, pricing communication, or public-facing messaging? | cmo | "This feature has marketing or brand relevance. How would you like to proceed?" | **Start brand workshop** - Run the brand-architect agent to create or update a brand guide / **Include marketing perspective** - CMO joins the brainstorm to add marketing context / **Brainstorm normally** - Continue with the standard brainstorm flow | "Assess the marketing implications of this feature: {desc}. Identify marketing concerns, opportunities, and questions the user should consider during brainstorming. When the assessment involves visual layout or page structure, explicitly recommend delegating to conversion-optimizer or ux-design-lead for layout review. Output a brief structured assessment (not a full strategy)." |
+| Engineering | Does this feature require significant architectural decisions, infrastructure changes, system design, or technical debt resolution beyond normal implementation? | cto | "This feature has architectural implications. Include technical assessment?" | **Include technical assessment** - CTO joins the brainstorm to assess technical implications / **Brainstorm normally** - Continue without CTO input | "Assess the technical implications of this feature: {desc}. Identify architecture risks, complexity concerns, and technical questions the user should consider during brainstorming. Output a brief structured assessment." |
+| Operations | Does this feature involve operational decisions such as vendor selection, tool provisioning, expense tracking, process changes, or infrastructure procurement? | coo | "This feature has operational implications. Include operations assessment?" | **Include operations assessment** - COO joins the brainstorm to assess operational implications / **Brainstorm normally** - Continue without operations input | "Assess the operational implications of this feature: {desc}. Identify cost concerns, vendor decisions, process changes, and operational questions the user should consider during brainstorming. Output a brief structured assessment." |
+| Product | Does this feature involve validating a new business idea, assessing product-market fit, evaluating customer demand, competitive positioning, or determining whether to build something? | cpo | "This looks like it involves product validation. How would you like to proceed?" | **Start validation workshop** - Run the business-validator agent to validate the business idea / **Include product perspective** - CPO joins the brainstorm to add product context / **Brainstorm normally** - Continue with the standard brainstorm flow | "Assess the product implications of this feature: {desc}. Identify product strategy concerns, validation gaps, and questions the user should consider during brainstorming. Output a brief structured assessment (not a full strategy)." |
+| Legal | Does this feature involve creating, updating, or auditing legal documents such as terms of service, privacy policies, data processing agreements, or compliance documentation? | clo | "This feature has legal implications. Include legal assessment?" | **Include legal assessment** - CLO joins the brainstorm to assess legal implications / **Brainstorm normally** - Continue without legal input | "Assess the legal implications of this feature: {desc}. Identify compliance requirements, legal document needs, regulatory concerns, and legal questions the user should consider during brainstorming. Output a brief structured assessment." |
+| Sales | Does this feature involve sales pipeline management, outbound prospecting, deal negotiation, proposal generation, revenue forecasting, or converting leads into customers through human-assisted sales motions? | cro | "This feature has sales implications. Include sales assessment?" | **Include sales assessment** - CRO joins the brainstorm to assess sales implications / **Brainstorm normally** - Continue without sales input | "Assess the sales implications of this feature: {desc}. Identify pipeline concerns, revenue conversion opportunities, and sales questions the user should consider during brainstorming. Output a brief structured assessment." |
 
-2. **Engineering architecture implications** -- Does this feature require significant architectural decisions, infrastructure changes, system design, or technical debt resolution beyond normal implementation?
+#### Processing Instructions
 
-3. **Brand-specific work** -- Is this specifically about brand identity definition, brand guide creation, or voice and tone development? (This is a special case within marketing.)
-
-4. **Operations implications** -- Does this feature involve operational decisions such as vendor selection, tool provisioning, expense tracking, process changes, or infrastructure procurement?
-
-5. **Product strategy implications** -- Does this feature involve validating a new business idea, assessing product-market fit, evaluating customer demand, competitive positioning, or determining whether to build something?
-
-6. **Legal implications** -- Does this feature involve creating, updating, or auditing legal documents such as terms of service, privacy policies, data processing agreements, or compliance documentation?
-
-7. **Sales implications** -- Does this feature involve sales pipeline management, outbound prospecting, deal negotiation, proposal generation, revenue forecasting, or converting leads into customers through human-assisted sales motions?
-
-If no domains are relevant, continue to Phase 1.
-
-#### Routing
-
-**If brand-specific work is detected:**
-
-Use **AskUserQuestion tool** to ask: "This looks like it has brand and marketing relevance. How would you like to proceed?"
-
-Options:
-
-1. **Start brand workshop** - Run the brand-architect agent to create or update a brand guide
-2. **Include marketing perspective** - CMO joins the brainstorm to add marketing context
-3. **Brainstorm normally** - Continue with the standard brainstorm flow
-
-**If general marketing relevance is detected (not brand-specific):**
-
-Use **AskUserQuestion tool** to ask: "This feature has marketing implications. Include marketing perspective?"
-
-Options:
-
-1. **Include marketing perspective** - CMO joins the brainstorm to add marketing context
-2. **Brainstorm normally** - Continue without marketing input
-
-**If engineering architecture relevance is detected:**
-
-Use **AskUserQuestion tool** to ask: "This feature has architectural implications. Include technical assessment?"
-
-Options:
-
-1. **Include technical assessment** - CTO joins the brainstorm to assess technical implications
-2. **Brainstorm normally** - Continue without CTO input
-
-**If operations relevance is detected:**
-
-Use **AskUserQuestion tool** to ask: "This feature has operational implications. Include operations assessment?"
-
-Options:
-
-1. **Include operations assessment** - COO joins the brainstorm to assess operational implications
-2. **Brainstorm normally** - Continue without operations input
-
-**If product strategy relevance is detected:**
-
-Use **AskUserQuestion tool** to ask: "This looks like it involves product validation. How would you like to proceed?"
-
-Options:
-
-1. **Start validation workshop** - Run the business-validator agent to validate the business idea
-2. **Include product perspective** - CPO joins the brainstorm to add product context
-3. **Brainstorm normally** - Continue with the standard brainstorm flow
-
-**If legal relevance is detected:**
-
-Use **AskUserQuestion tool** to ask: "This feature has legal implications. Include legal assessment?"
-
-Options:
-
-1. **Include legal assessment** - CLO joins the brainstorm to assess legal implications
-2. **Brainstorm normally** - Continue without legal input
-
-**If sales relevance is detected:**
-
-Use **AskUserQuestion tool** to ask: "This feature has sales implications. Include sales assessment?"
-
-Options:
-
-1. **Include sales assessment** - CRO joins the brainstorm to assess sales implications
-2. **Brainstorm normally** - Continue without sales input
-
-**If multiple domains are relevant:** Ask about each domain separately.
-
-**If the user declines all domain leaders:** Continue to Phase 1 as usual.
+1. Read the feature description and assess relevance against each domain in the table above.
+2. For each relevant domain, use **AskUserQuestion tool** with the routing prompt and options from the table.
+3. Workshop options ("Start brand workshop" in Marketing, "Start validation workshop" in Product): follow the named workshop section below (Brand Workshop, Validation Workshop).
+4. Standard participation: for each accepted leader, spawn a Task using the Task Prompt from the table, substituting `{desc}` with the feature description. Weave each leader's assessment into the brainstorm dialogue alongside repo research findings.
+5. If multiple domains are relevant, ask about each separately.
+6. If no domains are relevant or the user declines all domain leaders, continue to Phase 1.
 
 #### Brand Workshop (if selected)
 
@@ -236,72 +167,6 @@ Options:
    ```
 
    End brainstorm execution after displaying this message.
-
-#### Domain Leader Participation (if accepted)
-
-When a domain leader is accepted, they participate in Phase 1.2 (Collaborative Dialogue):
-
-**CMO participation:** After repo research completes, spawn the CMO agent in parallel:
-
-```text
-Task cmo: "Assess the marketing implications of this feature: <feature_description>.
-Identify marketing concerns, opportunities, and questions the user should consider
-during brainstorming. When the assessment involves visual layout or page structure,
-explicitly recommend delegating to conversion-optimizer or ux-design-lead for layout review.
-Output a brief structured assessment (not a full strategy)."
-```
-
-Weave the CMO's assessment into the brainstorm dialogue alongside repo research findings.
-
-**CTO participation:** After repo research completes, spawn the CTO agent in parallel:
-
-```text
-Task cto: "Assess the technical implications of this feature: <feature_description>.
-Identify architecture risks, complexity concerns, and technical questions the user
-should consider during brainstorming. Output a brief structured assessment."
-```
-
-Weave the CTO's assessment into the brainstorm dialogue alongside repo research findings.
-
-**COO participation:** After repo research completes, spawn the COO agent in parallel:
-
-```text
-Task coo: "Assess the operational implications of this feature: <feature_description>.
-Identify cost concerns, vendor decisions, process changes, and operational questions the user
-should consider during brainstorming. Output a brief structured assessment."
-```
-
-Weave the COO's assessment into the brainstorm dialogue alongside repo research findings.
-
-**CPO participation:** After repo research completes, spawn the CPO agent in parallel:
-
-```text
-Task cpo: "Assess the product implications of this feature: <feature_description>.
-Identify product strategy concerns, validation gaps, and questions the user should consider
-during brainstorming. Output a brief structured assessment (not a full strategy)."
-```
-
-Weave the CPO's assessment into the brainstorm dialogue alongside repo research findings.
-
-**CLO participation:** After repo research completes, spawn the CLO agent in parallel:
-
-```text
-Task clo: "Assess the legal implications of this feature: <feature_description>.
-Identify compliance requirements, legal document needs, regulatory concerns, and legal questions
-the user should consider during brainstorming. Output a brief structured assessment."
-```
-
-Weave the CLO's assessment into the brainstorm dialogue alongside repo research findings.
-
-**CRO participation:** After repo research completes, spawn the CRO agent in parallel:
-
-```text
-Task cro: "Assess the sales implications of this feature: <feature_description>.
-Identify pipeline concerns, revenue conversion opportunities, and sales questions the user
-should consider during brainstorming. Output a brief structured assessment."
-```
-
-Weave the CRO's assessment into the brainstorm dialogue alongside repo research findings.
 
 ### Phase 1: Understand the Idea
 

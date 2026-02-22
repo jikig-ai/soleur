@@ -53,10 +53,7 @@ rm -rf docs/_site_test # BLOCKED by guardrails
 
 **4. Create domain leader agent** following the 3-phase contract (Assess, Recommend/Delegate, Sharp Edges). Use `agents/legal/clo.md` as the canonical template.
 
-**5. Add brainstorm routing** to `commands/soleur/brainstorm.md` Phase 0.5 (3 additions):
-- Assessment question (after the last numbered question)
-- Routing block (after the last "If X relevance detected" block)
-- Participation block (after the last domain leader participation block)
+**5. Add brainstorm routing** to `commands/soleur/brainstorm.md` Phase 0.5: add a single row to the Domain Config table with all 6 columns (Domain, Assessment Question, Leader, Routing Prompt, Options, Task Prompt). [Updated 2026-02-22: refactored from 3 inline blocks to table-driven config]
 
 **6. Add disambiguation sentences** to agents with overlapping scope in adjacent domains. Check both directions: new domain agents reference existing ones, existing agents reference new ones.
 

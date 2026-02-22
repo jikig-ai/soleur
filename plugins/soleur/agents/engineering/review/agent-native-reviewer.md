@@ -1,6 +1,6 @@
 ---
 name: agent-native-reviewer
-description: "Use this agent when reviewing code to ensure features are agent-native - that any action a user can take, an agent can also take, and anything a user can see, an agent can see. This enforces the principle that agents should have parity with users in capability and context."
+description: "Use this agent when reviewing code to ensure features are agent-native -- any action a user can take, an agent can also take, and anything a user can see, an agent can see. Enforces agent-user parity in capability and context."
 model: inherit
 ---
 
