@@ -1,7 +1,6 @@
 ---
-name: soleur:one-shot
-description: Full autonomous engineering workflow from plan to PR with video
-argument-hint: "[feature description or issue reference]"
+name: one-shot
+description: "This skill should be used when running the full autonomous engineering workflow from plan to PR with video."
 ---
 
 Run these steps in order. Do not do anything else.
@@ -26,8 +25,8 @@ BRANCH: [insert current branch name]
 ARGUMENTS: $ARGUMENTS
 
 STEPS:
-1. Run /soleur:plan $ARGUMENTS
-2. After plan is created, run /deepen-plan <plan_file_path>
+1. Use the Skill tool: skill: soleur:plan, args: "$ARGUMENTS"
+2. After plan is created, use the Skill tool: skill: soleur:deepen-plan, args: "<plan_file_path>"
 
 RETURN CONTRACT:
 When both steps are done, output a summary in this exact format:
@@ -46,7 +45,7 @@ When both steps are done, output a summary in this exact format:
 ### Components Invoked
 <list of commands/skills/agents invoked>
 
-Do NOT proceed beyond deepen-plan. Do NOT start /soleur:work."
+Do NOT proceed beyond deepen-plan. Do NOT start work."
 ```
 
 **Parse subagent output and write session-state.md:**
@@ -79,17 +78,17 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 
 **If absent or subagent failed (fallback):**
 1. Write to session-state.md: `## Plan Phase\n- Status: fallback (subagent failed)\n`
-2. Run `/soleur:plan $ARGUMENTS` and `/deepen-plan` inline (no compaction benefit, but pipeline continues)
+2. Use the **Skill tool**: `skill: soleur:plan`, args: "$ARGUMENTS" and then `skill: soleur:deepen-plan` inline (no compaction benefit, but pipeline continues)
 3. Continue to step 3.
 
 **Steps 3-9: Implementation through Ship**
 
-3. `/soleur:work <plan_file_path>`
-4. `/soleur:review`
-5. `/resolve-todo-parallel`
-6. `/soleur:compound`
-7. `/test-browser`
-8. `/feature-video`
+3. Use the **Skill tool**: `skill: soleur:work`, args: "<plan_file_path>"
+4. Use the **Skill tool**: `skill: soleur:review`
+5. Use the **Skill tool**: `skill: soleur:resolve-todo-parallel`
+6. Use the **Skill tool**: `skill: soleur:compound`
+7. Use the **Skill tool**: `skill: soleur:test-browser`
+8. Use the **Skill tool**: `skill: soleur:feature-video`
 9. Output `<promise>DONE</promise>` when video is in PR
 
 CRITICAL RULE: If a completion promise is set, you may ONLY output it when the statement is completely and unequivocally TRUE. Do not output false promises to escape the loop.

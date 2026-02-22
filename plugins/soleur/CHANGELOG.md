@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.0.1] - 2026-02-22
+
+### Changed
+
+- Update Getting Started page Common Workflows and Beyond Engineering sections to use `/soleur:go` as entry point
+
+## [3.0.0] - 2026-02-22
+
+### Changed
+
+- **BREAKING:** Migrate 6 workflow commands (brainstorm, plan, work, review, compound, one-shot) from `commands/soleur/` to `skills/` -- pipeline stages are now agent-discoverable via Skill tool
+- Rename `brainstorming` skill to `brainstorm-techniques` to free up the clean name
+- Rename `compound-docs` skill to `compound-capture` to free up the clean name
+- Update all cross-references across 20+ files (skills, agents, docs, constitution)
+- Rewrite command naming convention section in AGENTS.md to reflect skills architecture
+
+### Removed
+
+- Remove 6 workflow commands from autocomplete (brainstorm, plan, work, review, compound, one-shot) -- only `go`, `sync`, `help` remain as commands
+
+### Migration Guide
+
+If you previously invoked `/soleur:brainstorm`, `/soleur:plan`, `/soleur:work`, `/soleur:review`, `/soleur:compound`, or `/soleur:one-shot` directly, use `/soleur:go` instead. All workflow stages are now skills invoked automatically through the router. The `skill: soleur:<name>` invocation syntax continues to work unchanged.
+
+## [2.36.2] - 2026-02-22
+
+### Changed
+
+- Rewrite Vision page "The Road Ahead" section as "Master Plan" with 3 milestones: Automate Software Companies, Automate Hardware Companies, Multiplanetary Companies
+
 ## [2.36.1] - 2026-02-22
 
 ### Changed

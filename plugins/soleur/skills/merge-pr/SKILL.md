@@ -99,7 +99,7 @@ If any unarchived artifacts are found, stop:
 STOPPED: Unarchived KB artifacts found for this feature:
 <list of files>
 
-Run /soleur:compound to consolidate and archive these artifacts, then re-run /soleur:merge-pr.
+Use `skill: soleur:compound` to consolidate and archive these artifacts, then re-run `skill: soleur:merge-pr`.
 ```
 
 If no unarchived artifacts exist (either compound already archived them, or no artifacts were created), proceed.

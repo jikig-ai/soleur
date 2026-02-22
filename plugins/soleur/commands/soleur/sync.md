@@ -263,7 +263,7 @@ For accepted constitution findings:
 For accepted learnings findings:
 
 1. Create new file in appropriate category: `learnings/[category]/[kebab-case-title].md`
-2. Use compound-docs YAML schema with `problem_type: best_practice`
+2. Use compound-capture YAML schema with `problem_type: best_practice`
 
 **Template:**
 
@@ -317,7 +317,7 @@ Run `/sync` again to discover additional patterns.
 
 ### Phase 4: Definition Sync
 
-Scan accumulated learnings against skill, agent, and command definitions. Propose one-line bullet edits to route institutional knowledge to the definitions that need it. This complements the per-session routing in compound-docs Step 8 by catching cross-cutting learnings, retroactive learnings, and learnings from sessions where the relevant definition was not directly invoked.
+Scan accumulated learnings against skill, agent, and command definitions. Propose one-line bullet edits to route institutional knowledge to the definitions that need it. This complements the per-session routing in compound-capture Step 8 by catching cross-cutting learnings, retroactive learnings, and learnings from sessions where the relevant definition was not directly invoked.
 
 **4.1 Gate**
 
@@ -414,7 +414,7 @@ Each finding is reviewed one at a time with y/n/edit options. This is familiar U
 
 ### Existing Learnings Schema
 
-Uses the `compound-docs` YAML schema with `problem_type: best_practice` for non-problem learnings. This ensures compatibility with existing learnings tooling.
+Uses the `compound-capture` YAML schema with `problem_type: best_practice` for non-problem learnings. This ensures compatibility with existing learnings tooling.
 
 ## Examples
 

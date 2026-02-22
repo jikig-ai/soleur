@@ -1,7 +1,6 @@
 ---
-name: soleur:work
-description: Execute work plans efficiently while maintaining quality and finishing features
-argument-hint: "[plan file, specification, or todo file path]"
+name: work
+description: "This skill should be used when executing work plans efficiently while maintaining quality and finishing features."
 ---
 
 # Work Plan Execution Command
@@ -281,7 +280,7 @@ skill: ship
 The `/ship` skill handles all shipping steps in order:
 
 1. Validate artifact trail (brainstorms, specs, plans committed)
-2. Capture learnings via `/soleur:compound` (asks if not already run)
+2. Capture learnings via `skill: soleur:compound` (asks if not already run)
 3. Verify documentation (README counts, tables)
 4. Version bump (plugin.json + CHANGELOG + README triad)
 5. Run tests
@@ -321,14 +320,14 @@ The `/ship` skill handles all shipping steps in order:
 
 ### Review Before You Ship
 
-- Run `/soleur:review` after completing implementation
+- Use `skill: soleur:review` after completing implementation
 - Catches issues before they reach PR reviewers
 - Faster feedback than waiting for human review
 - Builds confidence that your code is solid
 
 ### Compound Your Learnings
 
-- Run `/soleur:compound` before creating a PR
+- Use `skill: soleur:compound` before creating a PR
 - Document debugging breakthroughs, non-obvious patterns, and framework gotchas
 - Even "simple" implementations can yield valuable insights
 - Future-you and teammates will thank present-you

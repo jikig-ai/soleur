@@ -1,5 +1,5 @@
 ---
-name: brainstorming
+name: brainstorm-techniques
 description: This skill should be used before implementing features, building components, or making changes. It guides exploring user intent, approaches, and design decisions before planning. Triggers on "let's brainstorm", "help me think through", "what should we build", "explore approaches", ambiguous feature requests, or when the user's request has multiple valid interpretations that need clarification.
 ---
 
@@ -151,7 +151,7 @@ topic: <kebab-case-topic>
 - [Any unresolved questions for the planning phase]
 
 ## Next Steps
-→ `/soleur:plan` for implementation details
+→ Use `skill: soleur:plan` for implementation details
 ```
 
 **Output Location:** `knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`
@@ -160,7 +160,7 @@ topic: <kebab-case-topic>
 
 Present clear options for what to do next:
 
-1. **Proceed to planning** → Run `/soleur:plan`
+1. **Proceed to planning** → Use `skill: soleur:plan`
 2. **Refine further** → Continue exploring the design
 3. **Done for now** → User will return later
 
@@ -212,4 +212,4 @@ Planning answers **HOW** to build it:
 - Technical details and code patterns
 - Testing strategy and verification
 
-When brainstorm output exists, `/soleur:plan` should detect it and use it as input, skipping its own idea refinement phase.
+When brainstorm output exists, the plan skill should detect it and use it as input, skipping its own idea refinement phase.

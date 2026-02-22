@@ -45,18 +45,18 @@ Present the following formatted overview. Replace placeholder counts with actual
 ```text
 Soleur - The Company-as-a-Service Platform
 
-GETTING STARTED:
+COMMANDS:
   /soleur:go <what you want>  The recommended way to use Soleur
   /soleur:sync                Populate knowledge-base from existing codebase
   /soleur:help                This help listing
 
-WORKFLOW COMMANDS (advanced):
-  /soleur:brainstorm <idea>   Explore requirements and approaches
-  /soleur:plan                Create an implementation plan
-  /soleur:work <plan>         Execute the plan systematically
-  /soleur:review              Run multi-agent code review
-  /soleur:compound            Capture learnings from solved problems
-  /soleur:one-shot <feature>  Full autonomous engineering workflow
+WORKFLOW SKILLS (invoked via /soleur:go or directly via Skill tool):
+  brainstorm                  Explore requirements and approaches
+  plan                        Create an implementation plan
+  work                        Execute the plan systematically
+  review                      Run multi-agent code review
+  compound                    Capture learnings from solved problems
+  one-shot                    Full autonomous engineering workflow
 
 AGENTS: [N] agents across [M] categories
   review    ([count])  Code review, security, performance, patterns

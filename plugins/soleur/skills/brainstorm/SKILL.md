@@ -1,16 +1,15 @@
 ---
-name: soleur:brainstorm
-description: Explore requirements and approaches through collaborative dialogue before planning implementation
-argument-hint: "[feature idea or problem to explore]"
+name: brainstorm
+description: "This skill should be used when exploring requirements and approaches through collaborative dialogue before planning implementation."
 ---
 
 # Brainstorm a Feature or Improvement
 
 **Note: The current year is 2026.** Use this when dating brainstorm documents.
 
-Brainstorming helps answer **WHAT** to build through collaborative dialogue. It precedes `/soleur:plan`, which answers **HOW** to build it.
+Brainstorming helps answer **WHAT** to build through collaborative dialogue. It precedes the `soleur:plan` skill, which answers **HOW** to build it.
 
-**Process knowledge:** Load the `brainstorming` skill for detailed question techniques, approach exploration patterns, and YAGNI principles.
+**Process knowledge:** Load the `brainstorm-techniques` skill for detailed question techniques, approach exploration patterns, and YAGNI principles.
 
 ## Feature Description
 
@@ -50,11 +49,11 @@ Evaluate whether brainstorming is needed based on the feature description.
 Use **AskUserQuestion tool** to suggest: "Your requirements seem clear enough to skip brainstorming. How would you like to proceed?"
 
 Options:
-1. **One-shot it** - Run `/soleur:one-shot` for full autonomous execution (plan, deepen, implement, review, resolve todos, browser test, feature video, PR). Best for simple, single-session tasks like bug fixes or small improvements.
-2. **Plan first** - Run `/soleur:plan` to create a plan before implementing
+1. **One-shot it** - Use the **Skill tool**: `skill: soleur:one-shot` for full autonomous execution (plan, deepen, implement, review, resolve todos, browser test, feature video, PR). Best for simple, single-session tasks like bug fixes or small improvements.
+2. **Plan first** - Use the **Skill tool**: `skill: soleur:plan` to create a plan before implementing
 3. **Brainstorm anyway** - Continue exploring the idea
 
-If one-shot is selected, pass the original feature description (including any issue references) to `/soleur:one-shot` and stop brainstorm execution. Note: this skips brainstorm capture (Phase 3.5), worktree creation (Phase 3), and spec/issue creation (Phase 3.6) -- the one-shot pipeline handles setup through `/soleur:plan`.
+If one-shot is selected, pass the original feature description (including any issue references) to `skill: soleur:one-shot` and stop brainstorm execution. Note: this skips brainstorm capture (Phase 3.5), worktree creation (Phase 3), and spec/issue creation (Phase 3.6) -- the one-shot pipeline handles setup through the plan skill.
 
 ### Phase 0.5: Domain Leader Assessment
 
@@ -102,7 +101,7 @@ If either agent fails or returns empty, proceed with whatever results are availa
 
 Use the **AskUserQuestion tool** to ask questions **one at a time**.
 
-**Guidelines (see `brainstorming` skill for detailed techniques):**
+**Guidelines (see `brainstorm-techniques` skill for detailed techniques):**
 
 - Prefer multiple choice when natural options exist
 - Start broad (purpose, users) then narrow (constraints, edge cases)
@@ -167,7 +166,7 @@ Write the brainstorm document. **Use worktree path if created.**
 - If worktree exists: `<worktree-path>/knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md` (replace `<worktree-path>` with the actual worktree path, e.g., `.worktrees/feat-<name>`)
 - If no worktree: `knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`
 
-**Document structure:** See the `brainstorming` skill for the template format. Key sections: What We're Building, Why This Approach, Key Decisions, Open Questions.
+**Document structure:** See the `brainstorm-techniques` skill for the template format. Key sections: What We're Building, Why This Approach, Key Decisions, Open Questions.
 
 If domain leaders participated and reported capability gaps in their assessments, include a `## Capability Gaps` section after "Open Questions" listing each gap with what is missing, which domain it belongs to, and why it is needed. Omit this section if no domain leaders participated or no gaps were reported.
 
@@ -223,8 +222,8 @@ Ensure the brainstorms directory exists before writing.
    **IMPORTANT:** All subsequent work for this feature should happen in the worktree, not the main repository. Announce the switch clearly to the user.
 
 7. **Announce:**
-   - If using existing issue: "Spec saved. **Using existing issue: #N.** Now working in worktree: `.worktrees/feat-<name>`. Run `/soleur:plan` to create tasks."
-   - If created new issue: "Spec saved. GitHub issue #N created. **Now working in worktree:** `.worktrees/feat-<name>`. Run `/soleur:plan` to create tasks."
+   - If using existing issue: "Spec saved. **Using existing issue: #N.** Now working in worktree: `.worktrees/feat-<name>`. Use `skill: soleur:plan` to create tasks."
+   - If created new issue: "Spec saved. GitHub issue #N created. **Now working in worktree:** `.worktrees/feat-<name>`. Use `skill: soleur:plan` to create tasks."
 
 **If knowledge-base/ does NOT exist:**
 
@@ -241,7 +240,7 @@ Use **AskUserQuestion tool** to present next steps:
 
 **Options:**
 
-1. **Proceed to planning** - Run `/soleur:plan` (will auto-detect this brainstorm)
+1. **Proceed to planning** - Use `skill: soleur:plan` (will auto-detect this brainstorm)
 2. **Create visual designs** - Run ux-design-lead agent for .pen file design (requires Pencil extension)
 3. **Refine design further** - Continue exploring
 4. **Done for now** - Return later
@@ -263,7 +262,7 @@ Key decisions:
 - [Decision 1]
 - [Decision 2]
 
-Next: Run `/soleur:plan` when ready to implement.
+Next: Use `skill: soleur:plan` when ready to implement.
 ```
 
 **Issue line format:**

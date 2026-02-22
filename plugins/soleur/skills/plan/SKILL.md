@@ -1,7 +1,6 @@
 ---
-name: soleur:plan
-description: Transform feature descriptions into well-structured project plans following conventions
-argument-hint: "[feature description, bug report, or improvement idea]"
+name: plan
+description: "This skill should be used when transforming feature descriptions into well-structured project plans following conventions."
 ---
 
 # Create a plan for a new feature or bug fix
@@ -305,7 +304,7 @@ Check if `knowledge-base/` exists. If so, run `git branch --show-current` to get
 
 2. **Save tasks.md** to `knowledge-base/specs/feat-<name>/tasks.md`
 
-3. **Announce:** "Tasks saved to `knowledge-base/specs/feat-<name>/tasks.md`. Run `/soleur:work` to implement."
+3. **Announce:** "Tasks saved to `knowledge-base/specs/feat-<name>/tasks.md`. Use `skill: soleur:work` to implement."
 
 **If knowledge-base/ does NOT exist or not on feature branch:**
 
@@ -337,8 +336,8 @@ After plan review, use the **AskUserQuestion tool** to present these options:
 
 1. **Open plan in editor** - Open the plan file for review
 2. **Run `/deepen-plan`** - Enhance each section with parallel research agents (best practices, performance, UI)
-3. **Start `/soleur:work`** - Begin implementing this plan locally
-4. **Start `/soleur:work` on remote** - Begin implementing in Claude Code on the web (use `&` to run in background)
+3. **Start `soleur:work`** - Begin implementing this plan locally
+4. **Start `soleur:work` on remote** - Begin implementing in Claude Code on the web (use `&` to run in background)
 5. **Create Issue** - Create issue in project tracker (GitHub/Linear)
 6. **Simplify** - Reduce detail level
 
@@ -346,15 +345,15 @@ Based on selection:
 
 - **Open plan in editor** → Run `open knowledge-base/plans/<plan_filename>.md` to open the file in the user's default editor
 - **`/deepen-plan`** → Call the /deepen-plan command with the plan file path to enhance with research
-- **`/soleur:work`** → Call the /soleur:work command with the plan file path
-- **`/soleur:work` on remote** → Run `/soleur:work knowledge-base/plans/<plan_filename>.md &` to start work in background for Claude Code web
+- **`soleur:work`** → Use `skill: soleur:work` with the plan file path
+- **`soleur:work` on remote** → Use `skill: soleur:work` with `knowledge-base/plans/<plan_filename>.md` to start work in background for Claude Code web
 - **Create Issue** → See "Issue Creation" section below
 - **Simplify** → Ask "What should I simplify?" then regenerate simpler version
 - **Other** (automatically provided) → Accept free text for rework or specific changes
 
-**Note:** If running `/soleur:plan` with ultrathink enabled, automatically run `/deepen-plan` after plan creation for maximum depth and grounding.
+**Note:** If running `soleur:plan` with ultrathink enabled, automatically use `skill: soleur:deepen-plan` after plan creation for maximum depth and grounding.
 
-Loop back to options after Simplify or Other changes until user selects `/soleur:work`.
+Loop back to options after Simplify or Other changes until user selects `soleur:work`.
 
 ## Issue Creation
 
@@ -382,12 +381,12 @@ When user selects "Create Issue", detect their project tracker from CLAUDE.md:
 
 5. **After creation:**
    - Display the issue URL
-   - Ask if they want to proceed to `/soleur:work` or `/plan_review`
+   - Ask if they want to proceed to `skill: soleur:work` or `skill: soleur:plan-review`
 
 ## Managing Plan Documents
 
 **Update an existing plan:**
-If re-running `/soleur:plan` for the same feature, read the existing plan first. Update in place rather than creating a duplicate. Preserve prior content and mark changes with `[Updated YYYY-MM-DD]`.
+If re-running `soleur:plan` for the same feature, read the existing plan first. Update in place rather than creating a duplicate. Preserve prior content and mark changes with `[Updated YYYY-MM-DD]`.
 
 **Archive completed plans:**
 Move completed or superseded plans to `knowledge-base/plans/archive/`: `mkdir -p knowledge-base/plans/archive && git mv knowledge-base/plans/<file>.md knowledge-base/plans/archive/`. Commit with `git commit -m "plan: archive <topic>"`.

@@ -64,7 +64,7 @@ FAILURE MODE TO AVOID: Seeing an error message and immediately changing code bas
 MANDATORY checklist after completing implementation work. Every step MUST be completed in order. Do not skip steps. Do not propose committing until steps 1-2 are done.
 
 1. **Review** -- Run code review on unstaged changes. Do not skip this.
-2. **Compound** -- HARD RULE: Run `/soleur:compound` to capture learnings. Ask the user "Should we run /soleur:compound before committing?" -- if they decline, proceed. But you must NEVER silently skip this step. Skipping without asking is a protocol violation.
+2. **Compound** -- HARD RULE: Run the compound skill (`skill: "soleur:compound"`) to capture learnings. Ask the user "Should we run compound before committing?" -- if they decline, proceed. But you must NEVER silently skip this step. Skipping without asking is a protocol violation.
 3. **Stage ALL artifacts** -- Brainstorms, specs, plans, learnings, AND code. Historically missed: forgetting to stage non-code files. Run `git status` and verify nothing is left behind.
 4. **README** -- If any new command, skill, or agent was added, update `plugins/soleur/README.md`. Check, don't assume.
 5. **Merge main** -- Run `git fetch origin main && git merge origin/main` before bumping versions. This ensures the version bump starts from the latest version on main, reducing merge conflicts on version files. If merge conflicts arise on version files, read the current version from main (`git show origin/main:plugins/soleur/plugin.json`) and bump from that -- do not assume the branch version is current. CRITICAL: If you have uncommitted work, commit it first (even as WIP) before merging -- never use `git stash` to hold significant work during merge operations in a worktree.
@@ -75,6 +75,8 @@ MANDATORY checklist after completing implementation work. Every step MUST be com
 10. **Merge and cleanup** -- After CI passes, merge with `gh pr merge <number> --squash`. Then immediately run `worktree-manager.sh cleanup-merged` from the repo root. Do not defer cleanup to the next session -- if this session ends before cleanup runs, the worktree becomes stale. See `/ship` Phase 8 for the full procedure.
 
 FAILURE MODE TO AVOID: Committing code, then forgetting to push, forgetting to create the PR, forgetting to include spec/plan files, or silently skipping compound. The compound step is the most frequently skipped -- it has caused missing learnings and undocumented constitution updates. The merge-then-session-end gap is another known recurrence: if cleanup is skipped because a session ends after merge, the next session's Session-Start Hygiene check will catch it. If you catch yourself about to skip a step, stop and complete it.
+
+Note: The workflow skills (brainstorm, plan, work, review, compound, one-shot) are invoked via the Skill tool, not as slash commands. Only `go`, `sync`, and `help` remain as slash commands.
 
 Use the `/ship` skill to automate this checklist. Prefer `/ship` over manual commit/push/PR -- it enforces compound and review gates that manual workflows silently bypass.
 
@@ -100,11 +102,13 @@ FAILURE MODE TO AVOID: The user says "let's brainstorm X" and you immediately sp
 
 The full lifecycle for a feature is: brainstorm, plan, implement, review, ship. Small fixes can skip brainstorm and plan, but for non-trivial work follow this sequence:
 
-1. **Brainstorm** (`/soleur:brainstorm`) -- Explore the problem space. Output: `knowledge-base/brainstorms/`.
-2. **Plan** (`/soleur:plan`) -- Design the implementation. Output: `knowledge-base/plans/`.
-3. **Implement** (`/soleur:work`) -- Build it on a feature branch.
-4. **Review** (`/soleur:review`) -- Code review before shipping.
+1. **Brainstorm** (skill: `soleur:brainstorm`) -- Explore the problem space. Output: `knowledge-base/brainstorms/`.
+2. **Plan** (skill: `soleur:plan`) -- Design the implementation. Output: `knowledge-base/plans/`.
+3. **Implement** (skill: `soleur:work`) -- Build it on a feature branch.
+4. **Review** (skill: `soleur:review`) -- Code review before shipping.
 5. **Ship** (`/ship`) -- Automates the Workflow Completion Protocol above.
+
+These workflow skills are invoked via the Skill tool (`skill: soleur:brainstorm`) or automatically via the unified entry point (`/soleur:go`).
 
 ## Plugin Versioning
 

@@ -1,6 +1,6 @@
 # YAML Frontmatter Schema
 
-**See `plugins/soleur/skills/compound-docs/schema.yaml` for the complete schema specification.**
+**See `plugins/soleur/skills/compound-capture/schema.yaml` for the complete schema specification.**
 
 ## Required Fields
 

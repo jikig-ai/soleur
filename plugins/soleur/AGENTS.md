@@ -48,7 +48,7 @@ agents/
 └── support/               # Support and community agents
 
 commands/
-└── soleur/                # All commands (soleur:plan, soleur:review, etc.)
+└── soleur/                # Entry-point commands (go, sync, help)
 
 skills/
 └── <skill-name>/          # All skills at root level (flat)
@@ -63,21 +63,30 @@ To add a new domain (e.g., product, growth):
 3. Add key to `domainOrder` and `DOMAIN_CSS_VARS` in the same file
 4. Add CSS variable in `docs/css/style.css`
 5. Skills stay flat at root level (the skill loader does not recurse into subdirectories)
-6. Commands stay under `commands/soleur/` (they are domain-agnostic workflow orchestrators)
+6. Commands stay under `commands/soleur/` (only entry-point commands: go, sync, help). Workflow stages are skills.
 7. The plugin loader discovers agents recursively -- no config changes needed
 8. Landing page department cards, stats, and legal doc counts update automatically from data
 
-## Command Naming Convention
+## Command and Skill Naming Convention
 
-**Soleur commands** use `soleur:` prefix to avoid collisions with built-in commands:
+Only 3 **commands** remain under `commands/soleur/`, using the `soleur:` prefix to avoid collisions with built-in commands:
 
-- `/soleur:brainstorm` - Brainstorm
-- `/soleur:plan` - Create implementation plans
-- `/soleur:review` - Run comprehensive code reviews
-- `/soleur:work` - Execute work items systematically
-- `/soleur:compound` - Document solved problems
+- `/soleur:go` - Unified entry point that routes to workflow skills
+- `/soleur:sync` - Populate knowledge base from existing codebase
+- `/soleur:help` - List all available Soleur commands, agents, and skills
 
-**Why `soleur:`?** Claude Code has built-in `/plan` and `/review` commands. Using `name: soleur:plan` in frontmatter creates a unique `/soleur:plan` command with no collision.
+The 6 workflow stages are now **skills** under `skills/`:
+
+- `soleur:brainstorm` - Explore requirements, make design decisions
+- `soleur:plan` - Create implementation plans with research
+- `soleur:work` - Execute plans with incremental commits
+- `soleur:review` - Multi-agent code review before PR
+- `soleur:compound` - Capture learnings for future work
+- `soleur:one-shot` - Full autonomous engineering workflow from plan to PR
+
+**Why skills?** Skills are discoverable by agents and invocable via the Skill tool. Commands are invisible to agents. Workflow stages benefit from agent discoverability and Skill tool invocation (e.g., `/soleur:go` routes to skills, one-shot sequences plan then work via the Skill tool).
+
+**Prefix source:** Commands get their `soleur:` prefix from the `name:` field in frontmatter. Skills get their `soleur:` prefix automatically from the plugin namespace -- the skill's `name:` field should not include the prefix.
 
 ## Agent Compliance Checklist
 
@@ -167,7 +176,7 @@ Domain leaders are agents that orchestrate a business domain's specialist team. 
 
 1. Create `agents/<domain>/` with leader + specialist `.md` files
 2. Follow the 3-phase contract (Assess, Recommend/Delegate, Sharp Edges) -- use `agents/legal/clo.md` as template
-3. Add a row to the Domain Config table in `commands/soleur/brainstorm.md` Phase 0.5 with: domain name, assessment question, leader name, routing prompt, options, and task prompt
+3. Add a row to the Domain Config table in `skills/brainstorm/SKILL.md` Phase 0.5 with: domain name, assessment question, leader name, routing prompt, options, and task prompt
 4. Add disambiguation sentences to agents with overlapping scope in adjacent domains (both directions)
 5. Verify token budget: `shopt -s globstar && grep -h 'description:' agents/**/*.md | wc -w` (under 2,500)
 6. Update docs data files: `agents.js` (DOMAIN_META, DOMAIN_CSS_VARS, domainOrder), `style.css` (CSS variable). Landing page and legal docs update automatically from data.

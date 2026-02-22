@@ -73,13 +73,13 @@ Search for unarchived artifacts matching the feature name (excluding `archive/` 
 - Plans: `knowledge-base/plans/*FEATURE*`
 - Spec directory: `knowledge-base/specs/feat-FEATURE/`
 
-**If unarchived artifacts exist:** Do NOT offer Skip. List the found artifacts and explain that /compound must run to consolidate and archive them before shipping. Then run `/soleur:compound`. The compound flow will automatically consolidate and archive the artifacts on `feat-*` branches.
+**If unarchived artifacts exist:** Do NOT offer Skip. List the found artifacts and explain that compound must run to consolidate and archive them before shipping. Then use `skill: soleur:compound`. The compound flow will automatically consolidate and archive the artifacts on `feat-*` branches.
 
 **If no unarchived artifacts exist:** Offer the standard choice:
 
 "No learnings documented for this feature. Run /compound to capture what you learned?"
 
-- **Yes** -> Run `/soleur:compound`
+- **Yes** -> Use `skill: soleur:compound`
 - **Skip** -> Continue without documenting
 
 ## Phase 3: Verify Documentation
@@ -225,9 +225,9 @@ git rev-parse --abbrev-ref HEAD
 
 Extract the feature name from the result (strip `feat-`/`feature/`/`fix-`/`fix/` prefix). Then search for unarchived KB artifacts matching the feature name in brainstorms, plans, and specs directories (excluding `archive/` paths).
 
-If any unarchived artifacts are found, BLOCK the push and instruct the user to run `/soleur:compound` first.
+If any unarchived artifacts are found, BLOCK the push and instruct the user to use `skill: soleur:compound` first.
 
-**If blocked:** Stop. Run `/soleur:compound` to consolidate and archive artifacts, then return to this phase. Do NOT bypass this check.
+**If blocked:** Stop. Use `skill: soleur:compound` to consolidate and archive artifacts, then return to this phase. Do NOT bypass this check.
 
 **If clear:** Proceed to push.
 

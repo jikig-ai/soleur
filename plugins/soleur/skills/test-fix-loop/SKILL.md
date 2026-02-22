@@ -10,7 +10,7 @@ Autonomous test-fix iteration loop. Run the test suite, diagnose failures, apply
 ## When to Use
 
 - After implementation produces unexpected test failures in unrelated modules
-- When `/soleur:work` GREEN phase fails and manual diagnosis is tedious
+- When `soleur:work` GREEN phase fails and manual diagnosis is tedious
 - To batch-fix multiple test failures across a codebase
 - NOT for writing new tests (use `atdd-developer`)
 - NOT for linting, type-checking, or non-test failures
