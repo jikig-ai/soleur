@@ -1,6 +1,6 @@
 ---
 name: growth-strategist
-description: "This agent performs content strategy analysis including keyword research, content auditing for search intent alignment, content gap analysis, content planning, and GEO/AEO (Generative Engine Optimization / AI Engine Optimization) auditing at the content level. It complements the seo-aeo-analyst (which handles technical SEO correctness) by focusing on whether content matches what people actually search for."
+description: "Use this agent when you need content strategy analysis including keyword research, content auditing for search intent alignment, content gap analysis, content planning, and GEO/AEO (Generative Engine Optimization / AI Engine Optimization) auditing at the content level. It complements the seo-aeo-analyst (which handles technical SEO correctness) by focusing on whether content matches what people actually search for."
 model: inherit
 ---
 
