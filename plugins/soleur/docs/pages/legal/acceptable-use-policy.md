@@ -41,7 +41,7 @@ This Policy applies to all users globally, with specific provisions addressing c
 
 This Policy applies to all use of the Soleur platform, including but not limited to:
 
-- Interaction with Soleur's 45 AI agents and 45 skills;
+- Interaction with Soleur's {{ stats.agents }} AI agents and {{ stats.skills }} skills;
 - Execution of shell commands, code generation, and file manipulation through agents;
 - Browser automation via the agent-browser subsystem;
 - API interactions initiated by or through Soleur agents;

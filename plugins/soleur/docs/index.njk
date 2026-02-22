@@ -22,7 +22,7 @@ permalink: index.html
     <!-- Stats Strip -->
     <section class="landing-stats" aria-label="Platform statistics">
       <div class="landing-stat">
-        <div class="landing-stat-value">8</div>
+        <div class="landing-stat-value">{{ stats.departments }}</div>
         <div class="landing-stat-label">Departments</div>
       </div>
       <div class="landing-stat">
@@ -54,7 +54,7 @@ permalink: index.html
           <div class="problem-card">
             <div class="problem-card-icon" aria-hidden="true">&#x26A1;</div>
             <h3>Agents Execute</h3>
-            <p>Engineering, finance, marketing, sales, legal, operations, product, support &mdash; every department, running autonomously on your command.</p>
+            <p>{{ agents.departmentList | lower }} &mdash; every department, running autonomously on your command.</p>
           </div>
           <div class="problem-card">
             <div class="problem-card-icon" aria-hidden="true">&#x1F504;</div>
@@ -84,46 +84,13 @@ permalink: index.html
         <p class="section-label">Your AI Organization</p>
         <h2 class="section-title">Every department. From idea to shipped.</h2>
         <div class="feature-grid-departments">
+          {%- for domain in agents.domains %}
           <div class="feature-card">
-            <div class="feature-card-icon" aria-hidden="true">&#x1F4DA;</div>
-            <h3>Product</h3>
-            <p>Product management, competitive analysis, planning &amp; specs, UX design. From market insight to shipped experience.</p>
+            <div class="feature-card-icon" aria-hidden="true">{{ domain.icon | safe }}</div>
+            <h3>{{ domain.name }}</h3>
+            <p>{{ domain.cardDescription | safe }}</p>
           </div>
-          <div class="feature-card">
-            <div class="feature-card-icon" aria-hidden="true">&#x1F4BB;</div>
-            <h3>Engineering</h3>
-            <p>Code review, architecture, security, quality testing. Specialized agents shipping production-grade code on your command.</p>
-          </div>
-          <div class="feature-card">
-            <div class="feature-card-icon" aria-hidden="true">&#x1F4E3;</div>
-            <h3>Marketing</h3>
-            <p>Brand identity, community content, release announcements. Your public presence runs on autopilot.</p>
-          </div>
-          <div class="feature-card">
-            <div class="feature-card-icon" aria-hidden="true">&#x1F4B0;</div>
-            <h3>Sales</h3>
-            <p>Outbound campaigns, deal qualification, pipeline analytics. AI-powered revenue operations from first outreach to closed-won.</p>
-          </div>
-          <div class="feature-card">
-            <div class="feature-card-icon" aria-hidden="true">&#x2696;&#xFE0F;</div>
-            <h3>Legal</h3>
-            <p>Terms, privacy policies, compliance audits. Legal documents generated, reviewed, and kept current automatically.</p>
-          </div>
-          <div class="feature-card">
-            <div class="feature-card-icon" aria-hidden="true">&#x2699;&#xFE0F;</div>
-            <h3>Operations</h3>
-            <p>Vendor research, expense tracking, tool provisioning. Operational infrastructure that runs without overhead.</p>
-          </div>
-          <div class="feature-card">
-            <div class="feature-card-icon" aria-hidden="true">&#x1F4CA;</div>
-            <h3>Finance</h3>
-            <p>Budget planning, revenue analysis, financial reporting. Data-driven financial oversight without the back office.</p>
-          </div>
-          <div class="feature-card">
-            <div class="feature-card-icon" aria-hidden="true">&#x1F6E0;&#xFE0F;</div>
-            <h3>Support</h3>
-            <p>Issue triage, community management, ticket routing. Customer-facing operations that scale without headcount.</p>
-          </div>
+          {%- endfor %}
         </div>
         <h3 class="feature-grid-sublabel">The Workflow</h3>
         <div class="feature-grid-workflow">

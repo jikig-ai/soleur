@@ -2,15 +2,50 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve, relative } from "node:path";
 import yaml from "yaml";
 
-const DOMAIN_LABELS = {
-  engineering: "Engineering",
-  finance: "Finance",
-  legal: "Legal",
-  marketing: "Marketing",
-  operations: "Operations",
-  product: "Product",
-  sales: "Sales",
-  support: "Support",
+// Domain metadata: single source of truth for labels, landing-page icons, and card descriptions.
+// Adding a domain here (+ domainOrder + DOMAIN_CSS_VARS) is all that's needed --
+// the landing page and legal docs render from this data automatically.
+const DOMAIN_META = {
+  engineering: {
+    label: "Engineering",
+    icon: "&#x1F4BB;",
+    cardDescription: "Code review, architecture, security, quality testing. Specialized agents shipping production-grade code on your command.",
+  },
+  finance: {
+    label: "Finance",
+    icon: "&#x1F4CA;",
+    cardDescription: "Budget planning, revenue analysis, financial reporting. Data-driven financial oversight without the back office.",
+  },
+  legal: {
+    label: "Legal",
+    icon: "&#x2696;&#xFE0F;",
+    cardDescription: "Terms, privacy policies, compliance audits. Legal documents generated, reviewed, and kept current automatically.",
+  },
+  marketing: {
+    label: "Marketing",
+    icon: "&#x1F4E3;",
+    cardDescription: "Brand identity, community content, release announcements. Your public presence runs on autopilot.",
+  },
+  operations: {
+    label: "Operations",
+    icon: "&#x2699;&#xFE0F;",
+    cardDescription: "Vendor research, expense tracking, tool provisioning. Operational infrastructure that runs without overhead.",
+  },
+  product: {
+    label: "Product",
+    icon: "&#x1F4DA;",
+    cardDescription: "Product management, competitive analysis, planning &amp; specs, UX design. From market insight to shipped experience.",
+  },
+  sales: {
+    label: "Sales",
+    icon: "&#x1F4B0;",
+    cardDescription: "Outbound campaigns, deal qualification, pipeline analytics. AI-powered revenue operations from first outreach to closed-won.",
+  },
+  support: {
+    label: "Support",
+    icon: "&#x1F6E0;&#xFE0F;",
+    cardDescription: "Issue triage, community management, ticket routing. Customer-facing operations that scale without headcount.",
+  },
 };
 
 const SUB_LABELS = {
@@ -121,7 +156,7 @@ export default function () {
     const agent = {
       name: data.name || filename,
       description: extractSummary(body),
-      domain: DOMAIN_LABELS[domain] || domain,
+      domain: DOMAIN_META[domain]?.label || domain || domain,
       domainKey: domain,
       sub: sub ? (SUB_LABELS[sub] || sub) : null,
       subKey: sub,
@@ -169,14 +204,19 @@ export default function () {
     group.agents.sort((a, b) => a.name.localeCompare(b.name));
 
     domains.push({
-      name: DOMAIN_LABELS[key],
+      name: DOMAIN_META[key]?.label || key,
       key,
       count: totalCount,
+      icon: DOMAIN_META[key]?.icon || "",
+      cardDescription: DOMAIN_META[key]?.cardDescription || "",
       agents: group.agents,
       subcategories,
       cssVar: DOMAIN_CSS_VARS[key] || "var(--accent)",
     });
   }
 
-  return { domains };
+  return {
+    domains,
+    departmentList: domains.map((d) => d.name).join(", "),
+  };
 }
