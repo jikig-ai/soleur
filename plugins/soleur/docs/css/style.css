@@ -569,7 +569,7 @@
   .feature-grid-departments,
   .feature-grid-workflow {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    grid-template-columns: repeat(3, 1fr);
     gap: var(--space-5);
     max-width: 1200px;
     margin-inline: auto;

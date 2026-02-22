@@ -6,13 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [2.31.4] - 2026-02-22
+## [2.31.5] - 2026-02-22
 
 ### Fixed
 
 - Remove all command substitution patterns from ship skill to prevent Claude Code security prompts
 - Replace "run X then use result in Y" prose with explicit two-step Bash call instructions
 - Add global "No command substitution" rule at top of ship SKILL.md
+
+## [2.31.4] - 2026-02-22
+
+### Fixed
+
+- Fix broken landing page grid layout: replace `auto-fill` with `repeat(3, 1fr)` for clean 3x2 grids
+- Replace aspirational department cards (Strategy, Support) with real plugin domains (Legal, Operations)
+- Add missing "Review" workflow card and rename "Learn & Grow" to "Compound" to match actual workflow
+- Tighten Sales card copy per CMO recommendation
 
 ## [2.31.3] - 2026-02-22
 
