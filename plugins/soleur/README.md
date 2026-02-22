@@ -106,7 +106,7 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 | Component | Count |
 |-----------|-------|
-| Agents | 47 |
+| Agents | 49 |
 | Commands | 8 |
 | Skills | 46 |
 | MCP Servers | 1 |
@@ -210,10 +210,12 @@ Agents are organized by domain, then by function.
 | `ops-provisioner` | Guide SaaS tool account setup, purchase, configuration, and verification |
 | `ops-research` | Research domains, hosting, tools/SaaS, and cost optimization with browser automation |
 
-### Product (2)
+### Product (4)
 
 | Agent | Description |
 |-------|-------------|
+| `business-validator` | Validate business ideas through structured 6-gate workshop (market research, competitive analysis, business model) |
+| `cpo` | Orchestrate product domain -- assess product strategy, validate business models, delegate to specialist agents |
 | `spec-flow-analyzer` | Analyze user flows and identify gaps in specifications |
 
 #### Design (1)
