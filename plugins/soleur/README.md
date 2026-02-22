@@ -113,9 +113,9 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 | Component | Count |
 |-----------|-------|
 | Agents | 60 |
-| Commands | 8 |
+| Commands | 9 |
 | Skills | 46 |
-| MCP Servers | 2 |
+| MCP Servers | 3 |
 
 ## Agents
 
