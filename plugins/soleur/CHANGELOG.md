@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.33.2] - 2026-02-22
+
+### Changed
+
+- Trim 16 agent descriptions to recover 342 words of token budget headroom (2,496 -> 2,154)
+- Refactor brainstorm Phase 0.5 from inline per-domain blocks to table-driven config (-135 lines)
+- Merge brand routing into marketing domain row (7 rows -> 6)
+
+### Fixed
+
+- Add missing "sales" domain to 8 files (plugin.json, README, AGENTS.md, getting-started, llms.txt, terms-and-conditions)
+- Fix stale agent/skill counts in terms-and-conditions.md (45 -> 54 agents, 45 -> 46 skills)
+- Update "Adding a New Domain Leader" checklist to reference table-driven config
+
+## [2.33.1] - 2026-02-22
+
+### Fixed
+
+- Replace shell variable expansion syntax (`${VAR}`, `$VAR`) in 18 plugin .md files to eliminate "Shell expansion syntax in paths requires manual approval" prompts
+- Add constitution rule preventing future shell expansion in bash code blocks
+
 ## [2.33.0] - 2026-02-22
 
 ### Added

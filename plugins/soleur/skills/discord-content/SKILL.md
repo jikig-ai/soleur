@@ -76,12 +76,16 @@ Present the final draft to the user with character count displayed. Use the **As
 
 On acceptance, post the content via webhook:
 
+First get the webhook URL with `printenv DISCORD_WEBHOOK_URL`, then use the literal URL:
+
 ```bash
 curl -s -o /dev/null -w "%{http_code}" \
   -H "Content-Type: application/json" \
   -d "{\"content\": \"ESCAPED_CONTENT\", \"username\": \"Sol\", \"avatar_url\": \"AVATAR_URL\"}" \
-  "$DISCORD_WEBHOOK_URL"
+  "<webhook-url>"
 ```
+
+Replace `<webhook-url>` with the actual URL from `printenv`.
 
 Set `avatar_url` to the hosted logo URL (e.g., the GitHub-hosted `logo-mark-512.png`). Webhook messages freeze author identity at post time -- these fields ensure consistent branding.
 

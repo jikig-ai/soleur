@@ -20,16 +20,17 @@ Only act on `uncovered_stacks`. If empty, report "No stack gaps detected" and re
 
 Query all three registries in parallel for each uncovered stack. Use Bash `curl` with a 5-second timeout. Run all queries in a single message with parallel tool calls.
 
-For each uncovered stack, replace `${STACK}` with the actual stack name (e.g., `flutter`, `rust`) and run these three curl commands:
+For each uncovered stack, replace `<stack-name>` below with the actual stack name (e.g., `flutter`, `rust`) and run these three curl commands:
 
 ```bash
-# api.claude-plugins.dev (skills + plugins)
-curl -s --max-time 5 "https://api.claude-plugins.dev/api/skills/search?q=${STACK}&limit=10" 2>/dev/null || echo '{"error":"timeout"}'
+curl -s --max-time 5 "https://api.claude-plugins.dev/api/skills/search?q=<stack-name>&limit=10" 2>/dev/null || echo '{"error":"timeout"}'
+```
 
-# claudepluginhub.com (plugins)
-curl -s --max-time 5 "https://www.claudepluginhub.com/api/plugins?q=${STACK}" 2>/dev/null || echo '{"error":"timeout"}'
+```bash
+curl -s --max-time 5 "https://www.claudepluginhub.com/api/plugins?q=<stack-name>" 2>/dev/null || echo '{"error":"timeout"}'
+```
 
-# Anthropic official plugins
+```bash
 curl -s --max-time 5 "https://raw.githubusercontent.com/anthropics/claude-plugins-official/main/.claude-plugin/marketplace.json" 2>/dev/null || echo '{"error":"timeout"}'
 ```
 
@@ -101,11 +102,14 @@ For each approved artifact:
 
 If the artifact has a `gitUrl` or `repositoryUrl`, attempt to fetch the agent/skill markdown:
 
+Replace `<owner>`, `<repo>`, and `<name>` with the actual values from the artifact's git URL:
+
 ```bash
-# Try common paths for agent markdown
-curl -s --max-time 5 "https://raw.githubusercontent.com/${owner}/${repo}/main/agents/${name}.md" 2>/dev/null
-# Or for skills
-curl -s --max-time 5 "https://raw.githubusercontent.com/${owner}/${repo}/main/SKILL.md" 2>/dev/null
+curl -s --max-time 5 "https://raw.githubusercontent.com/<owner>/<repo>/main/agents/<name>.md" 2>/dev/null
+```
+
+```bash
+curl -s --max-time 5 "https://raw.githubusercontent.com/<owner>/<repo>/main/SKILL.md" 2>/dev/null
 ```
 
 If the content cannot be fetched, skip that artifact with a warning: "Could not fetch content for [name]. Skipping."

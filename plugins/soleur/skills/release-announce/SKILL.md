@@ -13,7 +13,7 @@ description: This skill should be used when announcing a new release. It parses 
 
    Read `plugins/soleur/.claude-plugin/plugin.json` and extract the `version` field value.
 
-2. Extract the `## [$VERSION]` section from `plugins/soleur/CHANGELOG.md`. Parse from the `## [$VERSION]` heading to the next `## [` heading (exclusive). If no matching section exists, error with "Changelog section for v$VERSION not found" and stop.
+2. Extract the `## [<version>]` section from `plugins/soleur/CHANGELOG.md`. Parse from the `## [<version>]` heading to the next `## [` heading (exclusive). If no matching section exists, error with "Changelog section for v<version> not found" and stop. Replace `<version>` with the actual version from step 1.
 
 3. Generate a detailed summary of the extracted changelog section:
    - Include all categories present (Added, Changed, Fixed, Removed)
@@ -25,15 +25,17 @@ description: This skill should be used when announcing a new release. It parses 
 1. Check if a release for this version already exists:
 
    ```bash
-   gh release view "v$VERSION" 2>/dev/null
+   gh release view "v<version>" 2>/dev/null
    ```
 
-2. If the release already exists: warn "Release v$VERSION already exists, skipping" and stop.
+   Replace `<version>` with the actual version number (e.g., `2.32.1`).
+
+2. If the release already exists: warn "Release v<version> already exists, skipping" and stop.
 
 3. Create the release:
 
    ```bash
-   gh release create "v$VERSION" --title "v$VERSION" --notes "<full summary>"
+   gh release create "v<version>" --title "v<version>" --notes "<full summary>"
    ```
 
 4. If the command fails: warn with the error message.
