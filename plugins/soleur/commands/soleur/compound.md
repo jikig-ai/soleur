@@ -138,6 +138,8 @@ module: [module]
 
 ### Constitution Promotion (Manual)
 
+HARD RULE: This phase MUST run even when compound is invoked inside an automated pipeline (one-shot, ship). The model has historically rationalized skipping this as "pipeline mode optimization" -- that is a protocol violation. Constitution promotion and route-to-definition are the phases that prevent repeated mistakes across sessions. If the pipeline is time-constrained, present proposals with a 5-second timeout per item, but never skip entirely.
+
 After saving the learning, prompt the user:
 
 **Question:** "Promote anything to constitution?"
@@ -155,6 +157,8 @@ After saving the learning, prompt the user:
 **If user says no:** Continue to next step
 
 ### Route Learning to Definition
+
+HARD RULE: This phase MUST run even in automated pipelines. See constitution promotion rule above.
 
 After constitution promotion, compound routes the captured learning to the skill, agent, or command definition that was active in the session. This feeds insights back into the instructions that directly govern behavior, preventing repeated mistakes.
 

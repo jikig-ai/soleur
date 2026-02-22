@@ -44,7 +44,7 @@ EXAMPLES:
 
 STOPPING:
   Only by reaching --max-iterations or detecting --completion-promise.
-  Or run /soleur:cancel-ralph to cancel manually.
+  Or manually remove the state file: rm .claude/ralph-loop.local.md
 
 MONITORING:
   # View current iteration:
@@ -131,7 +131,7 @@ fed back to you. You'll see your previous work in files, creating a
 self-referential loop where you iteratively improve on the same task.
 
 To monitor: head -10 .claude/ralph-loop.local.md
-To cancel: /soleur:cancel-ralph
+To cancel: rm .claude/ralph-loop.local.md
 
 WARNING: This loop cannot be stopped manually! It will run infinitely
 unless you set --max-iterations or --completion-promise.

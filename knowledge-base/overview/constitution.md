@@ -75,6 +75,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Never persist aggregated security findings (audit reports, posture assessments) to files in an open-source repository -- output inline in conversation only; the aggregation is the risk, not the individual facts
 - Never design skills that invoke other skills programmatically -- skills are user-invoked entry points with no inter-skill API; redirect users to the target skill or route through an agent via Task tool
 - Never put `<example>` blocks or `<commentary>` tags in agent description frontmatter -- these belong in the agent body (after `---`) which is only loaded on invocation; descriptions are loaded into the system prompt on every turn and their cumulative size must stay minimal
+- Never skip compound's constitution promotion or route-to-definition phases in automated pipelines (one-shot, ship) -- the model will rationalize skipping them as "pipeline mode" optimization, but these are the phases that prevent repeated mistakes across sessions
 
 ### Prefer
 
@@ -107,6 +108,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Extend `/ship` with conditional skill invocations rather than inlining domain logic -- ship should remain a thin orchestration layer
 - Mechanical notifications (webhooks, emails) belong in CI workflows; keep local skills for AI-powered work that needs Claude -- secrets live in GitHub Actions, not local env vars
 - When one agent/skill produces a structured document consumed by others, define a heading-level contract (exact `##` names, required/optional flags) in the producer -- consumers parse by heading name, not by position
+- When bundling external plugins, embed only the mechanism (hooks, scripts) -- do not create new user-facing commands unless the user explicitly requests them; internal infrastructure does not need user-facing surface area
 - Route users to specialized agents through existing commands (e.g., brainstorm routes to brand-architect) rather than creating new entry points -- keeps the user workflow unified and avoids proliferating slash commands
 - Inventory component counts and descriptions from source file frontmatter rather than hardcoding -- docs stay accurate when the same files the plugin loader reads are the source of truth
 - When self-hosting Google Fonts, check if the CSS API returns the same URL for multiple weights -- if so, use one woff2 file with `font-weight: <min> <max>` range syntax instead of downloading duplicate files
