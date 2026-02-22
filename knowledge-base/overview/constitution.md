@@ -62,7 +62,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Plans that create worktrees and invoke Task agents must include explicit `cd ${WORKTREE_PATH}` + `pwd` verification between worktree creation and agent invocation
 - When adding or integrating new agents, verify the cumulative agent description token count stays under 15k tokens -- agent descriptions are injected into the system prompt on every turn and bloated descriptions degrade all conversations
 - Before adding new GitHub Actions workflows, audit existing ones with `gh run list --workflow=<name>.yml` -- remove workflows that are always skipped (condition never matches) or superseded by newer workflows that absorbed their functionality
-- Agent descriptions for agents with overlapping scope must include a one-line disambiguation sentence: "Use [sibling] for [its scope]; use this agent for [this scope]."
+- Agent descriptions for agents with overlapping scope must include a one-line disambiguation sentence: "Use [sibling] for [its scope]; use this agent for [this scope]." When adding a new agent to a domain, update ALL existing sibling descriptions to cross-reference the new agent -- disambiguation is a graph property, not just a property of the new node
 - The project uses Bun as the JavaScript runtime with ESM modules (`"type": "module"`); pre-commit hooks are managed by lefthook (not Husky)
 
 ### Never
