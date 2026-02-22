@@ -48,6 +48,7 @@
     --cat-legal: #6C8EBF;
     --cat-sales: #E06666;
     --cat-finance: #26A69A;
+    --cat-support: #9B59B6;
     --font-display: 'Cormorant Garamond', Georgia, 'Times New Roman', serif;
     --font-body: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
     --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
@@ -573,7 +574,13 @@
   }
 
   /* Landing page: Feature grids (departments + workflow) */
-  .feature-grid-departments,
+  .feature-grid-departments {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--space-5);
+    max-width: 1200px;
+    margin-inline: auto;
+  }
   .feature-grid-workflow {
     display: grid;
     grid-template-columns: repeat(3, 1fr);

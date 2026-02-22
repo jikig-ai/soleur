@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.35.1] - 2026-02-22
+
+### Fixed
+
+- Update landing page department count from 7 to 8 and add Finance and Support department cards
+- Update landing page inline department list to include all 8 domains
+- Update landing page departments grid to 4-column layout for 8 cards (2 perfect rows)
+- Update terms and conditions from "58 AI agents across seven domains" to "60 AI agents across eight domains"
+
+## [2.35.0] - 2026-02-22
+
+### Added
+
+- Add Support domain with 3 agents: CCO (domain leader), ticket-triage, community-manager (moved from Marketing)
+- Add Support row to brainstorm Phase 0.5 domain config table for automatic CCO routing
+- Add `--cat-support` CSS variable (#9B59B6 purple) and Support to docs site agent catalog
+
+### Changed
+
+- Move community-manager agent from Marketing to Support domain
+- Update CMO description and delegation table to remove community-manager, add cross-domain note
+- Add disambiguation sentence to triage skill referencing ticket-triage agent
+
 ## [2.34.0] - 2026-02-22
 
 ### Added

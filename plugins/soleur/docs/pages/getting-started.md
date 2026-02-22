@@ -18,7 +18,7 @@ permalink: pages/getting-started.html
 
 ## Why Soleur
 
-Soleur gives a single founder the leverage of a full organization. **{{ stats.agents }} agents** across engineering, finance, marketing, legal, operations, product, and sales -- plus **{{ stats.skills }} skills** and **{{ stats.commands }} commands** -- that compound your company knowledge over time. Every problem you solve makes the next one easier.
+Soleur gives a single founder the leverage of a full organization. **{{ stats.agents }} agents** across engineering, finance, marketing, legal, operations, product, sales, and support -- plus **{{ stats.skills }} skills** and **{{ stats.commands }} commands** -- that compound your company knowledge over time. Every problem you solve makes the next one easier.
 
 ## Installation
 
@@ -111,7 +111,7 @@ Soleur follows a structured 5-step workflow for software development:
 ## Learn More
 
 <ul class="learn-more-links">
-  <li><a href="pages/agents.html">Agents <span class="learn-more-desc">AI agents across engineering, finance, marketing, legal, operations, product, and sales</span></a></li>
+  <li><a href="pages/agents.html">Agents <span class="learn-more-desc">AI agents across engineering, finance, marketing, legal, operations, product, sales, and support</span></a></li>
   <li><a href="pages/skills.html">Skills <span class="learn-more-desc">Multi-step skills for complex workflows</span></a></li>
   <li><a href="pages/changelog.html">Changelog <span class="learn-more-desc">All notable changes to Soleur</span></a></li>
 </ul>
