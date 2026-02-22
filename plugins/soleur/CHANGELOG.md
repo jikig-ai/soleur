@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.25.2] - 2026-02-22
+
+### Added
+
+- Add Phase 0.5 pre-flight validation checks to `/soleur:work` command (#215)
+- Environment checks: default branch detection (FAIL), worktree verification (WARN), uncommitted changes (WARN), stashed changes (WARN), detached HEAD (FAIL)
+- Scope checks: plan file existence (FAIL), merge conflict zone detection (WARN), ad-hoc work detection (WARN)
+- Convention verification reminder in Phase 1 "Read Plan and Clarify" step
+
 ## [2.25.1] - 2026-02-22
 
 ### Fixed
