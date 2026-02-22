@@ -294,7 +294,7 @@ Ensure the brainstorms directory exists before writing.
 
    Parse the feature description for `#N` patterns (e.g., `#42`). Extract the first issue number found.
 
-   **If issue reference found**, validate its state by running `gh issue view <number> --json state --jq .state`:
+   **If issue reference found**, validate its state by running `gh issue view <number> --json state` and pipe to `jq .state`:
 
    - **If OPEN:** Use existing issue -- skip creation, proceed to step 3
    - **If CLOSED:** Warn the user, then create a new issue with "Replaces closed #N" in the body (proceed to step 2)
@@ -316,7 +316,7 @@ Ensure the brainstorms directory exists before writing.
 
 3. **Update existing issue with artifact links** (if using existing issue):
 
-   Fetch the existing issue body with `gh issue view <number> --json body --jq .body`. Append an Artifacts section with links to the brainstorm document, spec file, and branch name. Then update with `gh issue edit <number> --body "<updated body>"`.
+   Fetch the existing issue body with `gh issue view <number> --json body` piped to `jq .body`. Append an Artifacts section with links to the brainstorm document, spec file, and branch name. Then update with `gh issue edit <number> --body "<updated body>"`.
 
 4. **Generate spec.md** using `spec-templates` skill template:
    - Fill in Problem Statement from brainstorm

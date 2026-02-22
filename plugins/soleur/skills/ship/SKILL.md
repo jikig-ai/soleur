@@ -210,7 +210,22 @@ If any unarchived artifacts are found, BLOCK the push and instruct the user to r
 
 Push the branch to remote: run `git rev-parse --abbrev-ref HEAD` to get the branch name, then `git push -u origin <branch-name>`.
 
-Create the PR using `gh pr create` with a title and body containing a summary and checklist. Use a HEREDOC for the body to preserve formatting.
+Create the PR:
+
+```bash
+gh pr create --title "the pr title" --body "$(cat <<'EOF'
+## Summary
+<bullet points>
+
+## Test plan
+<checklist>
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+EOF
+)"
+```
+
+IMPORTANT: Do not quote flag names. Write `--title` not `"--title"`.
 
 Present the PR URL to the user.
 
@@ -219,11 +234,8 @@ Present the PR URL to the user.
 After pushing (or after any subsequent push), verify the PR has no merge conflicts with the base branch:
 
 ```bash
-# Fetch latest base branch
 git fetch origin main
-
-# Check PR mergeability
-gh pr view --json mergeable,mergeStateStatus --jq '{mergeable, mergeStateStatus}'
+gh pr view --json mergeable,mergeStateStatus | jq '{mergeable, mergeStateStatus}'
 ```
 
 **If `mergeable` is `MERGEABLE`:** Continue to Phase 8.
@@ -259,7 +271,7 @@ gh pr view --json mergeable,mergeStateStatus --jq '{mergeable, mergeStateStatus}
 
    ```bash
    git push
-   gh pr view --json mergeable --jq '.mergeable'
+   gh pr view --json mergeable | jq '.mergeable'
    ```
 
 6. If still `CONFLICTING` after resolution: stop and ask the user for help.
@@ -281,7 +293,7 @@ gh pr checks --watch --fail-fast
 1. Read the failure details:
 
    ```bash
-   gh pr checks --json name,state,description --jq '.[] | select(.state != "SUCCESS")'
+   gh pr checks --json name,state,description | jq '.[] | select(.state != "SUCCESS")'
    ```
 
 2. If the failure is in tests: investigate the failing test, fix locally, commit, push, and re-run this phase.
