@@ -13,14 +13,29 @@ description: This skill should be used when merging a feature branch to main wit
 
 ## Phase 0: Context Detection
 
-Detect the current environment and record the starting state for rollback:
+Detect the current environment and record the starting state for rollback. Run these commands separately and store the results:
 
+1. Get current branch name:
 ```bash
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
-STARTING_SHA=$(git rev-parse HEAD)
-WORKTREE_PATH=$(pwd)
-REPO_ROOT=$(git worktree list | head -1 | awk '{print $1}')
+git rev-parse --abbrev-ref HEAD
 ```
+
+2. Get current commit SHA (this is the rollback point):
+```bash
+git rev-parse HEAD
+```
+
+3. Get current working directory path (worktree path):
+```bash
+pwd
+```
+
+4. Get the main repo root (first path from worktree list output):
+```bash
+git worktree list
+```
+
+Store these four values as BRANCH, STARTING_SHA, WORKTREE_PATH, and REPO_ROOT for use throughout the pipeline.
 
 Load project conventions:
 
@@ -279,10 +294,10 @@ gh pr list --head ${BRANCH} --json number,state --jq '.[] | select(.state == "OP
 
 **If a PR exists:** Announce the PR number and proceed.
 
-**If no PR exists:** Create one:
+**If no PR exists:** Create one with `gh pr create`. Pass the body via HEREDOC to preserve formatting:
 
 ```bash
-gh pr create --title "<type>: <description>" --body "$(cat <<'EOF'
+gh pr create --title "<type>: <description>" --body "
 ## Summary
 <bullet points summarizing changes>
 
@@ -291,8 +306,7 @@ gh pr create --title "<type>: <description>" --body "$(cat <<'EOF'
 - [ ] Manual verification of merge pipeline
 
 Generated with [Claude Code](https://claude.com/claude-code)
-EOF
-)"
+"
 ```
 
 Derive the title from the branch name and changes. Use `feat:` for features, `fix:` for bug fixes.

@@ -58,12 +58,13 @@ esac
 
 2. **Add profile support to the wrapper** (if service needs multiple accounts):
 
-```bash
+```text
 # In secure-api.sh, add to profile remapping section:
 yourservice)
     SERVICE_UPPER="YOURSERVICE"
-    YOURSERVICE_API_KEY=$(eval echo \$${SERVICE_UPPER}_${PROFILE_UPPER}_API_KEY)
-    YOURSERVICE_ACCOUNT_ID=$(eval echo \$${SERVICE_UPPER}_${PROFILE_UPPER}_ACCOUNT_ID)
+    # Dynamically resolve the env var name using the profile:
+    # YOURSERVICE_API_KEY = value of YOURSERVICE_<PROFILE>_API_KEY
+    # YOURSERVICE_ACCOUNT_ID = value of YOURSERVICE_<PROFILE>_ACCOUNT_ID
     ;;
 ```
 

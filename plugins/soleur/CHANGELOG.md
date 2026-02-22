@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.27.1] - 2026-02-22
+
+### Fixed
+
+- Remove remaining `$()` command substitution from merge-pr skill, community-manager agent, and 2 reference docs
+- Add constitution rule: when fixing patterns across plugin files, search all `.md` under `plugins/soleur/` -- not just the category that triggered the report
+
 ## [2.27.0] - 2026-02-22
 
 ### Added
