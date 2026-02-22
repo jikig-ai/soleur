@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.23.14] - 2026-02-22
+
+### Fixed
+
+- Fix agent description voice: 3 agents now use imperative "Use this agent when..." form per AGENTS.md compliance
+
 ## [2.23.13] - 2026-02-21
 
 ### Changed

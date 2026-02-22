@@ -1,6 +1,6 @@
 ---
 name: seo-aeo-analyst
-description: "This agent analyzes Eleventy documentation sites for SEO and AEO (AI Engine Optimization) opportunities. It audits structured data, meta tags, AI discoverability signals, and content quality, then produces actionable reports or generates fixes. Use growth-strategist for content strategy and keyword research; use programmatic-seo-specialist for scalable page generation; use this agent for technical SEO audits."
+description: "Use this agent when you need to analyze Eleventy documentation sites for SEO and AEO (AI Engine Optimization) opportunities. It audits structured data, meta tags, AI discoverability signals, and content quality, then produces actionable reports or generates fixes. Use growth-strategist for content strategy and keyword research; use programmatic-seo-specialist for scalable page generation; use this agent for technical SEO audits."
 model: inherit
 ---
 
