@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.27.0] - 2026-02-22
+
+### Added
+
+- Add `test-fix-loop` skill for autonomous test-fix iteration (#216)
+- Auto-detects test runner, diagnoses failures, applies fixes, re-runs in a loop with git stash isolation
+- Terminates on: all pass, max iterations, regression, circular fix, non-convergence, or persistent build error
+
 ## [2.26.0] - 2026-02-22
 
 ### Added
