@@ -117,11 +117,11 @@ These findings inform the next step.
 
 ### 1.5. Community Discovery Check (Conditional)
 
-**Read `plugins/soleur/commands/soleur/references/plan-community-discovery.md` now** for the full community discovery procedure (stack detection, coverage gap check, agent-finder). Skip if no uncovered stacks detected.
+**Read `plugins/soleur/skills/plan/references/plan-community-discovery.md` now** for the full community discovery procedure (stack detection, coverage gap check, agent-finder). Skip if no uncovered stacks detected.
 
 ### 1.5b. Functional Overlap Check
 
-**Read `plugins/soleur/commands/soleur/references/plan-functional-overlap.md` now** for the functional overlap check procedure (always runs, spawns functional-discovery agent).
+**Read `plugins/soleur/skills/plan/references/plan-functional-overlap.md` now** for the functional overlap check procedure (always runs, spawns functional-discovery agent).
 
 ### 1.6. Research Decision
 
@@ -201,7 +201,7 @@ After planning the issue structure, run SpecFlow Analyzer to validate and refine
 
 ### 4. Choose Implementation Detail Level
 
-**Read `plugins/soleur/commands/soleur/references/plan-issue-templates.md` now** to load the three issue templates (MINIMAL, MORE, A LOT). Select the appropriate detail level based on complexity -- simpler is mostly better. Use the template structure from the reference file for the chosen level.
+**Read `plugins/soleur/skills/plan/references/plan-issue-templates.md` now** to load the three issue templates (MINIMAL, MORE, A LOT). Select the appropriate detail level based on complexity -- simpler is mostly better. Use the template structure from the reference file for the chosen level.
 
 ### 5. Issue Creation & Formatting
 
