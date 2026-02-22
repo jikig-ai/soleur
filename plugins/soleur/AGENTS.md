@@ -150,6 +150,7 @@ Domain leaders are agents that orchestrate a business domain's specialist team. 
 |--------|--------|-------------------|-------------|
 | `cmo` | Marketing | 11 specialists | Auto-consulted via brainstorm domain detection |
 | `cto` | Engineering | Research, review, design agents | Auto-consulted via brainstorm domain detection |
+| `clo` | Legal | legal-document-generator, legal-compliance-auditor | Auto-consulted via brainstorm domain detection |
 | `coo` | Operations | ops-advisor, ops-research, ops-provisioner | Auto-consulted via brainstorm domain detection |
 
 ### Adding a New Domain Leader

@@ -106,7 +106,7 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 | Component | Count |
 |-----------|-------|
-| Agents | 47 |
+| Agents | 48 |
 | Commands | 8 |
 | Skills | 46 |
 | MCP Servers | 1 |
@@ -132,10 +132,11 @@ Agents are organized by domain, then by function.
 | `retention-strategist` | Churn prevention, payment recovery, referral programs, and free tool strategy |
 | `seo-aeo-analyst` | Audit Eleventy docs sites for SEO and AEO (AI Engine Optimization) issues |
 
-### Legal (2)
+### Legal (3)
 
 | Agent | Description |
 |-------|-------------|
+| `clo` | Legal domain leader -- orchestrates legal strategy and delegates to specialist agents |
 | `legal-document-generator` | Generate draft legal documents (Terms, Privacy Policy, Cookie Policy, GDPR, AUP, DPA, Disclaimer) |
 | `legal-compliance-auditor` | Audit legal documents for compliance gaps, outdated clauses, and cross-document consistency |
 
