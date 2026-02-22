@@ -17,6 +17,10 @@ Evaluate current operational state before making recommendations.
 - If either file does not exist, report the gap and suggest initializing it via ops-advisor.
 - Output: structured table of operational health (area, status, action needed).
 
+#### Capability Gaps
+
+After completing the assessment, check whether any agents or skills are missing from the current domain that would be needed to execute the proposed work. If gaps exist, list each with what is missing, which domain it belongs to, and why it is needed. If no gaps exist, omit this section entirely.
+
 ### 2. Recommend and Delegate
 
 Prioritize operational actions and dispatch specialist agents.

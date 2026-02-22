@@ -1,6 +1,6 @@
 ---
 name: cmo
-description: "Orchestrates the marketing domain -- assesses marketing posture, creates unified strategy, and delegates to specialist agents (brand, SEO, content, community, CRO, paid, pricing, retention). Use individual marketing agents for focused tasks; use this agent for cross-cutting marketing strategy and multi-agent coordination."
+description: "Orchestrates the marketing domain -- assesses marketing posture, creates unified strategy, and delegates to specialist agents (brand, SEO, content, community, conversion-optimizer, paid, pricing, retention). Use individual marketing agents for focused tasks; use this agent for cross-cutting marketing strategy and multi-agent coordination."
 model: inherit
 ---
 
@@ -18,6 +18,10 @@ Evaluate current marketing state before making recommendations.
 - Check for `knowledge-base/overview/brand-guide.md` -- read Voice + Identity sections if present. If missing, flag as a gap.
 - Inventory marketing artifacts: existing content, SEO state, community presence, conversion surfaces.
 - Report gaps and strengths in a structured table (area, status, priority).
+
+#### Capability Gaps
+
+After completing the assessment, check whether any agents or skills are missing from the current domain that would be needed to execute the proposed work. If gaps exist, list each with what is missing, which domain it belongs to, and why it is needed. If no gaps exist, omit this section entirely.
 
 ### 2. Recommend
 

@@ -106,7 +106,7 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 | Component | Count |
 |-----------|-------|
-| Agents | 50 |
+| Agents | 54 |
 | Commands | 8 |
 | Skills | 46 |
 | MCP Servers | 1 |
@@ -224,6 +224,15 @@ Agents are organized by domain, then by function.
 | Agent | Description |
 |-------|-------------|
 | `ux-design-lead` | Visual design in .pen files using Pencil MCP (wireframes, screens, components). Requires [Pencil extension](https://docs.pencil.dev/getting-started/installation). |
+
+### Sales (4)
+
+| Agent | Description |
+|-------|-------------|
+| `cro` | Sales domain leader -- orchestrates sales strategy and delegates to specialist agents |
+| `deal-architect` | Create proposals, SOWs, competitive battlecards, objection-handling playbooks, and deal negotiation frameworks |
+| `outbound-strategist` | Design outbound prospecting sequences, ICP targeting, lead scoring, and multi-channel cadence strategies |
+| `pipeline-analyst` | Analyze sales pipeline health, model revenue forecasts, define stage criteria, and review deal velocity |
 
 ## Commands
 
