@@ -26,4 +26,4 @@
 
 ## Workflow Completion
 
-- [ ] 3.1 Version bump (MINOR) across plugin.json, CHANGELOG.md, README.md, root README.md, bug_report.yml
+- [x] 3.1 Version bump (MINOR) across plugin.json, CHANGELOG.md, README.md, root README.md, bug_report.yml

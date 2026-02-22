@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.32.0] - 2026-02-22
+
+### Added
+
+- Add Cloudflare MCP server to plugin.json for native API access via OAuth 2.1
+- Expand infra-security agent scope to full Cloudflare platform (DNS, WAF, Workers, Zero Trust, DDoS)
+
+### Changed
+
+- Rewrite infra-security agent from curl-based to MCP-based Cloudflare operations
+- Update terraform-architect disambiguation to reflect expanded infra-security scope
+
 ## [2.31.7] - 2026-02-22
 
 ### Changed
