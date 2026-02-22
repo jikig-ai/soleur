@@ -9,7 +9,7 @@ plan: ../../../knowledge-base/plans/2026-02-22-feat-clo-domain-leader-plan.md
 
 ## Phase 1: Core Agent
 
-- [ ] 1.1 Create `plugins/soleur/agents/legal/clo.md` with 4-phase domain leader contract
+- [ ] 1.1 Create `plugins/soleur/agents/legal/clo.md` with COO 3-phase pattern (Assess, Recommend/Delegate, Sharp Edges)
 - [ ] 1.2 Update `plugins/soleur/agents/legal/legal-document-generator.md` description with CLO disambiguation
 - [ ] 1.3 Update `plugins/soleur/agents/legal/legal-compliance-auditor.md` description with CLO disambiguation
 

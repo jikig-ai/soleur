@@ -1,6 +1,6 @@
 ---
 name: clo
-description: "Orchestrates the legal domain -- assesses legal document posture, recommends actions, and delegates to specialist agents (legal-document-generator, legal-compliance-auditor). Use individual legal agents for focused tasks; use this agent for cross-cutting legal strategy and multi-agent coordination."
+description: "Orchestrates the legal domain -- assesses legal document posture, recommends actions, and delegates to legal specialist agents. Use individual legal agents for focused tasks; use this agent for cross-cutting legal strategy and multi-agent coordination."
 model: inherit
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: legal-compliance-auditor
-description: "Use this agent when you need to audit existing legal documents for compliance gaps, outdated clauses, missing disclosures, and cross-document consistency. It produces a structured findings report with severity ratings. Use legal-document-generator to create new documents; use this agent to audit existing ones; use clo for cross-cutting legal strategy and multi-agent coordination."
+description: "Use this agent when you need to audit existing legal documents for compliance gaps, outdated clauses, missing disclosures, and cross-document consistency. It produces a structured findings report with severity ratings. Use legal-document-generator to create new documents; use this agent to audit existing ones; use clo for cross-cutting legal strategy."
 model: inherit
 ---
 
