@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Automates merge main, conflict resolution (deterministic for version files, Claude-assisted for code), conditional version bump, push, PR creation, CI wait, squash merge, and worktree cleanup
 - Add 3 constitution rules: git stage numbers for merge-conflict reads, conflict marker detection before staging, compound ordering prohibition after push/CI
 
+## [2.25.3] - 2026-02-22
+
+### Fixed
+
+- Update Plausible Analytics script tag in docs site to use site-specific snippet with outbound link, file download, and form submission tracking
+- Add defensive branch check to all 3 ops agents (ops-provisioner, ops-advisor, ops-research) to warn when modifying files on main branch
+- Record Plausible Analytics trial entry in expense ledger
+
 ## [2.25.2] - 2026-02-22
 
 ### Added

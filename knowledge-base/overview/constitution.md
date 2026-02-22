@@ -78,6 +78,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Never design skills that invoke other skills programmatically -- skills are user-invoked entry points with no inter-skill API; redirect users to the target skill or route through an agent via Task tool
 - Never put `<example>` blocks or `<commentary>` tags in agent description frontmatter -- these belong in the agent body (after `---`) which is only loaded on invocation; descriptions are loaded into the system prompt on every turn and their cumulative size must stay minimal
 - Never skip compound's constitution promotion or route-to-definition phases in automated pipelines (one-shot, ship) -- the model will rationalize skipping them as "pipeline mode" optimization, but these are the phases that prevent repeated mistakes across sessions
+- Never spawn file-modifying agents (ops-provisioner, brand-architect, etc.) from the main branch -- create a worktree first; agents that edit project files should include a defensive branch check as a safety net, but the primary enforcement belongs at the caller (command/skill) layer
 
 ### Prefer
 
