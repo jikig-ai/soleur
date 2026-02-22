@@ -149,6 +149,7 @@ Domain leaders are agents that orchestrate a business domain's specialist team. 
 | Leader | Domain | Agents Orchestrated | Entry Point |
 |--------|--------|-------------------|-------------|
 | `cmo` | Marketing | 11 specialists | `/soleur:marketing` skill or auto-consulted via brainstorm domain detection |
+| `cpo` | Product | spec-flow-analyzer, ux-design-lead, business-validator | Auto-consulted via brainstorm domain detection |
 | `cto` | Engineering | Research, review, design agents | Auto-consulted via brainstorm domain detection |
 
 ### Adding a New Domain Leader
