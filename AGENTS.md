@@ -80,6 +80,8 @@ Note: The workflow skills (brainstorm, plan, work, review, compound, one-shot) a
 
 Use the `/ship` skill to automate this checklist. Prefer `/ship` over manual commit/push/PR -- it enforces compound and review gates that manual workflows silently bypass.
 
+**Context compaction in pipelines:** When multi-phase workflows (one-shot, plan+work) hit context limits, errors from earlier phases are silently lost. The one-shot pipeline isolates plan+deepen as a subagent and writes a `session-state.md` file with forwarded errors, decisions, and component lists. Compound reads this file in Phase 0.5 to recover errors that would otherwise be invisible.
+
 ## Interaction Style
 
 HARD RULE: When the user gives a brainstorm or planning request, do NOT spawn any Task agents or launch parallel research before the user has confirmed the direction. Zero agents until the user says go.

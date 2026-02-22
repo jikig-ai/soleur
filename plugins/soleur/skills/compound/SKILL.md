@@ -37,8 +37,11 @@ Read `CLAUDE.md` if it exists - apply project conventions during documentation.
 
 HARD RULE: Before writing any learning, enumerate ALL errors encountered in this session. Output a numbered list to the user. This step cannot be skipped even if the session felt clean.
 
+**Check for session-state.md:** Run `git branch --show-current`. If on a `feat-*` branch, check if `knowledge-base/specs/feat-<name>/session-state.md` exists. If it does, read it and include any forwarded errors from `### Errors` in the inventory. These errors occurred in preceding pipeline phases (e.g., plan+deepen subagent) whose context was compacted.
+
 Include:
 
+- Errors forwarded from session-state.md (if present)
 - Skill or command not found errors (e.g., wrong plugin namespace)
 - Wrong file paths, directories, or branch confusion
 - Failed bash commands or unexpected exit codes
@@ -47,7 +50,7 @@ Include:
 - Tools or agents that returned errors
 - Permission denials or hook rejections
 
-If genuinely no errors occurred, output: "Session error inventory: none detected."
+If genuinely no errors occurred (including no forwarded errors), output: "Session error inventory: none detected."
 
 This list feeds directly into the Session Errors section of the learning document. Every item on this list MUST appear in the final output unless the user explicitly excludes it.
 
@@ -161,7 +164,7 @@ HARD RULE: This phase MUST run even in automated pipelines. See constitution pro
 
 After constitution promotion, compound routes the captured learning to the skill, agent, or command definition that was active in the session. This feeds insights back into the instructions that directly govern behavior, preventing repeated mistakes.
 
-1. Detect which skills, agents, or commands were invoked in this conversation
+1. Detect which skills, agents, or commands were invoked in this conversation. Also check session-state.md `### Components Invoked` for components from preceding pipeline phases.
 2. Propose a one-line bullet edit to the most relevant section of the target definition file
 3. User confirms with Accept/Skip/Edit
 

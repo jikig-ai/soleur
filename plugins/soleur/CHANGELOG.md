@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.0.2] - 2026-02-22
+
+### Changed
+
+- Extract heavy, conditionally-used content from 5 skill bodies into 10 reference files loaded on demand (26% static word count reduction: 13,292w to 9,794w)
+- Add constitution dedup to plan and work skills -- skip re-reading constitution.md when already in context
+- Isolate plan+deepen as a Task subagent in one-shot pipeline with structured return contract
+- Add session-state.md error forwarding for multi-phase pipeline error recovery
+- Update compound and compound-capture to read session-state.md for forwarded errors from preceding phases
+- Add 3 architecture principles to constitution (reference extraction, subagent contracts, compaction checkpoints)
+
 ## [3.0.1] - 2026-02-22
 
 ### Changed
