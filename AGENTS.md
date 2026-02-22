@@ -1,6 +1,6 @@
 # Agent Instructions
 
-This repository contains the Soleur Claude Code plugin -- an orchestration engine that provides agents, commands, skills, and a knowledge base across engineering, marketing, legal, operations, product, sales, and support.
+This repository contains the Soleur Claude Code plugin -- an orchestration engine that provides agents, commands, skills, and a knowledge base across engineering, finance, marketing, legal, operations, product, sales, and support.
 
 ## Working Agreement
 

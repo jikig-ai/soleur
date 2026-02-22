@@ -1,7 +1,7 @@
 {
   "name": "soleur",
-  "version": "2.33.2",
-  "description": "A full AI organization across engineering, marketing, legal, operations, product, sales, and support. 56 agents, 8 commands, 46 skills, and 3 MCP servers that compound your company knowledge over time.",
+  "version": "2.35.0",
+  "description": "A full AI organization across engineering, finance, marketing, legal, operations, product, sales, and support. 60 agents, 8 commands, 46 skills, and 3 MCP servers that compound your company knowledge over time.",
   "author": {
     "name": "Jean Deruelle",
     "email": "jean.deruelle@jikigai.com",

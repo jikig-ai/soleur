@@ -68,15 +68,15 @@ Current: 2,154 words. Adding CCO (~30 words) + ticket-triage (~40 words) = ~2,22
 
 ## Acceptance Criteria
 
-- [ ] `agents/support/` with cco.md, ticket-triage.md, community-manager.md (moved)
-- [ ] CCO follows 3-phase domain leader contract
-- [ ] ticket-triage classifies GitHub issues via `gh` CLI, outputs inline report
+- [x] `agents/support/` with cco.md, ticket-triage.md, community-manager.md (moved)
+- [x] CCO follows 3-phase domain leader contract
+- [x] ticket-triage classifies GitHub issues via `gh` CLI, outputs inline report
 - [ ] `/soleur:community` works after community-manager move
-- [ ] CMO description and delegation table updated (community removed)
-- [ ] Brainstorm Domain Config table has Support row
-- [ ] Docs data files updated (agents.js, style.css, skills.js)
+- [x] CMO description and delegation table updated (community removed)
+- [x] Brainstorm Domain Config table has Support row
+- [x] Docs data files updated (agents.js, style.css, skills.js)
 - [ ] Token budget under 2,500 words
-- [ ] Version bumped (MINOR)
+- [x] Version bumped (MINOR)
 
 ## Test Scenarios
 
