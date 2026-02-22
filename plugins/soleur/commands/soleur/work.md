@@ -37,14 +37,13 @@ Navigate to the repository root, then run `bash ./plugins/soleur/skills/git-work
 
 Check if `knowledge-base/` directory exists. If it does:
 
-1. Read `knowledge-base/overview/constitution.md`
-2. Run `git branch --show-current` to get the current branch name
-3. If the branch starts with `feat-`, read `knowledge-base/specs/<branch-name>/tasks.md` if it exists
+1. Run `git branch --show-current` to get the current branch name
+2. If the branch starts with `feat-`, read `knowledge-base/specs/<branch-name>/tasks.md` if it exists
 
 **If knowledge-base/ exists:**
 
 1. Read `CLAUDE.md` if it exists - apply project conventions during implementation
-2. Read `knowledge-base/overview/constitution.md` - apply principles during implementation
+2. If `# Project Constitution` heading is NOT already in context, read `knowledge-base/overview/constitution.md` - apply principles during implementation. Skip if already loaded (e.g., from a preceding `/soleur:plan`).
 3. Detect feature from current branch (`feat-<name>` pattern)
 4. Read `knowledge-base/specs/feat-<name>/tasks.md` if it exists - use as work checklist alongside TodoWrite
 5. Announce: "Loaded constitution and tasks for `feat-<name>`"
@@ -142,158 +141,13 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    **Tier A: Agent Teams** (highest capability, ~7x token cost)
 
-   Persistent teammates with peer-to-peer messaging for plans where tasks share context
-   or integration points.
-
-   **Step A1: Offer Agent Teams**
-
-   Present the user with teammate count, task assignments, and cost context:
-
-   "I found N independent tasks that could run as an Agent Team.
-   This spawns persistent teammates that can coordinate via messaging (~7x token cost).
-
-   Proposed assignments:
-   - Teammate 1: [tasks]
-   - Teammate 2: [tasks]
-   ...
-
-   Run as Agent Team? (Or decline to try subagent fan-out instead)"
-
-   - If declined: fall through to Tier B
-   - If accepted: continue to Step A2
-
-   **Step A2: Activate Agent Teams and initialize**
-
-   Enable the experimental Agent Teams feature and initialize the team:
-
-   ```bash
-   export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
-   ```
-
-   Then initialize the team directory with `spawnTeam`:
-
-   ```text
-   spawnTeam("soleur-{branch}")
-   ```
-
-   If `spawnTeam` fails (stale team exists): attempt `cleanup`, retry once.
-   If retry still fails, deactivate the flag and fall through to Tier B:
-
-   ```bash
-   unset CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
-   ```
-
-   **Step A3: Spawn teammates**
-
-   Spawn teammates via Task tool with `team_name` parameter. Each teammate receives
-   task-specific context and instructions:
-
-   ```text
-   Task general-purpose (team_name="soleur-{branch}"): "You are a teammate
-   executing part of a work plan.
-
-   BRANCH: [current branch name]
-   WORKING DIRECTORY: [current working directory path]
-
-   YOUR TASKS:
-   [Task descriptions and relevant plan sections for this teammate]
-
-   FILES YOU MAY MODIFY:
-   [Explicit list of files this teammate is allowed to touch]
-
-   INSTRUCTIONS:
-   - Read CLAUDE.md and referenced files before modifying them
-   - Follow existing codebase patterns and conventions
-   - Write tests for new functionality
-   - Run tests relevant to your changes
-   - Do NOT commit -- the lead will commit after reviewing all work
-   - Do NOT modify files outside the list above
-   - Mark each task as completed via TaskUpdate when done"
-   ```
-
-   Assign overlapping tasks to the same teammate to prevent file conflicts.
-
-   **Step A4: Monitor, test, commit, and shutdown**
-
-   Lead monitors progress via `TaskList` and coordinates via `write`/`broadcast`.
-
-   If a teammate fails: retry once via the team. If retry fails, lead completes
-   that task sequentially. Other teammates continue unaffected.
-
-   When all tasks complete:
-
-   - Run the full test suite to verify integration
-   - If tests pass: create incremental commits for the batch
-   - If tests fail: fix integration issues, then commit
-   - Send `requestShutdown` to all teammates
-   - Run `cleanup` to remove team config and task files
-   - Deactivate the experimental flag:
-
-     ```bash
-     unset CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
-     ```
-
-   - Update TaskList to mark all completed tasks
-
-   Then proceed to the remaining dependent tasks (if any) using the sequential loop,
-   or skip directly to Phase 3 if all tasks are done.
+   **Read `plugins/soleur/commands/soleur/references/work-agent-teams.md` now** for the full Agent Teams protocol (offer, activate, spawn teammates, monitor/commit/shutdown). If declined or failed, fall through to Tier B.
 
    ---
 
    **Tier B: Subagent Fan-Out** (fire-and-gather, moderate cost)
 
-   Independent subagents that execute in parallel without peer-to-peer communication.
-
-   **Step B1: Offer subagent fan-out**
-
-   "I found N independent tasks that could run in parallel via subagents.
-   This uses more tokens but completes faster. Run in parallel?"
-
-   - If No: fall through to Tier C
-   - If Yes: continue to Step B2
-
-   **Step B2: Group and spawn subagents**
-
-   Group independent tasks into clusters (max 5 groups). Each group gets one Task
-   general-purpose agent. Spawn all groups in parallel using a single message with
-   multiple Task tool calls:
-
-   ```text
-   Task general-purpose: "You are executing part of a work plan.
-
-   BRANCH: [current branch name]
-   WORKING DIRECTORY: [current working directory path]
-
-   YOUR TASKS:
-   [Task descriptions and relevant plan sections for this group]
-
-   REFERENCED FILES:
-   [List files this group needs to read or modify]
-
-   INSTRUCTIONS:
-   - Read referenced files before modifying them
-   - Follow existing codebase patterns and conventions
-   - Write tests for new functionality
-   - Run tests relevant to your changes
-   - Do NOT commit -- the lead will commit after reviewing all work
-   - Do NOT modify files outside your assigned scope
-   - Report back: what you completed, files modified, any issues encountered"
-   ```
-
-   **Step B3: Collect results and integrate**
-
-   Wait for all subagents to complete. Then:
-
-   - Review each subagent's report for completeness and issues
-   - If any subagent failed or reported issues: complete those tasks
-     sequentially using the task loop below
-   - Run the full test suite to verify integration across all parallel work
-   - If tests pass: create an incremental commit for the parallel batch
-   - If tests fail: fix integration issues, then commit
-   - Update TaskList to mark all completed tasks
-
-   Then proceed to the remaining dependent tasks (if any) using the sequential loop,
-   or skip directly to Phase 3 if all tasks are done.
+   **Read `plugins/soleur/commands/soleur/references/work-subagent-fanout.md` now** for the full Subagent Fan-Out protocol (offer, group/spawn, collect/integrate). If declined, fall through to Tier C.
 
    ---
 

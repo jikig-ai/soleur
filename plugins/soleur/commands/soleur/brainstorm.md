@@ -64,18 +64,7 @@ Assess whether the feature description has implications for specific business do
 
 #### Domain Config
 
-Read the feature description and assess relevance against each domain in the table below. For each relevant domain, use **AskUserQuestion tool** with the routing prompt and options from the table.
-
-| Domain | Assessment Question | Leader | Routing Prompt | Options | Task Prompt |
-|--------|-------------------|--------|----------------|---------|-------------|
-| Marketing | Does this feature involve content changes, audience targeting, brand impact, brand identity definition, brand guide creation, voice and tone development, go-to-market activities, SEO/AEO concerns, pricing communication, or public-facing messaging? | cmo | "This feature has marketing or brand relevance. How would you like to proceed?" | **Start brand workshop** - Run the brand-architect agent to create or update a brand guide / **Include marketing perspective** - CMO joins the brainstorm to add marketing context / **Brainstorm normally** - Continue with the standard brainstorm flow | "Assess the marketing implications of this feature: {desc}. Identify marketing concerns, opportunities, and questions the user should consider during brainstorming. When the assessment involves visual layout or page structure, explicitly recommend delegating to conversion-optimizer or ux-design-lead for layout review. Output a brief structured assessment (not a full strategy)." |
-| Engineering | Does this feature require significant architectural decisions, infrastructure changes, system design, or technical debt resolution beyond normal implementation? | cto | "This feature has architectural implications. Include technical assessment?" | **Include technical assessment** - CTO joins the brainstorm to assess technical implications / **Brainstorm normally** - Continue without CTO input | "Assess the technical implications of this feature: {desc}. Identify architecture risks, complexity concerns, and technical questions the user should consider during brainstorming. Output a brief structured assessment." |
-| Operations | Does this feature involve operational decisions such as vendor selection, tool provisioning, expense tracking, process changes, or infrastructure procurement? | coo | "This feature has operational implications. Include operations assessment?" | **Include operations assessment** - COO joins the brainstorm to assess operational implications / **Brainstorm normally** - Continue without operations input | "Assess the operational implications of this feature: {desc}. Identify cost concerns, vendor decisions, process changes, and operational questions the user should consider during brainstorming. Output a brief structured assessment." |
-| Product | Does this feature involve validating a new business idea, assessing product-market fit, evaluating customer demand, competitive positioning, or determining whether to build something? | cpo | "This looks like it involves product validation. How would you like to proceed?" | **Start validation workshop** - Run the business-validator agent to validate the business idea / **Include product perspective** - CPO joins the brainstorm to add product context / **Brainstorm normally** - Continue with the standard brainstorm flow | "Assess the product implications of this feature: {desc}. Identify product strategy concerns, validation gaps, and questions the user should consider during brainstorming. Output a brief structured assessment (not a full strategy)." |
-| Legal | Does this feature involve creating, updating, or auditing legal documents such as terms of service, privacy policies, data processing agreements, or compliance documentation? | clo | "This feature has legal implications. Include legal assessment?" | **Include legal assessment** - CLO joins the brainstorm to assess legal implications / **Brainstorm normally** - Continue without legal input | "Assess the legal implications of this feature: {desc}. Identify compliance requirements, legal document needs, regulatory concerns, and legal questions the user should consider during brainstorming. Output a brief structured assessment." |
-| Sales | Does this feature involve sales pipeline management, outbound prospecting, deal negotiation, proposal generation, revenue forecasting, or converting leads into customers through human-assisted sales motions? | cro | "This feature has sales implications. Include sales assessment?" | **Include sales assessment** - CRO joins the brainstorm to assess sales implications / **Brainstorm normally** - Continue without sales input | "Assess the sales implications of this feature: {desc}. Identify pipeline concerns, revenue conversion opportunities, and sales questions the user should consider during brainstorming. Output a brief structured assessment." |
-| Finance | Does this feature involve financial planning, budgeting, budget allocation, cash flow management, or financial reporting? | cfo | "This feature has finance implications. Include finance assessment?" | **Include finance assessment** - CFO joins the brainstorm to assess financial implications / **Brainstorm normally** - Continue without finance input | "Assess the financial implications of this feature: {desc}. Identify budget concerns, revenue model questions, and financial planning considerations the user should consider during brainstorming. Output a brief structured assessment." |
-| Support | Does this feature involve customer support workflows, issue triage, help documentation, community engagement, or customer success? | cco | "This feature has support implications. Include support assessment?" | **Include support assessment** - CCO joins the brainstorm to assess support implications / **Brainstorm normally** - Continue without support input | "Assess the support implications of this feature: {desc}. Identify support process gaps, documentation needs, community engagement opportunities, and support questions the user should consider during brainstorming. Output a brief structured assessment." |
+**Read `plugins/soleur/commands/soleur/references/brainstorm-domain-config.md` now** to load the Domain Config table with all 8 domain rows (Marketing, Engineering, Operations, Product, Legal, Sales, Finance, Support). Each row contains: Assessment Question, Leader, Routing Prompt, Options, and Task Prompt.
 
 #### Processing Instructions
 
@@ -88,89 +77,11 @@ Read the feature description and assess relevance against each domain in the tab
 
 #### Brand Workshop (if selected)
 
-1. **Create worktree:**
-   - Derive feature name: use the first 2-3 descriptive words from the feature description in kebab-case (e.g., "define our brand identity" -> `brand-identity`). If the description is fewer than 3 words, default to `brand-guide`.
-   - Run `./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh feature <name>`
-   - Set `WORKTREE_PATH`
-
-2. **Handle issue:**
-   - Parse feature_description for existing issue reference (`#N` pattern)
-   - If found: validate issue state with `gh issue view`. If OPEN, use it. If CLOSED or not found, create a new one.
-   - If not found: create a new issue with `gh issue create --title "feat: <Topic>" --body "..."`
-   - Update the issue body with artifact links (brand guide path, branch name)
-   - Do NOT generate spec.md -- brand workshops produce a brand guide, not a spec
-
-3. **Navigate to worktree:**
-
-   Run `cd` to the worktree path from step 1 (e.g., `.worktrees/feat-<name>`), then run `pwd` to verify the path shows `.worktrees/feat-<name>`.
-
-4. **Hand off to brand-architect:**
-
-   ```
-   Task brand-architect(feature_description)
-   ```
-
-   The brand-architect agent runs its full interactive workshop and writes the brand guide to `knowledge-base/overview/brand-guide.md` inside the worktree.
-
-5. **Display completion message and STOP.** Do NOT proceed to Phase 1. Do NOT run Phase 2 or Phase 3.5. Display:
-
-   ```text
-   Brand workshop complete!
-
-   Document: none (brand workshop)
-   Brand guide: knowledge-base/overview/brand-guide.md
-   Issue: #N (using existing) | #N (created)
-   Branch: feat-<name> (if worktree created)
-   Working directory: .worktrees/feat-<name>/ (if worktree created)
-
-   Next: The brand guide is now available for discord-content and other marketing skills.
-   ```
-
-   End brainstorm execution after displaying this message.
+**Read `plugins/soleur/commands/soleur/references/brainstorm-brand-workshop.md` now** for the full Brand Workshop procedure (worktree creation, issue handling, brand-architect handoff, completion message). Follow all steps in the reference file, then STOP -- do not proceed to Phase 1.
 
 #### Validation Workshop (if selected)
 
-<!-- Follows brand-architect workshop pattern: worktree, issue, hand off, STOP. See constitution for the workshop archetype. -->
-
-1. **Create worktree:**
-   - Derive feature name: use the first 2-3 descriptive words from the feature description in kebab-case (e.g., "validate my SaaS idea" -> `validate-saas`). If the description is fewer than 3 words, default to `business-validation`.
-   - Run `./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh feature <name>`
-   - Set `WORKTREE_PATH`
-
-2. **Handle issue:**
-   - Parse feature_description for existing issue reference (`#N` pattern)
-   - If found: validate issue state with `gh issue view`. If OPEN, use it. If CLOSED or not found, create a new one.
-   - If not found: create a new issue with `gh issue create --title "feat: <Topic>" --body "..."`
-   - Update the issue body with artifact links (validation report path, branch name)
-   - Do NOT generate spec.md -- validation workshops produce a validation report, not a spec
-
-3. **Navigate to worktree:**
-
-   Run `cd` to the worktree path from step 1 (e.g., `.worktrees/feat-<name>`), then run `pwd` to verify the path shows `.worktrees/feat-<name>`.
-
-4. **Hand off to business-validator:**
-
-   ```text
-   Task business-validator(feature_description)
-   ```
-
-   The business-validator agent runs its full interactive workshop and writes the validation report to `knowledge-base/overview/business-validation.md` inside the worktree.
-
-5. **Display completion message and STOP.** Do NOT proceed to Phase 1. Do NOT run Phase 2 or Phase 3.5. Display:
-
-   ```text
-   Validation workshop complete!
-
-   Document: none (validation workshop)
-   Validation report: knowledge-base/overview/business-validation.md
-   Issue: #N (using existing) | #N (created)
-   Branch: feat-<name> (if worktree created)
-   Working directory: .worktrees/feat-<name>/ (if worktree created)
-
-   Next: Review the validation report. If verdict is GO, run /soleur:plan to start building.
-   ```
-
-   End brainstorm execution after displaying this message.
+**Read `plugins/soleur/commands/soleur/references/brainstorm-validation-workshop.md` now** for the full Validation Workshop procedure (worktree creation, issue handling, business-validator handoff, completion message). Follow all steps in the reference file, then STOP -- do not proceed to Phase 1.
 
 ### Phase 1: Understand the Idea
 
@@ -321,6 +232,8 @@ Ensure the brainstorms directory exists before writing.
 - No spec or issue created
 
 ### Phase 4: Handoff
+
+**Context headroom notice:** Before presenting options, display: "All artifacts are on disk. Starting a new session for `/soleur:plan` will give you maximum context headroom."
 
 Use **AskUserQuestion tool** to present next steps:
 

@@ -59,6 +59,8 @@ This skill captures problem solutions immediately after confirmation, creating s
 
 Extract from conversation history:
 
+**Check for session-state.md:** Run `git branch --show-current`. If on a `feat-*` branch, check if `knowledge-base/specs/feat-<name>/session-state.md` exists. If it does, read it and incorporate forwarded errors from `### Errors` and decisions from `### Decisions` into the context below. These came from preceding pipeline phases whose context was compacted.
+
 **Required information:**
 
 - **Module name**: Which module or component had the problem
@@ -70,7 +72,7 @@ Extract from conversation history:
 
 **Session errors (beyond the target problem):**
 
-Scan conversation history for errors unrelated to the main problem investigation documented above. Only capture errors that are NOT part of the investigation attempts. Skip trivial errors immediately corrected (typos in commands, expected test failures during TDD).
+Scan conversation history AND session-state.md (if present) for errors unrelated to the main problem investigation documented above. Only capture errors that are NOT part of the investigation attempts. Skip trivial errors immediately corrected (typos in commands, expected test failures during TDD).
 
 Extract for each error found:
 - Describe what went wrong (1 sentence)
