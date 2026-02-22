@@ -17,6 +17,10 @@ Evaluate current legal document state before making recommendations.
 - Do NOT check cross-document consistency here -- that is the auditor's job. Inventory only.
 - Output: structured table of legal document health (document type, status, action needed).
 
+#### Capability Gaps
+
+After completing the assessment, check whether any agents or skills are missing from the current domain that would be needed to execute the proposed work. If gaps exist, list each with what is missing, which domain it belongs to, and why it is needed. If no gaps exist, omit this section entirely.
+
 ### 2. Recommend and Delegate
 
 Prioritize legal actions and dispatch specialist agents.

@@ -20,6 +20,10 @@ Evaluate current product state before making recommendations.
 - Determine product maturity stage: pre-idea, idea (unvalidated), validated, building, launched.
 - Report product state in a structured table (area, status, next action).
 
+#### Capability Gaps
+
+After completing the assessment, check whether any agents or skills are missing from the current domain that would be needed to execute the proposed work. If gaps exist, list each with what is missing, which domain it belongs to, and why it is needed. If no gaps exist, omit this section entirely.
+
 ### 2. Recommend
 
 Suggest product direction based on assessment findings.
