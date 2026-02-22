@@ -108,7 +108,7 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 |-----------|-------|
 | Agents | 45 |
 | Commands | 8 |
-| Skills | 45 |
+| Skills | 46 |
 | MCP Servers | 1 |
 
 ## Agents
@@ -294,6 +294,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `agent-browser` | CLI-based browser automation using Vercel's agent-browser |
 | `deploy` | Deploy containerized applications via Docker build, GHCR push, and SSH |
 | `git-worktree` | Manage Git worktrees for parallel development |
+| `merge-pr` | Autonomous single-PR merge with conflict resolution and cleanup |
 | `rclone` | Upload files to S3, Cloudflare R2, Backblaze B2, and cloud storage |
 | `reproduce-bug` | Reproduce bugs using logs, console, and browser screenshots |
 | `resolve-parallel` | Resolve TODO comments in parallel |
