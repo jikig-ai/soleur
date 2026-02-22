@@ -4,10 +4,11 @@
 
 Claude Code's security mechanism prompts users with "Command contains $() command substitution" when the Bash tool receives commands containing `$()`. Plugin markdown files (commands, skills, agents, and reference docs) contain bash code blocks with `$()` that agents try to execute, triggering this permission prompt repeatedly and breaking autonomous workflows.
 
-This issue recurred three times:
+This issue recurred four times:
 - v2.23.15: one-shot command
 - v2.23.18: 4 commands, 9 skills, AGENTS.md
 - v2.26.1: merge-pr skill, community-manager agent, 2 reference files
+- v3.0.6: help command -- no literal `$()` but used `find | wc` and `cat` via Bash, which also trigger permission prompts
 
 Each fix caught the files known at the time but missed others because the search scope was too narrow.
 
@@ -23,6 +24,8 @@ Replace `$()` in bash code blocks with one of these patterns:
 | Complex `$(eval ...)` | Change code fence from `bash` to `text` and use comments |
 
 Key principle: bash code blocks in plugin markdown are instructions for Claude, not scripts. They don't need to be valid standalone bash -- they need to be individual commands that Claude executes one at a time via the Bash tool.
+
+**Better alternative (v3.0.6 insight):** When a bash block only reads files or lists directories, replace it entirely with prose instructions for Claude's native tools (Read, Glob, Grep). This eliminates Bash permission prompts completely and is more reliable than splitting commands. Example: `find ... | wc -l` becomes "Use the Glob tool with pattern X and count the results."
 
 ## Key Insight
 

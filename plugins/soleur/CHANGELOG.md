@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.0.6] - 2026-02-22
+
+### Fixed
+
+- Replace bash code blocks in `/soleur:help` command with Read/Glob tool instructions to eliminate `$() command substitution` permission prompts
+- Update command-substitution learning with v3.0.6 recurrence and native-tool-replacement insight
+
 ## [3.0.5] - 2026-02-22
 
 ### Removed

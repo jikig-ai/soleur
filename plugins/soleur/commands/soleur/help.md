@@ -10,33 +10,20 @@ Display a formatted overview of all available Soleur capabilities. Read the plug
 
 ## Step 1: Read Plugin Manifest
 
-```bash
-cat plugins/soleur/.claude-plugin/plugin.json
-```
+Use the **Read tool** to read `plugins/soleur/.claude-plugin/plugin.json` to get the plugin version and metadata.
 
-If that path does not exist, try the installed plugin location:
-
-```bash
-cat ~/.claude/plugins/*/soleur/.claude-plugin/plugin.json 2>/dev/null || echo "Plugin manifest not found"
-```
+If that path does not exist, try reading from `~/.claude/plugins/*/soleur/.claude-plugin/plugin.json`.
 
 ## Step 2: Count Components
 
-```bash
-# Count agents
-find plugins/soleur/agents -name "*.md" -type f 2>/dev/null | wc -l
+Use the **Glob tool** to count components. Make all four calls in parallel in a single message:
 
-# Count commands (all in soleur/ subdirectory)
-find plugins/soleur/commands/soleur -name "*.md" -type f 2>/dev/null | wc -l
+1. **Count agents:** Use pattern `**/*.md` with path `plugins/soleur/agents` -- count the returned file paths
+2. **Count commands:** Use pattern `*.md` with path `plugins/soleur/commands/soleur` -- count the returned file paths
+3. **Count skills:** Use pattern `**/SKILL.md` with path `plugins/soleur/skills` -- count the returned file paths (one SKILL.md per skill)
+4. **Count agent domains:** From the agent file paths in result 1, extract the unique top-level directory names (the first path segment after `agents/`) and count them
 
-# Count skills
-find plugins/soleur/skills -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l
-
-# Count agent categories
-find plugins/soleur/agents -name "*.md" -not -name "README.md" 2>/dev/null | wc -l
-```
-
-If the plugin paths above do not exist, fall back to the installed plugin paths under `~/.claude/plugins/`.
+If the plugin paths do not exist, fall back to the installed plugin paths under `~/.claude/plugins/`.
 
 ## Step 3: Output the Help Reference
 
