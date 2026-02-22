@@ -89,4 +89,4 @@ Current: 2,154 words. Adding CCO (~30 words) + ticket-triage (~40 words) = ~2,22
 
 - Marketing: 12 -> 11 (community-manager moves out)
 - Support: 0 -> 3 (cco + ticket-triage + community-manager)
-- Net: +2 new agents (54 -> 56)
+- Net: +2 new agents (58 -> 60)
