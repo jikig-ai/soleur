@@ -2,158 +2,154 @@
 last_updated: 2026-02-22
 ---
 
-# Business Validation: Soleur
+# Business Validation: Soleur -- Company-as-a-Service Platform
 
 ## Problem
 
-**Problem statement (solution-free):** Developers using AI coding assistants produce inconsistent output across sessions. There is no structured lifecycle -- each session starts from scratch, prior decisions are forgotten, code review is ad-hoc, and learnings from debugging are lost. The result is repeated mistakes, scope creep during implementation, and knowledge that lives in individuals rather than in the project.
+**Problem statement (solution-free):** Solo founders building companies must operate every department -- engineering, marketing, legal, operations, and product -- alone. The non-engineering work (brand identity, legal compliance, pricing strategy, operational logistics, product validation) consumes the majority of a founder's time but receives none of the AI tooling investment. Current AI coding assistants help write code faster, but a company is not just code. The founder still manually handles contracts, brand guidelines, community management, expense tracking, competitive analysis, and a dozen other functions that large companies staff with entire teams.
 
 **Current workarounds:**
 
-- **Manual prompt engineering:** Developers write and maintain personal `.cursorrules`, `.windsurfrules`, or `CLAUDE.md` files to encode project conventions. This is fragile -- conventions drift, and each developer maintains a separate version.
-- **Copy-paste templates:** Teams share prompt snippets in Slack/Discord for common tasks (code review, planning). No enforcement, no versioning, no institutional memory.
-- **External documentation:** Confluence, Notion, or README files that developers must manually consult. The AI does not read them unless explicitly pointed to them, and the docs rot because updating them is a separate step from the development workflow.
-- **Multiple disconnected tools:** Separate tools for planning (Jira/Linear), reviewing (GitHub PR reviews), documentation (Confluence), and knowledge management (wikis). No unified workflow that feeds each phase into the next.
+- **Hire freelancers or agencies:** Expensive, slow, requires management overhead that solo founders are trying to avoid. A brand agency costs $5-15k; a lawyer costs $300-500/hour for basic documents.
+- **DIY with templates:** Founders use generic templates (Stripe Atlas legal docs, Canva brand kits, spreadsheet expense trackers). These are better than nothing but produce generic output that does not compound -- next month's work starts from scratch.
+- **AI chat for one-off tasks:** Ask ChatGPT to draft a privacy policy or brainstorm a tagline. No persistence, no cross-domain coherence, no institutional memory. The privacy policy does not know about the brand guide. The pricing strategy does not reference the competitive analysis.
+- **Ignore non-engineering work:** Ship first, worry about brand/legal/ops later. This is the most common approach and creates compounding debt that becomes harder to address as the company grows.
 
-**Pain severity:** Moderate-to-high for power users, low for casual users. This is not a hair-on-fire problem for most developers. The pain is cumulative -- it manifests as slow project velocity over weeks, not as an acute crisis. Developers who use AI assistants heavily (10+ hours/day) feel this acutely because they hit the "amnesia" problem repeatedly. Casual users who use AI for quick completions do not feel it at all.
+**Pain severity:** High for solo founders who take their companies seriously. The pain is not acute (no single moment of crisis) but chronic -- it is the cumulative friction of being a one-person company that needs the capabilities of a 20-person organization. Founders who have tried to do everything themselves feel this acutely. Those who have not yet scaled beyond code do not feel it yet.
 
-**Assessment:** The problem is real but not universal. It is specific to a segment: developers who use AI coding assistants as their primary development interface (not just autocomplete) and work on projects large enough to benefit from institutional memory. This segment is growing rapidly but is still a minority of all developers.
+**Assessment:** The problem is real and structural. It is not a tooling gap in one domain -- it is the absence of an integrated AI workforce that can operate across domains the way a human organization does. The pain intensifies as the founder's ambition grows: a side project needs only code, but a company needs everything.
 
 ## Customer
 
 **Target customer profile:**
 
-- **Role:** Senior/lead software engineers and solo developers building production software
-- **Company size:** Solo founders, small teams (2-10), and indie developers. Enterprise teams have their own workflow tooling.
-- **Industry:** SaaS, developer tools, agencies -- projects with ongoing development, not one-off scripts
-- **Behavior:** Already using Claude Code (or Cursor/Windsurf) as their primary development interface. Power users who have hit the limits of raw AI chat and want more structure.
-- **Frequency:** Daily. These users run AI-assisted workflows every working day.
+- **Role:** Solo founders building companies, not just shipping code. Technical builders who think in terms of businesses, not just products.
+- **Company size:** One person. The "company of one" who wants to operate at the scale of a funded startup without hiring.
+- **Industry:** SaaS, developer tools, creative businesses, consulting-turned-product -- any domain where one person builds and sells.
+- **Behavior:** Already using AI coding assistants (Claude Code, Cursor, Windsurf) as their primary development interface. Frustrated that AI helps with code but not with the other 70% of running a company.
+- **Frequency:** Daily. These founders interact with their company (not just their codebase) every working day.
 
 **Reachable customer examples:**
 
-1. Solo SaaS founders building products with Claude Code who outgrew ad-hoc prompting
-2. Small agency teams that need consistent output across multiple client projects
-3. Developer tooling builders who dogfood their own AI workflows
-4. Open-source maintainers managing complex codebases with AI assistance
-5. Indie hackers on platforms like IndieHackers, HackerNews, and the Claude Code Discord
+1. Solo SaaS founders on IndieHackers who discuss the pain of doing everything alone
+2. Claude Code power users in the Discord who have pushed beyond coding into broader workflows
+3. Indie hackers who have tried and failed to maintain brand consistency, legal compliance, and ops discipline while shipping features
+4. Technical founders who left companies and are building solo for the first time -- they know what departments they are missing
+5. Builders on Twitter/X who post about "AI replacing entire teams" and are looking for the tooling to prove it
 
-**Assessment:** The customer segment is specific and reachable, but it is small. Claude Code's total user base is a fraction of the developer population, and Soleur targets the power-user segment within that fraction. The TAM is bounded by Claude Code adoption. If Claude Code grows, Soleur's addressable market grows proportionally. This is both a risk (platform dependency) and an opportunity (riding a growth wave).
+**Assessment:** The customer segment is specific, passionate, and reachable. Solo founders who believe in the "company of one" thesis are vocal in online communities. The risk is that the segment is small in absolute numbers today. However, the trend (AI enabling smaller teams to do more) is accelerating, and early adopters in this segment are exactly the users who will push the platform hardest.
 
 ## Competitive Landscape
 
-The Claude Code plugin ecosystem is young but already crowded with overlapping approaches:
+The competitive landscape spans two categories: AI coding workflow tools (which solve part of the problem) and AI agent workforce platforms (which attempt the full problem).
 
-**Direct competitors (Claude Code plugins):**
+**AI agent workforce platforms (direct thesis competitors):**
 
 | Competitor | Approach | Differentiation from Soleur |
 |-----------|----------|---------------------------|
-| [Deep Trilogy](https://pierce-lamb.medium.com/the-deep-trilogy-claude-code-plugins-for-writing-good-software-fast-33b76f2a022d) (/deep-project, /deep-plan, /deep-implement) | Plan-first workflow with TDD, code review, and git integration | Narrower scope: planning + implementation only. No institutional memory, no multi-domain agents, no knowledge base. |
-| [Claude-Flow](https://github.com/ruvnet/claude-flow) | Multi-agent swarm orchestration with RAG and distributed intelligence | Broader scope: general-purpose agent orchestration platform, not development-workflow-specific. More infrastructure, less opinionated workflow. |
-| [Flow-Next](https://github.com/gmickel/gmickel-claude-marketplace) (gmickel) | Plan-first workflows, autonomous overnight coding, multi-model review gates | Similar philosophy but different execution: uses external tools (RepoPrompt, Codex) for review rather than built-in agents. |
-| [Claude Code Workflows](https://github.com/shinpr/claude-code-workflows) | Production-ready development workflows with specialized agents | Similar scope but appears less mature. |
-| [Awesome Claude Code ecosystem](https://github.com/hesreallyhim/awesome-claude-code) | Curated registries and marketplaces aggregating community plugins | Aggregation layer, not a direct product competitor -- but reduces switching cost between plugins. |
+| [Lindy.ai](https://lindy.ai) | No-code AI agent builder for business workflows (email, scheduling, sales) | Horizontal agent builder, not integrated into the development workflow. Agents are standalone, not part of a unified organization with shared memory. |
+| [Relevance AI](https://relevanceai.com) | AI workforce platform with agent teams for sales, support, and research | Enterprise-focused, sales-heavy. No engineering domain. Not designed for solo founders. |
+| [Crew AI](https://crewai.com) | Multi-agent orchestration framework for building AI teams | Framework, not a product. Requires significant setup. No built-in business domains. |
+| [AutoGPT / AgentGPT](https://agentgpt.rber.dev) | Autonomous AI agents that chain tasks | General-purpose autonomy, not domain-specific. No institutional memory, no knowledge base that compounds. |
 
-**Adjacent competitors (different platforms, similar problem):**
+**AI coding workflow tools (partial competitors):**
 
 | Competitor | Platform | Overlap |
 |-----------|----------|---------|
-| [Cursor Rules](https://docs.cursor.com/) + Composer | Cursor IDE | Project conventions + multi-file orchestration. IDE-native, no plugin needed. |
-| [Windsurf Workflows](https://windsurf.com/) + Cascade | Windsurf IDE | Agentic IDE with built-in workflow automation, rules, and memory. |
-| [Aider](https://aider.chat/) | CLI (model-agnostic) | Git-aware AI coding assistant with built-in commit workflow. Simpler, more focused. |
-| [Continue](https://continue.dev/) | VS Code/JetBrains | Open-source platform for custom AI assistants. Community-driven, extensible. |
+| [Deep Trilogy](https://pierce-lamb.medium.com/the-deep-trilogy-claude-code-plugins-for-writing-good-software-fast-33b76f2a022d) | Claude Code | Plan-first workflow. Engineering only -- no marketing, legal, ops, or product domains. |
+| [Cursor](https://cursor.com) + Composer | IDE | Project conventions + multi-file orchestration. IDE-native. Engineering only. |
+| [Windsurf](https://windsurf.com) + Cascade | IDE | Agentic IDE with built-in workflow automation. Engineering only. |
+| [Aider](https://aider.chat/) | CLI | Git-aware AI coding. Engineering only, no multi-domain agents. |
 
 **Structural analysis:**
 
-Soleur's competitive position has two vulnerabilities:
+Soleur occupies a unique position: it is the only platform that combines AI agent workforce capabilities (marketing, legal, ops, product) with deep engineering workflow integration (Claude Code plugin). Competitors either do engineering well but nothing else, or do business automation well but not engineering.
 
-1. **Platform risk:** Anthropic could build Soleur's core features (workflow orchestration, institutional memory, multi-agent review) directly into Claude Code. The plugin architecture means Anthropic has full visibility into what plugins users install and what patterns work. Historical precedent: every major platform has eventually absorbed popular plugin functionality (Slack, Chrome, VS Code).
+**Soleur's structural advantage:** The knowledge base. Every domain feeds a shared institutional memory -- the brand guide informs marketing content, the legal audit references the privacy policy, the business validation draws on the competitive landscape. This cross-domain coherence is not possible when using separate tools for each function. The compounding effect increases with usage: the 100th session is dramatically more productive than the 1st because the system has learned the founder's company.
 
-2. **Ecosystem fragmentation:** The Claude Code plugin ecosystem has low switching costs. Users can install Deep Trilogy for planning, a separate review plugin for review, and a separate knowledge-base plugin for memory. Soleur's integrated approach is a strength only if the integration creates value that the parts cannot replicate independently.
+**Vulnerabilities:**
 
-**Soleur's potential structural advantage:** Institutional memory via the knowledge-base (learnings, constitution, conventions). This is a compounding asset -- the more a team uses Soleur, the more valuable the knowledge base becomes. Competitors that focus on individual workflow phases (just planning, just review) do not accumulate this cross-session intelligence. However, this advantage only materializes after sustained use, creating a chicken-and-egg problem for adoption.
+1. **Platform dependency:** Anthropic could build multi-domain capabilities into Claude Code directly. Mitigation: Soleur's value is in the curated agent behaviors and accumulated knowledge, not in the plugin infrastructure.
+2. **Breadth vs. depth trade-off:** 54 agents across 5 domains means each domain gets fewer resources than a dedicated tool. Mitigation: The integration IS the product -- a mediocre-but-connected marketing agent is more valuable to a solo founder than an excellent-but-isolated marketing tool.
 
-**Assessment:** The space is competitive and getting more so. Soleur's breadth (48 agents, 5 domains) is both a strength and a liability -- it is differentiated but also harder to explain, harder to maintain, and harder for new users to navigate. The "why now" is the Claude Code plugin ecosystem's infancy: early movers can establish workflow patterns before consolidation. But the window is narrow.
+**Assessment:** The competitive landscape validates the thesis. Multiple companies are building AI agent workforces, confirming the market direction. None combine engineering depth with business breadth the way Soleur does. The "why now" is the convergence of capable LLMs (Claude, GPT-4) with plugin architectures that allow domain-specific agents to be composed into organizations.
 
 ## Demand Evidence
 
 **Direct demand signals:**
 
-- Soleur is in active use by its creator for real production development (this validation report is itself being generated by the tool). The "dogfooding" signal is genuine -- the creator uses it daily and has iterated through 2.26+ versions.
-- The plugin is published to a registry and installable via `claude plugin install soleur`.
-- Active development velocity: 235+ merged PRs, detailed changelog, frequent releases.
+- Soleur is in active daily use by its creator for running a real company. The "dogfooding" signal is genuine -- the creator uses all 5 domains (engineering, marketing, legal, ops, product) and has iterated through 2.30+ versions and 240+ merged PRs.
+- The plugin is published to the Claude Code registry and installable via `claude plugin install soleur`.
+- Active development velocity demonstrates builder conviction: detailed changelog, frequent releases, compounding knowledge base.
 
 **Indirect demand signals:**
 
-- The Claude Code plugin ecosystem is generating significant community interest (multiple curated lists, marketplace sites, blog posts comparing plugins).
-- Composio, Firecrawl, and other established developer-tool companies are writing "top Claude Code plugins" roundup posts, indicating market interest.
-- Developer forums (HackerNews, Reddit r/ClaudeAI) have recurring threads about managing AI coding assistant workflows.
+- The "company of one" and "solopreneur AI" themes are generating significant discussion on Twitter/X, IndieHackers, and HackerNews. The cultural moment is favorable.
+- Multiple companies (Lindy, Relevance AI, Crew AI) are raising venture funding for AI agent workforce platforms, validating the market category.
+- Claude Code Discord has active discussions about extending AI beyond coding into broader business workflows.
 
 **What is missing:**
 
-- No evidence of external users (beyond the creator) actively using Soleur.
-- No public testimonials, case studies, or community contributions from non-creator users.
+- No evidence of external users (beyond the creator) actively using Soleur across multiple domains.
+- No customer discovery conversations with solo founders about multi-domain AI pain.
 - No data on plugin install counts, retention, or activation rates.
-- No customer discovery conversations with potential users about the problem (vs. the solution).
+- No testimonials or case studies from users testing the full-organization hypothesis.
 
-> WARNING: Kill criterion triggered at Gate 4 -- proceeding because this is a dogfooding assessment of the agent, not a real investment decision. In a real validation, this gate would recommend pausing to conduct 5+ customer discovery conversations before continuing.
+> WARNING: Kill criterion triggered at Gate 4 -- proceeding because this is a self-assessment to inform the validation strategy. In a real validation, this gate would recommend pausing to conduct 5+ customer discovery conversations before continuing.
 
-**Assessment:** The demand evidence is the weakest gate. The product has strong builder conviction (the creator uses it intensively) but no external validation. Builder conviction is necessary but not sufficient -- many developer tools are built by people who love their own workflow but cannot transfer it to others. The critical next step is talking to 5-10 developers who use Claude Code heavily and testing whether Soleur's workflow resonates or whether they have built their own approaches that work well enough.
+**Assessment:** The demand evidence is the weakest gate. Builder conviction is high but external validation is zero. The critical next step is talking to 10 solo founders who are running companies alone and testing whether the multi-domain AI organization resonates -- or whether they have already built workflows that work well enough with separate tools.
 
 ## Business Model
 
 **Current model:** Free and open-source (Apache-2.0 license). No revenue.
 
-**Potential revenue models:**
+**Potential revenue models aligned with the Company-as-a-Service thesis:**
 
-| Model | Feasibility | Risks |
-|-------|------------|-------|
-| **Freemium + Pro tier** | Medium. Free core workflow, paid advanced agents (e.g., marketing domain, legal domain, operations). | Requires a clear value split between free and paid. Open-source codebase makes enforcement difficult without a hosted component. |
-| **Hosted knowledge-base sync** | Medium-high. Cloud-synced institutional memory across team members, with collaboration features. | Requires building SaaS infrastructure. Competes with the user's own git-based knowledge base. |
-| **Enterprise licensing** | Low-medium. Larger teams pay for support, custom agents, and private agent hosting. | Enterprise sales cycle is long. Soleur targets small teams/solos, not enterprise. |
-| **Marketplace commission** | Low. Take a cut of third-party skill/agent sales on a Soleur marketplace. | Requires ecosystem scale that does not exist yet. |
+| Model | Feasibility | Alignment |
+|-------|------------|-----------|
+| **Hosted knowledge sync** | Medium-high. Cloud-synced institutional memory, team collaboration, cross-project learning. | Strong. The knowledge base is the compounding asset -- hosted sync makes it persistent and shareable. |
+| **Freemium domain tiers** | Medium. Free engineering domain, paid marketing + legal + ops + product domains. | Strong. Non-engineering domains are the differentiator and the value users cannot get elsewhere. |
+| **Managed AI org service** | Medium. Concierge onboarding: set up your AI organization, configure domains, seed knowledge base. | Strong for early adopters. Does not scale, but validates willingness to pay. |
+| **Enterprise licensing** | Low. Multi-seat, private hosting, custom agents. | Weak. Soleur targets solo founders, not enterprise teams. Defer until adoption proves otherwise. |
 
 **Competitor pricing context:**
 
+- Lindy.ai: $49-499/month for AI agent workflows
+- Relevance AI: Usage-based, enterprise contracts
 - Cursor: $20/month (Pro), $40/month (Business)
-- Windsurf: $15/month (Pro), $35/month (Teams)
-- Claude Code: Usage-based (Anthropic pricing)
-- Most Claude Code plugins: Free/open-source (ecosystem too young for paid plugins)
+- Most Claude Code plugins: Free/open-source
 
-**Willingness-to-pay analysis:**
+**Willingness-to-pay hypothesis:** Solo founders already pay $20-40/month for AI coding tools. If Soleur delivers the value of a marketing agency ($5k+), a legal advisor ($300/hour), and an ops manager -- even at 10% of that value -- a $49-99/month price point is justified. The key is demonstrating that value during the validation phase.
 
-The Claude Code plugin ecosystem has not yet established paid plugin norms. Users expect plugins to be free. The most viable monetization path is likely a hosted layer (team sync, analytics, usage dashboards) rather than the plugin itself. However, building a hosted layer significantly increases the scope of the business from "plugin" to "SaaS product."
-
-**Assessment:** The business model is undefined. Open-source developer tools can become businesses (GitLab, Supabase, Vercel) but the path requires either massive adoption (to justify enterprise/hosted features) or a clear wedge feature that users will pay for. Soleur does not yet have either. The knowledge-base as a compounding asset is the most promising monetization angle, but only if external users exist and find it valuable.
+**Assessment:** The business model is undefined but the thesis points to a viable path. The knowledge base as a compounding asset, combined with non-engineering domains as the paid differentiator, creates a natural freemium split. Monetization should follow validated adoption, not precede it.
 
 ## Minimum Viable Scope
 
-**Core value proposition to test:** Does a structured brainstorm-plan-implement-review-compound workflow produce measurably better output than ad-hoc AI coding?
+**Core value proposition to test:** Can a solo founder use Soleur's multi-domain AI agents (engineering + marketing + legal + ops + product) to actually run a company -- not just write code?
 
-**Minimum viable version:**
+**Why breadth IS the minimum scope:**
 
-The current Soleur already exceeds MVP scope. If starting from scratch, the MVP would be:
+The Company-as-a-Service thesis requires demonstrating that an integrated AI organization across multiple domains is more valuable than separate tools for each domain. If the MVP were reduced to just the engineering workflow (plan/work/review/compound), it would test a different hypothesis entirely -- "does structured AI coding help?" -- which is already answered by competitors like Deep Trilogy and Cursor.
 
-1. `/plan` command -- structured implementation planning from a prompt
-2. `/work` command -- execute the plan with progress tracking
-3. `/review` command -- multi-perspective code review
-4. `knowledge-base/` directory -- learnings that persist across sessions
+The 5 domains are the minimum viable scope because:
 
-Everything else (48 agents, 5 domains, marketing agents, legal agents, operations agents, 46 skills) is expansion beyond the core value proposition.
+1. **Engineering** proves the platform works for the founder's primary activity
+2. **Marketing** proves the platform extends beyond code into go-to-market
+3. **Legal** proves the platform handles compliance (a universal founder pain point)
+4. **Operations** proves the platform manages the business itself (expenses, vendors)
+5. **Product** proves the platform informs strategic decisions (validation, spec analysis)
 
-**What the MVP deliberately excludes:**
+Removing any domain undermines the thesis. A "Company-as-a-Service" with only engineering is just a coding assistant.
 
-- Domain-specific agents (marketing, legal, operations, product)
-- Browser automation
-- Documentation site generation
-- Community management
-- SEO/AEO analysis
-- All the specialized review agents beyond a single general reviewer
+**Success metric:** 10 solo founders who use agents from at least 2 different domains (not just engineering) on their real projects for 2+ weeks and report that the integrated experience is more valuable than using separate tools.
 
-**Build time for the MVP:** Already built. The core workflow (plan/work/review/compound) has existed since early versions. The question is not "can we build the MVP?" but "can we find 10 external users who adopt the core workflow?"
+**What the validation tests:**
 
-**Success metric:** 10 external users who use the plan-work-review-compound cycle on a real project for 2+ weeks and report that it improved their development workflow. Not "installed it" -- actually used it across multiple sessions.
+1. Do solo founders experience multi-domain pain? (Problem interviews, no demo)
+2. Does the integrated AI organization resonate more than separate tools? (Guided onboarding)
+3. Do users return after the first session? Do they use non-engineering domains? (Unassisted usage)
 
-**Assessment:** The MVP is already built and the scope has expanded well beyond it. This is a common pattern for builder-driven products: the creator keeps adding features that serve their own workflow without validating that external users need or want the expanded scope. The 48 agents across 5 domains suggest the product may be solving the creator's organizational complexity rather than a generalizable customer need. The critical experiment is not building more -- it is finding 10 users for the core workflow that already exists.
+**Assessment:** The product already exceeds MVP scope in depth (54 agents) but matches MVP scope in breadth (5 domains). The validation should test breadth transfer (do non-engineering domains deliver value?) rather than depth (do we need more engineering agents?). The minimum viable experiment is getting 10 founders to try the full organization, not shrinking to a subset.
 
 ## Validation Verdict
 
@@ -162,30 +158,34 @@ Everything else (48 agents, 5 domains, marketing agents, legal agents, operation
 | Gate | Result |
 |------|--------|
 | Problem | PASS |
-| Customer | PASS (with caveats) |
-| Competitive Landscape | PASS (narrow window) |
+| Customer | PASS |
+| Competitive Landscape | PASS |
 | Demand Evidence | OVERRIDE |
-| Business Model | FAIL |
+| Business Model | PASS (with caveats) |
 | Minimum Viable Scope | PASS |
 
 **What is strong:**
 
-- The problem is real and growing. AI coding assistants lack structured workflows and institutional memory. The pain increases with usage intensity.
-- The product is well-built. 2.26+ versions, 235+ PRs, detailed constitution, dogfooding discipline. The engineering execution is strong.
-- The institutional memory angle (knowledge-base, learnings, compound workflow) is a genuine differentiator that compounds over time.
+- The problem is real and growing. Solo founders managing entire companies alone is a structural pain that intensifies with AI's expansion of what one person can build.
+- The product is well-built and genuinely used. 2.30+ versions, 240+ PRs, daily dogfooding across all 5 domains. The engineering execution is strong.
+- The competitive landscape validates the category. Multiple funded companies are building AI agent workforces. None combine engineering depth with business breadth.
+- The institutional knowledge base is a genuine compounding moat. Cross-domain coherence (brand guide informing marketing, competitive analysis informing validation) creates value that separate tools cannot replicate.
 
 **What is weak:**
 
-- Zero external demand evidence. The product has been built in isolation from customers. Builder conviction is high, but that is the most dangerous form of validation -- it feels like validation but is not.
-- No business model. Open-source Claude Code plugins have no established monetization path. The ecosystem is too young and users expect plugins to be free.
-- Scope has expanded far beyond what is needed to test the core value proposition. 48 agents across 5 domains serves the creator's needs but makes the product harder to explain, install, adopt, and maintain for external users.
+- Zero external demand evidence. The product has been built in isolation from customers. Builder conviction is high but untested.
+- The business model is plausible but unvalidated. No evidence that solo founders will pay for non-engineering AI domains.
 
 **What to do next (the PIVOT):**
 
-1. **Stop adding features.** The product has more than enough capability to test the core hypothesis. Every new agent or skill adds maintenance burden without bringing users.
-2. **Talk to 10 Claude Code power users.** Use the Claude Code Discord, HackerNews, and indie hacker communities. Do not pitch Soleur -- ask about their workflow pain points, how they manage knowledge across sessions, and what they have built themselves.
-3. **Test the core 4-command workflow.** Offer the brainstorm-plan-work-review-compound cycle to 5 users. Measure whether they use it more than once.
-4. **Validate the knowledge-base hypothesis.** The strongest differentiation is institutional memory. Test whether external users find value in learnings that persist across sessions, or whether they already have workflows (git commit messages, CLAUDE.md files, personal notes) that serve this purpose well enough.
-5. **Defer monetization until adoption.** Do not build a SaaS layer until at least 50 active users demonstrate sustained usage. The business model should follow the user behavior, not precede it.
+The pivot is from "build more features" to "find 10 solo founders who want AI departments."
 
-The core insight is sound: AI coding needs structure. But a sound insight with zero external validation is still just an idea. The pivot is from "build more" to "sell what exists."
+1. **Stop adding features.** The product has more than enough capability. Every new agent adds maintenance burden without bringing users.
+2. **Fix the onboarding surface.** The website says "Company-as-a-Service" but the README and Getting Started describe a dev workflow plugin. Users who install today hit a cliff between the marketing promise and the product surface. (This is being addressed in the current work.)
+3. **Source 10 solo founders from mixed channels.** Claude Code Discord (~4), GitHub signal mining (~3), direct network (~3). Avoid segment bias.
+4. **Run problem interviews first (no demo).** Test whether solo founders independently describe multi-domain pain. If fewer than 5/10 describe it, the thesis does not resonate.
+5. **Guided onboarding with the top 5.** Walk them through all 5 departments on their real projects. Observe which domains they try first and which they ignore.
+6. **2-week unassisted usage.** Track whether they return, whether their knowledge base grows, and whether they use non-engineering agents.
+7. **Defer monetization until 50+ active users.** Build the business model around observed behavior, not hypotheses.
+
+The core insight is sound: a solo founder needs more than a coding assistant -- they need an AI organization. But a sound insight with zero external validation is still an untested hypothesis. The pivot is from building to validating.

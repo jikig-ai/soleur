@@ -42,6 +42,10 @@ For the selected gate: display current content, ask what changed, collect update
 
 **If it does not exist:** Proceed to the full workshop (Gate 1).
 
+### Step 0.5: Read Project Identity
+
+Before starting the gates, read `knowledge-base/overview/brand-guide.md` if it exists -- extract the `## Identity` section (mission, positioning, target audience). If no brand guide exists, read `README.md` for positioning statements. If neither provides positioning context, proceed with a note: "No brand guide found. Vision alignment check will be skipped. Consider running the brand-architect workshop first." Keep the project's stated positioning in mind throughout all gates -- especially Gate 6, where a multi-domain platform's "minimum viable scope" may be its breadth, not a single feature.
+
 ### Gate 1: Problem (## Problem)
 
 Validate that the user can articulate the problem independently of their solution.
@@ -103,9 +107,11 @@ Validate revenue model and willingness to pay.
 
 Define the smallest testable version.
 
-1. "What is the ONE core thing your product must do to test the value proposition?"
+1. "What is the core value proposition your MVP must demonstrate?"
 2. "How long would it take to build that minimum version? Be honest."
 3. "How will you know if it is working? What is the success metric for the first version?"
+
+**If project identity was loaded in Step 0.5 and defines breadth as the value proposition:** The kill criterion shifts from "scope is too large" to "breadth lacks coherence -- domains do not connect to a unified value proposition." A platform that claims "every department" is not over-scoped if each domain serves the stated mission.
 
 **Kill criterion:** The MVP requires 6+ months of engineering. If the smallest testable version is that large, the core value proposition has not been identified yet.
 
@@ -121,6 +127,14 @@ Write a STOP verdict identifying which gate failed and why. Include the gates th
 
 **If the evidence is mixed:**
 Write a PIVOT verdict suggesting what needs to change (different customer, different problem framing, different business model) before the idea is viable.
+
+### Vision Alignment Check
+
+If project identity was loaded in Step 0.5, compare the assessment's conclusions against the stated positioning. If the assessment recommends reducing scope but the positioning defines breadth as the value proposition, flag the contradiction:
+
+> NOTE: This assessment recommends scope reduction, but the brand guide defines multi-domain breadth as the core value proposition. Review whether the reduction aligns with stated product identity.
+
+Present any contradictions to the user before writing. The user decides whether to adjust the assessment or the positioning.
 
 ### Final Write
 

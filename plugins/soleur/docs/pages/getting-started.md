@@ -18,7 +18,7 @@ permalink: pages/getting-started.html
 
 ## Why Soleur
 
-Soleur gives a single founder the leverage of a full organization. **45 agents** across engineering, marketing, legal, operations, and product -- plus **45 skills** and **8 commands** -- that compound your company knowledge over time. Every problem you solve makes the next one easier.
+Soleur gives a single founder the leverage of a full organization. **{{ stats.agents }} agents** across engineering, marketing, legal, operations, and product -- plus **{{ stats.skills }} skills** and **{{ stats.commands }} commands** -- that compound your company knowledge over time. Every problem you solve makes the next one easier.
 
 ## Installation
 
@@ -87,10 +87,31 @@ Soleur follows a structured 5-step workflow for software development:
   </div>
 </div>
 
+## Beyond Engineering
+
+<div class="commands-list">
+  <div class="command-item">
+    <code>Defining Your Brand</code>
+    <p>/soleur:brainstorm define our brand identity &rarr; interactive workshop producing a brand guide</p>
+  </div>
+  <div class="command-item">
+    <code>Generating Legal Documents</code>
+    <p>/legal-generate &rarr; Terms, Privacy Policy, GDPR Policy, and more</p>
+  </div>
+  <div class="command-item">
+    <code>Validating a Business Idea</code>
+    <p>/soleur:brainstorm validate our business idea &rarr; 6-gate validation workshop</p>
+  </div>
+  <div class="command-item">
+    <code>Tracking Expenses</code>
+    <p>Ask about operational expenses &rarr; routed to ops-advisor agent</p>
+  </div>
+</div>
+
 ## Learn More
 
 <ul class="learn-more-links">
-  <li><a href="pages/agents.html">Agents <span class="learn-more-desc">Specialized AI agents for engineering, research, and workflow</span></a></li>
+  <li><a href="pages/agents.html">Agents <span class="learn-more-desc">AI agents across engineering, marketing, legal, operations, and product</span></a></li>
   <li><a href="pages/skills.html">Skills <span class="learn-more-desc">Multi-step skills for complex workflows</span></a></li>
   <li><a href="pages/changelog.html">Changelog <span class="learn-more-desc">All notable changes to Soleur</span></a></li>
 </ul>
