@@ -228,15 +228,15 @@ Different agents need different intelligence levels. Use the cheapest model that
 
 ```swift
 enum ModelTier {
-    case fast      // claude-3-haiku: Quick, cheap, simple tasks
-    case balanced  // claude-sonnet: Good balance for most tasks
-    case powerful  // claude-opus: Complex reasoning, synthesis
+    case fast      // claude-haiku-4-5: Quick, cheap, simple tasks
+    case balanced  // claude-sonnet-4-6: Good balance for most tasks
+    case powerful  // claude-opus-4-6: Complex reasoning, synthesis
 
     var modelId: String {
         switch self {
-        case .fast: return "claude-3-haiku-20240307"
-        case .balanced: return "claude-sonnet-4-20250514"
-        case .powerful: return "claude-opus-4-20250514"
+        case .fast: return "claude-haiku-4-5"
+        case .balanced: return "claude-sonnet-4-6"
+        case .powerful: return "claude-opus-4-6"
         }
     }
 }

@@ -7,7 +7,7 @@ DSPy.rb provides unified support across multiple LLM providers through adapter g
 ### Provider Overview
 
 - **OpenAI**: GPT-4, GPT-4o, GPT-4o-mini, GPT-3.5-turbo
-- **Anthropic**: Claude 3 family (Sonnet, Opus, Haiku), Claude 3.5 Sonnet
+- **Anthropic**: Claude 4.x family (Opus 4.6, Sonnet 4.6, Haiku 4.5)
 - **Google Gemini**: Gemini 1.5 Pro, Gemini 1.5 Flash, other versions
 - **Ollama**: Local model support via OpenAI compatibility layer
 - **OpenRouter**: Unified multi-provider API for 200+ models
@@ -49,20 +49,16 @@ end
 
 ```ruby
 DSPy.configure do |c|
-  # Claude 3.5 Sonnet (latest, most capable)
-  c.lm = DSPy::LM.new('anthropic/claude-3-5-sonnet-20241022',
+  # Claude Opus 4.6 (most intelligent, best for agents and coding)
+  c.lm = DSPy::LM.new('anthropic/claude-opus-4-6',
     api_key: ENV['ANTHROPIC_API_KEY'])
 
-  # Claude 3 Opus (most capable in Claude 3 family)
-  c.lm = DSPy::LM.new('anthropic/claude-3-opus-20240229',
+  # Claude Sonnet 4.6 (best speed/intelligence balance)
+  c.lm = DSPy::LM.new('anthropic/claude-sonnet-4-6',
     api_key: ENV['ANTHROPIC_API_KEY'])
 
-  # Claude 3 Sonnet (balanced)
-  c.lm = DSPy::LM.new('anthropic/claude-3-sonnet-20240229',
-    api_key: ENV['ANTHROPIC_API_KEY'])
-
-  # Claude 3 Haiku (fast, cost-effective)
-  c.lm = DSPy::LM.new('anthropic/claude-3-haiku-20240307',
+  # Claude Haiku 4.5 (fastest, cost-effective)
+  c.lm = DSPy::LM.new('anthropic/claude-haiku-4-5',
     api_key: ENV['ANTHROPIC_API_KEY'])
 end
 ```
@@ -112,7 +108,7 @@ end
 ```ruby
 DSPy.configure do |c|
   # Access 200+ models through OpenRouter
-  c.lm = DSPy::LM.new('openrouter/anthropic/claude-3.5-sonnet',
+  c.lm = DSPy::LM.new('openrouter/anthropic/claude-sonnet-4-6',
     api_key: ENV['OPENROUTER_API_KEY'],
     base_url: 'https://openrouter.ai/api/v1')
 
@@ -180,7 +176,7 @@ Use different models for different tasks:
 fast_lm = DSPy::LM.new('openai/gpt-4o-mini', api_key: ENV['OPENAI_API_KEY'])
 
 # Powerful model for complex tasks
-powerful_lm = DSPy::LM.new('anthropic/claude-3-5-sonnet-20241022',
+powerful_lm = DSPy::LM.new('anthropic/claude-sonnet-4-6',
   api_key: ENV['ANTHROPIC_API_KEY'])
 
 # Use different models in different modules
@@ -222,9 +218,9 @@ result2 = predictor.forward(
 
 ### Model Selection Strategy
 
-1. **Development**: Use cheaper, faster models (gpt-4o-mini, claude-3-haiku, gemini-1.5-flash)
+1. **Development**: Use cheaper, faster models (gpt-4o-mini, claude-haiku-4-5, gemini-1.5-flash)
 2. **Production Simple Tasks**: Continue with cheaper models if quality is sufficient
-3. **Production Complex Tasks**: Upgrade to more capable models (gpt-4o, claude-3.5-sonnet, gemini-1.5-pro)
+3. **Production Complex Tasks**: Upgrade to more capable models (gpt-4o, claude-sonnet-4-6, gemini-1.5-pro)
 4. **Local Development**: Use Ollama for privacy and zero API costs
 
 ### Example Cost-Conscious Setup
@@ -242,7 +238,7 @@ elsif Rails.env.test?
   end
 else  # production
   DSPy.configure do |c|
-    c.lm = DSPy::LM.new('anthropic/claude-3-5-sonnet-20241022',
+    c.lm = DSPy::LM.new('anthropic/claude-sonnet-4-6',
       api_key: ENV['ANTHROPIC_API_KEY'])
   end
 end
@@ -259,7 +255,8 @@ end
 
 ### Anthropic
 
-- Claude 3.5 Sonnet is currently the most capable model
+- Claude Sonnet 4.6 offers the best speed/intelligence balance
+- Claude Opus 4.6 is the most intelligent for agents and coding
 - Excellent for complex reasoning and analysis
 - Strong safety features and helpful outputs
 - Requires base64 for images (no URL support)
