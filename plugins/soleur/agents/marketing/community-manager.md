@@ -43,19 +43,21 @@ Run scripts to gather raw data:
 
 ```bash
 SCRIPT_DIR="plugins/soleur/skills/community/scripts"
+```
 
-# Discord: fetch messages from monitored channels
-# If DISCORD_CHANNEL_IDS is set, use those channels; otherwise list all text channels
-if [[ -n "${DISCORD_CHANNEL_IDS:-}" ]]; then
-  IFS=',' read -ra CHANNELS <<< "$DISCORD_CHANNEL_IDS"
-else
-  CHANNELS=$(${SCRIPT_DIR}/discord-community.sh channels | jq -r '.[].id')
-fi
+Discord: fetch messages from monitored channels. If DISCORD_CHANNEL_IDS is set, split it by comma and use those channel IDs. Otherwise, list all text channels first:
 
-# For each channel, fetch last 100 messages
-for channel_id in "${CHANNELS[@]}"; do
-  ${SCRIPT_DIR}/discord-community.sh messages "$channel_id" 100
-done
+```bash
+plugins/soleur/skills/community/scripts/discord-community.sh channels | jq -r '.[].id'
+```
+
+Then for each channel ID from the output, fetch the last 100 messages:
+
+```bash
+plugins/soleur/skills/community/scripts/discord-community.sh messages "<channel_id>" 100
+```
+
+Run this for each channel.
 
 # Discord: fetch guild info and members
 ${SCRIPT_DIR}/discord-community.sh guild-info

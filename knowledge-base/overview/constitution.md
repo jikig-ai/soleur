@@ -66,6 +66,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Before adding new GitHub Actions workflows, audit existing ones with `gh run list --workflow=<name>.yml` -- remove workflows that are always skipped (condition never matches) or superseded by newer workflows that absorbed their functionality
 - Agent descriptions for agents with overlapping scope must include a one-line disambiguation sentence: "Use [sibling] for [its scope]; use this agent for [this scope]." When adding a new agent to a domain, update ALL existing sibling descriptions to cross-reference the new agent -- disambiguation is a graph property, not just a property of the new node
 - The project uses Bun as the JavaScript runtime with ESM modules (`"type": "module"`); pre-commit hooks are managed by lefthook (not Husky)
+- When fixing a pattern across plugin files (e.g., removing `$()`, renaming a reference), search ALL `.md` files under `plugins/soleur/` -- not just the category (commands/, skills/, agents/) that triggered the report; reference docs, SKILL.md, and agent definitions all contain executable bash blocks
 
 ### Never
 

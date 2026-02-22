@@ -280,22 +280,21 @@ For each screen in your app:
 
 ### Git Hooks / CI Checks
 
-```bash
+```text
 #!/bin/bash
 # pre-commit hook: check for new UI actions without tools
 
-# Find new SwiftUI Button/onTapGesture additions
-NEW_ACTIONS=$(git diff --cached --name-only | xargs grep -l "Button\|onTapGesture")
+# Find new SwiftUI Button/onTapGesture additions in staged files
+# Run: git diff --cached --name-only | xargs grep -l "Button\|onTapGesture"
+# Store the result in NEW_ACTIONS
 
-if [ -n "$NEW_ACTIONS" ]; then
-    echo "⚠️  New UI actions detected. Did you add corresponding agent tools?"
-    echo "Files: $NEW_ACTIONS"
-    echo ""
-    echo "Checklist:"
-    echo "  [ ] Agent tool exists for new action"
-    echo "  [ ] System prompt documents new capability"
-    echo "  [ ] Capability map updated"
-fi
+# If NEW_ACTIONS is non-empty, warn:
+#   "New UI actions detected. Did you add corresponding agent tools?"
+#   "Files: <list>"
+#   Checklist:
+#     [ ] Agent tool exists for new action
+#     [ ] System prompt documents new capability
+#     [ ] Capability map updated
 ```
 
 ### Automated Parity Testing
