@@ -43,7 +43,8 @@ agents/
 ├── operations/            # Ops and expense agents
 ├── product/               # Product analysis and design agents
 │   └── design/            # UX design agents
-└── sales/                 # Sales pipeline and revenue agents
+├── sales/                 # Sales pipeline and revenue agents
+└── support/               # Support and community agents
 
 commands/
 └── soleur/                # All commands (soleur:plan, soleur:review, etc.)
@@ -154,6 +155,7 @@ Domain leaders are agents that orchestrate a business domain's specialist team. 
 | `coo` | Operations | ops-advisor, ops-research, ops-provisioner | Auto-consulted via brainstorm domain detection |
 | `cpo` | Product | spec-flow-analyzer, ux-design-lead, business-validator | Auto-consulted via brainstorm domain detection |
 | `cro` | Sales | outbound-strategist, deal-architect, pipeline-analyst | Auto-consulted via brainstorm domain detection |
+| `cco` | Support | ticket-triage, community-manager | Auto-consulted via brainstorm domain detection |
 
 ### Adding a New Domain Leader
 

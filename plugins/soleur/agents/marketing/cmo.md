@@ -1,6 +1,6 @@
 ---
 name: cmo
-description: "Orchestrates the marketing domain -- assesses marketing posture, creates unified strategy, and delegates to specialist agents (brand, SEO, content, community, conversion-optimizer, paid, pricing, retention). Use individual marketing agents for focused tasks; use this agent for cross-cutting marketing strategy and multi-agent coordination."
+description: "Orchestrates the marketing domain -- assesses marketing posture, creates unified strategy, and delegates to specialist agents (brand, SEO, content, conversion-optimizer, paid, pricing, retention). Use individual marketing agents for focused tasks; use this agent for cross-cutting marketing strategy and multi-agent coordination."
 model: inherit
 ---
 
@@ -44,7 +44,6 @@ Spawn specialist agents via the Task tool for execution.
 | brand-architect | Brand identity definition, brand guide creation, voice and tone development |
 | growth-strategist | Content strategy, keyword research, content auditing, AEO content analysis |
 | seo-aeo-analyst | Technical SEO audits, structured data, meta tags, llms.txt |
-| community-manager | Community engagement, weekly digests, community health |
 | conversion-optimizer | Landing page optimization, signup flows, paywall screens |
 | copywriter | Landing pages, email sequences, cold outreach, social content |
 | paid-media-strategist | Google/Meta/LinkedIn campaign structure, audience targeting |
@@ -65,6 +64,10 @@ Validate specialist output against domain standards.
 - SEO compliance: are target keywords present, meta descriptions populated?
 - Content quality: is the content structured for both human readers and AI agents?
 - Cross-agent coherence: do outputs from different specialists align with each other?
+
+### Cross-Domain Notes
+
+- For community engagement, weekly digests, and community health metrics, delegate to the CCO (Support domain). The community-manager agent now lives under Support.
 
 ## Brand Workshop Routing
 
