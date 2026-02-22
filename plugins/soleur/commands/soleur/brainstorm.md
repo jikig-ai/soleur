@@ -58,7 +58,7 @@ If one-shot is selected, pass the original feature description (including any is
 
 Assess whether the feature description has implications for specific business domains. Domain leaders participate in brainstorming when their domain is relevant.
 
-<!-- To add a new domain: add a numbered assessment question below, a routing block, and a participation section -->
+<!-- To add a new domain: add a numbered assessment question below, a routing block, and a participation section. Consider table-driven refactor at 5+ domains. -->
 
 #### Assessment
 
@@ -70,7 +70,9 @@ Read the feature description and assess domain relevance:
 
 3. **Brand-specific work** -- Is this specifically about brand identity definition, brand guide creation, or voice and tone development? (This is a special case within marketing.)
 
-4. **Product strategy implications** -- Does this feature involve validating a new business idea, assessing product-market fit, evaluating customer demand, competitive positioning, or determining whether to build something?
+4. **Operations implications** -- Does this feature involve operational decisions such as vendor selection, tool provisioning, expense tracking, process changes, or infrastructure procurement?
+
+5. **Product strategy implications** -- Does this feature involve validating a new business idea, assessing product-market fit, evaluating customer demand, competitive positioning, or determining whether to build something?
 
 If no domains are relevant, continue to Phase 1.
 
@@ -103,6 +105,15 @@ Options:
 
 1. **Include technical assessment** - CTO joins the brainstorm to assess technical implications
 2. **Brainstorm normally** - Continue without CTO input
+
+**If operations relevance is detected:**
+
+Use **AskUserQuestion tool** to ask: "This feature has operational implications. Include operations assessment?"
+
+Options:
+
+1. **Include operations assessment** - COO joins the brainstorm to assess operational implications
+2. **Brainstorm normally** - Continue without operations input
 
 **If product strategy relevance is detected:**
 
@@ -238,6 +249,16 @@ should consider during brainstorming. Output a brief structured assessment."
 
 Weave the CTO's assessment into the brainstorm dialogue alongside repo research findings.
 
+**COO participation:** After repo research completes, spawn the COO agent in parallel:
+
+```text
+Task coo: "Assess the operational implications of this feature: <feature_description>.
+Identify cost concerns, vendor decisions, process changes, and operational questions the user
+should consider during brainstorming. Output a brief structured assessment."
+```
+
+Weave the COO's assessment into the brainstorm dialogue alongside repo research findings.
+
 **CPO participation:** After repo research completes, spawn the CPO agent in parallel:
 
 ```text
@@ -344,7 +365,7 @@ Ensure the brainstorms directory exists before writing.
 
    Parse the feature description for `#N` patterns (e.g., `#42`). Extract the first issue number found.
 
-   **If issue reference found**, validate its state by running `gh issue view <number> --json state --jq .state`:
+   **If issue reference found**, validate its state by running `gh issue view <number> --json state` and pipe to `jq .state`:
 
    - **If OPEN:** Use existing issue -- skip creation, proceed to step 3
    - **If CLOSED:** Warn the user, then create a new issue with "Replaces closed #N" in the body (proceed to step 2)
@@ -366,7 +387,7 @@ Ensure the brainstorms directory exists before writing.
 
 3. **Update existing issue with artifact links** (if using existing issue):
 
-   Fetch the existing issue body with `gh issue view <number> --json body --jq .body`. Append an Artifacts section with links to the brainstorm document, spec file, and branch name. Then update with `gh issue edit <number> --body "<updated body>"`.
+   Fetch the existing issue body with `gh issue view <number> --json body` piped to `jq .body`. Append an Artifacts section with links to the brainstorm document, spec file, and branch name. Then update with `gh issue edit <number> --body "<updated body>"`.
 
 4. **Generate spec.md** using `spec-templates` skill template:
    - Fill in Problem Statement from brainstorm

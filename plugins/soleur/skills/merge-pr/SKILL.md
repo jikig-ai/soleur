@@ -289,7 +289,7 @@ git push -u origin ${BRANCH}
 Check for an existing PR:
 
 ```bash
-gh pr list --head ${BRANCH} --json number,state --jq '.[] | select(.state == "OPEN") | .number'
+gh pr list --head ${BRANCH} --json number,state | jq '.[] | select(.state == "OPEN") | .number'
 ```
 
 **If a PR exists:** Announce the PR number and proceed.
@@ -326,7 +326,7 @@ gh pr checks --watch --fail-fast
 **If a check fails:**
 
 ```bash
-gh pr checks --json name,state,description --jq '.[] | select(.state != "SUCCESS")'
+gh pr checks --json name,state,description | jq '.[] | select(.state != "SUCCESS")'
 ```
 
 Stop and report:

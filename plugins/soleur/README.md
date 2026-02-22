@@ -106,7 +106,7 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 | Component | Count |
 |-----------|-------|
-| Agents | 48 |
+| Agents | 49 |
 | Commands | 8 |
 | Skills | 46 |
 | MCP Servers | 1 |
@@ -201,10 +201,11 @@ Agents are organized by domain, then by function.
 |-------|-------------|
 | `pr-comment-resolver` | Address PR comments and implement fixes |
 
-### Operations (3)
+### Operations (4)
 
 | Agent | Description |
 |-------|-------------|
+| `coo` | Operations domain leader -- orchestrates ops-advisor, ops-research, and ops-provisioner |
 | `ops-advisor` | Track expenses, manage domains, advise on hosting |
 | `ops-provisioner` | Guide SaaS tool account setup, purchase, configuration, and verification |
 | `ops-research` | Research domains, hosting, tools/SaaS, and cost optimization with browser automation |
@@ -259,7 +260,6 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `growth` | Content strategy: keyword research, content auditing, gap analysis, fix, AI agent consumability |
 | `legal-audit` | Audit legal documents for compliance gaps, outdated clauses, and cross-document consistency |
 | `legal-generate` | Generate draft legal documents from company context (7 document types, 3 jurisdictions) |
-| `marketing` | Cross-domain marketing assessment, strategy, and launch planning via CMO orchestration |
 | `release-announce` | Announce releases to Discord and GitHub Releases |
 | `release-docs` | Build and update documentation site with current components |
 | `seo-aeo` | Audit, fix, and validate SEO/AEO for Eleventy docs sites |
