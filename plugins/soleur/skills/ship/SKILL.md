@@ -7,6 +7,8 @@ description: This skill should be used when preparing a feature for production d
 
 **Purpose:** Enforce the full feature lifecycle before creating a PR, preventing missed steps like forgotten /compound runs, uncommitted artifacts, and missing version bumps.
 
+**CRITICAL: No command substitution.** Never use `$()` in Bash commands. When a step says "get value X, then use it in command Y", run them as **two separate Bash tool calls** -- first get the value, then use it literally in the next call. This avoids Claude Code's security prompt for command substitution.
+
 ## Phase 0: Context Detection
 
 Detect the current environment:
@@ -36,13 +38,17 @@ git remote show origin | grep 'HEAD branch'
 
 Check that feature artifacts exist and are committed. Look for files related to the current feature branch name:
 
-Run `git rev-parse --abbrev-ref HEAD` to get the current branch name. Extract the feature name by stripping the `feat-`, `feature/`, `fix-`, or `fix/` prefix.
+Get the current branch name:
 
-Then search for related artifacts:
+```bash
+git rev-parse --abbrev-ref HEAD
+```
 
-- Brainstorms: `ls knowledge-base/brainstorms/*<feature>* 2>/dev/null`
-- Specs: `ls knowledge-base/specs/feat-<feature>/spec.md 2>/dev/null`
-- Plans: `ls knowledge-base/plans/*<feature>* 2>/dev/null`
+Extract the feature name from the result by stripping the `feat-`, `feature/`, `fix-`, or `fix/` prefix. Then search for related artifacts using the Glob and Bash tools:
+
+- Brainstorms: glob `knowledge-base/brainstorms/*FEATURE*`
+- Specs: check `knowledge-base/specs/feat-FEATURE/spec.md`
+- Plans: glob `knowledge-base/plans/*FEATURE*`
 - Uncommitted files: `git status --porcelain knowledge-base/`
 
 **If artifacts exist but are not committed:** Stage and commit them.
@@ -51,39 +57,25 @@ Then search for related artifacts:
 
 ## Phase 2: Capture Learnings
 
-Check if /compound was run for this feature:
+Check if /compound was run for this feature. Use the feature name extracted in Phase 1:
 
 ```bash
-# Look for recent learnings matching this feature
-ls knowledge-base/learnings/**/*${FEATURE}* 2>/dev/null
 git log --oneline --since="1 week ago" -- knowledge-base/learnings/
 ```
 
-**If no recent learning exists:** Check for unarchived KB artifacts before offering a choice:
+Also use the Glob tool to search `knowledge-base/learnings/**/*FEATURE*` (replacing FEATURE with the actual name).
 
-Search for unarchived artifacts matching the feature name (excluding `*/archive/*` paths):
+**If no recent learning exists:** Check for unarchived KB artifacts before offering a choice.
 
-- Brainstorms in `knowledge-base/brainstorms/`
-- Plans in `knowledge-base/plans/`
-- Spec directory at `knowledge-base/specs/feat-<feature>/`
+Search for unarchived artifacts matching the feature name (excluding `archive/` paths) using the Glob tool:
 
-If any unarchived artifacts are found, set `HAS_ARTIFACTS=true`.
+- Brainstorms: `knowledge-base/brainstorms/*FEATURE*`
+- Plans: `knowledge-base/plans/*FEATURE*`
+- Spec directory: `knowledge-base/specs/feat-FEATURE/`
 
-**If artifacts exist (`HAS_ARTIFACTS=true`):** Do NOT offer Skip. Explain:
+**If unarchived artifacts exist:** Do NOT offer Skip. List the found artifacts and explain that /compound must run to consolidate and archive them before shipping. Then run `/soleur:compound`. The compound flow will automatically consolidate and archive the artifacts on `feat-*` branches.
 
-```text
-Unarchived KB artifacts found for this feature:
-${BRAINSTORMS}
-${PLANS}
-${SPECS}
-
-/compound must run to consolidate and archive these artifacts before shipping.
-Running /soleur:compound now...
-```
-
-Then run `/soleur:compound`. The compound flow will automatically consolidate and archive the artifacts on `feat-*` branches.
-
-**If no artifacts exist (`HAS_ARTIFACTS=false`):** Offer the standard choice:
+**If no unarchived artifacts exist:** Offer the standard choice:
 
 "No learnings documented for this feature. Run /compound to capture what you learned?"
 
@@ -92,16 +84,21 @@ Then run `/soleur:compound`. The compound flow will automatically consolidate an
 
 ## Phase 3: Verify Documentation
 
-Check if new commands, skills, or agents were added in this branch:
+Check if new commands, skills, or agents were added in this branch.
 
-First, find the merge base by running `git merge-base HEAD origin/main`. Then use that commit hash to compare:
+**Step 1** (separate Bash call): Get the merge base hash.
 
 ```bash
-git diff --name-status <merge-base>..HEAD -- \
-  plugins/soleur/commands/ \
-  plugins/soleur/skills/ \
-  plugins/soleur/agents/
+git merge-base HEAD origin/main
 ```
+
+**Step 2** (separate Bash call): Use the hash from Step 1 literally in this command.
+
+```bash
+git diff --name-status HASH..HEAD -- plugins/soleur/commands/ plugins/soleur/skills/ plugins/soleur/agents/
+```
+
+Replace `HASH` with the actual commit hash from Step 1. Do NOT use `$()` to combine these.
 
 **If new components were added:**
 
@@ -127,13 +124,21 @@ git merge origin/main
 
 ## Phase 4: Version Bump
 
-Check if plugin files were modified in this branch:
+Check if plugin files were modified in this branch.
 
-Run `git merge-base HEAD origin/main` to get the merge base hash, then:
+**Step 1** (separate Bash call): Get the merge base hash (reuse from Phase 3 if already obtained).
 
 ```bash
-git diff --name-only <merge-base>..HEAD -- plugins/soleur/
+git merge-base HEAD origin/main
 ```
+
+**Step 2** (separate Bash call): Use the hash literally.
+
+```bash
+git diff --name-only HASH..HEAD -- plugins/soleur/
+```
+
+Replace `HASH` with the actual commit hash. Do NOT use `$()` to combine these.
 
 **If plugin files were modified:**
 
@@ -180,7 +185,19 @@ Ship Checklist for [branch name]:
 
 First, verify that new source files have corresponding test files:
 
-Find new source files added in this branch by running `git merge-base HEAD origin/main` first, then `git diff --name-only --diff-filter=A <merge-base>..HEAD`. Filter for `.ts`, `.js`, `.rb`, `.py` files (excluding test/spec/config files).
+Find new source files added in this branch. First, get the merge base hash (reuse from Phase 3 if already obtained):
+
+```bash
+git merge-base HEAD origin/main
+```
+
+Then, in a separate Bash call, use the hash literally:
+
+```bash
+git diff --name-only --diff-filter=A HASH..HEAD
+```
+
+Replace `HASH` with the actual commit hash. Filter results for `.ts`, `.js`, `.rb`, `.py` files (excluding test/spec/config files).
 
 For each new source file, check if a corresponding test file exists (e.g., `foo.ts` -> `foo.test.ts` or `foo.spec.ts`). Report any source files missing test coverage.
 
@@ -200,7 +217,13 @@ bun test
 
 Before pushing, re-verify that unarchived KB artifacts have been consolidated. This is a hard gate -- do not proceed if it fails.
 
-Get the current branch with `git rev-parse --abbrev-ref HEAD` and extract the feature name (strip `feat-`/`feature/`/`fix-`/`fix/` prefix). Then search for unarchived KB artifacts matching the feature name in brainstorms, plans, and specs directories (excluding `archive/` paths).
+Get the current branch name:
+
+```bash
+git rev-parse --abbrev-ref HEAD
+```
+
+Extract the feature name from the result (strip `feat-`/`feature/`/`fix-`/`fix/` prefix). Then search for unarchived KB artifacts matching the feature name in brainstorms, plans, and specs directories (excluding `archive/` paths).
 
 If any unarchived artifacts are found, BLOCK the push and instruct the user to run `/soleur:compound` first.
 
@@ -208,24 +231,33 @@ If any unarchived artifacts are found, BLOCK the push and instruct the user to r
 
 **If clear:** Proceed to push.
 
-Push the branch to remote: run `git rev-parse --abbrev-ref HEAD` to get the branch name, then `git push -u origin <branch-name>`.
-
-Create the PR:
+Push the branch to remote. Get the branch name first:
 
 ```bash
-gh pr create --title "the pr title" --body "$(cat <<'EOF'
-## Summary
-<bullet points>
-
-## Test plan
-<checklist>
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
-EOF
-)"
+git rev-parse --abbrev-ref HEAD
 ```
 
-IMPORTANT: Do not quote flag names. Write `--title` not `"--title"`.
+Then push in a separate Bash call, using the branch name literally:
+
+```bash
+git push -u origin BRANCH_NAME
+```
+
+Replace `BRANCH_NAME` with the actual branch name from the previous call.
+
+Create the PR. Pass the body as a multi-line string (no `$()` needed):
+
+```bash
+gh pr create --title "the pr title" --body "## Summary
+- bullet points
+
+## Test plan
+- checklist
+
+Generated with [Claude Code](https://claude.com/claude-code)"
+```
+
+Do not quote flag names -- write `--title` not `"--title"`.
 
 Present the PR URL to the user.
 

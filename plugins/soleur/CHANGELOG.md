@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.31.3] - 2026-02-22
+
+### Fixed
+
+- Remove all command substitution patterns from ship skill to prevent Claude Code security prompts
+- Replace "run X then use result in Y" prose with explicit two-step Bash call instructions
+- Add global "No command substitution" rule at top of ship SKILL.md
+- Replace `$(cat <<'EOF'...)` PR create pattern with direct multi-line string
+
 ## [2.31.2] - 2026-02-22
 
 ### Fixed
