@@ -4,9 +4,9 @@ import yaml from "yaml";
 
 // Category mapping -- update here when skills are added/reorganized
 // Source of truth: plugins/soleur/docs/pages/skills.html (pre-migration)
-// Last verified: 2026-02-22 (4 categories, 47 skills)
+// Last verified: 2026-02-22 (4 categories, 46 skills)
 const SKILL_CATEGORIES = {
-  // Content & Release (16)
+  // Content & Release (17)
   brainstorming: "Content & Release",
   changelog: "Content & Release",
   "compound-docs": "Content & Release",
@@ -19,7 +19,6 @@ const SKILL_CATEGORIES = {
   "gemini-imagegen": "Content & Release",
   growth: "Content & Release",
   "legal-audit": "Content & Release",
-  marketing: "Content & Release",
   "legal-generate": "Content & Release",
   "release-announce": "Content & Release",
   "release-docs": "Content & Release",
