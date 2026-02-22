@@ -25,6 +25,16 @@ The infra-security agent's curl approach and other agents' `gh` CLI usage work w
 
 Before building or integrating MCP servers, verify three things: (1) the specific tools you need exist in the catalog, (2) the authentication model is compatible with your distribution mechanism, and (3) the transport type can be bundled. Both Cloudflare and GitHub MCP servers fail check (2) -- they require authentication that plugin.json cannot express. The knowledge base pattern (documenting correct sequences in learnings/) is a better solution for agent autonomy gaps than replacing working API calls with MCP wrappers. Revisit when plugin.json gains a `headers` field for authenticated HTTP MCP servers.
 
+## [Updated 2026-02-22] Cloudflare MCP Blockers Resolved
+
+Cloudflare released a unified "Code Mode" MCP server at `https://mcp.cloudflare.com/mcp` (distinct from the older 15 managed servers audited above). This resolves all three Cloudflare blockers:
+
+1. **DNS CRUD now available.** The unified server covers all ~2,500 Cloudflare API endpoints (including DNS record CRUD, zone settings, WAF, Workers, Zero Trust) through two tools: `search` and `execute`.
+2. **OAuth works via plugin.json.** The server supports OAuth 2.1 without requiring pre-registered client credentials. Claude Code handles this natively via the `/mcp` command -- users authenticate once in their browser. Plugin.json can bundle the server identically to Context7: `{"type": "http", "url": "https://mcp.cloudflare.com/mcp"}`.
+3. **Native HTTP transport.** The unified server is a remote HTTP endpoint. No stdio bridge needed.
+
+The infra-security agent was rewritten in PR #254 to use MCP instead of curl for all Cloudflare API operations. The GitHub MCP conclusion remains unchanged -- `gh` CLI is still preferred.
+
 ## Tags
 category: integration-issues
 module: infra-security-agent
