@@ -4,7 +4,7 @@ The Company-as-a-Service platform. Collapse the friction between a startup idea 
 
 60 agents across engineering, finance, marketing, legal, operations, product, sales, and support -- compounding your company knowledge with every session.
 
-[![Version](https://img.shields.io/badge/version-3.0.0-blue)](https://github.com/jikig-ai/soleur/releases)
+[![Version](https://img.shields.io/badge/version-3.0.1-blue)](https://github.com/jikig-ai/soleur/releases)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Discord](https://img.shields.io/badge/Discord-community-5865F2?logo=discord&logoColor=white)](https://discord.gg/PYZbPBKMUY)
 [![Website](https://img.shields.io/badge/website-soleur.ai-C9A962)](https://soleur.ai)

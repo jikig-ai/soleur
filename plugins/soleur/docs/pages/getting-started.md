@@ -84,15 +84,15 @@ The 5-step workflow (invoked automatically via `/soleur:go` or directly via Skil
 <div class="commands-list">
   <div class="command-item">
     <code>Building a Feature</code>
-    <p>brainstorm &rarr; plan &rarr; work &rarr; review &rarr; compound</p>
+    <p>/soleur:go build [feature] &rarr; brainstorm &rarr; plan &rarr; work &rarr; review &rarr; compound</p>
   </div>
   <div class="command-item">
     <code>Fixing a Bug</code>
-    <p>one-shot (autonomous fix from plan to PR)</p>
+    <p>/soleur:go fix [bug] &rarr; autonomous fix from plan to PR</p>
   </div>
   <div class="command-item">
     <code>Reviewing a PR</code>
-    <p>review (run multi-agent review on existing PR)</p>
+    <p>/soleur:go review &rarr; multi-agent review on existing PR</p>
   </div>
 </div>
 
@@ -105,7 +105,7 @@ The 5-step workflow (invoked automatically via `/soleur:go` or directly via Skil
   </div>
   <div class="command-item">
     <code>Generating Legal Documents</code>
-    <p>/legal-generate &rarr; Terms, Privacy Policy, GDPR Policy, and more</p>
+    <p>/soleur:go generate legal documents &rarr; Terms, Privacy Policy, GDPR Policy, and more</p>
   </div>
   <div class="command-item">
     <code>Validating a Business Idea</code>
@@ -113,7 +113,7 @@ The 5-step workflow (invoked automatically via `/soleur:go` or directly via Skil
   </div>
   <div class="command-item">
     <code>Tracking Expenses</code>
-    <p>Ask about operational expenses &rarr; routed to ops-advisor agent</p>
+    <p>/soleur:go review our expenses &rarr; routed to ops-advisor agent</p>
   </div>
 </div>
 
