@@ -357,22 +357,41 @@ cleanup_merged_worktrees() {
     return 0
   fi
 
+  # Build a map of branch -> actual worktree path using git's porcelain output.
+  # This is essential because branch names use slashes (feat/fix-x) but worktree
+  # directories use hyphens (feat-fix-x), so we cannot construct paths from branch names.
+  local -A branch_to_worktree
+  local current_wt_path="" current_wt_branch=""
+  while IFS= read -r line; do
+    if [[ "$line" == "worktree "* ]]; then
+      current_wt_path="${line#worktree }"
+    elif [[ "$line" == "branch refs/heads/"* ]]; then
+      current_wt_branch="${line#branch refs/heads/}"
+      branch_to_worktree["$current_wt_branch"]="$current_wt_path"
+    elif [[ -z "$line" ]]; then
+      current_wt_path=""
+      current_wt_branch=""
+    fi
+  done < <(git worktree list --porcelain 2>/dev/null)
+
   local cleaned=()
 
   for branch in $gone_branches; do
-    local worktree_path="$WORKTREE_DIR/$branch"
-    local spec_dir="$GIT_ROOT/knowledge-base/specs/$branch"
+    local worktree_path="${branch_to_worktree[$branch]:-}"
+    local safe_branch
+    safe_branch=$(echo "$branch" | tr '/' '-')
+    local spec_dir="$GIT_ROOT/knowledge-base/specs/$safe_branch"
     local archive_dir="$GIT_ROOT/knowledge-base/specs/archive"
 
     # Skip if active worktree
-    if [[ "$PWD" == "$worktree_path"* ]]; then
+    if [[ -n "$worktree_path" && "$PWD" == "$worktree_path"* ]]; then
       [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) $branch - currently active${NC}"
       continue
     fi
 
     # Skip if worktree has uncommitted changes (safety check)
     # Always print this warning since uncommitted changes need user attention
-    if [[ -d "$worktree_path" ]]; then
+    if [[ -n "$worktree_path" && -d "$worktree_path" ]]; then
       local status
       status=$(git -C "$worktree_path" status --porcelain 2>/dev/null)
       if [[ -n "$status" ]]; then
@@ -383,8 +402,8 @@ cleanup_merged_worktrees() {
 
     # Archive spec directory if exists (timestamp prevents collisions)
     if [[ -d "$spec_dir" ]]; then
-      local safe_branch=$(echo "$branch" | tr '/' '-')
-      local archive_name="$(date +%Y-%m-%d-%H%M%S)-$safe_branch"
+      local archive_name
+      archive_name="$(date +%Y-%m-%d-%H%M%S)-$safe_branch"
       local archive_path="$archive_dir/$archive_name"
 
       mkdir -p "$archive_dir"
@@ -393,11 +412,14 @@ cleanup_merged_worktrees() {
       fi
     fi
 
-    # Remove worktree if exists
-    if [[ -d "$worktree_path" ]]; then
+    # Remove worktree if exists (use actual path from git, not constructed path)
+    if [[ -n "$worktree_path" && -d "$worktree_path" ]]; then
       if ! git worktree remove "$worktree_path" 2>/dev/null; then
-        [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not remove worktree for $branch${NC}"
-        continue
+        # Retry with --force for edge cases (e.g., untracked files from interrupted archival)
+        if ! git worktree remove "$worktree_path" --force 2>/dev/null; then
+          [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not remove worktree for $branch${NC}"
+          continue
+        fi
       fi
     fi
 
