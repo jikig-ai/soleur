@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.35.1] - 2026-02-22
+
+### Fixed
+
+- Update landing page department count from 7 to 8 and add Finance and Support department cards
+- Update landing page inline department list to include all 8 domains
+- Update landing page departments grid to 4-column layout for 8 cards (2 perfect rows)
+- Update terms and conditions from "58 AI agents across seven domains" to "60 AI agents across eight domains"
+
 ## [2.35.0] - 2026-02-22
 
 ### Added
