@@ -321,9 +321,9 @@ mcp__xcodebuildmcp__shutdown_simulator({ simulator_id: "[uuid]" })
 /xcode-test current
 ```
 
-## Integration with /soleur:review
+## Integration with `soleur:review`
 
-When reviewing PRs that touch iOS code, the `/soleur:review` command can spawn this as a subagent:
+When reviewing PRs that touch iOS code, the `soleur:review` skill can spawn this as a subagent:
 
 ```
 Task general-purpose("Run /xcode-test for scheme [name]. Build, install on simulator, test key screens, check for crashes.")

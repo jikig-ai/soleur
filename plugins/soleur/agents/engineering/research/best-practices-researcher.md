@@ -25,7 +25,7 @@ Before going online, check if curated knowledge already exists in skills:
    - Frontend/Design → `frontend-design`, `swiss-design`
    - TypeScript/React → `react-best-practices`
    - AI/Agents → `agent-native-architecture`, `create-agent-skills`
-   - Documentation → `compound-docs`, `every-style-editor`
+   - Documentation → `compound-capture`, `every-style-editor`
    - File operations → `rclone`, `git-worktree`
    - Image generation → `gemini-imagegen`
 

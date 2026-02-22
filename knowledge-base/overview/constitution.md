@@ -45,7 +45,7 @@ Project principles organized by domain. Add principles as you learn them.
 
 ### Always
 
-- Core workflow commands use `soleur:` prefix to avoid collisions with built-in commands
+- Core workflow stages (brainstorm, plan, work, review, compound, one-shot) are skills invoked via the Skill tool; only three commands remain (`go`, `sync`, `help`) using the `soleur:` prefix to avoid collisions with built-in commands
 - Every plugin change must update three files: plugin.json (version), CHANGELOG.md, and README.md (counts/tables)
 - When adding a new skill, manually register it in `docs/_data/skills.js` SKILL_CATEGORIES -- skill discovery does not recurse and the docs site will silently omit unregistered skills
 - After version bumps, diff root README agent/skill counts against plugin README counts -- they drift independently and have diverged multiple times
@@ -55,7 +55,7 @@ Project principles organized by domain. Add principles as you learn them.
 - At session start, run `worktree-manager.sh cleanup-merged` to remove worktrees whose remote branches are [gone]; this is the recovery mechanism for the merge-then-session-end gap where cleanup was deferred
 - Operations that modify the knowledge-base or move files must use `git mv` to preserve history and produce a single atomic commit that can be reverted with `git revert`
 - New commands must be idempotent -- running the same command twice must not create duplicates or corrupt state
-- Run code review and `/soleur:compound` before committing -- the commit is the gate, not the PR; compound must be explicitly offered to the user before every commit, never silently skipped; compound must never be placed after `git push` or CI because compound produces a commit that invalidates CI and creates an infinite loop
+- Run code review and compound (skill: `soleur:compound`) before committing -- the commit is the gate, not the PR; compound must be explicitly offered to the user before every commit, never silently skipped; compound must never be placed after `git push` or CI because compound produces a commit that invalidates CI and creates an infinite loop
 - When reading file content during an active git merge conflict, use stage numbers: `git show :2:<path>` (ours) and `git show :3:<path>` (theirs); `git show HEAD:<path>` only returns one side and discards the incoming changes
 - Before staging files after a merge, grep staged content for conflict markers: `git diff --cached | grep -E '^\+(<{7}|={7}|>{7})'` -- conflict markers are invisible in normal review and have been committed undetected
 - When modifying agent instructions (adding checks, changing behavior), also update any skill Task prompts that reference the agent with hardcoded check lists -- stale prompts silently ignore new agent capabilities
@@ -78,7 +78,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Never use `git stash` in a worktree to hold significant uncommitted work during merge operations -- commit first (even as WIP), then merge; a stash pop conflict can destroy the worktree and branch, losing all uncommitted changes irrecoverably
 - Never allow agents to work directly on the default branch -- create a worktree (`git worktree add .worktrees/feat-<name> -b feat/<name>`) before the first file edit, even for trivial fixes; bare branches on the main checkout block parallel work
 - Never persist aggregated security findings (audit reports, posture assessments) to files in an open-source repository -- output inline in conversation only; the aggregation is the risk, not the individual facts
-- Never design skills that invoke other skills programmatically -- skills are user-invoked entry points with no inter-skill API; redirect users to the target skill or route through an agent via Task tool
+- Never design skills that invoke other skills programmatically -- skills are user-invoked entry points with no inter-skill API; redirect users to the target skill or route through an agent via Task tool. Note: pipeline orchestration via the Skill tool (e.g., one-shot sequencing plan then work) is the approved pattern; this principle targets tight programmatic imports between skill implementations, not Skill tool invocations from commands or other skills
 - Never put `<example>` blocks or `<commentary>` tags in agent description frontmatter -- these belong in the agent body (after `---`) which is only loaded on invocation; descriptions are loaded into the system prompt on every turn and their cumulative size must stay minimal
 - Never skip compound's constitution promotion or route-to-definition phases in automated pipelines (one-shot, ship) -- the model will rationalize skipping them as "pipeline mode" optimization, but these are the phases that prevent repeated mistakes across sessions
 - Never spawn file-modifying agents (ops-provisioner, brand-architect, etc.) from the main branch -- create a worktree first; agents that edit project files should include a defensive branch check as a safety net, but the primary enforcement belongs at the caller (command/skill) layer
@@ -87,7 +87,7 @@ Project principles organized by domain. Add principles as you learn them.
 ### Prefer
 
 - Plugin infrastructure (agents, commands, skills) is intentionally static - behavior changes require editing markdown files, not runtime registration
-- Use skills for agent-discoverable capabilities; use commands only for multi-phase orchestration workflows or actions requiring human judgment -- commands are invisible to agents
+- Use skills for agent-discoverable capabilities and workflow stages; use commands only for entry-point routing (go), knowledge-base sync (sync), and help -- commands are invisible to agents
 - Verify documentation against implementation reality before trusting it; treat docs about "what exists" as hypotheses to verify
 
 - `overview/` documents what the project does; `overview/constitution.md` documents how to work on it
@@ -107,7 +107,7 @@ Project principles organized by domain. Add principles as you learn them.
 - When adopting external components (agents, skills, libraries), trim to essentials that leverage the model's built-in knowledge rather than embedding encyclopedic reference material
 - Run `/soleur:plan_review` after brainstorm-generated plans to catch scope bloat -- plans consistently shrink by 30-50% after review (e.g., 9 components to 6, 3 parallel agents to 1, multi-file to single-file)
 - When merging or consolidating duplicate functionality, prefer a single inline implementation over separate files/agents/skills until complexity demands extraction
-- When simplifying a multi-command system, prefer adding a router/facade over migrating existing components -- the UX improvement comes from fewer entry points, not fewer files; migration has hidden costs (cross-reference breakage, format differences, testing burden) that outweigh cosmetic benefits
+- When simplifying a multi-command system, prefer migrating workflow stages to skills and adding a router command (go) -- skills are discoverable by agents and invocable via the Skill tool, while commands are invisible to agents; keep only entry-point commands that need slash-command UX
 - Prefer inline instructions over Task agents for deterministic checks (shell commands with binary pass/fail outcomes) -- agents add LLM round-trip latency to what would otherwise be millisecond operations
 - Plans should specify version bump intent (MINOR/PATCH/MAJOR) not exact version numbers, to avoid conflicts between parallel feature branches
 - Experimental feature flags should self-manage within execution scope -- activate on user consent, deactivate on completion or failure -- never require manual setup for features that already have a consent prompt

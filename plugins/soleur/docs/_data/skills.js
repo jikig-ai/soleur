@@ -3,13 +3,14 @@ import { join, resolve } from "node:path";
 import yaml from "yaml";
 
 // Category mapping -- update here when skills are added/reorganized
-// Source of truth: plugins/soleur/docs/pages/skills.html (pre-migration)
-// Last verified: 2026-02-22 (4 categories, 46 skills)
+// Source of truth: plugins/soleur/docs/pages/skills.html
+// Last verified: 2026-02-22 (4 categories, 52 skills)
 const SKILL_CATEGORIES = {
-  // Content & Release (17)
-  brainstorming: "Content & Release",
+  // Content & Release (16)
+  "brainstorm-techniques": "Review & Planning",
   changelog: "Content & Release",
-  "compound-docs": "Content & Release",
+  compound: "Content & Release",
+  "compound-capture": "Content & Release",
   "content-writer": "Content & Release",
   "deploy-docs": "Content & Release",
   "discord-content": "Content & Release",
@@ -38,23 +39,29 @@ const SKILL_CATEGORIES = {
   "spec-templates": "Development",
   "user-story-writer": "Development",
 
-  // Review & Planning (4)
+  // Review & Planning (7)
+  brainstorm: "Review & Planning",
   "deepen-plan": "Review & Planning",
   "heal-skill": "Review & Planning",
+  plan: "Review & Planning",
   "plan-review": "Review & Planning",
   "report-bug": "Review & Planning",
+  review: "Review & Planning",
 
-  // Workflow (13)
+  // Workflow (16)
   "agent-browser": "Workflow",
   community: "Workflow",
   deploy: "Workflow",
   "git-worktree": "Workflow",
+  "merge-pr": "Workflow",
+  "one-shot": "Workflow",
   rclone: "Workflow",
   "reproduce-bug": "Workflow",
   "resolve-parallel": "Workflow",
   "resolve-pr-parallel": "Workflow",
   "resolve-todo-parallel": "Workflow",
   ship: "Workflow",
+  work: "Workflow",
   "test-browser": "Workflow",
   "test-fix-loop": "Workflow",
   "xcode-test": "Workflow",

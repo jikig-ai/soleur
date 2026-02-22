@@ -18,103 +18,30 @@ The recommended way to use Soleur is through the unified entry point:
 /soleur:go <what you want to do>
 ```
 
-This classifies your intent and routes to the right workflow. For existing codebases, run `/soleur:sync` first to populate your knowledge-base.
+This classifies your intent and routes to the right workflow skill. For existing codebases, run `/soleur:sync` first to populate your knowledge-base.
 
-**Advanced workflow** (individual commands):
+The 5-step workflow (invoked automatically via `/soleur:go` or directly via Skill tool):
 
 ```text
-/soleur:brainstorm  -->  /soleur:plan  -->  /soleur:work  -->  /soleur:review  -->  /soleur:compound
+brainstorm  -->  plan  -->  work  -->  review  -->  compound
 ```
 
-### 1. Brainstorm (`/soleur:brainstorm`)
-
-Start here when you have a feature idea but need to explore it further. This command helps you:
-
-- Clarify what you're building through guided questions
-- Explore different approaches with pros/cons
-- Make key decisions before coding
-- Document the design in `knowledge-base/brainstorms/`
-
-**When to use:** New features, unclear requirements, multiple valid approaches.
-
-**Example:** `/soleur:brainstorm Add user authentication to the app`
-
-### 2. Plan (`/soleur:plan`)
-
-Once you know what to build, create an implementation plan. This command:
-
-- Analyzes your codebase for relevant patterns
-- Breaks the work into specific, actionable tasks
-- Creates a structured plan document
-- Optionally runs parallel research agents for deeper analysis
-
-**When to use:** After brainstorming, or when requirements are already clear.
-
-**Example:** `/soleur:plan` (auto-detects recent brainstorm) or `/soleur:plan path/to/spec.md`
-
-### 3. Work (`/soleur:work`)
-
-Execute the plan systematically. This command:
-
-- Reads your plan and sets up the environment
-- Detects independent tasks and offers parallel execution via subagents (max 5)
-- Tracks progress with TodoWrite
-- Makes incremental commits as logical units complete
-- Follows existing codebase patterns
-
-**When to use:** When you have a plan ready to execute.
-
-**Example:** `/soleur:work path/to/plan.md`
-
-### 4. Review (`/soleur:review`)
-
-Run comprehensive code review before creating a PR. This command:
-
-- Launches multiple specialized review agents in parallel
-- Checks for security, performance, patterns, and simplicity
-- Provides actionable feedback on your changes
-
-**When to use:** After completing implementation, before creating PR.
-
-**Example:** `/soleur:review`
-
-### 5. Compound (`/soleur:compound`)
-
-Capture learnings from your work. This command:
-
-- Documents debugging breakthroughs and non-obvious patterns
-- Saves knowledge to `knowledge-base/learnings/`
-- Makes future similar problems easier to solve
-
-**When to use:** Before creating PR, especially if you solved tricky problems.
-
-**Example:** `/soleur:compound` (or just say "that worked!" and it triggers automatically)
-
-### Sync (`/soleur:sync`)
-
-Analyze an existing codebase and populate the knowledge-base with conventions, architecture patterns, testing practices, and technical debt. Also scans accumulated learnings against skill/agent/command definitions and proposes one-line bullet edits. Run this before starting the workflow on a project that already has code.
-
-**Example:** `/soleur:sync` or `/soleur:sync conventions`
-
-### Help (`/soleur:help`)
-
-List all available Soleur commands, agents, and skills with descriptions and usage hints.
-
-**Example:** `/soleur:help`
-
-### One-Shot (`/soleur:one-shot`)
-
-Full autonomous engineering workflow that goes from plan to PR in a single command. Combines plan, work, review, and compound into one continuous flow.
-
-**Example:** `/soleur:one-shot Add dark mode support`
+| Skill | Purpose |
+|-------|---------|
+| `brainstorm` | Explore requirements and approaches before planning |
+| `plan` | Create structured implementation plans |
+| `work` | Execute plans with incremental commits |
+| `review` | Run comprehensive code review with specialized agents |
+| `compound` | Capture learnings for future work |
+| `one-shot` | Full autonomous workflow from plan to PR |
 
 ## Components
 
 | Component | Count |
 |-----------|-------|
 | Agents | 60 |
-| Commands | 9 |
-| Skills | 46 |
+| Commands | 3 |
+| Skills | 52 |
 | MCP Servers | 3 |
 
 ## Agents
@@ -262,15 +189,9 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 
 | Command | Description |
 |---------|-------------|
-| `/soleur:go` | Unified entry point -- classifies intent and routes to the right workflow |
-| `/soleur:brainstorm` | Explore requirements and approaches before planning |
-| `/soleur:plan` | Create implementation plans |
-| `/soleur:work` | Execute work items systematically |
-| `/soleur:review` | Run comprehensive code reviews |
-| `/soleur:compound` | Document solved problems to compound team knowledge |
+| `/soleur:go` | Unified entry point -- classifies intent and routes to the right workflow skill |
 | `/soleur:sync` | Analyze codebase and populate knowledge-base with conventions, patterns, and overview documentation |
 | `/soleur:help` | List all available Soleur commands, agents, and skills |
-| `/soleur:one-shot` | Full autonomous engineering workflow from plan to PR |
 
 ## Skills
 
@@ -278,10 +199,11 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 
 | Skill | Description |
 |-------|-------------|
-| `brainstorming` | Explore intent, approaches, and design decisions |
+| `brainstorm-techniques` | Explore intent, approaches, and design decisions |
 | `changelog` | Create engaging changelogs for recent merges |
 | `community` | Manage community engagement across Discord and GitHub (setup, digests, health, welcome) |
-| `compound-docs` | Capture solved problems as categorized documentation |
+| `compound` | Document solved problems to compound team knowledge |
+| `compound-capture` | Capture solved problems as categorized documentation |
 | `deploy-docs` | Validate and prepare documentation for deployment |
 | `docs-site` | Scaffold Eleventy documentation sites with data-driven catalogs |
 | `discord-content` | Create and post brand-consistent community content to Discord |
@@ -317,10 +239,13 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 
 | Skill | Description |
 |-------|-------------|
+| `brainstorm` | Explore requirements and approaches before planning |
 | `deepen-plan` | Enhance plans with parallel research agents |
 | `heal-skill` | Fix skill documentation issues |
+| `plan` | Create structured implementation plans |
 | `plan-review` | Multi-agent plan review in parallel |
 | `report-bug` | Report a bug in the plugin |
+| `review` | Run comprehensive code review with specialized agents |
 
 ### Workflow
 
@@ -330,6 +255,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `deploy` | Deploy containerized applications via Docker build, GHCR push, and SSH |
 | `git-worktree` | Manage Git worktrees for parallel development |
 | `merge-pr` | Autonomous single-PR merge with conflict resolution and cleanup |
+| `one-shot` | Full autonomous engineering workflow from plan to PR |
 | `rclone` | Upload files to S3, Cloudflare R2, Backblaze B2, and cloud storage |
 | `reproduce-bug` | Reproduce bugs using logs, console, and browser screenshots |
 | `resolve-parallel` | Resolve TODO comments in parallel |
@@ -338,6 +264,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `ship` | Enforce feature lifecycle checklist before creating PRs |
 | `test-browser` | Run browser tests on PR-affected pages |
 | `test-fix-loop` | Autonomous test-fix iteration with git stash isolation |
+| `work` | Execute plans with incremental commits |
 | `xcode-test` | Build and test iOS apps on simulator |
 
 ## MCP Servers

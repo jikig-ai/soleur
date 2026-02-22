@@ -32,41 +32,50 @@ Soleur follows a structured 5-step workflow for software development:
 
 <div class="commands-list">
   <div class="command-item">
-    <code>1. /soleur:brainstorm</code>
+    <code>/soleur:go</code>
+    <p>The recommended entry point -- describe what you want and Soleur routes to the right workflow</p>
+  </div>
+</div>
+
+The 5-step workflow (invoked automatically via `/soleur:go` or directly via Skill tool):
+
+<div class="commands-list">
+  <div class="command-item">
+    <code>1. brainstorm</code>
     <p>Explore what to build</p>
   </div>
   <div class="command-item">
-    <code>2. /soleur:plan</code>
+    <code>2. plan</code>
     <p>Create a structured implementation plan</p>
   </div>
   <div class="command-item">
-    <code>3. /soleur:work</code>
+    <code>3. work</code>
     <p>Execute the plan with quality checks</p>
   </div>
   <div class="command-item">
-    <code>4. /soleur:review</code>
+    <code>4. review</code>
     <p>Run multi-agent code review</p>
   </div>
   <div class="command-item">
-    <code>5. /soleur:compound</code>
+    <code>5. compound</code>
     <p>Document learnings for future reference</p>
   </div>
 </div>
 
-## Quick Commands
+## Commands
 
 <div class="commands-list">
   <div class="command-item">
-    <code>/soleur:one-shot</code>
-    <p>Full autonomous pipeline from plan to PR</p>
-  </div>
-  <div class="command-item">
-    <code>/soleur:help</code>
-    <p>List all available components</p>
+    <code>/soleur:go</code>
+    <p>Unified entry point -- routes to the right workflow skill</p>
   </div>
   <div class="command-item">
     <code>/soleur:sync</code>
     <p>Analyze and document your codebase</p>
+  </div>
+  <div class="command-item">
+    <code>/soleur:help</code>
+    <p>List all available components</p>
   </div>
 </div>
 
@@ -92,7 +101,7 @@ Soleur follows a structured 5-step workflow for software development:
 <div class="commands-list">
   <div class="command-item">
     <code>Defining Your Brand</code>
-    <p>/soleur:brainstorm define our brand identity &rarr; interactive workshop producing a brand guide</p>
+    <p>/soleur:go define our brand identity &rarr; interactive workshop producing a brand guide</p>
   </div>
   <div class="command-item">
     <code>Generating Legal Documents</code>
@@ -100,7 +109,7 @@ Soleur follows a structured 5-step workflow for software development:
   </div>
   <div class="command-item">
     <code>Validating a Business Idea</code>
-    <p>/soleur:brainstorm validate our business idea &rarr; 6-gate validation workshop</p>
+    <p>/soleur:go validate our business idea &rarr; 6-gate validation workshop</p>
   </div>
   <div class="command-item">
     <code>Tracking Expenses</code>

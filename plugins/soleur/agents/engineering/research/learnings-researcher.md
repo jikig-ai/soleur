@@ -132,7 +132,7 @@ For each relevant document, return a summary in this format:
 
 ## Frontmatter Schema Reference
 
-Reference the [yaml-schema.md](../../skills/compound-docs/references/yaml-schema.md) for the complete schema. Key enum values:
+Reference the [yaml-schema.md](../../skills/compound-capture/references/yaml-schema.md) for the complete schema. Key enum values:
 
 **problem_type values:**
 - build_error, test_failure, runtime_error, performance_issue
@@ -236,7 +236,7 @@ Structure your findings as:
 ## Integration Points
 
 This agent is designed to be invoked by:
-- `/soleur:plan` - To inform planning with institutional knowledge
+- `soleur:plan` skill - To inform planning with institutional knowledge
 - `/deepen-plan` - To add depth with relevant learnings
 - Manual invocation before starting work on a feature
 
