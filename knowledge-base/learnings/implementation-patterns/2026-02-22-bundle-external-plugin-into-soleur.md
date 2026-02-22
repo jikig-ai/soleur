@@ -6,6 +6,7 @@ severity: medium
 tags: [plugin-architecture, hooks, bundling, one-shot]
 symptoms: [external-plugin-dependency, one-shot-failure]
 date: 2026-02-22
+synced_to: [soleur:compound, constitution]
 ---
 
 # Bundle External Plugin into Soleur via Hook + Script
