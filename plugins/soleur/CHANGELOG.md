@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.23.14] - 2026-02-22
+
+### Fixed
+
+- Remove command substitution from one-shot command to avoid permission prompt on startup
+- Fix stale `.claude/` file paths in compound-docs and review command (#220)
+
 ## [2.23.13] - 2026-02-21
 
 ### Changed
