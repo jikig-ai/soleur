@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.36.1] - 2026-02-22
+
+### Changed
+
+- Make landing page department cards, count, and inline list data-driven from `agents.js` DOMAIN_META
+- Make legal doc agent/skill counts and domain lists data-driven via Eleventy template variables
+- Add `departments` count to `stats.js` (computed from non-empty agent directories)
+- Add `departmentList` string export to `agents.js` (comma-separated domain names)
+- Replace `DOMAIN_LABELS` with richer `DOMAIN_META` constant (label, icon, card description)
+- Update "Adding a New Domain" checklist to reflect auto-generated landing page and legal docs
+
+### Fixed
+
+- Fix stale counts in privacy-policy.md (was "45 agents, 45 skills") and acceptable-use-policy.md (was "45 agents and 45 skills")
+
 ## [2.36.0] - 2026-02-22
 
 ### Added

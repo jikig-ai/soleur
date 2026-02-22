@@ -59,9 +59,13 @@ skills/
 To add a new domain (e.g., product, growth):
 
 1. Create `agents/<domain>/` for domain-specific agents
-2. Skills stay flat at root level (the skill loader does not recurse into subdirectories)
-3. Commands stay under `commands/soleur/` (they are domain-agnostic workflow orchestrators)
-4. The plugin loader discovers agents recursively -- no config changes needed
+2. Add `DOMAIN_META` entry in `docs/_data/agents.js` (label, icon, card description)
+3. Add key to `domainOrder` and `DOMAIN_CSS_VARS` in the same file
+4. Add CSS variable in `docs/css/style.css`
+5. Skills stay flat at root level (the skill loader does not recurse into subdirectories)
+6. Commands stay under `commands/soleur/` (they are domain-agnostic workflow orchestrators)
+7. The plugin loader discovers agents recursively -- no config changes needed
+8. Landing page department cards, stats, and legal doc counts update automatically from data
 
 ## Command Naming Convention
 
@@ -166,7 +170,7 @@ Domain leaders are agents that orchestrate a business domain's specialist team. 
 3. Add a row to the Domain Config table in `commands/soleur/brainstorm.md` Phase 0.5 with: domain name, assessment question, leader name, routing prompt, options, and task prompt
 4. Add disambiguation sentences to agents with overlapping scope in adjacent domains (both directions)
 5. Verify token budget: `shopt -s globstar && grep -h 'description:' agents/**/*.md | wc -w` (under 2,500)
-6. Update docs data files: `agents.js` (DOMAIN_LABELS, DOMAIN_CSS_VARS, domainOrder), `style.css` (CSS variable)
+6. Update docs data files: `agents.js` (DOMAIN_META, DOMAIN_CSS_VARS, domainOrder), `style.css` (CSS variable). Landing page and legal docs update automatically from data.
 7. Update AGENTS.md (directory tree, domain leader table) and README.md (agent section, counts)
 8. Version bump (MINOR) and CHANGELOG
 

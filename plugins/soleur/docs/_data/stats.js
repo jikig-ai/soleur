@@ -20,6 +20,12 @@ export default function () {
 
   const agents = countMdFilesRecursive(agentsDir);
 
+  // Departments: count non-empty top-level directories under agents/
+  const departments = readdirSync(agentsDir, { withFileTypes: true })
+    .filter(
+      (e) => e.isDirectory() && countMdFilesRecursive(join(agentsDir, e.name)) > 0
+    ).length;
+
   // Skills: count directories that contain SKILL.md (flat, no recursion)
   let skills = 0;
   for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
@@ -38,5 +44,5 @@ export default function () {
     f.endsWith(".md")
   ).length;
 
-  return { agents, skills, commands };
+  return { agents, skills, commands, departments };
 }
