@@ -19,6 +19,10 @@ Evaluate current marketing state before making recommendations.
 - Inventory marketing artifacts: existing content, SEO state, community presence, conversion surfaces.
 - Report gaps and strengths in a structured table (area, status, priority).
 
+#### Capability Gaps
+
+After completing the assessment, check whether any agents or skills are missing from the current domain that would be needed to execute the proposed work. If gaps exist, list each with what is missing, which domain it belongs to, and why it is needed. If no gaps exist, omit this section entirely.
+
 ### 2. Recommend
 
 Prioritize marketing initiatives based on assessment findings.

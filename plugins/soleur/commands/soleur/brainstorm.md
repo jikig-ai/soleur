@@ -376,6 +376,8 @@ Write the brainstorm document. **Use worktree path if created.**
 
 **Document structure:** See the `brainstorming` skill for the template format. Key sections: What We're Building, Why This Approach, Key Decisions, Open Questions.
 
+If domain leaders participated and reported capability gaps in their assessments, include a `## Capability Gaps` section after "Open Questions" listing each gap with what is missing, which domain it belongs to, and why it is needed. Omit this section if no domain leaders participated or no gaps were reported.
+
 Ensure the brainstorms directory exists before writing.
 
 ### Phase 3.6: Create Spec and Issue (if worktree exists)
