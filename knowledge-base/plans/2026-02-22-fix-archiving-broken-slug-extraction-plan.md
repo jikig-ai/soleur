@@ -283,14 +283,14 @@ To:
 
 ## Acceptance Criteria
 
-- [ ] `compound-capture` branch detection handles both `feat-` and `feat/` prefixes
-- [ ] `compound-capture` slug extraction uses prose instructions (not bash code fence) covering `feat/`, `feat-`, `feature/`, `fix/`, `fix-`
-- [ ] `cleanup-merged` archives brainstorms matching the feature slug
-- [ ] `cleanup-merged` archives plans matching the feature slug
-- [ ] All 93 orphaned artifacts are moved to their respective `archive/` directories via `git mv`
-- [ ] `external/` and `feat-fix-archiving/` spec directories are NOT archived
-- [ ] No active brainstorms, plans, or specs exist without a corresponding feature branch (except `external/`)
-- [ ] compound skill documentation reflects the corrected slug extraction logic
+- [x] `compound-capture` branch detection handles both `feat-` and `feat/` prefixes
+- [x] `compound-capture` slug extraction uses prose instructions (not bash code fence) covering `feat/`, `feat-`, `feature/`, `fix/`, `fix-`
+- [x] `cleanup-merged` archives brainstorms matching the feature slug
+- [x] `cleanup-merged` archives plans matching the feature slug
+- [x] All 92 orphaned artifacts are moved to their respective `archive/` directories via `git mv`
+- [x] `external/` and `feat-fix-archiving/` spec directories are NOT archived
+- [x] No active brainstorms, plans, or specs exist without a corresponding feature branch (except `external/`)
+- [x] compound skill documentation reflects the corrected slug extraction logic
 
 ## Test Scenarios
 

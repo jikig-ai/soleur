@@ -24,13 +24,13 @@
 
 ## Phase 4: One-Time Orphan Cleanup
 
-- [ ] 4.1 Archive all orphaned brainstorms (13 files) with `git mv`
-- [ ] 4.2 Archive all orphaned plans (38 files) with `git mv`
-- [ ] 4.3 Archive all orphaned spec directories (41 dirs, excluding `external/` and `feat-fix-archiving/`) with `git mv`
-- [ ] 4.4 Commit as single atomic operation
+- [x] 4.1 Archive all orphaned brainstorms (13 files) with `git mv`
+- [x] 4.2 Archive all orphaned plans (38 files) with `git mv`
+- [x] 4.3 Archive all orphaned spec directories (41 dirs, excluding `external/` and `feat-fix-archiving/`) with `git mv`
+- [x] 4.4 Commit as single atomic operation
 
 ## Phase 5: Verification
 
-- [ ] 5.1 Verify no active brainstorms/plans/specs remain without a feature branch (except external/)
-- [ ] 5.2 Verify compound-capture branch detection handles `feat/` prefix
-- [ ] 5.3 Verify archived artifacts landed in correct archive/ directories with timestamps
+- [x] 5.1 Verify no active brainstorms/plans/specs remain without a feature branch (except external/)
+- [x] 5.2 Verify compound-capture branch detection handles `feat/` prefix
+- [x] 5.3 Verify archived artifacts landed in correct archive/ directories with timestamps

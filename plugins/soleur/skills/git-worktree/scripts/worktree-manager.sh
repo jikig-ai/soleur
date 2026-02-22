@@ -335,6 +335,27 @@ cleanup_worktrees() {
   echo -e "${GREEN}Cleanup complete!${NC}"
 }
 
+# Archive KB artifact files matching a slug from a flat directory
+# Usage: archive_kb_files <dir> <slug> <label> <verbose>
+archive_kb_files() {
+  local dir="$1"
+  local slug="$2"
+  local label="$3"
+  local verbose="$4"
+  [[ -d "$dir" ]] || return 0
+  local archive_dir="$dir/archive"
+  mkdir -p "$archive_dir"
+  for f in "$dir"/*"$slug"*; do
+    [[ -f "$f" && "$f" != */archive/* ]] || continue
+    local fname ts
+    fname=$(basename "$f")
+    ts="$(date +%Y-%m-%d-%H%M%S)"
+    if ! mv "$f" "$archive_dir/$ts-$fname" 2>/dev/null; then
+      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not archive $label $fname${NC}"
+    fi
+  done
+}
+
 # Clean up worktrees for merged branches (detects [gone] status)
 cleanup_merged_worktrees() {
   # Determine output mode: verbose if TTY, quiet otherwise
@@ -411,6 +432,16 @@ cleanup_merged_worktrees() {
         [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not archive spec for $branch${NC}"
       fi
     fi
+
+    # Extract feature slug by stripping all known branch prefixes
+    local feature_slug="$safe_branch"
+    feature_slug="${feature_slug#feat-}"
+    feature_slug="${feature_slug#fix-}"
+    feature_slug="${feature_slug#feature-}"
+
+    # Archive brainstorms and plans matching the feature slug
+    archive_kb_files "$GIT_ROOT/knowledge-base/brainstorms" "$feature_slug" "brainstorm" "$verbose"
+    archive_kb_files "$GIT_ROOT/knowledge-base/plans" "$feature_slug" "plan" "$verbose"
 
     # Remove worktree if exists (use actual path from git, not constructed path)
     if [[ -n "$worktree_path" && -d "$worktree_path" ]]; then
