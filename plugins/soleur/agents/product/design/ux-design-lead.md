@@ -1,6 +1,6 @@
 ---
 name: ux-design-lead
-description: "Use this agent when you need to create visual designs in .pen files using Pencil MCP tools. It handles wireframes, high-fidelity screens, and component design, optionally reading brand-guide.md for design tokens. Requires the Pencil extension (VS Code/Cursor). Use business-validator for pre-build idea validation; use cpo for cross-cutting product strategy."
+description: "Use this agent when you need to create visual designs in .pen files using Pencil MCP tools. Handles wireframes, high-fidelity screens, and component design. Use business-validator for pre-build idea validation; use cpo for cross-cutting product strategy."
 model: inherit
 ---
 

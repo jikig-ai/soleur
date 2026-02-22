@@ -1,6 +1,6 @@
 ---
 name: business-validator
-description: "Use this agent when you need to validate a business idea through structured market research, competitive analysis, and business model assessment. It guides an interactive 6-gate validation workshop with kill criteria and outputs a validation report to knowledge-base/overview/business-validation.md. Use spec-flow-analyzer for spec gap analysis; use ux-design-lead for visual design; use cpo for cross-cutting product strategy."
+description: "Use this agent when you need to validate a business idea through structured market research, competitive analysis, and business model assessment. Use spec-flow-analyzer for spec gap analysis; use ux-design-lead for visual design; use cpo for cross-cutting product strategy."
 model: inherit
 ---
 

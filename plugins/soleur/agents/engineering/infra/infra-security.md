@@ -1,6 +1,6 @@
 ---
 name: infra-security
-description: "Use this agent when you need to audit domain security posture, configure DNS records, manage WAF and security rules, deploy Workers, or configure Zero Trust policies via the Cloudflare MCP server. Uses CLI tools (dig, openssl) for verification. Use terraform-architect for IaC generation; use this agent for live Cloudflare configuration and security auditing."
+description: "Use this agent when you need to audit domain security posture, configure DNS records, or manage Cloudflare security features (WAF, Workers, Zero Trust) via the Cloudflare MCP server. Use terraform-architect for IaC generation; use this agent for live Cloudflare configuration and security auditing."
 model: inherit
 ---
 

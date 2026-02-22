@@ -1,6 +1,6 @@
 ---
 name: community-manager
-description: "Use this agent when you need to analyze community engagement, generate weekly digests, or assess community health metrics. It reads Discord messages via bot API, fetches GitHub activity via gh CLI, and produces structured community reports. The agent orchestrates shell scripts for data collection and generates both markdown digests and condensed Discord posts."
+description: "Use this agent when you need to analyze community engagement, generate weekly digests, or assess community health metrics. Reads Discord messages via bot API and fetches GitHub activity via gh CLI to produce structured community reports."
 model: inherit
 ---
 
