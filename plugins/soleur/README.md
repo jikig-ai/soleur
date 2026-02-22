@@ -301,6 +301,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `resolve-todo-parallel` | Resolve CLI todos in parallel |
 | `ship` | Enforce feature lifecycle checklist before creating PRs |
 | `test-browser` | Run browser tests on PR-affected pages |
+| `test-fix-loop` | Autonomous test-fix iteration with git stash isolation |
 | `xcode-test` | Build and test iOS apps on simulator |
 
 ## MCP Servers
