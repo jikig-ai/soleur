@@ -6,14 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [2.31.3] - 2026-02-22
+## [2.31.4] - 2026-02-22
 
 ### Fixed
 
 - Remove all command substitution patterns from ship skill to prevent Claude Code security prompts
 - Replace "run X then use result in Y" prose with explicit two-step Bash call instructions
 - Add global "No command substitution" rule at top of ship SKILL.md
-- Replace `$(cat <<'EOF'...)` PR create pattern with direct multi-line string
+
+## [2.31.3] - 2026-02-22
+
+### Fixed
+
+- Align all onboarding artifacts with Company-as-a-Service vision (#248)
+- Fix business-validator agent context-blindness (add Step 0.5: Read Project Identity, make Gate 6 vision-aware, add Vision Alignment Check)
+- Fix CPO agent to cross-reference business-validation.md against brand-guide.md
+- Rewrite business-validation.md with correct Company-as-a-Service framing
+- Update plugin.json description, root README, Getting Started, llms.txt, plugin README, and AGENTS.md to describe all 5 domains
+- Replace hardcoded agent/skill counts with dynamic template variables in Getting Started
+- Add "Beyond Engineering" section to Getting Started with non-engineering workflows
+- Add "Your AI Organization" table to root README
+- Fix stale agent counts in brand-guide.md (50 -> 54)
+- Add constitution principle: assessment agents must read brand-guide.md before first decision gate
 
 ## [2.31.2] - 2026-02-22
 

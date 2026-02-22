@@ -2,16 +2,16 @@
 
 The Company-as-a-Service platform. Collapse the friction between a startup idea and a billion-dollar outcome.
 
-Currently: an orchestration engine for Claude Code -- agents, workflows, and compounding knowledge.
+54 agents across engineering, marketing, legal, operations, and product -- compounding your company knowledge with every session.
 
-[![Version](https://img.shields.io/badge/version-2.31.3-blue)](https://github.com/jikig-ai/soleur/releases)
+[![Version](https://img.shields.io/badge/version-2.31.4-blue)](https://github.com/jikig-ai/soleur/releases)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Discord](https://img.shields.io/badge/Discord-community-5865F2?logo=discord&logoColor=white)](https://discord.gg/PYZbPBKMUY)
 [![Website](https://img.shields.io/badge/website-soleur.ai-C9A962)](https://soleur.ai)
 
 ## What is Soleur?
 
-Soleur gives a single founder the leverage of a full organization. **50 agents**, **8 commands**, and **46 skills** that compound your company knowledge over time -- every problem you solve makes the next one easier.
+Soleur gives a single founder the leverage of a full organization. **54 agents**, **8 commands**, and **46 skills** that compound your company knowledge over time -- every problem you solve makes the next one easier.
 
 ## Installation
 
@@ -47,6 +47,16 @@ claude plugin install --url https://github.com/jikig-ai/soleur/tree/main/plugins
 | `/soleur:one-shot` | Full autonomous engineering workflow from plan to PR |
 
 See **[full component reference](./plugins/soleur/README.md)** for all agents, commands, and skills.
+
+## Your AI Organization
+
+| Department | What It Does | Entry Point |
+|-----------|-------------|-------------|
+| Engineering | Code review, architecture, security, testing, deployment | `/soleur:plan`, `/soleur:work`, `/soleur:review` |
+| Marketing | Brand identity, content strategy, SEO, community, pricing | `/soleur:brainstorm define our brand` |
+| Legal | Terms, privacy policy, GDPR, compliance audits | `/legal-generate`, `/legal-audit` |
+| Operations | Expense tracking, vendor research, tool provisioning | Ask about ops (routed via agents) |
+| Product | Business validation, spec analysis, UX design | `/soleur:brainstorm validate our idea` |
 
 ## Learn More
 
