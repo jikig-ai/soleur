@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.29.0] - 2026-02-22
+
+### Added
+
+- Add business-validator agent for 6-gate business idea validation workshop (#141)
+- Add CPO (Chief Product Officer) domain leader agent for product domain orchestration (#183)
+- Add product strategy detection to brainstorm Phase 0.5 domain leader assessment
+- Add validation workshop route to brainstorm (STOP pattern, follows brand-architect template)
+- CPO auto-consulted via brainstorm domain detection when product strategy decisions are involved
+- Add disambiguation sentences to all product domain agent descriptions
+- Dogfood: run business-validator on Soleur itself (verdict: PIVOT)
+- Constitution: add workshop archetype principle and agent count reconciliation principle
+
 ## [2.28.2] - 2026-02-22
 
 ### Fixed
