@@ -312,23 +312,23 @@ Do NOT commit or version-bump -- the edits are staged for the normal workflow co
 
 ---
 
-## Automatic Consolidation (feat-* branches)
+## Automatic Consolidation (feature branches)
 
 After documentation is complete and before the decision menu, automatically consolidate and archive KB artifacts on feature branches. This replaces the former manual Option 2 in the decision menu.
 
 **Branch detection:**
 
-Run `git branch --show-current` to get the current branch. If it does not start with `feat-`, skip consolidation entirely.
+Run `git branch --show-current` to get the current branch. If it does not start with `feat-`, `feat/`, `fix-`, or `fix/`, skip consolidation entirely.
 
-**If on a `feat-*` branch, run the following steps automatically:**
+**If on a feature branch (`feat-*`, `feat/*`, `fix-*`, or `fix/*`), run the following steps automatically:**
 
 ### Auto-Consolidation Step A: Artifact Discovery
 
-Extract the slug from the current branch name:
-
-```bash
-slug="${current_branch#feat-}"
-```
+Extract the slug from the current branch name by stripping the branch type prefix. Handle all prefix variants:
+- `feat/` -- strip prefix (e.g., `feat/domain-leaders` becomes `domain-leaders`)
+- `feat-` -- strip prefix (e.g., `feat-domain-leaders` becomes `domain-leaders`)
+- `fix/` -- strip prefix (e.g., `fix/typo` becomes `typo`)
+- `fix-` -- strip prefix (e.g., `fix-typo` becomes `typo`)
 
 Glob for related artifacts:
 

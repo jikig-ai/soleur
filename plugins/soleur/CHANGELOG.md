@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [3.0.4] - 2026-02-22
+## [3.0.5] - 2026-02-22
 
 ### Removed
 
@@ -17,6 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Update community-manager agent to reference setup scripts directly instead of removed `/soleur:community setup` skill
 - Update skill counts from 52 to 50 across plugin.json, README, root README, brand guide, and skills.js
+
+## [3.0.4] - 2026-02-22
+
+### Fixed
+
+- Fix compound-capture slug extraction to handle `feat/`, `feat-`, `fix/`, `fix-` branch prefixes (was only stripping `feat-`, causing silent archiving failures on `feat/` branches)
+- Fix cleanup-merged to archive brainstorms and plans (was only archiving spec directories)
+- Extract `archive_kb_files()` helper in worktree-manager.sh to eliminate code duplication
+- Archive 92 orphaned KB artifacts from completed features (13 brainstorms, 38 plans, 41 spec dirs)
+- Update compound skill discovery documentation to reflect multi-prefix slug extraction
 
 ## [3.0.3] - 2026-02-22
 

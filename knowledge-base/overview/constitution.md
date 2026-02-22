@@ -142,6 +142,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Heavy, conditionally-used content in command/skill bodies must be extracted to reference files loaded on-demand via Read tool -- static baseline context that is always loaded should contain only the execution skeleton and phase triggers, not the full content of each phase
 - When spawning isolated subagents (Task tool), establish an explicit return contract with structured headings (`## Session Summary`, `### Errors`, etc.) and a fallback path if the subagent fails or returns malformed output -- session-state.md is the mechanism for multi-phase error propagation when parent context cannot hold child errors
 - Add explicit compaction checkpoints to multi-phase workflows -- if context truncation occurs, write an inventory to a known file path (e.g., session-state.md) so downstream phases can recover; silent compaction has caused missing learnings and undocumented errors in pipelines
+- When fixing a prefix-stripping or pattern-matching bug, verify the fix code does not repeat the same single-variant assumption being corrected -- the initial worktree-manager.sh fix reproduced the exact `feat-`-only bug it was supposed to fix; multi-agent review catches this reliably but self-review often misses it
 
 ## Testing
 
