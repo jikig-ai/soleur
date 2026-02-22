@@ -43,17 +43,24 @@ This classifies your intent and routes to the right workflow. For the full step-
 brainstorm  -->  plan  -->  work  -->  review  -->  compound
 ```
 
-| Component | Type | Purpose |
-|-----------|------|---------|
-| `/soleur:go` | Command | Unified entry point -- routes to the right workflow skill |
-| `/soleur:sync` | Command | Analyze codebase and populate knowledge-base |
-| `/soleur:help` | Command | List all available Soleur commands, agents, and skills |
-| `brainstorm` | Skill | Explore ideas and make design decisions |
-| `plan` | Skill | Create structured implementation plans |
-| `work` | Skill | Execute plans with incremental commits |
-| `review` | Skill | Run comprehensive code review with specialized agents |
-| `compound` | Skill | Capture learnings for future work |
-| `one-shot` | Skill | Full autonomous engineering workflow from plan to PR |
+### Commands
+
+| Command | Purpose |
+|---------|---------|
+| `/soleur:go` | Unified entry point -- routes to the right workflow skill |
+| `/soleur:sync` | Analyze codebase and populate knowledge-base |
+| `/soleur:help` | List all available Soleur commands, agents, and skills |
+
+### Workflow Skills
+
+| Skill | Purpose |
+|-------|---------|
+| `brainstorm` | Explore ideas and make design decisions |
+| `plan` | Create structured implementation plans |
+| `work` | Execute plans with incremental commits |
+| `review` | Run comprehensive code review with specialized agents |
+| `compound` | Capture learnings for future work |
+| `one-shot` | Full autonomous engineering workflow from plan to PR |
 
 See **[full component reference](./plugins/soleur/README.md)** for all agents, commands, and skills.
 
