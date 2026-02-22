@@ -157,11 +157,14 @@ Domain leaders are agents that orchestrate a business domain's specialist team. 
 
 ### Adding a New Domain Leader
 
-1. Create `agents/<domain>/<role>.md` at the domain root level
-2. Follow the 4-phase contract in the agent body
-3. Add a domain assessment question to the brainstorm command's Phase 0.5
-4. Optionally create a `/soleur:<domain>` skill as standalone entry point
-5. Update README counts and CHANGELOG
+1. Create `agents/<domain>/` with leader + specialist `.md` files
+2. Follow the 3-phase contract (Assess, Recommend/Delegate, Sharp Edges) -- use `agents/legal/clo.md` as template
+3. Add brainstorm routing to `commands/soleur/brainstorm.md` Phase 0.5 (assessment question, routing block, participation block)
+4. Add disambiguation sentences to agents with overlapping scope in adjacent domains (both directions)
+5. Verify token budget: `shopt -s globstar && grep -h 'description:' agents/**/*.md | wc -w` (under 2,500)
+6. Update docs data files: `agents.js` (DOMAIN_LABELS, DOMAIN_CSS_VARS, domainOrder), `style.css` (CSS variable)
+7. Update AGENTS.md (directory tree, domain leader table) and README.md (agent section, counts)
+8. Version bump (MINOR) and CHANGELOG
 
 ## Documentation
 
