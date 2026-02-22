@@ -6,13 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [2.26.0] - 2026-02-22
+## [2.27.0] - 2026-02-22
 
 ### Added
 
 - Add `test-fix-loop` skill for autonomous test-fix iteration (#216)
 - Auto-detects test runner, diagnoses failures, applies fixes, re-runs in a loop with git stash isolation
 - Terminates on: all pass, max iterations, regression, circular fix, non-convergence, or persistent build error
+
+## [2.26.0] - 2026-02-22
+
+### Added
+
+- Add `merge-pr` skill for autonomous single-PR merge pipeline with conflict resolution and cleanup (#214)
+- Automates merge main, conflict resolution (deterministic for version files, Claude-assisted for code), conditional version bump, push, PR creation, CI wait, squash merge, and worktree cleanup
+- Add 3 constitution rules: git stage numbers for merge-conflict reads, conflict marker detection before staging, compound ordering prohibition after push/CI
+
+## [2.25.3] - 2026-02-22
+
+### Fixed
+
+- Update Plausible Analytics script tag in docs site to use site-specific snippet with outbound link, file download, and form submission tracking
+- Add defensive branch check to all 3 ops agents (ops-provisioner, ops-advisor, ops-research) to warn when modifying files on main branch
+- Record Plausible Analytics trial entry in expense ledger
 
 ## [2.25.2] - 2026-02-22
 

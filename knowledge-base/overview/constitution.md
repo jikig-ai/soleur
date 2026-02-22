@@ -54,7 +54,9 @@ Project principles organized by domain. Add principles as you learn them.
 - At session start, run `worktree-manager.sh cleanup-merged` to remove worktrees whose remote branches are [gone]; this is the recovery mechanism for the merge-then-session-end gap where cleanup was deferred
 - Operations that modify the knowledge-base or move files must use `git mv` to preserve history and produce a single atomic commit that can be reverted with `git revert`
 - New commands must be idempotent -- running the same command twice must not create duplicates or corrupt state
-- Run code review and `/soleur:compound` before committing -- the commit is the gate, not the PR; compound must be explicitly offered to the user before every commit, never silently skipped
+- Run code review and `/soleur:compound` before committing -- the commit is the gate, not the PR; compound must be explicitly offered to the user before every commit, never silently skipped; compound must never be placed after `git push` or CI because compound produces a commit that invalidates CI and creates an infinite loop
+- When reading file content during an active git merge conflict, use stage numbers: `git show :2:<path>` (ours) and `git show :3:<path>` (theirs); `git show HEAD:<path>` only returns one side and discards the incoming changes
+- Before staging files after a merge, grep staged content for conflict markers: `git diff --cached | grep -E '^\+(<{7}|={7}|>{7})'` -- conflict markers are invisible in normal review and have been committed undetected
 - When modifying agent instructions (adding checks, changing behavior), also update any skill Task prompts that reference the agent with hardcoded check lists -- stale prompts silently ignore new agent capabilities
 - Infrastructure agents that wire external services (DNS, SSL, Pages) must own the full verification loop -- use `gh` CLI, `openssl`, `curl`, and `agent-browser` to verify each step programmatically instead of asking the user to check manually; only stop for genuine decisions, not mechanical verification
 - Network and external service failures must degrade gracefully -- warn (if interactive) and continue rather than abort the workflow
@@ -76,6 +78,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Never design skills that invoke other skills programmatically -- skills are user-invoked entry points with no inter-skill API; redirect users to the target skill or route through an agent via Task tool
 - Never put `<example>` blocks or `<commentary>` tags in agent description frontmatter -- these belong in the agent body (after `---`) which is only loaded on invocation; descriptions are loaded into the system prompt on every turn and their cumulative size must stay minimal
 - Never skip compound's constitution promotion or route-to-definition phases in automated pipelines (one-shot, ship) -- the model will rationalize skipping them as "pipeline mode" optimization, but these are the phases that prevent repeated mistakes across sessions
+- Never spawn file-modifying agents (ops-provisioner, brand-architect, etc.) from the main branch -- create a worktree first; agents that edit project files should include a defensive branch check as a safety net, but the primary enforcement belongs at the caller (command/skill) layer
 
 ### Prefer
 

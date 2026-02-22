@@ -19,6 +19,8 @@ If files do not exist, proceed without baseline context.
 
 ## Setup
 
+**Branch check:** Before making any file changes, check the current branch with `git branch --show-current`. If on `main` or `master`, warn the user: "You are on the main branch. File changes should happen in a worktree. Create one with `git worktree add .worktrees/feat-<name> -b feat/<name>` first, or confirm you want to proceed on main." Wait for confirmation before continuing.
+
 Accept the tool name, purpose, and signup URL from the user. Check `knowledge-base/ops/expenses.md` for existing entries matching this tool. If an entry exists, warn the user and ask whether to proceed (upgrade/reconfigure) or stop.
 
 Check if agent-browser is available by running `agent-browser --help`.
