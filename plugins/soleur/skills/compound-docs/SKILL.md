@@ -188,18 +188,12 @@ Please provide corrected values.
 
 **Create documentation file:**
 
-```bash
-PROBLEM_TYPE="[from validated YAML]"
-CATEGORY="[mapped from problem_type]"
-FILENAME="[generated-filename].md"
-DOC_PATH="knowledge-base/learnings/${CATEGORY}/${FILENAME}"
+Determine the category from the validated YAML `problem_type` field and generate a filename. Then:
 
-# Create directory if needed
-mkdir -p "knowledge-base/learnings/${CATEGORY}"
+1. Create the category directory: `mkdir -p knowledge-base/learnings/<category>`
+2. Write the documentation file to `knowledge-base/learnings/<category>/<filename>.md` using the template from [resolution-template.md](./assets/resolution-template.md)
 
-# Write documentation using template from assets/resolution-template.md
-# (Content populated with Step 2 context and validated YAML frontmatter)
-```
+Replace `<category>` with the mapped category and `<filename>` with the generated filename.
 
 **Result:**
 - Single file in category directory
@@ -215,10 +209,7 @@ If similar issues found in Step 3:
 
 **Update existing doc:**
 
-```bash
-# Add Related Issues link to similar doc
-echo "- See also: [$FILENAME]($REAL_FILE)" >> [similar-doc.md]
-```
+Append a "See also" cross-reference link to the similar document, using the new document's filename and path.
 
 **Update new doc:**
 Already includes cross-reference from Step 6.
@@ -339,13 +330,12 @@ slug="${current_branch#feat-}"
 
 Glob for related artifacts:
 
+Search for artifacts matching the feature slug. Replace `<slug>` with the actual feature slug derived from the branch name:
+
 ```bash
-# Find brainstorms, plans, and specs matching the feature slug
-find knowledge-base/brainstorms/ -name "*${slug}*" -not -path "*/archive/*" 2>/dev/null
-find knowledge-base/plans/ -name "*${slug}*" -not -path "*/archive/*" 2>/dev/null
-if [[ -d "knowledge-base/specs/feat-${slug}" ]]; then
-  echo "knowledge-base/specs/feat-${slug}/"
-fi
+find knowledge-base/brainstorms/ -name "*<slug>*" -not -path "*/archive/*" 2>/dev/null
+find knowledge-base/plans/ -name "*<slug>*" -not -path "*/archive/*" 2>/dev/null
+test -d "knowledge-base/specs/feat-<slug>" && echo "knowledge-base/specs/feat-<slug>/"
 ```
 
 **If no artifacts found:** Skip consolidation silently and proceed to the decision menu.
@@ -353,14 +343,16 @@ fi
 **If artifacts found:** Present the discovered list:
 
 ```text
-Found artifacts for feat-${slug}:
+Found artifacts for feat-<slug>:
 
-1. knowledge-base/brainstorms/2026-02-09-${slug}-brainstorm.md
-2. knowledge-base/plans/2026-02-09-feat-${slug}-plan.md
-3. knowledge-base/specs/feat-${slug}/
+1. knowledge-base/brainstorms/2026-02-09-<slug>-brainstorm.md
+2. knowledge-base/plans/2026-02-09-feat-<slug>-plan.md
+3. knowledge-base/specs/feat-<slug>/
 
 Proceed with consolidation? (Y/n/add more)
 ```
+
+Replace `<slug>` with the actual feature slug throughout.
 
 If user selects "add more," prompt for additional file paths and append to the list.
 
@@ -432,26 +424,24 @@ Use `git mv` with timestamp prefix for each artifact:
 
 Generate a timestamp in `YYYYMMDD-HHMMSS` format (e.g., `20260222-143000`).
 
-```bash
-# Brainstorms and plans: prefix with timestamp
-git mv "knowledge-base/brainstorms/original-name.md" \
-       "knowledge-base/brainstorms/archive/${timestamp}-original-name.md"
+Replace `<timestamp>` with the generated timestamp and `<slug>` with the feature slug. Run each `git mv` as a separate Bash command:
 
+```bash
+git mv "knowledge-base/brainstorms/original-name.md" \
+       "knowledge-base/brainstorms/archive/<timestamp>-original-name.md"
+```
+
+```bash
 git mv "knowledge-base/plans/original-name.md" \
-       "knowledge-base/plans/archive/${timestamp}-original-name.md"
-
-# Spec directories: move entire directory
-git mv "knowledge-base/specs/feat-${slug}" \
-       "knowledge-base/specs/archive/${timestamp}-feat-${slug}"
+       "knowledge-base/plans/archive/<timestamp>-original-name.md"
 ```
-
-**If `git mv` fails** (untracked file), add first then retry:
 
 ```bash
-git add "knowledge-base/brainstorms/original-name.md"
-git mv "knowledge-base/brainstorms/original-name.md" \
-       "knowledge-base/brainstorms/archive/${timestamp}-original-name.md"
+git mv "knowledge-base/specs/feat-<slug>" \
+       "knowledge-base/specs/archive/<timestamp>-feat-<slug>"
 ```
+
+**If `git mv` fails** (untracked file), run `git add` on the file first, then retry the `git mv`.
 
 **Context-aware archival confirmation:**
 
@@ -473,8 +463,10 @@ All changes (overview edits + archival moves) go into a single commit:
 
 ```bash
 git add -A knowledge-base/
-git commit -m "compound: consolidate and archive feat-${slug} artifacts"
+git commit -m "compound: consolidate and archive feat-<slug> artifacts"
 ```
+
+Replace `<slug>` with the actual feature slug.
 
 This ensures `git revert` restores everything in one operation.
 

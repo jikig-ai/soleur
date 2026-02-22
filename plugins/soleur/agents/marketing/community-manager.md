@@ -16,13 +16,7 @@ Before executing any workflow, verify these environment variables:
 
 If any required variable is missing, direct the user to run `/soleur:community setup` and stop.
 
-```bash
-# Check prerequisites
-if [[ -z "${DISCORD_BOT_TOKEN:-}" ]]; then
-  echo "DISCORD_BOT_TOKEN is not set. Run /soleur:community setup to configure."
-  # Stop
-fi
-```
+Check if `DISCORD_BOT_TOKEN` is set by running `printenv DISCORD_BOT_TOKEN`. If no output, stop and tell the user: "DISCORD_BOT_TOKEN is not set. Run /soleur:community setup to configure."
 
 ## Scripts
 
@@ -60,13 +54,13 @@ plugins/soleur/skills/community/scripts/discord-community.sh messages "<channel_
 Run this for each channel.
 
 # Discord: fetch guild info and members
-${SCRIPT_DIR}/discord-community.sh guild-info
-${SCRIPT_DIR}/discord-community.sh members
+plugins/soleur/skills/community/scripts/discord-community.sh guild-info
+plugins/soleur/skills/community/scripts/discord-community.sh members
 
 # GitHub: fetch last 7 days of activity
-${SCRIPT_DIR}/github-community.sh activity 7
-${SCRIPT_DIR}/github-community.sh contributors 7
-${SCRIPT_DIR}/github-community.sh discussions 7
+plugins/soleur/skills/community/scripts/github-community.sh activity 7
+plugins/soleur/skills/community/scripts/github-community.sh contributors 7
+plugins/soleur/skills/community/scripts/github-community.sh discussions 7
 ```
 
 ### Step 2: Analyze Data
@@ -104,12 +98,16 @@ Generate a condensed version of the digest (under 2000 characters) suitable for 
 
 Post via webhook:
 
+First get the webhook URL with `printenv DISCORD_WEBHOOK_URL`, then use the literal URL in the curl command:
+
 ```bash
 curl -s -o /dev/null -w "%{http_code}" \
   -H "Content-Type: application/json" \
   -d "{\"content\": \"ESCAPED_CONTENT\", \"username\": \"Sol\", \"avatar_url\": \"AVATAR_URL\"}" \
-  "$DISCORD_WEBHOOK_URL"
+  "<webhook-url>"
 ```
+
+Replace `<webhook-url>` with the actual URL from `printenv`.
 
 Set `avatar_url` to the hosted logo URL (e.g., the GitHub-hosted `logo-mark-512.png`). Webhook messages freeze author identity at post time -- these fields ensure consistent branding.
 
@@ -148,12 +146,10 @@ Display community health metrics inline (no file output).
 ### Step 1: Collect Data
 
 ```bash
-SCRIPT_DIR="plugins/soleur/skills/community/scripts"
-
-${SCRIPT_DIR}/discord-community.sh guild-info
-${SCRIPT_DIR}/discord-community.sh members
-${SCRIPT_DIR}/github-community.sh activity 30
-${SCRIPT_DIR}/github-community.sh contributors 30
+plugins/soleur/skills/community/scripts/discord-community.sh guild-info
+plugins/soleur/skills/community/scripts/discord-community.sh members
+plugins/soleur/skills/community/scripts/github-community.sh activity 30
+plugins/soleur/skills/community/scripts/github-community.sh contributors 30
 ```
 
 ### Step 2: Display Metrics

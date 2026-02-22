@@ -19,16 +19,17 @@ Use the feature description as the search term for registry queries.
 
 Query all three registries in parallel for the feature description. Use Bash `curl` with a 5-second timeout. Run all queries in a single message with parallel tool calls.
 
-Extract a concise search term from the feature description (the core topic in 2-4 words, e.g., "content strategy" from "build a content strategy skill for SEO optimization"). Replace `${QUERY}` with this URL-encoded search term:
+Extract a concise search term from the feature description (the core topic in 2-4 words, e.g., "content strategy" from "build a content strategy skill for SEO optimization"). Replace `<search-query>` below with this URL-encoded search term:
 
 ```bash
-# api.claude-plugins.dev (skills + plugins)
-curl -s --max-time 5 "https://api.claude-plugins.dev/api/skills/search?q=${QUERY}&limit=10" 2>/dev/null || echo '{"error":"timeout"}'
+curl -s --max-time 5 "https://api.claude-plugins.dev/api/skills/search?q=<search-query>&limit=10" 2>/dev/null || echo '{"error":"timeout"}'
+```
 
-# claudepluginhub.com (plugins)
-curl -s --max-time 5 "https://www.claudepluginhub.com/api/plugins?q=${QUERY}" 2>/dev/null || echo '{"error":"timeout"}'
+```bash
+curl -s --max-time 5 "https://www.claudepluginhub.com/api/plugins?q=<search-query>" 2>/dev/null || echo '{"error":"timeout"}'
+```
 
-# Anthropic official plugins
+```bash
 curl -s --max-time 5 "https://raw.githubusercontent.com/anthropics/claude-plugins-official/main/.claude-plugin/marketplace.json" 2>/dev/null || echo '{"error":"timeout"}'
 ```
 
@@ -110,11 +111,14 @@ For each approved artifact:
 
 If the artifact has a `gitUrl` or `repositoryUrl`, attempt to fetch the agent/skill markdown:
 
+Replace `<owner>`, `<repo>`, and `<name>` with the actual values from the artifact's git URL:
+
 ```bash
-# Try common paths for agent markdown
-curl -s --max-time 5 "https://raw.githubusercontent.com/${owner}/${repo}/main/agents/${name}.md" 2>/dev/null
-# Or for skills
-curl -s --max-time 5 "https://raw.githubusercontent.com/${owner}/${repo}/main/SKILL.md" 2>/dev/null
+curl -s --max-time 5 "https://raw.githubusercontent.com/<owner>/<repo>/main/agents/<name>.md" 2>/dev/null
+```
+
+```bash
+curl -s --max-time 5 "https://raw.githubusercontent.com/<owner>/<repo>/main/SKILL.md" 2>/dev/null
 ```
 
 If the content cannot be fetched, skip that artifact with a warning: "Could not fetch content for [name]. Skipping."

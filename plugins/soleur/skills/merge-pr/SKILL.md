@@ -50,9 +50,11 @@ If an argument was provided, verify that branch exists and check it out. Otherwi
 Announce:
 
 ```text
-merge-pr: Starting pipeline for branch: ${BRANCH}
-Starting SHA: ${STARTING_SHA} (rollback point)
+merge-pr: Starting pipeline for branch: <branch-name>
+Starting SHA: <starting-sha> (rollback point)
 ```
+
+Replace `<branch-name>` with the actual branch name and `<starting-sha>` with the current HEAD SHA.
 
 ## Phase 1: Pre-condition Validation
 
@@ -283,13 +285,15 @@ If the commit fails due to a pre-commit hook (e.g., markdownlint on the CHANGELO
 Push the branch to remote:
 
 ```bash
-git push -u origin ${BRANCH}
+git push -u origin <branch-name>
 ```
+
+Replace `<branch-name>` with the actual branch name.
 
 Check for an existing PR:
 
 ```bash
-gh pr list --head ${BRANCH} --json number,state | jq '.[] | select(.state == "OPEN") | .number'
+gh pr list --head <branch-name> --json number,state | jq '.[] | select(.state == "OPEN") | .number'
 ```
 
 **If a PR exists:** Announce the PR number and proceed.
@@ -337,8 +341,8 @@ STOPPED: CI check failed.
 Failed checks:
 <check name>: <description>
 
-Starting SHA for rollback: ${STARTING_SHA}
-To rollback: git reset --hard ${STARTING_SHA} && git push --force-with-lease origin ${BRANCH}
+Starting SHA for rollback: <starting-sha>
+To rollback: git reset --hard <starting-sha> && git push --force-with-lease origin <branch-name>
 ```
 
 ### 6.2 Merge
@@ -357,9 +361,7 @@ If `gh pr merge` fails (PR already merged, branch protection, etc.), stop and re
 
 The `cleanup-merged` script skips the current working directory's worktree. Navigate to the main repo root first:
 
-```bash
-cd ${REPO_ROOT}
-```
+Navigate to the main repository root directory (the parent of `.worktrees/`). Run `cd` to the repo root path, then verify with `pwd`.
 
 ### 7.2 Run cleanup
 
@@ -381,17 +383,21 @@ Version: <X.Y.Z> (or "no version bump")
 Merge SHA: <sha>
 Cleanup: <worktrees cleaned or "no cleanup needed">
 
-Rollback (if needed): git reset --hard ${STARTING_SHA}
+Rollback (if needed): git reset --hard <starting-sha>
 ```
+
+Replace `<starting-sha>` with the SHA recorded at the start of the pipeline.
 
 ## Rollback
 
 If the pipeline fails partway through and the branch has unwanted commits (merge + version bump), rollback to the starting state:
 
 ```bash
-git reset --hard ${STARTING_SHA}
-git push --force-with-lease origin ${BRANCH}
+git reset --hard <starting-sha>
+git push --force-with-lease origin <branch-name>
 ```
+
+Replace `<starting-sha>` and `<branch-name>` with the actual values recorded at pipeline start.
 
 The starting SHA is recorded in Phase 0 and printed in the end-of-run report.
 

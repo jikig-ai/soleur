@@ -18,9 +18,10 @@ npx @11ty/eleventy
 
 # Verify build output
 test -f _site/index.html && echo "OK index.html"
-for page in agents skills changelog getting-started; do
-  test -f "_site/pages/${page}.html" && echo "OK ${page}.html"
-done
+test -f "_site/pages/agents.html" && echo "OK agents.html"
+test -f "_site/pages/skills.html" && echo "OK skills.html"
+test -f "_site/pages/changelog.html" && echo "OK changelog.html"
+test -f "_site/pages/getting-started.html" && echo "OK getting-started.html"
 test -f _site/404.html && echo "OK 404.html"
 test -f _site/css/style.css && echo "OK style.css"
 test -f _site/CNAME && echo "OK CNAME"

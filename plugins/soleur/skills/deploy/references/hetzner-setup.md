@@ -25,8 +25,10 @@ systemctl enable --now docker
 Create a GitHub Personal Access Token (classic) with `read:packages` scope, then log in on the server:
 
 ```bash
-echo "$GHCR_TOKEN" | docker login ghcr.io -u <github-username> --password-stdin
+echo "<ghcr-token>" | docker login ghcr.io -u <github-username> --password-stdin
 ```
+
+Replace `<ghcr-token>` with the actual token value and `<github-username>` with the GitHub username.
 
 Pipe the token via stdin -- do not pass it as a command-line argument.
 
