@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [2.24.1] - 2026-02-22
+## [2.25.1] - 2026-02-22
 
 ### Fixed
 
@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add constitution rules: never skip compound phases in pipelines; prefer embedding mechanisms over user-facing commands when bundling external plugins
 - Update learning document with `synced_to` metadata after routing to definitions
+
+## [2.25.0] - 2026-02-22
+
+### Added
+
+- Add `ops-provisioner` agent for guided SaaS tool account setup, plan purchase, configuration, and verification (#212)
+- Update `ops-research` and `ops-advisor` agent descriptions with three-way disambiguation
 
 ## [2.24.0] - 2026-02-22
 

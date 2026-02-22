@@ -1,7 +1,7 @@
 {
   "name": "soleur",
-  "version": "2.24.1",
-  "description": "A full AI organization that reviews, plans, builds, remembers, and self-improves. 45 agents, 8 commands, and 45 skills that compound your engineering knowledge over time.",
+  "version": "2.25.1",
+  "description": "A full AI organization that reviews, plans, builds, remembers, and self-improves. 46 agents, 8 commands, and 45 skills that compound your engineering knowledge over time.",
   "author": {
     "name": "Jean Deruelle",
     "email": "jean.deruelle@jikigai.com",
