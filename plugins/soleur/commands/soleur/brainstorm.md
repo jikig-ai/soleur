@@ -35,6 +35,8 @@ fi
 
 Read `CLAUDE.md` if it exists - apply project conventions during brainstorming.
 
+**Plugin loader constraint:** Before proposing namespace changes (bare commands, command-to-skill migration), verify plugin loader constraints -- bare namespace commands are not supported, and commands/skills have different frontmatter and argument handling.
+
 Evaluate whether brainstorming is needed based on the feature description.
 
 **Clear requirements indicators:**

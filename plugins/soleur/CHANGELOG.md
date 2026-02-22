@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.36.0] - 2026-02-22
+
+### Added
+
+- Add `/soleur:go` command -- unified entry point that classifies user intent (explore, build, review) and routes to the right workflow command
+- Add plugin loader constraint note to brainstorm.md Phase 0 (bare namespace commands not supported)
+- Add router-over-migration principle to constitution.md
+
+### Changed
+
+- Update help.md with new layout: "Getting Started" (go, sync, help) and "Workflow Commands (Advanced)" sections
+- Update README.md workflow section to recommend `/soleur:go` as primary entry point
+- Update README.md command count from 8 to 9
+
 ## [2.35.1] - 2026-02-22
 
 ### Fixed
