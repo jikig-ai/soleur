@@ -55,7 +55,10 @@ rm -rf docs/_site_test # BLOCKED by guardrails
 
 **5. Add brainstorm routing** to `commands/soleur/brainstorm.md` Phase 0.5: add a single row to the Domain Config table with all 6 columns (Domain, Assessment Question, Leader, Routing Prompt, Options, Task Prompt). [Updated 2026-02-22: refactored from 3 inline blocks to table-driven config]
 
-**6. Add disambiguation sentences** to agents with overlapping scope in adjacent domains. Check both directions: new domain agents reference existing ones, existing agents reference new ones.
+**6. Add disambiguation sentences** to agents with overlapping scope in adjacent domains. BOTH directions are mandatory -- this is the most commonly missed step:
+   - Forward: new domain agents reference existing agents (natural during creation)
+   - Reverse: existing agents in adjacent domains reference new agents back (easy to forget)
+   - Check domain leaders AND specialists (e.g., adding Finance requires updating CRO, COO, pricing-strategist descriptions AND Sharp Edges)
 
 **7. Update AGENTS.md**: Add to directory tree, domain leader table, and agent count.
 

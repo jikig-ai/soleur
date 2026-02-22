@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.34.0] - 2026-02-22
+
+### Added
+
+- Add Finance domain with 4 agents: CFO (domain leader), budget-analyst, revenue-analyst, financial-reporter
+- Add Finance row to brainstorm Phase 0.5 domain config table for automatic CFO routing
+- Add `--cat-finance` CSS variable (#26A69A teal) and Finance to docs site agent catalog
+
+### Changed
+
+- Update ops-advisor disambiguation to reference CFO for financial analysis boundary
+- Update landing page department count from 6 to 7 (no new card -- grid orphan prevention)
+
 ## [2.33.2] - 2026-02-22
 
 ### Changed
