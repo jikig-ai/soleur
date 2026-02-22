@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.23.17] - 2026-02-22
+
+### Fixed
+
+- Update outdated Claude 3/3.5 model IDs to Claude 4.x across 9 reference files (#219)
+- Update stale Claude 4.0 IDs (`claude-sonnet-4-20250514`, `claude-opus-4-20250514`) to latest 4.6 aliases
+- Update stale pricing comments to current Feb 2026 rates
+
 ## [2.23.16] - 2026-02-22
 
 ### Fixed

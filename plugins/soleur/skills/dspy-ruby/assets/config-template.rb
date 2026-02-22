@@ -21,7 +21,7 @@ end
 
 # Anthropic Claude
 DSPy.configure do |c|
-  c.lm = DSPy::LM.new('anthropic/claude-3-5-sonnet-20241022',
+  c.lm = DSPy::LM.new('anthropic/claude-sonnet-4-6',
     api_key: ENV['ANTHROPIC_API_KEY'])
 end
 
@@ -39,7 +39,7 @@ end
 
 # OpenRouter (access to 200+ models)
 DSPy.configure do |c|
-  c.lm = DSPy::LM.new('openrouter/anthropic/claude-3.5-sonnet',
+  c.lm = DSPy::LM.new('openrouter/anthropic/claude-sonnet-4-6',
     api_key: ENV['OPENROUTER_API_KEY'],
     base_url: 'https://openrouter.ai/api/v1')
 end
@@ -63,7 +63,7 @@ elsif Rails.env.test?
 else
   # Use powerful model for production
   DSPy.configure do |c|
-    c.lm = DSPy::LM.new('anthropic/claude-3-5-sonnet-20241022',
+    c.lm = DSPy::LM.new('anthropic/claude-sonnet-4-6',
       api_key: ENV['ANTHROPIC_API_KEY'])
   end
 end
@@ -96,7 +96,7 @@ module MyApp
   )
 
   # Powerful model for complex tasks
-  POWERFUL_LM = DSPy::LM.new('anthropic/claude-3-5-sonnet-20241022',
+  POWERFUL_LM = DSPy::LM.new('anthropic/claude-sonnet-4-6',
     api_key: ENV['ANTHROPIC_API_KEY'],
     temperature: 0.7
   )
@@ -216,7 +216,7 @@ class FallbackConfig
   end
 
   def self.create_lm_with_fallback
-    primary = DSPy::LM.new('anthropic/claude-3-5-sonnet-20241022',
+    primary = DSPy::LM.new('anthropic/claude-sonnet-4-6',
       api_key: ENV['ANTHROPIC_API_KEY'])
 
     fallback = DSPy::LM.new('openai/gpt-4o',
@@ -306,7 +306,7 @@ BudgetTrackedConfig.configure(monthly_budget_usd: 100)
 #   when :test
 #     { provider: 'openai', model: 'gpt-4o-mini', temperature: 0.0 }
 #   when :production
-#     { provider: 'anthropic', model: 'claude-3-5-sonnet-20241022' }
+#     { provider: 'anthropic', model: 'claude-sonnet-4-6' }
 #   end
 #
 #   # Configure language model
