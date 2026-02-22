@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.0.4] - 2026-02-22
+
+### Removed
+
+- Remove `community` skill from plugin loader (thin wrapper around community-manager agent; scripts preserved at `skills/community/scripts/`)
+- Remove `report-bug` skill from plugin loader (user-only utility incorrectly migrated to skill namespace)
+
+### Changed
+
+- Update community-manager agent to reference setup scripts directly instead of removed `/soleur:community setup` skill
+- Update skill counts from 52 to 50 across plugin.json, README, root README, brand guide, and skills.js
+
 ## [3.0.3] - 2026-02-22
 
 ### Fixed
