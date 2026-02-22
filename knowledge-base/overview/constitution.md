@@ -28,6 +28,7 @@ Project principles organized by domain. Add principles as you learn them.
 ### Never
 
 - Avoid second person ("you should") - use objective language ("To accomplish X, do Y")
+- Never use shell variable expansion (`${VAR}`, `$VAR`, `$()`) in bash code blocks within skill, command, or agent .md files -- use angle-bracket prose placeholders (`<variable-name>`) with substitution instructions instead, or relative paths (e.g., `./plugins/soleur/...`) for plugin-relative paths; the ship skill's "No command substitution" pattern is the reference implementation
 
 ### Prefer
 

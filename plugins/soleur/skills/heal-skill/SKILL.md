@@ -31,7 +31,7 @@ Identify the skill from conversation context:
 - Check which SKILL.md was recently referenced
 - Examine current task context
 
-Set: `SKILL_NAME=[skill-name]` and `SKILL_DIR=./skills/$SKILL_NAME`
+Identify the skill name and locate its directory at `./skills/<skill-name>/`.
 
 If unclear, ask the user.
 </step_1>
@@ -48,10 +48,12 @@ Determine:
 </step_2>
 
 <step_3 name="scan_affected_files">
+List the skill directory contents. Replace `<skill-dir>` with the actual skill directory path (e.g., `plugins/soleur/skills/<skill-name>`):
+
 ```bash
-ls -la $SKILL_DIR/
-ls -la $SKILL_DIR/references/ 2>/dev/null
-ls -la $SKILL_DIR/scripts/ 2>/dev/null
+ls -la <skill-dir>/
+ls -la <skill-dir>/references/ 2>/dev/null
+ls -la <skill-dir>/scripts/ 2>/dev/null
 ```
 </step_3>
 

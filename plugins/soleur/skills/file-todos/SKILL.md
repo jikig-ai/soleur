@@ -135,12 +135,7 @@ grep "^dependencies:" todos/003-*.md
 grep -l 'dependencies:.*"002"' todos/*.md
 ```
 
-**To verify blockers are complete before starting:**
-```bash
-for dep in 001 002 003; do
-  [ -f "todos/${dep}-complete-*.md" ] || echo "Issue $dep not complete"
-done
-```
+**To verify blockers are complete before starting:** Check each dependency ID by running `ls todos/<dep-id>-complete-*.md 2>/dev/null` for each dependency. Replace `<dep-id>` with the actual dependency number (e.g., `001`, `002`).
 
 ### Updating Work Logs
 

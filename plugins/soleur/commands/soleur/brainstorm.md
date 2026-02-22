@@ -167,12 +167,7 @@ Options:
 
 3. **Navigate to worktree:**
 
-   ```bash
-   cd ${WORKTREE_PATH}
-   pwd  # Must show .worktrees/feat-<name>
-   ```
-
-   Verify location before proceeding.
+   Run `cd` to the worktree path from step 1 (e.g., `.worktrees/feat-<name>`), then run `pwd` to verify the path shows `.worktrees/feat-<name>`.
 
 4. **Hand off to brand-architect:**
 
@@ -216,12 +211,7 @@ Options:
 
 3. **Navigate to worktree:**
 
-   ```bash
-   cd ${WORKTREE_PATH}
-   pwd  # Must show .worktrees/feat-<name>
-   ```
-
-   Verify location before proceeding.
+   Run `cd` to the worktree path from step 1 (e.g., `.worktrees/feat-<name>`), then run `pwd` to verify the path shows `.worktrees/feat-<name>`.
 
 4. **Hand off to business-validator:**
 
@@ -394,7 +384,7 @@ Write the brainstorm document. **Use worktree path if created.**
 
 **File path:**
 
-- If worktree exists: `${WORKTREE_PATH}/knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`
+- If worktree exists: `<worktree-path>/knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md` (replace `<worktree-path>` with the actual worktree path, e.g., `.worktrees/feat-<name>`)
 - If no worktree: `knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`
 
 **Document structure:** See the `brainstorming` skill for the template format. Key sections: What We're Building, Why This Approach, Key Decisions, Open Questions.
@@ -442,7 +432,7 @@ Ensure the brainstorms directory exists before writing.
    - Add Functional Requirements (FR1, FR2...) from key features
    - Add Technical Requirements (TR1, TR2...) from constraints
 
-5. **Save spec.md** to worktree: `${WORKTREE_PATH}/knowledge-base/specs/feat-<name>/spec.md`
+5. **Save spec.md** to the worktree: `<worktree-path>/knowledge-base/specs/feat-<name>/spec.md` (replace `<worktree-path>` with the actual worktree path)
 
 6. **Switch to worktree:**
 

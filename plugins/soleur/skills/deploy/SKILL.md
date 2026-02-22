@@ -23,22 +23,13 @@ For first-time server setup, see [hetzner-setup.md](./references/hetzner-setup.m
 
 Check prerequisites before starting the build.
 
-```bash
-# Required env vars
-echo "${DEPLOY_HOST:?Set DEPLOY_HOST env var}" > /dev/null
-echo "${DEPLOY_IMAGE:?Set DEPLOY_IMAGE env var}" > /dev/null
+Run these checks as separate Bash commands:
 
-# Docker daemon
-docker info > /dev/null 2>&1 || { echo "ERROR: Docker daemon not running"; exit 1; }
-
-# SSH connectivity
-ssh -o ConnectTimeout=5 -o BatchMode=yes "$DEPLOY_HOST" "echo OK" > /dev/null 2>&1 \
-  || { echo "ERROR: SSH to $DEPLOY_HOST failed"; exit 1; }
-
-# Dockerfile exists
-DOCKERFILE="${DEPLOY_DOCKERFILE:-./Dockerfile}"
-test -f "$DOCKERFILE" || { echo "ERROR: Dockerfile not found at $DOCKERFILE"; exit 1; }
-```
+1. Verify `DEPLOY_HOST` is set: `printenv DEPLOY_HOST` (must produce output)
+2. Verify `DEPLOY_IMAGE` is set: `printenv DEPLOY_IMAGE` (must produce output)
+3. Verify Docker daemon: `docker info > /dev/null 2>&1`
+4. Verify SSH connectivity: `ssh -o ConnectTimeout=5 -o BatchMode=yes <deploy-host> "echo OK"` (replace `<deploy-host>` with the actual DEPLOY_HOST value)
+5. Verify Dockerfile exists: `test -f ./Dockerfile` (or the DEPLOY_DOCKERFILE path if set)
 
 If any check fails, stop and report the error. Do not proceed to Phase 1.
 
@@ -74,7 +65,7 @@ If the user selects Cancel, stop execution.
 Run [deploy.sh](./scripts/deploy.sh) to build, push, and deploy:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/skills/deploy/scripts/deploy.sh
+bash ./plugins/soleur/skills/deploy/scripts/deploy.sh
 ```
 
 The script handles:

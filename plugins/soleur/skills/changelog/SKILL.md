@@ -105,15 +105,15 @@ Remember, the final output should only include the content within the <change_lo
 
 Post changelogs to Discord by adding a webhook URL:
 
-```
-# Set Discord webhook URL
-DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
+First get the webhook URL with `printenv DISCORD_WEBHOOK_URL`, then post using curl with the literal URL:
 
-# Post using curl
+```bash
 curl -H "Content-Type: application/json" \
   -d "{\"content\": \"{{CHANGELOG}}\"}" \
-  $DISCORD_WEBHOOK_URL
+  "<webhook-url>"
 ```
+
+Replace `<webhook-url>` with the actual Discord webhook URL.
 
 To get a webhook URL, go to Discord server > Server Settings > Integrations > Webhooks > New Webhook.
 

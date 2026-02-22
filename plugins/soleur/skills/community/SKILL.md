@@ -29,34 +29,13 @@ Before executing any sub-command, validate environment variables.
 
 **Required for all sub-commands except `post`:**
 
-```bash
-if [[ -z "${DISCORD_BOT_TOKEN:-}" ]]; then
-  echo "DISCORD_BOT_TOKEN is not set."
-  echo ""
-  echo "Run /soleur:community setup to configure Discord automatically."
-  # Stop execution
-fi
-```
+Check if `DISCORD_BOT_TOKEN` is set by running `printenv DISCORD_BOT_TOKEN`. If no output, stop and tell the user: "DISCORD_BOT_TOKEN is not set. Run /soleur:community setup to configure Discord automatically."
 
-```bash
-if [[ -z "${DISCORD_GUILD_ID:-}" ]]; then
-  echo "DISCORD_GUILD_ID is not set."
-  echo ""
-  echo "Run /soleur:community setup to configure Discord automatically."
-  # Stop execution
-fi
-```
+Check if `DISCORD_GUILD_ID` is set by running `printenv DISCORD_GUILD_ID`. If no output, stop and tell the user: "DISCORD_GUILD_ID is not set. Run /soleur:community setup to configure Discord automatically."
 
 **Required for sub-commands that post (digest, welcome):**
 
-```bash
-if [[ -z "${DISCORD_WEBHOOK_URL:-}" ]]; then
-  echo "DISCORD_WEBHOOK_URL is not set."
-  echo ""
-  echo "Run /soleur:community setup to configure Discord automatically."
-  # Stop execution
-fi
-```
+Check if `DISCORD_WEBHOOK_URL` is set by running `printenv DISCORD_WEBHOOK_URL`. If the command produces no output, stop and tell the user: "DISCORD_WEBHOOK_URL is not set. Run /soleur:community setup to configure Discord automatically."
 
 **Brand guide (required for digest Discord post and welcome):**
 
@@ -80,13 +59,7 @@ Setup script: [discord-setup.sh](./scripts/discord-setup.sh)
 
 ### Phase 0: Check Existing Config
 
-```bash
-if [[ -n "${DISCORD_BOT_TOKEN:-}" ]] && [[ -n "${DISCORD_GUILD_ID:-}" ]] && [[ -n "${DISCORD_WEBHOOK_URL:-}" ]]; then
-  # All three vars present
-fi
-```
-
-If all three are set, use **AskUserQuestion**:
+Check if all three environment variables are set by running `printenv DISCORD_BOT_TOKEN DISCORD_GUILD_ID DISCORD_WEBHOOK_URL`. If all three produce output, use **AskUserQuestion**:
 
 - **Reconfigure** -- Overwrite existing Discord configuration
 - **Keep current** -- Exit setup, keep existing configuration
@@ -114,10 +87,10 @@ agent-browser open "https://discord.com/developers/applications" --headed
 
 3. Use **AskUserQuestion**: "Paste your bot token"
 
-4. Validate the token securely:
+4. Validate the token securely. Replace `<token>` with the literal token string from AskUserQuestion:
 
 ```bash
-DISCORD_BOT_TOKEN_INPUT="$token" plugins/soleur/skills/community/scripts/discord-setup.sh validate-token
+DISCORD_BOT_TOKEN_INPUT="<token>" plugins/soleur/skills/community/scripts/discord-setup.sh validate-token
 ```
 
 - On success: capture app ID from stdout (first line)
@@ -128,15 +101,17 @@ DISCORD_BOT_TOKEN_INPUT="$token" plugins/soleur/skills/community/scripts/discord
 1. Build the OAuth2 URL using the app ID from Phase 1:
 
 ```
-https://discord.com/oauth2/authorize?client_id={APP_ID}&scope=bot&permissions=536939520
+https://discord.com/oauth2/authorize?client_id=<app-id>&scope=bot&permissions=536939520
 ```
+
+Replace `<app-id>` with the app ID captured from Phase 1.
 
 Permission 536939520 = View Channels + Send Messages + Read Message History + Manage Webhooks.
 
 2. Navigate the browser to the OAuth2 URL:
 
 ```bash
-agent-browser open "{OAUTH2_URL}" --headed
+agent-browser open "<oauth2-url>" --headed
 ```
 
 3. Display: "Select your server in the dropdown and click **Authorize**."
@@ -148,7 +123,7 @@ agent-browser open "{OAUTH2_URL}" --headed
 **Step 1: Discover guilds**
 
 ```bash
-DISCORD_BOT_TOKEN_INPUT="$token" plugins/soleur/skills/community/scripts/discord-setup.sh discover-guilds
+DISCORD_BOT_TOKEN_INPUT="<token>" plugins/soleur/skills/community/scripts/discord-setup.sh discover-guilds
 ```
 
 - If 0 guilds: "Bot is not in any servers. Complete the authorization step first." Exit.
@@ -158,7 +133,7 @@ DISCORD_BOT_TOKEN_INPUT="$token" plugins/soleur/skills/community/scripts/discord
 **Step 2: List channels**
 
 ```bash
-DISCORD_BOT_TOKEN_INPUT="$token" plugins/soleur/skills/community/scripts/discord-setup.sh list-channels <guild_id>
+DISCORD_BOT_TOKEN_INPUT="<token>" plugins/soleur/skills/community/scripts/discord-setup.sh list-channels <guild_id>
 ```
 
 Use **AskUserQuestion** with channel names (first 10 text channels) as options. Recommend `#general` or the first channel if no obvious default.
@@ -166,7 +141,7 @@ Use **AskUserQuestion** with channel names (first 10 text channels) as options. 
 **Step 3: Create webhook**
 
 ```bash
-DISCORD_BOT_TOKEN_INPUT="$token" plugins/soleur/skills/community/scripts/discord-setup.sh create-webhook <channel_id>
+DISCORD_BOT_TOKEN_INPUT="<token>" plugins/soleur/skills/community/scripts/discord-setup.sh create-webhook <channel_id>
 ```
 
 - On success (exit 0): capture webhook URL from stdout
@@ -178,7 +153,7 @@ DISCORD_BOT_TOKEN_INPUT="$token" plugins/soleur/skills/community/scripts/discord
 **Step 1: Write .env**
 
 ```bash
-DISCORD_BOT_TOKEN_INPUT="$token" plugins/soleur/skills/community/scripts/discord-setup.sh write-env <guild_id> <webhook_url>
+DISCORD_BOT_TOKEN_INPUT="<token>" plugins/soleur/skills/community/scripts/discord-setup.sh write-env <guild_id> <webhook_url>
 ```
 
 **Step 2: Verify**
@@ -334,14 +309,16 @@ Present the draft to the user with character count. Use the **AskUserQuestion to
 
 On acceptance, post via webhook:
 
+First get the webhook URL with `printenv DISCORD_WEBHOOK_URL`, then use the literal URL:
+
 ```bash
 curl -s -o /dev/null -w "%{http_code}" \
   -H "Content-Type: application/json" \
   -d "{\"content\": \"ESCAPED_CONTENT\", \"username\": \"Sol\", \"avatar_url\": \"AVATAR_URL\"}" \
-  "$DISCORD_WEBHOOK_URL"
+  "<webhook-url>"
 ```
 
-Set `avatar_url` to the hosted logo URL (e.g., the GitHub-hosted `logo-mark-512.png`). Webhook messages freeze author identity at post time -- these fields ensure consistent branding.
+Replace `<webhook-url>` with the actual URL from `printenv`. Set `avatar_url` to the hosted logo URL (e.g., the GitHub-hosted `logo-mark-512.png`). Webhook messages freeze author identity at post time -- these fields ensure consistent branding.
 
 JSON-escape all content before inserting into the payload.
 
