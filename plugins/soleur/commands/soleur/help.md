@@ -45,14 +45,17 @@ Present the following formatted overview. Replace placeholder counts with actual
 ```text
 Soleur - The Company-as-a-Service Platform
 
-COMMANDS (all soleur: namespaced):
+GETTING STARTED:
+  /soleur:go <what you want>  The recommended way to use Soleur
+  /soleur:sync                Populate knowledge-base from existing codebase
+  /soleur:help                This help listing
+
+WORKFLOW COMMANDS (advanced):
   /soleur:brainstorm <idea>   Explore requirements and approaches
   /soleur:plan                Create an implementation plan
   /soleur:work <plan>         Execute the plan systematically
   /soleur:review              Run multi-agent code review
   /soleur:compound            Capture learnings from solved problems
-  /soleur:sync                Populate knowledge-base from existing codebase
-  /soleur:help                This help listing
   /soleur:one-shot <feature>  Full autonomous engineering workflow
 
 AGENTS: [N] agents across [M] categories
@@ -67,7 +70,7 @@ SKILLS: [N] skills
 MCP SERVERS:
   context7                    Framework documentation lookup
 
-Quick start: /soleur:brainstorm <idea>
+Quick start: /soleur:go <what you want to do>
 Full docs:   See plugins/soleur/README.md
 ```
 

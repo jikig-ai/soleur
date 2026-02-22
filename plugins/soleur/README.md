@@ -12,13 +12,19 @@ claude plugin install soleur
 
 ## The Soleur Workflow
 
-Soleur provides a structured workflow for feature development. Use these commands in order:
+The recommended way to use Soleur is through the unified entry point:
+
+```text
+/soleur:go <what you want to do>
+```
+
+This classifies your intent and routes to the right workflow. For existing codebases, run `/soleur:sync` first to populate your knowledge-base.
+
+**Advanced workflow** (individual commands):
 
 ```text
 /soleur:brainstorm  -->  /soleur:plan  -->  /soleur:work  -->  /soleur:review  -->  /soleur:compound
 ```
-
-**For existing codebases:** Run `/soleur:sync` first to populate your knowledge-base with conventions and patterns before starting the workflow.
 
 ### 1. Brainstorm (`/soleur:brainstorm`)
 
@@ -249,6 +255,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 
 | Command | Description |
 |---------|-------------|
+| `/soleur:go` | Unified entry point -- classifies intent and routes to the right workflow |
 | `/soleur:brainstorm` | Explore requirements and approaches before planning |
 | `/soleur:plan` | Create implementation plans |
 | `/soleur:work` | Execute work items systematically |
