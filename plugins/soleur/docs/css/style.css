@@ -452,7 +452,7 @@
     display: flex;
     justify-content: space-around;
     align-items: center;
-    padding: var(--space-8) var(--space-5);
+    padding: var(--space-10) var(--space-5);
     background: var(--color-bg-secondary);
     border-top: 1px solid var(--color-border);
     border-bottom: 1px solid var(--color-border);
@@ -565,6 +565,12 @@
     color: var(--color-accent);
   }
 
+  /* Landing page: Mid-page CTA */
+  .landing-cta-mid {
+    text-align: center;
+    padding: var(--space-6) var(--space-5);
+  }
+
   /* Landing page: Feature grids (departments + workflow) */
   .feature-grid-departments,
   .feature-grid-workflow {
@@ -581,8 +587,8 @@
     color: var(--color-accent);
     text-transform: uppercase;
     text-align: center;
-    margin-top: var(--space-8);
-    margin-bottom: var(--space-4);
+    margin-top: var(--space-10);
+    margin-bottom: var(--space-5);
     max-width: 1200px;
     margin-inline: auto;
   }
@@ -932,7 +938,8 @@
   }
 
   @media (min-width: 769px) and (max-width: 1024px) {
-    .problem-cards { grid-template-columns: 1fr 1fr; }
+    .feature-grid-departments,
+    .feature-grid-workflow { grid-template-columns: repeat(2, 1fr); }
   }
 }
 

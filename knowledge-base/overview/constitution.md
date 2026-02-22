@@ -132,6 +132,8 @@ Project principles organized by domain. Add principles as you learn them.
 - Consolidate catalog categories to ~4-6 groups with 5+ items each; keep category names and ordering consistent across docs pages, README tables, and release tooling
 - If skill sub-commands are always run in sequence with no branching decisions between them, merge them into a single sub-command
 - Add CSS classes to `style.css` `@layer components` instead of inline styles in Nunjucks templates
+- When changing card counts in CSS grids, verify `card_count % column_count == 0` at every responsive breakpoint -- a nonzero remainder means orphaned cards; take screenshots at desktop, tablet, and mobile before shipping
+- Marketing-visible changes (landing page, docs site layout) must route through CMO who delegates to UX designer or conversion-optimizer for layout review -- CMO provides strategic direction, specialists verify visual execution
 - Add test/temp build output directories (e.g., `_site_test/`) to `.gitignore` when introducing new build commands
 - When extending commands that run inside an LLM, prefer semantic assessment questions over keyword substring matching -- LLMs are better at understanding intent than pattern matching, and semantic questions are more extensible (one question per domain vs. a keyword table)
 - Legal documents exist in two locations (`docs/legal/` for source markdown and `plugins/soleur/docs/pages/legal/` for docs site Eleventy templates) -- both must be updated in sync when legal content changes

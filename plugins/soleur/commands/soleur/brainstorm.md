@@ -256,7 +256,9 @@ When a domain leader is accepted, they participate in Phase 1.2 (Collaborative D
 ```text
 Task cmo: "Assess the marketing implications of this feature: <feature_description>.
 Identify marketing concerns, opportunities, and questions the user should consider
-during brainstorming. Output a brief structured assessment (not a full strategy)."
+during brainstorming. When the assessment involves visual layout or page structure,
+explicitly recommend delegating to conversion-optimizer or ux-design-lead for layout review.
+Output a brief structured assessment (not a full strategy)."
 ```
 
 Weave the CMO's assessment into the brainstorm dialogue alongside repo research findings.
