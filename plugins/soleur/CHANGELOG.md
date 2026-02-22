@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.35.0] - 2026-02-22
+
+### Added
+
+- Add Support domain with 3 agents: CCO (domain leader), ticket-triage, community-manager (moved from Marketing)
+- Add Support row to brainstorm Phase 0.5 domain config table for automatic CCO routing
+- Add `--cat-support` CSS variable (#9B59B6 purple) and Support to docs site agent catalog
+
+### Changed
+
+- Move community-manager agent from Marketing to Support domain
+- Update CMO description and delegation table to remove community-manager, add cross-domain note
+- Add disambiguation sentence to triage skill referencing ticket-triage agent
+
 ## [2.34.0] - 2026-02-22
 
 ### Added

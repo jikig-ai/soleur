@@ -70,7 +70,7 @@ Soleur occupies a unique position: it is the only platform that combines AI agen
 **Vulnerabilities:**
 
 1. **Platform dependency:** Anthropic could build multi-domain capabilities into Claude Code directly. Mitigation: Soleur's value is in the curated agent behaviors and accumulated knowledge, not in the plugin infrastructure.
-2. **Breadth vs. depth trade-off:** 54 agents across 5 domains means each domain gets fewer resources than a dedicated tool. Mitigation: The integration IS the product -- a mediocre-but-connected marketing agent is more valuable to a solo founder than an excellent-but-isolated marketing tool.
+2. **Breadth vs. depth trade-off:** 60 agents across 5 domains means each domain gets fewer resources than a dedicated tool. Mitigation: The integration IS the product -- a mediocre-but-connected marketing agent is more valuable to a solo founder than an excellent-but-isolated marketing tool.
 
 **Assessment:** The competitive landscape validates the thesis. Multiple companies are building AI agent workforces, confirming the market direction. None combine engineering depth with business breadth the way Soleur does. The "why now" is the convergence of capable LLMs (Claude, GPT-4) with plugin architectures that allow domain-specific agents to be composed into organizations.
 
@@ -149,7 +149,7 @@ Removing any domain undermines the thesis. A "Company-as-a-Service" with only en
 2. Does the integrated AI organization resonate more than separate tools? (Guided onboarding)
 3. Do users return after the first session? Do they use non-engineering domains? (Unassisted usage)
 
-**Assessment:** The product already exceeds MVP scope in depth (54 agents) but matches MVP scope in breadth (5 domains). The validation should test breadth transfer (do non-engineering domains deliver value?) rather than depth (do we need more engineering agents?). The minimum viable experiment is getting 10 founders to try the full organization, not shrinking to a subset.
+**Assessment:** The product already exceeds MVP scope in depth (60 agents) but matches MVP scope in breadth (5 domains). The validation should test breadth transfer (do non-engineering domains deliver value?) rather than depth (do we need more engineering agents?). The minimum viable experiment is getting 10 founders to try the full organization, not shrinking to a subset.
 
 ## Validation Verdict
 

@@ -10,6 +10,7 @@ const DOMAIN_LABELS = {
   operations: "Operations",
   product: "Product",
   sales: "Sales",
+  support: "Support",
 };
 
 const SUB_LABELS = {
@@ -29,6 +30,7 @@ const DOMAIN_CSS_VARS = {
   operations: "var(--cat-workflow)",
   product: "var(--cat-tools)",
   sales: "var(--cat-sales)",
+  support: "var(--cat-support)",
 };
 
 function parseFrontmatter(content) {
@@ -141,7 +143,7 @@ export default function () {
   }
 
   // Sort and structure output
-  const domainOrder = ["engineering", "finance", "legal", "marketing", "operations", "product", "sales"];
+  const domainOrder = ["engineering", "finance", "legal", "marketing", "operations", "product", "sales", "support"];
   const subOrder = ["review", "design", "infra", "research", "workflow"];
 
   const domains = [];

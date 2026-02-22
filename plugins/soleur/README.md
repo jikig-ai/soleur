@@ -1,6 +1,6 @@
 # Soleur
 
-A full AI organization across engineering, finance, marketing, legal, operations, product, and sales. Every decision you make teaches the system. Every project gets better and faster than the last.
+A full AI organization across engineering, finance, marketing, legal, operations, product, sales, and support. Every decision you make teaches the system. Every project gets better and faster than the last.
 
 ## Quick Start
 
@@ -106,7 +106,7 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 | Component | Count |
 |-----------|-------|
-| Agents | 54 |
+| Agents | 60 |
 | Commands | 8 |
 | Skills | 46 |
 | MCP Servers | 2 |
@@ -115,14 +115,13 @@ Full autonomous engineering workflow that goes from plan to PR in a single comma
 
 Agents are organized by domain, then by function.
 
-### Marketing (12)
+### Marketing (11)
 
 | Agent | Description |
 |-------|-------------|
 | `analytics-analyst` | Analytics tracking setup, event taxonomy design, A/B test planning, and attribution modeling |
 | `brand-architect` | Interactive brand identity workshop producing structured brand guides |
 | `cmo` | Marketing domain leader -- orchestrates marketing strategy and delegates to specialist agents |
-| `community-manager` | Analyze community engagement, generate weekly digests, and report health metrics across Discord and GitHub |
 | `conversion-optimizer` | Analyze and optimize conversion surfaces: landing pages, signup flows, onboarding, forms, popups, paywalls |
 | `copywriter` | Marketing copy for landing pages, email sequences, cold outreach, social content, and copy editing |
 | `growth-strategist` | Content strategy analysis and execution: keyword research, content auditing, gap analysis, AI agent consumability, and applying fixes |
@@ -242,6 +241,14 @@ Agents are organized by domain, then by function.
 | `deal-architect` | Create proposals, SOWs, competitive battlecards, objection-handling playbooks, and deal negotiation frameworks |
 | `outbound-strategist` | Design outbound prospecting sequences, ICP targeting, lead scoring, and multi-channel cadence strategies |
 | `pipeline-analyst` | Analyze sales pipeline health, model revenue forecasts, define stage criteria, and review deal velocity |
+
+### Support (3)
+
+| Agent | Description |
+|-------|-------------|
+| `cco` | Support domain leader -- orchestrates support strategy and delegates to specialist agents |
+| `community-manager` | Analyze community engagement, generate weekly digests, and report health metrics across Discord and GitHub |
+| `ticket-triage` | Classify and route GitHub issues by severity (P1/P2/P3) and domain |
 
 ## Commands
 
