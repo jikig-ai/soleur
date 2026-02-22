@@ -271,33 +271,13 @@ Ensure the brainstorms directory exists before writing.
 
 1. **Check for existing issue reference in feature_description:**
 
-   ```bash
-   # Parse for issue patterns: #N (first occurrence)
-   existing_issue=$(echo "<feature_description>" | grep -oE '#[0-9]+' | head -1 | tr -d '#')
-   ```
+   Parse the feature description for `#N` patterns (e.g., `#42`). Extract the first issue number found.
 
-   **If issue reference found**, validate and handle by state:
+   **If issue reference found**, validate its state by running `gh issue view <number> --json state --jq .state`:
 
-   ```bash
-   if [[ -n "$existing_issue" ]]; then
-     issue_state=$(gh issue view "$existing_issue" --json state --jq .state 2>/dev/null)
-
-     if [[ "$issue_state" == "OPEN" ]]; then
-       # Use existing issue - skip creation, proceed to step 3
-       echo "Using existing issue: #$existing_issue"
-     elif [[ "$issue_state" == "CLOSED" ]]; then
-       # Warn and create new issue with reference
-       echo "Warning: Issue #$existing_issue is closed."
-       echo "Creating new issue with reference to closed one."
-       # Proceed to step 2, include "Replaces closed #$existing_issue" in body
-     else
-       # Issue not found - prompt user
-       echo "Warning: Issue #$existing_issue not found."
-       # Use AskUserQuestion: "Create new issue anyway?"
-       # If yes, proceed to step 2. If no, abort.
-     fi
-   fi
-   ```
+   - **If OPEN:** Use existing issue -- skip creation, proceed to step 3
+   - **If CLOSED:** Warn the user, then create a new issue with "Replaces closed #N" in the body (proceed to step 2)
+   - **If not found or error:** Use AskUserQuestion: "Issue #N not found. Create new issue anyway?" If yes, proceed to step 2. If no, abort.
 
 2. **Create GitHub issue** (only if no valid existing issue):
 
@@ -315,18 +295,7 @@ Ensure the brainstorms directory exists before writing.
 
 3. **Update existing issue with artifact links** (if using existing issue):
 
-   ```bash
-   existing_body=$(gh issue view "$existing_issue" --json body --jq .body)
-   new_body="${existing_body}
-
-   ---
-   ## Artifacts
-   - Brainstorm: \`knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md\`
-   - Spec: \`knowledge-base/specs/feat-<name>/spec.md\`
-   - Branch: \`feat-<name>\`
-   "
-   gh issue edit "$existing_issue" --body "$new_body"
-   ```
+   Fetch the existing issue body with `gh issue view <number> --json body --jq .body`. Append an Artifacts section with links to the brainstorm document, spec file, and branch name. Then update with `gh issue edit <number> --body "<updated body>"`.
 
 4. **Generate spec.md** using `spec-templates` skill template:
    - Fill in Problem Statement from brainstorm

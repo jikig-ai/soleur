@@ -325,12 +325,7 @@ After documentation is complete and before the decision menu, automatically cons
 
 **Branch detection:**
 
-```bash
-current_branch=$(git branch --show-current)
-if [[ "$current_branch" != feat-* ]]; then
-  # Not a feature branch -- skip consolidation entirely
-fi
-```
+Run `git branch --show-current` to get the current branch. If it does not start with `feat-`, skip consolidation entirely.
 
 **If on a `feat-*` branch, run the following steps automatically:**
 
@@ -435,9 +430,9 @@ mkdir -p knowledge-base/specs/archive
 
 Use `git mv` with timestamp prefix for each artifact:
 
-```bash
-timestamp=$(date +%Y%m%d-%H%M%S)
+Generate a timestamp in `YYYYMMDD-HHMMSS` format (e.g., `20260222-143000`).
 
+```bash
 # Brainstorms and plans: prefix with timestamp
 git mv "knowledge-base/brainstorms/original-name.md" \
        "knowledge-base/brainstorms/archive/${timestamp}-original-name.md"

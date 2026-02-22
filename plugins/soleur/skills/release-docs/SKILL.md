@@ -25,11 +25,11 @@ The documentation site auto-generates agent and skill catalog pages from source 
 
 Count all current components:
 
-```bash
-echo "Agents: $(find plugins/soleur/agents -name '*.md' -not -name 'README.md' | wc -l)"
-echo "Commands: $(find plugins/soleur/commands -name '*.md' -not -name 'README.md' | wc -l)"
-echo "Skills: $(find plugins/soleur/skills -name 'SKILL.md' | wc -l)"
-```
+Count each component type using Glob:
+
+- **Agents:** Count `.md` files (excluding README.md) under `plugins/soleur/agents/`
+- **Commands:** Count `.md` files (excluding README.md) under `plugins/soleur/commands/`
+- **Skills:** Count `SKILL.md` files under `plugins/soleur/skills/`
 
 ## Step 2: Update Metadata Files
 
@@ -57,12 +57,13 @@ The `SKILL_CATEGORIES` object maps each skill name to its display category. New 
 ```bash
 # Run the Eleventy build
 npx @11ty/eleventy
+```
 
-# Verify counts in output
-echo "Agent cards: $(grep -c 'component-card' _site/pages/agents.html)"
-echo "Skill cards: $(grep -c 'component-card' _site/pages/skills.html)"
+After the build completes, verify counts by using Grep to count occurrences of `component-card` in `_site/pages/agents.html` and `_site/pages/skills.html`.
 
-# Verify JSON files
+Verify JSON files are well-formed:
+
+```bash
 cat plugins/soleur/.claude-plugin/plugin.json | jq .
 ```
 

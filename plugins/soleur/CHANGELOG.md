@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.23.18] - 2026-02-22
+
+### Fixed
+
+- Remove `$()` command substitution from all commands and skills to eliminate Claude Code permission prompts
+- Affected files: 4 commands (brainstorm, plan, work, compound), 9 skills (ship, git-worktree, compound-docs, release-announce, release-docs, deploy, deploy-docs, rclone, file-todos), and AGENTS.md
+
 ## [2.23.17] - 2026-02-22
 
 ### Fixed

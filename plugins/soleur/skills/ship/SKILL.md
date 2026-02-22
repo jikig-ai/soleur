@@ -36,23 +36,14 @@ git remote show origin | grep 'HEAD branch'
 
 Check that feature artifacts exist and are committed. Look for files related to the current feature branch name:
 
-```bash
-# Extract feature name from branch (e.g., feat-user-auth -> user-auth)
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
-FEATURE=$(echo "$BRANCH" | sed 's/^feat-//' | sed 's/^feature\///' | sed 's/^fix-//' | sed 's/^fix\///')
+Run `git rev-parse --abbrev-ref HEAD` to get the current branch name. Extract the feature name by stripping the `feat-`, `feature/`, `fix-`, or `fix/` prefix.
 
-# Check for brainstorm artifacts
-ls knowledge-base/brainstorms/*${FEATURE}* 2>/dev/null
+Then search for related artifacts:
 
-# Check for spec artifacts
-ls knowledge-base/specs/feat-${FEATURE}/spec.md 2>/dev/null
-
-# Check for plan artifacts
-ls knowledge-base/plans/*${FEATURE}* 2>/dev/null
-
-# Check for uncommitted files
-git status --porcelain knowledge-base/
-```
+- Brainstorms: `ls knowledge-base/brainstorms/*<feature>* 2>/dev/null`
+- Specs: `ls knowledge-base/specs/feat-<feature>/spec.md 2>/dev/null`
+- Plans: `ls knowledge-base/plans/*<feature>* 2>/dev/null`
+- Uncommitted files: `git status --porcelain knowledge-base/`
 
 **If artifacts exist but are not committed:** Stage and commit them.
 
@@ -70,16 +61,13 @@ git log --oneline --since="1 week ago" -- knowledge-base/learnings/
 
 **If no recent learning exists:** Check for unarchived KB artifacts before offering a choice:
 
-```bash
-# Check for unarchived artifacts matching this feature
-BRAINSTORMS=$(find knowledge-base/brainstorms/ -name "*${FEATURE}*" -not -path "*/archive/*" 2>/dev/null)
-PLANS=$(find knowledge-base/plans/ -name "*${FEATURE}*" -not -path "*/archive/*" 2>/dev/null)
-SPECS=$(ls -d "knowledge-base/specs/feat-${FEATURE}" 2>/dev/null)
-HAS_ARTIFACTS=false
-if [[ -n "$BRAINSTORMS" || -n "$PLANS" || -n "$SPECS" ]]; then
-  HAS_ARTIFACTS=true
-fi
-```
+Search for unarchived artifacts matching the feature name (excluding `*/archive/*` paths):
+
+- Brainstorms in `knowledge-base/brainstorms/`
+- Plans in `knowledge-base/plans/`
+- Spec directory at `knowledge-base/specs/feat-<feature>/`
+
+If any unarchived artifacts are found, set `HAS_ARTIFACTS=true`.
 
 **If artifacts exist (`HAS_ARTIFACTS=true`):** Do NOT offer Skip. Explain:
 
@@ -106,9 +94,10 @@ Then run `/soleur:compound`. The compound flow will automatically consolidate an
 
 Check if new commands, skills, or agents were added in this branch:
 
+First, find the merge base by running `git merge-base HEAD origin/main`. Then use that commit hash to compare:
+
 ```bash
-# Compare against base branch for new additions
-git diff --name-status $(git merge-base HEAD origin/main)..HEAD -- \
+git diff --name-status <merge-base>..HEAD -- \
   plugins/soleur/commands/ \
   plugins/soleur/skills/ \
   plugins/soleur/agents/
@@ -140,8 +129,10 @@ git merge origin/main
 
 Check if plugin files were modified in this branch:
 
+Run `git merge-base HEAD origin/main` to get the merge base hash, then:
+
 ```bash
-git diff --name-only $(git merge-base HEAD origin/main)..HEAD -- plugins/soleur/
+git diff --name-only <merge-base>..HEAD -- plugins/soleur/
 ```
 
 **If plugin files were modified:**
@@ -189,25 +180,9 @@ Ship Checklist for [branch name]:
 
 First, verify that new source files have corresponding test files:
 
-```bash
-# Find new source files added in this branch (excluding tests, configs, docs)
-BASE=$(git merge-base HEAD origin/main)
-NEW_SRC=$(git diff --name-only --diff-filter=A "$BASE"..HEAD | grep -E '\.(ts|js|rb|py)$' | grep -v -E '(test|spec|config|\.d\.ts)')
-MISSING_TESTS=""
+Find new source files added in this branch by running `git merge-base HEAD origin/main` first, then `git diff --name-only --diff-filter=A <merge-base>..HEAD`. Filter for `.ts`, `.js`, `.rb`, `.py` files (excluding test/spec/config files).
 
-for src in $NEW_SRC; do
-  # Derive expected test file path
-  test_file=$(echo "$src" | sed 's|/src/|/test/|; s|\.ts$|.test.ts|; s|\.js$|.test.js|; s|\.rb$|_test.rb|; s|\.py$|_test.py|')
-  alt_test=$(echo "$src" | sed 's|\.ts$|.spec.ts|; s|\.js$|.spec.js|; s|\.rb$|_spec.rb|')
-  if [ ! -f "$test_file" ] && [ ! -f "$alt_test" ]; then
-    MISSING_TESTS="$MISSING_TESTS\n  - $src (expected: $test_file)"
-  fi
-done
-
-if [ -n "$MISSING_TESTS" ]; then
-  echo "WARNING: New source files without test files:$MISSING_TESTS"
-fi
-```
+For each new source file, check if a corresponding test file exists (e.g., `foo.ts` -> `foo.test.ts` or `foo.spec.ts`). Report any source files missing test coverage.
 
 **If test files are missing:** Ask the user whether to write tests now or continue without them. Do not silently proceed.
 
@@ -225,47 +200,17 @@ bun test
 
 Before pushing, re-verify that unarchived KB artifacts have been consolidated. This is a hard gate -- do not proceed if it fails.
 
-```bash
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
-FEATURE=$(echo "$BRANCH" | sed 's/^feat-//' | sed 's/^feature\///' | sed 's/^fix-//' | sed 's/^fix\///')
+Get the current branch with `git rev-parse --abbrev-ref HEAD` and extract the feature name (strip `feat-`/`feature/`/`fix-`/`fix/` prefix). Then search for unarchived KB artifacts matching the feature name in brainstorms, plans, and specs directories (excluding `archive/` paths).
 
-BRAINSTORMS=$(find knowledge-base/brainstorms/ -name "*${FEATURE}*" -not -path "*/archive/*" 2>/dev/null)
-PLANS=$(find knowledge-base/plans/ -name "*${FEATURE}*" -not -path "*/archive/*" 2>/dev/null)
-SPECS=$(ls -d "knowledge-base/specs/feat-${FEATURE}" 2>/dev/null)
-
-if [[ -n "$BRAINSTORMS" || -n "$PLANS" || -n "$SPECS" ]]; then
-  echo "BLOCKED: Unarchived KB artifacts found. Run /soleur:compound before pushing."
-  echo "$BRAINSTORMS"
-  echo "$PLANS"
-  echo "$SPECS"
-  exit 1
-fi
-```
+If any unarchived artifacts are found, BLOCK the push and instruct the user to run `/soleur:compound` first.
 
 **If blocked:** Stop. Run `/soleur:compound` to consolidate and archive artifacts, then return to this phase. Do NOT bypass this check.
 
 **If clear:** Proceed to push.
 
-```bash
-# Push branch to remote
-git push -u origin $(git rev-parse --abbrev-ref HEAD)
+Push the branch to remote: run `git rev-parse --abbrev-ref HEAD` to get the branch name, then `git push -u origin <branch-name>`.
 
-# Create PR using gh CLI
-gh pr create --title "[type]: [description]" --body "$(cat <<'PREOF'
-## Summary
-- [bullet points from commits]
-
-## Checklist
-- [x] Artifacts committed
-- [x] Learnings captured
-- [x] Documentation updated
-- [x] Version bumped
-- [x] Tests pass
-
-Generated with [Claude Code](https://claude.com/claude-code)
-PREOF
-)"
-```
+Create the PR using `gh pr create` with a title and body containing a summary and checklist. Use a HEREDOC for the body to preserve formatting.
 
 Present the PR URL to the user.
 
@@ -367,9 +312,7 @@ gh pr merge <number> --squash
 
 2. Clean up worktree and local branch:
 
-   ```bash
-   cd $(git rev-parse --show-toplevel) && bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
-   ```
+   Navigate to the repository root directory, then run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged`.
 
 This detects `[gone]` branches (where the remote was deleted after merge), removes their worktrees, archives spec directories, and deletes local branches.
 
