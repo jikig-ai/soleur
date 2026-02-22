@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.31.6] - 2026-02-22
+
+### Fixed
+
+- Fix orphaned "Knowledge Compounds" card at tablet breakpoint (769-1024px) by removing broken 2-col rule for problem-cards
+- Add 2-column responsive rule for department/workflow grids at tablet for clean 3x2 layout
+- Replace confusing "1 Automated Workflow" stat with "6 Departments" for clearer value communication
+- Add mid-page CTA between quote and features section per CMO conversion assessment
+- Increase spacing between department and workflow grid sections to reduce "wall of cards" effect
+
 ## [2.31.5] - 2026-02-22
 
 ### Fixed
