@@ -14,13 +14,18 @@ graph TB
         CLI[Claude Code CLI]
     end
 
-    subgraph "Core Workflow"
-        BS["/soleur:brainstorm"]
-        PL["/soleur:plan"]
-        WK["/soleur:work"]
-        RV["/soleur:review"]
-        CP["/soleur:compound"]
+    subgraph "Entry Points"
+        GO["/soleur:go"]
         SY["/soleur:sync"]
+        HLP["/soleur:help"]
+    end
+
+    subgraph "Workflow Skills"
+        BS["brainstorm"]
+        PL["plan"]
+        WK["work"]
+        RV["review"]
+        CP["compound"]
     end
 
     subgraph "Components"
@@ -38,7 +43,7 @@ graph TB
         PLA[plans/]
     end
 
-    CLI --> BS --> PL --> WK --> RV --> CP
+    CLI --> GO --> BS --> PL --> WK --> RV --> CP
     SY --> KB
 
     BS --> AG
@@ -46,8 +51,8 @@ graph TB
     WK --> AG
     RV --> AG
 
-    CM --> AG
     CM --> SK
+    SK --> AG
 
     CP --> LN
     BS --> BR
@@ -57,24 +62,28 @@ graph TB
 ## The Workflow
 
 ```
-/soleur:brainstorm --> /soleur:plan --> /soleur:work --> /soleur:review --> /soleur:compound
+brainstorm --> plan --> work --> review --> compound
 ```
 
-| Phase | Command | Purpose |
-|-------|---------|---------|
-| 1. Explore | `/soleur:brainstorm` | Clarify requirements, explore approaches, make design decisions |
-| 2. Plan | `/soleur:plan` | Create structured implementation plans with research |
-| 3. Execute | `/soleur:work` | Implement systematically with incremental commits |
-| 4. Review | `/soleur:review` | Multi-agent code review before PR |
-| 5. Learn | `/soleur:compound` | Capture learnings for future work |
+Workflow stages are skills, invocable directly or via `/soleur:go`:
 
-**Additional commands:**
+| Phase | Skill | Purpose |
+|-------|-------|---------|
+| 1. Explore | `soleur:brainstorm` | Clarify requirements, explore approaches, make design decisions |
+| 2. Plan | `soleur:plan` | Create structured implementation plans with research |
+| 3. Execute | `soleur:work` | Implement systematically with incremental commits |
+| 4. Review | `soleur:review` | Multi-agent code review before PR |
+| 5. Learn | `soleur:compound` | Capture learnings for future work |
+
+**Additional skill:** `soleur:one-shot` -- Full autonomous engineering workflow from plan to PR.
+
+**Commands** (entry points only):
 
 | Command | Purpose |
 |---------|---------|
+| `/soleur:go` | Unified entry point that routes to workflow skills |
 | `/soleur:sync` | Populate knowledge-base from existing codebase |
 | `/soleur:help` | List all available Soleur commands, agents, and skills |
-| `/soleur:one-shot` | Full autonomous engineering workflow from plan to PR |
 
 **For existing codebases:** Run `/soleur:sync` first to populate knowledge-base with conventions.
 
@@ -83,7 +92,7 @@ graph TB
 | Component | Count | Description |
 |-----------|-------|-------------|
 | [Agents](./components/agents.md) | 45 | AI agents for specialized tasks |
-| [Commands](./components/commands.md) | 8 | Slash commands for workflow |
+| [Commands](./components/commands.md) | 3 | Slash commands for entry points |
 | [Skills](./components/skills.md) | 45 | Specialized capabilities |
 | [Knowledge Base](./components/knowledge-base.md) | 1 | Documentation system |
 
@@ -93,7 +102,7 @@ Each component has detailed documentation in [components/](./components/) coveri
 
 The [constitution](./constitution.md) defines project principles organized by domain (Code Style, Architecture, Testing, Proposals, Specs, Tasks). Each domain uses **Always/Never/Prefer** categories to express rules at different levels of strictness.
 
-Commands like `/soleur:plan` and `/soleur:work` read the constitution automatically to guide decisions. `/soleur:sync` discovers new conventions from the codebase and writes them as constitution rules. `/soleur:compound` promotes learnings to constitution principles when appropriate.
+Workflow skills like plan and work read the constitution automatically to guide decisions. `/soleur:sync` discovers new conventions from the codebase and writes them as constitution rules. The compound skill promotes learnings to constitution principles when appropriate.
 
 ## Directory Structure
 
@@ -153,7 +162,7 @@ claude plugin install soleur
 /soleur:sync
 
 # Start the workflow
-/soleur:brainstorm <feature idea>
+/soleur:go <feature idea>
 ```
 
 ## See Also

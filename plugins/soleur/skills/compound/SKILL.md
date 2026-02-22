@@ -1,7 +1,6 @@
 ---
-name: soleur:compound
-description: Document a recently solved problem to compound your team's knowledge
-argument-hint: "[optional: brief context about the fix]"
+name: compound
+description: "This skill should be used when documenting a recently solved problem to compound your team's knowledge."
 ---
 
 # /compound
@@ -17,8 +16,8 @@ Captures problem solutions while context is fresh, creating structured documenta
 ## Usage
 
 ```bash
-/soleur:compound                    # Document the most recent fix
-/soleur:compound [brief context]    # Provide additional context hint
+skill: soleur:compound               # Document the most recent fix
+skill: soleur:compound [brief context]  # Provide additional context hint
 ```
 
 ## Phase 0: Setup
@@ -166,7 +165,7 @@ After constitution promotion, compound routes the captured learning to the skill
 2. Propose a one-line bullet edit to the most relevant section of the target definition file
 3. User confirms with Accept/Skip/Edit
 
-See compound-docs Step 8 for the full flow.
+See compound-capture Step 8 for the full flow.
 
 **Graceful degradation:** Skips if `plugins/soleur/` does not exist or no components detected in the session.
 
@@ -199,7 +198,7 @@ The automatic consolidation:
 4. **Archives sources** -- all discovered artifacts moved to `archive/` subdirectories via `git mv` with `YYYYMMDD-HHMMSS` timestamp prefix
 5. **Single commit** -- overview edits and archival moves committed together for clean `git revert`
 
-If no artifacts are found for the feature slug, consolidation is skipped silently. See the `compound-docs` skill for full implementation details.
+If no artifacts are found for the feature slug, consolidation is skipped silently. See the `compound-capture` skill for full implementation details.
 
 ### Worktree Cleanup (Manual)
 
@@ -314,11 +313,11 @@ Build → Test → Find Issue → Research → Improve → Document → Validate
 
 <auto_invoke> <trigger_phrases> - "that worked" - "it's fixed" - "working now" - "problem solved" </trigger_phrases>
 
-<manual_override> Use /soleur:compound [context] to document immediately without waiting for auto-detection. </manual_override> </auto_invoke>
+<manual_override> Use `skill: soleur:compound` [context] to document immediately without waiting for auto-detection. </manual_override> </auto_invoke>
 
 ## Routes To
 
-`compound-docs` skill
+`compound-capture` skill
 
 ## Applicable Specialized Agents
 
@@ -345,9 +344,9 @@ Based on problem type, these agents can enhance documentation:
 ### When to Invoke
 
 - **Auto-triggered** (optional): Agents can run post-documentation for enhancement
-- **Manual trigger**: User can invoke agents after /soleur:compound completes for deeper review
+- **Manual trigger**: User can invoke agents after `soleur:compound` completes for deeper review
 
 ## Related Commands
 
 - `/research [topic]` - Deep investigation (searches knowledge-base/learnings/ for patterns)
-- `/soleur:plan` - Planning workflow (references documented solutions)
+- `soleur:plan` skill - Planning workflow (references documented solutions)

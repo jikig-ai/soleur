@@ -45,7 +45,7 @@ graph LR
     FN -->|Used by| CMD
 ```
 
-1. Workflow command (e.g., `/soleur:review`) identifies which agents to invoke
+1. Workflow skill (e.g., `soleur:review`) identifies which agents to invoke
 2. Task tool spawns agent with specific prompt
 3. Agent reads relevant files, analyzes, and returns findings
 4. Parent command consolidates results

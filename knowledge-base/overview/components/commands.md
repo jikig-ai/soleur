@@ -1,40 +1,38 @@
 ---
 component: commands
-updated: 2026-02-12
+updated: 2026-02-22
 primary_location: plugins/soleur/commands/soleur/
 ---
 
 # Commands
 
-Slash commands that users invoke to perform development tasks. Commands are markdown files containing instructions that Claude executes when the user types the command.
+Slash commands that users invoke as entry points to the development workflow. Commands are markdown files containing instructions that Claude executes when the user types the command.
 
 ## Purpose
 
-Provide user-facing entry points for the development workflow. Commands orchestrate agents, manage the knowledge base, and guide users through structured processes.
+Provide user-facing entry points for routing, knowledge-base sync, and help. Workflow stages (brainstorm, plan, work, review, compound, one-shot) have been migrated to skills for agent discoverability and Skill tool invocation.
 
 ## Responsibilities
 
-- Accept user input and parse arguments
-- Coordinate multiple agents when needed
-- Read and write to the knowledge base
-- Guide users through multi-step workflows
-- Provide consistent, repeatable processes
+- Accept user input and route to the appropriate workflow skill
+- Manage the knowledge base (sync)
+- Provide help and orientation
 
 ## Key Interfaces
 
 **Invocation:** Users type the command name prefixed with `/`:
 
 ```
-/soleur:plan feat-authentication
+/soleur:go plan feat-authentication
 ```
 
 **Definition:** Commands are markdown files with YAML frontmatter:
 
 ```yaml
 ---
-name: soleur:plan
-description: Create implementation plans
-argument-hint: "[path-to-spec]"
+name: soleur:go
+description: Unified entry point that routes to workflow skills
+argument-hint: "[stage] [args]"
 ---
 
 # Command Title
@@ -46,74 +44,86 @@ Instructions for Claude to follow...
 
 ```mermaid
 graph LR
-    U[User] -->|"/command"| CC[Claude Code]
-    CC -->|Loads| CMD[Command.md]
-    CMD -->|Spawns| AG[Agents]
-    CMD -->|Reads/Writes| KB[Knowledge Base]
-    CMD -->|Returns| U
+    U[User] -->|"/soleur:go"| GO[go command]
+    GO -->|Skill tool| SK[Workflow Skill]
+    SK -->|Spawns| AG[Agents]
+    SK -->|Reads/Writes| KB[Knowledge Base]
+    SK -->|Returns| U
 ```
 
-1. User types `/soleur:command` in Claude Code
-2. Claude Code loads the command markdown file
-3. Claude follows instructions, invoking agents as needed
-4. Command reads/writes knowledge base files
+1. User types `/soleur:go <stage>` or invokes a skill directly
+2. The go command routes to the appropriate workflow skill
+3. The skill follows instructions, invoking agents as needed
+4. Skill reads/writes knowledge base files
 5. Results returned to user
 
-## Commands (8)
+## Commands (3)
 
-All commands use the `soleur:` prefix to avoid collisions with built-in commands. There are no top-level utility commands -- former utility commands were converted to skills in v1.17.0-v1.18.0.
+All commands use the `soleur:` prefix to avoid collisions with built-in commands. Workflow stages were migrated from commands to skills in v2.37.0 for agent discoverability.
 
 | Command | Purpose |
 |---------|---------|
-| `/soleur:brainstorm` | Explore requirements, make design decisions |
-| `/soleur:plan` | Create implementation plans with research |
-| `/soleur:work` | Execute plans with incremental commits |
-| `/soleur:review` | Multi-agent code review before PR |
-| `/soleur:compound` | Capture learnings for future work |
+| `/soleur:go` | Unified entry point that routes to workflow skills |
 | `/soleur:sync` | Populate knowledge base from existing codebase |
 | `/soleur:help` | List all available Soleur commands, agents, and skills |
-| `/soleur:one-shot` | Full autonomous engineering workflow from plan to PR |
+
+**Workflow skills** (invoked via `/soleur:go` or directly):
+
+| Skill | Purpose |
+|-------|---------|
+| `soleur:brainstorm` | Explore requirements, make design decisions |
+| `soleur:plan` | Create implementation plans with research |
+| `soleur:work` | Execute plans with incremental commits |
+| `soleur:review` | Multi-agent code review before PR |
+| `soleur:compound` | Capture learnings for future work |
+| `soleur:one-shot` | Full autonomous engineering workflow from plan to PR |
 
 ## Workflow Sequence
 
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant B as /brainstorm
-    participant P as /plan
-    participant W as /work
-    participant R as /review
-    participant C as /compound
+    participant GO as /soleur:go
+    participant B as brainstorm skill
+    participant P as plan skill
+    participant W as work skill
+    participant R as review skill
+    participant C as compound skill
 
-    U->>B: Start with idea
+    U->>GO: Start with idea
+    GO->>B: Route to brainstorm
     B->>U: Design decisions documented
-    U->>P: Create plan
+    U->>GO: Create plan
+    GO->>P: Route to plan
     P->>U: Implementation plan ready
-    U->>W: Execute plan
+    U->>GO: Execute plan
+    GO->>W: Route to work
     W->>U: Code implemented
-    U->>R: Review before PR
+    U->>GO: Review before PR
+    GO->>R: Route to review
     R->>U: Issues identified
-    U->>C: Capture learnings
+    U->>GO: Capture learnings
+    GO->>C: Route to compound
     C->>U: Knowledge compounded
 ```
 
 ## Dependencies
 
-- **Internal**: Agents (invoked via Task tool), Skills (for specialized capabilities)
+- **Internal**: Skills (workflow stages), Agents (invoked by skills via Task tool)
 - **External**: Claude Code CLI, GitHub CLI (for PR operations)
 
 ## Examples
 
-**Start a new feature:**
+**Start a new feature via go:**
 
 ```
-/soleur:brainstorm Add user authentication with OAuth
+/soleur:go brainstorm Add user authentication with OAuth
 ```
 
-**Execute an existing plan:**
+**Invoke a skill directly:**
 
 ```
-/soleur:work knowledge-base/plans/2026-02-06-feat-auth-plan.md
+/soleur:plan feat-authentication
 ```
 
 **Review before PR:**
@@ -124,10 +134,11 @@ sequenceDiagram
 
 ## Related Files
 
-- `plugins/soleur/commands/soleur/` - All command definitions
+- `plugins/soleur/commands/soleur/` - Command definitions (go, sync, help)
+- `plugins/soleur/skills/` - Workflow skill definitions
 
 ## See Also
 
-- [Agents](./agents.md) - Agents invoked by commands
-- [Skills](./skills.md) - Skills used by commands
-- [constitution.md](../constitution.md) - Command conventions
+- [Agents](./agents.md) - Agents invoked by skills
+- [Skills](./skills.md) - Workflow skills and specialized capabilities
+- [constitution.md](../constitution.md) - Command and skill conventions

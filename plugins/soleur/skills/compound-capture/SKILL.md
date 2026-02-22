@@ -1,5 +1,5 @@
 ---
-name: compound-docs
+name: compound-capture
 description: This skill should be used when capturing solved problems as categorized documentation with YAML frontmatter for fast lookup. It auto-documents solutions after confirmation and builds searchable institutional knowledge. Triggers on "that worked", "it's fixed", "document this fix", "capture this solution", "problem solved", "/doc-fix".
 allowed-tools:
   - Read # Parse conversation context
@@ -11,7 +11,7 @@ preconditions:
   - Solution has been verified working
 ---
 
-# compound-docs Skill
+# compound-capture Skill
 
 **Purpose:** Automatically document solved problems to build searchable institutional knowledge with category-based organization (enum-validated problem types).
 

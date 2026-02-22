@@ -38,8 +38,8 @@ git worktree add .worktrees/feature-name -b feature-name main
 
 Use this skill in these scenarios:
 
-1. **Code Review (`/soleur:review`)**: If NOT already on the target branch (PR branch or requested branch), offer worktree for isolated review
-2. **Feature Work (`/soleur:work`)**: Always ask if user wants parallel worktree or live branch work
+1. **Code Review (`soleur:review`)**: If NOT already on the target branch (PR branch or requested branch), offer worktree for isolated review
+2. **Feature Work (`soleur:work`)**: Always ask if user wants parallel worktree or live branch work
 3. **Parallel Development**: When working on multiple features simultaneously
 4. **Cleanup**: After completing work in a worktree
 
@@ -47,7 +47,7 @@ Use this skill in these scenarios:
 
 ### In Claude Code Workflows
 
-The skill is automatically called from `/soleur:review` and `/soleur:work` commands:
+The skill is automatically called from the `soleur:review` and `soleur:work` skills:
 
 ```
 # For review: offers worktree if not on PR branch
@@ -204,7 +204,7 @@ bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup
 
 ## Integration with Workflows
 
-### `/soleur:review`
+### `soleur:review`
 
 Instead of always creating a worktree:
 
@@ -217,7 +217,7 @@ Instead of always creating a worktree:
    - no → proceed with PR diff on current branch
 ```
 
-### `/soleur:work`
+### `soleur:work`
 
 Always offer choice:
 

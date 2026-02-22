@@ -9,7 +9,7 @@ description: This skill should be used when enhancing an existing plan with para
 
 **Note: The current year is 2026.** Use this when searching for recent documentation and best practices.
 
-This skill takes an existing plan (from `/soleur:plan`) and enhances each section with parallel research agents. Each major element gets its own dedicated research sub-agent to find:
+This skill takes an existing plan (from the `soleur:plan` skill) and enhances each section with parallel research agents. Each major element gets its own dedicated research sub-agent to find:
 - Best practices and industry patterns
 - Performance optimizations
 - UI/UX improvements (if applicable)
@@ -144,13 +144,13 @@ Task general-purpose: "Use the security-patterns skill at ~/.claude/skills/secur
 ### 3. Discover and Apply Learnings/Solutions
 
 <thinking>
-Check for documented learnings from /soleur:compound. These are solved problems stored as markdown files. Spawn a sub-agent for each learning to check if it's relevant.
+Check for documented learnings from the `soleur:compound` skill. These are solved problems stored as markdown files. Spawn a sub-agent for each learning to check if it's relevant.
 </thinking>
 
 **LEARNINGS LOCATION - Check these exact folders:**
 
 ```
-knowledge-base/learnings/           <-- PRIMARY: Project-level learnings (created by /soleur:compound)
+knowledge-base/learnings/           <-- PRIMARY: Project-level learnings (created by soleur:compound)
 ├── performance-issues/
 │   └── *.md
 ├── debugging-patterns/
@@ -353,7 +353,7 @@ Wait for ALL parallel agents to complete - skills, research agents, review agent
 **Collect outputs from ALL sources:**
 
 1. **Skill-based sub-agents** - Each skill's full output (code examples, patterns, recommendations)
-2. **Learnings/Solutions sub-agents** - Relevant documented learnings from /soleur:compound
+2. **Learnings/Solutions sub-agents** - Relevant documented learnings from `soleur:compound`
 3. **Research agents** - Best practices, documentation, real-world examples
 4. **Review agents** - All feedback from every reviewer (architecture, security, performance, simplicity, etc.)
 5. **Context7 queries** - Framework documentation and patterns
@@ -464,20 +464,20 @@ After writing the enhanced plan, use the **AskUserQuestion tool** to present the
 **Options:**
 1. **View diff** - Show what was added/changed
 2. **Run `/plan_review`** - Get feedback from reviewers on enhanced plan
-3. **Start `/soleur:work`** - Begin implementing this enhanced plan
+3. **Start `soleur:work`** - Begin implementing this enhanced plan
 4. **Deepen further** - Run another round of research on specific sections
 5. **Revert** - Restore original plan (if backup exists)
 
 Based on selection:
 - **View diff** -> Run `git diff [plan_path]` or show before/after
 - **`/plan_review`** -> Call the /plan_review command with the plan file path
-- **`/soleur:work`** -> Call the /soleur:work command with the plan file path
+- **`soleur:work`** -> Use `skill: soleur:work` with the plan file path
 - **Deepen further** -> Ask which sections need more research, then re-run those agents
 - **Revert** -> Restore from git or backup
 
 ## Example Enhancement
 
-**Before (from /soleur:plan):**
+**Before (from `soleur:plan`):**
 ```markdown
 ## Technical Approach
 

@@ -4,14 +4,14 @@ The Company-as-a-Service platform. Collapse the friction between a startup idea 
 
 60 agents across engineering, finance, marketing, legal, operations, product, sales, and support -- compounding your company knowledge with every session.
 
-[![Version](https://img.shields.io/badge/version-2.36.2-blue)](https://github.com/jikig-ai/soleur/releases)
+[![Version](https://img.shields.io/badge/version-3.0.0-blue)](https://github.com/jikig-ai/soleur/releases)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Discord](https://img.shields.io/badge/Discord-community-5865F2?logo=discord&logoColor=white)](https://discord.gg/PYZbPBKMUY)
 [![Website](https://img.shields.io/badge/website-soleur.ai-C9A962)](https://soleur.ai)
 
 ## What is Soleur?
 
-Soleur gives a single founder the leverage of a full organization. **60 agents**, **9 commands**, and **46 skills** that compound your company knowledge over time -- every problem you solve makes the next one easier.
+Soleur gives a single founder the leverage of a full organization. **60 agents**, **3 commands**, and **52 skills** that compound your company knowledge over time -- every problem you solve makes the next one easier.
 
 ## Installation
 
@@ -40,20 +40,20 @@ The recommended way to use Soleur:
 This classifies your intent and routes to the right workflow. For the full step-by-step:
 
 ```text
-/soleur:brainstorm --> /soleur:plan --> /soleur:work --> /soleur:review --> /soleur:compound
+brainstorm  -->  plan  -->  work  -->  review  -->  compound
 ```
 
-| Command | Purpose |
-| ------- | ------- |
-| `/soleur:go` | Unified entry point -- routes to the right workflow |
-| `/soleur:sync` | Analyze codebase and populate knowledge-base |
-| `/soleur:brainstorm` | Explore ideas and make design decisions |
-| `/soleur:plan` | Create structured implementation plans |
-| `/soleur:work` | Execute plans with incremental commits |
-| `/soleur:review` | Run comprehensive code review with specialized agents |
-| `/soleur:compound` | Capture learnings for future work |
-| `/soleur:help` | List all available Soleur commands, agents, and skills |
-| `/soleur:one-shot` | Full autonomous engineering workflow from plan to PR |
+| Component | Type | Purpose |
+|-----------|------|---------|
+| `/soleur:go` | Command | Unified entry point -- routes to the right workflow skill |
+| `/soleur:sync` | Command | Analyze codebase and populate knowledge-base |
+| `/soleur:help` | Command | List all available Soleur commands, agents, and skills |
+| `brainstorm` | Skill | Explore ideas and make design decisions |
+| `plan` | Skill | Create structured implementation plans |
+| `work` | Skill | Execute plans with incremental commits |
+| `review` | Skill | Run comprehensive code review with specialized agents |
+| `compound` | Skill | Capture learnings for future work |
+| `one-shot` | Skill | Full autonomous engineering workflow from plan to PR |
 
 See **[full component reference](./plugins/soleur/README.md)** for all agents, commands, and skills.
 
@@ -61,12 +61,12 @@ See **[full component reference](./plugins/soleur/README.md)** for all agents, c
 
 | Department | What It Does | Entry Point |
 |-----------|-------------|-------------|
-| Engineering | Code review, architecture, security, testing, deployment | `/soleur:plan`, `/soleur:work`, `/soleur:review` |
+| Engineering | Code review, architecture, security, testing, deployment | `/soleur:go` (routes to plan, work, review skills) |
 | Finance | Budgeting, revenue analysis, financial reporting, cash flow | Ask about finance (routed via agents) |
-| Marketing | Brand identity, content strategy, SEO, community, pricing | `/soleur:brainstorm define our brand` |
+| Marketing | Brand identity, content strategy, SEO, community, pricing | `/soleur:go define our brand` |
 | Legal | Terms, privacy policy, GDPR, compliance audits | `/legal-generate`, `/legal-audit` |
 | Operations | Expense tracking, vendor research, tool provisioning | Ask about ops (routed via agents) |
-| Product | Business validation, spec analysis, UX design | `/soleur:brainstorm validate our idea` |
+| Product | Business validation, spec analysis, UX design | `/soleur:go validate our idea` |
 | Sales | Pipeline management, outbound prospecting, deal negotiation | Ask about sales (routed via agents) |
 | Support | Issue triage, community engagement, customer success | Ask about support (routed via agents) |
 
