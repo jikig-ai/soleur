@@ -16,6 +16,7 @@ Evaluate current product state before making recommendations.
 
 - Check for `knowledge-base/overview/business-validation.md` -- read verdict and gate results if present. If missing and the request involves a new idea, flag that validation has not been done.
 - Check for `knowledge-base/overview/brand-guide.md` -- read Identity and Positioning sections if present for product context.
+- If both `business-validation.md` and `brand-guide.md` exist, cross-reference the validation's framing against the brand's Identity and Positioning sections. If the validation treats stated product features as "scope creep" or contradicts the brand's positioning, flag: "Validation may be misaligned with current brand positioning (last updated: [date]). Consider revalidation." Recommend revalidation but allow the user to proceed.
 - Check for spec files in `knowledge-base/specs/` -- assess what has been specified and what gaps remain.
 - Determine product maturity stage: pre-idea, idea (unvalidated), validated, building, launched.
 - Report product state in a structured table (area, status, next action).

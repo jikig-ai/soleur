@@ -2,7 +2,7 @@
 
 The Company-as-a-Service platform. Collapse the friction between a startup idea and a billion-dollar outcome.
 
-Currently: an orchestration engine for Claude Code -- agents, workflows, and compounding knowledge.
+50 agents across engineering, marketing, legal, operations, and product -- compounding your company knowledge with every session.
 
 [![Version](https://img.shields.io/badge/version-2.30.0-blue)](https://github.com/jikig-ai/soleur/releases)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
@@ -47,6 +47,16 @@ claude plugin install --url https://github.com/jikig-ai/soleur/tree/main/plugins
 | `/soleur:one-shot` | Full autonomous engineering workflow from plan to PR |
 
 See **[full component reference](./plugins/soleur/README.md)** for all agents, commands, and skills.
+
+## Your AI Organization
+
+| Department | What It Does | Entry Point |
+|-----------|-------------|-------------|
+| Engineering | Code review, architecture, security, testing, deployment | `/soleur:plan`, `/soleur:work`, `/soleur:review` |
+| Marketing | Brand identity, content strategy, SEO, community, pricing | `/soleur:brainstorm define our brand` |
+| Legal | Terms, privacy policy, GDPR, compliance audits | `/legal-generate`, `/legal-audit` |
+| Operations | Expense tracking, vendor research, tool provisioning | Ask about ops (routed via agents) |
+| Product | Business validation, spec analysis, UX design | `/soleur:brainstorm validate our idea` |
 
 ## Learn More
 
