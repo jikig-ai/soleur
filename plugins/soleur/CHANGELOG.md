@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.36.2] - 2026-02-22
+
+### Changed
+
+- Rewrite Vision page "The Road Ahead" section as "Master Plan" with 3 milestones: Automate Software Companies, Automate Hardware Companies, Multiplanetary Companies
+
 ## [2.36.1] - 2026-02-22
 
 ### Changed
