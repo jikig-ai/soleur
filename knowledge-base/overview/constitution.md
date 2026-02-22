@@ -74,6 +74,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Never state conventions in constitution.md without tooling enforcement (config files, pre-commit hooks, or CI checks)
 - Never commit local config files that may contain secrets (`.claude/settings.local.json`, `.env`, `*.local.*`) -- add them to `.gitignore` at project initialization
 - Never edit files in the main repo root when a worktree is active for the current feature -- verify `pwd` shows `.worktrees/<name>/` before writing; place feature-scoped directories (todos, reports) inside the app directory within the worktree
+- Never use `git stash` in a worktree to hold significant uncommitted work during merge operations -- commit first (even as WIP), then merge; a stash pop conflict can destroy the worktree and branch, losing all uncommitted changes irrecoverably
 - Never allow agents to work directly on the default branch -- create a worktree (`git worktree add .worktrees/feat-<name> -b feat/<name>`) before the first file edit, even for trivial fixes; bare branches on the main checkout block parallel work
 - Never persist aggregated security findings (audit reports, posture assessments) to files in an open-source repository -- output inline in conversation only; the aggregation is the risk, not the individual facts
 - Never design skills that invoke other skills programmatically -- skills are user-invoked entry points with no inter-skill API; redirect users to the target skill or route through an agent via Task tool

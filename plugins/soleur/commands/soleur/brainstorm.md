@@ -58,7 +58,7 @@ If one-shot is selected, pass the original feature description (including any is
 
 Assess whether the feature description has implications for specific business domains. Domain leaders participate in brainstorming when their domain is relevant.
 
-<!-- To add a new domain: add a numbered assessment question below, a routing block, and a participation section -->
+<!-- To add a new domain: add a numbered assessment question below, a routing block, and a participation section. Consider table-driven refactor at 5+ domains. -->
 
 #### Assessment
 
@@ -69,6 +69,8 @@ Read the feature description and assess domain relevance:
 2. **Engineering architecture implications** -- Does this feature require significant architectural decisions, infrastructure changes, system design, or technical debt resolution beyond normal implementation?
 
 3. **Brand-specific work** -- Is this specifically about brand identity definition, brand guide creation, or voice and tone development? (This is a special case within marketing.)
+
+4. **Operations implications** -- Does this feature involve operational decisions such as vendor selection, tool provisioning, expense tracking, process changes, or infrastructure procurement?
 
 If no domains are relevant, continue to Phase 1.
 
@@ -102,7 +104,16 @@ Options:
 1. **Include technical assessment** - CTO joins the brainstorm to assess technical implications
 2. **Brainstorm normally** - Continue without CTO input
 
-**If both marketing and engineering are relevant:** Ask about each domain separately.
+**If operations relevance is detected:**
+
+Use **AskUserQuestion tool** to ask: "This feature has operational implications. Include operations assessment?"
+
+Options:
+
+1. **Include operations assessment** - COO joins the brainstorm to assess operational implications
+2. **Brainstorm normally** - Continue without operations input
+
+**If multiple domains are relevant:** Ask about each domain separately.
 
 **If the user declines all domain leaders:** Continue to Phase 1 as usual.
 
@@ -176,6 +187,16 @@ should consider during brainstorming. Output a brief structured assessment."
 ```
 
 Weave the CTO's assessment into the brainstorm dialogue alongside repo research findings.
+
+**COO participation:** After repo research completes, spawn the COO agent in parallel:
+
+```text
+Task coo: "Assess the operational implications of this feature: <feature_description>.
+Identify cost concerns, vendor decisions, process changes, and operational questions the user
+should consider during brainstorming. Output a brief structured assessment."
+```
+
+Weave the COO's assessment into the brainstorm dialogue alongside repo research findings.
 
 ### Phase 1: Understand the Idea
 
