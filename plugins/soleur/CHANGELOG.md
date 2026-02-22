@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.30.1] - 2026-02-22
+
+### Added
+
+- Add capability gap detection to all 5 domain leader agents (CTO, CMO, COO, CPO, CLO) during brainstorm participation (#234)
+- Brainstorm command includes consolidated Capability Gaps section in brainstorm documents when domain leaders report missing agents/skills
+- Plan command Phase 1.5b passes brainstorm gap context to functional-discovery for guided registry searches
+
 ## [2.30.0] - 2026-02-22
 
 ### Added
