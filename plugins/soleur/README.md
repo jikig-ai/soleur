@@ -1,6 +1,6 @@
 # Soleur
 
-A full AI organization across engineering, marketing, legal, operations, product, and sales. Every decision you make teaches the system. Every project gets better and faster than the last.
+A full AI organization across engineering, finance, marketing, legal, operations, product, and sales. Every decision you make teaches the system. Every project gets better and faster than the last.
 
 ## Quick Start
 
@@ -131,6 +131,15 @@ Agents are organized by domain, then by function.
 | `programmatic-seo-specialist` | Template-based SEO page generation at scale: comparison pages, alternatives, integrations |
 | `retention-strategist` | Churn prevention, payment recovery, referral programs, and free tool strategy |
 | `seo-aeo-analyst` | Audit Eleventy docs sites for SEO and AEO (AI Engine Optimization) issues |
+
+### Finance (4)
+
+| Agent | Description |
+|-------|-------------|
+| `cfo` | Finance domain leader -- orchestrates financial strategy and delegates to specialist agents |
+| `budget-analyst` | Create budget plans, analyze spending allocation, model burn rate, and review budget-to-actual variance |
+| `revenue-analyst` | Track revenue, build financial forecasts, model P&L projections, and analyze revenue trends |
+| `financial-reporter` | Generate financial summaries, cash flow statements, and periodic financial reports |
 
 ### Legal (3)
 
