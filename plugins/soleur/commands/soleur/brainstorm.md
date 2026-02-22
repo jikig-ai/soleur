@@ -74,6 +74,8 @@ Read the feature description and assess domain relevance:
 
 5. **Product strategy implications** -- Does this feature involve validating a new business idea, assessing product-market fit, evaluating customer demand, competitive positioning, or determining whether to build something?
 
+6. **Legal implications** -- Does this feature involve creating, updating, or auditing legal documents such as terms of service, privacy policies, data processing agreements, or compliance documentation?
+
 If no domains are relevant, continue to Phase 1.
 
 #### Routing
@@ -124,6 +126,15 @@ Options:
 1. **Start validation workshop** - Run the business-validator agent to validate the business idea
 2. **Include product perspective** - CPO joins the brainstorm to add product context
 3. **Brainstorm normally** - Continue with the standard brainstorm flow
+
+**If legal relevance is detected:**
+
+Use **AskUserQuestion tool** to ask: "This feature has legal implications. Include legal assessment?"
+
+Options:
+
+1. **Include legal assessment** - CLO joins the brainstorm to assess legal implications
+2. **Brainstorm normally** - Continue without legal input
 
 **If multiple domains are relevant:** Ask about each domain separately.
 
@@ -268,6 +279,16 @@ during brainstorming. Output a brief structured assessment (not a full strategy)
 ```
 
 Weave the CPO's assessment into the brainstorm dialogue alongside repo research findings.
+
+**CLO participation:** After repo research completes, spawn the CLO agent in parallel:
+
+```text
+Task clo: "Assess the legal implications of this feature: <feature_description>.
+Identify compliance requirements, legal document needs, regulatory concerns, and legal questions
+the user should consider during brainstorming. Output a brief structured assessment."
+```
+
+Weave the CLO's assessment into the brainstorm dialogue alongside repo research findings.
 
 ### Phase 1: Understand the Idea
 

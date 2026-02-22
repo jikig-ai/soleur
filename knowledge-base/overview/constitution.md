@@ -114,6 +114,8 @@ Project principles organized by domain. Add principles as you learn them.
 - Automate post-merge steps in CI workflows rather than relying on manual skill invocations after merge
 - Extend `/ship` with conditional skill invocations rather than inlining domain logic -- ship should remain a thin orchestration layer
 - Mechanical notifications (webhooks, emails) belong in CI workflows; keep local skills for AI-powered work that needs Claude -- secrets live in GitHub Actions, not local env vars
+- When skills use `!` code fences with permission-sensitive Bash commands, pre-authorize the script path in settings or surface the command earlier in the skill flow -- the Skill tool fails fast on permission denials without showing an interactive approval prompt
+- When adding domain leader agents, verify the cumulative agent description word count stays under 2500 with `shopt -s globstar && grep -h 'description:' agents/**/*.md | wc -w` -- the `**` glob requires globstar to recurse into subdirectories
 - When one agent/skill produces a structured document consumed by others, define a heading-level contract (exact `##` names, required/optional flags) in the producer -- consumers parse by heading name, not by position
 - When bundling external plugins, embed only the mechanism (hooks, scripts) -- do not create new user-facing commands unless the user explicitly requests them; internal infrastructure does not need user-facing surface area
 - Route users to specialized agents through existing commands (e.g., brainstorm routes to brand-architect) rather than creating new entry points -- keeps the user workflow unified and avoids proliferating slash commands

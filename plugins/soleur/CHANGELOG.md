@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.30.0] - 2026-02-22
+
+### Added
+
+- Add CLO (Chief Legal Officer) domain leader agent for legal orchestration (#181)
+- CLO follows COO's 3-phase pattern (Assess, Recommend/Delegate, Sharp Edges) to orchestrate legal-document-generator and legal-compliance-auditor
+- Add legal detection to brainstorm Phase 0.5 domain leader assessment
+- CLO auto-consulted via brainstorm domain detection when legal implications are involved
+
+### Changed
+
+- Update legal-document-generator and legal-compliance-auditor descriptions with CLO cross-reference for disambiguation
+
 ## [2.29.0] - 2026-02-22
 
 ### Added
