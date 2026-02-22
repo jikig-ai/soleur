@@ -140,13 +140,13 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    **Tier A: Agent Teams** (highest capability, ~7x token cost)
 
-   **Read `plugins/soleur/commands/soleur/references/work-agent-teams.md` now** for the full Agent Teams protocol (offer, activate, spawn teammates, monitor/commit/shutdown). If declined or failed, fall through to Tier B.
+   **Read `plugins/soleur/skills/work/references/work-agent-teams.md` now** for the full Agent Teams protocol (offer, activate, spawn teammates, monitor/commit/shutdown). If declined or failed, fall through to Tier B.
 
    ---
 
    **Tier B: Subagent Fan-Out** (fire-and-gather, moderate cost)
 
-   **Read `plugins/soleur/commands/soleur/references/work-subagent-fanout.md` now** for the full Subagent Fan-Out protocol (offer, group/spawn, collect/integrate). If declined, fall through to Tier C.
+   **Read `plugins/soleur/skills/work/references/work-subagent-fanout.md` now** for the full Subagent Fan-Out protocol (offer, group/spawn, collect/integrate). If declined, fall through to Tier C.
 
    ---
 

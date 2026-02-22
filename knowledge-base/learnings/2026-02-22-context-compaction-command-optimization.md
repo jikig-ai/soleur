@@ -39,7 +39,7 @@ The Soleur Claude Code plugin maintained 5 heavyweight command files (`brainstor
 
 **Extract conditionally-used content into reference files:**
 
-Created 10 reference files in `commands/soleur/references/` loaded on-demand via Read tool:
+Created 10 reference files loaded on-demand via Read tool. Originally placed in `commands/soleur/references/`, later moved to `skills/<name>/references/` directories to prevent autocomplete pollution (the plugin loader recursively discovers `.md` files in `commands/` as slash commands):
 
 | Command | Reference Files Created | Content Extracted |
 |---------|------------------------|-------------------|

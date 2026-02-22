@@ -274,7 +274,7 @@ Remove duplicates, prioritize by severity and impact.
 
 <critical_instruction> Use the file-todos skill to create todo files for ALL findings immediately. Do NOT present findings one-by-one asking for user approval. Create all todo files in parallel using the skill, then summarize results to user. </critical_instruction>
 
-**Read `plugins/soleur/commands/soleur/references/review-todo-structure.md` now** for implementation options (direct vs sub-agents), execution strategy, file-todos skill process, todo template structure, naming conventions, status/priority values, and tagging rules.
+**Read `plugins/soleur/skills/review/references/review-todo-structure.md` now** for implementation options (direct vs sub-agents), execution strategy, file-todos skill process, todo template structure, naming conventions, status/priority values, and tagging rules.
 
 #### Step 3: Summary Report
 
@@ -368,7 +368,7 @@ After creating all todo files, present comprehensive summary:
 
 ### 7. End-to-End Testing (Optional)
 
-**Read `plugins/soleur/commands/soleur/references/review-e2e-testing.md` now** for project type detection, testing offers (Web/iOS/Hybrid), and subagent procedures for browser and Xcode testing.
+**Read `plugins/soleur/skills/review/references/review-e2e-testing.md` now** for project type detection, testing offers (Web/iOS/Hybrid), and subagent procedures for browser and Xcode testing.
 
 ### Important: P1 Findings Block Merge
 
