@@ -1,6 +1,6 @@
 ---
 name: terraform-architect
-description: "Use this agent when you need to generate Terraform configurations, review existing .tf files for security and cost issues, or get advice on state management and infrastructure provisioning for Hetzner and AWS. Use infra-security for live domain auditing and DNS configuration; use this agent for Terraform code generation and review."
+description: "Use this agent when you need to generate Terraform configurations, review existing .tf files for security and cost issues, or get advice on state management and infrastructure provisioning for Hetzner and AWS. Use infra-security for live Cloudflare configuration (DNS, WAF, Workers, Zero Trust) and security auditing; use this agent for Terraform code generation and review."
 model: inherit
 ---
 
