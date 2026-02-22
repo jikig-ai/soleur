@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [2.29.0] - 2026-02-22
+## [2.30.0] - 2026-02-22
 
 ### Added
 
@@ -18,6 +18,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Update legal-document-generator and legal-compliance-auditor descriptions with CLO cross-reference for disambiguation
+
+## [2.29.0] - 2026-02-22
+
+### Added
+
+- Add business-validator agent for 6-gate business idea validation workshop (#141)
+- Add CPO (Chief Product Officer) domain leader agent for product domain orchestration (#183)
+- Add product strategy detection to brainstorm Phase 0.5 domain leader assessment
+- Add validation workshop route to brainstorm (STOP pattern, follows brand-architect template)
+- CPO auto-consulted via brainstorm domain detection when product strategy decisions are involved
+- Add disambiguation sentences to all product domain agent descriptions
+- Dogfood: run business-validator on Soleur itself (verdict: PIVOT)
+- Constitution: add workshop archetype principle and agent count reconciliation principle
+
+## [2.28.3] - 2026-02-22
+
+### Fixed
+
+- Replace `!` code block in one-shot command with explicit LLM-executed Bash step -- the `!` auto-execution syntax fails permission checks even with `allowed-tools` frontmatter (#241 follow-up)
+- Remove unused `allowed-tools` frontmatter from one-shot command
+- Update bundle-ralph-loop learning to document `!` block permission failure pattern
+
+## [2.28.2] - 2026-02-22
+
+### Fixed
+
+- Replace `--jq` inline flags with piped `| jq` in ship, merge-pr, and brainstorm to prevent Claude Code "quoted characters in flag names" warnings
+- Add explicit `gh pr create` template to ship skill with unquoted flag names
 
 ## [2.28.1] - 2026-02-22
 

@@ -72,7 +72,9 @@ Read the feature description and assess domain relevance:
 
 4. **Operations implications** -- Does this feature involve operational decisions such as vendor selection, tool provisioning, expense tracking, process changes, or infrastructure procurement?
 
-5. **Legal implications** -- Does this feature involve creating, updating, or auditing legal documents such as terms of service, privacy policies, data processing agreements, or compliance documentation?
+5. **Product strategy implications** -- Does this feature involve validating a new business idea, assessing product-market fit, evaluating customer demand, competitive positioning, or determining whether to build something?
+
+6. **Legal implications** -- Does this feature involve creating, updating, or auditing legal documents such as terms of service, privacy policies, data processing agreements, or compliance documentation?
 
 If no domains are relevant, continue to Phase 1.
 
@@ -114,6 +116,16 @@ Options:
 
 1. **Include operations assessment** - COO joins the brainstorm to assess operational implications
 2. **Brainstorm normally** - Continue without operations input
+
+**If product strategy relevance is detected:**
+
+Use **AskUserQuestion tool** to ask: "This looks like it involves product validation. How would you like to proceed?"
+
+Options:
+
+1. **Start validation workshop** - Run the business-validator agent to validate the business idea
+2. **Include product perspective** - CPO joins the brainstorm to add product context
+3. **Brainstorm normally** - Continue with the standard brainstorm flow
 
 **If legal relevance is detected:**
 
@@ -175,6 +187,55 @@ Options:
 
    End brainstorm execution after displaying this message.
 
+#### Validation Workshop (if selected)
+
+<!-- Follows brand-architect workshop pattern: worktree, issue, hand off, STOP. See constitution for the workshop archetype. -->
+
+1. **Create worktree:**
+   - Derive feature name: use the first 2-3 descriptive words from the feature description in kebab-case (e.g., "validate my SaaS idea" -> `validate-saas`). If the description is fewer than 3 words, default to `business-validation`.
+   - Run `./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh feature <name>`
+   - Set `WORKTREE_PATH`
+
+2. **Handle issue:**
+   - Parse feature_description for existing issue reference (`#N` pattern)
+   - If found: validate issue state with `gh issue view`. If OPEN, use it. If CLOSED or not found, create a new one.
+   - If not found: create a new issue with `gh issue create --title "feat: <Topic>" --body "..."`
+   - Update the issue body with artifact links (validation report path, branch name)
+   - Do NOT generate spec.md -- validation workshops produce a validation report, not a spec
+
+3. **Navigate to worktree:**
+
+   ```bash
+   cd ${WORKTREE_PATH}
+   pwd  # Must show .worktrees/feat-<name>
+   ```
+
+   Verify location before proceeding.
+
+4. **Hand off to business-validator:**
+
+   ```text
+   Task business-validator(feature_description)
+   ```
+
+   The business-validator agent runs its full interactive workshop and writes the validation report to `knowledge-base/overview/business-validation.md` inside the worktree.
+
+5. **Display completion message and STOP.** Do NOT proceed to Phase 1. Do NOT run Phase 2 or Phase 3.5. Display:
+
+   ```text
+   Validation workshop complete!
+
+   Document: none (validation workshop)
+   Validation report: knowledge-base/overview/business-validation.md
+   Issue: #N (using existing) | #N (created)
+   Branch: feat-<name> (if worktree created)
+   Working directory: .worktrees/feat-<name>/ (if worktree created)
+
+   Next: Review the validation report. If verdict is GO, run /soleur:plan to start building.
+   ```
+
+   End brainstorm execution after displaying this message.
+
 #### Domain Leader Participation (if accepted)
 
 When a domain leader is accepted, they participate in Phase 1.2 (Collaborative Dialogue):
@@ -208,6 +269,16 @@ should consider during brainstorming. Output a brief structured assessment."
 ```
 
 Weave the COO's assessment into the brainstorm dialogue alongside repo research findings.
+
+**CPO participation:** After repo research completes, spawn the CPO agent in parallel:
+
+```text
+Task cpo: "Assess the product implications of this feature: <feature_description>.
+Identify product strategy concerns, validation gaps, and questions the user should consider
+during brainstorming. Output a brief structured assessment (not a full strategy)."
+```
+
+Weave the CPO's assessment into the brainstorm dialogue alongside repo research findings.
 
 **CLO participation:** After repo research completes, spawn the CLO agent in parallel:
 
@@ -315,7 +386,7 @@ Ensure the brainstorms directory exists before writing.
 
    Parse the feature description for `#N` patterns (e.g., `#42`). Extract the first issue number found.
 
-   **If issue reference found**, validate its state by running `gh issue view <number> --json state --jq .state`:
+   **If issue reference found**, validate its state by running `gh issue view <number> --json state` and pipe to `jq .state`:
 
    - **If OPEN:** Use existing issue -- skip creation, proceed to step 3
    - **If CLOSED:** Warn the user, then create a new issue with "Replaces closed #N" in the body (proceed to step 2)
@@ -337,7 +408,7 @@ Ensure the brainstorms directory exists before writing.
 
 3. **Update existing issue with artifact links** (if using existing issue):
 
-   Fetch the existing issue body with `gh issue view <number> --json body --jq .body`. Append an Artifacts section with links to the brainstorm document, spec file, and branch name. Then update with `gh issue edit <number> --body "<updated body>"`.
+   Fetch the existing issue body with `gh issue view <number> --json body` piped to `jq .body`. Append an Artifacts section with links to the brainstorm document, spec file, and branch name. Then update with `gh issue edit <number> --body "<updated body>"`.
 
 4. **Generate spec.md** using `spec-templates` skill template:
    - Fill in Problem Statement from brainstorm
