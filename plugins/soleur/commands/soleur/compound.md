@@ -115,15 +115,7 @@ Based on problem type detected, automatically invoke applicable agents:
 
 ### Save Learning to Knowledge Base
 
-```bash
-if [[ -d "knowledge-base" ]]; then
-  # Save learning to knowledge-base/learnings/
-  learning_file="knowledge-base/learnings/$(date +%Y-%m-%d)-<topic>.md"
-else
-  # Fall back to knowledge-base/learnings/
-  learning_file="knowledge-base/learnings/<category>/<topic>.md"
-fi
-```
+If `knowledge-base/` directory exists, save the learning file to `knowledge-base/learnings/YYYY-MM-DD-<topic>.md` (using today's date). Otherwise, fall back to `knowledge-base/learnings/<category>/<topic>.md`.
 
 **Learning format for knowledge-base/learnings/:**
 

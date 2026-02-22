@@ -11,10 +11,7 @@ description: This skill should be used when announcing a new release. It parses 
 
 1. Read the current version from `plugins/soleur/.claude-plugin/plugin.json`:
 
-   ```bash
-   VERSION=$(cat plugins/soleur/.claude-plugin/plugin.json | grep '"version"' | sed 's/.*"version": "\(.*\)".*/\1/')
-   echo "Version: $VERSION"
-   ```
+   Read `plugins/soleur/.claude-plugin/plugin.json` and extract the `version` field value.
 
 2. Extract the `## [$VERSION]` section from `plugins/soleur/CHANGELOG.md`. Parse from the `## [$VERSION]` heading to the next `## [` heading (exclusive). If no matching section exists, error with "Changelog section for v$VERSION not found" and stop.
 

@@ -33,22 +33,11 @@ fi
 
 **Check for knowledge-base directory and load context:**
 
-```bash
-if [[ -d "knowledge-base" ]]; then
-  # Load constitution for planning guidance
-  cat knowledge-base/overview/constitution.md
+Check if `knowledge-base/` directory exists. If it does:
 
-  # Detect feature from current branch
-  current_branch=$(git branch --show-current)
-  if [[ "$current_branch" == feat-* ]]; then
-    feature_name="$current_branch"
-    # Load spec if it exists
-    if [[ -f "knowledge-base/specs/$feature_name/spec.md" ]]; then
-      cat "knowledge-base/specs/$feature_name/spec.md"
-    fi
-  fi
-fi
-```
+1. Read `knowledge-base/overview/constitution.md`
+2. Run `git branch --show-current` to get the current branch name
+3. If the branch starts with `feat-`, read `knowledge-base/specs/<branch-name>/spec.md` if it exists
 
 **If knowledge-base/ exists:**
 
@@ -637,16 +626,7 @@ Examples:
 
 **After writing the plan to `knowledge-base/plans/`, also create tasks.md if knowledge-base/ exists:**
 
-```bash
-if [[ -d "knowledge-base" ]]; then
-  current_branch=$(git branch --show-current)
-  if [[ "$current_branch" == feat-* ]]; then
-    # Create tasks.md from plan
-    spec_dir="knowledge-base/specs/$current_branch"
-    mkdir -p "$spec_dir"
-  fi
-fi
-```
+Check if `knowledge-base/` exists. If so, run `git branch --show-current` to get the current branch. If on a `feat-*` branch, create the spec directory with `mkdir -p knowledge-base/specs/<branch-name>`.
 
 **If knowledge-base/ exists and on a feature branch:**
 
@@ -726,9 +706,7 @@ When user selects "Create Issue", detect their project tracker from CLAUDE.md:
 
 3. **If Linear:**
 
-   ```bash
-   linear issue create --title "<title>" --description "$(cat <plan_path>)"
-   ```
+   Read the plan file content, then run `linear issue create --title "<title>" --description "<plan content>"`.
 
 4. **If no tracker configured:**
    Ask user: "Which project tracker do you use? (GitHub/Linear/Other)"

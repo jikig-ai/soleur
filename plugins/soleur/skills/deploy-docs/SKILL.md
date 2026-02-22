@@ -29,14 +29,12 @@ test -f _site/sitemap.xml && echo "OK sitemap.xml"
 
 ## Step 2: Verify Component Counts
 
-```bash
-echo "Agent cards: $(grep -c 'component-card' _site/pages/agents.html)"
-echo "Skill cards: $(grep -c 'component-card' _site/pages/skills.html)"
+Use Grep to count occurrences of `component-card` in `_site/pages/agents.html` and `_site/pages/skills.html`.
 
-# Compare with source
-echo "Agent files: $(find plugins/soleur/agents -name '*.md' -not -name 'README.md' | wc -l)"
-echo "Skill files: $(find plugins/soleur/skills -name 'SKILL.md' | wc -l)"
-```
+Then compare with source counts using Glob:
+
+- Agent files: count `.md` files (excluding README.md) under `plugins/soleur/agents/`
+- Skill files: count `SKILL.md` files under `plugins/soleur/skills/`
 
 Cards in the output must match source file counts exactly.
 

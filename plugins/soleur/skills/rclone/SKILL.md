@@ -11,7 +11,7 @@ Before any rclone operation, verify installation and configuration:
 
 ```bash
 # Check if rclone is installed
-command -v rclone >/dev/null 2>&1 && echo "rclone installed: $(rclone version | head -1)" || echo "NOT INSTALLED"
+command -v rclone >/dev/null 2>&1 && rclone version || echo "NOT INSTALLED"
 
 # List configured remotes
 rclone listremotes 2>/dev/null || echo "NO REMOTES CONFIGURED"

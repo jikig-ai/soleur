@@ -58,12 +58,14 @@ Display before asking:
 
 ```text
 Deployment Plan
-  Image:      $DEPLOY_IMAGE:$(git rev-parse --short HEAD)
-  Target:     $DEPLOY_HOST
-  Container:  ${DEPLOY_CONTAINER:-$(basename $DEPLOY_IMAGE)}
-  Dockerfile: ${DEPLOY_DOCKERFILE:-./Dockerfile}
-  Health URL: ${DEPLOY_HEALTH_URL:-none}
+  Image:      <DEPLOY_IMAGE>:<git-short-sha>
+  Target:     <DEPLOY_HOST>
+  Container:  <DEPLOY_CONTAINER or image basename>
+  Dockerfile: <DEPLOY_DOCKERFILE or ./Dockerfile>
+  Health URL: <DEPLOY_HEALTH_URL or none>
 ```
+
+Resolve `<git-short-sha>` by running `git rev-parse --short HEAD`.
 
 If the user selects Cancel, stop execution.
 
@@ -92,7 +94,7 @@ If the health check fails:
 
 ```text
 Health check failed. Debug with:
-  ssh $DEPLOY_HOST "docker logs ${DEPLOY_CONTAINER:-$(basename $DEPLOY_IMAGE)} --tail 50"
+  ssh <DEPLOY_HOST> "docker logs <container-name> --tail 50"
 ```
 
 **If `DEPLOY_HEALTH_URL` is not set:**
@@ -100,7 +102,7 @@ Health check failed. Debug with:
 Report deployment as complete without health verification:
 
 ```text
-Deployed $(git rev-parse --short HEAD) to $DEPLOY_HOST
+Deployed <git-short-sha> to <DEPLOY_HOST>
 No health URL configured -- skipping verification.
 ```
 

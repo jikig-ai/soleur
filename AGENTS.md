@@ -26,8 +26,10 @@ Core workflow:
 
 At the start of every session, before any other work, run:
 
+Navigate to the repository root directory, then run:
+
 ```bash
-cd $(git rev-parse --show-toplevel) && bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
+bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
 git worktree list
 ```
 
@@ -45,7 +47,7 @@ Before EVERY file write or git command:
 
 This applies to ALL files -- code, brainstorms, specs, plans, learnings, configs. No exceptions.
 
-**MCP tool file paths:** MCP servers (e.g., Playwright) resolve relative filenames from their own process CWD, which is the main repo root -- NOT the Bash session CWD. When working in a worktree, always pass **absolute paths** to MCP tools that write files (screenshots, downloads, exports). Use `$(pwd)/filename.png` or the full worktree path. Bash CLI tools (e.g., `agent-browser screenshot`) are unaffected since they inherit the shell CWD.
+**MCP tool file paths:** MCP servers (e.g., Playwright) resolve relative filenames from their own process CWD, which is the main repo root -- NOT the Bash session CWD. When working in a worktree, always pass **absolute paths** to MCP tools that write files (screenshots, downloads, exports). Use the full worktree path (run `pwd` and prepend it to the filename). Bash CLI tools (e.g., `agent-browser screenshot`) are unaffected since they inherit the shell CWD.
 
 ## Diagnostic-First Rule
 

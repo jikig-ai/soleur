@@ -31,31 +31,15 @@ fi
 
 **Clean up merged worktrees (silent, runs in background):**
 
-```bash
-# Clean up worktrees for merged branches (won't affect current worktree)
-cd $(git rev-parse --show-toplevel) && ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged 2>/dev/null || true
-```
-
-Report cleanup results: how many worktrees were cleaned up, which branches remain active.
+Navigate to the repository root, then run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged`. Report cleanup results: how many worktrees were cleaned up, which branches remain active.
 
 **Check for knowledge-base directory and load context:**
 
-```bash
-if [[ -d "knowledge-base" ]]; then
-  # Load constitution for implementation guidance
-  cat knowledge-base/overview/constitution.md
+Check if `knowledge-base/` directory exists. If it does:
 
-  # Detect feature from current branch
-  current_branch=$(git branch --show-current)
-  if [[ "$current_branch" == feat-* ]]; then
-    feature_name="$current_branch"
-    # Load tasks if they exist
-    if [[ -f "knowledge-base/specs/$feature_name/tasks.md" ]]; then
-      cat "knowledge-base/specs/$feature_name/tasks.md"
-    fi
-  fi
-fi
-```
+1. Read `knowledge-base/overview/constitution.md`
+2. Run `git branch --show-current` to get the current branch name
+3. If the branch starts with `feat-`, read `knowledge-base/specs/<branch-name>/tasks.md` if it exists
 
 **If knowledge-base/ exists:**
 
@@ -81,17 +65,7 @@ fi
 
 2. **Setup Environment**
 
-   First, check the current branch:
-
-   ```bash
-   current_branch=$(git branch --show-current)
-   default_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
-
-   # Fallback if remote HEAD isn't set
-   if [ -z "$default_branch" ]; then
-     default_branch=$(git rev-parse --verify origin/main >/dev/null 2>&1 && echo "main" || echo "master")
-   fi
-   ```
+   First, check the current branch by running `git branch --show-current`. Then determine the default branch by running `git symbolic-ref refs/remotes/origin/HEAD` and extracting the branch name. If that fails, check whether `origin/main` exists (fallback to `master`).
 
    **If already on a feature branch** (not the default branch):
    - Ask: "Continue working on `[current_branch]`, or create a new branch?"
