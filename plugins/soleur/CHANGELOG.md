@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.26.0] - 2026-02-22
+
+### Added
+
+- Add `merge-pr` skill for autonomous single-PR merge pipeline with conflict resolution and cleanup (#214)
+- Automates merge main, conflict resolution (deterministic for version files, Claude-assisted for code), conditional version bump, push, PR creation, CI wait, squash merge, and worktree cleanup
+- Add 3 constitution rules: git stage numbers for merge-conflict reads, conflict marker detection before staging, compound ordering prohibition after push/CI
+
 ## [2.25.3] - 2026-02-22
 
 ### Fixed
