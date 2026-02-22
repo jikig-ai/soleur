@@ -76,6 +76,8 @@ Read the feature description and assess domain relevance:
 
 6. **Legal implications** -- Does this feature involve creating, updating, or auditing legal documents such as terms of service, privacy policies, data processing agreements, or compliance documentation?
 
+7. **Sales implications** -- Does this feature involve sales pipeline management, outbound prospecting, deal negotiation, proposal generation, revenue forecasting, or converting leads into customers through human-assisted sales motions?
+
 If no domains are relevant, continue to Phase 1.
 
 #### Routing
@@ -135,6 +137,15 @@ Options:
 
 1. **Include legal assessment** - CLO joins the brainstorm to assess legal implications
 2. **Brainstorm normally** - Continue without legal input
+
+**If sales relevance is detected:**
+
+Use **AskUserQuestion tool** to ask: "This feature has sales implications. Include sales assessment?"
+
+Options:
+
+1. **Include sales assessment** - CRO joins the brainstorm to assess sales implications
+2. **Brainstorm normally** - Continue without sales input
 
 **If multiple domains are relevant:** Ask about each domain separately.
 
@@ -289,6 +300,16 @@ the user should consider during brainstorming. Output a brief structured assessm
 ```
 
 Weave the CLO's assessment into the brainstorm dialogue alongside repo research findings.
+
+**CRO participation:** After repo research completes, spawn the CRO agent in parallel:
+
+```text
+Task cro: "Assess the sales implications of this feature: <feature_description>.
+Identify pipeline concerns, revenue conversion opportunities, and sales questions the user
+should consider during brainstorming. Output a brief structured assessment."
+```
+
+Weave the CRO's assessment into the brainstorm dialogue alongside repo research findings.
 
 ### Phase 1: Understand the Idea
 

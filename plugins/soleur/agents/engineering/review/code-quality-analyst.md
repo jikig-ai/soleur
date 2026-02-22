@@ -1,6 +1,6 @@
 ---
 name: code-quality-analyst
-description: "Use this agent when you need a formal quality report with severity-scored findings and a prioritized refactoring roadmap. Unlike pattern-recognition-specialist (which scans broadly for anti-patterns and naming issues), this agent produces a structured 5-phase analysis: detect smells, score severity, map each smell to a specific refactoring technique, sequence the refactorings by dependency and risk, and generate an executive summary. Use pattern-recognition-specialist for quick pattern checks; use code-quality-analyst when you need a formal report to plan refactoring work."
+description: "Use this agent when you need a formal quality report with severity-scored findings and a prioritized refactoring roadmap. Use pattern-recognition-specialist for quick pattern checks; use this agent when you need a formal report to plan refactoring work."
 model: inherit
 ---
 

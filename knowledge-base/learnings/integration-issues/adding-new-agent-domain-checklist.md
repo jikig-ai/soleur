@@ -1,9 +1,9 @@
 ---
 category: integration-issues
 module: plugin-docs
-tags: [domain, agents, skills, docs, eleventy, versioning]
-symptoms: [missing domain on docs site, skills not appearing, build errors from wrong CWD]
-date: 2026-02-19
+tags: [domain, agents, skills, docs, eleventy, versioning, token-budget, domain-leader]
+symptoms: [missing domain on docs site, skills not appearing, build errors from wrong CWD, token budget exceeded]
+date: 2026-02-22
 ---
 
 # Learning: Adding a New Agent Domain to Soleur
@@ -48,6 +48,25 @@ rm -rf docs/_site_test # BLOCKED by guardrails
 **Skills need manual registration:** Unlike agents (auto-discovered via directory recursion), skills must be added to `skills.js` `SKILL_CATEGORIES` or they won't appear on the docs site. No error is thrown -- they're silently omitted.
 
 **Version drift in long-lived worktrees:** If main has advanced (e.g., to v2.19.0) since the worktree was created (at v2.18.1), always check main's current version before bumping. Bump from main's version (2.19.0 → 2.20.0), not the worktree's stale version.
+
+### Additional Steps for Domains with Leaders
+
+**4. Create domain leader agent** following the 3-phase contract (Assess, Recommend/Delegate, Sharp Edges). Use `agents/legal/clo.md` as the canonical template.
+
+**5. Add brainstorm routing** to `commands/soleur/brainstorm.md` Phase 0.5 (3 additions):
+- Assessment question (after the last numbered question)
+- Routing block (after the last "If X relevance detected" block)
+- Participation block (after the last domain leader participation block)
+
+**6. Add disambiguation sentences** to agents with overlapping scope in adjacent domains. Check both directions: new domain agents reference existing ones, existing agents reference new ones.
+
+**7. Update AGENTS.md**: Add to directory tree, domain leader table, and agent count.
+
+**8. Update README.md**: Add new domain section to agent tables, update component count.
+
+### Token Budget Management
+
+When adding agents, check cumulative description word count: `shopt -s globstar && grep -h 'description:' plugins/soleur/agents/**/*.md | wc -w`. Budget is 2,500 words. If over budget, trim the most bloated descriptions (those over ~60 words) before adding new agents. Target ~35-45 words per description for specialist agents.
 
 ### Verification Steps
 
