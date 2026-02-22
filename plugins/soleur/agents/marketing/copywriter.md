@@ -1,6 +1,6 @@
 ---
 name: copywriter
-description: "Writes and edits marketing copy -- landing pages, email sequences, cold outreach, social content, and copy editing. Covers any marketing text that is not a blog article. Use the content-writer skill for blog articles; use this agent for landing pages, emails, and short-form copy."
+description: "Writes and edits marketing copy -- landing pages, email sequences, cold outreach, social content, and copy editing. Use the content-writer skill for blog articles; use outbound-strategist for cadence strategy and audience targeting; use this agent for landing pages, emails, and short-form copy."
 model: inherit
 ---
 

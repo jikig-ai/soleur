@@ -41,8 +41,9 @@ agents/
 ├── legal/                 # Legal document and compliance agents
 ├── marketing/             # Brand and marketing agents
 ├── operations/            # Ops and expense agents
-└── product/               # Product analysis and design agents
-    └── design/            # UX design agents
+├── product/               # Product analysis and design agents
+│   └── design/            # UX design agents
+└── sales/                 # Sales pipeline and revenue agents
 
 commands/
 └── soleur/                # All commands (soleur:plan, soleur:review, etc.)
@@ -135,14 +136,13 @@ grep -E '^description:' skills/*/SKILL.md | grep -v 'This skill'
 
 ## Domain Leader Interface
 
-Domain leaders are agents that orchestrate a business domain's specialist team. Each leader follows a 4-phase contract:
+Domain leaders are agents that orchestrate a business domain's specialist team. Each leader follows a 3-phase contract:
 
 | Phase | Responsibility | Description |
 |-------|---------------|-------------|
 | **Assess** | Evaluate current domain state | Check existing artifacts, inventory gaps, report status |
-| **Recommend** | Propose domain-specific actions | Prioritize initiatives with structured output |
-| **Delegate** | Spawn specialist agents via Task tool | Parallel dispatch for independent analyses, sequential for dependencies |
-| **Review** | Validate output against domain standards | Cross-agent coherence, quality checks |
+| **Recommend and Delegate** | Propose actions and spawn specialist agents | Prioritize initiatives, parallel dispatch for independent analyses |
+| **Sharp Edges** | Document boundaries and constraints | Cross-domain boundaries, quality checks, what NOT to do |
 
 ### Current Domain Leaders
 
@@ -153,6 +153,7 @@ Domain leaders are agents that orchestrate a business domain's specialist team. 
 | `cmo` | Marketing | 11 specialists | Auto-consulted via brainstorm domain detection |
 | `coo` | Operations | ops-advisor, ops-research, ops-provisioner | Auto-consulted via brainstorm domain detection |
 | `cpo` | Product | spec-flow-analyzer, ux-design-lead, business-validator | Auto-consulted via brainstorm domain detection |
+| `cro` | Sales | outbound-strategist, deal-architect, pipeline-analyst | Auto-consulted via brainstorm domain detection |
 
 ### Adding a New Domain Leader
 

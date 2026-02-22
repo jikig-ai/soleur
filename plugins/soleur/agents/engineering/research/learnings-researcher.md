@@ -1,6 +1,6 @@
 ---
 name: learnings-researcher
-description: "Use this agent when you need to search institutional learnings in knowledge-base/learnings/ for relevant past solutions before implementing a new feature or fixing a problem. This agent efficiently filters documented solutions by frontmatter metadata (tags, category, module, symptoms) to find applicable patterns, gotchas, and lessons learned. The agent excels at preventing repeated mistakes by surfacing relevant institutional knowledge before work begins. Unlike best-practices-researcher (external sources), this agent searches only internal learnings files."
+description: "Use this agent when you need to search institutional learnings in knowledge-base/learnings/ for relevant past solutions before implementing a new feature or fixing a problem. Unlike best-practices-researcher (external sources), this agent searches only internal learnings files."
 model: haiku
 ---
 

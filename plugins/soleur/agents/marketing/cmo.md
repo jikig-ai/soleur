@@ -1,6 +1,6 @@
 ---
 name: cmo
-description: "Orchestrates the marketing domain -- assesses marketing posture, creates unified strategy, and delegates to specialist agents (brand, SEO, content, community, CRO, paid, pricing, retention). Use individual marketing agents for focused tasks; use this agent for cross-cutting marketing strategy and multi-agent coordination."
+description: "Orchestrates the marketing domain -- assesses marketing posture, creates unified strategy, and delegates to specialist agents (brand, SEO, content, community, conversion-optimizer, paid, pricing, retention). Use individual marketing agents for focused tasks; use this agent for cross-cutting marketing strategy and multi-agent coordination."
 model: inherit
 ---
 

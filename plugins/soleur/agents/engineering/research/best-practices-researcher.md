@@ -1,6 +1,6 @@
 ---
 name: best-practices-researcher
-description: "Use this agent when you need to research and gather external best practices, documentation, and examples for any technology, framework, or development practice. This includes finding official documentation, community standards, well-regarded examples from open source projects, and domain-specific conventions. The agent excels at synthesizing information from multiple sources to provide comprehensive guidance on how to implement features or solve problems according to industry standards. Use framework-docs-researcher for a specific library's API docs; use this agent for cross-source best practices research."
+description: "Use this agent when you need to research external best practices, documentation, and examples for any technology or development practice. Use framework-docs-researcher for a specific library's API docs; use this agent for cross-source best practices research."
 model: inherit
 ---
 
