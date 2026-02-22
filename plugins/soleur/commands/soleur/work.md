@@ -53,12 +53,35 @@ Check if `knowledge-base/` directory exists. If it does:
 
 - Continue with standard work flow (use input document only)
 
+### Phase 0.5: Pre-Flight Checks
+
+Run these checks before proceeding to Phase 1. A FAIL blocks execution with a remediation message. A WARN displays and continues. If all checks pass, proceed silently.
+
+**Environment checks:**
+
+1. Run `git branch --show-current`. If the result is empty (detached HEAD), FAIL: "Detached HEAD state -- checkout a feature branch or create a worktree." If the result is the default branch (main or master), FAIL: "On default branch -- create a worktree before starting work. Run: `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh feature <name>`"
+2. Run `pwd`. If the path does NOT contain `.worktrees/`, WARN: "Not in a worktree directory. You can create one via `git-worktree` skill in Phase 1."
+3. Run `git status --short`. If output is non-empty, WARN: "Uncommitted changes detected. Consider committing or stashing before starting new work."
+4. Run `git stash list`. If output is non-empty, WARN: "Stashed changes found. Review stash list to avoid forgotten work."
+
+**Scope checks:**
+
+5. If a plan file path was provided as input (ends in `.md` or starts with a path-like pattern), verify it exists and is readable. If not, FAIL: "Plan file not found at the specified path." If the input appears to be a text description rather than a file path, WARN: "Input appears to be a description, not a file path. Scope validation limited."
+6. Run `git diff --name-only HEAD...origin/main` to identify files that diverged between this branch and main. If output is non-empty, WARN: "Branch has diverged from main in [N] files: [file list]. Consider merging main before starting." If the git command fails (e.g., offline, no remote), skip this check silently.
+
+**On FAIL:** Display the failure message with remediation steps and stop. Do not proceed to Phase 1.
+
+**On WARN only:** Display all warnings together and proceed to Phase 1.
+
+**On all pass:** Proceed silently to Phase 1.
+
 ### Phase 1: Quick Start
 
 1. **Read Plan and Clarify**
 
    - Read the work document completely
    - Review any references or links provided in the plan
+   - Before proceeding, verify the plan does not contradict conventions in AGENTS.md and constitution.md: file format (markdown tables not YAML), kebab-case naming, directory structure (agents recurse, skills flat), required frontmatter fields, shell script conventions
    - If anything is unclear or ambiguous, ask clarifying questions now
    - Get user approval to proceed
    - **Do not skip this** - better to ask questions now than build the wrong thing
