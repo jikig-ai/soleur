@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.28.3] - 2026-02-22
+
+### Fixed
+
+- Replace `!` code block in one-shot command with explicit LLM-executed Bash step -- the `!` auto-execution syntax fails permission checks even with `allowed-tools` frontmatter (#241 follow-up)
+- Remove unused `allowed-tools` frontmatter from one-shot command
+- Update bundle-ralph-loop learning to document `!` block permission failure pattern
+
 ## [2.28.2] - 2026-02-22
 
 ### Fixed
