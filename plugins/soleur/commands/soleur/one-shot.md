@@ -2,6 +2,7 @@
 name: soleur:one-shot
 description: Full autonomous engineering workflow from plan to PR with video
 argument-hint: "[feature description or issue reference]"
+allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/setup-ralph-loop.sh:*)"]
 ---
 
 ```!
