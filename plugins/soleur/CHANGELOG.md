@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.31.0] - 2026-02-22
+
+### Added
+
+- Add Sales domain with CRO (Chief Revenue Officer) domain leader and 3 specialist agents (#247)
+- New agents: `cro`, `outbound-strategist`, `deal-architect`, `pipeline-analyst` under `agents/sales/`
+- CRO follows the 3-phase domain leader pattern (Assess, Recommend/Delegate, Sharp Edges)
+- Sales detection added to brainstorm Phase 0.5 domain assessment (question #7, routing, participation)
+- Cross-domain disambiguation between Sales and Marketing agents (5 Marketing agents updated)
+
+### Changed
+
+- Trim 10 bloated agent descriptions to stay under 2,500-word token budget (2,613 -> 2,497 words)
+- Fix AGENTS.md domain leader contract from "4-phase" to "3-phase" to match actual implementation
+- Fix CMO description: replace "CRO" abbreviation with "conversion-optimizer" to avoid naming collision
+- Update docs site: add Sales to agents.js data, style.css CSS variable (`--cat-sales: #E06666`)
+
 ## [2.30.1] - 2026-02-22
 
 ### Added
