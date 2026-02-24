@@ -54,6 +54,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Lifecycle workflows with hooks must cover every state transition with a cleanup trigger; verify no gaps between create, ship, merge, and session-start
 - At session start, run `worktree-manager.sh cleanup-merged` to remove worktrees whose remote branches are [gone]; this is the recovery mechanism for the merge-then-session-end gap where cleanup was deferred
 - Operations that modify the knowledge-base or move files must use `git mv` to preserve history and produce a single atomic commit that can be reverted with `git revert`
+- Skill instructions that use `git mv` must prepend `git add` on the source file to handle untracked files created during the session -- `git add` on an already-tracked file is a no-op
 - New commands must be idempotent -- running the same command twice must not create duplicates or corrupt state
 - Run code review and compound (skill: `soleur:compound`) before committing -- the commit is the gate, not the PR; compound must be explicitly offered to the user before every commit, never silently skipped; compound must never be placed after `git push` or CI because compound produces a commit that invalidates CI and creates an infinite loop
 - When reading file content during an active git merge conflict, use stage numbers: `git show :2:<path>` (ours) and `git show :3:<path>` (theirs); `git show HEAD:<path>` only returns one side and discards the incoming changes

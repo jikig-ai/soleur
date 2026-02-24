@@ -178,7 +178,7 @@ See compound-capture Step 8 for the full flow.
 Read the file in `knowledge-base/learnings/`, apply changes, and commit with `git commit -m "learning: update <topic>"`.
 
 **Archive an outdated learning:**
-Move it to `knowledge-base/learnings/archive/`: `mkdir -p knowledge-base/learnings/archive && git mv knowledge-base/learnings/<category>/<file>.md knowledge-base/learnings/archive/`. Commit with `git commit -m "learning: archive <topic>"`.
+Move it to `knowledge-base/learnings/archive/`: `mkdir -p knowledge-base/learnings/archive && git add knowledge-base/learnings/<category>/<file>.md && git mv knowledge-base/learnings/<category>/<file>.md knowledge-base/learnings/archive/`. The `git add` ensures the file is tracked before `git mv`.Commit with `git commit -m "learning: archive <topic>"`.
 
 **Delete a learning:**
 Only with user confirmation. `git rm knowledge-base/learnings/<category>/<file>.md` and commit.
