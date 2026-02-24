@@ -64,17 +64,18 @@ The Plugin facilitates interactions with the Anthropic Claude API and other thir
 
 ### 5.1 License Grant
 
-Subject to your compliance with these Terms, we grant you a limited, non-exclusive, non-transferable, revocable license to install and use the Plugin for your personal or internal business purposes.
+The Plugin is licensed under the Business Source License 1.1 (BSL 1.1). Subject to your compliance with these Terms and the BSL 1.1 license, you may copy, modify, create derivative works, redistribute, and make production use of the Plugin for your personal or internal business purposes.
 
 ### 5.2 Restrictions
 
 You shall not:
 
+- Offer the Plugin to third parties on a hosted or managed basis in order to compete with Jikigai's commercial offerings
 - Reverse engineer, decompile, or disassemble the Plugin except as expressly permitted by applicable law (including EU Directive 2009/24/EC on the legal protection of computer programs)
 - Remove, alter, or obscure any proprietary notices, labels, or marks
-- Use the Plugin to develop a competing product or service
-- Sublicense, sell, rent, lease, or otherwise commercially distribute the Plugin without prior written consent
 - Use the Plugin in any manner that violates applicable laws or regulations
+
+Each version of the Plugin converts to the Apache License 2.0 four years after its publication date. Prior versions (v3.0.10 and earlier) remain under the Apache License 2.0.
 
 ### 5.3 User Content Ownership
 
@@ -244,7 +245,7 @@ These Terms do not confer any rights on any third party unless expressly stated.
 
 ## 16. Legal Entity and Contact Information
 
-Soleur is an open-source project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France. These Terms are offered by Jikigai on behalf of the Soleur project.
+Soleur is a source-available project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France. These Terms are offered by Jikigai on behalf of the Soleur project.
 
 For questions or concerns regarding these Terms, please contact us through:
 

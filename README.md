@@ -4,8 +4,8 @@ The Company-as-a-Service platform. Collapse the friction between a startup idea 
 
 60 agents across engineering, finance, marketing, legal, operations, product, sales, and support -- compounding your company knowledge with every session.
 
-[![Version](https://img.shields.io/badge/version-3.0.10-blue)](https://github.com/jikig-ai/soleur/releases)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Version](https://img.shields.io/badge/version-3.1.0-blue)](https://github.com/jikig-ai/soleur/releases)
+[![License](https://img.shields.io/badge/License-BSL_1.1-blue.svg)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-community-5865F2?logo=discord&logoColor=white)](https://discord.gg/PYZbPBKMUY)
 [![Website](https://img.shields.io/badge/website-soleur.ai-C9A962)](https://soleur.ai)
 
@@ -102,4 +102,6 @@ This work builds on ideas and patterns from these excellent projects:
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE) for details.
+BSL 1.1 (Business Source License). See [LICENSE](LICENSE) for details.
+
+Source-available for all individual and internal company use. The only restriction is offering Soleur as a competing hosted service. Each version converts to Apache-2.0 after 4 years. Versions v3.0.10 and earlier remain Apache-2.0.

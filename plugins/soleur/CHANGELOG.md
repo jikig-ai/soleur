@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.1.0] - 2026-02-24
+
+### Changed
+
+- **License:** Switch from Apache-2.0 to BSL 1.1 (Business Source License)
+  - All individual and internal company use remains permitted
+  - The only restriction: offering Soleur as a competing hosted/managed service
+  - Each version auto-converts to Apache-2.0 after 4 years
+  - Prior versions (v3.0.10 and earlier) remain Apache-2.0
+- Update LICENSE files (root and plugin) with BSL 1.1 text
+- Update plugin.json license field to `BUSL-1.1`
+- Update README license badges and sections (root and plugin)
+- Update all legal documents (Terms, Privacy Policy, Disclaimer, Cookie Policy, GDPR Policy, AUP, DPA) to reflect source-available status
+- Sync Eleventy legal page templates with source markdown
+
 ## [3.0.10] - 2026-02-24
 
 ### Changed

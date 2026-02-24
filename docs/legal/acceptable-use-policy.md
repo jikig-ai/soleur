@@ -90,7 +90,7 @@ You must not use Soleur to generate, process, store, or distribute:
 You must not:
 
 - (a) Attempt to bypass, disable, or circumvent any security mechanism, access control, or usage limitation of the Soleur platform;
-- (b) Reverse-engineer Soleur for the purpose of developing competing products or extracting proprietary logic (subject to applicable open-source license terms);
+- (b) Reverse-engineer Soleur for the purpose of developing competing products or extracting proprietary logic (subject to applicable license terms);
 - (c) Modify Soleur in a manner designed to remove safety guardrails, audit logging, or confirmation prompts that protect against destructive operations;
 - (d) Use Soleur to circumvent security controls, authentication mechanisms, or access restrictions on third-party systems; or
 - (e) Attempt to manipulate or override the agent instruction framework to cause agents to perform actions outside their defined scope or safety boundaries.
@@ -205,7 +205,7 @@ If any provision of this Policy is found to be unenforceable or invalid under ap
 
 ## 10. Legal Entity and Contact
 
-Soleur is an open-source project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France.
+Soleur is a source-available project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France.
 
 For questions about this Policy, please contact us through:
 
