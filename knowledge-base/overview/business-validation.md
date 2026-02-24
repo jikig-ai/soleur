@@ -1,12 +1,12 @@
 ---
-last_updated: 2026-02-22
+last_updated: 2026-02-24
 ---
 
 # Business Validation: Soleur -- Company-as-a-Service Platform
 
 ## Problem
 
-**Problem statement (solution-free):** Solo founders building companies must operate every department -- engineering, marketing, legal, operations, and product -- alone. The non-engineering work (brand identity, legal compliance, pricing strategy, operational logistics, product validation) consumes the majority of a founder's time but receives none of the AI tooling investment. Current AI coding assistants help write code faster, but a company is not just code. The founder still manually handles contracts, brand guidelines, community management, expense tracking, competitive analysis, and a dozen other functions that large companies staff with entire teams.
+**Problem statement (solution-free):** Solo founders face a twofold problem. First, a capacity gap: one person cannot fill the roles of engineer, marketer, lawyer, operations manager, and product strategist simultaneously. Second, an expertise gap: even if they had the time, most technical founders do not know how to run a marketing department, draft enforceable contracts, or build a pricing strategy. The non-engineering work -- brand identity, legal compliance, pricing, operational logistics, product validation -- consumes the majority of a founder's time but receives almost none of the AI tooling investment.
 
 **Current workarounds:**
 
@@ -15,15 +15,16 @@ last_updated: 2026-02-22
 - **AI chat for one-off tasks:** Ask ChatGPT to draft a privacy policy or brainstorm a tagline. No persistence, no cross-domain coherence, no institutional memory. The privacy policy does not know about the brand guide. The pricing strategy does not reference the competitive analysis.
 - **Ignore non-engineering work:** Ship first, worry about brand/legal/ops later. This is the most common approach and creates compounding debt that becomes harder to address as the company grows.
 
-**Pain severity:** High for solo founders who take their companies seriously. The pain is not acute (no single moment of crisis) but chronic -- it is the cumulative friction of being a one-person company that needs the capabilities of a 20-person organization. Founders who have tried to do everything themselves feel this acutely. Those who have not yet scaled beyond code do not feel it yet.
+**Pain severity:** High for solo founders who take their companies seriously. The pain is chronic rather than acute -- the cumulative friction of being a one-person company that needs the capabilities of a 20-person organization. The capacity gap is felt daily; the expertise gap is felt whenever the founder encounters a domain they have never operated in before.
 
-**Assessment:** The problem is real and structural. It is not a tooling gap in one domain -- it is the absence of an integrated AI workforce that can operate across domains the way a human organization does. The pain intensifies as the founder's ambition grows: a side project needs only code, but a company needs everything.
+**Assessment:** PASS. The problem is real, structural, and clearly articulated independent of any solution. It is not a tooling gap in one domain -- it is the absence of an integrated AI workforce that can operate across domains the way a human organization does.
 
 ## Customer
 
 **Target customer profile:**
 
 - **Role:** Solo founders building companies, not just shipping code. Technical builders who think in terms of businesses, not just products.
+- **Stage:** Initially technical solo founders across all stages (pre-revenue through scaling). Eventually non-technical founders, but the beachhead is technical.
 - **Company size:** One person. The "company of one" who wants to operate at the scale of a funded startup without hiring.
 - **Industry:** SaaS, developer tools, creative businesses, consulting-turned-product -- any domain where one person builds and sells.
 - **Behavior:** Already using AI coding assistants (Claude Code, Cursor, Windsurf) as their primary development interface. Frustrated that AI helps with code but not with the other 70% of running a company.
@@ -31,86 +32,99 @@ last_updated: 2026-02-22
 
 **Reachable customer examples:**
 
-1. Solo SaaS founders on IndieHackers who discuss the pain of doing everything alone
-2. Claude Code power users in the Discord who have pushed beyond coding into broader workflows
-3. Indie hackers who have tried and failed to maintain brand consistency, legal compliance, and ops discipline while shipping features
-4. Technical founders who left companies and are building solo for the first time -- they know what departments they are missing
-5. Builders on Twitter/X who post about "AI replacing entire teams" and are looking for the tooling to prove it
+The user can name 2-3 real contacts who fit the profile, falling short of the 5-person threshold. However, the market thesis is supported by strong external signals:
 
-**Assessment:** The customer segment is specific, passionate, and reachable. Solo founders who believe in the "company of one" thesis are vocal in online communities. The risk is that the segment is small in absolute numbers today. However, the trend (AI enabling smaller teams to do more) is accelerating, and early adopters in this segment are exactly the users who will push the platform hardest.
+- Naval Ravikant's prediction of AI-enabled solo billion-dollar companies
+- Dario Amodei's projections on AI capability expansion
+- Solo founder growth statistics (23.7% to 36.3% of new companies)
+- Active communities (IndieHackers, Claude Code Discord, Twitter/X solopreneur networks)
+
+**Assessment:** CONDITIONAL PASS. The customer segment is specific, passionate, and reachable. The risk is that the definition is broad (technical solo founders across all stages) and the named contacts fall below the 5-person threshold. The external market signals are strong but do not substitute for a tight initial segment. The recommendation is to narrow to a specific sub-segment for initial validation (e.g., Claude Code power users who have already pushed beyond coding into broader workflows).
 
 ## Competitive Landscape
 
-The competitive landscape spans two categories: AI coding workflow tools (which solve part of the problem) and AI agent workforce platforms (which attempt the full problem).
+The competitive landscape spans four tiers, from closest substitutes to loosest alternatives.
 
-**AI agent workforce platforms (direct thesis competitors):**
+**Tier 1: Claude Code plugins (closest substitutes)**
+
+| Competitor | Overlap | Differentiation from Soleur |
+|-----------|---------|---------------------------|
+| [Deep Trilogy](https://pierce-lamb.medium.com/the-deep-trilogy-claude-code-plugins-for-writing-good-software-fast-33b76f2a022d) | Plan-first engineering workflow | Engineering only -- no marketing, legal, ops, or product domains. No compounding knowledge base across sessions. |
+
+**Tier 2: No-code AI agent platforms**
 
 | Competitor | Approach | Differentiation from Soleur |
 |-----------|----------|---------------------------|
 | [Lindy.ai](https://lindy.ai) | No-code AI agent builder for business workflows (email, scheduling, sales) | Horizontal agent builder, not integrated into the development workflow. Agents are standalone, not part of a unified organization with shared memory. |
 | [Relevance AI](https://relevanceai.com) | AI workforce platform with agent teams for sales, support, and research | Enterprise-focused, sales-heavy. No engineering domain. Not designed for solo founders. |
+
+**Tier 3: AI agent frameworks**
+
+| Competitor | Approach | Differentiation from Soleur |
+|-----------|----------|---------------------------|
 | [Crew AI](https://crewai.com) | Multi-agent orchestration framework for building AI teams | Framework, not a product. Requires significant setup. No built-in business domains. |
 | [AutoGPT / AgentGPT](https://agentgpt.rber.dev) | Autonomous AI agents that chain tasks | General-purpose autonomy, not domain-specific. No institutional memory, no knowledge base that compounds. |
 
-**AI coding workflow tools (partial competitors):**
+**Tier 4: DIY stack (AI coding tools used individually)**
 
 | Competitor | Platform | Overlap |
 |-----------|----------|---------|
-| [Deep Trilogy](https://pierce-lamb.medium.com/the-deep-trilogy-claude-code-plugins-for-writing-good-software-fast-33b76f2a022d) | Claude Code | Plan-first workflow. Engineering only -- no marketing, legal, ops, or product domains. |
 | [Cursor](https://cursor.com) + Composer | IDE | Project conventions + multi-file orchestration. IDE-native. Engineering only. |
 | [Windsurf](https://windsurf.com) + Cascade | IDE | Agentic IDE with built-in workflow automation. Engineering only. |
 | [Aider](https://aider.chat/) | CLI | Git-aware AI coding. Engineering only, no multi-domain agents. |
 
-**Structural analysis:**
+**Structural advantages:**
 
-Soleur occupies a unique position: it is the only platform that combines AI agent workforce capabilities (marketing, legal, ops, product) with deep engineering workflow integration (Claude Code plugin). Competitors either do engineering well but nothing else, or do business automation well but not engineering.
-
-**Soleur's structural advantage:** The knowledge base. Every domain feeds a shared institutional memory -- the brand guide informs marketing content, the legal audit references the privacy policy, the business validation draws on the competitive landscape. This cross-domain coherence is not possible when using separate tools for each function. The compounding effect increases with usage: the 100th session is dramatically more productive than the 1st because the system has learned the founder's company.
+1. **Compounding knowledge base:** Every domain feeds a shared institutional memory that persists across sessions. The brand guide informs marketing content, the legal audit references the privacy policy, the business validation draws on the competitive landscape. This cross-domain coherence is not possible when using separate tools for each function. The 100th session is dramatically more productive than the 1st.
+2. **Full-stack 8-domain integration:** Engineering, marketing, legal, operations, product, finance, sales, and support agents share context within a single workflow. Competitors either do engineering well but nothing else, or do business automation well but not engineering.
 
 **Vulnerabilities:**
 
 1. **Platform dependency:** Anthropic could build multi-domain capabilities into Claude Code directly. Mitigation: Soleur's value is in the curated agent behaviors and accumulated knowledge, not in the plugin infrastructure.
-2. **Breadth vs. depth trade-off:** 60 agents across 5 domains means each domain gets fewer resources than a dedicated tool. Mitigation: The integration IS the product -- a mediocre-but-connected marketing agent is more valuable to a solo founder than an excellent-but-isolated marketing tool.
+2. **Breadth vs. depth trade-off:** 65+ agents across 8 domains means each domain gets fewer resources than a dedicated tool. Mitigation: The integration IS the product -- a mediocre-but-connected marketing agent is more valuable to a solo founder than an excellent-but-isolated marketing tool.
 
-**Assessment:** The competitive landscape validates the thesis. Multiple companies are building AI agent workforces, confirming the market direction. None combine engineering depth with business breadth the way Soleur does. The "why now" is the convergence of capable LLMs (Claude, GPT-4) with plugin architectures that allow domain-specific agents to be composed into organizations.
+**Assessment:** PASS. The competitive landscape validates the thesis. Multiple funded companies are building AI agent workforces, confirming the market direction. None combine engineering depth with business breadth the way Soleur does. The structural advantages (compounding knowledge, cross-domain coherence) are genuine moats that competitors cannot easily replicate without rebuilding from scratch.
 
 ## Demand Evidence
 
 **Direct demand signals:**
 
-- Soleur is in active daily use by its creator for running a real company. The "dogfooding" signal is genuine -- the creator uses all 5 domains (engineering, marketing, legal, ops, product) and has iterated through 2.30+ versions and 240+ merged PRs.
+- 1-2 informal conversations about the multi-domain pain with people in the founder's network. Not zero, but well below the 5+ threshold for confidence.
+- Soleur is in active daily use by its creator for running a real company. The "dogfooding" signal is genuine -- the creator uses all domains and has iterated through 280+ merged PRs.
 - The plugin is published to the Claude Code registry and installable via `claude plugin install soleur`.
-- Active development velocity demonstrates builder conviction: detailed changelog, frequent releases, compounding knowledge base.
 
 **Indirect demand signals:**
 
-- The "company of one" and "solopreneur AI" themes are generating significant discussion on Twitter/X, IndieHackers, and HackerNews. The cultural moment is favorable.
-- Multiple companies (Lindy, Relevance AI, Crew AI) are raising venture funding for AI agent workforce platforms, validating the market category.
+- Naval Ravikant's podcast discussion of AI-enabled solo billion-dollar companies -- cultural validation of the thesis at the highest level.
+- Dario Amodei's predictions on AI capability trajectories -- technical validation of the underlying assumption.
+- Solo founder market growth data (23.7% to 36.3%) -- structural trend validation.
+- Multiple companies (Lindy, Relevance AI, Crew AI) raising venture funding for AI agent workforce platforms, confirming the market category.
 - Claude Code Discord has active discussions about extending AI beyond coding into broader business workflows.
 
 **What is missing:**
 
 - No evidence of external users (beyond the creator) actively using Soleur across multiple domains.
-- No customer discovery conversations with solo founders about multi-domain AI pain.
+- Only 1-2 customer discovery conversations -- below the minimum of 5 recommended for problem validation.
 - No data on plugin install counts, retention, or activation rates.
 - No testimonials or case studies from users testing the full-organization hypothesis.
+- No one has asked to be notified when a paid version exists, or offered to pay early.
 
-> WARNING: Kill criterion triggered at Gate 4 -- proceeding because this is a self-assessment to inform the validation strategy. In a real validation, this gate would recommend pausing to conduct 5+ customer discovery conversations before continuing.
+> WARNING: Kill criterion triggered at Gate 4 -- user chose to proceed. Direct customer validation is thin. The strong external signals (market trends, thought leader predictions, competitor funding) provide directional confidence but do not substitute for hearing real founders describe this pain in their own words.
 
-**Assessment:** The demand evidence is the weakest gate. Builder conviction is high but external validation is zero. The critical next step is talking to 10 solo founders who are running companies alone and testing whether the multi-domain AI organization resonates -- or whether they have already built workflows that work well enough with separate tools.
+**Assessment:** FLAG. Builder conviction is high but external validation is thin. The critical next step is conducting 10+ customer discovery conversations with solo founders -- testing whether they independently describe multi-domain pain, not whether they like the solution when shown a demo.
 
 ## Business Model
 
 **Current model:** Free and open-source (Apache-2.0 license). No revenue.
 
-**Potential revenue models aligned with the Company-as-a-Service thesis:**
+**Revenue model direction:** Leaning toward a hybrid model -- free self-hosted plugin (open source core) with a paid hosted platform / managed service. The exact model is under active exploration (GitHub issue #287 exists to brainstorm this). Options being considered:
 
 | Model | Feasibility | Alignment |
 |-------|------------|-----------|
-| **Hosted knowledge sync** | Medium-high. Cloud-synced institutional memory, team collaboration, cross-project learning. | Strong. The knowledge base is the compounding asset -- hosted sync makes it persistent and shareable. |
+| **Hosted platform / managed service** | Medium-high. Cloud-synced institutional memory, managed agents, team collaboration. | Strong. Natural extension of the knowledge base as a compounding asset. |
 | **Freemium domain tiers** | Medium. Free engineering domain, paid marketing + legal + ops + product domains. | Strong. Non-engineering domains are the differentiator and the value users cannot get elsewhere. |
 | **Managed AI org service** | Medium. Concierge onboarding: set up your AI organization, configure domains, seed knowledge base. | Strong for early adopters. Does not scale, but validates willingness to pay. |
-| **Enterprise licensing** | Low. Multi-seat, private hosting, custom agents. | Weak. Soleur targets solo founders, not enterprise teams. Defer until adoption proves otherwise. |
+| **Enterprise licensing** | Low priority. Multi-seat, private hosting, custom agents. | Weak alignment with solo founder target. Defer until adoption proves otherwise. |
 
 **Competitor pricing context:**
 
@@ -119,37 +133,32 @@ Soleur occupies a unique position: it is the only platform that combines AI agen
 - Cursor: $20/month (Pro), $40/month (Business)
 - Most Claude Code plugins: Free/open-source
 
-**Willingness-to-pay hypothesis:** Solo founders already pay $20-40/month for AI coding tools. If Soleur delivers the value of a marketing agency ($5k+), a legal advisor ($300/hour), and an ops manager -- even at 10% of that value -- a $49-99/month price point is justified. The key is demonstrating that value during the validation phase.
+**Willingness-to-pay hypothesis:** Solo founders already pay $20-40/month for AI coding tools. If Soleur delivers the value of a marketing agency ($5k+), a legal advisor ($300/hour), and an ops manager -- even at 10% of that value -- a $49-99/month price point is justified. No direct evidence of willingness to pay at this stage.
 
-**Assessment:** The business model is undefined but the thesis points to a viable path. The knowledge base as a compounding asset, combined with non-engineering domains as the paid differentiator, creates a natural freemium split. Monetization should follow validated adoption, not precede it.
+**Assessment:** CONDITIONAL PASS. The business model is plausible but uncommitted. The thesis points to a viable freemium path (open source core, paid hosted platform with non-engineering domains as the differentiator). Monetization should follow validated adoption, not precede it. The open question in issue #287 is appropriate -- committing to a model before validating demand would be premature.
 
 ## Minimum Viable Scope
 
-**Core value proposition to test:** Can a solo founder use Soleur's multi-domain AI agents (engineering + marketing + legal + ops + product) to actually run a company -- not just write code?
+**Core value proposition to test:** Can a solo founder use Soleur's multi-domain AI agents to actually run a company -- not just write code?
+
+**Two "aha moments" that prove the breadth thesis:**
+
+1. **End-to-end feature lifecycle across domains:** A founder brainstorms a feature (product), plans it (engineering), implements it (engineering), reviews legal implications (legal), generates launch content (marketing), and ships it -- all within one integrated workflow where each step has context from the previous ones.
+2. **Cross-domain knowledge flow:** A decision made in one domain automatically informs others. The brand guide shapes marketing content. The competitive analysis informs product validation. The legal audit references the privacy policy. The knowledge base compounds across domains, not just within them.
 
 **Why breadth IS the minimum scope:**
 
-The Company-as-a-Service thesis requires demonstrating that an integrated AI organization across multiple domains is more valuable than separate tools for each domain. If the MVP were reduced to just the engineering workflow (plan/work/review/compound), it would test a different hypothesis entirely -- "does structured AI coding help?" -- which is already answered by competitors like Deep Trilogy and Cursor.
+The Company-as-a-Service thesis requires demonstrating that an integrated AI organization across multiple domains is more valuable than separate tools for each domain. If the MVP were reduced to just the engineering workflow, it would test a different hypothesis entirely -- "does structured AI coding help?" -- which is already answered by competitors. The domains cohere through the shared knowledge base and agent context, passing the breadth-coherence check.
 
-The 5 domains are the minimum viable scope because:
+**Build timeline:** The product already exists -- 65+ agents, 50+ skills, 280+ merged PRs. The MVP is built. The validation work is about testing with external users, not building more features.
 
-1. **Engineering** proves the platform works for the founder's primary activity
-2. **Marketing** proves the platform extends beyond code into go-to-market
-3. **Legal** proves the platform handles compliance (a universal founder pain point)
-4. **Operations** proves the platform manages the business itself (expenses, vendors)
-5. **Product** proves the platform informs strategic decisions (validation, spec analysis)
+**Success metrics:**
 
-Removing any domain undermines the thesis. A "Company-as-a-Service" with only engineering is just a coding assistant.
+- 10 solo founders who use agents from at least 2 different domains (not just engineering) on their real projects for 2+ weeks
+- At least 5 of 10 report that the integrated experience is more valuable than using separate tools
+- At least 3 of 10 express willingness to pay for the hosted version
 
-**Success metric:** 10 solo founders who use agents from at least 2 different domains (not just engineering) on their real projects for 2+ weeks and report that the integrated experience is more valuable than using separate tools.
-
-**What the validation tests:**
-
-1. Do solo founders experience multi-domain pain? (Problem interviews, no demo)
-2. Does the integrated AI organization resonate more than separate tools? (Guided onboarding)
-3. Do users return after the first session? Do they use non-engineering domains? (Unassisted usage)
-
-**Assessment:** The product already exceeds MVP scope in depth (60 agents) but matches MVP scope in breadth (5 domains). The validation should test breadth transfer (do non-engineering domains deliver value?) rather than depth (do we need more engineering agents?). The minimum viable experiment is getting 10 founders to try the full organization, not shrinking to a subset.
+**Assessment:** PASS. The product already exceeds MVP scope in depth but matches MVP scope in breadth. The validation should test breadth transfer (do non-engineering domains deliver value to external users?) rather than depth (do we need more engineering agents?). The breadth-coherence check passes -- all domains connect through the shared knowledge base and cross-domain agent context.
 
 ## Validation Verdict
 
@@ -158,34 +167,45 @@ Removing any domain undermines the thesis. A "Company-as-a-Service" with only en
 | Gate | Result |
 |------|--------|
 | Problem | PASS |
-| Customer | PASS |
+| Customer | CONDITIONAL PASS |
 | Competitive Landscape | PASS |
 | Demand Evidence | OVERRIDE |
-| Business Model | PASS (with caveats) |
+| Business Model | CONDITIONAL PASS |
 | Minimum Viable Scope | PASS |
 
-**What is strong:**
+### Vision Alignment Check
 
-- The problem is real and growing. Solo founders managing entire companies alone is a structural pain that intensifies with AI's expansion of what one person can build.
-- The product is well-built and genuinely used. 2.30+ versions, 240+ PRs, daily dogfooding across all 5 domains. The engineering execution is strong.
-- The competitive landscape validates the category. Multiple funded companies are building AI agent workforces. None combine engineering depth with business breadth.
-- The institutional knowledge base is a genuine compounding moat. Cross-domain coherence (brand guide informing marketing, competitive analysis informing validation) creates value that separate tools cannot replicate.
+The validation assessment was compared against the brand guide's stated positioning (mission: enable a single founder to build, ship, and scale a billion-dollar company; positioning: full AI organization across every department; thesis: the billion-dollar solo company is an engineering problem).
 
-**What is weak:**
+**Alignment findings:**
 
-- Zero external demand evidence. The product has been built in isolation from customers. Builder conviction is high but untested.
-- The business model is plausible but unvalidated. No evidence that solo founders will pay for non-engineering AI domains.
+1. **CaaS positioning:** Aligned. The validation directly tests the Company-as-a-Service thesis. The problem framing (capacity + expertise gaps), the customer definition (technical solo founders), and the MVP scope (multi-domain breadth) all map to the brand guide's mission.
+2. **MVP scope and breadth:** Aligned. Gate 6 explicitly argues that breadth is the minimum scope, and removing any domain undermines the thesis. This honors the brand guide's positioning of "a full AI organization that operates as every department."
+3. **No contradictions requiring resolution.** One productive tension exists: the brand guide speaks with the conviction of inevitability ("It's an engineering problem. We're solving it."), while the validation reveals that this conviction has not been tested outside the builder's own experience. This is a timing tension, not a directional one. The pivot is from building to validating, not from ambition to modesty. The brand identity remains intact.
 
-**What to do next (the PIVOT):**
+### What is strong
 
-The pivot is from "build more features" to "find 10 solo founders who want AI departments."
+- **The problem is real and growing.** Solo founders managing entire companies alone is a structural pain that intensifies as AI expands what one person can build. The twofold framing (capacity gap + expertise gap) is clean and testable.
+- **The product is well-built and genuinely used.** 280+ PRs, daily dogfooding across all domains. The engineering execution is strong and the product already exceeds MVP scope.
+- **The competitive landscape validates the category.** Multiple funded companies are building AI agent workforces. None combine engineering depth with business breadth. The structural advantages (compounding knowledge, cross-domain coherence) are genuine and difficult to replicate.
+- **The breadth thesis is coherent.** The domains connect through a shared knowledge base and agent context. This is not a random collection of tools -- it is an integrated system where decisions in one domain inform others.
 
-1. **Stop adding features.** The product has more than enough capability. Every new agent adds maintenance burden without bringing users.
-2. **Fix the onboarding surface.** The website says "Company-as-a-Service" but the README and Getting Started describe a dev workflow plugin. Users who install today hit a cliff between the marketing promise and the product surface. (This is being addressed in the current work.)
-3. **Source 10 solo founders from mixed channels.** Claude Code Discord (~4), GitHub signal mining (~3), direct network (~3). Avoid segment bias.
-4. **Run problem interviews first (no demo).** Test whether solo founders independently describe multi-domain pain. If fewer than 5/10 describe it, the thesis does not resonate.
-5. **Guided onboarding with the top 5.** Walk them through all 5 departments on their real projects. Observe which domains they try first and which they ignore.
-6. **2-week unassisted usage.** Track whether they return, whether their knowledge base grows, and whether they use non-engineering agents.
-7. **Defer monetization until 50+ active users.** Build the business model around observed behavior, not hypotheses.
+### What is weak
 
-The core insight is sound: a solo founder needs more than a coding assistant -- they need an AI organization. But a sound insight with zero external validation is still an untested hypothesis. The pivot is from building to validating.
+- **Demand evidence is thin.** 1-2 informal conversations is above zero but well below the threshold for confidence. The strong external signals (Naval, Amodei, market trends) provide directional validation but do not substitute for hearing real founders describe this pain unprompted.
+- **The business model is plausible but uncommitted.** No pricing, no revenue model decision, no evidence of willingness to pay. This is appropriate at this stage but means the path to sustainability is unproven.
+- **The customer definition is broad.** "Technical solo founders across all stages" is a market thesis, not a beachhead segment. The initial validation needs a tighter cohort.
+
+### What to do next (the PIVOT)
+
+The pivot is not a change in direction. It is a change in activity: from building features to validating the thesis with real users.
+
+1. **Pause feature development.** The product has more than enough capability. Every new agent adds maintenance burden without bringing users closer. Focus engineering effort on onboarding surface and documentation.
+2. **Source 10 solo founders from mixed channels.** Claude Code Discord, GitHub signal mining, IndieHackers, direct network. Avoid segment bias -- include founders at different stages and in different industries.
+3. **Run problem interviews first (no demo).** Test whether solo founders independently describe multi-domain pain. If fewer than 5 of 10 describe it, the thesis does not resonate at the problem level.
+4. **Guided onboarding with the top 5.** Walk them through all domains on their real projects. Observe which domains they engage with first and which they ignore.
+5. **2-week unassisted usage.** Track whether they return, whether their knowledge base grows, and whether they use non-engineering agents without prompting.
+6. **Test willingness to pay.** Before building the hosted platform, ask founders directly: "Would you pay $49/month for this? What would it need to deliver for that to be worth it?"
+7. **Commit to a business model after 50+ active users.** Build the revenue model around observed behavior, not hypotheses. Issue #287 should be informed by validation data.
+
+The core insight is sound: a solo founder needs more than a coding assistant -- they need an AI organization. But a sound insight with zero external validation is still an untested hypothesis. The verdict is PIVOT because the product and the thesis are strong enough to warrant aggressive validation -- not because anything needs to be rebuilt.

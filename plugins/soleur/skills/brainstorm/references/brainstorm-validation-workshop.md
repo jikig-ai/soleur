@@ -20,11 +20,13 @@
 
 4. **Hand off to business-validator:**
 
-   ```text
-   Task business-validator(feature_description)
-   ```
+   The business-validator is an interactive workshop agent with sequential gates. Since Task subagents cannot prompt the user directly, relay each gate manually:
 
-   The business-validator agent runs its full interactive workshop and writes the validation report to `knowledge-base/overview/business-validation.md` inside the worktree.
+   1. Invoke `Task business-validator(feature_description)` -- agent returns the first gate question
+   2. Relay the question to the user via **AskUserQuestion**
+   3. Invoke `Task business-validator(prior_gate_results + user_answer)` -- agent returns next gate question
+   4. Repeat until all 6 gates complete and the vision alignment check runs
+   5. Final invocation writes the validation report to `knowledge-base/overview/business-validation.md` inside the worktree
 
 5. **Display completion message and STOP.** Do NOT proceed to Phase 1. Do NOT run Phase 2 or Phase 3.5. Display:
 

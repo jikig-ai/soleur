@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.0.7] - 2026-02-24
+
+### Changed
+
+- Re-run business validation workshop with fixed agent (closes #259)
+- Update validation workshop reference with per-gate relay pattern for interactive subagents
+- Add learning: workshop agents as subagents require manual gate relay
+
 ## [3.0.6] - 2026-02-22
 
 ### Fixed
