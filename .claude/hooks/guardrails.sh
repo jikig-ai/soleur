@@ -8,7 +8,9 @@ INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
 
 # Guard 1: Block git commit on main branch
-if echo "$COMMAND" | grep -qE '^\s*git\s+commit'; then
+# Match git commit at start of string OR after chain operators (&&, ||, ;)
+# so chained commands like "git add && git commit" are caught.
+if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+commit'; then
   BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
   if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
     echo '{"decision":"block","reason":"BLOCKED: Committing directly to main/master is not allowed. Create a feature branch first."}'
