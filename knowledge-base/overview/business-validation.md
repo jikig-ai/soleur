@@ -43,7 +43,7 @@ The user can name 2-3 real contacts who fit the profile, falling short of the 5-
 
 ## Competitive Landscape
 
-The competitive landscape spans four tiers, from closest substitutes to loosest alternatives.
+The competitive landscape spans five tiers, from closest substitutes to loosest alternatives.
 
 **Tier 1: Claude Code plugins (closest substitutes)**
 
@@ -58,14 +58,29 @@ The competitive landscape spans four tiers, from closest substitutes to loosest 
 | [Lindy.ai](https://lindy.ai) | No-code AI agent builder for business workflows (email, scheduling, sales) | Horizontal agent builder, not integrated into the development workflow. Agents are standalone, not part of a unified organization with shared memory. |
 | [Relevance AI](https://relevanceai.com) | AI workforce platform with agent teams for sales, support, and research | Enterprise-focused, sales-heavy. No engineering domain. Not designed for solo founders. |
 
-**Tier 3: AI agent frameworks**
+**Tier 3: Company-as-a-Service / full-stack business platforms**
+
+| Competitor | Approach | Differentiation from Soleur |
+|---|---|---|
+| [SoloCEO](https://soloceoai.com) | AI executive board: 12 AI board members (CFO, CMO, COO, etc.) analyze business simultaneously. $2,000 diagnostic, beta 2026. | Closest CaaS competitor. Advisory-only (diagnostic + recommendations), not operational. One-time analysis, not an ongoing workflow. No engineering domain, no compounding knowledge base. |
+| [Tanka](https://tanka.ai) | AI co-founder platform with persistent memory, smart replies, landing page generation. Integrates Slack, WhatsApp, Gmail, Notion. | Memory-native like Soleur, but communication-centric. No engineering workflow, no legal domain, no structured knowledge base that compounds across business domains. |
+| [Lovable.dev](https://lovable.dev) | AI full-stack React app builder. $20M ARR in 2 months. | Website/app generation only. No legal, marketing, ops, or finance domains. No institutional memory across sessions. |
+| [Bolt.new](https://bolt.new) | AI web app builder with framework flexibility. ~$100M ARR projected 2025. | Fastest to prototype but engineering-only. No cross-domain agents or compounding knowledge base. |
+| [v0.dev](https://v0.dev) | Vercel's AI Next.js app generator with built-in databases. | Highest code quality but engineering-only. No business operations, no multi-domain workflow. |
+| [Replit Agent](https://replit.com) | Autonomous coding agent with 30+ integrations. Cloud-hosted. | Most autonomous for coding but no marketing, legal, or product domains. Cloud-hosted, not local-first. |
+| [Notion AI 3.0](https://notion.com) | Autonomous AI agents across workspace (docs, databases, projects). Multi-model (GPT-5.2, Claude Opus, Gemini). | Broadest platform but shallow per domain. No engineering workflow (code review, deployment), no legal, no structured business validation. Workspace tool, not a business operating system. |
+| [Systeme.io](https://systeme.io) | All-in-one marketing platform: funnels, email, courses, websites. $17/month. | Marketing and sales only. No engineering, legal, or product domains. Workflow automation, not AI intelligence. |
+| [Stripe Atlas](https://stripe.com/atlas) | Delaware C-corp formation + banking + payments. $500 one-time. | Legal formation only. One-time event, not ongoing operations. No AI, no agents, no compounding knowledge. |
+| [Firstbase](https://firstbase.io) | Global company formation with banking, payroll, accounting integrations. | Broader than Atlas but still formation-focused. No engineering, marketing, or product domains. No AI workflow. |
+
+**Tier 4: AI agent frameworks**
 
 | Competitor | Approach | Differentiation from Soleur |
 |-----------|----------|---------------------------|
 | [Crew AI](https://crewai.com) | Multi-agent orchestration framework for building AI teams | Framework, not a product. Requires significant setup. No built-in business domains. |
 | [AutoGPT / AgentGPT](https://agentgpt.rber.dev) | Autonomous AI agents that chain tasks | General-purpose autonomy, not domain-specific. No institutional memory, no knowledge base that compounds. |
 
-**Tier 4: DIY stack (AI coding tools used individually)**
+**Tier 5: DIY stack (AI coding tools used individually)**
 
 | Competitor | Platform | Overlap |
 |-----------|----------|---------|
@@ -77,13 +92,15 @@ The competitive landscape spans four tiers, from closest substitutes to loosest 
 
 1. **Compounding knowledge base:** Every domain feeds a shared institutional memory that persists across sessions. The brand guide informs marketing content, the legal audit references the privacy policy, the business validation draws on the competitive landscape. This cross-domain coherence is not possible when using separate tools for each function. The 100th session is dramatically more productive than the 1st.
 2. **Full-stack 8-domain integration:** Engineering, marketing, legal, operations, product, finance, sales, and support agents share context within a single workflow. Competitors either do engineering well but nothing else, or do business automation well but not engineering.
+3. **Operational continuity vs. one-time diagnostics:** SoloCEO and Stripe Atlas provide point-in-time outputs (a diagnostic report, incorporation papers). Soleur operates continuously -- agents learn from prior decisions and cross-domain coherence deepens over time.
+4. **Full-domain coverage vs. partial overlap:** Every CaaS competitor covers 1-3 domains. Lovable/Bolt/v0 cover engineering. Systeme.io covers marketing/sales. Tanka covers communication. SoloCEO covers advisory across domains but not execution. Only Soleur covers all 8 domains as an integrated operating system.
 
 **Vulnerabilities:**
 
 1. **Platform dependency:** Anthropic could build multi-domain capabilities into Claude Code directly. Mitigation: Soleur's value is in the curated agent behaviors and accumulated knowledge, not in the plugin infrastructure.
 2. **Breadth vs. depth trade-off:** 65+ agents across 8 domains means each domain gets fewer resources than a dedicated tool. Mitigation: The integration IS the product -- a mediocre-but-connected marketing agent is more valuable to a solo founder than an excellent-but-isolated marketing tool.
 
-**Assessment:** PASS. The competitive landscape validates the thesis. Multiple funded companies are building AI agent workforces, confirming the market direction. None combine engineering depth with business breadth the way Soleur does. The structural advantages (compounding knowledge, cross-domain coherence) are genuine moats that competitors cannot easily replicate without rebuilding from scratch.
+**Assessment:** PASS. The expanded five-tier competitive landscape validates the thesis. The new CaaS tier reveals more competitors than previously mapped, but none achieve full 8-domain integration with a compounding knowledge base. The closest competitor (SoloCEO) offers multi-domain advisory but not operational execution. The closest operational competitor (Tanka) has memory but lacks domain breadth. Multiple funded companies are building AI agent workforces, confirming the market direction. The structural advantages (compounding knowledge, cross-domain coherence, operational continuity) are genuine moats that competitors cannot easily replicate without rebuilding from scratch.
 
 ## Demand Evidence
 
