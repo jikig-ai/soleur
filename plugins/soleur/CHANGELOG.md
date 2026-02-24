@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.0.10] - 2026-02-24
+
+### Changed
+
+- Standardize all agents to `model: inherit` (changed learnings-researcher from `model: haiku`)
+- Add Model Selection Policy section to AGENTS.md documenting the inherit-by-default standard
+- Update Agent Compliance Checklist to require `model: inherit` with justification for overrides
+- Add `CLAUDE_CODE_EFFORT_LEVEL=high` to project settings for explicit max reasoning effort
+
 ## [3.0.9] - 2026-02-24
 
 ### Changed

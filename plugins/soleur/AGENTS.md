@@ -98,7 +98,7 @@ When adding or modifying agents, verify compliance:
 - [ ] `description:` is 1-3 sentences of routing text only -- when to use this agent
 - [ ] `description:` contains NO `<example>` blocks, NO `<commentary>` tags (these bloat the system prompt on every turn)
 - [ ] `description:` includes a disambiguation sentence if another agent has overlapping scope ("Use [sibling] for [X]; use this agent for [Y].")
-- [ ] `model:` field present (`inherit`, `haiku`, `sonnet`, or `opus`)
+- [ ] `model: inherit` (see Model Selection Policy; explicit overrides require justification)
 
 ### Token Budget Check (Required when adding agents)
 
@@ -115,6 +115,15 @@ grep -l '<example>' agents/**/*.md | xargs grep -l 'description:.*<example>'
 grep -h 'description:' agents/**/*.md | wc -w
 # Target: under 2500 words total across all agents
 ```
+
+## Model Selection Policy
+
+All agents must use `model: inherit` in their YAML frontmatter. This ensures agents run on whatever model the user's session is using, respecting their cost/quality preference.
+
+- **Default:** `model: inherit` for all agents, no exceptions.
+- **Override justification:** Explicit model overrides (`haiku`, `sonnet`, `opus`) require written justification in the agent body text explaining why the task is fundamentally mismatched with the session model.
+- **Effort control:** Reasoning effort is a session-level setting (`effortLevel` in `.claude/settings.json` or the `/model` slider), not configurable per-agent. The Claude Code plugin spec does not support per-agent effort levels.
+- **Current exceptions:** None.
 
 ## Skill Compliance Checklist
 
