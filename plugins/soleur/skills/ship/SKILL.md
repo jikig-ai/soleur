@@ -358,7 +358,7 @@ gh pr merge <number> --squash
 
    Navigate to the repository root directory, then run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged`.
 
-This detects `[gone]` branches (where the remote was deleted after merge), removes their worktrees, archives spec directories, and deletes local branches.
+This detects `[gone]` branches (where the remote was deleted after merge), removes their worktrees, archives spec directories, deletes local branches, and pulls latest main so the next worktree branches from the current state.
 
 **If working from a worktree:** Navigate to the main repo root first, then run cleanup.
 
