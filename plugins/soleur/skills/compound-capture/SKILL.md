@@ -426,24 +426,26 @@ Use `git mv` with timestamp prefix for each artifact:
 
 Generate a timestamp in `YYYYMMDD-HHMMSS` format (e.g., `20260222-143000`).
 
-Replace `<timestamp>` with the generated timestamp and `<slug>` with the feature slug. Run each `git mv` as a separate Bash command:
+Replace `<timestamp>` with the generated timestamp and `<slug>` with the feature slug. Run each as a separate Bash command:
 
 ```bash
+# git add ensures the file is tracked before git mv
+git add "knowledge-base/brainstorms/original-name.md"
 git mv "knowledge-base/brainstorms/original-name.md" \
        "knowledge-base/brainstorms/archive/<timestamp>-original-name.md"
 ```
 
 ```bash
+git add "knowledge-base/plans/original-name.md"
 git mv "knowledge-base/plans/original-name.md" \
        "knowledge-base/plans/archive/<timestamp>-original-name.md"
 ```
 
 ```bash
+git add "knowledge-base/specs/feat-<slug>"
 git mv "knowledge-base/specs/feat-<slug>" \
        "knowledge-base/specs/archive/<timestamp>-feat-<slug>"
 ```
-
-**If `git mv` fails** (untracked file), run `git add` on the file first, then retry the `git mv`.
 
 **Context-aware archival confirmation:**
 

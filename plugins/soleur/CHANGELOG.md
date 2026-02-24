@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.0.8] - 2026-02-24
+
+### Fixed
+
+- Add proactive `git add` before `git mv` in 4 skill archival instructions to prevent "not under version control" errors on untracked files (closes #290)
+- Move compound-capture Step E fallback from trailing note to inline code blocks for reliability
+- Add constitution rule: skill instructions using `git mv` must prepend `git add` on source files
+
 ## [3.0.7] - 2026-02-24
 
 ### Changed

@@ -389,6 +389,6 @@ When user selects "Create Issue", detect their project tracker from CLAUDE.md:
 If re-running `soleur:plan` for the same feature, read the existing plan first. Update in place rather than creating a duplicate. Preserve prior content and mark changes with `[Updated YYYY-MM-DD]`.
 
 **Archive completed plans:**
-Move completed or superseded plans to `knowledge-base/plans/archive/`: `mkdir -p knowledge-base/plans/archive && git mv knowledge-base/plans/<file>.md knowledge-base/plans/archive/`. Commit with `git commit -m "plan: archive <topic>"`.
+Move completed or superseded plans to `knowledge-base/plans/archive/`: `mkdir -p knowledge-base/plans/archive && git add knowledge-base/plans/<file>.md && git mv knowledge-base/plans/<file>.md knowledge-base/plans/archive/`. The `git add` ensures the file is tracked before `git mv`.Commit with `git commit -m "plan: archive <topic>"`.
 
 NEVER CODE! Just research and write the plan.
