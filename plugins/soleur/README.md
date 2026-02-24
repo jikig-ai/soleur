@@ -41,7 +41,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 |-----------|-------|
 | Agents | 60 |
 | Commands | 3 |
-| Skills | 50 |
+| Skills | 51 |
 | MCP Servers | 3 |
 
 ## Agents
@@ -250,6 +250,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | Skill | Description |
 |-------|-------------|
 | `agent-browser` | CLI-based browser automation using Vercel's agent-browser |
+| `archive-kb` | Archive knowledge-base artifacts with timestamped prefixes |
 | `deploy` | Deploy containerized applications via Docker build, GHCR push, and SSH |
 | `git-worktree` | Manage Git worktrees for parallel development |
 | `merge-pr` | Autonomous single-PR merge with conflict resolution and cleanup |

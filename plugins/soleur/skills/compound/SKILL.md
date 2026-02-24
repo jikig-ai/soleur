@@ -198,7 +198,7 @@ The automatic consolidation:
 1. **Discovers artifacts** -- extracts the feature slug by stripping `feat/`, `feat-`, `fix/`, or `fix-` prefix from the branch name, then globs `knowledge-base/{brainstorms,plans}/*<slug>*` and `knowledge-base/specs/feat-<slug>/` (excluding `*/archive/`)
 2. **Extracts knowledge** -- a single agent reads all artifacts and proposes updates to `constitution.md`, component docs, and overview `README.md`
 3. **Approval flow** -- proposals presented one at a time with Accept/Skip/Edit; idempotency checked via substring match
-4. **Archives sources** -- all discovered artifacts moved to `archive/` subdirectories via `git mv` with `YYYYMMDD-HHMMSS` timestamp prefix
+4. **Archives sources** -- runs `bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` to move all discovered artifacts to `archive/` subdirectories via `git mv` with `YYYYMMDD-HHMMSS` timestamp prefix
 5. **Single commit** -- overview edits and archival moves committed together for clean `git revert`
 
 If no artifacts are found for the feature slug, consolidation is skipped silently. See the `compound-capture` skill for full implementation details.

@@ -277,7 +277,7 @@ Next: Use `skill: soleur:plan` when ready to implement.
 If re-running brainstorm on the same topic, read the existing document first. Update in place rather than creating a duplicate. Preserve prior decisions and mark any changes with `[Updated YYYY-MM-DD]`.
 
 **Archive old brainstorms:**
-Move completed or superseded brainstorms to `knowledge-base/brainstorms/archive/`: `mkdir -p knowledge-base/brainstorms/archive && git add knowledge-base/brainstorms/<file>.md && git mv knowledge-base/brainstorms/<file>.md knowledge-base/brainstorms/archive/`. The `git add` ensures the file is tracked before `git mv`.Commit with `git commit -m "brainstorm: archive <topic>"`.
+Run `bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` from the repository root. This moves matching artifacts to `knowledge-base/brainstorms/archive/` with timestamp prefixes, preserving git history. Commit with `git commit -m "brainstorm: archive <topic>"`.
 
 ## Important Guidelines
 
