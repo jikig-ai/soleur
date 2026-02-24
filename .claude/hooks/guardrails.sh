@@ -17,7 +17,10 @@ if echo "$COMMAND" | grep -qE '^\s*git\s+commit'; then
 fi
 
 # Guard 2: Block rm -rf on worktree paths
-if echo "$COMMAND" | grep -qE 'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-rf)\s' && echo "$COMMAND" | grep -qE '\.worktrees/'; then
+# Match rm with recursive-force flags followed by a worktree path as an argument.
+# Uses a single pattern to avoid false positives when .worktrees/ appears in
+# unrelated text (e.g., inside a gh issue comment body or heredoc).
+if echo "$COMMAND" | grep -qE 'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)\s+\S*\.worktrees/'; then
   echo '{"decision":"block","reason":"BLOCKED: rm -rf on worktree paths is not allowed. Use git worktree remove or worktree-manager.sh cleanup-merged instead."}'
   exit 0
 fi
