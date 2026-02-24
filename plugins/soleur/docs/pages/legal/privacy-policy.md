@@ -30,7 +30,7 @@ We are committed to protecting your privacy. This Policy explains what data is a
 
 ## 2. Who We Are
 
-**Soleur** is an open-source project maintained by **Jikigai**, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France. Jikigai is the data controller for the processing activities described in this Policy.
+**Soleur** is a source-available project maintained by **Jikigai**, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France. Jikigai is the data controller for the processing activities described in this Policy.
 
 The Soleur source code is available at the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur).
 
@@ -111,7 +111,7 @@ For the Docs Site, to the extent that technical data is collected by GitHub Page
 
 For website analytics via Plausible Analytics, the lawful basis is **legitimate interest** (Article 6(1)(f) GDPR) -- understanding documentation traffic patterns to improve content and user experience. This processing is cookie-free, stores no personal data, and does not require consent under the ePrivacy Directive (Article 5(3) does not apply as no information is stored on or accessed from the user's device).
 
-If you interact with the GitHub repository (e.g., filing issues), the legal basis for processing your GitHub profile information in that context is **legitimate interest** (Article 6(1)(f) GDPR) -- facilitating community participation in the open-source project. The balancing test for this interest considers: (a) the processing is limited to publicly available GitHub profile data voluntarily shared by the user, (b) the user initiated the interaction, (c) the processing is necessary for the stated purpose (community participation), and (d) the user can withdraw by deleting their GitHub contributions.
+If you interact with the GitHub repository (e.g., filing issues), the legal basis for processing your GitHub profile information in that context is **legitimate interest** (Article 6(1)(f) GDPR) -- facilitating community participation in the project. The balancing test for this interest considers: (a) the processing is limited to publicly available GitHub profile data voluntarily shared by the user, (b) the user initiated the interaction, (c) the processing is necessary for the stated purpose (community participation), and (d) the user can withdraw by deleting their GitHub contributions.
 
 ## 7. Data Retention
 
@@ -158,7 +158,7 @@ Because the Plugin runs locally and does not transmit data to our servers, the s
 - Keeping your operating system and development tools up to date.
 - Using appropriate access controls on your local filesystem.
 - Managing your API keys securely (e.g., not committing them to version control).
-- Reviewing the Plugin's open-source code to verify its behavior.
+- Reviewing the Plugin's source code to verify its behavior.
 
 ## 12. Cookies
 
@@ -174,7 +174,7 @@ For material changes, we will make reasonable efforts to notify users (e.g., thr
 
 ## 14. Legal Entity and Contact Us
 
-Soleur is an open-source project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France.
+Soleur is a source-available project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France.
 
 GDPR Article 27 requires a representative in the EU for controllers not established in the EU. Because Jikigai is incorporated in France, Article 27 does not apply.
 

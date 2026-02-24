@@ -1,6 +1,6 @@
 {
   "name": "soleur",
-  "version": "3.0.9",
+  "version": "3.1.0",
   "description": "A full AI organization across engineering, finance, marketing, legal, operations, product, sales, and support. 60 agents, 3 commands, 50 skills, and 3 MCP servers that compound your company knowledge over time.",
   "author": {
     "name": "Jean Deruelle",
@@ -9,7 +9,7 @@
   },
   "homepage": "https://soleur.ai",
   "repository": "https://github.com/jikig-ai/soleur",
-  "license": "Apache-2.0",
+  "license": "BUSL-1.1",
   "keywords": [
     "soleur",
     "claude-code",

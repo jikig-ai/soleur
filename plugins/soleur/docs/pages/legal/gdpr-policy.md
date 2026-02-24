@@ -68,7 +68,7 @@ For website analytics via Plausible Analytics, the lawful basis is **legitimate 
 
 ### 3.3 Repository Interactions
 
-For processing of GitHub profile data when users contribute to the Soleur repository (issues, pull requests, discussions), the lawful basis is **legitimate interest** (Article 6(1)(f)) -- facilitating community participation in the open-source project. The balancing test considers: (a) the processing is limited to publicly available GitHub profile data voluntarily shared by the user, (b) the user initiated the interaction, (c) the processing is necessary for the stated purpose, and (d) users can withdraw by deleting their GitHub contributions.
+For processing of GitHub profile data when users contribute to the Soleur repository (issues, pull requests, discussions), the lawful basis is **legitimate interest** (Article 6(1)(f)) -- facilitating community participation in the project. The balancing test considers: (a) the processing is limited to publicly available GitHub profile data voluntarily shared by the user, (b) the user initiated the interaction, (c) the processing is necessary for the stated purpose, and (d) users can withdraw by deleting their GitHub contributions.
 
 ### 3.4 Legal and GDPR Inquiry Handling
 
@@ -212,7 +212,7 @@ The register documents four processing activities:
 
 1. **Documentation website hosting** (soleur.ai via GitHub Pages) -- IP addresses, browser metadata of visitors
 2. **Website analytics** (soleur.ai via Plausible Analytics) -- page URLs, referrer URLs, country (derived from IP, not stored), device type, browser type. Legal basis: legitimate interest (Article 6(1)(f)). No personal data is stored; IP addresses are discarded after geolocation. Plausible Analytics is hosted in the EU.
-3. **Open-source repository management** (GitHub) -- contributor profile data, issue reporters
+3. **Source repository management** (GitHub) -- contributor profile data, issue reporters
 4. **Legal and GDPR inquiry handling** (legal@jikigai.com) -- names, email addresses, inquiry content
 
 The register is maintained internally and is available on request to the competent supervisory authority (CNIL for France). Since the 2018 reform of the Loi Informatique et Libertes, no registration or prior declaration to the CNIL is required.
@@ -259,7 +259,7 @@ For questions about this GDPR Policy or data protection matters:
 
 To exercise your data subject rights under GDPR, send a written request to legal@jikigai.com. We will acknowledge your request within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3).
 
-Soleur is an open-source project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France.
+Soleur is a source-available project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France.
 
 Soleur's limited data processing (standard web hosting, community repository interactions) does not meet the thresholds requiring a Data Protection Officer (DPO) under Article 37 of the GDPR: the processing is not core business activity involving regular and systematic monitoring of data subjects at large scale, nor does it involve large-scale processing of special categories of data. Accordingly, no DPO has been appointed. Should this assessment change, DPO contact information will be added to this policy.
 

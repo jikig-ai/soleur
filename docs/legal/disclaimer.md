@@ -15,7 +15,7 @@ generated-date: 2026-02-20
 
 **Last Updated:** February 20, 2026
 
-This Disclaimer / Limitation of Liability ("Disclaimer") governs your use of Soleur, a Company-as-a-Service platform provided as an open-source Claude Code plugin (the "Platform," "Software," or "Service"), operated by Soleur ("we," "us," or "our"). By accessing or using the Platform, you acknowledge that you have read, understood, and agree to be bound by this Disclaimer.
+This Disclaimer / Limitation of Liability ("Disclaimer") governs your use of Soleur, a Company-as-a-Service platform provided as a source-available Claude Code plugin (the "Platform," "Software," or "Service"), operated by Soleur ("we," "us," or "our"). By accessing or using the Platform, you acknowledge that you have read, understood, and agree to be bound by this Disclaimer.
 
 ---
 
@@ -31,9 +31,9 @@ THE PLATFORM IS PROVIDED ON AN "AS-IS" AND "AS-AVAILABLE" BASIS, WITHOUT WARRANT
 - **Accuracy or reliability** -- We make no warranty that any output, content, or functionality provided by the Platform is accurate, reliable, complete, or error-free.
 - **Uninterrupted or secure operation** -- We make no warranty that the Platform will operate without interruption, be free of defects, or be secure from unauthorized access.
 
-### 1.2 Open-Source Software Disclaimer
+### 1.2 Source-Available Software Disclaimer
 
-Soleur is distributed as free, open-source software under the terms of its applicable license. Open-source software is provided without charge and without obligation of support, maintenance, or updates. You use the Platform entirely at your own risk. The availability of the Platform as open-source does not create any contractual, fiduciary, or professional relationship between you and us.
+Soleur is distributed as source-available software under the Business Source License 1.1 (BSL 1.1). The software is provided without charge for individual and internal company use and without obligation of support, maintenance, or updates. You use the Platform entirely at your own risk. The availability of the Platform as source-available software does not create any contractual, fiduciary, or professional relationship between you and us. Each version converts to the Apache License 2.0 four years after its publication date.
 
 ### 1.3 No Professional Advice
 
@@ -191,7 +191,7 @@ We reserve the right to modify this Disclaimer at any time. Changes will be post
 
 ## 10. Legal Entity and Contact Information
 
-Soleur is an open-source project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France.
+Soleur is a source-available project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France.
 
 If you have questions about this Disclaimer, you may contact us through:
 

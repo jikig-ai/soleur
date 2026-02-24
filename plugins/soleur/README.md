@@ -352,4 +352,6 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 ## License
 
-Apache-2.0
+BSL 1.1 (Business Source License). See [LICENSE](LICENSE) for details.
+
+Source-available for all individual and internal company use. The only restriction is offering Soleur as a competing hosted service. Each version converts to Apache-2.0 after 4 years. Versions v3.0.9 and earlier remain Apache-2.0.
