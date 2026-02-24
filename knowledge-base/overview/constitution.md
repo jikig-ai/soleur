@@ -145,6 +145,7 @@ Project principles organized by domain. Add principles as you learn them.
 - When spawning isolated subagents (Task tool), establish an explicit return contract with structured headings (`## Session Summary`, `### Errors`, etc.) and a fallback path if the subagent fails or returns malformed output -- session-state.md is the mechanism for multi-phase error propagation when parent context cannot hold child errors
 - Add explicit compaction checkpoints to multi-phase workflows -- if context truncation occurs, write an inventory to a known file path (e.g., session-state.md) so downstream phases can recover; silent compaction has caused missing learnings and undocumented errors in pipelines
 - When fixing a prefix-stripping or pattern-matching bug, verify the fix code does not repeat the same single-variant assumption being corrected -- the initial worktree-manager.sh fix reproduced the exact `feat-`-only bug it was supposed to fix; multi-agent review catches this reliably but self-review often misses it
+- Prefer single-pattern grep guards over ANDing separate greps -- independent substring checks cannot enforce syntactic context (e.g., that `.worktrees/` is an `rm` argument, not comment text); combine into one regex that enforces proximity
 
 ## Testing
 
