@@ -85,7 +85,7 @@ You shall not:
 - Remove, alter, or obscure any proprietary notices, labels, or marks
 - Use the Plugin in any manner that violates applicable laws or regulations
 
-Each version of the Plugin converts to the Apache License 2.0 four years after its publication date. Prior versions (v3.0.9 and earlier) remain under the Apache License 2.0.
+Each version of the Plugin converts to the Apache License 2.0 four years after its publication date. Prior versions (v3.0.10 and earlier) remain under the Apache License 2.0.
 
 ### 5.3 User Content Ownership
 

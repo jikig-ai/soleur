@@ -29,6 +29,7 @@ Project principles organized by domain. Add principles as you learn them.
 
 - Avoid second person ("you should") - use objective language ("To accomplish X, do Y")
 - Never use shell variable expansion (`${VAR}`, `$VAR`, `$()`) in bash code blocks within skill, command, or agent .md files -- use angle-bracket prose placeholders (`<variable-name>`) with substitution instructions instead, or relative paths (e.g., `./plugins/soleur/...`) for plugin-relative paths; the ship skill's "No command substitution" pattern is the reference implementation
+- Never anchor guardrail grep patterns to `^` alone -- the Bash tool chains commands with `&&`, `;`, and `||`, so a `^`-anchored pattern only catches the first command; match at command boundaries with `(^|&&|\|\||;)` instead
 
 ### Prefer
 
@@ -69,6 +70,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Before adding new GitHub Actions workflows, audit existing ones with `gh run list --workflow=<name>.yml` -- remove workflows that are always skipped (condition never matches) or superseded by newer workflows that absorbed their functionality
 - Agent descriptions for agents with overlapping scope must include a one-line disambiguation sentence: "Use [sibling] for [its scope]; use this agent for [this scope]." When adding a new agent to a domain, update ALL existing sibling descriptions to cross-reference the new agent -- disambiguation is a graph property, not just a property of the new node
 - The project uses Bun as the JavaScript runtime with ESM modules (`"type": "module"`); pre-commit hooks are managed by lefthook (not Husky)
+- Claude Code effort level must be set via `env.CLAUDE_CODE_EFFORT_LEVEL` in `.claude/settings.json`, not as a top-level `effortLevel` field (which is not in the schema); valid values: `low`, `medium`, `high`
 - When fixing a pattern across plugin files (e.g., removing `$()`, renaming a reference), search ALL `.md` files under `plugins/soleur/` -- not just the category (commands/, skills/, agents/) that triggered the report; reference docs, SKILL.md, and agent definitions all contain executable bash blocks
 
 ### Never
