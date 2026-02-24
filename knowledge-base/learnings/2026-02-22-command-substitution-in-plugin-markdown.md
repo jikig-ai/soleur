@@ -46,6 +46,8 @@ Then filter out non-bash contexts (prose mentions in changelogs, etc.) and fix a
 
 When fixing a pattern across files, always search the widest reasonable scope. For plugin markdown issues, that means all `.md` files under `plugins/soleur/`, including subdirectories for agents, skills (with references/), and commands.
 
+**Root-cause fix:** When the same `$()` pattern recurs across multiple files, extract it into a bash script (see `2026-02-24-extract-command-substitution-into-scripts.md`). The `archive-kb` skill demonstrates this pattern.
+
 ## Session Errors
 
 1. Attempted to Edit worktree files without reading them first (tool requires a Read before Edit)

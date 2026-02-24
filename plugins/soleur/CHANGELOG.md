@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.2.0] - 2026-02-24
+
+### Added
+
+- **New skill: `archive-kb`** -- Archive knowledge-base artifacts (brainstorms, plans, specs) to `archive/` subdirectories with timestamped prefixes. The script encapsulates `date`, `git add`, and `git mv` into a single command, eliminating `$()` command substitution from all SKILL.md files that reference archival
+- `--dry-run` flag for previewing what would be archived without executing
+
+### Changed
+
+- Replace inline archival instructions in `compound-capture` Step E with `archive-kb.sh` invocation (reduces ~35 lines to ~5 lines)
+- Update archival references in `compound`, `brainstorm`, and `plan` SKILL.md files to invoke `archive-kb.sh`
+- Add error handling instruction to `compound-capture` Step E (stop on non-zero exit)
+- Register `archive-kb` in `docs/_data/skills.js` SKILL_CATEGORIES (Workflow)
+
 ## [3.1.0] - 2026-02-24
 
 ### Changed

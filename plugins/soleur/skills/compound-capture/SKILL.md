@@ -414,38 +414,11 @@ Apply each accepted proposal immediately after approval:
 
 Archive ALL discovered artifacts regardless of how many proposals were accepted or skipped.
 
-Create archive directories on first use:
+Run the archival script from the repository root:
 
-```bash
-mkdir -p knowledge-base/brainstorms/archive
-mkdir -p knowledge-base/plans/archive
-mkdir -p knowledge-base/specs/archive
-```
+    bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh
 
-Use `git mv` with timestamp prefix for each artifact:
-
-Generate a timestamp in `YYYYMMDD-HHMMSS` format (e.g., `20260222-143000`).
-
-Replace `<timestamp>` with the generated timestamp and `<slug>` with the feature slug. Run each as a separate Bash command:
-
-```bash
-# git add ensures the file is tracked before git mv
-git add "knowledge-base/brainstorms/original-name.md"
-git mv "knowledge-base/brainstorms/original-name.md" \
-       "knowledge-base/brainstorms/archive/<timestamp>-original-name.md"
-```
-
-```bash
-git add "knowledge-base/plans/original-name.md"
-git mv "knowledge-base/plans/original-name.md" \
-       "knowledge-base/plans/archive/<timestamp>-original-name.md"
-```
-
-```bash
-git add "knowledge-base/specs/feat-<slug>"
-git mv "knowledge-base/specs/feat-<slug>" \
-       "knowledge-base/specs/archive/<timestamp>-feat-<slug>"
-```
+The script discovers artifacts matching the current branch's feature slug, creates archive directories, and moves each artifact with a timestamped prefix using `git mv`. It handles untracked files automatically. If the script exits non-zero, display the error and stop -- do not proceed to Step F.
 
 **Context-aware archival confirmation:**
 
