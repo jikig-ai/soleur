@@ -53,6 +53,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Skills must have a SKILL.md file and may include scripts/, references/, and assets/ subdirectories
 - Lifecycle workflows with hooks must cover every state transition with a cleanup trigger; verify no gaps between create, ship, merge, and session-start
 - At session start, run `worktree-manager.sh cleanup-merged` to remove worktrees whose remote branches are [gone]; this is the recovery mechanism for the merge-then-session-end gap where cleanup was deferred
+- Post-merge cleanup scripts must update the local main branch to match origin/main -- use `--ff-only` to enforce the no-direct-commits-to-main invariant
 - Operations that modify the knowledge-base or move files must use `git mv` to preserve history and produce a single atomic commit that can be reverted with `git revert`
 - Skill instructions that use `git mv` must prepend `git add` on the source file to handle untracked files created during the session -- `git add` on an already-tracked file is a no-op
 - New commands must be idempotent -- running the same command twice must not create duplicates or corrupt state

@@ -466,6 +466,24 @@ cleanup_merged_worktrees() {
   # Output summary
   if [[ ${#cleaned[@]} -gt 0 ]]; then
     echo -e "${GREEN}Cleaned ${#cleaned[@]} merged worktree(s): ${cleaned[*]}${NC}"
+
+    # After cleanup, update main checkout so next worktree branches from latest
+    local main_status
+    main_status=$(git -C "$GIT_ROOT" status --porcelain 2>/dev/null)
+    if [[ -n "$main_status" ]]; then
+      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Main checkout has uncommitted changes -- skipping pull${NC}"
+    else
+      local current_branch
+      current_branch=$(git -C "$GIT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)
+      if [[ "$current_branch" != "main" && "$current_branch" != "master" ]]; then
+        git -C "$GIT_ROOT" checkout main 2>/dev/null || git -C "$GIT_ROOT" checkout master 2>/dev/null || true
+      fi
+      if ! git -C "$GIT_ROOT" pull --ff-only origin main 2>/dev/null; then
+        [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not pull latest main${NC}"
+      else
+        [[ "$verbose" == "true" ]] && echo -e "${GREEN}Updated main to latest${NC}"
+      fi
+    fi
   fi
 }
 
