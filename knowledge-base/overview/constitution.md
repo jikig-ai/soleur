@@ -183,6 +183,17 @@ Project principles organized by domain. Add principles as you learn them.
 
 ### Prefer
 
+## Business
+
+### Always
+
+- Include a "threat assumptions" section in revenue and strategy plans listing which competitive conditions must hold for the plan to remain valid -- assumptions that are invalidated should trigger an immediate reassessment, not wait for a quarterly review
+- Use parallel domain leader analysis for strategic competitive threats -- multi-agent convergence (all leaders reaching the same conclusion independently) is a strong validation signal; if 3+ leaders converge on the same insight without coordination, treat it as high-confidence
+
+### Never
+
+### Prefer
+
 ## Specs
 
 ### Always
