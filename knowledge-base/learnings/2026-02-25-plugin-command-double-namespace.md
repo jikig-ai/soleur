@@ -15,23 +15,23 @@ Commands in the Soleur Claude Code plugin appeared with double namespaces (`sole
 1. Moved `commands/soleur/*.md` to `commands/*.md` (flat structure)
 2. Updated frontmatter `name` fields to remove `soleur:` prefix (plugin namespace auto-adds it)
 3. Updated all internal path references (AGENTS.md, helpers.ts, stats.js, compound-capture, sync, help)
-4. Documented timing behavior in SessionStart hook comments
 
-## Three Failed Attempts
+## Four Failed Auto-Load Attempts (all reverted)
 
 1. **Commit #307** (marketplace manifest): Marketplace registered but plugin not auto-installed
 2. **Commit #308** (SessionStart hook): Plugin installed but too late -- registry already built
 3. **Commit #309** (marketplace + enabledPlugins): Required trust dialog, skipped in headless mode
+4. **All three reverted**: `extraKnownMarketplaces`, `enabledPlugins`, `SessionStart` hook, and `.claude-plugin/marketplace.json` all removed because they created false "Successfully installed" messages while the plugin was never actually available in the current session
 
 ## Session Errors
 
 - `Unknown skill: soleur:go` due to double-namespacing as `soleur:soleur:go`
 - Plugin auto-load silently failed in headless mode (no error, just missing skills)
-- Three prior commits each addressed a symptom without resolving the root cause
+- Four prior commits each addressed a symptom without resolving the root cause
 
 ## Key Insight
 
-Plugin commands must be flat in `commands/` -- subdirectories become part of the namespace. For headless environments, there is currently no way to auto-load plugins on first session. `--plugin-dir` has no settings.json equivalent (feature request filed). Container caching enables session 2+.
+Plugin commands must be flat in `commands/` -- subdirectories become part of the namespace. For headless environments, there is currently no way to auto-load plugins on first session. `--plugin-dir` has no settings.json equivalent (feature request filed). The marketplace, enabledPlugins, and SessionStart hook approaches are all dead ends -- they install the plugin after the skill registry is already built.
 
 ## Tags
 
