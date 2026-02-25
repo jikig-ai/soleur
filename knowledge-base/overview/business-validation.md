@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-02-24
+last_updated: 2026-02-25
 ---
 
 # Business Validation: Soleur -- Company-as-a-Service Platform
@@ -43,7 +43,13 @@ The user can name 2-3 real contacts who fit the profile, falling short of the 5-
 
 ## Competitive Landscape
 
-The competitive landscape spans five tiers, from closest substitutes to loosest alternatives.
+The competitive landscape spans six tiers, from platform-native competition to loosest alternatives.
+
+**Tier 0: Platform-native competition (existential threat)** [Added 2026-02-25]
+
+| Competitor | Overlap | Differentiation from Soleur |
+|-----------|---------|---------------------------|
+| [Anthropic Cowork Plugins](https://claude.com/blog/cowork-plugins-across-enterprise) | 11 first-party plugins across productivity, sales, support, product, marketing, legal, finance, data, enterprise-search, bio-research, and meta-tooling. Enterprise connectors (Google Workspace, Docusign, Apollo, Clay, FactSet, LegalZoom). Private plugin marketplace with admin controls, per-user provisioning, OpenTelemetry tracking. | Cowork templates are stateless and siloed per domain -- no compounding knowledge base, no cross-domain coherence, no workflow lifecycle orchestration (brainstorm > plan > implement > review > compound). Templates are nouns; Soleur's workflows are verbs. However, Anthropic controls the model, the API, the distribution surface, and the pricing. 5 of 8 Soleur domains face direct first-party competition. Engineering workflow is the notable gap in Anthropic's offering. See `knowledge-base/brainstorms/2026-02-25-cowork-plugins-risk-analysis-brainstorm.md` for full analysis. |
 
 **Tier 1: Claude Code plugins (closest substitutes)**
 
@@ -97,10 +103,11 @@ The competitive landscape spans five tiers, from closest substitutes to loosest 
 
 **Vulnerabilities:**
 
-1. **Platform dependency:** Anthropic could build multi-domain capabilities into Claude Code directly. Mitigation: Soleur's value is in the curated agent behaviors and accumulated knowledge, not in the plugin infrastructure.
-2. **Breadth vs. depth trade-off:** 65+ agents across 8 domains means each domain gets fewer resources than a dedicated tool. Mitigation: The integration IS the product -- a mediocre-but-connected marketing agent is more valuable to a solo founder than an excellent-but-isolated marketing tool.
+1. **Platform dependency -- PARTIALLY MATERIALIZED (2026-02-25).** Anthropic has built multi-domain capabilities -- not into Claude Code directly, but into Cowork (their web/desktop product). 11 first-party plugins cover 6+ business domains. The original mitigation ("Soleur's value is in curated agent behaviors and accumulated knowledge") is partially validated: Cowork templates are stateless with no compounding knowledge base. But the mitigation is partially invalidated: Cowork's enterprise connectors (Google Workspace, Docusign, FactSet) and cross-app context make "curated agent behaviors" less differentiating when the platform has native access to real data sources. The revenue plan (standalone web dashboard at $49-99/month) is directly threatened -- see Tier 0 above and brainstorm `2026-02-25-cowork-plugins-risk-analysis-brainstorm.md`.
+2. **Breadth vs. depth trade-off:** 65+ agents across 8 domains means each domain gets fewer resources than a dedicated tool. Mitigation: The integration IS the product -- a mediocre-but-connected marketing agent is more valuable to a solo founder than an excellent-but-isolated marketing tool. [Updated 2026-02-25]: Anthropic is now commoditizing horizontal domain breadth. The differentiation axis must shift from domain count to orchestration depth and compounding knowledge.
+3. **Revenue model collision (2026-02-25).** The hosted web platform revenue plan (issue #297) faces a distribution asymmetry problem. Anthropic controls the surface, the model, and the marketplace. The pricing math collapses when the comparison set shifts from "Soleur vs. hiring an agency" to "Soleur's hosted platform vs. Anthropic's free bundled templates." See brainstorm for strategic options (knowledge infrastructure pivot, multi-platform, ride Cowork distribution).
 
-**Assessment:** PASS. The expanded five-tier competitive landscape validates the thesis. The new CaaS tier reveals more competitors than previously mapped, but none achieve full 8-domain integration with a compounding knowledge base. The closest competitor (SoloCEO) offers multi-domain advisory but not operational execution. The closest operational competitor (Tanka) has memory but lacks domain breadth. Multiple funded companies are building AI agent workforces, confirming the market direction. The structural advantages (compounding knowledge, cross-domain coherence, operational continuity) are genuine moats that competitors cannot easily replicate without rebuilding from scratch.
+**Assessment:** CONDITIONAL PASS [Updated 2026-02-25, was PASS]. The six-tier competitive landscape validates the thesis but reveals a Tier 0 threat that did not exist at prior assessment. Anthropic's Cowork Plugins represent platform-native competition across 5 of 8 Soleur domains. The structural advantages (compounding knowledge, cross-domain coherence, workflow orchestration) remain genuine moats -- Cowork templates are stateless and siloed. However, the revenue model assumption (standalone web dashboard) is directly challenged. The competitive assessment now requires distinguishing between the thesis (valid) and the revenue plan (threatened). Engineering workflow remains Soleur's strongest differentiated position -- Anthropic has no first-party engineering plugin.
 
 ## Demand Evidence
 
