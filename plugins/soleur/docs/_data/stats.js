@@ -16,7 +16,7 @@ function countMdFilesRecursive(dir) {
 export default function () {
   const agentsDir = resolve("plugins/soleur/agents");
   const skillsDir = resolve("plugins/soleur/skills");
-  const commandsDir = resolve("plugins/soleur/commands/soleur");
+  const commandsDir = resolve("plugins/soleur/commands");
 
   const agents = countMdFilesRecursive(agentsDir);
 
@@ -39,7 +39,7 @@ export default function () {
     }
   }
 
-  // Commands: count .md files in commands/soleur/
+  // Commands: count .md files in commands/
   const commands = readdirSync(commandsDir).filter((f) =>
     f.endsWith(".md")
   ).length;
