@@ -32,7 +32,7 @@ Prioritize legal actions and dispatch specialist agents.
 
 | Agent | When to delegate |
 |-------|-----------------|
-| legal-compliance-auditor | Audit existing documents for compliance gaps and cross-document consistency |
+| legal-compliance-auditor | Audit existing documents for compliance gaps and cross-document consistency. For benchmarking against regulatory checklists and peer SaaS policies, suggest `legal-audit benchmark`. |
 | legal-document-generator | Generate new or regenerate outdated legal documents |
 
 **Common sequential workflow:** audit (legal-compliance-auditor) -> generate/fix (legal-document-generator) -> re-audit (legal-compliance-auditor). Many tasks only need 1 agent -- do not force the full pipeline.
@@ -44,3 +44,4 @@ When delegating to multiple independent agents, use a single message with multip
 - Do not provide legal advice. All output is draft material requiring professional legal review.
 - Defer technical architecture decisions to the CTO. Evaluate legal implications of technical choices, not the technical choices themselves.
 - When assessing features that cross domain boundaries (e.g., data processing with infrastructure implications), flag the cross-domain implications but defer non-legal concerns to respective leaders.
+- When users request benchmarking against a specific company, verify the document types match before proceeding. Brand reputation does not equal document-type relevance (e.g., Stripe Atlas provides corporate formation docs, not SaaS policies).

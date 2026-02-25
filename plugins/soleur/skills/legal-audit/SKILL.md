@@ -1,6 +1,6 @@
 ---
 name: legal-audit
-description: "This skill should be used when auditing existing legal documents for compliance gaps, outdated clauses, missing disclosures, and cross-document consistency. It scans a project for legal documents, invokes the legal-compliance-auditor agent, and displays findings inline. Triggers on \"legal audit\", \"audit privacy policy\", \"check legal compliance\", \"review legal documents\", \"legal-audit\"."
+description: "This skill should be used when auditing existing legal documents for compliance gaps, outdated clauses, missing disclosures, and cross-document consistency. It scans a project for legal documents, invokes the legal-compliance-auditor agent, and displays findings inline. Triggers on \"legal audit\", \"audit privacy policy\", \"check legal compliance\", \"review legal documents\", \"legal-audit\", \"legal benchmark\", \"benchmark legal compliance\", \"regulatory checklist\", \"compare legal documents\"."
 ---
 
 # Legal Compliance Auditor
@@ -37,7 +37,11 @@ Read each document in the confirmed scope.
 
 ## Phase 2: Audit
 
-Invoke the `legal-compliance-auditor` agent via the **Task tool** with all documents and jurisdiction context:
+Invoke the `legal-compliance-auditor` agent via the **Task tool** with all documents and jurisdiction context.
+
+If the user's input includes the word `benchmark` (either via `args` parameter or natural language), append the benchmark trigger to the Task prompt. Otherwise, send the standard audit prompt unchanged.
+
+**Standard audit prompt:**
 
 ```
 Task legal-compliance-auditor: "Audit the following legal documents for [jurisdiction] compliance.
@@ -46,6 +50,12 @@ Documents:
 [Include full content of each document]
 
 Check each document individually for compliance gaps, then cross-reference all documents for consistency."
+```
+
+**Benchmark audit prompt** (append to the standard prompt above):
+
+```
+"Additionally, run benchmark mode: check against the GDPR Art 13/14 regulatory disclosure checklist and compare against peer SaaS policies."
 ```
 
 ## Phase 3: Report
