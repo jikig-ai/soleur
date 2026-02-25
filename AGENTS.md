@@ -10,6 +10,7 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 - Never `git stash` in worktrees. Commit WIP first, then merge.
 - Never `rm -rf` on the current directory, a worktree path, or the repo root.
 - MCP tools (Playwright, etc.) resolve paths from the repo root, not the shell CWD. Always pass absolute paths to MCP tools when in a worktree.
+- When a command exits non-zero or prints a warning, investigate before proceeding. Never treat a failed step as success.
 
 ## Workflow Gates
 

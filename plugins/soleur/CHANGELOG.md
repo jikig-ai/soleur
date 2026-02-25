@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.2.1] - 2026-02-25
+
+### Fixed
+
+- **cleanup-merged pull failure**: Fix silent pull failure in `worktree-manager.sh cleanup-merged` -- stderr was suppressed (`2>/dev/null`), verbose guard hid messages in non-TTY mode, and missing `return 0` let failed pull exit code leak as script exit code
+- Pull success/failure messages now always print (removed TTY-only verbose guard)
+- Pull errors captured in variable and displayed in warning message for diagnosis
+
 ## [3.2.0] - 2026-02-24
 
 ### Added
