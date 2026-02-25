@@ -1,5 +1,5 @@
 ---
-name: soleur:help
+name: help
 description: "List all available Soleur commands, agents, and skills"
 argument-hint: ""
 ---
@@ -19,7 +19,7 @@ If that path does not exist, try reading from `~/.claude/plugins/*/soleur/.claud
 Use the **Glob tool** to count components. Make all four calls in parallel in a single message:
 
 1. **Count agents:** Use pattern `**/*.md` with path `plugins/soleur/agents` -- count the returned file paths
-2. **Count commands:** Use pattern `*.md` with path `plugins/soleur/commands/soleur` -- count the returned file paths
+2. **Count commands:** Use pattern `*.md` with path `plugins/soleur/commands` -- count the returned file paths
 3. **Count skills:** Use pattern `**/SKILL.md` with path `plugins/soleur/skills` -- count the returned file paths (one SKILL.md per skill)
 4. **Count agent domains:** From the agent file paths in result 1, extract the unique top-level directory names (the first path segment after `agents/`) and count them
 

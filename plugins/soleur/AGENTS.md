@@ -47,8 +47,7 @@ agents/
 ├── sales/                 # Sales pipeline and revenue agents
 └── support/               # Support and community agents
 
-commands/
-└── soleur/                # Entry-point commands (go, sync, help)
+commands/                      # Entry-point commands (go, sync, help)
 
 skills/
 └── <skill-name>/          # All skills at root level (flat)
@@ -63,13 +62,13 @@ To add a new domain (e.g., product, growth):
 3. Add key to `domainOrder` and `DOMAIN_CSS_VARS` in the same file
 4. Add CSS variable in `docs/css/style.css`
 5. Skills stay flat at root level (the skill loader does not recurse into subdirectories)
-6. Commands stay under `commands/soleur/` (only entry-point commands: go, sync, help). Workflow stages are skills.
+6. Commands stay flat under `commands/` (only entry-point commands: go, sync, help). Workflow stages are skills.
 7. The plugin loader discovers agents recursively -- no config changes needed
 8. Landing page department cards, stats, and legal doc counts update automatically from data
 
 ## Command and Skill Naming Convention
 
-Only 3 **commands** remain under `commands/soleur/`, using the `soleur:` prefix to avoid collisions with built-in commands:
+Only 3 **commands** remain under `commands/`, using the `soleur:` prefix to avoid collisions with built-in commands:
 
 - `/soleur:go` - Unified entry point that routes to workflow skills
 - `/soleur:sync` - Populate knowledge base from existing codebase
@@ -86,7 +85,7 @@ The 6 workflow stages are now **skills** under `skills/`:
 
 **Why skills?** Skills are discoverable by agents and invocable via the Skill tool. Commands are invisible to agents. Workflow stages benefit from agent discoverability and Skill tool invocation (e.g., `/soleur:go` routes to skills, one-shot sequences plan then work via the Skill tool).
 
-**Prefix source:** Commands get their `soleur:` prefix from the `name:` field in frontmatter. Skills get their `soleur:` prefix automatically from the plugin namespace -- the skill's `name:` field should not include the prefix.
+**Prefix source:** Both commands and skills get their `soleur:` prefix automatically from the plugin namespace. The `name:` field in frontmatter should NOT include the `soleur:` prefix. Commands live flat in `commands/` (not in a subdirectory) to avoid double-namespacing.
 
 ## Agent Compliance Checklist
 

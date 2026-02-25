@@ -272,7 +272,7 @@ Identify which skills, agents, or commands were invoked in this session by exami
 Map detected component names to file paths:
 - Skill `foo` -> `plugins/soleur/skills/foo/SKILL.md`
 - Agent `soleur:engineering:review:baz` -> `plugins/soleur/agents/engineering/review/baz.md`
-- Command `soleur:bar` -> `plugins/soleur/commands/soleur/bar.md`
+- Command `soleur:bar` -> `plugins/soleur/commands/bar.md`
 
 If no components detected, skip to the decision menu.
 

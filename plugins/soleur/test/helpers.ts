@@ -12,9 +12,9 @@ export function discoverAgents(): string[] {
   );
 }
 
-// Commands are flat under commands/soleur/
+// Commands are flat under commands/
 export function discoverCommands(): string[] {
-  return Array.from(new Glob("commands/soleur/*.md").scanSync(PLUGIN_ROOT));
+  return Array.from(new Glob("commands/*.md").scanSync(PLUGIN_ROOT));
 }
 
 // Skills are one level only (loader does NOT recurse)

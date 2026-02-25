@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.3.1] - 2026-02-25
+
+### Fixed
+
+- **Double-namespaced commands**: Move commands from `commands/soleur/*.md` to `commands/*.md` to fix double-namespacing (`soleur:soleur:go` -> `soleur:go`). The plugin loader uses subdirectory names as part of the namespace, so `commands/soleur/go.md` produced `soleur:soleur:go` instead of the intended `soleur:go`
+- Update command frontmatter `name` fields to omit the `soleur:` prefix (plugin namespace auto-adds it)
+- Update all internal path references (`AGENTS.md`, `helpers.ts`, `stats.js`, `compound-capture`, `sync`, `help`)
+
 ## [3.3.0] - 2026-02-25
 
 ### Added
