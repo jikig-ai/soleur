@@ -33,7 +33,7 @@ body:
     attributes:
       label: Plugin version
       description: "Run `claude plugin list` to check"
-      placeholder: "3.2.2"
+      placeholder: "3.3.0"
     validations:
       required: true
   - type: input

@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.3.0] - 2026-02-25
+
+### Added
+
+- **Legal benchmark audit mode**: Extend `legal-compliance-auditor` agent and `legal-audit` skill with a `benchmark` sub-command that checks legal documents against GDPR Article 13/14 regulatory disclosure checklists and compares clause coverage against peer SaaS policies (Basecamp, GitHub)
+  - GDPR Art 13/14 enumerated disclosure checklist (13 items) with `[REGULATORY]` finding labels
+  - Peer comparison via WebFetch with curated URL table and graceful `[SKIPPED]` fallback
+  - Benchmark summary with disclosure coverage score and peer comparison stats
+  - CLO delegation table updated to suggest `legal-audit benchmark` for competitive benchmarking
+
 ## [3.2.2] - 2026-02-25
 
 ### Fixed
