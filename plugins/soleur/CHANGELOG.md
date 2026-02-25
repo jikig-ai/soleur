@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Benchmark summary with disclosure coverage score and peer comparison stats
   - CLO delegation table updated to suggest `legal-audit benchmark` for competitive benchmarking
 
+## [3.2.2] - 2026-02-25
+
+### Fixed
+
+- **functional-discovery approval prompt**: Merge two separate bash blocks in "Already-Installed Check" into a single command, preventing the agent from inserting `echo "---"` separators that trigger Claude Code's "quoted characters in flag names" approval prompt
+
 ## [3.2.1] - 2026-02-25
 
 ### Fixed
