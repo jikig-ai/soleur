@@ -2,28 +2,7 @@
   "env": {
     "CLAUDE_CODE_EFFORT_LEVEL": "high"
   },
-  "extraKnownMarketplaces": {
-    "soleur": {
-      "source": {
-        "source": "github",
-        "repo": "jikig-ai/soleur"
-      }
-    }
-  },
-  "enabledPlugins": {
-    "soleur@soleur": true
-  },
   "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh"
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
