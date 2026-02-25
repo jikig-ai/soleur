@@ -70,14 +70,10 @@ After filtering, deduplicate across registries using `name + author/namespace` (
 
 ### Already-Installed Check
 
-Before presenting results, check if any matching artifacts are already installed locally:
+Before presenting results, check if any matching artifacts are already installed locally. Run as a single Bash call (do not add separators like `echo "---"` between commands -- quoted dash strings trigger approval prompts):
 
 ```bash
-# Check community agents
-ls plugins/soleur/agents/community/ 2>/dev/null
-
-# Check community skills
-ls -d plugins/soleur/skills/community-*/ 2>/dev/null
+ls plugins/soleur/agents/community/ 2>/dev/null; ls -d plugins/soleur/skills/community-*/ 2>/dev/null
 ```
 
 Filter out any results whose name matches an already-installed artifact.
