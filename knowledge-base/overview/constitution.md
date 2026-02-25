@@ -46,6 +46,7 @@ Project principles organized by domain. Add principles as you learn them.
 
 ### Always
 
+- Verify the root cause before implementing any fix -- reproduce the error or run the simplest diagnostic first; do not change code based on a guess
 - Core workflow stages (brainstorm, plan, work, review, compound, one-shot) are skills invoked via the Skill tool; only three commands remain (`go`, `sync`, `help`) using the `soleur:` prefix to avoid collisions with built-in commands
 - Every plugin change must update three files: plugin.json (version), CHANGELOG.md, and README.md (counts/tables)
 - When adding a new skill, manually register it in `docs/_data/skills.js` SKILL_CATEGORIES -- skill discovery does not recurse and the docs site will silently omit unregistered skills
@@ -109,6 +110,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Lead-coordinated commits in all parallel execution modes -- teammates and subagents propose changes, only the lead agent commits
 - Design for v2, implement for v1 -- keep interfaces extensible but ship the simplest working version first (no multi-agent orchestration, no CLI flags, no caching until users request it)
 - When adopting external components (agents, skills, libraries), trim to essentials that leverage the model's built-in knowledge rather than embedding encyclopedic reference material
+- AGENTS.md should contain only rules the agent would violate without being told -- move procedural checklists to the skills that automate them; every line in the system prompt competes for attention on every turn
 - Run `/soleur:plan_review` after brainstorm-generated plans to catch scope bloat -- plans consistently shrink by 30-50% after review (e.g., 9 components to 6, 3 parallel agents to 1, multi-file to single-file)
 - When merging or consolidating duplicate functionality, prefer a single inline implementation over separate files/agents/skills until complexity demands extraction
 - When simplifying a multi-command system, prefer migrating workflow stages to skills and adding a router command (go) -- skills are discoverable by agents and invocable via the Skill tool, while commands are invisible to agents; keep only entry-point commands that need slash-command UX
