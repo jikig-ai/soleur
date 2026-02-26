@@ -11,7 +11,27 @@ COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
 # Match git commit at start of string OR after chain operators (&&, ||, ;)
 # so chained commands like "git add && git commit" are caught.
 if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+commit'; then
-  BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  # Resolve the branch from the command's working directory, not the hook's CWD.
+  # Three patterns: "cd /worktree && ...", "git -C /worktree commit", or bare
+  # "git commit" when Claude Code's shell CWD is already the worktree.
+  GIT_DIR=""
+  if echo "$COMMAND" | grep -qE '^\s*cd\s+'; then
+    GIT_DIR=$(echo "$COMMAND" | sed -nE 's/^\s*cd\s+"?([^"&;]+)"?.*/\1/p' | xargs)
+  elif echo "$COMMAND" | grep -qoE 'git\s+-C\s+\S+'; then
+    GIT_DIR=$(echo "$COMMAND" | grep -oE 'git\s+-C\s+\S+' | head -1 | sed -nE 's/git\s+-C\s+(\S+)/\1/p')
+  fi
+  if [ -n "$GIT_DIR" ] && [ -d "$GIT_DIR" ]; then
+    BRANCH=$(git -C "$GIT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  else
+    # Fallback: check the hook input for a cwd field (future-proofing),
+    # then fall back to the hook's own CWD (repo root).
+    HOOK_CWD=$(echo "$INPUT" | jq -r '.cwd // ""')
+    if [ -n "$HOOK_CWD" ] && [ -d "$HOOK_CWD" ]; then
+      BRANCH=$(git -C "$HOOK_CWD" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    else
+      BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    fi
+  fi
   if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
     echo '{"decision":"block","reason":"BLOCKED: Committing directly to main/master is not allowed. Create a feature branch first."}'
     exit 0
