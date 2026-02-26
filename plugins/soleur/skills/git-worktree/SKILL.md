@@ -27,6 +27,8 @@ The script handles critical setup that raw git commands don't:
 2. Ensures `.worktrees` is in `.gitignore`
 3. Creates consistent directory structure
 
+**After creating a worktree**, run `npm install` if the project has a `package.json` — worktrees do not share `node_modules/` with the main working tree, and build commands (`npx @11ty/eleventy`, etc.) will silently hang instead of erroring.
+
 ```bash
 # ✅ CORRECT - Always use the script
 bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh create feature-name
