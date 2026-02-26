@@ -95,6 +95,10 @@ You retain all rights, title, and interest in your User Content. We claim no own
 
 All rights, title, and interest in and to the Plugin (including agent definitions, skill configurations, command logic, and documentation) remain with us. These Terms do not grant you any rights to our trademarks, service marks, or trade names.
 
+### 5.5 Contributor Intellectual Property
+
+If you contribute code or other materials to the Soleur project via pull requests, you must sign a Contributor License Agreement (CLA) before your contribution can be accepted. The CLA grants Jikigai a perpetual, irrevocable license to use, modify, sublicense, and relicense your contribution, while you retain your copyright. The CLA includes an express patent grant covering contributed code. Full terms are set out in the [Individual Contributor License Agreement](/pages/legal/individual-cla.html) and [Corporate Contributor License Agreement](/pages/legal/corporate-cla.html).
+
 ## 6. AI-Generated Output
 
 ### 6.1 Nature of AI Output
@@ -279,6 +283,8 @@ To exercise your data subject rights under GDPR, send a written request to legal
 > - [Cookie Policy](/pages/legal/cookie-policy.html) -- covers cookies used by the documentation site
 > - [Disclaimer](/pages/legal/disclaimer.html) -- standalone version of warranty and liability provisions
 > - [GDPR Policy](/pages/legal/gdpr-policy.html) -- detailed GDPR-specific policy for EU/EEA users
+> - [Individual CLA](/pages/legal/individual-cla.html) -- contributor license agreement for individuals
+> - [Corporate CLA](/pages/legal/corporate-cla.html) -- contributor license agreement for organizations
 
     </div>
   </div>

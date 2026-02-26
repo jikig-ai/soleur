@@ -14,6 +14,16 @@ claude --plugin-dir ./plugins/soleur
 
 This loads the plugin directly without installation, so you can test changes immediately.
 
+## Contributor License Agreement
+
+Before your first pull request can be merged, you must sign the [Individual Contributor License Agreement](https://soleur.ai/pages/legal/individual-cla.html) (CLA). The CLA bot will prompt you automatically on your first PR.
+
+**What does the CLA do?** You keep your copyright. Jikigai gets a license to use, distribute, and relicense your contribution -- this is needed because Soleur uses a [Business Source License](LICENSE) with dual licensing.
+
+**If your employer owns your work** (common with full-time employment contracts), ask them to sign the [Corporate CLA](https://soleur.ai/pages/legal/corporate-cla.html) by emailing legal@jikigai.com.
+
+**How it works:** Comment `I have read the CLA Document and I hereby sign the CLA` on your first PR. The CLA bot will record your signature and the check will pass. You only need to sign once.
+
 ## Submitting Changes
 
 1. **Check existing issues** before starting work to avoid duplicates.
