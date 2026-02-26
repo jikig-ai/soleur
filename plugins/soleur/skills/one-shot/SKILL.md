@@ -87,6 +87,7 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 4. Use the **Skill tool**: `skill: soleur:review`
 5. Use the **Skill tool**: `skill: soleur:resolve-todo-parallel`
 6. Use the **Skill tool**: `skill: soleur:compound`
+6.5. **Version-bump recheck.** After compound completes, check if it staged changes under `plugins/soleur/` by running `git diff --cached --name-only -- plugins/soleur/` and `git diff --name-only -- plugins/soleur/`. If either returns results, compound's route-to-definition edited plugin files after ship already did the version bump. In that case: re-read `plugins/soleur/.claude-plugin/plugin.json` for the current version, bump PATCH, update the versioning triad (plugin.json, CHANGELOG.md, README.md), sync external references (root README badge, bug_report.yml), stage all changes, and commit. If no new plugin changes, skip.
 7. Use the **Skill tool**: `skill: soleur:test-browser`
 8. Use the **Skill tool**: `skill: soleur:feature-video`
 9. Output `<promise>DONE</promise>` when video is in PR
