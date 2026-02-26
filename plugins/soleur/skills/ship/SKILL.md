@@ -122,7 +122,37 @@ git merge origin/main
 
 **If merge is clean:** Proceed to Phase 4.
 
-## Phase 4: Version Bump
+## Phase 4: Run Tests
+
+First, verify that new source files have corresponding test files:
+
+Find new source files added in this branch. First, get the merge base hash (reuse from Phase 3 if already obtained):
+
+```bash
+git merge-base HEAD origin/main
+```
+
+Then, in a separate Bash call, use the hash literally:
+
+```bash
+git diff --name-only --diff-filter=A HASH..HEAD
+```
+
+Replace `HASH` with the actual commit hash. Filter results for `.ts`, `.js`, `.rb`, `.py` files (excluding test/spec/config files).
+
+For each new source file, check if a corresponding test file exists (e.g., `foo.ts` -> `foo.test.ts` or `foo.spec.ts`). Report any source files missing test coverage.
+
+**If test files are missing:** Ask the user whether to write tests now or continue without them. Do not silently proceed.
+
+Then run the project's test suite:
+
+```bash
+bun test
+```
+
+**If tests fail:** Stop and fix before proceeding.
+
+## Phase 5: Version Bump
 
 Check if plugin files were modified in this branch.
 
@@ -161,7 +191,7 @@ Read `plugins/soleur/AGENTS.md` for versioning rules, then:
 
 **If no plugin files modified:** Skip version bump.
 
-## Phase 5: Final Checklist
+## Phase 6: Final Checklist
 
 Create a TodoWrite checklist summarizing the state:
 
@@ -171,65 +201,16 @@ Ship Checklist for [branch name]:
 - [x/skip] Artifacts committed (brainstorm/spec/plan)
 - [x/skip] Learnings captured (/compound)
 - [x/skip] README updated (component counts)
+- [x/skip] Tests pass
 - [x/skip] Version bumped (plugin.json + CHANGELOG + README)
 - [x/skip] Version synced (root README badge + bug report template)
-- [x/skip] Tests exist for new source files
-- [ ] Tests pass
 - [ ] Push to remote
 - [ ] Create PR
 - [ ] PR is mergeable (no conflicts)
 - [ ] CI checks pass
 ```
 
-## Phase 6: Run Tests
-
-First, verify that new source files have corresponding test files:
-
-Find new source files added in this branch. First, get the merge base hash (reuse from Phase 3 if already obtained):
-
-```bash
-git merge-base HEAD origin/main
-```
-
-Then, in a separate Bash call, use the hash literally:
-
-```bash
-git diff --name-only --diff-filter=A HASH..HEAD
-```
-
-Replace `HASH` with the actual commit hash. Filter results for `.ts`, `.js`, `.rb`, `.py` files (excluding test/spec/config files).
-
-For each new source file, check if a corresponding test file exists (e.g., `foo.ts` -> `foo.test.ts` or `foo.spec.ts`). Report any source files missing test coverage.
-
-**If test files are missing:** Ask the user whether to write tests now or continue without them. Do not silently proceed.
-
-Then run the project's test suite:
-
-```bash
-bun test
-```
-
-**If tests fail:** Stop and fix before proceeding.
-
 ## Phase 7: Push and Create PR
-
-### Pre-Push Gate: Verify /compound completed
-
-Before pushing, re-verify that unarchived KB artifacts have been consolidated. This is a hard gate -- do not proceed if it fails.
-
-Get the current branch name:
-
-```bash
-git rev-parse --abbrev-ref HEAD
-```
-
-Extract the feature name from the result (strip `feat-`/`feature/`/`fix-`/`fix/` prefix). Then search for unarchived KB artifacts matching the feature name in brainstorms, plans, and specs directories (excluding `archive/` paths).
-
-If any unarchived artifacts are found, BLOCK the push and instruct the user to use `skill: soleur:compound` first.
-
-**If blocked:** Stop. Use `skill: soleur:compound` to consolidate and archive artifacts, then return to this phase. Do NOT bypass this check.
-
-**If clear:** Proceed to push.
 
 Push the branch to remote. Get the branch name first:
 

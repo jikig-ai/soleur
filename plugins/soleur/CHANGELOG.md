@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.3.4] - 2026-02-26
+
+### Fixed
+
+- **Ship SKILL.md** -- Reordered phases: tests (Phase 4) now run before version bump (Phase 5), ensuring compound's route-to-definition edits are captured. Removed redundant pre-push compound gate from Phase 7 (Phase 2 already enforces compound).
+- **One-shot SKILL.md** -- Added version-bump-recheck (step 6.5) after second compound run to catch route-to-definition edits that occur after ship's version bump.
+- **Work SKILL.md** -- Updated inline ship phase description to reflect new ordering.
+
 ## [3.3.3] - 2026-02-26
 
 ### Added

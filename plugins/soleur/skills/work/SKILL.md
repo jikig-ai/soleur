@@ -282,8 +282,8 @@ The `/ship` skill handles all shipping steps in order:
 1. Validate artifact trail (brainstorms, specs, plans committed)
 2. Capture learnings via `skill: soleur:compound` (asks if not already run)
 3. Verify documentation (README counts, tables)
-4. Version bump (plugin.json + CHANGELOG + README triad)
-5. Run tests
+4. Run tests
+5. Version bump (plugin.json + CHANGELOG + README triad)
 6. Push and create PR (with screenshots for UI changes)
 7. Post-merge cleanup (worktree removal)
 
