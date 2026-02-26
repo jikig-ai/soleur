@@ -10,7 +10,6 @@ on:
 # to the base branch. Do NOT add steps that checkout or build PR code.
 
 permissions:
-  actions: write
   contents: write
   pull-requests: write
   statuses: write
@@ -19,7 +18,9 @@ jobs:
   cla-check:
     if: |
       (github.event_name == 'pull_request_target') ||
-      (github.event_name == 'issue_comment' && github.event.comment.body == 'recheck')
+      (github.event_name == 'issue_comment' &&
+       github.event.comment.body == 'recheck' &&
+       github.event.issue.pull_request)
     runs-on: ubuntu-latest
     steps:
       - name: CLA Assistant

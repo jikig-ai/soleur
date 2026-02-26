@@ -12,7 +12,7 @@ generated-date: 2026-02-20
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** February 22, 2026 (analytics disclosure)
+**Last Updated:** February 26, 2026 (CLA signature processing)
 
 ---
 
@@ -60,6 +60,12 @@ For website analytics via Plausible Analytics, the lawful basis is **legitimate 
 
 For processing of GitHub profile data when users contribute to the Soleur repository (issues, pull requests, discussions), the lawful basis is **legitimate interest** (Article 6(1)(f)) -- facilitating community participation in the project. The balancing test considers: (a) the processing is limited to publicly available GitHub profile data voluntarily shared by the user, (b) the user initiated the interaction, (c) the processing is necessary for the stated purpose, and (d) users can withdraw by deleting their GitHub contributions.
 
+### 3.5 Contributor License Agreement (CLA) Signatures
+
+For processing of CLA signature data when contributors sign the Contributor License Agreement via GitHub pull requests, the lawful basis is **legitimate interest** (Article 6(1)(f)). The data processed consists of the contributor's GitHub username, signature timestamp, and associated pull request reference.
+
+**Balancing test:** (1) Maintaining an enforceable record of contributor intellectual property license grants is a legitimate interest of the project maintainer, required to support dual licensing under the Business Source License 1.1. (2) The processing is limited to the minimum data necessary -- only the GitHub username (already public), timestamp, and PR reference are collected. No additional personal data is requested. (3) Contributors' rights are not overridden because they voluntarily initiate the process by submitting a pull request and explicitly consenting by posting the signing comment. Signature data is stored on a dedicated branch (`cla-signatures`) in the public repository. Retention is indefinite because the license grants are irrevocable; however, contributors may request deletion of their signature record, noting that the underlying license grant survives deletion per the CLA terms (Section 8(e)).
+
 ### 3.4 Legal and GDPR Inquiry Handling
 
 For processing personal data contained in data subject rights requests and legal inquiries sent to legal@jikigai.com, the lawful basis is **legal obligation** (Article 6(1)(c)) for GDPR requests (fulfilling our obligations under Articles 12-22) and **legitimate interest** (Article 6(1)(f)) for other legal inquiries.
@@ -89,6 +95,7 @@ The following data may be processed by third-party services when users interact 
 | Prompts, code context | Anthropic (via Claude API) | Powering AI agent responses (user authenticates with own credentials) |
 | GitHub account data | GitHub (via repository) | Issue tracking, contributions |
 | Name, email, inquiry content | Proton AG (via Proton Mail) | Handling legal and GDPR inquiries (legal@jikigai.com) |
+| GitHub username, signature timestamp, PR reference | GitHub (via CLA Assistant) | Recording CLA signature for contributor IP license grants |
 
 Users are responsible for reviewing the privacy policies of these third-party services.
 
@@ -198,12 +205,13 @@ Given that Soleur's own data processing is limited to standard web hosting (via 
 
 Jikigai maintains an internal record of processing activities as required by Article 30(1) of the GDPR. The SME exemption under Article 30(5) does not apply because, although Jikigai has fewer than 250 employees, the documentation site hosting constitutes non-occasional processing (continuous web hosting).
 
-The register documents four processing activities:
+The register documents five processing activities:
 
 1. **Documentation website hosting** (soleur.ai via GitHub Pages) -- IP addresses, browser metadata of visitors
 2. **Website analytics** (soleur.ai via Plausible Analytics) -- page URLs, referrer URLs, country (derived from IP, not stored), device type, browser type. Legal basis: legitimate interest (Article 6(1)(f)). No personal data is stored; IP addresses are discarded after geolocation. Plausible Analytics is hosted in the EU.
 3. **Source repository management** (GitHub) -- contributor profile data, issue reporters
 4. **Legal and GDPR inquiry handling** (legal@jikigai.com) -- names, email addresses, inquiry content
+5. **CLA signature collection** (GitHub CLA Assistant) -- GitHub username, signature timestamp, pull request reference. Legal basis: legitimate interest (Article 6(1)(f)). Signature data is stored on the `cla-signatures` branch in the public repository. Retention is indefinite (irrevocable license grants).
 
 The register is maintained internally and is available on request to the competent supervisory authority (CNIL for France). Since the 2018 reform of the Loi Informatique et Libertes, no registration or prior declaration to the CNIL is required.
 
@@ -255,6 +263,6 @@ Soleur's limited data processing (standard web hosting, community repository int
 
 ---
 
-> **Related documents:** This GDPR Policy should be read alongside the companion [Privacy Policy](privacy-policy.md) for broader privacy disclosures and the [Cookie Policy](cookie-policy.md) for information about cookies used by the documentation site.
+> **Related documents:** This GDPR Policy should be read alongside the companion [Privacy Policy](privacy-policy.md) for broader privacy disclosures, the [Cookie Policy](cookie-policy.md) for information about cookies used by the documentation site, and the [Individual CLA](individual-cla.md) and [Corporate CLA](corporate-cla.md) for contributor license terms.
 
 > **DRAFT -- This document was generated by AI and requires professional legal review before use. It does not constitute legal advice.**
