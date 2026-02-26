@@ -14,9 +14,17 @@
    - Update the issue body with artifact links (validation report path, branch name)
    - Do NOT generate spec.md -- validation workshops produce a validation report, not a spec
 
-3. **Navigate to worktree:**
+3. **Navigate to worktree and create draft PR:**
 
    Run `cd` to the worktree path from step 1 (e.g., `.worktrees/feat-<name>`), then run `pwd` to verify the path shows `.worktrees/feat-<name>`.
+
+   After verifying the path, create a draft PR:
+
+   ```bash
+   bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh draft-pr
+   ```
+
+   If this fails (no network), print a warning but continue.
 
 4. **Hand off to business-validator:**
 
@@ -28,7 +36,17 @@
    4. Repeat until all 6 gates complete and the vision alignment check runs
    5. Final invocation writes the validation report to `knowledge-base/overview/business-validation.md` inside the worktree
 
-5. **Display completion message and STOP.** Do NOT proceed to Phase 1. Do NOT run Phase 2 or Phase 3.5. Display:
+5. **Commit and push workshop artifacts:**
+
+   ```bash
+   git add knowledge-base/overview/business-validation.md
+   git commit -m "docs: capture validation report"
+   git push
+   ```
+
+   If the push fails, print a warning but continue.
+
+6. **Display completion message and STOP.** Do NOT proceed to Phase 1. Do NOT run Phase 2 or Phase 3.5. Display:
 
    ```text
    Validation workshop complete!

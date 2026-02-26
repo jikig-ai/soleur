@@ -306,6 +306,18 @@ Check if `knowledge-base/` exists. If so, run `git branch --show-current` to get
 
 3. **Announce:** "Tasks saved to `knowledge-base/specs/feat-<name>/tasks.md`. Use `skill: soleur:work` to implement."
 
+4. **Commit and push plan artifacts:**
+
+   After both the plan file and tasks.md are written, commit and push everything:
+
+   ```bash
+   git add knowledge-base/plans/ knowledge-base/specs/feat-<name>/tasks.md
+   git commit -m "docs: create plan and tasks for feat-<name>"
+   git push
+   ```
+
+   If the push fails (no network), print a warning but continue.
+
 **If knowledge-base/ does NOT exist or not on feature branch:**
 
 - Plan saved to `knowledge-base/plans/` only (current behavior)

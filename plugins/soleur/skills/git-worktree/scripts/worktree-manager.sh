@@ -490,6 +490,54 @@ cleanup_merged_worktrees() {
   return 0
 }
 
+# Create a draft PR for the current branch
+# Idempotent: skips if a PR already exists
+# All push/PR failures warn but do not block (returns 0)
+create_draft_pr() {
+  local branch
+  branch=$(git rev-parse --abbrev-ref HEAD)
+
+  # Guard: refuse to run on main/master
+  if [[ "$branch" == "main" || "$branch" == "master" ]]; then
+    echo -e "${RED}Error: Cannot create draft PR on $branch${NC}"
+    return 1
+  fi
+
+  # Check if PR already exists (idempotent)
+  local existing_pr
+  if ! existing_pr=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number' 2>&1); then
+    echo -e "${YELLOW}Warning: Could not check for existing PR: $existing_pr${NC}"
+    existing_pr=""
+  fi
+
+  if [[ -n "$existing_pr" ]]; then
+    echo -e "${GREEN}Draft PR #$existing_pr already exists for $branch${NC}"
+    return 0
+  fi
+
+  # Create empty initial commit
+  git commit --allow-empty -m "chore: initialize $branch"
+
+  # Push branch to remote (warn on failure, do not block)
+  local push_error
+  if ! push_error=$(git push -u origin "$branch" 2>&1); then
+    echo -e "${YELLOW}Warning: Push failed. Work is committed locally.${NC}"
+    echo "  $push_error"
+    return 0
+  fi
+
+  # Create draft PR (warn on failure, do not block)
+  local pr_body="Draft PR created automatically. Content will be added as work progresses."
+  local pr_url
+  if ! pr_url=$(gh pr create --draft --title "WIP: $branch" --body "$pr_body" 2>&1); then
+    echo -e "${YELLOW}Warning: Draft PR creation failed. Branch is pushed to remote.${NC}"
+    echo "  $pr_url"
+    return 0
+  fi
+
+  echo -e "${GREEN}Draft PR created: $pr_url${NC}"
+}
+
 # Main command handler
 main() {
   local command="${1:-list}"
@@ -515,6 +563,9 @@ main() {
       ;;
     cleanup-merged)
       cleanup_merged_worktrees
+      ;;
+    draft-pr)
+      create_draft_pr
       ;;
     help)
       show_help
@@ -546,6 +597,8 @@ Commands:
   cleanup | clean                     Clean up inactive worktrees
   cleanup-merged                      Clean up worktrees for merged branches
                                       (detects [gone] branches, archives specs)
+  draft-pr                            Create empty commit, push, and open draft PR
+                                      (idempotent: skips if PR already exists)
   help                                Show this help message
 
 Environment Files:

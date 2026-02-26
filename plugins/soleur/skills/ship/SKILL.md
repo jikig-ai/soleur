@@ -245,7 +245,45 @@ git push -u origin BRANCH_NAME
 
 Replace `BRANCH_NAME` with the actual branch name from the previous call.
 
-Create the PR. Pass the body as a multi-line string (no `$()` needed):
+**Check for existing PR on this branch:**
+
+Check for an existing open PR using the branch name from above:
+
+```bash
+gh pr list --head BRANCH_NAME --state open --json number,isDraft --jq '.[0]'
+```
+
+Replace `BRANCH_NAME` with the actual branch name.
+
+**If an open PR exists:**
+
+1. The PR was likely created as a draft earlier in the workflow.
+2. Confirm the PR title and body with the user before editing.
+3. Update the PR. Pass the body as a multi-line string (no `$()` needed):
+
+   ```bash
+   gh pr edit PR_NUMBER --title "the pr title" --body "## Summary
+   - bullet points
+
+   ## Test plan
+   - checklist
+
+   Generated with [Claude Code](https://claude.com/claude-code)"
+   ```
+
+   Do not quote flag names -- write `--title` not `"--title"`.
+
+4. If the PR is a draft, mark it ready:
+
+   ```bash
+   gh pr ready PR_NUMBER
+   ```
+
+5. Present the PR URL to the user.
+
+**If no open PR exists:**
+
+Fall through to creating a new PR. This handles cases where the user entered the pipeline through `/plan` or `/work` directly (skipping brainstorm/one-shot).
 
 ```bash
 gh pr create --title "the pr title" --body "## Summary
