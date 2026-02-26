@@ -85,6 +85,10 @@ You retain all rights, title, and interest in your User Content. We claim no own
 
 All rights, title, and interest in and to the Plugin (including agent definitions, skill configurations, command logic, and documentation) remain with us. These Terms do not grant you any rights to our trademarks, service marks, or trade names.
 
+### 5.5 Contributor Intellectual Property
+
+If you contribute code or other materials to the Soleur project via pull requests, you must sign a Contributor License Agreement (CLA) before your contribution can be accepted. The CLA grants Jikigai a perpetual, irrevocable license to use, modify, sublicense, and relicense your contribution, while you retain your copyright. The CLA includes an express patent grant covering contributed code. Full terms are set out in the [Individual Contributor License Agreement](individual-cla.md) and [Corporate Contributor License Agreement](corporate-cla.md).
+
 ## 6. AI-Generated Output
 
 ### 6.1 Nature of AI Output
@@ -263,9 +267,11 @@ To exercise your data subject rights under GDPR, send a written request to legal
 
 ---
 
-> **Related documents:** This Terms & Conditions document references privacy practices, data handling, cookies, and acceptable use policies. Please review the companion documents:
+> **Related documents:** This Terms & Conditions document references privacy practices, data handling, cookies, acceptable use policies, and contributor agreements. Please review the companion documents:
 > - [Privacy Policy](privacy-policy.md) -- details data practices referenced in Section 7
 > - [Acceptable Use Policy](acceptable-use-policy.md) -- expands on the acceptable use provisions in Section 8
 > - [Cookie Policy](cookie-policy.md) -- covers cookies used by the documentation site
 > - [Disclaimer](disclaimer.md) -- standalone version of warranty and liability provisions
 > - [GDPR Policy](gdpr-policy.md) -- detailed GDPR-specific policy for EU/EEA users
+> - [Individual CLA](individual-cla.md) -- contributor license agreement for individuals
+> - [Corporate CLA](corporate-cla.md) -- contributor license agreement for organizations
