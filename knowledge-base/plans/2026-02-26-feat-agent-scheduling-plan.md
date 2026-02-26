@@ -6,9 +6,11 @@ date: 2026-02-26
 
 # feat: Agent Scheduling via GitHub Actions
 
+[Updated 2026-02-26 — simplified after plan review: removed bash script, scoped to issue-only output, cut run/secret-validation/interval-computation]
+
 ## Overview
 
-Create a `soleur:schedule` skill that generates GitHub Actions workflow files for scheduling Soleur skill invocations on recurring cron schedules. Each schedule becomes a standalone `.github/workflows/scheduled-<name>.yml` using `claude-code-action`. Output is flexible per schedule (issues, PRs, or Discord notifications).
+Create a `soleur:schedule` skill that generates GitHub Actions workflow files for scheduling Soleur skill invocations on recurring cron schedules. Each schedule becomes a standalone `.github/workflows/scheduled-<name>.yml` using `claude-code-action` with issue-based output.
 
 ## Problem Statement / Motivation
 
@@ -18,187 +20,180 @@ Related: #312
 
 ## Proposed Solution
 
-A single skill (`soleur:schedule`) with a supporting bash script (`schedule-manager.sh`), following the `git-worktree` skill pattern. The bash script handles YAML generation and workflow management; the SKILL.md handles interactive input collection and subcommand routing.
+A single SKILL.md file (`soleur:schedule`) with no bash script. The YAML workflow template lives directly in SKILL.md as a code block. The LLM fills in placeholders during the interactive `create` flow and writes the file. No intermediate script layer — the LLM handles string interpolation, validation, and file I/O natively.
 
 ### Architecture
 
 ```
-User -> /soleur:schedule create -> SKILL.md interactive Q&A -> schedule-manager.sh generate -> .yml file
+User -> /soleur:schedule create -> SKILL.md interactive Q&A -> LLM writes .yml file
 
-GitHub Actions cron -> scheduled-<name>.yml -> claude-code-action -> Skill -> Output routing
+GitHub Actions cron -> scheduled-<name>.yml -> claude-code-action -> Skill -> GitHub Issue
 
-User -> /soleur:schedule list    -> schedule-manager.sh list   -> formatted table
-User -> /soleur:schedule delete  -> schedule-manager.sh delete -> remove .yml
-User -> /soleur:schedule run     -> schedule-manager.sh run    -> gh workflow run
+User -> /soleur:schedule list   -> LLM globs + greps scheduled-*.yml -> formatted output
+User -> /soleur:schedule delete -> LLM removes .yml file after confirmation
 ```
 
-### Scope Decisions (from SpecFlow analysis)
+### Scope Decisions
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Agent vs. skill invocation | **Skills only for v1** | Skills are reliably invocable via `/soleur:<name>` in prompts. Agents are LLM-routed by description — unreliable for unattended cron execution. Agent support deferred to v2. |
-| `update` subcommand | **Deferred (v2)** | YAGNI. Users can hand-edit the generated YAML. Delete + recreate is available. |
-| Auto-commit/push on create | **No** | Write file and inform user. The workflow only activates on the default branch, so auto-pushing from a feature branch doesn't help. User decides when to merge. |
+| Agent vs. skill invocation | **Skills only for v1** | Skills are reliably invocable via `/soleur:<name>` in prompts. Agents are LLM-routed by description — unreliable for unattended cron execution. |
+| Output mode | **Issue only for v1** | Simplest permissions model. PR mode has branching conflicts with `claude-code-action`. Discord requires external secret + fragile curl-in-prompt. Both deferred to v2. |
+| Implementation | **SKILL.md only, no bash script** | YAML generation is string interpolation. The LLM handles it natively. A bash heredoc template adds quoting hazards and a layer of indirection for no gain. |
+| `update` subcommand | **Deferred (v2)** | YAGNI. Users can hand-edit the generated YAML. |
+| `run` subcommand | **Deferred (v2)** | Wraps `gh workflow run` — a one-liner. Documented as a tip in SKILL.md. |
+| Auto-commit/push on create | **No** | Write file and inform user. Workflow only activates on the default branch. |
 | State across runs | **Out of scope** | Each run is stateless. Document as known limitation. |
-| Minimum cron interval | **Warn < 1 hour, block < 5 minutes** | Lightweight cost protection without formal budget controls. |
-| Concurrency groups | **Yes** | Prevent overlapping runs of the same schedule. `cancel-in-progress: false` to queue rather than cancel. |
-| Failure notification | **Yes** | `if: failure()` step that creates a GitHub issue with the run URL. |
-| Secret validation | **Warn, don't block** | Check `gh secret list` during `create` and warn if `ANTHROPIC_API_KEY` is missing. |
-| Degraded `list` | **File-only view** | Show name, cron, skill, output mode from YAML parsing. Add run status column if `gh` is authenticated. |
-| Workflow file name | **User-provided during `create`** | Validated: lowercase, hyphens only, no collisions. |
+| Cron validation | **Basic syntax check by LLM** | Validate 5-field format and warn if frequency > hourly. No bash cron parser — GitHub Actions rejects invalid cron at push time. |
+| Concurrency groups | **Yes** | Prevent overlapping runs. Note: `cancel-in-progress: false` allows one pending run, not a true queue. |
+| Failure notification | **Yes** | `if: failure()` step creates a GitHub issue. Prevents silent failures. |
+| Secret validation | **Document, don't check** | `gh secret list` returns nothing for non-admin users → false warnings. Document `ANTHROPIC_API_KEY` as prerequisite instead. |
+| SHA pinning | **LLM resolves at create time** | Two `gh api` commands during create flow. Two-step resolution for annotated tags (tag object → commit SHA). |
 
 ## Technical Considerations
 
+### Prerequisite: Plugin Discovery Spike
+
+**BLOCKING — resolve before implementation.**
+
+No `.claude/plugins.json` exists. The existing `claude-code-review.yml` uses marketplace plugins, not local ones. Must verify that `claude-code-action` auto-discovers the Soleur plugin from the checked-out repo's `plugins/soleur/` directory.
+
+**Spike:** Create a minimal test workflow that uses `claude-code-action` with a prompt invoking a Soleur skill. Push to a test branch and trigger via `workflow_dispatch`. If it fails, design the fallback: explicit `plugin_marketplaces` pointing at the repo, `claude_args` with plugin path, or a setup step.
+
 ### Generated Workflow Template
 
-Each generated `.github/workflows/scheduled-<name>.yml` includes:
+The SKILL.md contains this template with `<PLACEHOLDER>` markers:
 
 ```yaml
-name: "Scheduled: <display-name>"
+name: "Scheduled: <DISPLAY_NAME>"
 
 on:
   schedule:
-    - cron: '<cron-expression>'
+    - cron: '<CRON_EXPRESSION>'
   workflow_dispatch: {}
 
 concurrency:
-  group: schedule-<name>
+  group: schedule-<NAME>
   cancel-in-progress: false
 
 permissions:
-  # Varies by output mode (see below)
+  contents: read
+  issues: write
 
 jobs:
   run-schedule:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@<SHA>  # Pinned
+      - name: Checkout repository
+        uses: actions/checkout@<CHECKOUT_SHA> # v4
 
       - name: Run scheduled skill
-        uses: anthropics/claude-code-action@<SHA>  # Pinned
+        uses: anthropics/claude-code-action@<ACTION_SHA> # v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          prompt: '<generated prompt based on skill + output mode>'
-
-      # Output-mode specific steps (issue/pr/discord)
+          prompt: |
+            Run /soleur:<SKILL_NAME> on this repository.
+            After analysis, create a GitHub issue titled
+            "[Scheduled] <DISPLAY_NAME> - $(date +%Y-%m-%d)"
+            with label "scheduled-<NAME>" summarizing your findings.
+          model: <MODEL>
 
       - name: Notify on failure
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          gh label create "scheduled-failure" --color "B60205" \
+            --description "Scheduled workflow failure" 2>/dev/null || true
           gh issue create \
-            --title "[Scheduled] <name> failed - $(date +%Y-%m-%d)" \
-            --body "..." \
+            --title "[Scheduled] <NAME> failed - $(date +%Y-%m-%d)" \
+            --body "Workflow run failed. See: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             --label "scheduled-failure"
 ```
 
-### Permissions by Output Mode
+### SHA Pinning — Two-Step Resolution for Annotated Tags
 
-| Mode | Permissions |
-|------|------------|
-| `issue` | `contents: read`, `issues: write` |
-| `pr` | `contents: write`, `pull-requests: write` |
-| `discord` | `contents: read` |
-| All modes (failure step) | `+ issues: write` |
-
-### Prompt Templates by Output Mode
-
-**Issue mode:**
-```
-Run /soleur:<skill> on this repository. After analysis, create a GitHub issue titled
-"[Scheduled] <name> - <date>" with label "scheduled-<name>" summarizing your findings.
-```
-
-**PR mode:**
-```
-Run /soleur:<skill> on this repository. Create a branch named
-"scheduled/<name>/<date>" for any changes. If changes were made, open a draft PR
-titled "[Scheduled] <name> - <date>". If no changes needed, create an issue
-reporting "no changes required."
-```
-
-**Discord mode:**
-```
-Run /soleur:<skill> on this repository. After analysis, post a summary to Discord
-using: curl -H "Content-Type: application/json" -d '{"content": "<your summary>",
-"username": "Soleur Scheduler"}' "$DISCORD_WEBHOOK_URL"
-```
-
-### SHA Pinning Strategy
-
-The bash script resolves the current SHA for `anthropics/claude-code-action@v1` and `actions/checkout@v4` at generation time using `gh api`:
+During `create`, the LLM resolves SHAs with:
 
 ```bash
-gh api repos/anthropics/claude-code-action/git/ref/tags/v1 --jq '.object.sha'
-gh api repos/actions/checkout/git/ref/tags/v4 --jq '.object.sha'
+# Step 1: Get the ref
+REF_JSON=$(gh api repos/anthropics/claude-code-action/git/ref/tags/v1)
+TYPE=$(echo "$REF_JSON" | jq -r '.object.type')
+SHA=$(echo "$REF_JSON" | jq -r '.object.sha')
+
+# Step 2: If annotated tag, dereference to commit
+if [ "$TYPE" = "tag" ]; then
+  SHA=$(gh api "repos/anthropics/claude-code-action/git/tags/$SHA" --jq '.object.sha')
+fi
+echo "claude-code-action SHA: $SHA"
 ```
 
-The resolved SHAs are embedded in the generated YAML with a comment showing the tag:
+Same two-step process for `actions/checkout@v4`. The resolved SHAs are embedded in the generated YAML with tag comments for readability.
 
-```yaml
-uses: anthropics/claude-code-action@abc123def456 # v1
-```
+### Cron Validation Rules (Natural Language in SKILL.md)
 
-### Cron Validation
+The SKILL.md instructs the LLM to:
+1. Verify the expression has exactly 5 space-separated fields
+2. Verify each field contains only valid characters: `0-9`, `*`, `/`, `-`, `,`
+3. Reject named values (`MON`, `JAN`) — GitHub Actions POSIX cron does not support them
+4. Warn the user if the schedule runs more frequently than hourly
+5. Reject anything more frequent than every 5 minutes
+6. Note that GitHub Actions cron has ~15-minute variance
 
-The bash script validates cron expressions:
-1. Must have exactly 5 space-separated fields
-2. Each field must contain only valid characters (`0-9`, `*`, `/`, `-`, `,`)
-3. Ranges must be within valid bounds (minutes: 0-59, hours: 0-23, etc.)
-4. Warn if effective interval < 1 hour
-5. Block if effective interval < 5 minutes
+### Concurrency Limitation
 
-### Plugin Discovery in CI
-
-`claude-code-action` checks out the repository and runs Claude Code from the repo root. The Soleur plugin at `plugins/soleur/` should be auto-discovered via the `.claude/plugins.json` configuration. This needs to be verified during implementation — if auto-discovery doesn't work, the generated workflow will need explicit `plugin_marketplaces` or plugin path configuration.
+`cancel-in-progress: false` allows only one pending run to wait. If a third run triggers while one is running and one is pending, the pending run is replaced (not queued). This is a GitHub Actions limitation, not a true queue. Documented in SKILL.md as a known limitation.
 
 ## Acceptance Criteria
 
-- [ ] `soleur:schedule create` interactively collects skill, cron, output mode, model and generates valid workflow YAML
-- [ ] `soleur:schedule list` displays all `scheduled-*.yml` with name, cron, skill, output mode
+- [ ] `soleur:schedule create` interactively collects skill name, cron expression, schedule name, and model, then generates valid workflow YAML with SHA-pinned actions, permissions, concurrency group, and failure notification
+- [ ] `soleur:schedule list` displays existing `scheduled-*.yml` with name, cron, skill from YAML parsing
 - [ ] `soleur:schedule delete <name>` removes the workflow file with confirmation
-- [ ] `soleur:schedule run <name>` triggers `gh workflow run` for the specified schedule
-- [ ] Generated workflows include proper SHA pinning, permissions, concurrency groups, and failure notification
-- [ ] Cron expressions are validated before generation (syntax + minimum interval)
-- [ ] Missing `ANTHROPIC_API_KEY` secret produces a warning during `create`
-- [ ] All three output modes (issue, PR, Discord) produce correct workflow templates
+- [ ] Generated YAML is valid GitHub Actions syntax
+- [ ] Cron expressions are validated (5-field format, frequency guard)
 - [ ] Skill is registered in docs data files and version is bumped
+- [ ] `plugin.json` description count is updated
 
 ## Test Scenarios
 
-- Given a user runs `soleur:schedule create`, when they provide valid inputs (skill: `legal-audit`, cron: `0 9 * * MON`, mode: `issue`, model: `sonnet`), then a valid `.github/workflows/scheduled-legal-audit.yml` is generated with correct cron, permissions, and prompt
-- Given a user provides cron `* * * * *`, when the script validates it, then it blocks with "minimum interval is 5 minutes"
-- Given a user provides cron `0 */2 * * *`, when the script validates it, then it passes (2-hour interval)
-- Given `scheduled-audit.yml` exists, when `soleur:schedule list` runs, then it displays the schedule in a formatted table
+- Given a user runs `soleur:schedule create`, when they provide valid inputs (skill: `legal-audit`, cron: `0 9 * * 1`, name: `weekly-legal-audit`, model: `sonnet`), then a valid `.github/workflows/scheduled-weekly-legal-audit.yml` is generated with correct cron, permissions, SHA-pinned actions, and issue-mode prompt
+- Given a user provides cron `* * * * *`, when the LLM validates it, then it rejects with "minimum interval is 5 minutes"
+- Given a user provides cron `MON` in the day-of-week field, when the LLM validates it, then it rejects with "use numeric values (0-6), not names"
+- Given `scheduled-audit.yml` exists, when `soleur:schedule list` runs, then it displays the schedule name, cron, skill, and output mode
 - Given `scheduled-audit.yml` exists, when `soleur:schedule delete audit` runs with confirmation, then the file is removed
-- Given `scheduled-audit.yml` exists on the default branch, when `soleur:schedule run audit` runs, then `gh workflow run` is invoked
 
 ## Dependencies & Risks
 
 **Dependencies:**
-- `claude-code-action` must support running Soleur plugin skills from a checked-out repo
+- `claude-code-action` must support running Soleur plugin skills from a checked-out repo (spike required)
 - `ANTHROPIC_API_KEY` must be configured as a repository secret
-- `DISCORD_WEBHOOK_URL` secret needed for discord output mode
 
 **Risks:**
-- `claude-code-action` plugin discovery may not auto-detect Soleur from the repo — mitigation: verify empirically, add explicit config if needed
-- Bash YAML templating is fragile — mitigation: use heredocs with proper quoting, test generated YAML with `yq` validation
-- GitHub Actions cron has ~15 min variance — mitigation: document this limitation
-- Long-running scheduled skills may overlap — mitigation: concurrency groups with queue behavior
+- `claude-code-action` plugin discovery may not auto-detect Soleur — mitigation: spike before implementation, design fallback path
+- GitHub Actions cron has ~15 min variance — mitigation: document limitation
+- Long-running skills may overlap — mitigation: concurrency groups (with documented queue limitation)
 
 ## File Inventory
 
 | File | Action | Purpose |
 |------|--------|---------|
-| `plugins/soleur/skills/schedule/SKILL.md` | Create | Skill definition with subcommand docs |
-| `plugins/soleur/skills/schedule/scripts/schedule-manager.sh` | Create | Bash script: generate, list, delete, run, validate |
+| `plugins/soleur/skills/schedule/SKILL.md` | Create | Skill definition with template, create/list/delete flows |
 | `plugins/soleur/docs/_data/skills.js` | Edit | Register skill in SKILL_CATEGORIES |
-| `plugins/soleur/.claude-plugin/plugin.json` | Edit | MINOR version bump |
+| `plugins/soleur/.claude-plugin/plugin.json` | Edit | MINOR version bump + description count |
 | `plugins/soleur/CHANGELOG.md` | Edit | Document new skill |
 | `plugins/soleur/README.md` | Edit | Update skill count |
 | Root `README.md` | Edit | Update version badge |
 | `.github/ISSUE_TEMPLATE/bug_report.yml` | Edit | Update version placeholder |
+
+## v2 Roadmap (Deferred)
+
+- PR output mode (with `claude-code-action` branching integration)
+- Discord output mode (with `jq`-based payload construction)
+- `run` subcommand (manual trigger via `gh workflow run`)
+- `update` subcommand (modify cron/model/output without delete+recreate)
+- `list` run-status column (from `gh run list`)
+- Agent invocation support (prompt engineering for LLM-routed agents)
+- State across runs (for incremental analysis)
 
 ## References & Research
 
@@ -206,11 +201,9 @@ The bash script validates cron expressions:
 - Cron workflow pattern: `.github/workflows/review-reminder.yml`
 - claude-code-action usage: `.github/workflows/claude-code-review.yml`
 - Discord webhook pattern: `.github/workflows/auto-release.yml`
-- Bash subcommand skill pattern: `plugins/soleur/skills/git-worktree/SKILL.md`
 - Skill creation lifecycle: `knowledge-base/learnings/implementation-patterns/2026-02-22-new-skill-creation-lifecycle.md`
 - GitHub Actions security: `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
 - Workflow cascade limitation: `knowledge-base/learnings/integration-issues/github-actions-auto-release-permissions.md`
-- Extract $() to scripts: `knowledge-base/learnings/2026-02-24-extract-command-substitution-into-scripts.md`
 - Merge-pr skill design lessons: `knowledge-base/learnings/2026-02-22-merge-pr-skill-design-lessons.md`
 
 ### Related Work
