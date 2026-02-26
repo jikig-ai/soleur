@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.3.3] - 2026-02-26
+
+### Added
+
+- **`draft-pr` subcommand** in `worktree-manager.sh` -- creates empty commit, pushes branch, and opens a draft PR. Idempotent (skips if PR already exists). Warns but continues on network failure.
+
+### Changed
+
+- **Brainstorm SKILL.md** -- Phase 3 now calls `draft-pr` after worktree creation. Phase 3.6 commits brainstorm doc + spec together and pushes at skill boundary.
+- **Brand Workshop / Validation Workshop** references -- call `draft-pr` after worktree creation, commit + push workshop artifacts before completion.
+- **One-shot SKILL.md** -- Step 0c creates draft PR after branch creation.
+- **Plan SKILL.md** -- Save Tasks section commits plan + tasks.md together and pushes at skill boundary.
+- **Ship SKILL.md** -- Phase 7 detects existing draft PR via `gh pr list --head`, uses `gh pr edit` + `gh pr ready` instead of creating new PR. Falls through to `gh pr create` when no draft PR exists (backwards compatible).
+
 ## [3.3.2] - 2026-02-26
 
 ### Added

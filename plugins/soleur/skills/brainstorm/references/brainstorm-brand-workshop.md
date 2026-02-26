@@ -12,9 +12,17 @@
    - Update the issue body with artifact links (brand guide path, branch name)
    - Do NOT generate spec.md -- brand workshops produce a brand guide, not a spec
 
-3. **Navigate to worktree:**
+3. **Navigate to worktree and create draft PR:**
 
    Run `cd` to the worktree path from step 1 (e.g., `.worktrees/feat-<name>`), then run `pwd` to verify the path shows `.worktrees/feat-<name>`.
+
+   After verifying the path, create a draft PR:
+
+   ```bash
+   bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh draft-pr
+   ```
+
+   If this fails (no network), print a warning but continue.
 
 4. **Hand off to brand-architect:**
 
@@ -24,7 +32,17 @@
 
    The brand-architect agent runs its full interactive workshop and writes the brand guide to `knowledge-base/overview/brand-guide.md` inside the worktree.
 
-5. **Display completion message and STOP.** Do NOT proceed to Phase 1. Do NOT run Phase 2 or Phase 3.5. Display:
+5. **Commit and push workshop artifacts:**
+
+   ```bash
+   git add knowledge-base/overview/brand-guide.md
+   git commit -m "docs: capture brand guide"
+   git push
+   ```
+
+   If the push fails, print a warning but continue.
+
+6. **Display completion message and STOP.** Do NOT proceed to Phase 1. Do NOT run Phase 2 or Phase 3.5. Display:
 
    ```text
    Brand workshop complete!

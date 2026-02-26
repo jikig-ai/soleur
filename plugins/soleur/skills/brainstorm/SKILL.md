@@ -157,6 +157,17 @@ fi
 
    All files written after this point MUST use this path prefix.
 
+4. **Create draft PR:**
+
+   Switch to the worktree and create a draft PR:
+
+   ```bash
+   cd .worktrees/feat-<name>
+   bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh draft-pr
+   ```
+
+   This creates an empty commit, pushes the branch, and opens a draft PR. If the push or PR creation fails (no network), a warning is printed but the workflow continues.
+
 ### Phase 3.5: Capture the Design
 
 Write the brainstorm document. **Use worktree path if created.**
@@ -213,7 +224,19 @@ Ensure the brainstorms directory exists before writing.
 
 5. **Save spec.md** to the worktree: `<worktree-path>/knowledge-base/specs/feat-<name>/spec.md` (replace `<worktree-path>` with the actual worktree path)
 
-6. **Switch to worktree:**
+6. **Commit and push all brainstorm artifacts:**
+
+   After the brainstorm document (Phase 3.5) and spec are both written, commit and push everything:
+
+   ```bash
+   git add knowledge-base/brainstorms/ knowledge-base/specs/feat-<name>/
+   git commit -m "docs: capture brainstorm and spec for feat-<name>"
+   git push
+   ```
+
+   If the push fails (no network), print a warning but continue. The artifacts are committed locally.
+
+7. **Switch to worktree:**
 
    ```bash
    cd .worktrees/feat-<name>
@@ -221,7 +244,7 @@ Ensure the brainstorms directory exists before writing.
 
    **IMPORTANT:** All subsequent work for this feature should happen in the worktree, not the main repository. Announce the switch clearly to the user.
 
-7. **Announce:**
+8. **Announce:**
    - If using existing issue: "Spec saved. **Using existing issue: #N.** Now working in worktree: `.worktrees/feat-<name>`. Use `skill: soleur:plan` to create tasks."
    - If created new issue: "Spec saved. GitHub issue #N created. **Now working in worktree:** `.worktrees/feat-<name>`. Use `skill: soleur:plan` to create tasks."
 
