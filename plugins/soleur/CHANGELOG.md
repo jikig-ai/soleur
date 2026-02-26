@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.3.5] - 2026-02-26
+
+### Fixed
+
+- **Work SKILL.md** -- Decoupled from ship. Phase 4 is now a handoff ("Implementation complete. Next: review -> compound -> ship") instead of auto-delegating to ship. Enables review findings to be addressed before merge.
+- **One-shot SKILL.md** -- Restructured pipeline: work (implement) -> review -> resolve-todo -> compound -> ship. Review and resolve now run before merge, not after. Removed version-bump-recheck step 6.5 (no longer needed since ship runs after compound).
+
 ## [3.3.4] - 2026-02-26
 
 ### Fixed
