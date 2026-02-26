@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.3.5] - 2026-02-26
+
+### Changed
+
+- **Landing page hero** -- Removed "The Company-as-a-Service Platform" badge from homepage hero section. Tightened hero top padding from `--space-12` (128px) to `--space-10` (80px). Cleaned up unused `.hero-badge` and `.hero-badge-dot` CSS rules. CaaS positioning retained in frontmatter description, vision page, llms.txt, and legal documents.
+
 ## [3.3.4] - 2026-02-26
 
 ### Fixed
