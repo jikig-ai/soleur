@@ -468,10 +468,10 @@ cleanup_merged_worktrees() {
     echo -e "${GREEN}Cleaned ${#cleaned[@]} merged worktree(s): ${cleaned[*]}${NC}"
 
     # After cleanup, update main checkout so next worktree branches from latest
-    local main_status
-    main_status=$(git -C "$GIT_ROOT" status --porcelain 2>/dev/null)
-    if [[ -n "$main_status" ]]; then
-      echo -e "${YELLOW}Warning: Main checkout has uncommitted changes -- skipping pull${NC}"
+    # Only check tracked file changes (staged + unstaged) -- untracked files cannot
+    # conflict with a fast-forward pull and should not block the update
+    if ! git -C "$GIT_ROOT" diff --quiet HEAD 2>/dev/null || ! git -C "$GIT_ROOT" diff --cached --quiet 2>/dev/null; then
+      echo -e "${YELLOW}Warning: Main checkout has uncommitted changes to tracked files -- skipping pull${NC}"
     else
       local current_branch
       current_branch=$(git -C "$GIT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)
