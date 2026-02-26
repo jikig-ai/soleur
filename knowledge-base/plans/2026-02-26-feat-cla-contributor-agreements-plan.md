@@ -79,20 +79,28 @@ Draft both CLA documents using Apache ICLA/CCLA as templates adapted for BSL 1.1
 
 ### Phase 2: CLA Enforcement
 
+**Prerequisites (manual, before workflow runs):**
+- Create a GitHub gist for signature storage (the CLA Assistant Action reads/writes signatures here)
+- Add `PERSONAL_ACCESS_TOKEN` repository secret with gist read/write permissions (fine-grained PAT)
+
 **Create:**
 - `.github/workflows/cla.yml` -- CLA Assistant Action workflow
   - Trigger: `pull_request_target` (opened, synchronize, reopened) + `issue_comment` (for re-check)
   - Pin `cla-assistant/cla-assistant-action` to commit SHA
   - Declare explicit `permissions: actions: write, contents: read, pull-requests: write, statuses: write`
-  - Configure: `path-to-signatures: signatures/cla.json` (gist-based) or inline gist ID
+  - Configure with gist ID from the prerequisite step
   - Allowlist: `dependabot[bot],github-actions[bot],renovate[bot]`
   - Point to CLA text: Individual CLA URL on docs site
+  - **Security:** Do not checkout or build PR code in this workflow (`pull_request_target` runs with base branch write access)
+
+**Smoke test:**
+- Open a throwaway PR against the feature branch to verify the action triggers and the status check appears
 
 **Configure (manual, post-merge):**
 - Add branch ruleset or branch protection rule requiring "CLA" status check on `main`
-- Document this manual step in the PR description
+- Document all manual steps (gist, secret, ruleset) in the PR description
 
-### Phase 3: Contributor-Facing Updates
+### Phase 3: Contributor-Facing and Cross-Document Updates
 
 **Modify:**
 - `CONTRIBUTING.md` -- add "Contributor License Agreement" section after "Getting Started":
@@ -101,29 +109,17 @@ Draft both CLA documents using Apache ICLA/CCLA as templates adapted for BSL 1.1
   - Guidance for employed contributors: "If your employer owns your work, ask them to sign the Corporate CLA"
   - Link to CLA Assistant signing flow
 
-- `.github/PULL_REQUEST_TEMPLATE.md` -- add informational notice (not checkbox):
-  ```markdown
-  ## CLA
-  By submitting this PR, you confirm you have signed the [Contributor License Agreement](https://soleur.ai/pages/legal/individual-cla.html). First-time contributors will be prompted automatically.
-  ```
+- `docs/legal/privacy-policy.md` + `plugins/soleur/docs/pages/legal/privacy-policy.md` -- add section on CLA signature data processing (GitHub username, timestamp, legal basis: legitimate interest under GDPR Art. 6(1)(f)). Add CLA to "Related documents."
+- `docs/legal/data-processing-agreement.md` + `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` -- add CLA as a processing activity. Add CLA to "Related documents."
+- `docs/legal/terms-and-conditions.md` + `plugins/soleur/docs/pages/legal/terms-and-conditions.md` -- update Section 5 to acknowledge contributor IP framework via CLA. Add CLA to "Related documents."
 
-### Phase 4: Cross-Document Updates
+Note: Only the 3 substantively affected legal docs get CLA cross-references. No blanket update to all 14 legal files -- CLA is not topically related to the Cookie Policy, Disclaimer, or GDPR Policy.
 
-**Modify:**
-- `docs/legal/privacy-policy.md` + `plugins/soleur/docs/pages/legal/privacy-policy.md` -- add section on CLA signature data processing (GitHub username, timestamp, legal basis: legitimate interest under GDPR Art. 6(1)(f))
-- `docs/legal/data-processing-agreement.md` + `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` -- add CLA as a processing activity
-- `docs/legal/terms-and-conditions.md` + `plugins/soleur/docs/pages/legal/terms-and-conditions.md` -- update Section 5 to acknowledge contributor IP framework via CLA
-- All 7 existing legal docs: update "Related documents" sections to include CLA references (14 files total -- 7 source + 7 site)
-
-### Phase 5: Docs Site and Versioning
+### Phase 4: Docs Site and Versioning
 
 **Modify:**
 - `plugins/soleur/docs/pages/legal.njk` -- add 2 new card entries (Individual CLA, Corporate CLA), update count from 7 to 9, category: "Agreement"
-- `plugins/soleur/.claude-plugin/plugin.json` -- bump version `3.3.5` → `3.4.0`
-- `plugins/soleur/CHANGELOG.md` -- add `[3.4.0]` entry under `### Added`
-- `plugins/soleur/README.md` -- update version reference
-- `README.md` (root) -- update version badge from `3.3.5` to `3.4.0`
-- `.github/ISSUE_TEMPLATE/bug_report.yml` -- update placeholder from `3.3.5` to `3.4.0`
+- Version bump `3.3.5` → `3.4.0` across all version locations: `plugin.json`, `CHANGELOG.md`, `README.md` (plugin + root), `bug_report.yml`
 
 ## Acceptance Criteria
 
@@ -133,14 +129,14 @@ Draft both CLA documents using Apache ICLA/CCLA as templates adapted for BSL 1.1
 - [ ] CLA Assistant GitHub Action workflow exists and runs on PRs
 - [ ] Bot accounts (dependabot, github-actions, renovate) are exempt
 - [ ] CONTRIBUTING.md has CLA section with plain-language explanation
-- [ ] PR template has CLA notice
 - [ ] Privacy policy updated to disclose CLA signature collection
 - [ ] Data protection disclosure updated with CLA processing activity
 - [ ] T&C Section 5 references contributor CLA framework
-- [ ] All existing legal docs have CLA in "Related documents"
 - [ ] Legal hub page shows 9 documents with both CLA cards
 - [ ] Plugin version bumped to 3.4.0 across triad
 - [ ] Cross-document consistency verified (entity name, jurisdiction, contact)
+- [ ] Post-merge manual steps documented in PR description (gist, secret, ruleset)
+- [ ] Smoke test: CLA action triggers on a test PR
 
 ## Test Scenarios
 
