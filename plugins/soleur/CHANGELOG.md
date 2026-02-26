@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.3.2] - 2026-02-26
+
+### Added
+
+- **Worktree write guard hook**: New PreToolUse hook (`.claude/hooks/worktree-write-guard.sh`) that blocks `Write` and `Edit` tool calls targeting the main repo checkout when worktrees exist, preventing the recurring problem of agents creating files on main instead of in the active worktree
+
+### Fixed
+
+- **cleanup-merged untracked file false positive**: Change uncommitted-changes check in `cleanup_merged_worktrees()` to only consider tracked file changes (`git diff --quiet HEAD` + `git diff --cached --quiet`), so untracked files (screenshots, temp artifacts) no longer block the post-cleanup `git pull`
+
 ## [3.3.1] - 2026-02-25
 
 ### Fixed

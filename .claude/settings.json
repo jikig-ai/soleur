@@ -12,6 +12,15 @@
             "command": ".claude/hooks/guardrails.sh"
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/worktree-write-guard.sh"
+          }
+        ]
       }
     ]
   }
