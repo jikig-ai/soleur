@@ -269,25 +269,20 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - Figma designs match (if applicable)
    - No console errors or warnings
 
-### Phase 4: Ship It
+### Phase 4: Handoff
 
-Delegate to the `/ship` skill, which enforces the complete shipping checklist:
+Implementation is complete. **Do not invoke ship from here.** The caller (one-shot, or the user) controls when review, compound, and ship run. This separation ensures review findings can be addressed before merge.
 
-```text
-skill: ship
-```
+**Announce to the user:**
 
-The `/ship` skill handles all shipping steps in order:
+"Implementation complete. Next steps: `review` -> `compound` -> `ship`"
 
-1. Validate artifact trail (brainstorms, specs, plans committed)
-2. Capture learnings via `skill: soleur:compound` (asks if not already run)
-3. Verify documentation (README counts, tables)
-4. Run tests
-5. Version bump (plugin.json + CHANGELOG + README triad)
-6. Push and create PR (with screenshots for UI changes)
-7. Post-merge cleanup (worktree removal)
+The recommended post-implementation sequence:
 
-**Do not skip this delegation.** The `/ship` skill exists specifically to prevent missed steps like forgotten `/compound` runs, uncommitted artifacts, and missing version bumps. Running Phase 4 manually is how steps get skipped.
+1. `skill: soleur:review` -- multi-agent code review
+2. `skill: soleur:resolve-todo-parallel` -- fix review findings
+3. `skill: soleur:compound` -- capture learnings
+4. `skill: soleur:ship` -- version bump, push, PR, merge, cleanup
 
 ---
 
@@ -350,7 +345,7 @@ Before entering Phase 4, verify these Phase 2-3 items are complete:
 - [ ] Code follows existing patterns
 - [ ] Figma designs match implementation (if applicable)
 
-Phase 4 (`/ship`) handles the rest: `/compound`, version bump, screenshots, PR creation, and post-merge cleanup.
+After Phase 4 handoff, the caller handles: `/review`, `/compound`, `/ship` (version bump, push, PR, merge, cleanup).
 
 ## When to Use Reviewer Agents
 
