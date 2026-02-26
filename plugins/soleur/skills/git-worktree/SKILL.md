@@ -16,6 +16,7 @@ This skill provides a unified interface for managing Git worktrees across your d
 - **Interactive confirmations** at each step
 - **Automatic .gitignore management** for worktree directory
 - **Automatic .env file copying** from main repo to new worktrees
+- **Write guard enforcement** via PreToolUse hook (`.claude/hooks/worktree-write-guard.sh`) -- blocks Write/Edit to main checkout when worktrees exist
 
 ## CRITICAL: Always Use the Manager Script
 

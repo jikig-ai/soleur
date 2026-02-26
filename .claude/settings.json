@@ -1,4 +1,12 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(git add -A && git commit:*)",
+      "Bash(git add && git commit:*)",
+      "Bash(git commit -m:*)",
+      "Bash(git commit -F:*)"
+    ]
+  },
   "env": {
     "CLAUDE_CODE_EFFORT_LEVEL": "high"
   },
@@ -10,6 +18,15 @@
           {
             "type": "command",
             "command": ".claude/hooks/guardrails.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/worktree-write-guard.sh"
           }
         ]
       }

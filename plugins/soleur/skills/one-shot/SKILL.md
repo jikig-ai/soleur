@@ -13,6 +13,14 @@ bash ./plugins/soleur/scripts/setup-ralph-loop.sh "finish all slash commands" --
 
 **Step 0b: Ensure branch isolation.** Check the current branch with `git branch --show-current`. If on the default branch (main or master), pull latest and create a feature branch named `feat/one-shot-<slugified-arguments>` before proceeding. Parallel agents on the same repo cause silent merge conflicts when both work on main.
 
+**Step 0c: Create draft PR.** After creating the feature branch, create a draft PR:
+
+```bash
+bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh draft-pr
+```
+
+If this fails (no network), print a warning but continue. The branch exists locally.
+
 **Steps 1-2: Plan + Deepen (Isolated Subagent)**
 
 Spawn a Task general-purpose subagent to run plan and deepen-plan. This creates a compaction boundary -- the subagent's context is discarded after it returns, freeing headroom for implementation.
