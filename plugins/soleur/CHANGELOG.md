@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Data Protection Disclosure** -- Added CLA signature processing activity and updated Controller scope description.
 - **Legal hub page** -- Updated document count from 7 to 9, added Individual CLA and Corporate CLA cards.
 
+## [3.3.7] - 2026-02-26
+
+### Changed
+
+- **Landing page hero** -- Removed "The Company-as-a-Service Platform" badge from homepage hero section. Tightened hero top padding from `--space-12` (128px) to `--space-10` (80px). Cleaned up unused `.hero-badge` and `.hero-badge-dot` CSS rules. CaaS positioning retained in frontmatter description, vision page, llms.txt, and legal documents.
+- **Git worktree SKILL.md** -- Added note about running `npm install` after worktree creation (worktrees don't share `node_modules/`).
+
 ## [3.3.5] - 2026-02-26
 
 ### Fixed

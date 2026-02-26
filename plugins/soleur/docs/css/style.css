@@ -404,26 +404,8 @@
   /* Landing page: Hero */
   .landing-hero {
     margin-top: var(--header-h);
-    padding: var(--space-12) var(--space-5) var(--space-10);
+    padding: var(--space-10) var(--space-5) var(--space-10);
     text-align: center;
-  }
-  .landing-hero .hero-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-2) var(--space-5);
-    border: 1px solid rgba(201, 169, 98, 0.25);
-    border-radius: 9999px;
-    font-size: var(--text-sm);
-    color: var(--color-accent);
-    margin-bottom: var(--space-8);
-  }
-  .hero-badge-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--color-accent);
-    box-shadow: 0 0 8px rgba(201, 169, 98, 0.5);
   }
   .landing-hero h1 {
     font-family: var(--font-display);

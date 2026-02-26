@@ -14,6 +14,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Agent prompts must contain only instructions the LLM would get wrong without them -- omit general domain knowledge, error handling, and boilerplate the model already knows
 - Agent frontmatter must include a `model` field (`inherit`, `haiku`, `sonnet`, or `opus`) to control execution model
 - Command frontmatter must include an `argument-hint` field describing expected arguments
+- Add allow rules to `.claude/settings.json` for session-start commands that inherently require `$()` -- don't extract them into scripts
 - Shell scripts must use `#!/usr/bin/env bash` shebang and declare `set -euo pipefail` at the top
 - Shell scripts use snake_case for function names and local variables, SCREAMING_SNAKE_CASE for global constants
 - Shell functions must declare all variables with `local`; error messages go to stderr (`>&2`)
@@ -72,6 +73,7 @@ Project principles organized by domain. Add principles as you learn them.
 - When adding or integrating new agents, verify the cumulative agent description token count stays under 15k tokens -- agent descriptions are injected into the system prompt on every turn and bloated descriptions degrade all conversations
 - Before adding new GitHub Actions workflows, audit existing ones with `gh run list --workflow=<name>.yml` -- remove workflows that are always skipped (condition never matches) or superseded by newer workflows that absorbed their functionality
 - Agent descriptions for agents with overlapping scope must include a one-line disambiguation sentence: "Use [sibling] for [its scope]; use this agent for [this scope]." When adding a new agent to a domain, update ALL existing sibling descriptions to cross-reference the new agent -- disambiguation is a graph property, not just a property of the new node
+- After creating a worktree, run `npm install` before any build commands (`npx @11ty/eleventy`, etc.) -- worktrees do not share `node_modules/` with the main working tree, and missing dependencies cause silent hangs rather than error messages
 - The project uses Bun as the JavaScript runtime with ESM modules (`"type": "module"`); pre-commit hooks are managed by lefthook (not Husky)
 - Claude Code effort level must be set via `env.CLAUDE_CODE_EFFORT_LEVEL` in `.claude/settings.json`, not as a top-level `effortLevel` field (which is not in the schema); valid values: `low`, `medium`, `high`
 - When fixing a pattern across plugin files (e.g., removing `$()`, renaming a reference), search ALL `.md` files under `plugins/soleur/` -- not just the category (commands/, skills/, agents/) that triggered the report; reference docs, SKILL.md, and agent definitions all contain executable bash blocks
