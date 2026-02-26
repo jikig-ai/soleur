@@ -1,5 +1,5 @@
 ---
-name: soleur:go
+name: go
 description: Unified entry point that classifies intent and routes to the right workflow skill
 argument-hint: "[what you want to do]"
 ---

@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [3.2.2] - 2026-02-25
+## [3.3.2] - 2026-02-26
 
 ### Added
 
@@ -19,6 +19,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **One-shot SKILL.md** -- Step 0c creates draft PR after branch creation.
 - **Plan SKILL.md** -- Save Tasks section commits plan + tasks.md together and pushes at skill boundary.
 - **Ship SKILL.md** -- Phase 7 detects existing draft PR via `gh pr list --head`, uses `gh pr edit` + `gh pr ready` instead of creating new PR. Falls through to `gh pr create` when no draft PR exists (backwards compatible).
+
+## [3.3.1] - 2026-02-25
+
+### Fixed
+
+- **Double-namespaced commands**: Move commands from `commands/soleur/*.md` to `commands/*.md` to fix double-namespacing (`soleur:soleur:go` -> `soleur:go`). The plugin loader uses subdirectory names as part of the namespace, so `commands/soleur/go.md` produced `soleur:soleur:go` instead of the intended `soleur:go`
+- Update command frontmatter `name` fields to omit the `soleur:` prefix (plugin namespace auto-adds it)
+- Update all internal path references (`AGENTS.md`, `helpers.ts`, `stats.js`, `compound-capture`, `sync`, `help`)
+
+## [3.3.0] - 2026-02-25
+
+### Added
+
+- **Legal benchmark audit mode**: Extend `legal-compliance-auditor` agent and `legal-audit` skill with a `benchmark` sub-command that checks legal documents against GDPR Article 13/14 regulatory disclosure checklists and compares clause coverage against peer SaaS policies (Basecamp, GitHub)
+  - GDPR Art 13/14 enumerated disclosure checklist (13 items) with `[REGULATORY]` finding labels
+  - Peer comparison via WebFetch with curated URL table and graceful `[SKIPPED]` fallback
+  - Benchmark summary with disclosure coverage score and peer comparison stats
+  - CLO delegation table updated to suggest `legal-audit benchmark` for competitive benchmarking
+
+## [3.2.2] - 2026-02-25
+
+### Fixed
+
+- **functional-discovery approval prompt**: Merge two separate bash blocks in "Already-Installed Check" into a single command, preventing the agent from inserting `echo "---"` separators that trigger Claude Code's "quoted characters in flag names" approval prompt
 
 ## [3.2.1] - 2026-02-25
 

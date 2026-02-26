@@ -1,5 +1,5 @@
 ---
-name: soleur:sync
+name: sync
 description: Analyze codebase and populate knowledge-base with conventions, patterns, and technical debt
 argument-hint: "[area: conventions|architecture|testing|debt|overview|all]"
 ---
@@ -339,7 +339,7 @@ List all definitions by name:
 
 - Skills: `plugins/soleur/skills/*/SKILL.md` (flat, one level)
 - Agents: `plugins/soleur/agents/**/*.md` (recursive)
-- Commands: `plugins/soleur/commands/soleur/*.md` (flat)
+- Commands: `plugins/soleur/commands/*.md` (flat)
 
 **4.3 Match**
 

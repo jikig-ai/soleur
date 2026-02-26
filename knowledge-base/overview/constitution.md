@@ -30,6 +30,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Avoid second person ("you should") - use objective language ("To accomplish X, do Y")
 - Never use shell variable expansion (`${VAR}`, `$VAR`, `$()`) in bash code blocks within skill, command, or agent .md files -- use angle-bracket prose placeholders (`<variable-name>`) with substitution instructions instead, or relative paths (e.g., `./plugins/soleur/...`) for plugin-relative paths; the ship skill's "No command substitution" pattern is the reference implementation
 - Never anchor guardrail grep patterns to `^` alone -- the Bash tool chains commands with `&&`, `;`, and `||`, so a `^`-anchored pattern only catches the first command; match at command boundaries with `(^|&&|\|\||;)` instead
+- Never write bash code blocks in agent/skill prompts that trigger Claude Code's approval heuristics -- pre-combine multiple blocks into a single `;`-joined command (models insert `echo "---"` separators otherwise), avoid quoted strings starting with dashes (`"---"`, `"-flag"`), and keep commands simple enough to auto-approve; if a command requires user consent, the agent blocks waiting for input it will never receive when running as a subagent
 
 ### Prefer
 
@@ -87,6 +88,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Never put `<example>` blocks or `<commentary>` tags in agent description frontmatter -- these belong in the agent body (after `---`) which is only loaded on invocation; descriptions are loaded into the system prompt on every turn and their cumulative size must stay minimal
 - Never skip compound's constitution promotion or route-to-definition phases in automated pipelines (one-shot, ship) -- the model will rationalize skipping them as "pipeline mode" optimization, but these are the phases that prevent repeated mistakes across sessions
 - Never spawn file-modifying agents (ops-provisioner, brand-architect, etc.) from the main branch -- create a worktree first; agents that edit project files should include a defensive branch check as a safety net, but the primary enforcement belongs at the caller (command/skill) layer
+- Never nest command `.md` files in subdirectories under `commands/` -- the plugin loader treats subdirectory names as namespace segments, causing double-namespacing (e.g., `commands/soleur/go.md` becomes `soleur:soleur:go` instead of `soleur:go`)
 - Never construct filesystem paths from git ref names -- use `git worktree list --porcelain` to resolve actual worktree paths; refs use `/` separators (e.g., `feat/fix-x`) but worktree directories may use `-` (e.g., `feat-fix-x`), causing silent path mismatches
 
 ### Prefer

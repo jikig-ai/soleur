@@ -48,3 +48,62 @@ Flag inconsistencies as CRITICAL findings.
 NEVER write audit findings to files. Present all findings inline in the conversation only. This is a hard requirement for open-source repositories where aggregated compliance findings could expose security posture.
 
 If asked to save the report to a file, decline and explain that audit findings should remain in the conversation.
+
+### 4. Regulatory Benchmark Mode
+
+When the Task prompt includes "benchmark mode", run these additional checks alongside the standard compliance audit. Benchmark findings use the source prefix `[REGULATORY]`:
+
+```
+[HIGH] [REGULATORY] Data Subject Rights > Missing DPO contact details > GDPR Article 13(1)(b) requires disclosure of DPO contact details where applicable
+```
+
+**GDPR Article 13 disclosure checklist** -- verify each document discloses:
+
+1. Identity and contact details of the controller
+2. Contact details of the Data Protection Officer (where applicable)
+3. Purposes of processing and legal basis for each
+4. Legitimate interests pursued (where legal basis is Art. 6(1)(f))
+5. Recipients or categories of recipients of personal data
+6. Transfers to third countries and the safeguards applied
+7. Retention periods or criteria for determining retention
+8. Data subject rights (access, rectification, erasure, restriction, portability, objection)
+9. Right to withdraw consent (where consent is the legal basis)
+10. Right to lodge a complaint with a supervisory authority
+11. Whether provision of data is statutory/contractual requirement and consequences of non-provision
+12. Existence of automated decision-making including profiling (Art. 22)
+13. Source of data (Art. 14 only -- where data not obtained from the data subject)
+
+Check each item against the relevant document (Privacy Policy primarily, but cross-reference Terms & Conditions and GDPR Policy). Report missing items as `[HIGH] [REGULATORY]` findings. Report partially addressed items as `[MEDIUM] [REGULATORY]`.
+
+### 5. Peer Comparison Mode
+
+When running in benchmark mode, also compare document coverage against peer SaaS policies. Peer comparison is best-effort -- WebFetch may fail on some URLs.
+
+**Curated peer URLs:**
+
+| Document Type | Peer | URL |
+|---|---|---|
+| Terms & Conditions | Basecamp | `https://basecamp.com/about/policies/terms` |
+| Privacy Policy | Basecamp | `https://basecamp.com/about/policies/privacy` |
+| Acceptable Use Policy | GitHub | `https://docs.github.com/en/site-policy/acceptable-use-policies/github-acceptable-use-policies` |
+
+Only these three document types have standalone peer equivalents. For all other document types (Cookie Policy, GDPR Policy, Data Protection Disclosure, Disclaimer), report:
+
+```
+[INFO] [PEER] No standalone peer equivalent for <type>. Peer companies typically embed this content in their Terms of Service or Privacy Policy.
+```
+
+**Fetching and comparing:** Use WebFetch to retrieve each peer URL. Compare structural coverage: what sections does the peer include that the audited document does not?
+
+- If WebFetch returns usable content, compare and report gaps as `[SEVERITY] [PEER:<name>] Section > Issue > Recommendation`.
+- If WebFetch returns unusable content (PDF landing page, consent banner, 404, error), report: `[INFO] [PEER:<name>] [SKIPPED] Could not retrieve — <reason>` and continue to the next peer. Never silently omit a peer.
+
+**Benchmark summary:** After the standard summary block, add:
+
+```
+## Benchmark Summary
+- GDPR Art 13/14 disclosures: X/13 present
+- Peer comparisons: N attempted, N successful, N skipped
+```
+
+Benchmark findings are subject to the same output restriction as standard findings -- conversation-only, never persisted to files.
