@@ -89,16 +89,16 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 2. Use the **Skill tool**: `skill: soleur:plan`, args: "$ARGUMENTS" and then `skill: soleur:deepen-plan` inline (no compaction benefit, but pipeline continues)
 3. Continue to step 3.
 
-**Steps 3-9: Implementation through Ship**
+**Steps 3-10: Implementation, Review, and Ship**
 
-3. Use the **Skill tool**: `skill: soleur:work`, args: "<plan_file_path>"
+3. Use the **Skill tool**: `skill: soleur:work`, args: "<plan_file_path>". Work handles implementation only (Phases 0-3). It does NOT invoke ship -- one-shot controls the full lifecycle below.
 4. Use the **Skill tool**: `skill: soleur:review`
 5. Use the **Skill tool**: `skill: soleur:resolve-todo-parallel`
 6. Use the **Skill tool**: `skill: soleur:compound`
-6.5. **Version-bump recheck.** After compound completes, check if it staged changes under `plugins/soleur/` by running `git diff --cached --name-only -- plugins/soleur/` and `git diff --name-only -- plugins/soleur/`. If either returns results, compound's route-to-definition edited plugin files after ship already did the version bump. In that case: re-read `plugins/soleur/.claude-plugin/plugin.json` for the current version, bump PATCH, update the versioning triad (plugin.json, CHANGELOG.md, README.md), sync external references (root README badge, bug_report.yml), stage all changes, and commit. If no new plugin changes, skip.
-7. Use the **Skill tool**: `skill: soleur:test-browser`
-8. Use the **Skill tool**: `skill: soleur:feature-video`
-9. Output `<promise>DONE</promise>` when video is in PR
+7. Use the **Skill tool**: `skill: soleur:ship`. Ship handles compound re-check (Phase 2), documentation verification (Phase 3), tests (Phase 4), version bump (Phase 5), push, PR creation, CI, merge, and cleanup.
+8. Use the **Skill tool**: `skill: soleur:test-browser`
+9. Use the **Skill tool**: `skill: soleur:feature-video`
+10. Output `<promise>DONE</promise>` when video is in PR
 
 CRITICAL RULE: If a completion promise is set, you may ONLY output it when the statement is completely and unequivocally TRUE. Do not output false promises to escape the loop.
 
