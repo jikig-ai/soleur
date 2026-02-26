@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.4.0] - 2026-02-26
+
+### Added
+
+- **Individual CLA** (`docs/legal/individual-cla.md`) -- Contributor License Agreement for individuals with copyright license grant, patent grant, and relicensing terms. Covers French moral rights (droits moraux).
+- **Corporate CLA** (`docs/legal/corporate-cla.md`) -- Contributor License Agreement for organizations covering contributions by employees and authorized representatives.
+- **CLA Assistant workflow** (`.github/workflows/cla.yml`) -- GitHub Action using `contributor-assistant/github-action@v2.6.1` (SHA-pinned) with repo-based signature storage on `cla-signatures` branch. Bot allowlist for dependabot, github-actions, and renovate.
+- **Docs site CLA pages** -- Eleventy pages for Individual CLA and Corporate CLA in the legal section.
+
+### Changed
+
+- **CONTRIBUTING.md** -- Added CLA section explaining signing process, corporate CLA path, and bot mechanics.
+- **Terms & Conditions** -- Added Section 5.5 (Contributor Intellectual Property) referencing CLA requirements for PR contributors.
+- **Privacy Policy** -- Added Section 4.5 documenting CLA signature data processing (GitHub username, timestamp, PR reference) under GDPR Art. 6(1)(f) legitimate interest.
+- **Data Protection Disclosure** -- Added CLA signature processing activity and updated Controller scope description.
+- **Legal hub page** -- Updated document count from 7 to 9, added Individual CLA and Corporate CLA cards.
+
 ## [3.3.5] - 2026-02-26
 
 ### Fixed
