@@ -7,35 +7,35 @@
 ## Phase 1: Core Components
 
 ### 1.0 Trim existing agent descriptions for budget headroom
-- [ ] Measure current budget: `shopt -s globstar && grep -h 'description:' plugins/soleur/agents/**/*.md | wc -w`
-- [ ] Identify verbose descriptions to trim (`pricing-strategist`, `programmatic-seo-specialist` are candidates)
-- [ ] Trim 15-20 words to create safe headroom for new agent + sibling disambiguation updates
-- [ ] Re-verify word count after trimming
+- [x] Measure current budget: `shopt -s globstar && grep -h 'description:' plugins/soleur/agents/**/*.md | wc -w`
+- [x] Identify verbose descriptions to trim (`pricing-strategist`, `programmatic-seo-specialist` are candidates)
+- [x] Trim 15-20 words to create safe headroom for new agent + sibling disambiguation updates
+- [x] Re-verify word count after trimming
 
 ### 1.1 Create competitive-intelligence agent
-- [ ] Create `plugins/soleur/agents/product/competitive-intelligence.md`
-- [ ] Frontmatter: `name: competitive-intelligence`, `description:` (under 25 words), `model: inherit`
-- [ ] Description includes disambiguation vs. `business-validator`
-- [ ] Body: context loading, research process, output contract (with CI fallback), sharp edges
-- [ ] Verify cumulative description word count under 2,500
+- [x] Create `plugins/soleur/agents/product/competitive-intelligence.md`
+- [x] Frontmatter: `name: competitive-intelligence`, `description:` (under 25 words), `model: inherit`
+- [x] Description includes disambiguation vs. `business-validator`
+- [x] Body: context loading, research process, output contract (with CI fallback), sharp edges
+- [x] Verify cumulative description word count under 2,500
 
 ### 1.2 Create competitive-analysis skill
-- [ ] Create `plugins/soleur/skills/competitive-analysis/SKILL.md`
-- [ ] Frontmatter: `name: competitive-analysis`, third-person description with trigger phrases
-- [ ] Non-interactive detection: any `$ARGUMENTS` present = skip prompts, use default tiers (0,3)
-- [ ] Interactive path: AskUserQuestion for tier selection
-- [ ] Delegates to competitive-intelligence agent via Task tool
+- [x] Create `plugins/soleur/skills/competitive-analysis/SKILL.md`
+- [x] Frontmatter: `name: competitive-analysis`, third-person description with trigger phrases
+- [x] Non-interactive detection: any `$ARGUMENTS` present = skip prompts, use default tiers (0,3)
+- [x] Interactive path: AskUserQuestion for tier selection
+- [x] Delegates to competitive-intelligence agent via Task tool
 
 ## Phase 2: Integration
 
 ### 2.1 Update CPO routing
-- [ ] Add delegation row to `plugins/soleur/agents/product/cpo.md`: competitive analysis signals -> competitive-intelligence
-- [ ] Update CPO description to include competitive-intelligence in orchestrated agents list
+- [x] Add delegation row to `plugins/soleur/agents/product/cpo.md`: competitive analysis signals -> competitive-intelligence
+- [x] Update CPO description to include competitive-intelligence in orchestrated agents list
 
 ### 2.2 Update sibling agent disambiguation (both directions)
-- [ ] Update `plugins/soleur/agents/product/business-validator.md` description: add disambiguation referencing competitive-intelligence
-- [ ] Update `plugins/soleur/agents/marketing/growth-strategist.md` description: add disambiguation referencing competitive-intelligence
-- [ ] Re-verify cumulative description word count after all description changes
+- [x] Update `plugins/soleur/agents/product/business-validator.md` description: add disambiguation referencing competitive-intelligence
+- [x] Update `plugins/soleur/agents/marketing/growth-strategist.md` description: add disambiguation referencing competitive-intelligence
+- [x] Re-verify cumulative description word count after all description changes
 
 ## Phase 3: Version Bump and Documentation
 
