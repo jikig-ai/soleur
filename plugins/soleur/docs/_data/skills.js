@@ -39,8 +39,9 @@ const SKILL_CATEGORIES = {
   "spec-templates": "Development",
   "user-story-writer": "Development",
 
-  // Review & Planning (6)
+  // Review & Planning (7)
   brainstorm: "Review & Planning",
+  "competitive-analysis": "Review & Planning",
   "deepen-plan": "Review & Planning",
   "heal-skill": "Review & Planning",
   plan: "Review & Planning",
