@@ -1,0 +1,34 @@
+name: "Scheduled: Competitive Analysis"
+
+on:
+  schedule:
+    - cron: '0 9 1 * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: schedule-competitive-analysis
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  run-schedule:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Run scheduled skill
+        uses: anthropics/claude-code-action@1dd74842e568f373608605d9e45c9e854f65f543 # v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
+          plugins: 'soleur@soleur'
+          claude_args: '--model claude-sonnet-4-6 --max-turns 30'
+          prompt: |
+            Run /soleur:competitive-analysis --tiers 0,3 on this repository.
+            After your analysis is complete, create a GitHub issue titled
+            "[Scheduled] Competitive Analysis - <today's date in YYYY-MM-DD format>"
+            with the label "scheduled-competitive-analysis" summarizing your findings.

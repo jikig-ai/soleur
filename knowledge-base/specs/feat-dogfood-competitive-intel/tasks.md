@@ -2,19 +2,19 @@
 
 ## Phase 1: Setup
 
-- [ ] 1.1 Verify `ANTHROPIC_API_KEY` repository secret exists (`gh secret list`)
-- [ ] 1.2 Verify `.claude-plugin/marketplace.json` exists and has correct plugin version (3.7.0)
+- [x] 1.1 Verify `ANTHROPIC_API_KEY` repository secret exists (`gh secret list`)
+- [x] 1.2 Verify `.claude-plugin/marketplace.json` exists and has correct plugin version (3.7.0)
 
 ## Phase 2: Core Implementation
 
-- [ ] 2.1 Run `/soleur:schedule create --name competitive-analysis --skill competitive-analysis --cron "0 9 1 * *" --model claude-sonnet-4-6`
-- [ ] 2.2 Verify generated workflow file at `.github/workflows/scheduled-competitive-analysis.yml`
-- [ ] 2.3 Confirm actions are SHA-pinned (not mutable tags like `@v4`)
-- [ ] 2.4 Edit prompt to include `--tiers 0,3` after `/soleur:competitive-analysis` (template does not support skill-specific args)
-- [ ] 2.5 Add `--max-turns 30` to `claude_args` field for sufficient scan depth
-- [ ] 2.6 Validate YAML syntax passes (`python3 -c "import yaml; ..."`)
-- [ ] 2.7 Confirm concurrency group is set with `cancel-in-progress: false`
-- [ ] 2.8 Confirm permissions include `contents: read` and `issues: write`
+- [x] 2.1 Run `/soleur:schedule create --name competitive-analysis --skill competitive-analysis --cron "0 9 1 * *" --model claude-sonnet-4-6`
+- [x] 2.2 Verify generated workflow file at `.github/workflows/scheduled-competitive-analysis.yml`
+- [x] 2.3 Confirm actions are SHA-pinned (not mutable tags like `@v4`)
+- [x] 2.4 Edit prompt to include `--tiers 0,3` after `/soleur:competitive-analysis` (template does not support skill-specific args)
+- [x] 2.5 Add `--max-turns 30` to `claude_args` field for sufficient scan depth
+- [x] 2.6 Validate YAML syntax passes (`python3 -c "import yaml; ..."`)
+- [x] 2.7 Confirm concurrency group is set with `cancel-in-progress: false`
+- [x] 2.8 Confirm permissions include `contents: read` and `issues: write`
 
 ## Phase 3: Ship and Validate
 

@@ -156,17 +156,17 @@ From `knowledge-base/learnings/2026-02-27-schedule-skill-ci-plugin-discovery-and
 
 ## Acceptance Criteria
 
-- [ ] `.github/workflows/scheduled-competitive-analysis.yml` exists with SHA-pinned actions
-- [ ] Workflow has both `schedule` (cron) and `workflow_dispatch` triggers
-- [ ] Cron expression is `0 9 1 * *` (monthly on the 1st at 09:00 UTC)
-- [ ] Workflow uses `plugin_marketplaces` and `plugins` for Soleur discovery
-- [ ] Prompt passes `--tiers 0,3` to the competitive-analysis skill
-- [ ] `claude_args` includes `--max-turns 30` for sufficient scan depth
-- [ ] YAML validates without syntax errors
+- [x] `.github/workflows/scheduled-competitive-analysis.yml` exists with SHA-pinned actions
+- [x] Workflow has both `schedule` (cron) and `workflow_dispatch` triggers
+- [x] Cron expression is `0 9 1 * *` (monthly on the 1st at 09:00 UTC)
+- [x] Workflow uses `plugin_marketplaces` and `plugins` for Soleur discovery
+- [x] Prompt passes `--tiers 0,3` to the competitive-analysis skill
+- [x] `claude_args` includes `--max-turns 30` for sufficient scan depth
+- [x] YAML validates without syntax errors
 - [ ] Manual `workflow_dispatch` trigger runs successfully
 - [ ] Workflow run creates a GitHub Issue with competitive intelligence content
-- [ ] Concurrency group prevents overlapping runs
-- [ ] Actions are pinned to commit SHAs with human-readable version comments
+- [x] Concurrency group prevents overlapping runs
+- [x] Actions are pinned to commit SHAs with human-readable version comments
 
 ## Test Scenarios
 
