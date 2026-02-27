@@ -7,7 +7,7 @@ description: This skill should be used when Pencil MCP tools are unavailable and
 
 Auto-detect, install, and register the Pencil MCP server with Claude Code CLI.
 
-**Prerequisite:** Pencil Desktop, and VS Code or Cursor must be installed. Pencil MCP requires a running IDE with the Pencil extension active.
+**Prerequisite:** VS Code or Cursor must be installed. Pencil MCP requires a running IDE with the Pencil extension active. Pencil Desktop is optional.
 
 ## Phase 0: Dependency Check
 

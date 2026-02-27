@@ -9,12 +9,11 @@ AUTO_INSTALL=false
 # Detect OS for platform-specific checks
 OS="unknown"
 [[ "$(uname -s)" == "Darwin" ]] && OS="macos"
-[[ -f /etc/debian_version ]] && OS="debian"
+[[ "$(uname -s)" == "Linux" ]] && OS="linux"
 
 # -- Detection Functions --
 
 detect_pencil_desktop() {
-  # Platform-specific checks first (avoid pencil CLI name collision with evolus/pencil)
   case "$OS" in
     macos)
       test -d "/Applications/Pencil.app" && return 0
@@ -22,9 +21,12 @@ detect_pencil_desktop() {
       # TODO: verify bundle ID 'dev.pencil.desktop' against actual Pencil.app Info.plist
       mdfind "kMDItemCFBundleIdentifier == 'dev.pencil.desktop'" 2>/dev/null | grep -q . && return 0
       ;;
-    debian)
-      # TODO: verify .deb package name -- may be 'pencil-desktop' or 'pencil-app', not 'pencil'
-      dpkg -s pencil 2>/dev/null | grep -q '^Status:.*installed' && return 0
+    linux)
+      # Pencil Desktop is distributed as AppImage on Linux (no .deb/.rpm)
+      # Check common AppImage locations
+      for dir in "$HOME/Applications" "$HOME/.local/bin" "/opt"; do
+        ls "$dir"/Pencil*.AppImage 2>/dev/null | grep -q . && return 0
+      done
       ;;
   esac
   # Cross-platform fallback: pencil CLI (requires explicit install from Desktop menu)
@@ -53,22 +55,7 @@ detect_extension() {
 echo "=== Pencil Setup Dependency Check ==="
 echo
 
-# 1. Hard dependency: Pencil Desktop app
-if detect_pencil_desktop; then
-  echo "  [ok] Pencil Desktop"
-else
-  echo "  [MISSING] Pencil Desktop (required)"
-  case "$OS" in
-    macos)  echo "    Download: https://www.pencil.dev/downloads (macOS .dmg)" ;;
-    debian) echo "    Download: https://www.pencil.dev/downloads (Linux .deb)" ;;
-    *)      echo "    Download: https://www.pencil.dev/downloads" ;;
-  esac
-  echo
-  echo "Install Pencil Desktop, then run this check again."
-  exit 1
-fi
-
-# 2. Hard dependency: IDE (Cursor or VS Code)
+# 1. Hard dependency: IDE (Cursor or VS Code)
 IDE=$(detect_ide)
 if [[ -n "$IDE" ]]; then
   echo "  [ok] IDE: $IDE"
@@ -79,7 +66,7 @@ else
   exit 1
 fi
 
-# 3. Hard dependency: Pencil IDE extension (auto-installable)
+# 2. Hard dependency: Pencil IDE extension (auto-installable)
 BINARY=$(detect_extension "$IDE")
 if [[ -n "$BINARY" ]]; then
   echo "  [ok] Pencil extension"
@@ -107,6 +94,18 @@ else
     echo "    https://docs.pencil.dev/getting-started/installation"
     exit 1
   fi
+fi
+
+# 3. Informational: Pencil Desktop app (not required for MCP setup)
+if detect_pencil_desktop; then
+  echo "  [ok] Pencil Desktop"
+else
+  echo "  [info] Pencil Desktop not found (optional)"
+  case "$OS" in
+    macos) echo "    Download: https://www.pencil.dev/downloads (macOS .dmg)" ;;
+    linux) echo "    Download: https://www.pencil.dev/downloads (Linux AppImage)" ;;
+    *)     echo "    Download: https://www.pencil.dev/downloads" ;;
+  esac
 fi
 
 # 4. Informational: pencil CLI (not required for MCP setup)
