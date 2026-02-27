@@ -161,6 +161,7 @@ Project principles organized by domain. Add principles as you learn them.
 - When fixing a prefix-stripping or pattern-matching bug, verify the fix code does not repeat the same single-variant assumption being corrected -- the initial worktree-manager.sh fix reproduced the exact `feat-`-only bug it was supposed to fix; multi-agent review catches this reliably but self-review often misses it
 - Prefer single-pattern grep guards over ANDing separate greps -- independent substring checks cannot enforce syntactic context (e.g., that `.worktrees/` is an `rm` argument, not comment text); combine into one regex that enforces proximity
 - Prefer hook-based enforcement over documentation-only rules for agent discipline -- PreToolUse hooks make violations impossible rather than aspirational; reserve AGENTS.md hard rules for cases where hooks cannot intercept (e.g., reasoning errors, not tool calls)
+- Diagnostic scripts must print positive confirmation on success, not just absence of error -- silent success is indistinguishable from a skipped check; always emit an `[ok]` or equivalent status line for each verified condition
 
 ## Testing
 

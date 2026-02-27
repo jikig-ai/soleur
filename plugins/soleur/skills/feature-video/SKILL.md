@@ -1,6 +1,6 @@
 ---
 name: feature-video
-description: "This skill should be used when recording video walkthroughs of features and adding them to PR descriptions. It captures browser interactions using agent-browser CLI, creates GIF/MP4 demos, uploads via rclone, and updates the PR. Triggers on \"record video\", \"feature demo\", \"PR walkthrough\", \"video for PR\", \"screen recording\"."
+description: "This skill should be used when recording video walkthroughs of features and adding them to PR descriptions. It captures browser interactions using agent-browser CLI, optionally creates GIF/MP4 demos (requires ffmpeg), and optionally uploads via rclone. Gracefully degrades when optional tools are missing. Triggers on \"record video\", \"feature demo\", \"PR walkthrough\", \"video for PR\", \"screen recording\"."
 ---
 
 # Feature Video Walkthrough
@@ -14,32 +14,45 @@ description: "This skill should be used when recording video walkthroughs of fea
 This skill creates professional video walkthroughs of features for PR documentation:
 - Records browser interactions using agent-browser CLI
 - Demonstrates the complete user flow
-- Uploads the video for easy sharing
-- Updates the PR description with an embedded video
+- Converts screenshots to video/GIF (when ffmpeg is available)
+- Uploads to cloud storage (when rclone is configured)
+- Updates the PR description with the best available output
 
 ## Prerequisites
 
 <requirements>
 - Local development server running (e.g., `bin/dev`, `rails server`)
-- agent-browser CLI installed
+- agent-browser CLI installed (required)
 - Git repository with a PR to document
-- `ffmpeg` installed (for video conversion)
-- `rclone` configured (optional, for cloud upload - see rclone skill)
+- `ffmpeg` installed (optional -- without it, screenshots are captured but no video/GIF is created)
+- `rclone` configured (optional -- without it, video stays local instead of uploading to cloud storage)
 </requirements>
 
-## Setup
+## Phase 0: Dependency Check
 
-**Check installation:**
+Run [check_deps.sh](./scripts/check_deps.sh) before proceeding:
+
 ```bash
-command -v agent-browser >/dev/null 2>&1 && echo "Installed" || echo "NOT INSTALLED"
+bash ./plugins/soleur/skills/feature-video/scripts/check_deps.sh
 ```
 
-**Install if needed:**
-```bash
-npm install -g agent-browser && agent-browser install
-```
+If the script exits non-zero, agent-browser is missing and recording cannot proceed. Stop and inform the user.
 
-See the `agent-browser` skill for detailed usage.
+If ffmpeg or rclone show `[skip]`, note which tools are unavailable. The skill continues with degraded capability:
+- **No ffmpeg**: Capture screenshots only. Skip video/GIF creation in steps 4-5.
+- **No rclone**: Create video locally. Skip upload in step 6.
+
+Store the availability as variables for use in later steps:
+
+```bash
+HAS_FFMPEG=$(command -v ffmpeg >/dev/null 2>&1 && echo "true" || echo "false")
+HAS_RCLONE=$(command -v rclone >/dev/null 2>&1 && echo "true" || echo "false")
+RCLONE_CONFIGURED="false"
+if [ "$HAS_RCLONE" = "true" ]; then
+  REMOTES=$(rclone listremotes 2>/dev/null || true)
+  [ -n "$REMOTES" ] && RCLONE_CONFIGURED="true"
+fi
+```
 
 ## Main Tasks
 
@@ -126,18 +139,16 @@ Does this look right?
 
 <setup_recording>
 
-**Create videos directory:**
+**Create directories:**
 ```bash
-mkdir -p tmp/videos
+mkdir -p tmp/screenshots tmp/videos
 ```
 
 **Recording approach: Use browser screenshots as frames**
 
-agent-browser captures screenshots at key moments, then combine into video using ffmpeg:
+agent-browser captures screenshots at key moments. If ffmpeg is available, screenshots are combined into video/GIF in step 5.
 
-```bash
-ffmpeg -framerate 2 -pattern_type glob -i 'tmp/screenshots/*.png' -vf "scale=1280:-1" tmp/videos/feature-demo.gif
-```
+**If ffmpeg is unavailable:** Screenshots are the final output. Skip video/GIF creation commands in step 5.
 
 </setup_recording>
 
@@ -176,11 +187,12 @@ agent-browser wait 2000
 agent-browser screenshot tmp/screenshots/04-result.png
 ```
 
-**Create video/GIF from screenshots:**
+**Create video/GIF from screenshots (skip if ffmpeg unavailable):**
+
+If `HAS_FFMPEG=false`, skip the ffmpeg commands below. The screenshots in `tmp/screenshots/` are the final output. Inform the user: "ffmpeg not installed -- screenshots captured but video/GIF creation skipped."
 
 ```bash
-# Create directories
-mkdir -p tmp/videos tmp/screenshots
+# Only run if HAS_FFMPEG=true
 
 # Create MP4 video (RECOMMENDED - better quality, smaller size)
 # -framerate 0.5 = 2 seconds per frame (slower playback)
@@ -205,12 +217,11 @@ ffmpeg -y -framerate 0.5 -pattern_type glob -i 'tmp/screenshots/*.png' \
 
 <upload_video>
 
-**Upload with rclone:**
+**Skip this step if `RCLONE_CONFIGURED=false`.** Inform the user: "rclone not available or not configured -- video retained locally at tmp/videos/."
+
+**Upload with rclone (only if RCLONE_CONFIGURED=true):**
 
 ```bash
-# Check rclone is configured
-rclone listremotes
-
 # Upload video, preview GIF, and screenshots to cloud storage
 # Use --s3-no-check-bucket to avoid permission errors
 rclone copy tmp/videos/ r2:kieran-claude/pr-videos/pr-[number]/ --s3-no-check-bucket --progress
@@ -237,11 +248,13 @@ Preview: https://pub-4047722ebb1b4b09853f24d3b61467f1.r2.dev/pr-videos/pr-[numbe
 gh pr view [number] --json body -q '.body'
 ```
 
-**Add video section to PR description:**
+**Add a demo section to the PR description based on what was produced:**
 
-If the PR already has a video section, replace it. Otherwise, append:
+If the PR already has a demo section, replace it. Otherwise, append.
 
-**IMPORTANT:** GitHub cannot embed external MP4s directly. Use a clickable GIF that links to the video:
+**Case A: Video uploaded (HAS_FFMPEG=true, RCLONE_CONFIGURED=true)**
+
+Use a clickable GIF that links to the video (GitHub cannot embed external MP4s directly):
 
 ```markdown
 ## Demo
@@ -251,23 +264,34 @@ If the PR already has a video section, replace it. Otherwise, append:
 *Click to view full video*
 ```
 
-Example:
+**Case B: Video created locally (HAS_FFMPEG=true, RCLONE_CONFIGURED=false)**
+
 ```markdown
-[![Feature Demo](https://pub-4047722ebb1b4b09853f24d3b61467f1.r2.dev/pr-videos/pr-137/feature-demo-preview.gif)](https://pub-4047722ebb1b4b09853f24d3b61467f1.r2.dev/pr-videos/pr-137/feature-demo.mp4)
+## Demo
+
+Video created locally at `tmp/videos/feature-demo.mp4`. Upload manually or configure rclone to embed.
+```
+
+**Case C: Screenshots only (HAS_FFMPEG=false)**
+
+Embed screenshots directly in the PR:
+
+```markdown
+## Demo
+
+Screenshots captured (video conversion requires ffmpeg):
+
+| Step | Screenshot |
+|------|-----------|
+| Start | `tmp/screenshots/01-start.png` |
+| Navigate | `tmp/screenshots/02-navigate.png` |
+| Feature | `tmp/screenshots/03-feature.png` |
+| Result | `tmp/screenshots/04-result.png` |
 ```
 
 **Update the PR:**
 ```bash
-gh pr edit [number] --body "[updated body with video section]"
-```
-
-**Or add as a comment if preferred:**
-```bash
-gh pr comment [number] --body "## Feature Demo
-
-![Demo]([video-url])
-
-_Automated walkthrough of the changes in this PR_"
+gh pr edit [number] --body "[updated body with demo section]"
 ```
 
 </update_pr>
@@ -277,11 +301,13 @@ _Automated walkthrough of the changes in this PR_"
 <cleanup>
 
 ```bash
-# Optional: Clean up screenshots
-rm -rf tmp/screenshots
-
-# Keep videos for reference
-echo "Video retained at: tmp/videos/feature-demo.gif"
+# Only delete screenshots if they were converted to video
+if [ "$HAS_FFMPEG" = "true" ]; then
+  rm -rf tmp/screenshots
+  echo "Screenshots cleaned up (video retained at tmp/videos/)"
+else
+  echo "Screenshots retained at tmp/screenshots/ (no video conversion)"
+fi
 ```
 
 </cleanup>
