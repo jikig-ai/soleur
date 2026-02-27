@@ -41,7 +41,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 |-----------|-------|
 | Agents | 60 |
 | Commands | 3 |
-| Skills | 51 |
+| Skills | 52 |
 | MCP Servers | 3 |
 
 ## Agents
@@ -260,6 +260,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `resolve-parallel` | Resolve TODO comments in parallel |
 | `resolve-pr-parallel` | Resolve PR comments in parallel |
 | `resolve-todo-parallel` | Resolve CLI todos in parallel |
+| `schedule` | Generate GitHub Actions cron workflows for scheduling Soleur skills |
 | `ship` | Enforce feature lifecycle checklist before creating PRs |
 | `test-browser` | Run browser tests on PR-affected pages |
 | `test-fix-loop` | Autonomous test-fix iteration with git stash isolation |
