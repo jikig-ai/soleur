@@ -39,7 +39,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 
 | Component | Count |
 |-----------|-------|
-| Agents | 60 |
+| Agents | 61 |
 | Commands | 3 |
 | Skills | 53 |
 | MCP Servers | 3 |
@@ -152,11 +152,12 @@ Agents are organized by domain, then by function.
 | `ops-provisioner` | Guide SaaS tool account setup, purchase, configuration, and verification |
 | `ops-research` | Research domains, hosting, tools/SaaS, and cost optimization with browser automation |
 
-### Product (4)
+### Product (5)
 
 | Agent | Description |
 |-------|-------------|
 | `business-validator` | Validate business ideas through structured 6-gate workshop (market research, competitive analysis, business model) |
+| `competitive-intelligence` | Recurring competitive landscape monitoring and market research reports |
 | `cpo` | Orchestrate product domain -- assess product strategy, validate business models, delegate to specialist agents |
 | `spec-flow-analyzer` | Analyze user flows and identify gaps in specifications |
 
@@ -239,6 +240,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | Skill | Description |
 |-------|-------------|
 | `brainstorm` | Explore requirements and approaches before planning |
+| `competitive-analysis` | Run competitive intelligence scans and market research reports |
 | `deepen-plan` | Enhance plans with parallel research agents |
 | `heal-skill` | Fix skill documentation issues |
 | `plan` | Create structured implementation plans |
