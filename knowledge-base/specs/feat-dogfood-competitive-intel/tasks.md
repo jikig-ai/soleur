@@ -3,16 +3,18 @@
 ## Phase 1: Setup
 
 - [ ] 1.1 Verify `ANTHROPIC_API_KEY` repository secret exists (`gh secret list`)
-- [ ] 1.2 Verify `.claude-plugin/marketplace.json` exists and has correct plugin version
+- [ ] 1.2 Verify `.claude-plugin/marketplace.json` exists and has correct plugin version (3.7.0)
 
 ## Phase 2: Core Implementation
 
 - [ ] 2.1 Run `/soleur:schedule create --name competitive-analysis --skill competitive-analysis --cron "0 9 1 * *" --model claude-sonnet-4-6`
 - [ ] 2.2 Verify generated workflow file at `.github/workflows/scheduled-competitive-analysis.yml`
-- [ ] 2.3 Confirm prompt includes `--tiers 0,3` argument; manually edit if schedule skill template omits it
-- [ ] 2.4 Validate YAML syntax passes (`python3 -c "import yaml; ..."`)
-- [ ] 2.5 Confirm SHA-pinned actions (not mutable tags)
-- [ ] 2.6 Confirm concurrency group is set with `cancel-in-progress: false`
+- [ ] 2.3 Confirm actions are SHA-pinned (not mutable tags like `@v4`)
+- [ ] 2.4 Edit prompt to include `--tiers 0,3` after `/soleur:competitive-analysis` (template does not support skill-specific args)
+- [ ] 2.5 Add `--max-turns 30` to `claude_args` field for sufficient scan depth
+- [ ] 2.6 Validate YAML syntax passes (`python3 -c "import yaml; ..."`)
+- [ ] 2.7 Confirm concurrency group is set with `cancel-in-progress: false`
+- [ ] 2.8 Confirm permissions include `contents: read` and `issues: write`
 
 ## Phase 3: Ship and Validate
 
@@ -23,3 +25,4 @@
 - [ ] 3.5 Monitor run via `gh run watch`
 - [ ] 3.6 Verify the workflow run creates a GitHub Issue with competitive intelligence content
 - [ ] 3.7 Verify the issue has `scheduled-competitive-analysis` label
+- [ ] 3.8 Verify the issue contains: executive summary, overlap matrix, source URLs
