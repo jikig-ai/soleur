@@ -83,6 +83,7 @@ Project principles organized by domain. Add principles as you learn them.
 - GitHub Actions workflows that create issues with labels must pre-create labels via `gh label create <name> ... 2>/dev/null || true` -- `gh issue create --label` fails if the label does not exist; it does NOT auto-create labels
 - GitHub Actions workflows invoking LLM agents (claude-code-action) must set `timeout-minutes` on the job to cap runaway billing -- without it, a stuck agent runs for the 6-hour GitHub default
 - GitHub Actions workflows using `claude-code-action` must include `id-token: write` in the permissions block -- the action requires OIDC token access for authentication and fails immediately without it
+- GitHub Actions workflows using `claude-code-action` where the agent needs to run shell commands (gh issue create, gh pr create, etc.) or web research must include `--allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch` in `claude_args` -- the sandbox blocks Bash, Write, WebSearch, and WebFetch by default and silently drops denied tool calls (workflow reports success with no output)
 
 ### Never
 

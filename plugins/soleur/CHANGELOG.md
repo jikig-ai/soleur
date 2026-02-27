@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.7.6] - 2026-02-27
+
+### Fixed
+
+- **Scheduled competitive analysis workflow** -- Added `--allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch` to `claude_args`. The `claude-code-action` sandbox blocks Bash and web tools by default, causing all `gh issue create` attempts to be silently permission-denied. Upgraded model from `claude-sonnet-4-6` to `claude-opus-4-6` for deeper competitive research.
+- **schedule skill template** -- Added `--allowedTools` to the template `claude_args` so future generated workflows include the required tool permissions. Documented as 6th known limitation.
+
 ## [3.7.5] - 2026-02-27
 
 ### Added

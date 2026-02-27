@@ -95,7 +95,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/<REPO_OWNER>/<REPO_NAME>.git'
           plugins: 'soleur@soleur'
-          claude_args: '--model <MODEL>'
+          claude_args: '--model <MODEL> --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch'
           prompt: |
             Run /soleur:<SKILL_NAME> on this repository.
             After your analysis is complete, create a GitHub issue titled
@@ -171,3 +171,4 @@ Remove a scheduled workflow.
 - **No `--max-turns` in `claude_args`** — The template only includes `--model`. Skills that perform multiple WebSearch/WebFetch calls may need `--max-turns 30` added manually.
 - **No label pre-creation** — The template instructs issue creation with a label but does not pre-create it. Add a `gh label create ... || true` step manually.
 - **No `timeout-minutes`** — The template does not set a job-level timeout. LLM-backed workflows should add `timeout-minutes` to prevent runaway billing.
+- **No `--allowedTools` in `claude_args`** — `claude-code-action` blocks Bash, Write, WebSearch, and WebFetch by default. Skills that create GitHub issues or perform web research silently fail without `--allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch` in `claude_args`.
