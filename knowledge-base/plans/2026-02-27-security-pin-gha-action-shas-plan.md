@@ -4,13 +4,33 @@ type: fix
 date: 2026-02-27
 issue: "#343"
 version_bump: PATCH
+deepened: 2026-02-27
 ---
 
 # security: Pin mutable GitHub Actions tags to commit SHAs
 
+## Enhancement Summary
+
+**Deepened on:** 2026-02-27
+**Sections enhanced:** 5 (Problem Statement, Files Changed, Non-goals, Acceptance Criteria, References)
+
+### Key Improvements
+
+1. **Discovered a missed workflow:** `auto-release.yml` also uses unpinned `actions/checkout@v4` -- not listed in the original issue #343. Total affected files: 4 (not 3).
+2. **Documented Dependabot tradeoff:** SHA pinning disables Dependabot vulnerability alerts for pinned actions. The version comment format enables Dependabot to propose SHA updates, but security advisories will not trigger alerts automatically.
+3. **Verified all SHAs against the GitHub API** using `git/refs/tags` dereferencing to confirm each mutable tag's current commit. All SHAs in the mapping table are API-verified.
+4. **Added real-world attack context:** The tj-actions/changed-files incident (March 2025) compromised 23,000+ repositories via tag repointing -- the exact attack vector this fix mitigates.
+
+### New Considerations Discovered
+
+- GitHub now offers org/repo-level policy enforcement for SHA pinning (August 2025 changelog). Could be a follow-up.
+- `claude-code-review.yml` is also missing `timeout-minutes` (constitution rule). Noted but out of scope.
+
+---
+
 ## Overview
 
-Three GitHub Actions workflows use mutable version tags (`@v4`, `@v2`, `@v1`) instead of pinned commit SHAs. This is a supply-chain security risk -- the action publisher can silently redirect the tag to a different commit. Two other workflows (`scheduled-competitive-analysis.yml`, `review-reminder.yml`) already follow the correct pinning pattern.
+Four GitHub Actions workflows use mutable version tags (`@v4`, `@v2`, `@v1`) instead of pinned commit SHAs. This is a supply-chain security risk -- the action publisher can silently redirect the tag to a different commit. Three other workflows (`scheduled-competitive-analysis.yml`, `review-reminder.yml`, `cla.yml`) already follow the correct pinning pattern.
 
 ## Problem Statement
 
@@ -20,6 +40,14 @@ Evidence that the risk is real: `actions/checkout@v4` currently resolves to comm
 
 The `claude-code-review.yml` workflow is particularly high-risk: `anthropics/claude-code-action@v1` runs with `id-token: write` and `pull-requests: write` permissions -- a compromised action could exfiltrate secrets or modify PR content.
 
+### Research Insights
+
+**Real-world precedent:** In March 2025, the `tj-actions/changed-files` action was compromised. An attacker gained access and updated more than 350 Git tags to point to a malicious commit that dumped runner secrets. Over 23,000 repositories were affected. Pinning to commit SHAs would have been fully protective.
+
+**GitHub's own guidance:** "Pinning an action to a full-length commit SHA is currently the only way to use an action as an immutable release." -- [GitHub Security Hardening docs](https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions)
+
+**Enforcement options (August 2025):** GitHub now supports org/repo-level policies that require all workflow action references to use full-length commit SHAs. This could be enabled as a follow-up to prevent regressions.
+
 ## Proposed Solution
 
 Replace all mutable tags with pinned commit SHAs using the format:
@@ -28,9 +56,11 @@ Replace all mutable tags with pinned commit SHAs using the format:
 uses: <org>/<action>@<full-sha> # <version-tag>
 ```
 
-The trailing comment preserves version traceability for future updates.
+The trailing comment preserves version traceability for future updates and enables Dependabot to propose SHA updates when new versions are released.
 
-### SHA Mapping (current as of 2026-02-27)
+### SHA Mapping (API-verified 2026-02-27)
+
+All SHAs verified via `gh api repos/<org>/<action>/git/refs/tags/<tag>` with annotated tag dereferencing where needed.
 
 | Action | Current Tag | Pin To SHA | Version |
 |--------|-------------|-----------|---------|
@@ -71,6 +101,10 @@ The existing pins in `scheduled-competitive-analysis.yml` and `review-reminder.y
 - Line 30: `actions/checkout@v4` -> `actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1`
 - Line 36: `anthropics/claude-code-action@v1` -> `anthropics/claude-code-action@1dd74842e568f373608605d9e45c9e854f65f543 # v1.0.63`
 
+### `.github/workflows/auto-release.yml` (discovered during deepen -- not in original issue)
+
+- Line 17: `actions/checkout@v4` -> `actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1`
+
 ### `.github/workflows/scheduled-competitive-analysis.yml` (existing pin update)
 
 - Line 28: `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2` -> `actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1`
@@ -82,12 +116,13 @@ The existing pins in `scheduled-competitive-analysis.yml` and `review-reminder.y
 ## Non-goals
 
 - Upgrading actions to newer major versions (e.g., checkout v4 -> v6). That is a separate task with potential breaking changes.
-- Adding Dependabot or Renovate for automated SHA updates. Worth considering separately but out of scope.
-- Adding a CI check that enforces pinned SHAs. Could be a follow-up issue.
+- Adding Dependabot or Renovate for automated SHA updates. Worth considering separately but out of scope. **Note:** Dependabot does not create vulnerability alerts for SHA-pinned actions -- only for semantically-versioned ones. The trailing `# vX.Y.Z` comment enables Dependabot to propose version update PRs, but security advisories will not trigger alerts automatically.
+- Adding a CI check or org-level policy that enforces pinned SHAs. GitHub supports this since August 2025. Could be a follow-up issue.
+- Adding `timeout-minutes` to `claude-code-review.yml` (separate concern, separate issue).
 
 ## Acceptance Criteria
 
-- [ ] All `uses:` directives in all 5 workflow files reference commit SHAs, not mutable tags
+- [ ] All `uses:` directives in all 7 workflow files reference commit SHAs, not mutable tags
 - [ ] Each pinned SHA has a trailing `# vX.Y.Z` comment for version traceability
 - [ ] All SHAs are verified to resolve to the expected version tag
 - [ ] CI workflows still pass after the changes (checkout, build, test, deploy all functional)
@@ -95,18 +130,32 @@ The existing pins in `scheduled-competitive-analysis.yml` and `review-reminder.y
 
 ## Test Scenarios
 
-- Given the three unpinned workflow files, when SHAs are substituted, then `grep -rE '@v[0-9]+' .github/workflows/` returns zero matches
+- Given all workflow files, when SHAs are substituted, then `grep -rE '@v[0-9]+' .github/workflows/` returns zero matches
 - Given the updated `ci.yml`, when a PR is opened, then the CI job runs successfully with the pinned checkout and setup-bun actions
 - Given the updated `deploy-docs.yml`, when pushed to main with a docs change, then the Pages deployment completes successfully
 - Given the updated `claude-code-review.yml`, when a PR is opened, then the Claude review action runs successfully
+- Given the updated `auto-release.yml`, when pushed to main with a plugin.json version change, then the release workflow runs successfully
 
 ## Context
+
+### Workflow inventory (complete as of 2026-02-27)
+
+| Workflow | Status Before | Actions Count |
+|----------|--------------|---------------|
+| `ci.yml` | **Unpinned** | 2 |
+| `deploy-docs.yml` | **Unpinned** | 5 |
+| `claude-code-review.yml` | **Unpinned** | 2 |
+| `auto-release.yml` | **Unpinned** | 1 |
+| `scheduled-competitive-analysis.yml` | Pinned (v4.2.2) | 2 |
+| `review-reminder.yml` | Pinned (v4.2.2) | 1 |
+| `cla.yml` | Pinned | 1 |
 
 ### Existing patterns (reference implementations)
 
 - `.github/workflows/scheduled-competitive-analysis.yml:28` -- `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2`
 - `.github/workflows/scheduled-competitive-analysis.yml:39` -- `anthropics/claude-code-action@1dd74842e568f373608605d9e45c9e854f65f543 # v1.0.63`
 - `.github/workflows/review-reminder.yml:22` -- `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2`
+- `.github/workflows/cla.yml:26` -- `contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1`
 
 ### Institutional knowledge
 
@@ -118,3 +167,7 @@ The existing pins in `scheduled-competitive-analysis.yml` and `review-reminder.y
 - Issue: #343
 - Learning: `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
 - GitHub docs: [Using third-party actions](https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions)
+- [GitHub Actions policy now supports SHA pinning enforcement (August 2025)](https://github.blog/changelog/2025-08-15-github-actions-policy-now-supports-blocking-and-sha-pinning-actions/)
+- [StepSecurity: Pinning GitHub Actions for Enhanced Security](https://www.stepsecurity.io/blog/pinning-github-actions-for-enhanced-security-a-complete-guide)
+- [Why you should pin actions by commit-hash](https://blog.rafaelgss.dev/why-you-should-pin-actions-by-commit-hash)
+- tj-actions/changed-files compromise (March 2025) -- 23,000+ repositories affected by tag repointing attack

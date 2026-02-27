@@ -7,6 +7,7 @@ Source plan: `knowledge-base/plans/2026-02-27-security-pin-gha-action-shas-plan.
 - [ ] 1.1 Update `.github/workflows/ci.yml` -- replace `actions/checkout@v4` and `oven-sh/setup-bun@v2` with pinned SHAs
 - [ ] 1.2 Update `.github/workflows/deploy-docs.yml` -- replace all 5 mutable action tags with pinned SHAs
 - [ ] 1.3 Update `.github/workflows/claude-code-review.yml` -- replace `actions/checkout@v4` and `anthropics/claude-code-action@v1` with pinned SHAs
+- [ ] 1.4 Update `.github/workflows/auto-release.yml` -- replace `actions/checkout@v4` with pinned SHA (discovered during deepen-plan, not in original issue)
 
 ## Phase 2: Update existing pins to latest patch
 
