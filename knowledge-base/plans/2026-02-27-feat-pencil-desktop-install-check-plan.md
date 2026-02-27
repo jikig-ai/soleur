@@ -331,22 +331,22 @@ Per Pencil's CLI docs: "Currently you need to have a desktop app installed to us
 
 ## Acceptance Criteria
 
-- [ ] `scripts/check_deps.sh` created in `plugins/soleur/skills/pencil-setup/`
-- [ ] Script follows the output convention from `feature-video/scripts/check_deps.sh` (`[ok]`, `[MISSING]`, `[installing]`, `[FAILED]`, `[skip]`, `[info]`)
-- [ ] Pencil Desktop detected via platform-specific checks first, then `command -v pencil` fallback
-- [ ] macOS detection: `/Applications/Pencil.app` then `mdfind` fallback
-- [ ] Linux detection: `dpkg -s pencil` (not `dpkg -l`) with `Status:.*installed` grep
-- [ ] IDE (Cursor/VS Code) detected via `command -v`
-- [ ] Pencil extension detected via glob in IDE extension directory (same pattern as existing SKILL.md Step 3)
-- [ ] `--auto` flag installs extension without prompting but does NOT auto-download Desktop app
-- [ ] Missing Pencil Desktop prints platform-specific download URL and exits 1
-- [ ] Missing IDE prints install URLs and exits 1
-- [ ] Missing extension offers interactive install (or auto with `--auto`); exits 1 if install fails
-- [ ] Pencil CLI absence reported as informational (`[info]`), not blocking
-- [ ] SKILL.md updated with Phase 0 linking to `[check_deps.sh](./scripts/check_deps.sh)` (markdown link, not backtick)
-- [ ] SKILL.md Phase 0 code blocks contain no `$()` or `${VAR}` (per constitution)
-- [ ] Script has comment explaining absence of `set -euo pipefail`
-- [ ] Version bumped in plugin.json, CHANGELOG.md, README.md, marketplace.json
+- [x] `scripts/check_deps.sh` created in `plugins/soleur/skills/pencil-setup/`
+- [x] Script follows the output convention from `feature-video/scripts/check_deps.sh` (`[ok]`, `[MISSING]`, `[installing]`, `[FAILED]`, `[skip]`, `[info]`)
+- [x] Pencil Desktop detected via platform-specific checks first, then `command -v pencil` fallback
+- [x] macOS detection: `/Applications/Pencil.app` then `mdfind` fallback
+- [x] Linux detection: `dpkg -s pencil` (not `dpkg -l`) with `Status:.*installed` grep
+- [x] IDE (Cursor/VS Code) detected via `command -v`
+- [x] Pencil extension detected via glob in IDE extension directory (same pattern as existing SKILL.md Step 3)
+- [x] `--auto` flag installs extension without prompting but does NOT auto-download Desktop app
+- [x] Missing Pencil Desktop prints platform-specific download URL and exits 1
+- [x] Missing IDE prints install URLs and exits 1
+- [x] Missing extension offers interactive install (or auto with `--auto`); exits 1 if install fails
+- [x] Pencil CLI absence reported as informational (`[info]`), not blocking
+- [x] SKILL.md updated with Phase 0 linking to `[check_deps.sh](./scripts/check_deps.sh)` (markdown link, not backtick)
+- [x] SKILL.md Phase 0 code blocks contain no `$()` or `${VAR}` (per constitution)
+- [x] Script has comment explaining absence of `set -euo pipefail`
+- [x] Version bumped in plugin.json, CHANGELOG.md, README.md, marketplace.json
 
 ## Test Scenarios
 

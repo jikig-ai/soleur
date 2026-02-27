@@ -7,7 +7,30 @@ description: This skill should be used when Pencil MCP tools are unavailable and
 
 Auto-detect, install, and register the Pencil MCP server with Claude Code CLI.
 
-**Prerequisite:** VS Code or Cursor must be installed. Pencil MCP requires a running IDE with the Pencil extension active.
+**Prerequisite:** Pencil Desktop, and VS Code or Cursor must be installed. Pencil MCP requires a running IDE with the Pencil extension active.
+
+## Phase 0: Dependency Check
+
+Run [check_deps.sh](./scripts/check_deps.sh) before proceeding. When invoked
+from a pipeline (e.g., one-shot), pass `--auto` to skip interactive prompts
+and install the IDE extension automatically.
+
+For interactive use:
+
+```bash
+bash ./plugins/soleur/skills/pencil-setup/scripts/check_deps.sh
+```
+
+For pipeline/automated use:
+
+```bash
+bash ./plugins/soleur/skills/pencil-setup/scripts/check_deps.sh --auto
+```
+
+If the script exits non-zero, a required dependency is missing. Stop and
+inform the user with the printed instructions.
+
+If all checks pass, proceed to Step 1 (Check if Already Registered).
 
 ## Step 1: Check if Already Registered
 
