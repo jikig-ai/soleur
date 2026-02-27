@@ -176,7 +176,7 @@ Domain leaders are agents that orchestrate a business domain's specialist team. 
 | `clo` | Legal | legal-document-generator, legal-compliance-auditor | Auto-consulted via brainstorm domain detection |
 | `cmo` | Marketing | 11 specialists | Auto-consulted via brainstorm domain detection |
 | `coo` | Operations | ops-advisor, ops-research, ops-provisioner | Auto-consulted via brainstorm domain detection |
-| `cpo` | Product | spec-flow-analyzer, ux-design-lead, business-validator | Auto-consulted via brainstorm domain detection |
+| `cpo` | Product | spec-flow-analyzer, ux-design-lead, business-validator, competitive-intelligence | Auto-consulted via brainstorm domain detection |
 | `cfo` | Finance | budget-analyst, revenue-analyst, financial-reporter | Auto-consulted via brainstorm domain detection |
 | `cro` | Sales | outbound-strategist, deal-architect, pipeline-analyst | Auto-consulted via brainstorm domain detection |
 | `cco` | Support | ticket-triage, community-manager | Auto-consulted via brainstorm domain detection |

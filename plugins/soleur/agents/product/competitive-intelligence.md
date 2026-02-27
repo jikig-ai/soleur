@@ -38,7 +38,7 @@ If the file cannot be written (CI environment, read-only permissions), output th
 ## Sharp Edges
 
 - Use WebFetch for competitor marketing sites, WebSearch for news and product updates
-- Do not use AskUserQuestion -- this agent runs autonomously in CI
-- Overlap levels: High / Medium / Low / None (consistent with marketingskills analysis format)
+- Do not use AskUserQuestion -- this agent runs autonomously when invoked via Task tool. Interactive tier selection is the skill's responsibility.
+- Overlap levels: High / Medium / Low / None
 - Include source URLs for every claim -- downstream agents treat this as ground truth
 - Flag when source documents (brand-guide.md, business-validation.md) are older than 30 days

@@ -11,7 +11,10 @@ Run a competitive intelligence scan producing a structured report at knowledge-b
 
 ### 1. Detect Invocation Mode
 
-If arguments are present (non-empty), skip to Step 3 with default tiers (0,3).
+If arguments are present (non-empty):
+- If arguments contain `--tiers`, extract the comma-separated tier list.
+- Otherwise, use default tiers (0,3).
+- Skip to Step 3.
 
 If no arguments, proceed to Step 2.
 
