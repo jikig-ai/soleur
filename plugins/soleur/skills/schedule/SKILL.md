@@ -166,3 +166,7 @@ Remove a scheduled workflow.
 - **Skills only** — Agents cannot be reliably invoked in unattended CI. Only skills (`/soleur:<skill-name>`) are supported.
 - **Issue output only** — All scheduled runs report findings via GitHub Issues. PR and Discord output modes planned for v2.
 - **No state across runs** — Each scheduled run starts fresh. No mechanism to carry state between executions.
+- **No skill-specific arguments** — The template prompt does not pass arguments (e.g., `--tiers 0,3`) to the invoked skill. Manual prompt edit required after generation.
+- **No `--max-turns` in `claude_args`** — The template only includes `--model`. Skills that perform multiple WebSearch/WebFetch calls may need `--max-turns 30` added manually.
+- **No label pre-creation** — The template instructs issue creation with a label but does not pre-create it. Add a `gh label create ... || true` step manually.
+- **No `timeout-minutes`** — The template does not set a job-level timeout. LLM-backed workflows should add `timeout-minutes` to prevent runaway billing.
