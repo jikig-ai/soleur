@@ -24,16 +24,22 @@ This skill creates professional video walkthroughs of features for PR documentat
 - Local development server running (e.g., `bin/dev`, `rails server`)
 - agent-browser CLI installed (required)
 - Git repository with a PR to document
-- `ffmpeg` installed (optional -- without it, screenshots are captured but no video/GIF is created)
-- `rclone` configured (optional -- without it, video stays local instead of uploading to cloud storage)
+- `ffmpeg` installed (optional -- without it, screenshots are captured but no video/GIF is created). Can be installed automatically by the dependency check script.
+- `rclone` configured (optional -- without it, video stays local instead of uploading to cloud storage). Can be installed automatically by the dependency check script.
 </requirements>
 
 ## Phase 0: Dependency Check
 
-Run [check_deps.sh](./scripts/check_deps.sh) before proceeding:
+Run [check_deps.sh](./scripts/check_deps.sh) before proceeding. When invoked from a pipeline (e.g., one-shot), pass `--auto` to skip interactive prompts and install missing tools automatically:
 
 ```bash
 bash ./plugins/soleur/skills/feature-video/scripts/check_deps.sh
+```
+
+For pipeline/automated use:
+
+```bash
+bash ./plugins/soleur/skills/feature-video/scripts/check_deps.sh --auto
 ```
 
 If the script exits non-zero, agent-browser is missing and recording cannot proceed. Stop and inform the user.
