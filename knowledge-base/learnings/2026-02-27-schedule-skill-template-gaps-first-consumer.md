@@ -2,7 +2,7 @@
 
 ## Problem
 
-The `soleur:schedule` skill generates workflow YAML from a fixed template, but the first real consumer (`competitive-analysis`) exposed four gaps that required manual post-generation edits.
+The `soleur:schedule` skill generates workflow YAML from a fixed template, but the first real consumer (`competitive-analysis`) exposed five gaps that required manual post-generation edits.
 
 ## Solution
 
@@ -25,9 +25,11 @@ After generating the workflow with `/soleur:schedule create`, manually apply the
 
 4. **`timeout-minutes`**: The template has no job-level timeout. LLM-backed workflows should set `timeout-minutes: 30` (or similar) to prevent runaway billing if the agent gets stuck.
 
+5. **`id-token: write` permission**: `claude-code-action` requires OIDC token access for authentication. Without `id-token: write` in the permissions block, the action fails immediately with "Could not fetch an OIDC token." The existing `claude-code-review.yml` includes this permission, but the schedule skill template did not. [Updated 2026-02-27]
+
 ## Key Insight
 
-The schedule skill template is a starting point, not a complete workflow. Every generated workflow needs a review pass for: argument passthrough, turn limits, label existence, and timeout caps. These should be added to the template itself in a future iteration.
+The schedule skill template is a starting point, not a complete workflow. Every generated workflow needs a review pass for: argument passthrough, turn limits, label existence, timeout caps, and OIDC permissions. These should be added to the template itself in a future iteration.
 
 ## Session Errors
 
