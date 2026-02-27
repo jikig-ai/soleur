@@ -122,11 +122,11 @@ The existing pins in `scheduled-competitive-analysis.yml` and `review-reminder.y
 
 ## Acceptance Criteria
 
-- [ ] All `uses:` directives in all 7 workflow files reference commit SHAs, not mutable tags
-- [ ] Each pinned SHA has a trailing `# vX.Y.Z` comment for version traceability
-- [ ] All SHAs are verified to resolve to the expected version tag
+- [x] All `uses:` directives in all 7 workflow files reference commit SHAs, not mutable tags
+- [x] Each pinned SHA has a trailing `# vX.Y.Z` comment for version traceability
+- [x] All SHAs are verified to resolve to the expected version tag
 - [ ] CI workflows still pass after the changes (checkout, build, test, deploy all functional)
-- [ ] No mutable tags (`@v1`, `@v2`, `@v3`, `@v4`) remain in any workflow file
+- [x] No mutable tags (`@v1`, `@v2`, `@v3`, `@v4`) remain in any workflow file
 
 ## Test Scenarios
 
