@@ -6,11 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [3.7.4] - 2026-02-27
+## [3.7.5] - 2026-02-27
 
 ### Added
 
 - **pencil-setup: check_deps.sh** -- Preflight dependency checker for Pencil Desktop, IDE, and extension with interactive prompts and `--auto` flag for pipeline use. Platform-specific detection: macOS (app bundle + mdfind), Linux (dpkg -s), cross-platform fallback (command -v). Follows feature-video output convention ([ok], [MISSING], [installing], [FAILED], [skip], [info]).
+
+## [3.7.4] - 2026-02-27
+
+### Fixed
+
+- **Scheduled competitive analysis workflow** -- Added missing `id-token: write` permission required by `claude-code-action` for OIDC authentication. Without it, the action fails immediately with "Could not fetch an OIDC token." (#338 follow-up)
+- **schedule skill template** -- Added `id-token: write` to the template permissions block so future generated workflows include this required permission.
 
 ## [3.7.3] - 2026-02-27
 

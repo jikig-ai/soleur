@@ -17,6 +17,7 @@ concurrency:
 permissions:
   issues: write
   contents: read
+  id-token: write
 
 jobs:
   competitive-analysis:
