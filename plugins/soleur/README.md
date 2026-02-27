@@ -41,7 +41,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 |-----------|-------|
 | Agents | 60 |
 | Commands | 3 |
-| Skills | 52 |
+| Skills | 53 |
 | MCP Servers | 3 |
 
 ## Agents
@@ -255,6 +255,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `git-worktree` | Manage Git worktrees for parallel development |
 | `merge-pr` | Autonomous single-PR merge with conflict resolution and cleanup |
 | `one-shot` | Full autonomous engineering workflow from plan to PR |
+| `pencil-setup` | Auto-detect, install, and register Pencil MCP server with Claude Code CLI |
 | `rclone` | Upload files to S3, Cloudflare R2, Backblaze B2, and cloud storage |
 | `reproduce-bug` | Reproduce bugs using logs, console, and browser screenshots |
 | `resolve-parallel` | Resolve TODO comments in parallel |

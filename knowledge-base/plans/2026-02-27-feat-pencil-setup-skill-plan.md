@@ -57,11 +57,11 @@ A single SKILL.md file with inline bash blocks. The LLM runs 5 sequential comman
 
 ## Acceptance Criteria
 
-- [ ] **Already registered** — Given Pencil MCP is registered and binary path exists, skill prints "already configured" and exits
-- [ ] **Fresh install** — Given no Pencil extension, skill installs via IDE CLI, registers binary with `claude mcp add -s user`, and verifies
-- [ ] **No IDE** — Given no `cursor` or `code` on PATH, skill prints error with install links and stops
-- [ ] **ux-design-lead updated** — Agent references `pencil-setup` skill instead of raw install URL
-- [ ] **Version bump** — All version locations updated (MINOR)
+- [x] **Already registered** — Given Pencil MCP is registered and binary path exists, skill prints "already configured" and exits
+- [x] **Fresh install** — Given no Pencil extension, skill installs via IDE CLI, registers binary with `claude mcp add -s user`, and verifies
+- [x] **No IDE** — Given no `cursor` or `code` on PATH, skill prints error with install links and stops
+- [x] **ux-design-lead updated** — Agent references `pencil-setup` skill instead of raw install URL
+- [x] **Version bump** — All version locations updated (MINOR)
 
 ## Test Scenarios
 
