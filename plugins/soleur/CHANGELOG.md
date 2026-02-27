@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **ux-design-lead agent** -- Updated prerequisite check to reference `pencil-setup` skill instead of raw documentation URL.
 
+## [3.5.2] - 2026-02-27
+
+### Fixed
+
+- **`soleur:feature-video` skill** -- Eliminated silent failures when ffmpeg or rclone are missing. Added `check_deps.sh` preflight script (agent-browser hard check, ffmpeg/rclone soft checks). Skill now gracefully degrades: screenshots-only without ffmpeg, local video without rclone. PR description adapts to actual output. (#325)
+
 ## [3.5.1] - 2026-02-27
 
 ### Changed
