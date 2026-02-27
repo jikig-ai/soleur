@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.4.1] - 2026-02-27
+
+### Changed
+
+- **CLA learning** -- Updated CLA system learning with post-merge setup gotchas: PAT elimination via same-repo storage, correct signatures file format, `issue_comment` filter pitfalls, `pull_request_target` bootstrapping, and signing-to-check-update gap.
+- **Constitution** -- Added two architecture rules: always smoke test `pull_request_target` workflows end-to-end on a separate PR; always verify review agent suggestions against the full user journey before shipping.
+- **Review skill** -- Added sharp edge note: review agent suggestions that modify workflow `if` conditions or event filters must be smoke tested against the full user journey before shipping.
+
 ## [3.4.0] - 2026-02-26
 
 ### Added
