@@ -15,12 +15,12 @@
 
 ## Phase 2: Registration & Version Bump
 
-- [ ] 2.1 Register skill in `plugins/soleur/docs/_data/skills.js` under appropriate category
-- [ ] 2.2 MINOR version bump in `plugins/soleur/.claude-plugin/plugin.json` (version + description count)
-- [ ] 2.3 Update `plugins/soleur/CHANGELOG.md`
-- [ ] 2.4 Update `plugins/soleur/README.md` skill count
-- [ ] 2.5 Update root `README.md` version badge
-- [ ] 2.6 Update `.github/ISSUE_TEMPLATE/bug_report.yml` placeholder
+- [x] 2.1 Register skill in `plugins/soleur/docs/_data/skills.js` under appropriate category
+- [x] 2.2 MINOR version bump in `plugins/soleur/.claude-plugin/plugin.json` (version + description count)
+- [x] 2.3 Update `plugins/soleur/CHANGELOG.md`
+- [x] 2.4 Update `plugins/soleur/README.md` skill count
+- [x] 2.5 Update root `README.md` version badge
+- [x] 2.6 Update `.github/ISSUE_TEMPLATE/bug_report.yml` placeholder
 
 ## Phase 3: Testing
 

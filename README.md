@@ -11,7 +11,7 @@ The Company-as-a-Service platform. Collapse the friction between a startup idea 
 
 ## What is Soleur?
 
-Soleur gives a single founder the leverage of a full organization. **60 agents**, **3 commands**, and **51 skills** that compound your company knowledge over time -- every problem you solve makes the next one easier.
+Soleur gives a single founder the leverage of a full organization. **60 agents**, **3 commands**, and **52 skills** that compound your company knowledge over time -- every problem you solve makes the next one easier.
 
 ## Installation
 
