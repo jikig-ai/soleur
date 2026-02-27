@@ -1,6 +1,6 @@
 ---
 name: cpo
-description: "Orchestrates the product domain -- assesses product strategy, validates business models, and delegates to specialist agents (spec-flow-analyzer, ux-design-lead, business-validator). Use individual product agents for focused tasks; use this agent for cross-cutting product strategy and multi-agent coordination."
+description: "Orchestrates the product domain -- assesses product strategy, validates business models, and delegates to specialist agents (spec-flow-analyzer, ux-design-lead, business-validator, competitive-intelligence). Use individual product agents for focused tasks; use this agent for cross-cutting product strategy and multi-agent coordination."
 model: inherit
 ---
 
@@ -43,6 +43,7 @@ Route to the appropriate product agent based on signals.
 | No product exists yet, "I have an idea," pre-build validation needed | business-validator |
 | Product exists, spec or plan needs user flow analysis | spec-flow-analyzer |
 | Product exists, visual design or wireframes needed | ux-design-lead |
+| Competitive landscape, market research, recurring competitor monitoring | competitive-intelligence |
 | Cross-cutting product question (strategy, roadmap, prioritization) | Handle directly -- advisory assessment, no delegation |
 
 Spawn specialist agents via the Task tool. Use parallel dispatch for independent analyses.

@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.7.0] - 2026-02-27
+
+### Added
+
+- **`competitive-intelligence` agent** -- Product-domain agent for recurring competitive landscape monitoring. Researches competitors via WebSearch/WebFetch, reads brand-guide.md and business-validation.md for positioning context, and produces structured overlap-matrix reports. Designed for autonomous execution via `soleur:schedule`. (#330)
+- **`competitive-analysis` skill** -- Entry point for competitive intelligence scans with interactive tier selection and non-interactive mode for scheduled execution. Delegates to the competitive-intelligence agent via Task tool.
+
+### Changed
+
+- **CPO agent** -- Added competitive-intelligence to orchestrated agents list and routing table.
+- **Agent description trimming** -- Trimmed ticket-triage, pr-comment-resolver, and code-simplicity-reviewer descriptions to stay within 2,500-word budget.
+- **Sibling disambiguation** -- Updated business-validator and growth-strategist descriptions with bidirectional disambiguation for competitive-intelligence.
+
 ## [3.6.0] - 2026-02-27
 
 ### Added
