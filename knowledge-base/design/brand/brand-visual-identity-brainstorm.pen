@@ -150,55 +150,9 @@
           "width": "fill_container",
           "layout": "vertical",
           "gap": 32,
-          "padding": [
-            100,
-            80,
-            80,
-            80
-          ],
+          "padding": 80,
           "alignItems": "center",
           "children": [
-            {
-              "type": "frame",
-              "id": "tLo8Q",
-              "name": "badge",
-              "stroke": {
-                "thickness": 1,
-                "fill": "#C9A96240"
-              },
-              "gap": 8,
-              "padding": [
-                8,
-                20
-              ],
-              "alignItems": "center",
-              "children": [
-                {
-                  "type": "ellipse",
-                  "id": "pTmTl",
-                  "name": "badgeDot",
-                  "fill": "#C9A962",
-                  "width": 8,
-                  "height": 8,
-                  "effect": {
-                    "type": "shadow",
-                    "shadowType": "outer",
-                    "color": "#C9A96280",
-                    "blur": 8
-                  }
-                },
-                {
-                  "type": "text",
-                  "id": "6lv62",
-                  "name": "badgeText",
-                  "fill": "#C9A962",
-                  "content": "The Company-as-a-Service Platform",
-                  "fontFamily": "Inter",
-                  "fontSize": 13,
-                  "fontWeight": "500"
-                }
-              ]
-            },
             {
               "type": "text",
               "id": "WcWT1",
