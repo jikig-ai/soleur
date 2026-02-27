@@ -26,6 +26,7 @@ Before committing ANY changes:
 - [ ] Root `README.md` version badge matches new version
 - [ ] `.github/ISSUE_TEMPLATE/bug_report.yml` placeholder matches new version
 - [ ] `.claude-plugin/marketplace.json` plugin version matches new version
+- [ ] If rebasing, commit version bump files BEFORE running `git rebase` -- unstaged version changes cause rebase abort
 
 ### Directory Structure
 
