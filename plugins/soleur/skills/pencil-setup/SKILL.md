@@ -30,7 +30,9 @@ bash ./plugins/soleur/skills/pencil-setup/scripts/check_deps.sh --auto
 If the script exits non-zero, a required dependency is missing. Stop and
 inform the user with the printed instructions.
 
-If all checks pass, proceed to Step 1 (Check if Already Registered).
+If all checks pass, capture the `PREFERRED_BINARY=<path>` line from the
+script output — this is the best available MCP binary (Desktop's binary when
+accessible, otherwise the extension's). Proceed to Step 1.
 
 ## Step 1: Check if Already Registered
 
@@ -90,7 +92,7 @@ claude mcp remove pencil -s user 2>/dev/null
 claude mcp add -s user pencil -- <BINARY_PATH> --app <IDE>
 ```
 
-Replace `<BINARY_PATH>` with the path found in Step 3, and `<IDE>` with `cursor` or `code` from Step 2.
+Replace `<BINARY_PATH>` with the `PREFERRED_BINARY` value from Phase 0 (falls back to Step 3 if Phase 0 was skipped), and `<IDE>` with `cursor` or `code` from Step 2.
 
 ## Step 5: Verify
 
