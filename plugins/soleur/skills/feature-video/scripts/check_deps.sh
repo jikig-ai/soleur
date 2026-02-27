@@ -1,6 +1,68 @@
-#!/bin/bash
-# feature-video dependency checker
-# No set -e: soft dependency checks must not abort the script
+#!/usr/bin/env bash
+# feature-video dependency checker with optional auto-install
+# No set -euo pipefail: soft dependency checks and install failures
+# must not abort the script. Each install uses explicit if/then checks.
+
+AUTO_INSTALL=false
+[[ "${1:-}" == "--auto" ]] && AUTO_INSTALL=true
+
+# Detect OS for install commands
+OS="unknown"
+[[ "$(uname -s)" == "Darwin" ]] && OS="macos"
+[[ -f /etc/debian_version ]] && OS="debian"
+
+install_tool() {
+  local tool="$1"
+  case "$OS" in
+    debian)
+      if sudo -n true 2>/dev/null; then
+        sudo apt-get update -qq && sudo apt-get install -y "$tool"
+      else
+        echo "  Run manually: sudo apt-get install -y $tool" >&2
+        return 1
+      fi ;;
+    macos)
+      if command -v brew >/dev/null 2>&1; then
+        brew install "$tool"
+      else
+        echo "  Install Homebrew first: https://brew.sh" >&2
+        return 1
+      fi ;;
+    *)
+      echo "  Unsupported OS. Install $tool manually." >&2
+      return 1 ;;
+  esac
+}
+
+verify_install() {
+  local tool="$1"
+  if command -v "$tool" >/dev/null 2>&1; then
+    echo "  [ok] $tool (installed)"
+  else
+    echo "  [FAILED] $tool installed but not found in PATH"
+    echo "    Try opening a new terminal or check your PATH"
+  fi
+}
+
+attempt_install() {
+  local tool="$1"
+
+  if [[ "$AUTO_INSTALL" != "true" ]]; then
+    echo "  $tool not installed. Install it? (y/N)"
+    read -r response
+    if [[ ! "$response" =~ ^[Yy]$ ]]; then
+      echo "  [skip] $tool (declined)"
+      return
+    fi
+  fi
+
+  echo "  [installing] $tool..."
+  if install_tool "$tool"; then
+    verify_install "$tool"
+  else
+    echo "  [FAILED] $tool installation"
+  fi
+}
 
 echo "=== feature-video Dependency Check ==="
 echo
@@ -20,8 +82,7 @@ fi
 if command -v ffmpeg >/dev/null 2>&1; then
   echo "  [ok] ffmpeg"
 else
-  echo "  [skip] ffmpeg not installed (optional)"
-  echo "    Install: sudo apt install ffmpeg (Linux) or brew install ffmpeg (macOS)"
+  attempt_install "ffmpeg"
 fi
 
 # Soft dependency: rclone (cloud upload)
@@ -35,8 +96,7 @@ if command -v rclone >/dev/null 2>&1; then
     echo "  [ok] rclone: $REMOTE_COUNT remote(s) configured"
   fi
 else
-  echo "  [skip] rclone not installed (optional)"
-  echo "    Install: sudo apt install rclone (Linux) or brew install rclone (macOS)"
+  attempt_install "rclone"
 fi
 
 echo
