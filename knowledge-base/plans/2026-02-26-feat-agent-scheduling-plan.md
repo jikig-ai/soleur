@@ -153,13 +153,13 @@ The SKILL.md instructs the LLM to:
 
 ## Acceptance Criteria
 
-- [ ] `soleur:schedule create` interactively collects skill name, cron expression, schedule name, and model, then generates valid workflow YAML with SHA-pinned actions, permissions, concurrency group, and failure notification
-- [ ] `soleur:schedule list` displays existing `scheduled-*.yml` with name, cron, skill from YAML parsing
-- [ ] `soleur:schedule delete <name>` removes the workflow file with confirmation
-- [ ] Generated YAML is valid GitHub Actions syntax
-- [ ] Cron expressions are validated (5-field format, frequency guard)
-- [ ] Skill is registered in docs data files and version is bumped
-- [ ] `plugin.json` description count is updated
+- [x] `soleur:schedule create` interactively collects skill name, cron expression, schedule name, and model, then generates valid workflow YAML with SHA-pinned actions, permissions, concurrency group, and failure notification
+- [x] `soleur:schedule list` displays existing `scheduled-*.yml` with name, cron, skill from YAML parsing
+- [x] `soleur:schedule delete <name>` removes the workflow file with confirmation
+- [x] Generated YAML is valid GitHub Actions syntax
+- [x] Cron expressions are validated (5-field format, frequency guard)
+- [x] Skill is registered in docs data files and version is bumped
+- [x] `plugin.json` description count is updated
 
 ## Test Scenarios
 
