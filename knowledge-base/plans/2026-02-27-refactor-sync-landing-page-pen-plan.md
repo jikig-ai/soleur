@@ -34,11 +34,11 @@ The Pencil design file at `knowledge-base/design/brand/brand-visual-identity-bra
 
 ## Acceptance Criteria
 
-- [ ] The "Company-as-a-Service Platform" badge/pill element is removed from the landing page hero mockup in the .pen file
-- [ ] Hero top padding/spacing in the mockup is adjusted to match 80px (was 128px)
-- [ ] A before/after screenshot is captured to verify the change visually
-- [ ] No other elements in the .pen file are modified (vision page, legal pages, etc. retain CaaS references)
-- [ ] This is a non-plugin change (design asset only) -- no version bump required
+- [x] The "Company-as-a-Service Platform" badge/pill element is removed from the landing page hero mockup in the .pen file
+- [x] Hero top padding/spacing in the mockup is adjusted to match 80px (was 100px in .pen, not 128px as originally assumed)
+- [x] A before/after screenshot is captured to verify the change visually
+- [x] No other elements in the .pen file are modified (vision page, legal pages, etc. retain CaaS references)
+- [x] This is a non-plugin change (design asset only) -- no version bump required
 
 ### Research Insights
 

@@ -80,3 +80,9 @@ If the `pencil` entry appears, tell the user:
 > **Pencil MCP registered.** Restart Claude Code for tools to become available. Make sure your IDE is open with Pencil active.
 
 If it does not appear, tell the user the registration failed and suggest running the commands manually.
+
+## Sharp Edges
+
+- **WebSocket requires visible editor**: The MCP server process runs, but `batch_design`/`batch_get`/`open_document` calls fail with `WebSocket not connected to app` unless the .pen file tab is open and visible in the IDE. Opening via `cursor <path>` CLI is not sufficient -- the user must click the tab to activate the webview.
+- **No programmatic save**: After `batch_design` operations, changes exist in editor memory only. The user must Ctrl+S the .pen tab to flush to disk. Verify with `git status` after requesting save.
+- **Read before write**: Mockup property values (padding, colors, fonts) may diverge from live CSS. Always `batch_get` the current value before `batch_design` updates to avoid incorrect assumptions.
