@@ -50,11 +50,13 @@ Project principles organized by domain. Add principles as you learn them.
 
 - Verify the root cause before implementing any fix -- reproduce the error or run the simplest diagnostic first; do not change code based on a guess
 - Core workflow stages (brainstorm, plan, work, review, compound, one-shot) are skills invoked via the Skill tool; only three commands remain (`go`, `sync`, `help`) using the `soleur:` prefix to avoid collisions with built-in commands
-- Every plugin change must update three files: plugin.json (version), CHANGELOG.md, and README.md (counts/tables)
+- Every plugin change must update three files: plugin.json (version), CHANGELOG.md, and README.md (counts/tables); `.claude-plugin/marketplace.json` plugin version must also be kept in sync
+- Always fetch and check main before version bumps (`git fetch origin main && git log --oneline origin/main -3`) -- parallel feature branches that bump without checking cause version collisions that require rebase
 - When adding a new skill, manually register it in `docs/_data/skills.js` SKILL_CATEGORIES -- skill discovery does not recurse and the docs site will silently omit unregistered skills
 - After version bumps, diff root README agent/skill counts against plugin README counts -- they drift independently and have diverged multiple times
 - Organize agents by domain first (engineering/, etc.), then by function (review/, design/). Cross-domain agents stay at root level (research/, workflow/)
 - Skills must have a SKILL.md file and may include scripts/, references/, and assets/ subdirectories
+- Every SKILL.md interactive prompt (AskUserQuestion) must accept an `$ARGUMENTS` bypass path for programmatic callers -- agents and pipeline skills cannot answer interactive prompts; provide flag-based argument passthrough (e.g., `--name`, `--yes`) that skips the prompt when present
 - Lifecycle workflows with hooks must cover every state transition with a cleanup trigger; verify no gaps between create, ship, merge, and session-start
 - At session start, run `worktree-manager.sh cleanup-merged` to remove worktrees whose remote branches are [gone]; this is the recovery mechanism for the merge-then-session-end gap where cleanup was deferred
 - Post-merge cleanup scripts must update the local main branch to match origin/main -- use `--ff-only` to enforce the no-direct-commits-to-main invariant

@@ -1,0 +1,22 @@
+{
+  "name": "soleur",
+  "version": "1.0.0",
+  "description": "Soleur plugin marketplace. Provides the Soleur AI organization plugin for Claude Code.",
+  "owner": {
+    "name": "Jean Deruelle",
+    "email": "jean.deruelle@jikigai.com"
+  },
+  "plugins": [
+    {
+      "name": "soleur",
+      "description": "A full AI organization across engineering, finance, marketing, legal, operations, product, sales, and support. Agents, skills, and MCP servers that compound your company knowledge over time.",
+      "version": "3.5.0",
+      "author": {
+        "name": "Jean Deruelle",
+        "email": "jean.deruelle@jikigai.com"
+      },
+      "source": "./plugins/soleur",
+      "category": "productivity"
+    }
+  ]
+}

@@ -188,6 +188,7 @@ Read `plugins/soleur/AGENTS.md` for versioning rules, then:
    - `README.md` (root) -- update the version badge: `![Version](https://img.shields.io/badge/version-X.Y.Z-blue)`
    - `README.md` (root) -- verify the "With ❤️ by Soleur" badge is present
    - `.github/ISSUE_TEMPLATE/bug_report.yml` -- update the placeholder version
+   - `.claude-plugin/marketplace.json` -- update the plugin version field
 
 **If no plugin files modified:** Skip version bump.
 

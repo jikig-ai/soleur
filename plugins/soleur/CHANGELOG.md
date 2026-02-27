@@ -6,13 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [3.4.1] - 2026-02-27
+## [3.5.1] - 2026-02-27
 
 ### Changed
 
 - **CLA learning** -- Updated CLA system learning with post-merge setup gotchas: PAT elimination via same-repo storage, correct signatures file format, `issue_comment` filter pitfalls, `pull_request_target` bootstrapping, and signing-to-check-update gap.
 - **Constitution** -- Added two architecture rules: always smoke test `pull_request_target` workflows end-to-end on a separate PR; always verify review agent suggestions against the full user journey before shipping.
 - **Review skill** -- Added sharp edge note: review agent suggestions that modify workflow `if` conditions or event filters must be smoke tested against the full user journey before shipping.
+
+## [3.5.0] - 2026-02-27
+
+### Added
+
+- **`soleur:schedule` skill** -- Generate GitHub Actions workflow files for scheduling Soleur skills on recurring cron schedules. Supports `create`, `list`, and `delete` subcommands. Generated workflows use `claude-code-action` with SHA-pinned actions and concurrency groups. (#321)
+- **`.claude-plugin/marketplace.json`** -- Self-hosting marketplace manifest at the repo root. Enables `claude-code-action` in CI to discover and install the Soleur plugin via `plugin_marketplaces` and `plugins` inputs.
 
 ## [3.4.0] - 2026-02-26
 
@@ -37,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Landing page hero** -- Removed "The Company-as-a-Service Platform" badge from homepage hero section. Tightened hero top padding from `--space-12` (128px) to `--space-10` (80px). Cleaned up unused `.hero-badge` and `.hero-badge-dot` CSS rules. CaaS positioning retained in frontmatter description, vision page, llms.txt, and legal documents.
 - **Git worktree SKILL.md** -- Added note about running `npm install` after worktree creation (worktrees don't share `node_modules/`).
+
 
 ## [3.3.5] - 2026-02-26
 
