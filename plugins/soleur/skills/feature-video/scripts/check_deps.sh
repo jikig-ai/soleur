@@ -6,108 +6,68 @@
 AUTO_INSTALL=false
 [[ "${1:-}" == "--auto" ]] && AUTO_INSTALL=true
 
-echo "=== feature-video Dependency Check ==="
-echo
+# Detect OS for install commands
+OS="unknown"
+[[ "$(uname -s)" == "Darwin" ]] && OS="macos"
+[[ -f /etc/debian_version ]] && OS="debian"
 
-# --- OS detection ---
-detect_os() {
-  case "$(uname -s)" in
-    Darwin) echo "macos" ;;
-    Linux)
-      if [[ -f /etc/debian_version ]]; then echo "debian"
-      else echo "unknown"
-      fi ;;
-    *) echo "unknown" ;;
-  esac
-}
-
-OS=$(detect_os)
-
-# --- Install helpers ---
-install_ffmpeg() {
+install_tool() {
+  local tool="$1"
   case "$OS" in
     debian)
       if sudo -n true 2>/dev/null; then
-        sudo apt-get update -qq && sudo apt-get install -y ffmpeg
+        sudo apt-get update -qq && sudo apt-get install -y "$tool"
       else
-        echo "  Run manually: sudo apt-get install -y ffmpeg" >&2
+        echo "  Run manually: sudo apt-get install -y $tool" >&2
         return 1
       fi ;;
     macos)
       if command -v brew >/dev/null 2>&1; then
-        brew install ffmpeg
+        brew install "$tool"
       else
         echo "  Install Homebrew first: https://brew.sh" >&2
         return 1
       fi ;;
     *)
-      echo "  Manual install: https://ffmpeg.org/download.html" >&2
+      echo "  Unsupported OS. Install $tool manually." >&2
       return 1 ;;
   esac
 }
 
-install_rclone() {
-  case "$OS" in
-    debian)
-      if sudo -n true 2>/dev/null; then
-        sudo apt-get update -qq && sudo apt-get install -y rclone
-      else
-        echo "  Run manually: sudo apt-get install -y rclone" >&2
-        return 1
-      fi ;;
-    macos)
-      if command -v brew >/dev/null 2>&1; then
-        brew install rclone
-      else
-        echo "  Install Homebrew first: https://brew.sh" >&2
-        return 1
-      fi ;;
-    *)
-      echo "  Manual install: https://rclone.org/install/" >&2
-      return 1 ;;
-  esac
-}
-
-# --- Attempt install of a soft dependency ---
-# Usage: attempt_install <tool-name> <install-function>
-attempt_install() {
-  local tool_name="$1"
-  local install_fn="$2"
-
-  if [[ "$AUTO_INSTALL" == "true" ]]; then
-    echo "  [installing] $tool_name..."
-    if $install_fn; then
-      if command -v "$tool_name" >/dev/null 2>&1; then
-        echo "  [ok] $tool_name ($($tool_name --version 2>/dev/null | head -1 || echo 'installed'))"
-      else
-        echo "  [FAILED] $tool_name installed but not found in PATH"
-        echo "    Try opening a new terminal or check your PATH"
-      fi
-    else
-      echo "  [FAILED] $tool_name installation"
-    fi
+verify_install() {
+  local tool="$1"
+  if command -v "$tool" >/dev/null 2>&1; then
+    echo "  [ok] $tool (installed)"
   else
-    echo "  $tool_name not installed. Install it? (y/N)"
-    read -r response
-    if [[ "$response" =~ ^[Yy]$ ]]; then
-      echo "  [installing] $tool_name..."
-      if $install_fn; then
-        if command -v "$tool_name" >/dev/null 2>&1; then
-          echo "  [ok] $tool_name ($($tool_name --version 2>/dev/null | head -1 || echo 'installed'))"
-        else
-          echo "  [FAILED] $tool_name installed but not found in PATH"
-          echo "    Try opening a new terminal or check your PATH"
-        fi
-      else
-        echo "  [FAILED] $tool_name installation"
-      fi
-    else
-      echo "  [skip] $tool_name (declined)"
-    fi
+    echo "  [FAILED] $tool installed but not found in PATH"
+    echo "    Try opening a new terminal or check your PATH"
   fi
 }
 
-# --- Hard dependency: agent-browser ---
+attempt_install() {
+  local tool="$1"
+
+  if [[ "$AUTO_INSTALL" != "true" ]]; then
+    echo "  $tool not installed. Install it? (y/N)"
+    read -r response
+    if [[ ! "$response" =~ ^[Yy]$ ]]; then
+      echo "  [skip] $tool (declined)"
+      return
+    fi
+  fi
+
+  echo "  [installing] $tool..."
+  if install_tool "$tool"; then
+    verify_install "$tool"
+  else
+    echo "  [FAILED] $tool installation"
+  fi
+}
+
+echo "=== feature-video Dependency Check ==="
+echo
+
+# Hard dependency -- cannot record without this
 if command -v agent-browser >/dev/null 2>&1; then
   echo "  [ok] agent-browser"
 else
@@ -118,14 +78,14 @@ else
   exit 1
 fi
 
-# --- Soft dependency: ffmpeg (video/GIF conversion) ---
+# Soft dependency: ffmpeg (video/GIF conversion)
 if command -v ffmpeg >/dev/null 2>&1; then
   echo "  [ok] ffmpeg"
 else
-  attempt_install "ffmpeg" "install_ffmpeg"
+  attempt_install "ffmpeg"
 fi
 
-# --- Soft dependency: rclone (cloud upload) ---
+# Soft dependency: rclone (cloud upload)
 if command -v rclone >/dev/null 2>&1; then
   echo "  [ok] rclone"
   REMOTES=$(rclone listremotes 2>/dev/null || true)
@@ -136,7 +96,7 @@ if command -v rclone >/dev/null 2>&1; then
     echo "  [ok] rclone: $REMOTE_COUNT remote(s) configured"
   fi
 else
-  attempt_install "rclone" "install_rclone"
+  attempt_install "rclone"
 fi
 
 echo
