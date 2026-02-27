@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.7.3] - 2026-02-27
+
+### Added
+
+- **Scheduled competitive analysis workflow** -- Monthly cron workflow (`.github/workflows/scheduled-competitive-analysis.yml`) that runs `/soleur:competitive-analysis --tiers 0,3` on the 1st of each month at 09:00 UTC. First consumer of the `soleur:schedule` infrastructure. Uses SHA-pinned actions, `--max-turns 30`, label pre-creation, and `timeout-minutes: 30`. (#338)
+
+### Changed
+
+- **schedule skill** -- Documented 4 known limitations discovered during first consumer dogfood: no skill-specific argument passthrough, no `--max-turns` in template, no label pre-creation step, no `timeout-minutes` default.
+
 ## [3.7.2] - 2026-02-27
 
 ### Changed
