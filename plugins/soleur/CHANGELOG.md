@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.7.1] - 2026-02-27
+
+### Changed
+
+- **feature-video: check_deps.sh** -- Now offers to install ffmpeg and rclone when missing, with interactive prompts and `--auto` flag for pipeline use. Uses parameterized `install_tool()` for Debian/Ubuntu (apt-get) and macOS (brew). (#325)
+
 ## [3.7.0] - 2026-02-27
 
 ### Added
