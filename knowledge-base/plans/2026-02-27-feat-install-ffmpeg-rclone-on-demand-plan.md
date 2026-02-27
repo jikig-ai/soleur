@@ -123,15 +123,15 @@ Both `apt-get install -y` and `brew install` are idempotent -- they succeed sile
 
 ## Acceptance Criteria
 
-- [ ] `check_deps.sh` offers to install ffmpeg when missing (interactive prompt)
-- [ ] `check_deps.sh` offers to install rclone when missing (interactive prompt)
-- [ ] `check_deps.sh --auto` installs without prompting (for pipeline use)
-- [ ] Installation is verified after each tool install (re-check `command -v`)
-- [ ] Script prints `[ok]` with version after successful install
-- [ ] Script prints `[FAILED]` with manual instructions if install fails
-- [ ] Script handles missing `sudo` gracefully (prints command, continues with `[skip]`)
-- [ ] SKILL.md Phase 0 updated to mention `--auto` for pipeline use
-- [ ] Existing `[skip]` behavior preserved when user declines installation
+- [x] `check_deps.sh` offers to install ffmpeg when missing (interactive prompt)
+- [x] `check_deps.sh` offers to install rclone when missing (interactive prompt)
+- [x] `check_deps.sh --auto` installs without prompting (for pipeline use)
+- [x] Installation is verified after each tool install (re-check `command -v`)
+- [x] Script prints `[ok]` with version after successful install
+- [x] Script prints `[FAILED]` with manual instructions if install fails
+- [x] Script handles missing `sudo` gracefully (prints command, continues with `[skip]`)
+- [x] SKILL.md Phase 0 updated to mention `--auto` for pipeline use
+- [x] Existing `[skip]` behavior preserved when user declines installation
 - [ ] Version bumped (PATCH) in plugin.json, CHANGELOG.md, README.md, marketplace.json, bug_report.yml
 
 ## Test Scenarios
