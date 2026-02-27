@@ -79,6 +79,8 @@ Project principles organized by domain. Add principles as you learn them.
 - The project uses Bun as the JavaScript runtime with ESM modules (`"type": "module"`); pre-commit hooks are managed by lefthook (not Husky)
 - Claude Code effort level must be set via `env.CLAUDE_CODE_EFFORT_LEVEL` in `.claude/settings.json`, not as a top-level `effortLevel` field (which is not in the schema); valid values: `low`, `medium`, `high`
 - When fixing a pattern across plugin files (e.g., removing `$()`, renaming a reference), search ALL `.md` files under `plugins/soleur/` -- not just the category (commands/, skills/, agents/) that triggered the report; reference docs, SKILL.md, and agent definitions all contain executable bash blocks
+- GitHub Actions workflows that create issues with labels must pre-create labels via `gh label create <name> ... 2>/dev/null || true` -- `gh issue create --label` fails if the label does not exist; it does NOT auto-create labels
+- GitHub Actions workflows invoking LLM agents (claude-code-action) must set `timeout-minutes` on the job to cap runaway billing -- without it, a stuck agent runs for the 6-hour GitHub default
 
 ### Never
 
