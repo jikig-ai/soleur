@@ -6,8 +6,8 @@ PR #337 established a `check_deps.sh` pattern for CLI tool dependencies (ffmpeg,
 ## Solution
 Adapted the pattern by replacing `install_tool()`/`attempt_install()`/`verify_install()` with platform-specific `detect_*` functions:
 
-1. **Detection replaces installation for Desktop apps**: `detect_pencil_desktop()` uses platform-specific checks (macOS: app bundle test + mdfind Spotlight fallback, Linux: dpkg -s, cross-platform: command -v) instead of trying to install
-2. **Hard exit with download URL instead of auto-install**: Missing Desktop app prints `https://www.pencil.dev/downloads` and exits 1 -- no curl piping of .dmg/.deb files
+1. **Detection replaces installation for Desktop apps**: `detect_pencil_desktop()` uses platform-specific checks (macOS: app bundle test + mdfind Spotlight fallback, Linux: AppImage search in ~/Applications, ~/.local/bin, /opt, cross-platform: command -v) instead of trying to install. **Correction (v3.7.7):** Linux detection was originally `dpkg -s pencil` but Pencil has no .deb package -- fixed to AppImage glob.
+2. **Informational notice instead of hard exit**: Missing Desktop app shows `[info]` with download URL. **Correction (v3.7.7):** Originally exited 1, but dogfooding proved Pencil Desktop is optional -- the MCP server comes from the IDE extension, not the Desktop app.
 3. **`--auto` flag scope is narrower**: Only applies to IDE extension install (`cursor --install-extension`), not to the Desktop app itself. IDE extension marketplaces have their own signing/review, making auto-install safe
 4. **CLI name collision mitigation**: `command -v pencil` is a cross-platform fallback, not the primary check, because evolus/pencil (a different tool) uses the same binary name
 

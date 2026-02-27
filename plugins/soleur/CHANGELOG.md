@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.7.7] - 2026-02-27
+
+### Fixed
+
+- **pencil-setup: check_deps.sh** -- Demoted Pencil Desktop from hard dependency (exit 1) to informational. The MCP server comes from the IDE extension, not the Desktop app -- the script was blocking setup on machines where everything works. Fixed Linux detection from `dpkg -s pencil` (no .deb exists) to AppImage search in common locations. Reordered checks: IDE and extension first (hard deps), Desktop last (optional). Fixed download URL to say "Linux AppImage" instead of "Linux .deb".
+
 ## [3.7.6] - 2026-02-27
 
 ### Fixed
