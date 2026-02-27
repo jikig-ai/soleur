@@ -82,6 +82,7 @@ Project principles organized by domain. Add principles as you learn them.
 - When fixing a pattern across plugin files (e.g., removing `$()`, renaming a reference), search ALL `.md` files under `plugins/soleur/` -- not just the category (commands/, skills/, agents/) that triggered the report; reference docs, SKILL.md, and agent definitions all contain executable bash blocks
 - GitHub Actions workflows that create issues with labels must pre-create labels via `gh label create <name> ... 2>/dev/null || true` -- `gh issue create --label` fails if the label does not exist; it does NOT auto-create labels
 - GitHub Actions workflows invoking LLM agents (claude-code-action) must set `timeout-minutes` on the job to cap runaway billing -- without it, a stuck agent runs for the 6-hour GitHub default
+- GitHub Actions workflows using `claude-code-action` must include `id-token: write` in the permissions block -- the action requires OIDC token access for authentication and fails immediately without it
 
 ### Never
 

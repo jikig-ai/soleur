@@ -80,6 +80,7 @@ concurrency:
 permissions:
   contents: read
   issues: write
+  id-token: write
 
 jobs:
   run-schedule:
