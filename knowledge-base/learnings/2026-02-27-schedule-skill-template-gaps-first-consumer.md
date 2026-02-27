@@ -27,9 +27,11 @@ After generating the workflow with `/soleur:schedule create`, manually apply the
 
 5. **`id-token: write` permission**: `claude-code-action` requires OIDC token access for authentication. Without `id-token: write` in the permissions block, the action fails immediately with "Could not fetch an OIDC token." The existing `claude-code-review.yml` includes this permission, but the schedule skill template did not. [Updated 2026-02-27]
 
+6. **`--allowedTools` in `claude_args`**: `claude-code-action` blocks Bash, Write, WebSearch, and WebFetch by default. The agent generated a full competitive analysis report but all 3 `gh issue create` attempts were silently permission-denied. Add `--allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch` to `claude_args`. Without this, the workflow completes "successfully" (exit 0) but produces no output artifact. [Updated 2026-02-27]
+
 ## Key Insight
 
-The schedule skill template is a starting point, not a complete workflow. Every generated workflow needs a review pass for: argument passthrough, turn limits, label existence, timeout caps, and OIDC permissions. These should be added to the template itself in a future iteration.
+The schedule skill template is a starting point, not a complete workflow. Every generated workflow needs a review pass for: argument passthrough, turn limits, label existence, timeout caps, OIDC permissions, and tool allowlists. The `claude-code-action` sandbox is restrictive by default — the most dangerous gap is `--allowedTools` because the workflow reports success even when all Bash commands are silently blocked.
 
 ## Session Errors
 
