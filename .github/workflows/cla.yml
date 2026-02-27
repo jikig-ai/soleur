@@ -19,7 +19,6 @@ jobs:
     if: |
       (github.event_name == 'pull_request_target') ||
       (github.event_name == 'issue_comment' &&
-       github.event.comment.body == 'recheck' &&
        github.event.issue.pull_request)
     runs-on: ubuntu-latest
     steps:
