@@ -2,16 +2,16 @@
 
 ## Phase 0: Prerequisite Spike
 
-- [ ] 0.1 Verify `claude-code-action` discovers Soleur plugin from checked-out repo: create a minimal test workflow, push to a test branch, trigger via `workflow_dispatch`, and confirm the plugin's skills are available. If discovery fails, design the fallback path (explicit `plugin_marketplaces`, `claude_args`, or setup step).
+- [x] 0.1 Verify `claude-code-action` discovers Soleur plugin from checked-out repo: RESOLVED — `claude-code-action` does not auto-discover local plugins. Added `.claude-plugin/marketplace.json` at repo root to make the repo a self-hosting marketplace. Generated workflows use `plugin_marketplaces` + `plugins` inputs.
 
 ## Phase 1: SKILL.md Implementation
 
-- [ ] 1.1 Create `plugins/soleur/skills/schedule/SKILL.md` with YAML frontmatter (`name: schedule`, third-person description)
-- [ ] 1.2 Write `create` flow: interactive Q&A to collect schedule name, skill name, cron expression, model. Include cron validation rules (5-field format, numeric only, frequency guard). Include SHA resolution commands (two-step for annotated tags). Include the YAML template with `<PLACEHOLDER>` markers. Instruct LLM to fill placeholders and write the file.
-- [ ] 1.3 Write `list` flow: glob `.github/workflows/scheduled-*.yml`, grep for `cron:`, `name:`, skill name. Display formatted output.
-- [ ] 1.4 Write `delete` flow: verify file exists, confirm with user, remove file.
-- [ ] 1.5 Document known limitations: skills only (no agents), issue output only, no state across runs, cron ~15 min variance, concurrency group is not a true queue.
-- [ ] 1.6 Document `gh workflow run scheduled-<name>.yml` as a "how to test" tip (not a formal subcommand).
+- [x] 1.1 Create `plugins/soleur/skills/schedule/SKILL.md` with YAML frontmatter (`name: schedule`, third-person description)
+- [x] 1.2 Write `create` flow: interactive Q&A to collect schedule name, skill name, cron expression, model. Include cron validation rules (5-field format, numeric only, frequency guard). Include SHA resolution commands (two-step for annotated tags). Include the YAML template with `<PLACEHOLDER>` markers. Instruct LLM to fill placeholders and write the file.
+- [x] 1.3 Write `list` flow: glob `.github/workflows/scheduled-*.yml`, grep for `cron:`, `name:`, skill name. Display formatted output.
+- [x] 1.4 Write `delete` flow: verify file exists, confirm with user, remove file.
+- [x] 1.5 Document known limitations: skills only (no agents), issue output only, no state across runs, cron ~15 min variance, concurrency group is not a true queue.
+- [x] 1.6 Document `gh workflow run scheduled-<name>.yml` as a "how to test" tip (not a formal subcommand).
 
 ## Phase 2: Registration & Version Bump
 

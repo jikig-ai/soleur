@@ -52,13 +52,18 @@ User -> /soleur:schedule delete -> LLM removes .yml file after confirmation
 
 ## Technical Considerations
 
-### Prerequisite: Plugin Discovery Spike
+### Prerequisite: Marketplace Support (RESOLVED)
 
-**BLOCKING — resolve before implementation.**
+`claude-code-action` does NOT auto-discover local plugins. Plugins must be installed from registered marketplaces via `plugins` + `plugin_marketplaces` inputs. The Soleur plugin is not published to any external marketplace.
 
-No `.claude/plugins.json` exists. The existing `claude-code-review.yml` uses marketplace plugins, not local ones. Must verify that `claude-code-action` auto-discovers the Soleur plugin from the checked-out repo's `plugins/soleur/` directory.
+**Solution:** Added `.claude-plugin/marketplace.json` at the repo root, making the repo itself a self-hosting marketplace. The generated workflow uses:
 
-**Spike:** Create a minimal test workflow that uses `claude-code-action` with a prompt invoking a Soleur skill. Push to a test branch and trigger via `workflow_dispatch`. If it fails, design the fallback: explicit `plugin_marketplaces` pointing at the repo, `claude_args` with plugin path, or a setup step.
+```yaml
+plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
+plugins: 'soleur@soleur'
+```
+
+This enables `claude-code-action` to install the Soleur plugin from the checked-out repo's marketplace definition, making all `/soleur:` skills available in CI.
 
 ### Generated Workflow Template
 
@@ -91,12 +96,14 @@ jobs:
         uses: anthropics/claude-code-action@<ACTION_SHA> # v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
+          plugins: 'soleur@soleur'
+          claude_args: '--model <MODEL>'
           prompt: |
             Run /soleur:<SKILL_NAME> on this repository.
             After analysis, create a GitHub issue titled
             "[Scheduled] <DISPLAY_NAME> - $(date +%Y-%m-%d)"
             with label "scheduled-<NAME>" summarizing your findings.
-          model: <MODEL>
 
       - name: Notify on failure
         if: failure()
@@ -177,6 +184,7 @@ The SKILL.md instructs the LLM to:
 
 | File | Action | Purpose |
 |------|--------|---------|
+| `.claude-plugin/marketplace.json` | Create | Makes repo a self-hosting plugin marketplace for CI |
 | `plugins/soleur/skills/schedule/SKILL.md` | Create | Skill definition with template, create/list/delete flows |
 | `plugins/soleur/docs/_data/skills.js` | Edit | Register skill in SKILL_CATEGORIES |
 | `plugins/soleur/.claude-plugin/plugin.json` | Edit | MINOR version bump + description count |
