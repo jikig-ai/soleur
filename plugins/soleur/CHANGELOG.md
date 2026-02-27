@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.7.8] - 2026-02-27
+
+### Added
+
+- **pencil-setup: check_deps.sh** -- Prefer Pencil Desktop's MCP binary over the IDE extension when directly accessible (macOS app bundle, Linux extracted AppImage). Show richer status: capabilities when Desktop is found, "recommended" with unlock details when missing. Output `PREFERRED_BINARY=<path>` for SKILL.md consumption.
+
+### Fixed
+
+- **pencil-setup: check_deps.sh** -- Extension binary detection now filters by OS and architecture (`mcp-server-linux-x64`) instead of picking the last alphabetical match (`mcp-server-windows-x64.exe`).
+
 ## [3.7.7] - 2026-02-27
 
 ### Fixed
