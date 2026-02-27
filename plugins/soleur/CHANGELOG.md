@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.6.0] - 2026-02-27
+
+### Added
+
+- **`soleur:pencil-setup` skill** -- Auto-detect, install, and register the Pencil MCP server with Claude Code CLI. Detects VS Code/Cursor, installs the `highagency.pencildev` extension if missing, locates the platform binary, and registers it via `claude mcp add -s user`. Replaces manual install instructions in ux-design-lead agent. (#323)
+
+### Changed
+
+- **ux-design-lead agent** -- Updated prerequisite check to reference `pencil-setup` skill instead of raw documentation URL.
+
 ## [3.5.2] - 2026-02-27
 
 ### Fixed

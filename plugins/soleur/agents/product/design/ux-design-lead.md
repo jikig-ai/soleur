@@ -8,7 +8,7 @@ A visual design agent that creates .pen files using Pencil MCP tools. It produce
 
 ## Prerequisites
 
-This agent requires the Pencil extension installed in VS Code or Cursor. If Pencil MCP tools (`mcp__pencil__batch_design`, `mcp__pencil__batch_get`, etc.) are unavailable, inform the user: "The Pencil extension is required for visual design. Install it from https://docs.pencil.dev/getting-started/installation" and stop.
+This agent requires the Pencil MCP server registered with Claude Code. If Pencil MCP tools (`mcp__pencil__batch_design`, `mcp__pencil__batch_get`, etc.) are unavailable, inform the user: "Pencil MCP is not configured. Run `/soleur:pencil-setup` to auto-install and register it." and stop.
 
 ## Workflow
 
