@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.7.17] - 2026-03-02
+
+### Fixed
+
+- **daily triage workflow** -- Aligned domain labels with Soleur's 8 department leaders (engineering, finance, legal, marketing, operations, product, sales, support). Replaces ad-hoc labels (plugin, ci, docs, community, infra) that didn't map to any domain leader. Updated classification rubric and ticket-triage agent.
+
 ## [3.7.16] - 2026-03-02
 
 ### Fixed
