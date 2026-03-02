@@ -332,15 +332,27 @@ gh pr view --json mergeable,mergeStateStatus | jq '{mergeable, mergeStateStatus}
 
 ### CI Status Check
 
-After confirming mergeability, verify CI checks pass:
+After confirming mergeability, queue auto-merge and let GitHub handle waiting for CI:
 
 ```bash
-gh pr checks --watch --fail-fast
+gh pr merge <number> --squash --auto
 ```
 
-**If all checks pass:** Continue to Phase 8.
+Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks reported" when CI hasn't registered yet, causing premature merge attempts.
 
-**If a check fails:**
+**If auto-merge fails to queue:** Check `gh api repos/{owner}/{repo} --jq '.allow_auto_merge'` -- it must be `true`.
+
+## Phase 8: Poll for Merge and Cleanup
+
+After auto-merge is queued, poll until the PR is merged. Do NOT ask "merge now or later?" -- auto-merge handles it.
+
+```bash
+gh pr view <number> --json state --jq .state
+```
+
+Poll every 10 seconds until state is `MERGED`.
+
+**If state becomes `CLOSED` (not `MERGED`):** Auto-merge was cancelled due to a CI failure.
 
 1. Read the failure details:
 
@@ -348,23 +360,8 @@ gh pr checks --watch --fail-fast
    gh pr checks --json name,state,description | jq '.[] | select(.state != "SUCCESS")'
    ```
 
-2. If the failure is in tests: investigate the failing test, fix locally, commit, push, and re-run this phase.
+2. If the failure is in tests: investigate the failing test, fix locally, commit, push, re-queue auto-merge.
 3. If the failure is in a flaky or unrelated check: warn the user and ask whether to proceed or wait for a re-run.
-
-## Phase 8: Wait for CI, Merge, and Cleanup
-
-After the PR is created and Phase 7.5 confirms mergeability and CI status, merge the PR. Do NOT ask "merge now or later?" -- always wait for CI to pass first.
-
-```bash
-# If CI hasn't been checked yet (e.g., Phase 7.5 was skipped), run it now:
-gh pr checks --watch --fail-fast
-```
-
-**Once CI passes:** Merge immediately.
-
-```bash
-gh pr merge <number> --squash
-```
 
 **CRITICAL: Do NOT use `--delete-branch` on merge.** The guardrails hook blocks `--delete-branch` whenever ANY worktree exists in the repo -- not just the one for the branch being merged -- so the restriction applies unconditionally during parallel development. Merge with `--squash` only, then `cleanup-merged` handles branch deletion after removing the worktree.
 
