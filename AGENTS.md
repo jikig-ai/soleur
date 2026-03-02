@@ -15,9 +15,10 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 ## Workflow Gates
 
 - Zero agents until user confirms direction. Present a concise summary first, ask if they want to go deeper, only then launch research.
-- Before every commit, ask "Should we run compound?" (`skill: soleur:compound`). Never skip without asking.
+- Before every commit, run compound (`skill: soleur:compound`). Do not ask whether to run it -- just run it.
 - Every plugin change (`plugins/soleur/`): bump version in all three files -- `plugin.json`, `CHANGELOG.md`, `README.md`.
 - Use `/ship` to automate the full commit/push/PR workflow. It enforces review and compound gates.
+- After marking a PR ready, run `gh pr checks <number> --watch` to poll until CI passes, then `gh pr merge <number> --squash`, then `cleanup-merged`. Never stop at "waiting for CI" -- actively poll and merge in the same session.
 - At session start, from the repo root: run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged && git worktree list`.
 
 ## Communication
