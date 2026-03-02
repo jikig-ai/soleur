@@ -1,3 +1,8 @@
+---
+last_reviewed: 2026-03-02
+review_cadence: quarterly
+---
+
 # Project Constitution
 
 Project principles organized by domain. Add principles as you learn them.
