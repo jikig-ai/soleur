@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.7.15] - 2026-03-02
+
+### Added
+
+- **scheduled-daily-triage workflow** -- Daily GitHub Actions cron (06:00 UTC) that classifies open issues across 3 dimensions (priority, type, domain) using a 15-label taxonomy. Applies labels and adds a triage comment with reasoning. Phase 1 of #370.
+
+### Changed
+
+- **ticket-triage agent** -- Updated description to third-person voice and added disambiguation for the new daily triage workflow.
+- **triage skill** -- Added disambiguation sentence pointing to scheduled-daily-triage.yml for automated daily triage.
+
+### Fixed
+
+- **README.md** -- Corrected skill count from 53 to 54.
+
 ## [3.7.14] - 2026-03-02
 
 ### Fixed
