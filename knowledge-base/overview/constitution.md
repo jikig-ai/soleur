@@ -91,6 +91,7 @@ Project principles organized by domain. Add principles as you learn them.
 - GitHub Actions workflows using `claude-code-action` where the agent needs to run shell commands (gh issue create, gh pr create, etc.) or web research must include `--allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch` in `claude_args` -- the sandbox blocks Bash, Write, WebSearch, and WebFetch by default and silently drops denied tool calls (workflow reports success with no output)
 - GitHub Actions workflows that persist bot-generated content back to the repo should push directly to main rather than create PRs -- GITHUB_TOKEN cascade prevents CI/CLA workflows from triggering on bot PRs, and `allow_auto_merge` may be disabled; check `gh api repos/{owner}/{repo} --jq '.allow_auto_merge'` and active rulesets before designing the merge strategy
 - Run SpecFlow analysis (spec-flow-analyzer agent) on features that modify CI workflows or GitHub Actions -- it catches repo configuration blockers (auto-merge settings, rulesets, token permissions) before implementation begins
+- Multi-agent cascades (one agent spawning specialists via Task tool) require a pre-flight checklist: (1) `Task` must be in `--allowedTools` for CI workflows, (2) every specialist must have an explicit write target path in the delegation table, (3) every specialist must produce a writable artifact -- read-only analysis tasks need a concrete output file. Cascade failures are silent: missing tools, unspecified write targets, and no-output specialists all fail without error messages
 
 ### Never
 
