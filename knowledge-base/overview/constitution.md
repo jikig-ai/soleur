@@ -36,6 +36,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Avoid second person ("you should") - use objective language ("To accomplish X, do Y")
 - Never use shell variable expansion (`${VAR}`, `$VAR`, `$()`) in bash code blocks within skill, command, or agent .md files -- use angle-bracket prose placeholders (`<variable-name>`) with substitution instructions instead, or relative paths (e.g., `./plugins/soleur/...`) for plugin-relative paths; the ship skill's "No command substitution" pattern is the reference implementation
 - Never anchor guardrail grep patterns to `^` alone -- the Bash tool chains commands with `&&`, `;`, and `||`, so a `^`-anchored pattern only catches the first command; match at command boundaries with `(^|&&|\|\||;)` instead
+- Never use "Announce to the user" or "Output to the user" as terminal instructions in skills that can be invoked by pipelines (one-shot, ship) -- the model interprets these as implicit stop signals; use "Return control immediately" for pipeline-compatible handoff, with a conditional single-line output for direct user invocation
 - Never write bash code blocks in agent/skill prompts that trigger Claude Code's approval heuristics -- pre-combine multiple blocks into a single `;`-joined command (models insert `echo "---"` separators otherwise), avoid quoted strings starting with dashes (`"---"`, `"-flag"`), and keep commands simple enough to auto-approve; if a command requires user consent, the agent blocks waiting for input it will never receive when running as a subagent
 
 ### Prefer
