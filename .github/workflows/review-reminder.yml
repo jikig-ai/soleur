@@ -48,27 +48,44 @@ jobs:
           gh label create review-reminder --description "Auto-created review reminder" --color "0E8A16" 2>/dev/null || true
 
           while IFS= read -r file; do
-            # Extract next_review from YAML frontmatter
-            next_review=$(sed -n '/^---$/,/^---$/{ /^next_review:/{ s/.*: *//; p; q; } }' "$file")
+            # Extract review_cadence from YAML frontmatter (opt-in field)
+            review_cadence=$(sed -n '/^---$/,/^---$/{ /^review_cadence:/{ s/.*: *//; p; q; } }' "$file")
 
-            if [[ -z "$next_review" ]]; then
+            if [[ -z "$review_cadence" ]]; then
               continue
             fi
 
-            # Validate that next_review is a parseable date
-            if ! review_epoch=$(date -d "$next_review" +%s 2>/dev/null); then
-              echo "::warning::Skipping $file -- invalid next_review date: $next_review"
+            # Map cadence to days
+            case "$review_cadence" in
+              monthly)   cadence_days=30 ;;
+              quarterly) cadence_days=90 ;;
+              biannual)  cadence_days=180 ;;
+              annual)    cadence_days=365 ;;
+              *) echo "::warning::Skipping $file -- unknown review_cadence: $review_cadence"; continue ;;
+            esac
+
+            # Extract last_reviewed; if missing, treat as immediately stale
+            last_reviewed=$(sed -n '/^---$/,/^---$/{ /^last_reviewed:/{ s/.*: *//; p; q; } }' "$file")
+
+            if [[ -z "$last_reviewed" ]]; then
+              days_until=-1
+            else
+              if ! last_epoch=$(date -d "$last_reviewed" +%s 2>/dev/null); then
+                echo "::warning::Skipping $file -- invalid last_reviewed date: $last_reviewed"
+                continue
+              fi
+              next_due_epoch=$((last_epoch + cadence_days * 86400))
+              days_until=$(( (next_due_epoch - today_epoch) / 86400 ))
+            fi
+
+            # Flag documents due within 7 days or already past due
+            if [[ $days_until -gt 7 ]]; then
               continue
             fi
 
-            days_until=$(( (review_epoch - today_epoch) / 86400 ))
-
-            if [[ $days_until -lt 0 || $days_until -gt 7 ]]; then
-              continue
-            fi
-
-            # Build deterministic title from filename
-            slug=$(basename "$file" .md)
+            # Build deterministic title from relative path
+            slug="${file#knowledge-base/}"
+            slug="${slug%.md}"
             expected_title="Review Reminder: $slug"
 
             # Check for existing open issue with exact title match
@@ -85,17 +102,26 @@ jobs:
               doc_title="$slug"
             fi
 
+            # Compute review due date for display
+            if [[ -n "$last_reviewed" ]]; then
+              review_due=$(date -d "$last_reviewed + $cadence_days days" +%Y-%m-%d)
+            else
+              review_due="immediately (no last_reviewed set)"
+            fi
+
             # Create issue
             repo_url="${SERVER_URL}/${REPO_NAME}"
             file_link="${repo_url}/blob/main/${file}"
 
             issue_body="## Review Due: ${doc_title}
 
-          **Review date:** ${next_review}
+          **Review due:** ${review_due}
+          **Last reviewed:** ${last_reviewed:-never}
+          **Cadence:** ${review_cadence}
           **Source:** [${file}](${file_link})
 
           When complete:
-          - [ ] Update \`next_review\` in the source document's YAML frontmatter
+          - [ ] Update \`last_reviewed\` to today's date in the source document's YAML frontmatter
           - [ ] Close this issue
 
           _Auto-created by the [review-reminder workflow](${repo_url}/actions/workflows/review-reminder.yml)._"
@@ -111,7 +137,7 @@ jobs:
               exit 1
             fi
 
-          done < <(find knowledge-base/learnings -name '*.md' -type f 2>/dev/null)
+          done < <(find knowledge-base -name '*.md' -type f 2>/dev/null)
 
           echo ""
           echo "Summary: created=$created, skipped=$skipped"

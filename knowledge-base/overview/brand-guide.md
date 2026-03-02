@@ -1,5 +1,7 @@
 ---
 last_updated: 2026-02-21
+last_reviewed: 2026-03-02
+review_cadence: quarterly
 ---
 
 # Soleur Brand Guide

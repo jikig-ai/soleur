@@ -3,7 +3,8 @@ title: "GitHub Actions Audit: Run History Over Reading YAML"
 category: implementation-patterns
 tags: [github-actions, ci-cd, maintenance, audit]
 date: 2026-02-21
-next_review: 2026-05-21
+last_reviewed: 2026-02-21
+review_cadence: quarterly
 ---
 
 # GitHub Actions Audit Methodology

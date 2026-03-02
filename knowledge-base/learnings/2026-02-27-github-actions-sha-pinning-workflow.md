@@ -4,7 +4,8 @@ date: 2026-02-27
 category: security
 module: ci-cd
 tags: [github-actions, supply-chain-security, sha-pinning]
-next_review: 2026-08-27
+last_reviewed: 2026-02-27
+review_cadence: biannual
 ---
 
 # Learning: GitHub Actions SHA Pinning Workflow

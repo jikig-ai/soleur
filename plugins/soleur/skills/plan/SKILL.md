@@ -189,7 +189,7 @@ Think like a product manager - what would make this issue clear and actionable? 
 
 ### 3. SpecFlow Analysis
 
-After planning the issue structure, run SpecFlow Analyzer to validate and refine the feature specification:
+After planning the issue structure, run SpecFlow Analyzer to validate and refine the feature specification. SpecFlow is especially valuable for CI/workflow and infrastructure changes where bash conditional logic can silently drop edge cases that human review misses.
 
 - Task spec-flow-analyzer(feature_description, research_findings)
 
