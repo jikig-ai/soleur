@@ -14,6 +14,13 @@ export interface TurnStatus {
   typingTimer: Timer; // Periodic sendChatAction("typing")
 }
 
+export interface StreamState {
+  chatId: number;
+  messageId: number; // reused from TurnStatus, 0 until resolved
+  accumulatedText: string; // full text accumulated across deltas
+  lastUpdateTime: number; // for Date.now() throttle
+}
+
 // Minimal interface for the subset of bot.api we actually use
 export interface BotApi {
   sendMessage(
@@ -25,6 +32,7 @@ export interface BotApi {
     chatId: number,
     messageId: number,
     text: string,
+    other?: Record<string, unknown>,
   ): Promise<unknown>;
   deleteMessage(chatId: number, messageId: number): Promise<true>;
   sendChatAction(chatId: number, action: string): Promise<true>;

@@ -1,9 +1,10 @@
-import type { BotApi, CliState, QueuedMessage, TurnStatus } from "./types";
+import type { BotApi, CliState, QueuedMessage, StreamState, TurnStatus } from "./types";
 import {
   markdownToHtml,
   chunkMessage,
   stripHtmlTags,
   formatStatusText,
+  MAX_CHUNK_SIZE,
 } from "./helpers";
 
 export interface BridgeConfig {
@@ -11,6 +12,7 @@ export interface BridgeConfig {
   typingIntervalMs: number;
   turnTimeoutMs: number;
   maxQueueSize: number;
+  streamEditIntervalMs: number;
   onTurnComplete?: () => void;
 }
 
@@ -19,6 +21,7 @@ const DEFAULT_CONFIG: BridgeConfig = {
   typingIntervalMs: 4_000,
   turnTimeoutMs: 10 * 60 * 1_000, // 10 minutes
   maxQueueSize: 20,
+  streamEditIntervalMs: 2_500,
 };
 
 export class Bridge {
@@ -33,6 +36,7 @@ export class Bridge {
   messagesProcessed = 0;
   activeChatId: number | null = null;
   turnStatus: TurnStatus | null = null;
+  streamState: StreamState | null = null;
   messageQueue: QueuedMessage[] = [];
   private turnWatchdog: Timer | null = null;
 
@@ -120,6 +124,9 @@ export class Bridge {
     this.turnStatus = null;
     clearInterval(status.typingTimer);
 
+    // Skip deleteMessage when streaming repurposed the status message
+    if (this.streamState) return;
+
     // Delete the status message (if it was ever sent)
     if (status.messageId !== 0) {
       try {
@@ -167,6 +174,7 @@ export class Bridge {
     this.turnWatchdog = setTimeout(() => {
       console.error(`Turn watchdog fired after ${this.config.turnTimeoutMs / 1000}s`);
       this.processing = false;
+      this.cleanupStreamState();
       this.cleanupTurnStatus().catch(() => {});
 
       if (this.activeChatId) {
@@ -186,6 +194,102 @@ export class Bridge {
     }
   }
 
+  private initStreamState(chatId: number): void {
+    if (this.streamState) return; // already streaming
+
+    const messageId = this.turnStatus?.messageId ?? 0;
+
+    this.streamState = {
+      chatId,
+      messageId,
+      accumulatedText: "",
+      lastUpdateTime: 0,
+    };
+
+    // Clear typing timer — progressive text edits serve as the activity indicator
+    if (this.turnStatus) {
+      clearInterval(this.turnStatus.typingTimer);
+    }
+  }
+
+  private handleStreamEvent(event: Record<string, unknown>): void {
+    if (!this.activeChatId) return;
+
+    const eventType = event.type as string;
+
+    switch (eventType) {
+      case "content_block_start": {
+        const contentBlock = event.content_block as { type: string } | undefined;
+        if (contentBlock?.type === "text" && !this.streamState) {
+          this.initStreamState(this.activeChatId);
+        }
+        break;
+      }
+
+      case "content_block_delta": {
+        const delta = event.delta as { type: string; text?: string } | undefined;
+        if (delta?.type === "text_delta" && delta.text && this.streamState) {
+          this.streamState.accumulatedText += delta.text;
+
+          // Sync messageId from turnStatus if it resolved after streaming started
+          if (this.streamState.messageId === 0 && this.turnStatus?.messageId) {
+            this.streamState.messageId = this.turnStatus.messageId;
+          }
+
+          // Throttled edit: only update if messageId is available and enough time passed
+          if (
+            this.streamState.messageId !== 0 &&
+            Date.now() - this.streamState.lastUpdateTime >= this.config.streamEditIntervalMs
+          ) {
+            this.flushStreamEdit();
+          }
+
+          // Split at MAX_CHUNK_SIZE to stay under Telegram's 4096-char limit
+          if (this.streamState.accumulatedText.length >= MAX_CHUNK_SIZE) {
+            this.splitStreamMessage();
+          }
+        }
+        break;
+      }
+
+      // content_block_stop, message_delta, message_stop: no-op
+      default:
+        break;
+    }
+  }
+
+  private flushStreamEdit(): void {
+    if (!this.streamState || this.streamState.messageId === 0) return;
+    this.streamState.lastUpdateTime = Date.now();
+
+    this.api
+      .editMessageText(this.streamState.chatId, this.streamState.messageId, this.streamState.accumulatedText)
+      .catch((err) => console.error("Failed to edit stream message:", err));
+  }
+
+  private splitStreamMessage(): void {
+    if (!this.streamState) return;
+
+    const text = this.streamState.accumulatedText;
+    this.streamState.accumulatedText = "";
+    this.streamState.messageId = 0; // reset until new message resolves
+
+    // Finalize current message as plain text, then start a new one
+    this.api
+      .sendMessage(this.streamState.chatId, text)
+      .then((sent) => {
+        // Start a new streaming message for continuation
+        if (this.streamState) {
+          this.streamState.messageId = sent.message_id;
+        }
+      })
+      .catch((err) => console.error("Failed to split stream message:", err));
+  }
+
+  cleanupStreamState(): void {
+    this.streamState = null;
+  }
+
   handleCliMessage(raw: string): void {
     let msg: Record<string, unknown>;
     try {
@@ -202,6 +306,14 @@ export class Bridge {
       case "system": {
         if (msg.subtype === "init" && this.cliState === "connecting") {
           this.markReady("system/init");
+        }
+        break;
+      }
+
+      case "stream_event": {
+        const event = msg.event as Record<string, unknown> | undefined;
+        if (event) {
+          this.handleStreamEvent(event);
         }
         break;
       }
@@ -225,10 +337,28 @@ export class Bridge {
           .filter((c) => c.type === "text" && c.text)
           .map((c) => c.text as string);
         if (textParts.length > 0) {
-          const html = markdownToHtml(textParts.join("\n"));
-          // Clean up status independently -- never block response delivery
-          this.cleanupTurnStatus().catch((err) => console.error("Status cleanup failed:", err));
-          this.sendChunked(this.activeChatId!, html).catch((err) => console.error("sendChunked failed:", err));
+          if (this.streamState) {
+            // Streaming was active — send final HTML-formatted edit instead of sendChunked
+            const html = markdownToHtml(this.streamState.accumulatedText || textParts.join("\n"));
+            const { chatId, messageId } = this.streamState;
+            if (messageId !== 0) {
+              this.api
+                .editMessageText(chatId, messageId, html, { parse_mode: "HTML" })
+                .catch(() => {
+                  // HTML parse failed — fall back to plain text
+                  this.api
+                    .editMessageText(chatId, messageId, stripHtmlTags(html))
+                    .catch((err) => console.error("Failed final stream edit:", err));
+                });
+            }
+            // Clean up status without deleting the message (it IS the streaming message)
+            this.cleanupTurnStatus().catch((err) => console.error("Status cleanup failed:", err));
+          } else {
+            const html = markdownToHtml(textParts.join("\n"));
+            // Clean up status independently -- never block response delivery
+            this.cleanupTurnStatus().catch((err) => console.error("Status cleanup failed:", err));
+            this.sendChunked(this.activeChatId!, html).catch((err) => console.error("sendChunked failed:", err));
+          }
         }
         break;
       }
@@ -246,6 +376,9 @@ export class Bridge {
         this.processing = false;
         this.config.onTurnComplete?.();
         console.log(`Turn complete (total processed: ${this.messagesProcessed})`);
+
+        // Clean up streaming state
+        this.cleanupStreamState();
 
         // Clean up status message if still present (no text response was sent)
         this.cleanupTurnStatus().catch((err) => console.error("Status cleanup failed:", err));

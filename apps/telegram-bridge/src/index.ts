@@ -60,7 +60,7 @@ const bot = new Bot<BotContext>(TELEGRAM_BOT_TOKEN);
 // Adapt grammY's Api to our minimal BotApi interface
 const botApi: BotApi = {
   sendMessage: (chatId, text, other?) => bot.api.sendMessage(chatId, text, other as any),
-  editMessageText: (chatId, messageId, text) => bot.api.editMessageText(chatId, messageId, text),
+  editMessageText: (chatId, messageId, text, other?) => bot.api.editMessageText(chatId, messageId, text, other as any),
   deleteMessage: (chatId, messageId) => bot.api.deleteMessage(chatId, messageId),
   sendChatAction: (chatId, action) => bot.api.sendChatAction(chatId, action as any),
 };
@@ -96,6 +96,7 @@ function spawnCli(): void {
     "--verbose",
     "--output-format", "stream-json",
     "--input-format", "stream-json",
+    "--include-partial-messages",
     "--model", CLAUDE_MODEL,
     "-p", "",
   ];
