@@ -1,5 +1,7 @@
 ---
 last_updated: 2026-02-25
+last_reviewed: 2026-03-02
+review_cadence: quarterly
 ---
 
 # Business Validation: Soleur -- Company-as-a-Service Platform
