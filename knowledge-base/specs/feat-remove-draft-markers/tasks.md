@@ -38,5 +38,15 @@ issue: "#189"
 - [ ] 4.2 Update `plugins/soleur/CHANGELOG.md` with removal entry
 - [ ] 4.3 Verify `plugins/soleur/README.md` version references
 - [ ] 4.4 Update `.claude-plugin/marketplace.json` version
-- [ ] 4.5 Run `grep -r "DRAFT" docs/legal/ plugins/soleur/docs/pages/legal/` to verify zero matches remain
+- [ ] 4.5 Run verification commands from plan (grep checks for removed markers AND preserved references)
 - [ ] 4.6 Run site build (`npx @11ty/eleventy`) to verify no breakage
+
+## Preserve list (DO NOT EDIT these files)
+
+These files contain "draft" references about the generator's output behavior. Verify they are unchanged after all edits:
+
+- `plugins/soleur/agents/legal/legal-document-generator.md`
+- `plugins/soleur/skills/legal-generate/SKILL.md`
+- `plugins/soleur/agents/legal/clo.md`
+- `plugins/soleur/CHANGELOG.md`
+- `plugins/soleur/README.md`
