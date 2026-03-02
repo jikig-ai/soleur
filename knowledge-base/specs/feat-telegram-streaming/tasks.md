@@ -4,91 +4,73 @@
 **Issue:** #372
 **Branch:** feat-telegram-streaming
 
-## Phase 1: Foundation
+## Phase 1: Types + CLI Flag + Core Streaming
 
-### 1.1 Define StreamState type and extend BridgeConfig
-- [ ] Add `StreamState` interface to `apps/telegram-bridge/src/types.ts`
-- [ ] Add `streamDraftIntervalMs`, `streamEditIntervalMs`, `streamSplitThreshold` to `BridgeConfig`
-- [ ] Verify types compile: `bun run check` or `bunx tsc --noEmit`
+### 1.1 Verify stream_event envelope shape
+- [ ] Run CLI with `--include-partial-messages --output-format stream-json` and capture actual NDJSON
+- [ ] Document verified event structure (confirm `{"type": "stream_event", "event": {...}}` envelope)
+- [ ] Record exact field paths for text deltas: `msg.event.delta.text`, `msg.event.delta.type`
 
-### 1.2 Extend BotApi interface with sendMessageDraft
-- [ ] Add `sendMessageDraft(chatId, draftId, text, other?)` to `BotApi` in `types.ts`
-- [ ] Add adapter implementation in `index.ts` wrapping `bot.api.sendMessageDraft`
-- [ ] Add `sendMessageDraft` mock to `createMockApi()` in `test/bridge.test.ts`
+### 1.2 Define StreamState and extend editMessageText
+- [ ] Add `StreamState` interface to `types.ts`: `chatId`, `messageId`, `accumulatedText`, `lastUpdateTime`
+- [ ] Add `other?: Record<string, unknown>` parameter to `editMessageText` in `BotApi` interface
+- [ ] Update grammY adapter in `index.ts` to forward `other` parameter
+- [ ] Verify types compile: `bunx tsc --noEmit`
 
 ### 1.3 Add --include-partial-messages to CLI spawn
 - [ ] Add `"--include-partial-messages"` to `cliArgs` array in `index.ts`
-- [ ] Verify CLI emits `stream_event` NDJSON lines in logs
 
-## Phase 2: Core Streaming
-
-### 2.1 Add stream_event routing in handleCliMessage
+### 1.4 Add stream_event handling to handleCliMessage
 - [ ] Add `"stream_event"` case to the switch in `handleCliMessage`
-- [ ] Route inner `msg.event.type` to appropriate handlers:
-  - `content_block_start` (text blocks only) → `initStreamState`
-  - `content_block_delta` (text_delta only) → `handleTextDelta`
-  - `content_block_stop` → mark block complete
-  - `message_delta`, `message_stop` → no-op
+- [ ] Route `msg.event.type`:
+  - `content_block_start` (text only, no active streamState) → init StreamState, clear typingTimer
+  - `content_block_delta` (text_delta) → accumulate text, throttled `editMessageText`
+  - `content_block_start` (text, streamState active + after tool) → resume, don't reinit
+  - All others → no-op
 
-### 2.2 Implement initStreamState
-- [ ] Create `initStreamState(chatId)` method on Bridge
-- [ ] Set strategy to "detecting"
-- [ ] Try `sendMessageDraft` — on success set strategy to "native"
-- [ ] On draft-specific error (400 with `TEXTDRAFT_PEER_INVALID`), set strategy to "fallback"
-- [ ] In fallback: repurpose status message (edit "Thinking..." with first text)
-- [ ] Cache detected strategy on Bridge instance for subsequent turns
-
-### 2.3 Implement handleTextDelta + flushStreamUpdate
+### 1.5 Implement delta accumulation + throttled edit
 - [ ] Accumulate `msg.event.delta.text` into `streamState.accumulatedText`
-- [ ] Throttle check: `Date.now() - lastUpdateTime >= interval`
-- [ ] Native path: `sendMessageDraft(chatId, draftId, accumulatedText)`
-- [ ] Fallback path: `editMessageText(chatId, messageId, accumulatedText)`
-- [ ] Guard on messageId readiness (sentinel 0 check) — buffer if not ready
+- [ ] Throttle: `Date.now() - lastUpdateTime >= STREAM_EDIT_INTERVAL_MS` (2500ms)
+- [ ] Guard on `messageId !== 0` before editing
+- [ ] Use plain text (no `parse_mode`) during streaming
 
-## Phase 3: Assistant/Result Handler Modifications
+### 1.6 Implement 4096-char split during streaming
+- [ ] Check `accumulatedText.length >= MAX_CHUNK_SIZE` after accumulation
+- [ ] Finalize: `sendMessage(chatId, accumulatedText)` as plain text
+- [ ] Start new streaming message: `sendMessage` → store new `messageId` on `streamState`
+- [ ] Reset `accumulatedText`
 
-### 3.1 Modify assistant handler for streaming deduplication
+### 1.7 Modify assistant handler for streaming deduplication
 - [ ] Check if `streamState` is active when `assistant` event fires
-- [ ] If streaming active + fallback: `editMessageText` with HTML-formatted full text
-- [ ] If streaming active + native: `sendMessage` with HTML-formatted full text
-- [ ] If no streaming: existing `sendChunked` path unchanged
-- [ ] Handle `parse_mode: "HTML"` with plain-text fallback on parse error
+- [ ] If active: `editMessageText(chatId, messageId, html, { parse_mode: "HTML" })`
+- [ ] Catch HTML parse error → fall back to plain text edit
+- [ ] Skip `sendChunked` for text already streamed
+- [ ] Do NOT call `cleanupTurnStatus()` — message is the streaming message
 
-### 3.2 Modify result handler for StreamState cleanup
-- [ ] Add `cleanupStreamState()` method — null-before-cleanup pattern
-- [ ] Call `cleanupStreamState()` in `result` handler if `streamState` exists
-- [ ] Clean up in `handleCliExit` for crash scenarios
-- [ ] Ensure turn watchdog also cleans up StreamState
+### 1.8 Modify cleanupTurnStatus for streaming
+- [ ] When `streamState` is active: null `turnStatus`, clear `typingTimer`, but skip `deleteMessage`
+- [ ] When no streaming: existing behavior unchanged
 
-## Phase 4: 4096-Char Splitting + Tool Use
+### 1.9 Modify result handler + cleanup
+- [ ] Add `cleanupStreamState()`: null `streamState` (no message deletion)
+- [ ] Call in `result` handler, `handleCliExit`, and turn watchdog
 
-### 4.1 Implement message splitting during streaming
-- [ ] In `handleTextDelta`: check `accumulatedText.length >= streamSplitThreshold`
-- [ ] `finalizeStreamMessage()`: send accumulated text via `sendMessage`, store message_id in `splitMessages`
-- [ ] Reset `accumulatedText`, increment `draftId` (native) or get new `messageId` (fallback)
-- [ ] Start new streaming message for continuation
+## Phase 2: Tests
 
-### 4.2 Implement tool use pause/resume
-- [ ] On `content_block_start` with `type === "tool_use"`: set `streamState.paused = true`
-- [ ] Append `"\n\n⚙️ Using [tool]..."` to current stream message
-- [ ] On next `content_block_start` with `type === "text"`: set `paused = false`
-- [ ] Edit message to remove tool indicator, continue accumulating
+### 2.1 Update test infrastructure
+- [ ] Add `other?` parameter support to `editMessageText` mock in `createMockApi()`
+- [ ] Create `streamEvent(type, event)` helper for building stream NDJSON
 
-## Phase 5: Tests
-
-### 5.1 Streaming lifecycle tests
-- [ ] Happy path native: deltas → final HTML message
-- [ ] Happy path fallback: draft error → editMessageText path
-- [ ] Detection caching: second turn uses cached strategy
-- [ ] No deltas: `content_block_start` + `content_block_stop` with zero deltas
-
-### 5.2 Edge case tests
+### 2.2 Streaming lifecycle tests
+- [ ] Happy path: deltas → progressive edits → final HTML edit
 - [ ] 4096 split: accumulated text exceeds threshold → split into two messages
-- [ ] Tool use pause/resume: text → tool → text in single turn
-- [ ] Race condition: first delta before status message resolves
-- [ ] CLI crash mid-stream: process exit → cleanup
-- [ ] Interleaved blocks: text → tool → text in single turn
+- [ ] No deltas: `content_block_start` + `content_block_stop` → no edit, no error
 
-### 5.3 Error handling tests
-- [ ] Fallback 429: transient rate limit does NOT trigger permanent fallback
-- [ ] Turn watchdog during streaming: 10-minute timeout → cleanup
+### 2.3 Edge case tests
+- [ ] Race condition: first delta before status message resolves → buffered, flushed later
+- [ ] Interleaved blocks: text → tool_use → text → streaming resumes without reinit
+- [ ] CLI crash mid-stream → StreamState cleaned up
+
+### 2.4 Error handling tests
+- [ ] HTML parse failure on final edit → falls back to plain text
+- [ ] Turn watchdog during streaming → StreamState cleaned up
