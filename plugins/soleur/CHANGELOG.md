@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.7.13] - 2026-03-02
+
+### Changed
+
+- **legal documents** -- Removed DRAFT markers from all 7 legal documents (source docs and rendered pages) and updated the legal landing page. Closes #189.
+
 ## [3.7.12] - 2026-03-02
 
 ### Fixed
