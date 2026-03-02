@@ -1,7 +1,7 @@
 ---
 title: "Corporate Contributor License Agreement"
 type: corporate-cla
-jurisdiction: EU, US
+jurisdiction: FR, EU
 generated-date: 2026-02-26
 ---
 
