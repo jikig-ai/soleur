@@ -29,10 +29,10 @@ Closes #189.
 
 ## Acceptance Criteria
 
-- [ ] DRAFT blockquote banners removed from top and bottom of 7 source docs in `docs/legal/`
-- [ ] DRAFT blockquote banners removed from top and bottom of 7 rendered pages in `plugins/soleur/docs/pages/legal/`
-- [ ] Landing page (`plugins/soleur/docs/pages/legal.njk` line 22) no longer mentions "drafts" or "professional legal review"
-- [ ] Terms & Conditions section 6.2 body text updated in both locations to reflect reviewed status
+- [x] DRAFT blockquote banners removed from top and bottom of 7 source docs in `docs/legal/`
+- [x] DRAFT blockquote banners removed from top and bottom of 7 rendered pages in `plugins/soleur/docs/pages/legal/`
+- [x] Landing page (`plugins/soleur/docs/pages/legal.njk` line 22) no longer mentions "drafts" or "professional legal review"
+- [x] Terms & Conditions section 6.2 body text -- no change needed (describes generator output, not project docs)
 - [ ] Plugin version bumped (PATCH) in `plugin.json`, `CHANGELOG.md`, `README.md`, `marketplace.json`
 - [ ] Site builds successfully (`npx @11ty/eleventy`)
 - [ ] No remaining unintended "DRAFT" references in legal files (verified by grep)
