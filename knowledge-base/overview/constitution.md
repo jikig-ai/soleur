@@ -183,6 +183,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Plans must include a "Test Scenarios" section with Given/When/Then acceptance tests
 - Test files live in a `test/` sibling directory (not co-located with source), named `<module>.test.ts` -- no `.spec.ts` pattern
 - Run dependency-detection scripts (`check_deps.sh`) on a real machine before merging -- don't trust assumed dependency graphs or distribution formats
+- Run SpecFlow analysis on workflow and infrastructure changes to catch logic gaps in conditional paths -- human review misses boundary-value bugs in bash conditionals
 
 ### Never
 
