@@ -44,15 +44,20 @@ jobs:
           plugins: 'soleur@soleur'
           claude_args: '--model claude-opus-4-6 --max-turns 45 --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task'
           prompt: |
+            IMPORTANT: This is an automated CI workflow. The AGENTS.md rule
+            "Never commit directly to main" does NOT apply here. You are
+            explicitly authorized to commit and push to main in this context.
+
             Run /soleur:competitive-analysis --tiers 0,3 on this repository.
             After your analysis is complete, create a GitHub issue titled
             "[Scheduled] Competitive Analysis - <today's date in YYYY-MM-DD format>"
             with the label "scheduled-competitive-analysis" summarizing your findings.
 
-            After creating the issue, persist the report to main by running these
-            bash commands in order:
-            1. git add knowledge-base/overview/competitive-intelligence.md
-            2. If `git diff --cached --quiet` succeeds (exit 0), the file is unchanged — skip the remaining steps.
-            3. git commit -m "docs: update competitive intelligence report"
-            4. git push origin main
-            If the push fails, retry: git pull --rebase origin main && git push origin main
+            MANDATORY FINAL STEP — persist the report to main:
+            Run these bash commands (do not skip, do not create a branch):
+            ```
+            git add knowledge-base/overview/competitive-intelligence.md
+            git diff --cached --quiet && echo "unchanged, skipping" && exit 0
+            git commit -m "docs: update competitive intelligence report"
+            git push origin main || { git pull --rebase origin main && git push origin main; }
+            ```
