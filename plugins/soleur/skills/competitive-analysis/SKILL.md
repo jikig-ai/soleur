@@ -38,4 +38,4 @@ After the agent completes:
 
 ## Scheduled Execution
 
-The `scheduled-competitive-analysis.yml` workflow runs this skill monthly via `claude-code-action`. After the agent writes the report, a shell step pushes it directly to main — making `knowledge-base/overview/competitive-intelligence.md` a living document updated each run. The GitHub Issue is still created as an audit trail.
+The `scheduled-competitive-analysis.yml` workflow runs this skill monthly via `claude-code-action`. After the agent writes the report, a shell step pushes it directly to main — making `knowledge-base/overview/competitive-intelligence.md` a living document updated each run. The persist step re-authenticates with `github.token` because `claude-code-action` revokes the App installation token in its post-step cleanup. The GitHub Issue is still created as an audit trail.

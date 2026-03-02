@@ -83,7 +83,7 @@ Business plans, strategies, analyses, and recommendations produced by the Platfo
 
 ### 3.1 Exclusion of Damages
 
-TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL SOLEUR, ITS CONTRIBUTORS, MAINTAINERS, AFFILIATES, OR LICENSORS BE LIABLE FOR ANY:
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL JIKIGAI, ITS CONTRIBUTORS, MAINTAINERS, AFFILIATES, OR LICENSORS BE LIABLE FOR ANY:
 
 - **Direct damages** arising from your use of or inability to use the Platform;
 - **Indirect, incidental, special, consequential, or punitive damages**, including but not limited to loss of profits, loss of data, loss of business opportunity, loss of goodwill, or business interruption;
@@ -147,7 +147,7 @@ AI-Generated Output may include or reference code, libraries, or content subject
 
 ## 6. Indemnification
 
-You agree to indemnify, defend, and hold harmless Soleur, its contributors, maintainers, and affiliates from and against any and all claims, damages, losses, liabilities, costs, and expenses (including reasonable attorneys' fees) arising out of or related to:
+You agree to indemnify, defend, and hold harmless Jikigai, its contributors, maintainers, and affiliates from and against any and all claims, damages, losses, liabilities, costs, and expenses (including reasonable attorneys' fees) arising out of or related to:
 
 - Your use of the Platform or any AI-Generated Output;
 - Your violation of this Disclaimer or any applicable law;

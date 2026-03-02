@@ -22,7 +22,7 @@ permalink: pages/legal/data-protection-disclosure.html
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
-- **Soleur** ("Provider," "we," "us," or "our"), the developer and maintainer of the Soleur Claude Code plugin, accessible at [https://soleur.ai](https://soleur.ai) and the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur); and
+- **Jikigai** ("Provider," "we," "us," or "our"), the operator and maintainer of the Soleur Claude Code plugin, accessible at [https://soleur.ai](https://soleur.ai) and the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur); and
 
 - **You** ("User," "Controller," or "you"), the individual or entity using the Soleur plugin.
 

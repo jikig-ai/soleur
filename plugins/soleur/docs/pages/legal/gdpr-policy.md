@@ -25,7 +25,7 @@ permalink: pages/legal/gdpr-policy.html
 
 ## 1. Introduction
 
-This GDPR Policy explains how Soleur ("we", "us", "our") approaches data protection and privacy in compliance with the General Data Protection Regulation (EU) 2016/679 ("GDPR") and related European data protection legislation. Soleur is a Company-as-a-Service platform delivered as a Claude Code plugin, providing a full-stack AI organization with 45 agents, 45 skills, and a compounding knowledge base for solo founders and technical builders.
+This GDPR Policy explains how Jikigai ("we", "us", "our"), operator of Soleur, approaches data protection and privacy in compliance with the General Data Protection Regulation (EU) 2016/679 ("GDPR") and related European data protection legislation. Soleur is a Company-as-a-Service platform delivered as a Claude Code plugin, providing a full-stack AI organization with 45 agents, 45 skills, and a compounding knowledge base for solo founders and technical builders.
 
 This policy applies to all individuals located in the European Economic Area ("EEA") who use or interact with Soleur, including the plugin software, documentation site, and GitHub repository.
 
@@ -267,6 +267,12 @@ To exercise your data subject rights under GDPR, send a written request to legal
 Soleur is a source-available project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France.
 
 Soleur's limited data processing (standard web hosting, community repository interactions) does not meet the thresholds requiring a Data Protection Officer (DPO) under Article 37 of the GDPR: the processing is not core business activity involving regular and systematic monitoring of data subjects at large scale, nor does it involve large-scale processing of special categories of data. Accordingly, no DPO has been appointed. Should this assessment change, DPO contact information will be added to this policy.
+
+---
+
+## 15. Governing Law
+
+This GDPR Policy shall be governed by and construed in accordance with the laws of France, without regard to its conflict of laws provisions. Any disputes arising under or in connection with this Policy shall be subject to the exclusive jurisdiction of the courts of Paris, France. If you are a consumer in the EU/EEA, nothing in this Policy affects your rights under mandatory EU or member state consumer protection laws, including your right to bring proceedings in the courts of your country of habitual residence.
 
 ---
 

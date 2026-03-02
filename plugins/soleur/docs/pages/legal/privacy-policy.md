@@ -21,7 +21,7 @@ permalink: pages/legal/privacy-policy.html
 
 ## 1. Introduction
 
-This Privacy Policy describes how Soleur ("we," "us," or "our") handles information in connection with the Soleur Company-as-a-Service platform ("the Plugin"), a Claude Code plugin providing agents, skills, commands, and a knowledge base for structured software development workflows, and the Soleur documentation website located at soleur.ai ("the Docs Site").
+This Privacy Policy describes how Jikigai ("we," "us," or "our"), operator of Soleur, handles information in connection with the Soleur Company-as-a-Service platform ("the Plugin"), a Claude Code plugin providing agents, skills, commands, and a knowledge base for structured software development workflows, and the Soleur documentation website located at soleur.ai ("the Docs Site").
 
 We are committed to protecting your privacy. This Policy explains what data is and is not collected, how the Plugin operates, and your rights under applicable law, including the EU General Data Protection Regulation (GDPR) and US privacy regulations.
 
@@ -45,7 +45,7 @@ The Soleur Plugin **does not collect, transmit, or store any personal data on ex
 
 - The Plugin runs entirely on your local machine.
 - All knowledge-base files -- including plans, brainstorms, specifications, and learnings -- are stored exclusively on your local filesystem.
-- The Plugin does not phone home, send telemetry, or transmit analytics to Soleur-operated servers.
+- The Plugin does not phone home, send telemetry, or transmit analytics to Jikigai-operated servers.
 - The Plugin does not have its own backend, database, or cloud infrastructure.
 - We do not have access to your files, your code, or your usage patterns.
 

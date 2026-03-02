@@ -178,7 +178,7 @@ For Users in the EU/EEA, the limitations in this section apply only to the exten
 
 ## 11. Indemnification
 
-You agree to indemnify, defend, and hold harmless Soleur and its affiliates, contributors, and licensors from and against any claims, damages, losses, liabilities, costs, and expenses (including reasonable attorneys' fees) arising out of or relating to:
+You agree to indemnify, defend, and hold harmless Jikigai and its affiliates, contributors, and licensors from and against any claims, damages, losses, liabilities, costs, and expenses (including reasonable attorneys' fees) arising out of or relating to:
 
 - Your use of the Plugin
 - Your violation of these Terms

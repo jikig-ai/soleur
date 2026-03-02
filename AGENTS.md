@@ -20,6 +20,7 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 - Use `/ship` to automate the full commit/push/PR workflow. It enforces review and compound gates.
 - After marking a PR ready, run `gh pr checks <number> --watch` to poll until CI passes, then `gh pr merge <number> --squash`, then `cleanup-merged`. Never stop at "waiting for CI" -- actively poll and merge in the same session.
 - At session start, from the repo root: run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged && git worktree list`.
+- When an audit identifies pre-existing issues, create GitHub issues to track them before fixing. Don't just note them in conversation -- file them.
 
 ## Communication
 

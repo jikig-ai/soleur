@@ -1,7 +1,7 @@
 ---
 title: "Cookie Policy"
 type: cookie-policy
-jurisdiction: EU, US
+jurisdiction: FR, EU
 generated-date: 2026-02-20
 ---
 
@@ -13,7 +13,7 @@ generated-date: 2026-02-20
 
 ## 1. Introduction
 
-This Cookie Policy explains how Soleur ("we," "us," or "our") uses cookies and similar tracking technologies on our documentation website at [soleur.ai](https://soleur.ai) and in connection with our Company-as-a-Service platform (the "Service"). This policy is designed to comply with the EU General Data Protection Regulation (GDPR), the ePrivacy Directive, and applicable US privacy laws.
+This Cookie Policy explains how Jikigai ("we," "us," or "our"), operator of Soleur, uses cookies and similar tracking technologies on our documentation website at [soleur.ai](https://soleur.ai) and in connection with our Company-as-a-Service platform (the "Service"). This policy is designed to comply with the EU General Data Protection Regulation (GDPR), the ePrivacy Directive, and applicable US privacy laws.
 
 Soleur is a Claude Code plugin providing a full-stack AI organization with 45 agents, 45 skills, and a compounding knowledge base, designed for solo founders and technical builders.
 
@@ -151,6 +151,6 @@ If you have questions about this Cookie Policy or our data practices, you can re
 
 ---
 
-> **Related documents:** This Cookie Policy references data collection and privacy practices. Consider reviewing the companion **Privacy Policy** document for comprehensive coverage of personal data handling. If your service processes data on behalf of EU/EEA users, a **GDPR Policy** may also be appropriate.
+> **Related documents:** This Cookie Policy references data collection and privacy practices. Consider reviewing the companion **Privacy Policy** document for comprehensive coverage of personal data handling, the **Terms & Conditions** for the governing law that applies to this policy, and the **GDPR Policy** for EU/EEA-specific data protection obligations.
 
 ---

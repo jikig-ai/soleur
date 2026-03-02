@@ -26,7 +26,7 @@ permalink: pages/legal/acceptable-use-policy.html
 
 ## 1. Introduction
 
-This Acceptable Use Policy ("AUP" or "Policy") governs your use of the Soleur platform ("Soleur," "the Platform," "the Plugin"), a Claude Code plugin providing agents for software development workflows, including code generation, review, planning, deployment, and browser automation. Soleur is developed and maintained by the Soleur project ("we," "us," "our") and is available at [soleur.ai](https://soleur.ai) and through the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur).
+This Acceptable Use Policy ("AUP" or "Policy") governs your use of the Soleur platform ("Soleur," "the Platform," "the Plugin"), a Claude Code plugin providing agents for software development workflows, including code generation, review, planning, deployment, and browser automation. Soleur is developed and maintained by Jikigai ("we," "us," "our") and is available at [soleur.ai](https://soleur.ai) and through the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur).
 
 By installing, configuring, or using Soleur, you ("User," "you," "your") agree to comply with this Policy. If you do not agree, you must discontinue use of the Platform immediately.
 
@@ -210,7 +210,23 @@ If any provision of this Policy is found to be unenforceable or invalid under ap
 
 ---
 
-## 10. Legal Entity and Contact
+## 10. Governing Law and Dispute Resolution
+
+### 10.1 Governing Law
+
+This Policy shall be governed by and construed in accordance with the laws of France, without regard to its conflict of laws provisions.
+
+### 10.2 Jurisdiction
+
+Any disputes arising under or in connection with this Policy shall be subject to the exclusive jurisdiction of the courts of Paris, France.
+
+### 10.3 EU/EEA Consumers
+
+If you are a consumer in the EU/EEA, nothing in this Policy affects your rights under mandatory EU or member state consumer protection laws, including your right to bring proceedings in the courts of your country of habitual residence.
+
+---
+
+## 11. Legal Entity and Contact
 
 Soleur is a source-available project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France.
 
