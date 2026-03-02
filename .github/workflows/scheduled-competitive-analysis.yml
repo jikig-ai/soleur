@@ -22,7 +22,7 @@ permissions:
 jobs:
   competitive-analysis:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -41,7 +41,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
           plugins: 'soleur@soleur'
-          claude_args: '--model claude-opus-4-6 --max-turns 30 --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch'
+          claude_args: '--model claude-opus-4-6 --max-turns 45 --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task'
           prompt: |
             Run /soleur:competitive-analysis --tiers 0,3 on this repository.
             After your analysis is complete, create a GitHub issue titled

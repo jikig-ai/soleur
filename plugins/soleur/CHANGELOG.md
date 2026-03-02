@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.7.9] - 2026-03-02
+
+### Added
+
+- **competitive-intelligence agent** -- Phase 2: Cascade Updates. After producing the base CI report, the agent automatically spawns 4 specialist agents in parallel (growth-strategist, pricing-strategist, deal-architect, programmatic-seo-specialist) to refresh downstream artifacts with the latest competitive data. Appends a consolidated Cascade Results section to the CI report.
+
+### Changed
+
+- **scheduled-competitive-analysis workflow** -- Increased `timeout-minutes` from 30 to 45 and `--max-turns` from 30 to 45 to accommodate the cascade phase. Added `Task` to `--allowedTools` so the cascade can spawn sub-agents in CI.
+
 ## [3.7.8] - 2026-02-27
 
 ### Added
