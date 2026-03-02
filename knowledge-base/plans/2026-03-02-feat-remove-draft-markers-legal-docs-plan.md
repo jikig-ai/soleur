@@ -33,10 +33,10 @@ Closes #189.
 - [x] DRAFT blockquote banners removed from top and bottom of 7 rendered pages in `plugins/soleur/docs/pages/legal/`
 - [x] Landing page (`plugins/soleur/docs/pages/legal.njk` line 22) no longer mentions "drafts" or "professional legal review"
 - [x] Terms & Conditions section 6.2 body text -- no change needed (describes generator output, not project docs)
-- [ ] Plugin version bumped (PATCH) in `plugin.json`, `CHANGELOG.md`, `README.md`, `marketplace.json`
-- [ ] Site builds successfully (`npx @11ty/eleventy`)
-- [ ] No remaining unintended "DRAFT" references in legal files (verified by grep)
-- [ ] Explicit preserve list verified unchanged (see "Files to preserve unchanged" below)
+- [x] Plugin version bumped (PATCH) in `plugin.json`, `CHANGELOG.md`, `README.md`, `marketplace.json`
+- [x] Site builds successfully (`npx @11ty/eleventy`)
+- [x] No remaining unintended "DRAFT" references in legal files (verified by grep)
+- [x] Explicit preserve list verified unchanged (see "Files to preserve unchanged" below)
 
 ## Test Scenarios
 

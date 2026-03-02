@@ -271,18 +271,9 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 ### Phase 4: Handoff
 
-Implementation is complete. **Do not invoke ship from here.** The caller (one-shot, or the user) controls when review, compound, and ship run. This separation ensures review findings can be addressed before merge.
+Implementation is complete. **Do not invoke ship, review, or compound from here.** The caller (one-shot, or the user) controls the post-implementation sequence.
 
-**Announce to the user:**
-
-"Implementation complete. Next steps: `review` -> `compound` -> `ship`"
-
-The recommended post-implementation sequence:
-
-1. `skill: soleur:review` -- multi-agent code review
-2. `skill: soleur:resolve-todo-parallel` -- fix review findings
-3. `skill: soleur:compound` -- capture learnings
-4. `skill: soleur:ship` -- version bump, push, PR, merge, cleanup
+**Return control immediately.** Do not prompt the user for next steps or wait for input. The caller will invoke the next skill in the pipeline. If invoked directly by the user (not via one-shot), output a single line: "Implementation complete." and stop.
 
 ---
 
