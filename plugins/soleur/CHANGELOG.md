@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.7.18] - 2026-03-02
+
+### Fixed
+
+- **merge workflow** -- Replaced `gh pr checks --watch` + `gh pr merge --squash` with `gh pr merge --squash --auto` across AGENTS.md, ship skill, and merge-pr skill. The old pattern failed when CI checks hadn't registered yet (`--watch` exits immediately with "no checks reported"). Auto-merge queues the merge and GitHub handles waiting for branch protection requirements. Enabled `allow_auto_merge` on the repo.
+
 ## [3.7.17] - 2026-03-02
 
 ### Fixed

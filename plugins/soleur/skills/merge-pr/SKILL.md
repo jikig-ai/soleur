@@ -319,15 +319,25 @@ Announce the PR URL.
 
 ## Phase 6: CI and Merge
 
-### 6.1 Wait for CI
+### 6.1 Queue Auto-Merge
 
 ```bash
-gh pr checks --watch --fail-fast
+gh pr merge <number> --squash --auto
 ```
 
-**If all checks pass:** Proceed to merge.
+This queues the merge. GitHub waits for all branch protection requirements (CI checks, CLA) to pass, then merges automatically. Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks reported" when CI hasn't registered yet.
 
-**If a check fails:**
+**NEVER use `--delete-branch`.** The guardrails hook blocks it when any worktree exists. Branch cleanup is handled by `cleanup-merged` in Phase 7.
+
+### 6.2 Poll for Merge
+
+Poll until the PR state is MERGED:
+
+```bash
+gh pr view <number> --json state --jq .state
+```
+
+If the state is `CLOSED` (not `MERGED`), auto-merge was cancelled -- check for CI failures:
 
 ```bash
 gh pr checks --json name,state,description | jq '.[] | select(.state != "SUCCESS")'
@@ -344,16 +354,6 @@ Failed checks:
 Starting SHA for rollback: <starting-sha>
 To rollback: git reset --hard <starting-sha> && git push --force-with-lease origin <branch-name>
 ```
-
-### 6.2 Merge
-
-```bash
-gh pr merge <number> --squash
-```
-
-**NEVER use `--delete-branch`.** The guardrails hook blocks it when any worktree exists. Branch cleanup is handled by `cleanup-merged` in Phase 7.
-
-If `gh pr merge` fails (PR already merged, branch protection, etc.), stop and report the error.
 
 ## Phase 7: Cleanup and Report
 
