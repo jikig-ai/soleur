@@ -48,15 +48,15 @@ Mirror the T&Cs structure, adapted for Disclaimer context:
 
 ## Acceptance Criteria
 
-- [ ] T&Cs Section 14 uses French law / Courts of Paris with 3-subsection structure (law, jurisdiction, EU/EEA)
-- [ ] No geographic tier splitting -- single governing law applies to all users
-- [ ] Disclaimer Section 8 mirrors the same structure
-- [ ] Disclaimer entity attribution corrected from "Soleur" to "Jikigai"
-- [ ] Last Updated dates bumped in both documents
-- [ ] Frontmatter `jurisdiction:` field updated to `FR, EU`
-- [ ] All 4 files updated in sync (2 docs x 2 locations)
-- [ ] Zero Delaware references in `docs/legal/` and `plugins/soleur/docs/pages/legal/` (grep verified)
-- [ ] Post-change compliance audit passes (legal-compliance-auditor agent)
+- [x] T&Cs Section 14 uses French law / Courts of Paris with 3-subsection structure (law, jurisdiction, EU/EEA)
+- [x] No geographic tier splitting -- single governing law applies to all users
+- [x] Disclaimer Section 8 mirrors the same structure
+- [x] Disclaimer entity attribution corrected from "Soleur" to "Jikigai"
+- [x] Last Updated dates bumped in both documents
+- [x] Frontmatter `jurisdiction:` field updated to `FR, EU`
+- [x] All 4 files updated in sync (2 docs x 2 locations)
+- [x] Zero Delaware references in `docs/legal/` and `plugins/soleur/docs/pages/legal/` (grep verified)
+- [x] Post-change compliance audit passes (legal-compliance-auditor agent)
 
 ## Test Scenarios
 

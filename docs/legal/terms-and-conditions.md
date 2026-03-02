@@ -1,7 +1,7 @@
 ---
 title: "Terms & Conditions"
 type: terms-and-conditions
-jurisdiction: EU, US
+jurisdiction: FR, EU
 generated-date: 2026-02-20
 ---
 
@@ -13,7 +13,7 @@ generated-date: 2026-02-20
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** February 21, 2026
+**Last Updated:** March 2, 2026
 
 ---
 
@@ -207,19 +207,17 @@ Sections 5.4, 6, 9, 10, 11, 14, and 15 survive termination.
 
 ## 14. Governing Law and Dispute Resolution
 
-### 14.1 For US Users
+### 14.1 Governing Law
 
-These Terms shall be governed by and construed in accordance with the laws of the State of Delaware, United States, without regard to its conflict of law provisions. Any disputes arising under these Terms shall be resolved in the state or federal courts located in Delaware.
+These Terms shall be governed by and construed in accordance with the laws of France, without regard to its conflict of laws provisions.
 
-### 14.2 For EU/EEA Users
+### 14.2 Jurisdiction
 
-If you are a consumer in the EU/EEA, these Terms shall be governed by the laws of your country of residence, and you may bring proceedings in the courts of your country of residence. Nothing in these Terms affects your rights as a consumer under mandatory EU or member state consumer protection laws.
+Any disputes arising under or in connection with these Terms shall be subject to the exclusive jurisdiction of the courts of Paris, France.
 
-The European Commission provides an Online Dispute Resolution (ODR) platform at https://ec.europa.eu/consumers/odr. We are not obligated to participate in ODR procedures but will consider doing so on a case-by-case basis.
+### 14.3 EU/EEA Consumers
 
-### 14.3 For All Other Users
-
-For Users outside the US and EU/EEA, these Terms shall be governed by the laws of the State of Delaware, United States, unless mandatory local law requires otherwise.
+If you are a consumer in the EU/EEA, nothing in these Terms affects your rights under mandatory EU or member state consumer protection laws, including your right to bring proceedings in the courts of your country of habitual residence. The European Commission provides an Online Dispute Resolution (ODR) platform at https://ec.europa.eu/consumers/odr. We are not obligated to participate in ODR procedures but will consider doing so on a case-by-case basis.
 
 ## 15. General Provisions
 

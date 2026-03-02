@@ -1,7 +1,7 @@
 ---
 title: "Disclaimer / Limitation of Liability"
 type: disclaimer
-jurisdiction: EU, US
+jurisdiction: FR, EU
 generated-date: 2026-02-20
 ---
 
@@ -13,9 +13,9 @@ generated-date: 2026-02-20
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** February 20, 2026
+**Last Updated:** March 2, 2026
 
-This Disclaimer / Limitation of Liability ("Disclaimer") governs your use of Soleur, a Company-as-a-Service platform provided as a source-available Claude Code plugin (the "Platform," "Software," or "Service"), operated by Soleur ("we," "us," or "our"). By accessing or using the Platform, you acknowledge that you have read, understood, and agree to be bound by this Disclaimer.
+This Disclaimer / Limitation of Liability ("Disclaimer") governs your use of Soleur, a Company-as-a-Service platform provided as a source-available Claude Code plugin (the "Platform," "Software," or "Service"), operated by Jikigai ("we," "us," or "our"). By accessing or using the Platform, you acknowledge that you have read, understood, and agree to be bound by this Disclaimer.
 
 ---
 
@@ -169,17 +169,17 @@ If any provision of this Disclaimer is found to be invalid, illegal, or unenforc
 
 ## 8. Governing Law and Dispute Resolution
 
-### 8.1 EU Users
+### 8.1 Governing Law
 
-For users located in the European Union or the European Economic Area, this Disclaimer shall be governed by and construed in accordance with the laws of your country of residence. Any disputes shall be submitted to the competent courts of your habitual residence, without prejudice to your rights under mandatory EU consumer protection law.
+This Disclaimer shall be governed by and construed in accordance with the laws of France, without regard to its conflict of laws provisions.
 
-### 8.2 US Users
+### 8.2 Jurisdiction
 
-For users located in the United States, this Disclaimer shall be governed by and construed in accordance with the laws of the State of Delaware, without regard to its conflict of law principles.
+Any disputes arising under or in connection with this Disclaimer shall be subject to the exclusive jurisdiction of the courts of Paris, France.
 
-### 8.3 All Other Users
+### 8.3 EU/EEA Consumers
 
-For users located outside the EU/EEA and the United States, this Disclaimer shall be governed by the laws of the State of Delaware, United States, unless mandatory local law requires otherwise.
+If you are a consumer in the EU/EEA, nothing in this Disclaimer affects your rights under mandatory EU or member state consumer protection laws, including your right to bring proceedings in the courts of your country of habitual residence.
 
 ---
 
