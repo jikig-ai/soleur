@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [3.7.9] - 2026-03-02
+## [3.7.11] - 2026-03-02
 
 ### Added
 
@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **scheduled-competitive-analysis workflow** -- Increased `timeout-minutes` from 30 to 45 and `--max-turns` from 30 to 45 to accommodate the cascade phase. Added `Task` to `--allowedTools` so the cascade can spawn sub-agents in CI.
+
+## [3.7.10] - 2026-03-02
+
+### Changed
+
+- **competitive-analysis skill** -- Documented scheduled execution behavior: workflow now pushes report directly to main as a living document.
+
+## [3.7.9] - 2026-03-02
+
+### Changed
+
+- **plan skill** -- Added note that SpecFlow analysis is especially valuable for CI/workflow and infrastructure changes where bash conditional logic can silently drop edge cases.
 
 ## [3.7.8] - 2026-02-27
 

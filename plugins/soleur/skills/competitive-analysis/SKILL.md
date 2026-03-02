@@ -35,3 +35,7 @@ Task competitive-intelligence: "Run a competitive intelligence scan for tiers <T
 After the agent completes:
 - Confirm the report was written (or output as code block in CI)
 - Display the executive summary
+
+## Scheduled Execution
+
+The `scheduled-competitive-analysis.yml` workflow runs this skill monthly via `claude-code-action`. After the agent writes the report, a shell step pushes it directly to main — making `knowledge-base/overview/competitive-intelligence.md` a living document updated each run. The GitHub Issue is still created as an audit trail.

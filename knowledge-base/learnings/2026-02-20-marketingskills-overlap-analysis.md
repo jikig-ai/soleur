@@ -8,7 +8,8 @@ tags:
   - monitoring
 module: marketing
 date: 2026-02-20
-next_review: 2026-05-20
+last_reviewed: 2026-02-20
+review_cadence: quarterly
 ---
 
 # Learning: marketingskills Plugin Overlap Analysis

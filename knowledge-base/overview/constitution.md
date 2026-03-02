@@ -1,3 +1,8 @@
+---
+last_reviewed: 2026-03-02
+review_cadence: quarterly
+---
+
 # Project Constitution
 
 Project principles organized by domain. Add principles as you learn them.
@@ -84,6 +89,8 @@ Project principles organized by domain. Add principles as you learn them.
 - GitHub Actions workflows invoking LLM agents (claude-code-action) must set `timeout-minutes` on the job to cap runaway billing -- without it, a stuck agent runs for the 6-hour GitHub default
 - GitHub Actions workflows using `claude-code-action` must include `id-token: write` in the permissions block -- the action requires OIDC token access for authentication and fails immediately without it
 - GitHub Actions workflows using `claude-code-action` where the agent needs to run shell commands (gh issue create, gh pr create, etc.) or web research must include `--allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch` in `claude_args` -- the sandbox blocks Bash, Write, WebSearch, and WebFetch by default and silently drops denied tool calls (workflow reports success with no output)
+- GitHub Actions workflows that persist bot-generated content back to the repo should push directly to main rather than create PRs -- GITHUB_TOKEN cascade prevents CI/CLA workflows from triggering on bot PRs, and `allow_auto_merge` may be disabled; check `gh api repos/{owner}/{repo} --jq '.allow_auto_merge'` and active rulesets before designing the merge strategy
+- Run SpecFlow analysis (spec-flow-analyzer agent) on features that modify CI workflows or GitHub Actions -- it catches repo configuration blockers (auto-merge settings, rulesets, token permissions) before implementation begins
 - Multi-agent cascades (one agent spawning specialists via Task tool) require a pre-flight checklist: (1) `Task` must be in `--allowedTools` for CI workflows, (2) every specialist must have an explicit write target path in the delegation table, (3) every specialist must produce a writable artifact -- read-only analysis tasks need a concrete output file. Cascade failures are silent: missing tools, unspecified write targets, and no-output specialists all fail without error messages
 
 ### Never
@@ -179,6 +186,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Plans must include a "Test Scenarios" section with Given/When/Then acceptance tests
 - Test files live in a `test/` sibling directory (not co-located with source), named `<module>.test.ts` -- no `.spec.ts` pattern
 - Run dependency-detection scripts (`check_deps.sh`) on a real machine before merging -- don't trust assumed dependency graphs or distribution formats
+- Run SpecFlow analysis on workflow and infrastructure changes to catch logic gaps in conditional paths -- human review misses boundary-value bugs in bash conditionals
 
 ### Never
 
