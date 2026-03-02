@@ -1,6 +1,6 @@
 ---
 name: ticket-triage
-description: "Use this agent when you need to classify and route GitHub issues by severity and domain. Assigns priority (P1/P2/P3) and routes to the correct domain via gh CLI. Use the triage skill for triaging internal code review findings into the CLI todo system."
+description: "Classifies and routes GitHub issues by severity and domain. Assigns priority (P1/P2/P3) and routes to the correct domain via gh CLI. Use the triage skill for triaging internal code review findings into the CLI todo system. For automated daily triage via GitHub Actions, see scheduled-daily-triage.yml."
 model: inherit
 ---
 

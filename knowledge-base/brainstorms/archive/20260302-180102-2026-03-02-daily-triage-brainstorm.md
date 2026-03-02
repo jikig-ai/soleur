@@ -1,0 +1,93 @@
+# Daily Triage Automation Brainstorm
+
+**Date:** 2026-03-02
+**Issue:** #370
+**Branch:** feat-daily-triage
+**PR:** #375
+
+## What We're Building
+
+A daily scheduled GitHub Actions workflow that automatically triages all open issues. The workflow invokes a `daily-triage` skill, which delegates to the extended `ticket-triage` agent for classification. For each unlabeled issue, the agent classifies it across 5 dimensions and applies GitHub labels, then adds a triage comment with its reasoning.
+
+**Phase 1 only:** No autonomous bug fixing. Triage, classify, label, comment. Follow-up issues cover supervised fixing (Phase 2) and full autonomous pipeline (Phase 3).
+
+## Why This Approach
+
+### Phased delivery over all-at-once
+
+Both the CTO and CCO independently recommended splitting triage from autonomous fixing. Key reasons:
+
+- **Token revocation:** `claude-code-action` revokes its token in post-step cleanup. Any file persistence must happen inside the agent prompt. This is manageable for labels/comments but complex for code changes.
+- **Branch protection:** GITHUB_TOKEN PRs don't trigger CI (cascade limitation). Auto-merge is disabled. A full fix pipeline needs CLA bypass, PAT management, and rollback mechanisms -- none of which exist.
+- **Blast radius:** A bad autonomous fix to this plugin repo could break the plugin for all marketplace users. Triage is read-light/write-light (labels + comments) with minimal blast radius.
+- **Cost control:** Daily runs at Opus-class model across 26 issues is non-trivial. Triage is cheaper (classification only) than code generation.
+
+### Extend ticket-triage over new agent
+
+The `ticket-triage` agent already does classification with severity (P1/P2/P3), type, and domain routing. Extending it to apply labels and comment preserves the existing logic and avoids duplicating classification behavior. The agent remains classification-focused -- it just has write permissions now.
+
+### New daily-triage skill over direct agent invocation
+
+The `schedule` skill generates workflows that invoke skills. A skill wrapper makes the triage flow:
+- Locally testable via `/soleur:daily-triage`
+- Invocable from the schedule skill's generation pipeline
+- Cleanly separates orchestration (skill) from classification (agent)
+
+### Fix schedule skill template first
+
+The template has 6 known gaps documented in learnings. This is the second scheduled workflow consumer. Fixing the template now benefits all future scheduled workflows and avoids manual workarounds.
+
+## Key Decisions
+
+1. **Scope:** Triage-only (Phase 1). Follow-up issues for Phase 2 (supervised fix) and Phase 3 (full autonomous pipeline).
+2. **Label taxonomy:** 5 dimensions applied to each issue:
+   - `severity/critical`, `severity/major`, `severity/minor`
+   - `domain/plugin`, `domain/ci`, `domain/docs`, `domain/legal`, `domain/community`
+   - `type/bug`, `type/feature`, `type/chore`, `type/question`
+   - `urgency/p0-immediate`, `urgency/p1-today`, `urgency/p2-week`, `urgency/p3-backlog`
+   - `agent/fixable`, `agent/needs-human`
+3. **Idempotency:** Skip issues that already have a severity label. Prevents label thrashing and respects human overrides.
+4. **Output:** Comment on each triaged issue with classification reasoning and applied labels.
+5. **Schedule:** Daily at 06:00 UTC via cron.
+6. **Agent design:** Extend `ticket-triage` agent to apply labels and add comments (still classification-focused, not a code-writer).
+7. **Template:** Fix schedule skill template gaps before generating the workflow.
+
+## Implementation Components
+
+1. **Fix schedule skill template** -- add --max-turns, label pre-creation step, timeout-minutes, --allowedTools with Task, id-token permission, skill-specific arguments
+2. **Define label taxonomy** -- pre-create all labels in the workflow's setup step
+3. **Create `daily-triage` skill** -- orchestrates: list unlabeled issues, delegate to ticket-triage, verify labels applied
+4. **Extend `ticket-triage` agent** -- add label application via `gh issue edit` and commenting via `gh issue comment`
+5. **Generate workflow** -- use updated schedule skill to produce `scheduled-daily-triage.yml`
+6. **Create follow-up issues** -- Phase 2 (supervised bug fixing) and Phase 3 (full autonomous pipeline)
+
+## Open Questions
+
+1. **Label color scheme:** Should label colors follow a convention (red for severity/critical, yellow for urgency, blue for domain)?
+2. **Cost budget:** Should the workflow have a hard token/cost limit per run? The competitive-analysis workflow uses --max-turns 45 and timeout-minutes is unset.
+3. **Triage accuracy validation:** How long should Phase 1 run before considering Phase 2? The CCO suggested 2+ weeks.
+4. **Issue freshness:** Should the agent only process issues created in the last N days, or all open issues regardless of age?
+
+## Capability Gaps
+
+| Gap | Domain | Why Needed |
+|-----|--------|-----------|
+| Label taxonomy definition | Support | The 12 existing labels are insufficient. A formal set of triage labels must be pre-created. |
+| Schedule skill template fixes | Engineering | 6 known gaps (--max-turns, label pre-creation, timeout-minutes, --allowedTools, id-token, skill args) block clean workflow generation. |
+| Cost monitoring for scheduled agents | Operations | No mechanism to track or cap API spend for daily scheduled workflows. |
+
+## Domain Leader Assessments
+
+### CTO Assessment
+
+- **Risk:** Autonomous code changes rated HIGH. Token cascade, branch protection, and CLA all block autonomous merging.
+- **Recommendation:** Triage-only v1. The schedule skill template gaps are tech debt that should be resolved as a prerequisite.
+- **Complexity:** Medium (2-3 days) for triage-only. Large (1-2 weeks) for triage + fix.
+- **State management:** Label-gating (skip already-labeled issues) is simplest for idempotency.
+
+### CCO Assessment
+
+- **Current state:** 26 open issues, only 3 labeled. 12 labels exist, mostly defaults. No severity, domain, or urgency labels.
+- **Recommendation:** Define taxonomy before the agent runs. Unrestricted label creation causes taxonomy drift. Split triage from autonomous fixing.
+- **Key concern:** Without a "triaged" state marker, the agent re-processes every issue daily, wasting tokens.
+- **Feedback loop:** No mechanism for humans to correct misclassifications. Should be addressed in Phase 2.
