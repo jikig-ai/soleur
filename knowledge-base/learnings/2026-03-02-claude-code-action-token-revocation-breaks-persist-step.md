@@ -13,25 +13,30 @@ The `claude-code-action` post-step cleanup revokes the GitHub App installation t
 
 ## Solution
 
-Re-authenticate in the persist step using `${{ github.token }}` (GITHUB_TOKEN), which is scoped to the job and survives third-party action cleanup:
+Move the `git push` into the Claude agent's prompt so it executes **during** the `claude-code-action` step, while the App installation token is still valid.
+
+Two blockers prevent a separate post-action persist step:
+
+1. **Token revocation** — `claude-code-action` revokes the App installation token in its post-step cleanup. Re-authenticating with `GITHUB_TOKEN` solves auth but hits blocker #2.
+2. **Branch protection** — The CLA Required ruleset blocks direct pushes to main unless the actor has bypass privileges. `GITHUB_TOKEN` pushes as `github-actions[bot]`, which can't be added as a bypass actor via API (it's a platform-builtin, not an installed integration). The Claude App **can** be added as a bypass actor through the GitHub UI.
+
+By pushing inside the agent, the push uses the Claude App's identity (which has bypass) and the token hasn't been revoked yet.
 
 ```yaml
-- name: Persist competitive intelligence report
-  env:
-    GH_TOKEN: ${{ github.token }}
-    REPO: ${{ github.repository }}
-  run: |
-    git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
-    # ... git add, commit, push as before
+prompt: |
+  ... run the analysis ...
+  After creating the issue, persist the report to main by running:
+  1. git add knowledge-base/overview/competitive-intelligence.md
+  2. git diff --cached --quiet (if exit 0, skip — unchanged)
+  3. git commit -m "docs: update competitive intelligence report"
+  4. git push origin main
 ```
-
-Pass both values via `env:` to avoid expression injection in `run:` blocks.
 
 ## Key Insight
 
-Any GitHub Actions workflow step that runs **after** `claude-code-action` (or similar actions that manage their own installation tokens) cannot rely on `actions/checkout` credentials. Always re-authenticate with `${{ github.token }}` via `git remote set-url` before any git push in post-action steps.
+When `claude-code-action` needs to push generated files, the push must happen **inside the agent prompt** — not in a subsequent workflow step. Two independent issues prevent post-action pushes: (1) the action revokes its own token in cleanup, and (2) `github-actions[bot]` cannot be granted ruleset bypass via the GitHub API (only through the UI, and only for installed Apps).
 
-This applies to any workflow that: (1) uses `claude-code-action` to generate files, then (2) has a separate step to commit/push those files.
+The general pattern: any file persistence from `claude-code-action` should be part of the agent's instructions, not a separate shell step.
 
 ## Session Errors
 

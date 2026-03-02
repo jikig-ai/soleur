@@ -12,7 +12,7 @@ Three blockers made the PR approach unworkable:
 
 1. **`allow_auto_merge` is OFF** — `gh pr merge --squash --auto` fails immediately with "auto-merge is not allowed for this repository"
 2. **GITHUB_TOKEN cascade limitation** — PRs created by `GITHUB_TOKEN` don't trigger other workflows (`pull_request`, `pull_request_target` events are suppressed). CI and CLA checks never run, so required status checks never pass, and auto-merge waits forever.
-3. **No branch protection blocks regular pushes** — the repo's rulesets only prevent force-push and branch deletion on main. Regular `git push origin main` is allowed.
+3. **Branch protection now blocks bot pushes (OUTDATED)** — originally, rulesets only prevented force-push and branch deletion. The CLA Required ruleset (added later) blocks all pushes lacking the `cla-check` status. `github-actions[bot]` can't be granted bypass via API. Solution: push inside the `claude-code-action` agent prompt using the Claude App's identity (which has bypass). See `2026-03-02-claude-code-action-token-revocation-breaks-persist-step.md`.
 
 ## Key Insight
 

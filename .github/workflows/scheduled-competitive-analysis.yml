@@ -49,35 +49,10 @@ jobs:
             "[Scheduled] Competitive Analysis - <today's date in YYYY-MM-DD format>"
             with the label "scheduled-competitive-analysis" summarizing your findings.
 
-      - name: Persist competitive intelligence report
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        run: |
-          FILE="knowledge-base/overview/competitive-intelligence.md"
-          if [ ! -f "$FILE" ]; then
-            echo "::warning::Report file not found, skipping persist step"
-            exit 0
-          fi
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # Re-authenticate after claude-code-action revokes the installation token
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
-
-          git add "$FILE"
-
-          # Skip if report content is identical to what's on main
-          if git diff --cached --quiet; then
-            echo "::notice::Report unchanged, skipping"
-            exit 0
-          fi
-
-          git commit -m "docs: update competitive intelligence report"
-
-          # Retry with rebase if main has diverged during the run
-          git push origin main || {
-            git pull --rebase origin main
-            git push origin main
-          }
+            After creating the issue, persist the report to main by running these
+            bash commands in order:
+            1. git add knowledge-base/overview/competitive-intelligence.md
+            2. If `git diff --cached --quiet` succeeds (exit 0), the file is unchanged — skip the remaining steps.
+            3. git commit -m "docs: update competitive intelligence report"
+            4. git push origin main
+            If the push fails, retry: git pull --rebase origin main && git push origin main
