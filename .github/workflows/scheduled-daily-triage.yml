@@ -49,14 +49,15 @@ jobs:
           gh label create "type/chore"    --description "Maintenance, refactoring, tech debt"       --color "BFD4F2" 2>/dev/null || true
           gh label create "type/question" --description "Needs clarification or is a question"      --color "D876E3" 2>/dev/null || true
 
-          # Domain labels (blue family)
-          gh label create "domain/plugin"    --description "Plugin agents, skills, or commands"  --color "0075CA" 2>/dev/null || true
-          gh label create "domain/ci"        --description "GitHub Actions, CI/CD workflows"     --color "1D76DB" 2>/dev/null || true
-          gh label create "domain/docs"      --description "Documentation site, knowledge base"  --color "5319E7" 2>/dev/null || true
-          gh label create "domain/legal"     --description "Legal documents, compliance"         --color "6C8EBF" 2>/dev/null || true
-          gh label create "domain/community" --description "Discord, community engagement"       --color "7057FF" 2>/dev/null || true
-          gh label create "domain/infra"     --description "Infrastructure, hosting, DNS"        --color "006B75" 2>/dev/null || true
-          gh label create "domain/marketing" --description "Website, landing page, SEO"          --color "E4E669" 2>/dev/null || true
+          # Domain labels -- aligned with Soleur department leaders
+          gh label create "domain/engineering" --description "Plugin code, CI/CD, infra, docs site (CTO)" --color "0075CA" 2>/dev/null || true
+          gh label create "domain/finance"     --description "Budget, revenue, financial reporting (CFO)" --color "1D76DB" 2>/dev/null || true
+          gh label create "domain/legal"       --description "Legal documents, compliance (CLO)"          --color "6C8EBF" 2>/dev/null || true
+          gh label create "domain/marketing"   --description "Website, landing page, SEO, brand (CMO)"   --color "E4E669" 2>/dev/null || true
+          gh label create "domain/operations"  --description "Hosting, vendors, expense tracking (COO)"  --color "006B75" 2>/dev/null || true
+          gh label create "domain/product"     --description "Specs, UX design, business validation (CPO)" --color "5319E7" 2>/dev/null || true
+          gh label create "domain/sales"       --description "Pipeline, deals, outbound strategy (CRO)"  --color "7057FF" 2>/dev/null || true
+          gh label create "domain/support"     --description "Community, Discord, issue triage (CCO)"    --color "D876E3" 2>/dev/null || true
 
       - name: Triage open issues
         uses: anthropics/claude-code-action@64c7a0ef71df67b14cb4471f4d9c8565c61042bf # v1
@@ -96,14 +97,15 @@ jobs:
             - chore: Maintenance, refactoring, dependency update, tech debt
             - question: Needs clarification, is a question, or requires discussion
 
-            DOMAIN (pick one):
-            - plugin: Changes to agents/, skills/, commands/, or plugin.json
-            - ci: Changes to .github/workflows/, CI/CD configuration
-            - docs: Changes to docs/, knowledge-base/, README
-            - legal: Legal documents, compliance, privacy policy, terms
-            - community: Discord integration, community features
-            - infra: Infrastructure, hosting, DNS, deployment
-            - marketing: Website, landing page, SEO, branding
+            DOMAIN (pick one -- aligned with Soleur department leaders):
+            - engineering: Plugin code (agents, skills, commands), CI/CD workflows, infrastructure, docs site, knowledge base
+            - finance: Budget planning, revenue tracking, financial reporting
+            - legal: Legal documents, compliance, privacy policy, terms of service
+            - marketing: Website, landing page, SEO, branding, content strategy
+            - operations: Hosting providers, vendor management, expense tracking, DNS
+            - product: Feature specs, UX design, business validation, competitive analysis
+            - sales: Sales pipeline, deal management, outbound strategy, pricing
+            - support: Community engagement, Discord, issue triage, customer support
 
             ## Sharp Edges
 

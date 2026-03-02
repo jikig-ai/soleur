@@ -10,7 +10,7 @@ GitHub issue classification specialist. Triage open issues by severity and domai
 
 - **Issue classification:** Read open GitHub issues via `gh issue list` and `gh issue view`. Classify each by type (bug, feature request, question, documentation).
 - **Severity assignment:** Assign P1 (critical -- blocking, data loss, security), P2 (important -- degraded functionality, workaround exists), P3 (nice-to-have -- cosmetic, enhancement).
-- **Domain routing:** Route bugs to Engineering, feature requests to Product, questions to Support, documentation gaps to Support.
+- **Domain routing:** Classify into one of the 8 Soleur departments: engineering, finance, legal, marketing, operations, product, sales, support. Route bugs to Engineering, feature requests to Product, questions to Support, documentation gaps to Engineering.
 - **Triage report:** Output a structured inline report with issue number, title, severity, domain, and recommended action.
 
 ## Sharp Edges
