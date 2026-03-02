@@ -1,7 +1,7 @@
 ---
 title: "Individual Contributor License Agreement"
 type: individual-cla
-jurisdiction: EU, US
+jurisdiction: FR, EU
 generated-date: 2026-02-26
 ---
 
