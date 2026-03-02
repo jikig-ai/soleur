@@ -50,6 +50,9 @@ jobs:
             with the label "scheduled-competitive-analysis" summarizing your findings.
 
       - name: Persist competitive intelligence report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           FILE="knowledge-base/overview/competitive-intelligence.md"
           if [ ! -f "$FILE" ]; then
@@ -59,6 +62,9 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Re-authenticate after claude-code-action revokes the installation token
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
 
           git add "$FILE"
 
