@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.7.14] - 2026-03-02
+
+### Fixed
+
+- **scheduled-competitive-analysis workflow** -- Move git push into the Claude agent prompt instead of a separate workflow step. The Claude App has bypass privileges on the CLA Required ruleset, and its token is only valid during the agent step (revoked in post-step cleanup). Supersedes the v3.7.12 fix which solved auth but not branch protection.
+
+### Changed
+
+- **competitive-analysis skill** -- Updated Scheduled Execution docs to explain why persistence must happen inside the agent.
+
 ## [3.7.13] - 2026-03-02
 
 ### Changed
