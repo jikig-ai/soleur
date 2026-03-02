@@ -271,9 +271,14 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 ### Phase 4: Handoff
 
-Implementation is complete. **Do not invoke ship, review, or compound from here.** The caller (one-shot, or the user) controls the post-implementation sequence.
+Implementation is complete. Determine how this skill was invoked and act accordingly:
 
-**Return control immediately.** Do not prompt the user for next steps or wait for input. The caller will invoke the next skill in the pipeline. If invoked directly by the user (not via one-shot), output a single line: "Implementation complete." and stop.
+**If invoked by one-shot** (the conversation contains `soleur:one-shot` skill output earlier): Return control immediately. Do not invoke ship, review, or compound — the orchestrator handles the sequence. Output a single line: "Implementation complete." and stop.
+
+**If invoked directly by the user** (no one-shot orchestrator): Continue through the post-implementation pipeline automatically. Do NOT stop and wait — the earlier learning "Workflow Completion is Not Task Completion" applies. Run these steps in order:
+
+1. `skill: soleur:compound` — capture learnings before committing
+2. `skill: soleur:ship` — commit, push, create PR, merge
 
 ---
 
@@ -336,7 +341,7 @@ Before entering Phase 4, verify these Phase 2-3 items are complete:
 - [ ] Code follows existing patterns
 - [ ] Figma designs match implementation (if applicable)
 
-After Phase 4 handoff, the caller handles: `/review`, `/compound`, `/ship` (version bump, push, PR, merge, cleanup).
+After Phase 4 handoff (one-shot only), the orchestrator handles: `/review`, `/resolve-todo-parallel`, `/compound`, `/ship`.
 
 ## When to Use Reviewer Agents
 

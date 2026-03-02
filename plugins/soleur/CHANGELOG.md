@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.7.16] - 2026-03-02
+
+### Fixed
+
+- **work skill** -- Phase 4 Handoff no longer stops dead when invoked directly by user. Now branches on invocation context: hands off to orchestrator (one-shot), or continues through compound → ship (direct invocation). Fixes regression from v3.7.x decoupling that violated "Workflow Completion is Not Task Completion" learning.
+
 ## [3.7.15] - 2026-03-02
 
 ### Added

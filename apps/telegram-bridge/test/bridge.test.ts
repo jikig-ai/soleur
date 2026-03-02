@@ -597,3 +597,276 @@ describe("Bridge constructor", () => {
     expect(bridge.cliState).toBe("connecting");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Streaming helpers
+// ---------------------------------------------------------------------------
+
+function streamEvent(eventType: string, extra: Record<string, unknown> = {}): string {
+  return cliMsg({ type: "stream_event", event: { type: eventType, ...extra } });
+}
+
+function textBlockStart(): string {
+  return streamEvent("content_block_start", { content_block: { type: "text" } });
+}
+
+function textDelta(text: string): string {
+  return streamEvent("content_block_delta", { delta: { type: "text_delta", text } });
+}
+
+function assistantText(text: string): string {
+  return cliMsg({
+    type: "assistant",
+    message: { content: [{ type: "text", text }] },
+  });
+}
+
+function resultMsg(): string {
+  return cliMsg({ type: "result", result: "ok" });
+}
+
+// ---------------------------------------------------------------------------
+// Streaming
+// ---------------------------------------------------------------------------
+
+describe("streaming", () => {
+  let api: ReturnType<typeof createMockApi>;
+  let bridge: Bridge;
+
+  beforeEach(() => {
+    api = createMockApi();
+    bridge = new Bridge(api, {
+      statusEditIntervalMs: 100,
+      typingIntervalMs: 100,
+      streamEditIntervalMs: 50, // low for fast tests
+    });
+    bridge.activeChatId = 1;
+    bridge.initialResultReceived = true;
+    bridge.cliState = "ready";
+    bridge.cliStdin = { write: mock(() => 1) };
+  });
+
+  test("happy path: deltas → progressive edits → final HTML edit", async () => {
+    await bridge.startTurnStatus(1);
+    api.sendMessage.mockClear();
+    api.editMessageText.mockClear();
+
+    // Start streaming
+    bridge.handleCliMessage(textBlockStart());
+    expect(bridge.streamState).not.toBeNull();
+    expect(bridge.streamState!.accumulatedText).toBe("");
+
+    // Send deltas
+    bridge.handleCliMessage(textDelta("Hello "));
+    bridge.handleCliMessage(textDelta("world"));
+    expect(bridge.streamState!.accumulatedText).toBe("Hello world");
+
+    // Force throttle to fire by backdating lastUpdateTime
+    bridge.streamState!.lastUpdateTime = 0;
+    bridge.handleCliMessage(textDelta("!"));
+
+    // Should have flushed a plain-text edit
+    expect(api.editMessageText).toHaveBeenCalledWith(1, 42, "Hello world!");
+
+    // Assistant arrives with final text → HTML edit on streaming message
+    api.editMessageText.mockClear();
+    bridge.handleCliMessage(assistantText("Hello world!"));
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Final edit should use HTML parse_mode
+    expect(api.editMessageText).toHaveBeenCalledWith(
+      1, 42, expect.any(String), { parse_mode: "HTML" },
+    );
+    // Should NOT have sent a new message via sendChunked
+    expect(api.sendMessage).not.toHaveBeenCalled();
+
+    // Result cleans up
+    bridge.processing = true;
+    bridge.handleCliMessage(resultMsg());
+    expect(bridge.streamState).toBeNull();
+  });
+
+  test("4096 split: accumulated text exceeds threshold → two messages", async () => {
+    await bridge.startTurnStatus(1);
+    api.sendMessage.mockClear();
+
+    bridge.handleCliMessage(textBlockStart());
+
+    // Accumulate text up to the MAX_CHUNK_SIZE threshold (4000)
+    const bigText = "x".repeat(4000);
+    bridge.handleCliMessage(textDelta(bigText));
+
+    // splitStreamMessage should have been called: sendMessage to finalize, messageId reset
+    await new Promise((r) => setTimeout(r, 50));
+    expect(api.sendMessage).toHaveBeenCalledWith(1, bigText);
+    expect(bridge.streamState!.accumulatedText).toBe("");
+
+    // Clean up
+    bridge.cleanupStreamState();
+    await bridge.cleanupTurnStatus();
+  });
+
+  test("no deltas: content_block_start + stop → no edit, no error", async () => {
+    await bridge.startTurnStatus(1);
+    api.editMessageText.mockClear();
+
+    bridge.handleCliMessage(textBlockStart());
+    bridge.handleCliMessage(streamEvent("content_block_stop"));
+
+    // No edit should have been attempted (no text accumulated)
+    expect(api.editMessageText).not.toHaveBeenCalled();
+
+    // Clean up
+    bridge.cleanupStreamState();
+    await bridge.cleanupTurnStatus();
+  });
+
+  test("race condition: first delta before status message resolves → buffered", async () => {
+    // Make sendMessage hang (never resolve) to simulate slow status message
+    let resolveSend: (v: { message_id: number }) => void;
+    api.sendMessage.mockImplementationOnce(
+      () => new Promise((r) => { resolveSend = r; }),
+    );
+
+    // Don't await — status message is in flight
+    bridge.startTurnStatus(1);
+    await new Promise((r) => setTimeout(r, 10));
+    // messageId should be 0 (sendMessage hasn't resolved)
+    expect(bridge.turnStatus!.messageId).toBe(0);
+
+    // Start streaming and send deltas — should buffer without editing
+    bridge.handleCliMessage(textBlockStart());
+    bridge.streamState!.lastUpdateTime = 0; // force throttle
+    bridge.handleCliMessage(textDelta("buffered text"));
+    expect(api.editMessageText).not.toHaveBeenCalled();
+
+    // Resolve the status message — messageId becomes available
+    resolveSend!({ message_id: 99 });
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Next delta should sync messageId and flush
+    bridge.streamState!.lastUpdateTime = 0;
+    bridge.handleCliMessage(textDelta(" more"));
+
+    expect(bridge.streamState!.messageId).toBe(99);
+    expect(api.editMessageText).toHaveBeenCalledWith(1, 99, "buffered text more");
+
+    // Clean up
+    bridge.cleanupStreamState();
+    bridge.turnStatus = null;
+  });
+
+  test("interleaved blocks: text → tool_use → text → streaming resumes", async () => {
+    await bridge.startTurnStatus(1);
+    api.editMessageText.mockClear();
+
+    // First text block
+    bridge.handleCliMessage(textBlockStart());
+    bridge.handleCliMessage(textDelta("Part 1"));
+    bridge.handleCliMessage(streamEvent("content_block_stop"));
+    const firstStreamState = bridge.streamState;
+    expect(firstStreamState).not.toBeNull();
+
+    // Tool use block (different content_block type)
+    bridge.handleCliMessage(
+      streamEvent("content_block_start", { content_block: { type: "tool_use" } }),
+    );
+    bridge.handleCliMessage(streamEvent("content_block_stop"));
+
+    // Second text block — should NOT reinitialize (streamState already exists)
+    bridge.handleCliMessage(textBlockStart());
+    expect(bridge.streamState).toBe(firstStreamState); // same object reference
+    bridge.handleCliMessage(textDelta(" Part 2"));
+    expect(bridge.streamState!.accumulatedText).toBe("Part 1 Part 2");
+
+    // Clean up
+    bridge.cleanupStreamState();
+    await bridge.cleanupTurnStatus();
+  });
+
+  test("CLI crash mid-stream → StreamState cleaned up", async () => {
+    await bridge.startTurnStatus(1);
+
+    bridge.handleCliMessage(textBlockStart());
+    bridge.handleCliMessage(textDelta("partial response"));
+    expect(bridge.streamState).not.toBeNull();
+
+    // Simulate what happens on CLI crash: cleanupStreamState + cleanupTurnStatus
+    bridge.cleanupStreamState();
+    expect(bridge.streamState).toBeNull();
+    await bridge.cleanupTurnStatus();
+    expect(bridge.turnStatus).toBeNull();
+  });
+
+  test("turn watchdog during streaming → StreamState cleaned up", async () => {
+    const bridge2 = new Bridge(api, {
+      statusEditIntervalMs: 100,
+      typingIntervalMs: 100,
+      streamEditIntervalMs: 50,
+      turnTimeoutMs: 100, // very short for test
+    });
+    bridge2.activeChatId = 1;
+    bridge2.initialResultReceived = true;
+    bridge2.cliState = "ready";
+    bridge2.cliStdin = { write: mock(() => 1) };
+
+    bridge2.sendUserMessage("hello");
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Start streaming
+    bridge2.handleCliMessage(textBlockStart());
+    bridge2.handleCliMessage(textDelta("streaming..."));
+    expect(bridge2.streamState).not.toBeNull();
+
+    // Wait for watchdog to fire
+    await new Promise((r) => setTimeout(r, 200));
+
+    expect(bridge2.streamState).toBeNull();
+    expect(bridge2.processing).toBe(false);
+  });
+
+  test("HTML parse failure on final edit → falls back to plain text", async () => {
+    await bridge.startTurnStatus(1);
+    api.editMessageText.mockClear();
+
+    bridge.handleCliMessage(textBlockStart());
+    bridge.handleCliMessage(textDelta("**bold text**"));
+
+    // Clear any stream-flush edits so we only count final-edit calls
+    api.editMessageText.mockClear();
+
+    // Make HTML edit fail (simulating Telegram rejecting malformed HTML)
+    api.editMessageText
+      .mockRejectedValueOnce(new Error("Bad Request: can't parse HTML"))
+      .mockResolvedValueOnce(true);
+
+    bridge.handleCliMessage(assistantText("**bold text**"));
+    await new Promise((r) => setTimeout(r, 50));
+
+    // First call: HTML attempt. Second call: plain text fallback.
+    expect(api.editMessageText).toHaveBeenCalledTimes(2);
+    // Second call should NOT have parse_mode
+    const fallbackCall = api.editMessageText.mock.calls[1];
+    expect(fallbackCall[3]).toBeUndefined();
+
+    // Clean up
+    bridge.cleanupStreamState();
+  });
+
+  test("cleanupTurnStatus skips deleteMessage when streaming is active", async () => {
+    await bridge.startTurnStatus(1);
+
+    // Start streaming (repurposes the status message)
+    bridge.handleCliMessage(textBlockStart());
+    bridge.handleCliMessage(textDelta("streaming content"));
+    expect(bridge.streamState).not.toBeNull();
+
+    // Clean up turn status while streaming — should NOT delete the message
+    await bridge.cleanupTurnStatus();
+    expect(api.deleteMessage).not.toHaveBeenCalled();
+    expect(bridge.turnStatus).toBeNull();
+
+    // Clean up streaming
+    bridge.cleanupStreamState();
+  });
+});
