@@ -170,19 +170,19 @@ If the agent's `gh pr merge` command is part of a retry loop (e.g., merge failed
 
 ## Acceptance Criteria
 
-- [ ] PreToolUse hook script `.claude/hooks/pre-merge-rebase.sh` created
-- [ ] Hook registered in `.claude/settings.json` under `PreToolUse`
-- [ ] On `gh pr merge`, auto-fetches and rebases against `origin/main`
-- [ ] On successful rebase with new commits, force-pushes with `--force-with-lease --force-if-includes` before allowing merge
-- [ ] On rebase conflict, blocks the merge with `permissionDecision: "deny"` and aborts the rebase
-- [ ] On already up-to-date branch, allows merge without rebase or force-push
-- [ ] On dirty working tree, blocks with clear error message
-- [ ] On network failure during fetch, warns and allows merge to proceed (fail-open)
-- [ ] On detached HEAD, warns and allows merge to proceed (fail-open)
-- [ ] Non-`gh pr merge` Bash commands pass through with no delay (early exit)
-- [ ] Script follows shell conventions: `#!/usr/bin/env bash`, `set -eo pipefail`, `local` variables, stderr for warnings
-- [ ] Successful rebase emits `additionalContext` so the agent knows what happened
-- [ ] Script emits positive confirmation on success (per constitution: "Diagnostic scripts must print positive confirmation on success")
+- [x] PreToolUse hook script `.claude/hooks/pre-merge-rebase.sh` created
+- [x] Hook registered in `.claude/settings.json` under `PreToolUse`
+- [x] On `gh pr merge`, auto-fetches and rebases against `origin/main`
+- [x] On successful rebase with new commits, force-pushes with `--force-with-lease --force-if-includes` before allowing merge
+- [x] On rebase conflict, blocks the merge with `permissionDecision: "deny"` and aborts the rebase
+- [x] On already up-to-date branch, allows merge without rebase or force-push
+- [x] On dirty working tree, blocks with clear error message
+- [x] On network failure during fetch, warns and allows merge to proceed (fail-open)
+- [x] On detached HEAD, warns and allows merge to proceed (fail-open)
+- [x] Non-`gh pr merge` Bash commands pass through with no delay (early exit)
+- [x] Script follows shell conventions: `#!/usr/bin/env bash`, `set -eo pipefail`, `local` variables, stderr for warnings
+- [x] Successful rebase emits `additionalContext` so the agent knows what happened
+- [x] Script emits positive confirmation on success (per constitution: "Diagnostic scripts must print positive confirmation on success")
 
 ## Test Scenarios
 
