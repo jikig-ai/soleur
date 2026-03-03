@@ -7,10 +7,10 @@
 ## Phase 1: Implementation
 
 ### 1.1 Add `--yes` flag to worktree-manager.sh
-- [ ] Add `--yes` flag detection at script level (parse from `$@` before dispatching to subcommands)
-- [ ] Modify `create_worktree()`: skip `read -r` at lines 84 and 96 when `--yes` is set
-- [ ] Modify `cleanup_worktrees()`: skip `read -r` at line 316 when `--yes` is set
-- [ ] Modify `switch_worktree()`: require name argument when `--yes` is set (no interactive prompt)
+- [x] Add `--yes` flag detection at script level (parse from `$@` before dispatching to subcommands)
+- [x] Modify `create_worktree()`: skip `read -r` at lines 84 and 96 when `--yes` is set
+- [x] Modify `cleanup_worktrees()`: skip `read -r` at line 316 when `--yes` is set
+- [x] Modify `switch_worktree()`: require name argument when `--yes` is set (no interactive prompt)
 
 **Files:** `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`
 
