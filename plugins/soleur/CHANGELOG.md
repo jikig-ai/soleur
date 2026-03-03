@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.8.3] - 2026-03-03
+
+### Fixed
+
+- **work skill** -- Replaced "Return control immediately" in Phase 4 handoff with explicit continuation instruction; the previous phrasing caused the model to end its turn when invoked mid-pipeline, stalling one-shot at step 3
+
+### Changed
+
+- **hooks (guardrails.sh)** -- Migrated 3 guards from deprecated `{"decision":"block"}` to `hookSpecificOutput` with `permissionDecision: "deny"` using `jq -n`
+- **hooks (worktree-write-guard.sh)** -- Migrated 1 guard to `hookSpecificOutput` with `jq -n --arg` for safe variable interpolation (fixes JSON injection risk from special characters in worktree names)
+- **constitution** -- Added pipeline skill handoff rule: skills must never use stop/return language in handoff
+
 ## [3.8.2] - 2026-03-03
 
 ### Changed
