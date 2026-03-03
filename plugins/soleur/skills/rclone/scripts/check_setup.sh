@@ -1,7 +1,7 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # rclone setup checker - verifies installation and configuration
 
-set -e
+set -euo pipefail
 
 echo "=== rclone Setup Check ==="
 echo
@@ -24,7 +24,7 @@ fi
 # Check for configured remotes
 REMOTES=$(rclone listremotes 2>/dev/null || true)
 
-if [ -z "$REMOTES" ]; then
+if [[ -z "$REMOTES" ]]; then
     echo "✗ No remotes configured"
     echo
     echo "Run 'rclone config' to set up a remote, or use:"

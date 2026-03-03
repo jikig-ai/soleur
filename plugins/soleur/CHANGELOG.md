@@ -13,6 +13,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **work skill -- Tier 0 (Lifecycle Parallelism)** -- New execution tier that spawns two parallel agents (code and tests) from a shared interface contract using ATDD discipline. The coordinator generates file scopes and public interface signatures, agents execute concurrently, and test-fix-loop integrates their output. Docs are written sequentially after GREEN. Sits before the existing Tier A/B/C cascade with LLM-based eligibility judgment. Pipeline mode auto-selects when eligible.
 - **work-lifecycle-parallel.md reference file** -- Full Tier 0 protocol document covering 6 steps: offer/auto-select, generate contract, spawn agents, collect/commit, test-fix-loop, sequential docs
 
+## [3.8.4] - 2026-03-03
+
+### Fixed
+
+- **hooks (guardrails.sh, worktree-write-guard.sh)** -- Standardized shebang from `#!/bin/bash` to `#!/usr/bin/env bash` per constitution convention (closes #403)
+- **worktree-manager.sh** -- Upgraded `set -e` to `set -euo pipefail`; guarded bare `$2`/`$3` in main() dispatch with `${N:-}` defaults; appended `|| true` to grep pipeline in cleanup_merged_worktrees
+- **check_setup.sh** -- Upgraded `set -e` to `set -euo pipefail`; fixed `[ ]` to `[[ ]]` bracket convention
+- **one-shot SKILL.md** -- Added CONTINUATION GATE block after step 3 to prevent pipeline stall when work skill completes
+- **work SKILL.md** -- Replaced conclusive "Implementation complete." handoff with structured `## Work Phase Complete` continuation marker
+
+### Changed
+
+- **constitution** -- Added shell pipefail three-vector audit rule and sub-skill continuation marker rule
+
+## [3.8.3] - 2026-03-03
+
+### Fixed
+
+- **work skill** -- Replaced "Return control immediately" in Phase 4 handoff with explicit continuation instruction; the previous phrasing caused the model to end its turn when invoked mid-pipeline, stalling one-shot at step 3
+
+### Changed
+
+- **hooks (guardrails.sh)** -- Migrated 3 guards from deprecated `{"decision":"block"}` to `hookSpecificOutput` with `permissionDecision: "deny"` using `jq -n`
+- **hooks (worktree-write-guard.sh)** -- Migrated 1 guard to `hookSpecificOutput` with `jq -n --arg` for safe variable interpolation (fixes JSON injection risk from special characters in worktree names)
+- **constitution** -- Added pipeline skill handoff rule: skills must never use stop/return language in handoff
+
 ## [3.8.2] - 2026-03-03
 
 ### Changed
