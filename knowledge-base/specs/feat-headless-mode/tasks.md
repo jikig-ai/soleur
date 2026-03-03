@@ -15,7 +15,7 @@
 **Files:** `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`
 
 ### 1.2 Update constitution.md with `--headless` convention
-- [ ] Add headless mode convention to the `$ARGUMENTS` bypass rule section (strip flag, forward to children, abort on errors, no headless compound on main)
+- [x] Add headless mode convention to the `$ARGUMENTS` bypass rule section (strip flag, forward to children, abort on errors, no headless compound on main)
 
 **Files:** `knowledge-base/overview/constitution.md`
 
