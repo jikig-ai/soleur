@@ -38,11 +38,11 @@
 **Files:** `plugins/soleur/skills/compound/SKILL.md`
 
 ### 1.5 Add `--headless` bypass to compound-capture skill
-- [ ] Add `--headless` detection
-- [ ] Step 2 (missing context): infer from session context, skip fields that can't be inferred
-- [ ] Step 3 (similar issue): default to "create new doc with cross-reference"
-- [ ] Auto-consolidation Step E (archival): auto-archive
-- [ ] YAML validation failure: skip problematic learning, continue with remaining
+- [x] Add `--headless` detection
+- [x] Step 2 (missing context): infer from session context, skip fields that can't be inferred
+- [x] Step 3 (similar issue): default to "create new doc with cross-reference"
+- [x] Auto-consolidation Step E (archival): auto-archive
+- [x] YAML validation failure: skip problematic learning, continue with remaining
 
 **Files:** `plugins/soleur/skills/compound-capture/SKILL.md`
 
