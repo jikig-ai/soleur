@@ -2,6 +2,7 @@
 feature: feat/env-constraints
 plan: knowledge-base/plans/2026-03-03-chore-document-environment-constraints-plan.md
 issue: "#394"
+deepened: 2026-03-03
 ---
 
 # Tasks: Document Environment Constraints
@@ -9,18 +10,18 @@ issue: "#394"
 ## Phase 1: Core Implementation
 
 - [ ] 1.1 Add Warp terminal constraint to AGENTS.md Hard Rules section
-  - One-line rule: Warp terminal does not support ANSI escape sequences for tab manipulation
-  - Place after existing Hard Rules, before Workflow Gates
+  - Rule: "The host terminal is Warp. Do not attempt automated terminal manipulation via escape sequences (cursor position queries, TUI rendering, and similar sequences are intercepted by Warp's tmux control mode and silently fail)."
+  - Place at end of Hard Rules section, grouped with 1.2
+  - Note: Warp *does* support OSC title sequences (`\033]0;...\007`) -- the constraint covers cursor position queries and TUI rendering, not tab title setting
 - [ ] 1.2 Add non-interactive shell / no-sudo constraint to AGENTS.md Hard Rules section
-  - One-line rule: Bash tool runs without sudo access, provide manual instructions instead
-  - Place adjacent to the Warp rule (group environment constraints together)
+  - Rule: "The Bash tool runs in a non-interactive shell without `sudo` access. Do not attempt commands requiring elevated privileges -- provide manual instructions instead."
+  - Place immediately after 1.1
 - [ ] 1.3 Add environment constraints principle to constitution.md Architecture > Always
-  - Document the pattern: environment-specific constraints go in AGENTS.md Hard Rules
-  - Place after existing architecture rules
+  - Principle: "Document environment-specific constraints (terminal capabilities, shell limitations) in AGENTS.md Hard Rules when Claude violates them without being told -- these are loaded every turn and prevent dead-end attempts"
+  - Place after existing Architecture > Always rules
 
 ## Phase 2: Verification
 
-- [ ] 2.1 Verify AGENTS.md token budget is not materially impacted
-  - Count words in AGENTS.md before and after changes
-- [ ] 2.2 Run markdownlint on modified files
+- [ ] 2.1 Verify AGENTS.md Hard Rules section stays under 35 lines after changes
+- [ ] 2.2 Run markdownlint on AGENTS.md and constitution.md
 - [ ] 2.3 Run compound before commit
