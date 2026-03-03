@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **one-shot skill** -- Added explicit "immediately continue to step 4" instruction after work returns, preventing the orchestrator from stalling at the work-to-review handoff
+- **work skill** -- Replaced "and stop" halt language in Phase 4 pipeline handoff with continuation-compatible phrasing. The word "stop" caused the model to end its turn instead of returning control to the one-shot orchestrator, skipping steps 4-10 (review, compound, ship, etc.).
+- **one-shot skill** -- Added explicit continuation guard after work step to prevent early termination when work skill's expanded instructions dominate context.
 
 ## [3.8.0] - 2026-03-03
 
