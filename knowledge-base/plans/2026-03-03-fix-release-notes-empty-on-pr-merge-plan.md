@@ -139,13 +139,13 @@ Discord messages cannot be edited for identity but the content can be corrected 
 
 ## Acceptance Criteria
 
-- [ ] PR titles containing issue references (e.g., `feat: headless mode (#393)`) produce correct release notes after squash merge
-- [ ] PR titles without issue references still work (single `(#N)` pattern)
-- [ ] Commits without any `(#N)` pattern fall through to the existing no-PR-found path gracefully
-- [ ] The `gh api commits/.../pulls` API call has a fallback path when it fails
-- [ ] PR number is validated as an actual PR before fetching metadata
-- [ ] Discord webhook payload includes `username` and `avatar_url` fields
-- [ ] v3.9.2 release body is corrected
+- [x] PR titles containing issue references (e.g., `feat: headless mode (#393)`) produce correct release notes after squash merge
+- [x] PR titles without issue references still work (single `(#N)` pattern)
+- [x] Commits without any `(#N)` pattern fall through to the existing no-PR-found path gracefully
+- [x] The `gh api commits/.../pulls` API call has a fallback path when it fails
+- [x] PR number is validated as an actual PR before fetching metadata
+- [x] Discord webhook payload includes `username` and `avatar_url` fields
+- [x] v3.9.2 release body is corrected
 
 ## Test Scenarios
 

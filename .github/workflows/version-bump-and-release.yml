@@ -58,8 +58,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
-          DISPATCH_BUMP: ${{ github.event.inputs.bump_type }}
         run: |
+          # Fallback: emit empty PR metadata and use commit message as title
+          give_up() {
+            local reason="$1"
+            echo "::warning::${reason}, using commit message as title"
+            echo "number=" >> $GITHUB_OUTPUT
+            echo "title=$(echo "$COMMIT_MSG" | head -1)" >> $GITHUB_OUTPUT
+            echo "labels=" >> $GITHUB_OUTPUT
+            echo "" > /tmp/pr_body.txt
+            echo "body_file=/tmp/pr_body.txt" >> $GITHUB_OUTPUT
+            exit 0
+          }
+
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "number=" >> $GITHUB_OUTPUT
             echo "title=Manual version bump" >> $GITHUB_OUTPUT
@@ -69,33 +80,34 @@ jobs:
             exit 0
           fi
 
-          # Parse PR number from squash-merge commit message: "title (#NNN)"
-          PR_NUM=$(echo "$COMMIT_MSG" | grep -oP '\(#\K\d+(?=\))' | head -1)
+          # Primary: Use GitHub API to find PR from merge commit
+          # '// empty' ensures jq emits nothing (not "null") when array is empty
+          PR_NUM=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+            --jq '.[0].number // empty' 2>/dev/null || true)
 
+          # Fallback: Parse PR number from title line of squash-merge commit message
+          # GitHub appends (#PR_NUMBER) as the last parenthesized ref on the title line
           if [ -z "$PR_NUM" ]; then
-            echo "::warning::No PR number found in commit message, skipping"
-            echo "number=" >> $GITHUB_OUTPUT
-            # Use first line of commit message as title
-            FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
-            echo "title=$FIRST_LINE" >> $GITHUB_OUTPUT
-            echo "labels=" >> $GITHUB_OUTPUT
-            echo "" > /tmp/pr_body.txt
-            echo "body_file=/tmp/pr_body.txt" >> $GITHUB_OUTPUT
-            exit 0
+            echo "::notice::API lookup returned empty, falling back to commit message parsing"
+            PR_NUM=$(echo "$COMMIT_MSG" | head -1 | grep -oP '\(#\K\d+(?=\))' || true)
           fi
 
+          # Guard: ensure PR_NUM is a valid integer
+          if [ -n "$PR_NUM" ] && ! [[ "$PR_NUM" =~ ^[0-9]+$ ]]; then
+            echo "::warning::PR_NUM '$PR_NUM' is not a valid integer"
+            PR_NUM=""
+          fi
+
+          [ -z "$PR_NUM" ] && give_up "No PR number found"
+
+          # Fetch all PR metadata in a single API call (also validates it's a PR)
+          PR_JSON=$(gh pr view "$PR_NUM" --json number,title,labels,body 2>/dev/null) \
+            || give_up "#$PR_NUM is not a PR"
+
           echo "number=$PR_NUM" >> $GITHUB_OUTPUT
-
-          # Fetch PR metadata
-          PR_TITLE=$(gh pr view "$PR_NUM" --json title --jq '.title' 2>/dev/null || echo "")
-          echo "title=$PR_TITLE" >> $GITHUB_OUTPUT
-
-          PR_LABELS=$(gh pr view "$PR_NUM" --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
-          echo "labels=$PR_LABELS" >> $GITHUB_OUTPUT
-
-          # Write PR body to temp file to avoid shell interpolation issues
-          gh pr view "$PR_NUM" --json body --jq '.body // ""' > /tmp/pr_body.txt 2>/dev/null || echo "" > /tmp/pr_body.txt
-
+          echo "title=$(echo "$PR_JSON" | jq -r '.title')" >> $GITHUB_OUTPUT
+          echo "labels=$(echo "$PR_JSON" | jq -r '[.labels[].name] | join(",")')" >> $GITHUB_OUTPUT
+          echo "$PR_JSON" | jq -r '.body // ""' > /tmp/pr_body.txt
           echo "body_file=/tmp/pr_body.txt" >> $GITHUB_OUTPUT
 
       - name: Determine bump type
@@ -234,7 +246,11 @@ jobs:
           MESSAGE=$(printf '**Soleur %s released!**\n\n%s\n\nFull release notes: %s' \
             "$TAG" "$BODY" "$RELEASE_URL")
 
-          PAYLOAD=$(jq -n --arg content "$MESSAGE" '{content: $content}')
+          PAYLOAD=$(jq -n \
+            --arg content "$MESSAGE" \
+            --arg username "Sol" \
+            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
+            '{content: $content, username: $username, avatar_url: $avatar_url}')
 
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Content-Type: application/json" \
