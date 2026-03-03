@@ -352,7 +352,7 @@ Poll every 10 seconds until state is `MERGED`.
 
 **If merged (either now or user says "merge PR" later in the session):**
 
-1. **Version bump and release are automatic.** The `version-bump-and-release.yml` GitHub Actions workflow reads the PR's `semver:*` label, bumps version files, updates CHANGELOG.md, creates a GitHub Release, and posts to Discord. No manual step needed.
+1. **Version bump and release are automatic.** The `version-bump-and-release.yml` GitHub Actions workflow reads the PR's `semver:*` label, computes the next version from the latest release tag, creates a GitHub Release with a `vX.Y.Z` tag, and posts to Discord. No committed files are modified — version is derived from git tags.
 
    If the workflow did not fire (e.g., no semver label was set), run `/release-announce` manually as a fallback.
 
@@ -369,7 +369,7 @@ This detects `[gone]` branches (where the remote was deleted after merge), remov
 ## Important Rules
 
 - **Always set a semver label.** Every PR that touches `plugins/soleur/` must have a `semver:patch`, `semver:minor`, or `semver:major` label. CI uses this label to bump the version at merge time.
-- **Never bump version files in feature branches.** Version bumping (plugin.json, CHANGELOG.md, README badge, bug_report.yml, marketplace.json) is handled by `version-bump-and-release.yml` at merge time. Editing these files in feature branches creates merge conflicts.
+- **Never edit version fields.** `plugin.json` and `marketplace.json` versions are frozen sentinels (`0.0.0-dev`). Version is derived from git tags via GitHub Releases at build time.
 - **Ask before running /compound.** The user may have already documented learnings.
 - **Do not block on missing artifacts.** Not every change needs a brainstorm or plan.
 - **Confirm the PR title and body** with the user before creating it.
