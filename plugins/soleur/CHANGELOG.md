@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.8.0] - 2026-03-03
+
+### Added
+
+- **fix-issue skill** -- Automated single-file bug fix agent. Reads a GitHub issue, creates a `bot-fix/<N>-<slug>` branch, attempts a one-file fix, runs tests against a baseline, and opens a PR for human review. On failure, comments on the issue and adds `bot-fix/attempted` label. Works both in CI and locally.
+- **scheduled-bug-fixer workflow** -- Daily GitHub Actions cron (06:00 UTC) that picks the oldest open `priority/p3-low` + `type/bug` issue without `bot-fix/attempted` label and invokes `soleur:fix-issue`. Includes `workflow_dispatch` input for manual override. Phase 2 of #370.
+
+### Changed
+
+- **scheduled-daily-triage workflow** -- Shifted cron from 06:00 UTC to 04:00 UTC to give triage a 2-hour head start before the bug fixer runs.
+
 ## [3.7.18] - 2026-03-02
 
 ### Fixed

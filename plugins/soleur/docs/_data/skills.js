@@ -48,8 +48,9 @@ const SKILL_CATEGORIES = {
   "plan-review": "Review & Planning",
   review: "Review & Planning",
 
-  // Workflow (17)
+  // Workflow (18)
   "agent-browser": "Workflow",
+  "fix-issue": "Workflow",
   "archive-kb": "Workflow",
   deploy: "Workflow",
   "git-worktree": "Workflow",
