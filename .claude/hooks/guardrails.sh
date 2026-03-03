@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse guardrail hook for Bash commands.
-# Blocks: commits on main, rm -rf on worktrees, --delete-branch with active worktrees.
+# Blocks: commits on main, rm -rf on worktrees, --delete-branch with active worktrees,
+# commits with conflict markers in staged content.
 # NOTE: When adding or modifying guards, update AGENTS.md hook awareness rule to match.
 
 set -euo pipefail
@@ -66,6 +67,40 @@ if echo "$COMMAND" | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
       hookSpecificOutput: {
         permissionDecision: "deny",
         permissionDecisionReason: "BLOCKED: --delete-branch with active worktrees will orphan them. Remove worktrees first, then merge."
+      }
+    }'
+    exit 0
+  fi
+fi
+
+# Guard 4: Block commits with conflict markers in staged content
+# Matches git commit and git merge --continue (which internally commits).
+# Allows optional -C <path> between git and commit/merge.
+# Checks only added lines (^\+) to avoid blocking removal of markers.
+# CWD resolution mirrors Guard 1: cd, git -C, .cwd fallback.
+if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|merge\s+--continue)'; then
+  GUARD4_DIR=""
+  if echo "$COMMAND" | grep -qE '^\s*cd\s+'; then
+    GUARD4_DIR=$(echo "$COMMAND" | sed -nE 's/^\s*cd\s+"?([^"&;]+)"?.*/\1/p' | xargs)
+  elif echo "$COMMAND" | grep -qoE 'git\s+-C\s+\S+'; then
+    GUARD4_DIR=$(echo "$COMMAND" | grep -oE 'git\s+-C\s+\S+' | head -1 | sed -nE 's/git\s+-C\s+(\S+)/\1/p')
+  fi
+  if [ -z "$GUARD4_DIR" ] || [ ! -d "$GUARD4_DIR" ]; then
+    GUARD4_CWD=$(echo "$INPUT" | jq -r '.cwd // ""')
+    if [ -n "$GUARD4_CWD" ] && [ -d "$GUARD4_CWD" ]; then
+      GUARD4_DIR="$GUARD4_CWD"
+    fi
+  fi
+  if [ -n "$GUARD4_DIR" ] && [ -d "$GUARD4_DIR" ]; then
+    STAGED_DIFF=$(git -C "$GUARD4_DIR" diff --cached 2>/dev/null || true)
+  else
+    STAGED_DIFF=$(git diff --cached 2>/dev/null || true)
+  fi
+  if echo "$STAGED_DIFF" | grep -qE '^\+(<{7}|={7}|>{7})'; then
+    jq -n '{
+      hookSpecificOutput: {
+        permissionDecision: "deny",
+        permissionDecisionReason: "BLOCKED: Staged content contains conflict markers (<<<<<<<, =======, or >>>>>>>). Resolve all conflicts before committing."
       }
     }'
     exit 0

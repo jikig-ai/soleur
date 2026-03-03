@@ -52,6 +52,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Use imperative/infinitive form for instructions (verb-first)
 - When spawning parallel subagents to generate HTML pages, provide an explicit CSS class name reference list (not the full CSS file) -- subagents independently invent class names that don't match the shared stylesheet
 - After merges that bump versions, CI updates all version files automatically -- no manual grep needed; if HTML docs contain hardcoded version strings, file an issue to template them
+- When documentation mandates one strategy but code uses another, canonicalize on what the code does -- unless there is a strong reason to change the code; documentation that contradicts implementation creates confusion and wasted effort
 - Prefer numbered phase sections (Phase 1, Phase 2) in SKILL.md for multi-step workflows, with XML semantic tags (`<critical_sequence>`, `<decision_gate>`, `<validation_gate>`) to mark control flow
 - Prefer numeric literal underscores as thousand separators for readability (e.g., `3_000` instead of `3000`)
 - Prefer a language identifier after triple backticks in code blocks (e.g., ```bash, ```yaml -- never bare ```)
@@ -83,7 +84,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Skills invoked mid-pipeline must never use stop/return/done language in their handoff -- scope what they skip (e.g., "do not invoke ship"), but never imply end-of-turn; the calling pipeline controls turn boundaries, not the callee skill
 - When reading file content during an active git merge conflict, use stage numbers: `git show :2:<path>` (ours) and `git show :3:<path>` (theirs); `git show HEAD:<path>` only returns one side and discards the incoming changes
 - When resolving merge conflicts in large files (CHANGELOG.md, constitution.md), the Write tool replaces the ENTIRE file -- read the full base from `git show HEAD:<path>` and reconstruct the complete file; there is no "rest of file" to preserve
-- Before staging files after a merge, grep staged content for conflict markers: `git diff --cached | grep -E '^\+(<{7}|={7}|>{7})'` -- conflict markers are invisible in normal review and have been committed undetected
+- Before staging files after a merge, grep staged content for conflict markers: `git diff --cached | grep -E '^\+(<{7}|={7}|>{7})'` -- conflict markers are invisible in normal review and have been committed undetected (enforced by guardrails.sh Guard 4)
 - When modifying agent instructions (adding checks, changing behavior), also update any skill Task prompts that reference the agent with hardcoded check lists -- stale prompts silently ignore new agent capabilities
 - Infrastructure agents that wire external services (DNS, SSL, Pages) must own the full verification loop -- use `gh` CLI, `openssl`, `curl`, and `agent-browser` to verify each step programmatically instead of asking the user to check manually; only stop for genuine decisions, not mechanical verification
 - Pencil MCP edits require three conditions: (1) the .pen file tab must be visible in Cursor so the editor webview connects via WebSocket, (2) after `batch_design` operations, the user must Ctrl+S to flush changes to disk (no programmatic save exists), (3) always `batch_get` current property values before `batch_design` updates -- mockup values diverge from live CSS
@@ -107,7 +108,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Run SpecFlow analysis (spec-flow-analyzer agent) on features that modify CI workflows or GitHub Actions -- it catches repo configuration blockers (auto-merge settings, rulesets, token permissions) before implementation begins
 - Multi-agent cascades (one agent spawning specialists via Task tool) require a pre-flight checklist: (1) `Task` must be in `--allowedTools` for CI workflows, (2) every specialist must have an explicit write target path in the delegation table, (3) every specialist must produce a writable artifact -- read-only analysis tasks need a concrete output file. Cascade failures are silent: missing tools, unspecified write targets, and no-output specialists all fail without error messages
 - Scheduled workflows that select issues by label must cascade through priority levels (p3-low → p2-medium → p1-high) rather than hardcoding a single tier -- a fixed filter produces idle runs when the target tier is empty while higher-priority bugs accumulate
-- Before creating a PR or merging, rebase feature branch on latest origin/main (`git fetch origin main && git rebase origin/main`) -- rebasing ensures a clean merge even when multiple PRs land in sequence
+- Before creating a PR or merging, merge latest origin/main into the feature branch (`git fetch origin main && git merge origin/main`) -- merging ensures a clean PR even when multiple PRs land in sequence
 - Document environment-specific constraints (terminal capabilities, shell limitations) in AGENTS.md Hard Rules when Claude violates them without being told -- these are loaded every turn and prevent dead-end attempts
 
 ### Never
@@ -196,6 +197,7 @@ Project principles organized by domain. Add principles as you learn them.
 - When multiple fields of the same PR or issue are needed, consolidate into one `gh pr view <number> --json field1,field2,...` call instead of separate `gh pr view` invocations -- reduces API round trips and avoids rate-limit pressure in scripts that loop over many PRs
 - Prefer hook-based enforcement over documentation-only rules for agent discipline -- PreToolUse hooks make violations impossible rather than aspirational; reserve AGENTS.md hard rules for cases where hooks cannot intercept (e.g., reasoning errors, not tool calls)
 - Diagnostic scripts must print positive confirmation on success, not just absence of error -- silent success is indistinguishable from a skipped check; always emit an `[ok]` or equivalent status line for each verified condition
+- When adding a new sequential phase to an existing multi-agent pipeline, verify it does not exceed the pipeline's parallel subagent limit -- add as sequential (Phase N.5) rather than parallel when the limit is already reached
 
 ## Testing
 

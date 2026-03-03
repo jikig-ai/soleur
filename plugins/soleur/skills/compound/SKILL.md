@@ -120,6 +120,63 @@ Based on problem type detected, automatically invoke applicable agents:
 - **database_issue** --> `data-integrity-guardian`
 - Any code-heavy issue --> `kieran-rails-reviewer` + `code-simplicity-reviewer`
 
+## Phase 1.5: Deviation Analyst (Sequential)
+
+After all parallel subagents complete and before Constitution Promotion, scan the session for workflow deviations against hard rules. This phase runs sequentially (not as a parallel subagent) to respect the max-5 parallel subagent limit.
+
+### Purpose
+
+Close the gap between "we learned X" and "X is now enforced." The project has proven that hooks beat documentation — all existing PreToolUse hooks were added after prose rules failed. This phase detects deviations and proposes the strongest viable enforcement.
+
+### Procedure
+
+1. **Gather rules.** Read `AGENTS.md` and extract only `## Hard Rules` and `## Workflow Gates` items (Always/Never). Skip Prefer rules — they are advisory and flagging them adds noise.
+
+2. **Gather session evidence.** Two sources:
+   - **session-state.md** (if present): read `knowledge-base/specs/feat-<name>/session-state.md` for forwarded errors from preceding pipeline phases (pre-compaction deviations)
+   - **Current context**: scan the conversation for post-compaction actions — tool calls, command outputs, file edits
+
+3. **Detect deviations.** For each hard rule, check if session evidence shows a violation. Common examples:
+   - Editing files in main repo when a worktree is active
+   - Committing directly to main
+   - Running `git stash` in a worktree
+   - Skipping compound before commit
+   - Treating a failed command as success
+
+4. **Propose enforcement.** For each detected deviation, determine if an existing hook already covers it. If yes, note the existing hook and skip. If no, propose enforcement following the hierarchy:
+   - **PreToolUse hook** (preferred) — mechanical prevention, cannot be bypassed
+   - **Skill instruction** — checked when skill runs, can be overridden
+   - **Prose rule** (last resort) — requires agent compliance, weakest enforcement
+
+5. **Format output.** For each deviation, produce:
+
+   ```text
+   ### Deviation: [short description]
+   - **Rule violated:** [exact text from AGENTS.md or constitution.md]
+   - **Evidence:** [what happened in the session]
+   - **Existing enforcement:** [hook name if already covered, or "none"]
+   - **Proposed enforcement:** [hook/skill_instruction/prose_rule]
+   ```
+
+   For hook proposals, include an inline draft script following `.claude/hooks/` conventions:
+
+   ```bash
+   #!/usr/bin/env bash
+   # PreToolUse hook: [what it blocks]
+   # Source rule: [AGENTS.md or constitution.md reference]
+   set -euo pipefail
+   INPUT=$(cat)
+   # [detection logic]
+   # If violation detected:
+   # jq -n '{ hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: "BLOCKED: [reason]" } }'
+   ```
+
+6. **Feed into Constitution Promotion.** Present each deviation to the user via the existing Accept/Skip/Edit gate in the Constitution Promotion section below. Accepted hook proposals should be manually copied to `.claude/hooks/` after testing — never auto-install.
+
+### Empty Case
+
+If no deviations are detected, output: "Deviation Analyst: no violations found." and proceed to Knowledge Base Integration.
+
 ## Knowledge Base Integration
 
 **If knowledge-base/ directory exists, compound saves learnings there and offers constitution promotion:**
@@ -151,9 +208,13 @@ module: [module]
 
 HARD RULE: This phase MUST run even when compound is invoked inside an automated pipeline (one-shot, ship). The model has historically rationalized skipping this as "pipeline mode optimization" -- that is a protocol violation. Constitution promotion and route-to-definition are the phases that prevent repeated mistakes across sessions. If the pipeline is time-constrained, present proposals with a 5-second timeout per item, but never skip entirely.
 
-**Headless mode:** If `HEADLESS_MODE=true`, auto-promote using LLM judgment. Review recent learnings, determine if any warrant constitution promotion, select the domain and category using LLM judgment, generate the principle text, and check for duplicates via substring match against existing rules in `constitution.md`. Skip any principle that is already covered. Append non-duplicate principles and commit. Do not prompt the user.
+**Headless mode:** If `HEADLESS_MODE=true`, auto-promote using LLM judgment. Review recent learnings, determine if any warrant constitution promotion, select the domain and category using LLM judgment, generate the principle text, and check for duplicates via substring match against existing rules in `constitution.md`. Skip any principle that is already covered. Append non-duplicate principles and commit. Do not prompt the user. For deviation analyst proposals, auto-accept hook proposals that have clear rule-to-hook mappings and skip ambiguous ones.
 
-**Interactive mode:** After saving the learning, prompt the user:
+**Interactive mode:** After saving the learning, present two categories of proposals:
+
+**1. Deviation Analyst proposals (if any):** If Phase 1.5 produced deviations, present each one with Accept/Skip/Edit. For accepted hook proposals, display the draft script and instruct the user to manually copy it to `.claude/hooks/` after testing. For accepted skill instruction or prose rule proposals, apply the edit to the target file.
+
+**2. Constitution promotion:** Prompt the user:
 
 **Question:** "Promote anything to constitution?"
 
