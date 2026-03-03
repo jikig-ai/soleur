@@ -91,7 +91,10 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 
 **Steps 3-10: Implementation, Review, and Ship**
 
-3. Use the **Skill tool**: `skill: soleur:work`, args: "<plan_file_path>". Work handles implementation only (Phases 0-3). It does NOT invoke ship -- one-shot controls the full lifecycle below. **After work completes, continue to step 4 -- do not end your turn.**
+3. Use the **Skill tool**: `skill: soleur:work`, args: "<plan_file_path>". Work handles implementation only (Phases 0-3). It does NOT invoke ship -- one-shot controls the full lifecycle below.
+
+> **CONTINUATION GATE**: When work outputs `## Work Phase Complete`, that is your signal to continue. Do NOT end your turn. Do NOT treat "Implementation complete" or similar phrases as a stopping point. Immediately proceed to step 4 in the same response.
+
 4. Use the **Skill tool**: `skill: soleur:review`
 5. Use the **Skill tool**: `skill: soleur:resolve-todo-parallel`
 6. Use the **Skill tool**: `skill: soleur:compound`
