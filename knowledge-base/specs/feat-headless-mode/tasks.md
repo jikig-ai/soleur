@@ -27,13 +27,13 @@
 **Files:** `plugins/soleur/skills/work/SKILL.md`
 
 ### 1.4 Add `--headless` bypass to compound skill
-- [ ] Add `--headless` detection and branch safety check (abort if on main/master)
-- [ ] Constitution promotion: auto-promote using LLM judgment, deduplicate via substring match
-- [ ] Route-to-definition: auto-accept LLM-proposed edit
-- [ ] Auto-consolidation: auto-accept all proposals, auto-confirm archival
-- [ ] Decision menu: auto-select "Continue workflow"
-- [ ] Worktree cleanup: auto-skip
-- [ ] Forward `--headless` to compound-capture invocation
+- [x] Add `--headless` detection and branch safety check (abort if on main/master)
+- [x] Constitution promotion: auto-promote using LLM judgment, deduplicate via substring match
+- [x] Route-to-definition: auto-accept LLM-proposed edit
+- [x] Auto-consolidation: auto-accept all proposals, auto-confirm archival
+- [x] Decision menu: auto-select "Continue workflow"
+- [x] Worktree cleanup: auto-skip
+- [x] Forward `--headless` to compound-capture invocation
 
 **Files:** `plugins/soleur/skills/compound/SKILL.md`
 
