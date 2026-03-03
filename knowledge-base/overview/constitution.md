@@ -192,6 +192,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Prefer single-pattern grep guards over ANDing separate greps -- independent substring checks cannot enforce syntactic context (e.g., that `.worktrees/` is an `rm` argument, not comment text); combine into one regex that enforces proximity
 - Prefer hook-based enforcement over documentation-only rules for agent discipline -- PreToolUse hooks make violations impossible rather than aspirational; reserve AGENTS.md hard rules for cases where hooks cannot intercept (e.g., reasoning errors, not tool calls)
 - Diagnostic scripts must print positive confirmation on success, not just absence of error -- silent success is indistinguishable from a skipped check; always emit an `[ok]` or equivalent status line for each verified condition
+- When adding a new sequential phase to an existing multi-agent pipeline, verify it does not exceed the pipeline's parallel subagent limit -- add as sequential (Phase N.5) rather than parallel when the limit is already reached
 
 ## Testing
 
