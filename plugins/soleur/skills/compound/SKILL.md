@@ -18,7 +18,16 @@ Captures problem solutions while context is fresh, creating structured documenta
 ```bash
 skill: soleur:compound               # Document the most recent fix
 skill: soleur:compound [brief context]  # Provide additional context hint
+skill: soleur:compound --headless    # Headless mode: auto-approve all prompts
 ```
+
+## Headless Mode Detection
+
+If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headless` from `$ARGUMENTS` before processing remaining args.
+
+**Branch safety check:** If `HEADLESS_MODE=true`, run `git branch --show-current`. If the result is `main` or `master`, abort immediately with: "Error: headless compound cannot run on main/master. Checkout a feature branch first." This is defense-in-depth alongside PreToolUse hooks.
+
+When `HEADLESS_MODE=true`, forward `--headless` to the `compound-capture` invocation (e.g., `skill: soleur:compound-capture --headless`).
 
 ## Phase 0: Setup
 
@@ -111,6 +120,63 @@ Based on problem type detected, automatically invoke applicable agents:
 - **database_issue** --> `data-integrity-guardian`
 - Any code-heavy issue --> `kieran-rails-reviewer` + `code-simplicity-reviewer`
 
+## Phase 1.5: Deviation Analyst (Sequential)
+
+After all parallel subagents complete and before Constitution Promotion, scan the session for workflow deviations against hard rules. This phase runs sequentially (not as a parallel subagent) to respect the max-5 parallel subagent limit.
+
+### Purpose
+
+Close the gap between "we learned X" and "X is now enforced." The project has proven that hooks beat documentation — all existing PreToolUse hooks were added after prose rules failed. This phase detects deviations and proposes the strongest viable enforcement.
+
+### Procedure
+
+1. **Gather rules.** Read `AGENTS.md` and extract only `## Hard Rules` and `## Workflow Gates` items (Always/Never). Skip Prefer rules — they are advisory and flagging them adds noise.
+
+2. **Gather session evidence.** Two sources:
+   - **session-state.md** (if present): read `knowledge-base/specs/feat-<name>/session-state.md` for forwarded errors from preceding pipeline phases (pre-compaction deviations)
+   - **Current context**: scan the conversation for post-compaction actions — tool calls, command outputs, file edits
+
+3. **Detect deviations.** For each hard rule, check if session evidence shows a violation. Common examples:
+   - Editing files in main repo when a worktree is active
+   - Committing directly to main
+   - Running `git stash` in a worktree
+   - Skipping compound before commit
+   - Treating a failed command as success
+
+4. **Propose enforcement.** For each detected deviation, determine if an existing hook already covers it. If yes, note the existing hook and skip. If no, propose enforcement following the hierarchy:
+   - **PreToolUse hook** (preferred) — mechanical prevention, cannot be bypassed
+   - **Skill instruction** — checked when skill runs, can be overridden
+   - **Prose rule** (last resort) — requires agent compliance, weakest enforcement
+
+5. **Format output.** For each deviation, produce:
+
+   ```text
+   ### Deviation: [short description]
+   - **Rule violated:** [exact text from AGENTS.md or constitution.md]
+   - **Evidence:** [what happened in the session]
+   - **Existing enforcement:** [hook name if already covered, or "none"]
+   - **Proposed enforcement:** [hook/skill_instruction/prose_rule]
+   ```
+
+   For hook proposals, include an inline draft script following `.claude/hooks/` conventions:
+
+   ```bash
+   #!/usr/bin/env bash
+   # PreToolUse hook: [what it blocks]
+   # Source rule: [AGENTS.md or constitution.md reference]
+   set -euo pipefail
+   INPUT=$(cat)
+   # [detection logic]
+   # If violation detected:
+   # jq -n '{ hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: "BLOCKED: [reason]" } }'
+   ```
+
+6. **Feed into Constitution Promotion.** Present each deviation to the user via the existing Accept/Skip/Edit gate in the Constitution Promotion section below. Accepted hook proposals should be manually copied to `.claude/hooks/` after testing — never auto-install.
+
+### Empty Case
+
+If no deviations are detected, output: "Deviation Analyst: no violations found." and proceed to Knowledge Base Integration.
+
 ## Knowledge Base Integration
 
 **If knowledge-base/ directory exists, compound saves learnings there and offers constitution promotion:**
@@ -138,11 +204,17 @@ category: [category]
 module: [module]
 ```
 
-### Constitution Promotion (Manual)
+### Constitution Promotion (Manual or Auto)
 
 HARD RULE: This phase MUST run even when compound is invoked inside an automated pipeline (one-shot, ship). The model has historically rationalized skipping this as "pipeline mode optimization" -- that is a protocol violation. Constitution promotion and route-to-definition are the phases that prevent repeated mistakes across sessions. If the pipeline is time-constrained, present proposals with a 5-second timeout per item, but never skip entirely.
 
-After saving the learning, prompt the user:
+**Headless mode:** If `HEADLESS_MODE=true`, auto-promote using LLM judgment. Review recent learnings, determine if any warrant constitution promotion, select the domain and category using LLM judgment, generate the principle text, and check for duplicates via substring match against existing rules in `constitution.md`. Skip any principle that is already covered. Append non-duplicate principles and commit. Do not prompt the user. For deviation analyst proposals, auto-accept hook proposals that have clear rule-to-hook mappings and skip ambiguous ones.
+
+**Interactive mode:** After saving the learning, present two categories of proposals:
+
+**1. Deviation Analyst proposals (if any):** If Phase 1.5 produced deviations, present each one with Accept/Skip/Edit. For accepted hook proposals, display the draft script and instruct the user to manually copy it to `.claude/hooks/` after testing. For accepted skill instruction or prose rule proposals, apply the edit to the target file.
+
+**2. Constitution promotion:** Prompt the user:
 
 **Question:** "Promote anything to constitution?"
 
@@ -166,7 +238,8 @@ After constitution promotion, compound routes the captured learning to the skill
 
 1. Detect which skills, agents, or commands were invoked in this conversation. Also check session-state.md `### Components Invoked` for components from preceding pipeline phases.
 2. Propose a one-line bullet edit to the most relevant section of the target definition file
-3. User confirms with Accept/Skip/Edit
+3. **Headless mode:** If `HEADLESS_MODE=true`, auto-accept the LLM-proposed edit without prompting.
+4. **Interactive mode:** User confirms with Accept/Skip/Edit
 
 See compound-capture Step 8 for the full flow.
 
@@ -197,15 +270,17 @@ The automatic consolidation:
 
 1. **Discovers artifacts** -- extracts the feature slug by stripping `feat/`, `feat-`, `fix/`, or `fix-` prefix from the branch name, then globs `knowledge-base/{brainstorms,plans}/*<slug>*` and `knowledge-base/specs/feat-<slug>/` (excluding `*/archive/`)
 2. **Extracts knowledge** -- a single agent reads all artifacts and proposes updates to `constitution.md`, component docs, and overview `README.md`
-3. **Approval flow** -- proposals presented one at a time with Accept/Skip/Edit; idempotency checked via substring match
-4. **Archives sources** -- runs `bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` to move all discovered artifacts to `archive/` subdirectories via `git mv` with `YYYYMMDD-HHMMSS` timestamp prefix
+3. **Approval flow** -- **Headless mode:** auto-accept all proposals (idempotency still checked via substring match). **Interactive mode:** proposals presented one at a time with Accept/Skip/Edit; idempotency checked via substring match
+4. **Archives sources** -- runs `bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` to move all discovered artifacts to `archive/` subdirectories via `git mv` with `YYYYMMDD-HHMMSS` timestamp prefix. **Headless mode:** auto-confirm archival without prompting
 5. **Single commit** -- overview edits and archival moves committed together for clean `git revert`
 
 If no artifacts are found for the feature slug, consolidation is skipped silently. See the `compound-capture` skill for full implementation details.
 
 ### Worktree Cleanup (Manual)
 
-At the end, if on a feature branch:
+**Headless mode:** If `HEADLESS_MODE=true`, skip worktree cleanup entirely (cleanup-merged handles this post-merge).
+
+**Interactive mode:** At the end, if on a feature branch:
 
 **Question:** "Feature complete? Clean up worktree?"
 
@@ -284,7 +359,7 @@ File created:
 This documentation will be searchable for future reference when similar
 issues occur in the Email Processing or Brief System modules.
 
-What's next?
+What's next?  (Headless mode: auto-selects "Continue workflow")
 1. Continue workflow (recommended)
 2. Add to Required Reading
 3. Link related documentation

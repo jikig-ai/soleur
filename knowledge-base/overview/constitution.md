@@ -70,6 +70,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Organize agents by domain first (engineering/, etc.), then by function (review/, design/). Cross-domain agents stay at root level (research/, workflow/)
 - Skills must have a SKILL.md file and may include scripts/, references/, and assets/ subdirectories; directories under `skills/` without SKILL.md must be deleted or converted to proper skills
 - Every SKILL.md interactive prompt (AskUserQuestion) must accept an `$ARGUMENTS` bypass path for programmatic callers -- agents and pipeline skills cannot answer interactive prompts; provide flag-based argument passthrough (e.g., `--name`, `--yes`) that skips the prompt when present
+- **Headless mode convention:** When `$ARGUMENTS` contains `--headless`, all interactive prompts use sensible defaults. Skills must: (1) strip `--headless` from `$ARGUMENTS` before processing remaining args, (2) forward `--headless` to any child Skill tool invocations, (3) abort on unrecoverable errors instead of prompting, (4) never run headless compound on main/master
 - Lifecycle workflows with hooks must cover every state transition with a cleanup trigger; verify no gaps between create, ship, merge, and session-start
 - At session start, run `worktree-manager.sh cleanup-merged` to remove worktrees whose remote branches are [gone]; this is the recovery mechanism for the merge-then-session-end gap where cleanup was deferred
 - Post-merge cleanup scripts must update the local main branch to match origin/main -- use `--ff-only` to enforce the no-direct-commits-to-main invariant
@@ -192,6 +193,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Prefer single-pattern grep guards over ANDing separate greps -- independent substring checks cannot enforce syntactic context (e.g., that `.worktrees/` is an `rm` argument, not comment text); combine into one regex that enforces proximity
 - Prefer hook-based enforcement over documentation-only rules for agent discipline -- PreToolUse hooks make violations impossible rather than aspirational; reserve AGENTS.md hard rules for cases where hooks cannot intercept (e.g., reasoning errors, not tool calls)
 - Diagnostic scripts must print positive confirmation on success, not just absence of error -- silent success is indistinguishable from a skipped check; always emit an `[ok]` or equivalent status line for each verified condition
+- When adding a new sequential phase to an existing multi-agent pipeline, verify it does not exceed the pipeline's parallel subagent limit -- add as sequential (Phase N.5) rather than parallel when the limit is already reached
 
 ## Testing
 

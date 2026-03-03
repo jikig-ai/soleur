@@ -11,6 +11,10 @@ Execute a work plan efficiently while maintaining quality and finishing features
 
 This command takes a work document (plan, specification, or todo file) and executes it systematically. The focus is on **shipping complete features** by understanding requirements quickly, following existing patterns, and maintaining quality throughout.
 
+## Headless Mode Detection
+
+If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headless` from `$ARGUMENTS` before processing the remainder as a plan path. Pipeline mode (file path detection) already covers all prompt bypasses for work's own prompts — `--headless` is only needed for forwarding to child skills in Phase 4.
+
 ## Input Document
 
 <input_document> #$ARGUMENTS </input_document>
@@ -293,10 +297,10 @@ Implementation is complete. Determine how this skill was invoked and act accordi
 
 **If invoked by one-shot** (the conversation contains `soleur:one-shot` skill output earlier): Do not invoke ship, review, or compound — the orchestrator handles those. Output exactly `## Work Phase Complete` (this is a continuation marker, NOT a turn-ending statement) and then **immediately continue executing the next numbered step in the one-shot sequence** (step 4: review). Do NOT end your turn after outputting this marker.
 
-**If invoked directly by the user** (no one-shot orchestrator): Continue through the post-implementation pipeline automatically. Do NOT stop and wait — the earlier learning "Workflow Completion is Not Task Completion" applies. Run these steps in order:
+**If invoked directly by the user** (no one-shot orchestrator): Continue through the post-implementation pipeline automatically. Do NOT stop and wait — the earlier learning "Workflow Completion is Not Task Completion" applies. Run these steps in order, forwarding `--headless` if `HEADLESS_MODE=true`:
 
-1. `skill: soleur:compound` — capture learnings before committing
-2. `skill: soleur:ship` — commit, push, create PR, merge
+1. `skill: soleur:compound` (or `skill: soleur:compound --headless` if headless) — capture learnings before committing
+2. `skill: soleur:ship` (or `skill: soleur:ship --headless` if headless) — commit, push, create PR, merge
 
 ---
 
