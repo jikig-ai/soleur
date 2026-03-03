@@ -1,7 +1,8 @@
-# Daily bot-fix agent for low-priority bugs.
-# Picks the oldest open issue with priority/p3-low + type/bug (excluding
-# bot-fix/attempted), then invokes soleur:fix-issue to attempt a single-file
-# fix and open a PR for human review.
+# Daily bot-fix agent for open bugs.
+# Cascades through priority levels (p3-low → p2-medium → p1-high), picking
+# the oldest open issue with type/bug (excluding bot-fix/attempted), then
+# invokes soleur:fix-issue to attempt a single-file fix and open a PR for
+# human review.
 # Phase 2 of #370. Runs after daily triage (04:00 UTC).
 # To test manually: gh workflow run scheduled-bug-fixer.yml
 #
@@ -62,19 +63,22 @@ jobs:
             exit 0
           fi
 
-          ISSUE=$(gh issue list \
-            --label "priority/p3-low" \
-            --label "type/bug" \
-            --state open \
-            --json number,title,labels,createdAt \
-            --jq '[.[] | select(.labels | map(.name) | index("bot-fix/attempted") | not)] | sort_by(.createdAt) | .[0].number // empty')
+          for PRIORITY in priority/p3-low priority/p2-medium priority/p1-high; do
+            ISSUE=$(gh issue list \
+              --label "$PRIORITY" \
+              --label "type/bug" \
+              --state open \
+              --json number,title,labels,createdAt \
+              --jq '[.[] | select(.labels | map(.name) | index("bot-fix/attempted") | not)] | sort_by(.createdAt) | .[0].number // empty')
 
-          if [[ -z "$ISSUE" ]]; then
-            echo "No qualifying issues found"
-            exit 0
-          fi
+            if [[ -n "$ISSUE" ]]; then
+              echo "Selected issue #$ISSUE from $PRIORITY"
+              echo "issue=$ISSUE" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
 
-          echo "issue=$ISSUE" >> "$GITHUB_OUTPUT"
+          echo "No qualifying issues found at any priority level"
 
       - name: Fix issue
         if: steps.select.outputs.issue

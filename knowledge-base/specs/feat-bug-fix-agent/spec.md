@@ -2,11 +2,11 @@
 
 ## Problem Statement
 
-Low-priority bugs accumulate in the issue tracker because human developers prioritize higher-impact work. An automated agent can pick up trivial, single-file bug fixes and open PRs for human review, reducing the backlog without requiring developer time for the initial fix attempt.
+Bugs accumulate in the issue tracker because human developers prioritize higher-impact work. An automated agent can pick up trivial, single-file bug fixes and open PRs for human review, reducing the backlog without requiring developer time for the initial fix attempt.
 
 ## Goals
 
-- Automatically attempt fixes for `priority/p3-low` + `type/bug` issues daily
+- Automatically attempt fixes for `type/bug` issues daily, cascading from p3-low through p2-medium to p1-high
 - Open PRs with clear descriptions linking to the source issue
 - Require human merge approval on every bot PR (no auto-merge)
 - Keep cost bounded with `--max-turns` and `timeout-minutes`
@@ -27,7 +27,7 @@ Low-priority bugs accumulate in the issue tracker because human developers prior
 
 ### FR1: Issue Selection
 
-The agent selects the oldest open issue matching `priority/p3-low` + `type/bug` that has not been previously attempted. Issues with a `bot-fix/attempted` label (if retry prevention is adopted) are skipped.
+The agent cascades through priority levels in order: `priority/p3-low`, then `priority/p2-medium`, then `priority/p1-high`. At each level, it selects the oldest open issue matching that priority + `type/bug` that has not been previously attempted. Issues with a `bot-fix/attempted` label are skipped. The first match found wins — the agent does not process multiple issues per run.
 
 ### FR2: Fix Attempt
 
