@@ -62,10 +62,10 @@ Project principles organized by domain. Add principles as you learn them.
 
 - Verify the root cause before implementing any fix -- reproduce the error or run the simplest diagnostic first; do not change code based on a guess
 - Core workflow stages (brainstorm, plan, work, review, compound, one-shot) are skills invoked via the Skill tool; only three commands remain (`go`, `sync`, `help`) using the `soleur:` prefix to avoid collisions with built-in commands
-- Never bump version files (plugin.json, CHANGELOG.md version entries, README badge, marketplace.json, bug_report.yml) in feature branches -- `version-bump-and-release.yml` handles all 6 files at merge time via semver labels set by `/ship`
+- Never edit version fields in `plugin.json` or `marketplace.json` (frozen sentinels). Version is derived from git tags -- `version-bump-and-release.yml` creates GitHub Releases with `vX.Y.Z` tags at merge time via semver labels set by `/ship`
 - Always set a `semver:patch`, `semver:minor`, or `semver:major` label on PRs that touch `plugins/soleur/` -- CI uses this label to determine the version bump at merge time
 - When adding a new skill, manually register it in `docs/_data/skills.js` SKILL_CATEGORIES -- skill discovery does not recurse and the docs site will silently omit unregistered skills
-- Component counts (agents, skills, commands) are auto-computed at merge time by CI -- do not hardcode counts in version bump commits
+- Component counts (agents, skills, commands) are computed at docs build time by `stats.js` -- do not hardcode counts in committed files
 - Organize agents by domain first (engineering/, etc.), then by function (review/, design/). Cross-domain agents stay at root level (research/, workflow/)
 - Skills must have a SKILL.md file and may include scripts/, references/, and assets/ subdirectories; directories under `skills/` without SKILL.md must be deleted or converted to proper skills
 - Every SKILL.md interactive prompt (AskUserQuestion) must accept an `$ARGUMENTS` bypass path for programmatic callers -- agents and pipeline skills cannot answer interactive prompts; provide flag-based argument passthrough (e.g., `--name`, `--yes`) that skips the prompt when present

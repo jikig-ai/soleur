@@ -1,43 +1,38 @@
 ---
-title: Serialize version bumps to merge-time CI
+title: Tag-only versioning eliminates version file conflicts
 date: 2026-03-03
 category: integration-issues
-tags: [github-actions, versioning, merge-conflicts, ci]
+tags: [github-actions, versioning, ci, git-tags]
 module: .github/workflows
 ---
 
-# Learning: Serialize version bumps to merge-time CI
+# Learning: Tag-only versioning eliminates version file conflicts
 
 ## Problem
 
-Parallel feature branches each bumping version files (plugin.json, CHANGELOG.md, README badge, marketplace.json, bug_report.yml) was the #1 source of merge conflicts — 14+ incidents over weeks. Even with "fetch and check main before bumping," two branches merging within minutes of each other would still collide.
+The original `version-bump-and-release.yml` workflow updated 6 committed files (plugin.json, CHANGELOG.md, README badge, marketplace.json, bug_report.yml, plugin README) and pushed to main. This was blocked by the CLA Required ruleset since `github-actions[bot]` cannot be added as a bypass actor.
+
+Even before the ruleset block, parallel feature branches bumping the same files was the #1 source of merge conflicts — 14+ incidents.
 
 ## Solution
 
-Move ALL version bumping out of feature branches into a single GitHub Action (`version-bump-and-release.yml`) that runs on `push: branches: [main]`. The Action:
+Eliminate committed version files entirely. Version is derived from git tags via GitHub Releases API:
 
-1. Detects if plugin files changed (`git diff --name-only HEAD~1 -- plugins/soleur/`)
-2. Parses PR number from squash-merge commit message `(#NNN)`
-3. Reads `semver:*` label set by `/ship` skill during PR creation
-4. Computes next version from current plugin.json
-5. Extracts `## Changelog` section from PR body (temp files for input sanitization)
-6. Auto-computes component counts via `find` commands
-7. Updates all 6 files atomically, verifies consistency, commits, creates GitHub Release, notifies Discord
+1. CI computes next version from `gh release view` (latest release tag), not `plugin.json`
+2. CI creates a GitHub Release with `vX.Y.Z` tag via `gh release create` — this creates a tag on the existing commit without pushing new commits to main
+3. Docs site fetches version and changelog from the GitHub Releases API at build time
+4. `plugin.json` version is frozen to `0.0.0-dev` (sentinel)
+5. `CHANGELOG.md` deleted — GitHub Releases is the changelog source of truth
 
 Key design decisions:
+- **`gh release view` over `gh release list`**: `gh release list` sorts by creation date; `gh release view` returns GitHub's "latest" release which respects semver ordering
+- **CI vs local fallback in github.js**: In CI (`process.env.CI`), API failures are hard errors. In local dev, they produce a warning and empty data.
 - **Concurrency group with `cancel-in-progress: false`**: Queues rather than races when multiple PRs merge quickly
 - **Idempotency check**: Skips if the release tag already exists
-- **Unified workflow**: Merges release creation + Discord notification into the bump workflow to avoid GITHUB_TOKEN cascade limitation (commits from GITHUB_TOKEN don't trigger other `on: push` workflows)
-- **`workflow_run` trigger on deploy-docs**: Since the version bump commit won't trigger path-based push events, deploy-docs uses `workflow_run: workflows: ["Version Bump and Release"]` with a success check
 
 ## Key Insight
 
-When N parallel branches each modify the same files, the solution is not "be more careful about ordering" — it's to move those modifications to a serialized chokepoint (merge-time CI). The concurrency group ensures only one version bump runs at a time, and the `find`-based counts always reflect the true filesystem state rather than stale branch baselines.
-
-## Session Errors
-
-1. Security hook blocked first workflow write — `${{ github.event.head_commit.message }}` in `run:` block is a command injection vector. Use `env:` variables for all GitHub context expressions.
-2. `git add` on a `git rm`'d file fails — the file is already staged for deletion.
+When CI needs to record metadata (version numbers, changelogs), prefer API artifacts (tags, releases) over committed files. Committed files require write access to protected branches and create merge conflicts. Git tags and GitHub Releases are created via API without touching `refs/heads/main`.
 
 ## Tags
 

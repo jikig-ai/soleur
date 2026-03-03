@@ -32,8 +32,8 @@ body:
     id: plugin-version
     attributes:
       label: Plugin version
-      description: "Run `claude plugin list` to check"
-      placeholder: "3.9.0"
+      description: "Check https://github.com/jikig-ai/soleur/releases for the latest version"
+      placeholder: "e.g. 3.9.0"
     validations:
       required: true
   - type: input
