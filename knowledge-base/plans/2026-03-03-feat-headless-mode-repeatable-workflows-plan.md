@@ -112,13 +112,13 @@ all interactive prompts use sensible defaults. Skills must:
 
 ## Acceptance Criteria
 
-- [ ] `skill: soleur:ship --headless` runs to completion without any interactive prompts
-- [ ] `skill: soleur:compound --headless` auto-promotes learnings without human approval
-- [ ] `skill: soleur:compound --headless` aborts if on main/master branch
-- [ ] `skill: soleur:work --headless knowledge-base/specs/feat-foo/tasks.md` strips `--headless` and processes the plan path correctly
-- [ ] `worktree-manager.sh create feat-foo --yes` completes without `read -r` prompt
-- [ ] `worktree-manager.sh cleanup --yes` completes without `read -r` prompt
-- [ ] Constitution.md updated with `--headless` convention
+- [x] `skill: soleur:ship --headless` runs to completion without any interactive prompts
+- [x] `skill: soleur:compound --headless` auto-promotes learnings without human approval
+- [x] `skill: soleur:compound --headless` aborts if on main/master branch
+- [x] `skill: soleur:work --headless knowledge-base/specs/feat-foo/tasks.md` strips `--headless` and processes the plan path correctly
+- [x] `worktree-manager.sh create feat-foo --yes` completes without `read -r` prompt
+- [x] `worktree-manager.sh cleanup --yes` completes without `read -r` prompt
+- [x] Constitution.md updated with `--headless` convention
 
 ## Test Scenarios
 
