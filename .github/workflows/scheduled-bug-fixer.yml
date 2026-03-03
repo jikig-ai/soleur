@@ -1,8 +1,8 @@
 # Daily bot-fix agent for open bugs.
 # Cascades through priority levels (p3-low → p2-medium → p1-high), picking
-# the oldest open issue with type/bug (excluding bot-fix/attempted), then
-# invokes soleur:fix-issue to attempt a single-file fix and open a PR for
-# human review.
+# the oldest open issue with type/bug (excluding bot-fix/attempted and issues
+# that already have an open bot-fix PR), then invokes soleur:fix-issue to
+# attempt a single-file fix and open a PR for human review.
 # Phase 2 of #370. Runs after daily triage (04:00 UTC).
 # To test manually: gh workflow run scheduled-bug-fixer.yml
 #
@@ -63,13 +63,25 @@ jobs:
             exit 0
           fi
 
+          # Collect issue numbers that already have open bot-fix PRs
+          OPEN_FIXES=$(gh pr list \
+            --state open \
+            --json headRefName \
+            --jq '[.[].headRefName | select(startswith("bot-fix/")) | split("/")[1] | split("-")[0]] | unique | join(",")')
+          echo "Issues with open bot-fix PRs: ${OPEN_FIXES:-none}"
+
           for PRIORITY in priority/p3-low priority/p2-medium priority/p1-high; do
             ISSUE=$(gh issue list \
               --label "$PRIORITY" \
               --label "type/bug" \
               --state open \
               --json number,title,labels,createdAt \
-              --jq '[.[] | select(.labels | map(.name) | index("bot-fix/attempted") | not)] | sort_by(.createdAt) | .[0].number // empty')
+              --jq --arg skip "$OPEN_FIXES" '
+                ($skip | split(",") | map(select(length > 0)) | map(tonumber? // empty)) as $skip_nums |
+                [.[] | select(
+                  (.labels | map(.name) | index("bot-fix/attempted") | not) and
+                  (.number | IN($skip_nums[]) | not)
+                )] | sort_by(.createdAt) | .[0].number // empty')
 
             if [[ -n "$ISSUE" ]]; then
               echo "Selected issue #$ISSUE from $PRIORITY"

@@ -14,6 +14,8 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 - Before merging any PR, rebase on origin/main (`git fetch origin main && git rebase origin/main`). Never use interactive rebase (`-i`).
 - Always read a file before editing it. The Edit tool rejects unread files, but context compaction erases prior reads -- re-read after any compaction event.
 - PreToolUse hooks block: commits on main, rm -rf on worktrees, --delete-branch with active worktrees, writes to main repo when worktrees exist. Work with these guards, not around them.
+- The host terminal is Warp. Do not attempt automated terminal manipulation via escape sequences (cursor position queries, TUI rendering, and similar sequences are intercepted by Warp's tmux control mode and silently fail).
+- The Bash tool runs in a non-interactive shell without `sudo` access. Do not attempt commands requiring elevated privileges -- provide manual instructions instead.
 
 ## Workflow Gates
 
