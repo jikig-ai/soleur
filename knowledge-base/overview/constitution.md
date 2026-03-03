@@ -30,6 +30,9 @@ Project principles organized by domain. Add principles as you learn them.
 - CSS is organized into `@layer` cascade layers in order: reset, tokens, base, layout, components, utilities; custom properties follow semantic naming (`--color-*`, `--font-*`, `--text-*`, `--space-*`)
 - CHANGELOG follows Keep a Changelog format with `### Added`, `### Changed`, `### Fixed`, `### Removed` section headers under `## [X.Y.Z] - YYYY-MM-DD` version entries
 - Plan files use `YYYY-MM-DD-<type>-<descriptive-name>-plan.md` filename format; learning files use `YYYY-MM-DD-<descriptive-slug>.md` format
+- Learning files must include YAML frontmatter with `title`, `date`, `category`, and `tags` fields; optional fields include `symptoms`, `module`, and `synced_to`
+- Plan files must include YAML frontmatter with `title` (conventional commit prefix), `type` (fix/feat), and `date` fields
+- Linting configuration overrides (`.markdownlint.json`, `.eslintrc`, etc.) must include inline comments or a companion doc explaining the rationale for each disabled rule
 
 ### Never
 
@@ -49,6 +52,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Prefer numeric literal underscores as thousand separators for readability (e.g., `3_000` instead of `3000`)
 - Prefer a language identifier after triple backticks in code blocks (e.g., ```bash, ```yaml -- never bare ```)
 - Prefer verb-noun naming for skill directories where applicable (e.g., `deploy-docs`, `release-announce`, `resolve-pr-parallel`)
+- Prefer `# --- Section Name ---` comment headers in shell scripts to separate logical sections
 
 ## Architecture
 
@@ -61,7 +65,7 @@ Project principles organized by domain. Add principles as you learn them.
 - When adding a new skill, manually register it in `docs/_data/skills.js` SKILL_CATEGORIES -- skill discovery does not recurse and the docs site will silently omit unregistered skills
 - After version bumps, diff root README agent/skill counts against plugin README counts -- they drift independently and have diverged multiple times
 - Organize agents by domain first (engineering/, etc.), then by function (review/, design/). Cross-domain agents stay at root level (research/, workflow/)
-- Skills must have a SKILL.md file and may include scripts/, references/, and assets/ subdirectories
+- Skills must have a SKILL.md file and may include scripts/, references/, and assets/ subdirectories; directories under `skills/` without SKILL.md must be deleted or converted to proper skills
 - Every SKILL.md interactive prompt (AskUserQuestion) must accept an `$ARGUMENTS` bypass path for programmatic callers -- agents and pipeline skills cannot answer interactive prompts; provide flag-based argument passthrough (e.g., `--name`, `--yes`) that skips the prompt when present
 - Lifecycle workflows with hooks must cover every state transition with a cleanup trigger; verify no gaps between create, ship, merge, and session-start
 - At session start, run `worktree-manager.sh cleanup-merged` to remove worktrees whose remote branches are [gone]; this is the recovery mechanism for the merge-then-session-end gap where cleanup was deferred

@@ -172,3 +172,4 @@ Remove a scheduled workflow.
 - **No label pre-creation** — The template instructs issue creation with a label but does not pre-create it. Add a `gh label create ... || true` step manually.
 - **No `timeout-minutes`** — The template does not set a job-level timeout. LLM-backed workflows should add `timeout-minutes` to prevent runaway billing.
 - **No `--allowedTools` in `claude_args`** — `claude-code-action` blocks Bash, Write, WebSearch, and WebFetch by default. Skills that create GitHub issues or perform web research silently fail without `--allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch` in `claude_args`.
+- **No cascading priority selection** — Generated workflows that select issues by label hardcode a single priority tier. When that tier is empty, the bot sits idle while higher-priority bugs accumulate. Manually add a priority cascade loop (p3 -> p2 -> p1) after generation.

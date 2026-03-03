@@ -9,6 +9,8 @@ Auto-detect, install, and register the Pencil MCP server with Claude Code CLI.
 
 **Prerequisite:** VS Code or Cursor must be installed. Pencil MCP requires a running IDE with the Pencil extension active. Pencil Desktop is optional.
 
+**Known limitation:** macOS detection uses unverified bundle ID `dev.pencil.desktop` -- falls back to PATH-based detection if incorrect.
+
 ## Phase 0: Dependency Check
 
 Run [check_deps.sh](./scripts/check_deps.sh) before proceeding. When invoked

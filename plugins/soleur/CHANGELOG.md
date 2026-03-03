@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.8.2] - 2026-03-03
+
+### Changed
+
+- **knowledge-base overview** -- Full refresh of agents.md (22 -> 61 agents, 2 -> 9 domain categories), skills.md (35 -> 55 skills in 14 categories), and README.md counts
+- **constitution** -- Added 5 new rules: learning file frontmatter, plan file frontmatter, linting config rationale, shell section headers, and skill directory SKILL.md enforcement
+- **seo-aeo skill** -- Added known-limitation note about wildcard User-agent detection gap
+- **pencil-setup skill** -- Added known-limitation note about unverified macOS bundle ID
+- **schedule skill** -- Added known-limitation note about cascading priority selection
+
+### Added
+
+- **telegram-bridge component doc** -- New component documentation for the standalone Telegram bridge app
+- **6 technical debt learnings** -- No unified test runner, timer-based async settling, Pencil bundle ID, index.ts mixed concerns, validate-seo wildcard gap, community skill missing SKILL.md
+
 ## [3.8.1] - 2026-03-03
 
 ### Fixed
