@@ -5,6 +5,8 @@ description: This skill should be used when announcing a new release. It parses 
 
 # release-announce Skill
 
+> **Manual fallback only.** The `version-bump-and-release.yml` GitHub Action now handles version bumping and GitHub Release creation automatically at merge time. This skill is only needed if the Action fails or for manual re-announcements of existing versions.
+
 **Purpose:** Generate a release announcement from CHANGELOG.md and create a GitHub Release. Discord notification is handled by the `release-announce` GitHub Actions workflow, triggered automatically when the release is published.
 
 ## Step 1: Read Version and Changelog

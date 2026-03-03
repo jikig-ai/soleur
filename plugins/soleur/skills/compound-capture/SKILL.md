@@ -305,7 +305,7 @@ If accepted, write the edit to the definition file. Then update the learning fil
 - If frontmatter exists but `synced_to` is absent: add `synced_to: [definition-name]`
 - If no YAML frontmatter block exists: prepend a minimal `---` block with only `synced_to: [definition-name]`
 
-Do NOT commit or version-bump -- the edits are staged for the normal workflow completion protocol.
+Do NOT commit -- the edits are staged for the normal workflow completion protocol.
 </step>
 
 </critical_sequence>
