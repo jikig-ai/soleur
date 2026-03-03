@@ -20,9 +20,9 @@
 **Files:** `knowledge-base/overview/constitution.md`
 
 ### 1.3 Add `--headless` bypass to work skill
-- [ ] Strip `--headless` from `$ARGUMENTS` before treating remainder as plan path
-- [ ] Forward `--headless` to compound and ship in Phase 4 handoff (when invoked directly)
-- [ ] Verify pipeline mode (file path detection) already covers all prompt bypasses — `--headless` should be redundant for work's own prompts
+- [x] Strip `--headless` from `$ARGUMENTS` before treating remainder as plan path
+- [x] Forward `--headless` to compound and ship in Phase 4 handoff (when invoked directly)
+- [x] Verify pipeline mode (file path detection) already covers all prompt bypasses — `--headless` should be redundant for work's own prompts
 
 **Files:** `plugins/soleur/skills/work/SKILL.md`
 
