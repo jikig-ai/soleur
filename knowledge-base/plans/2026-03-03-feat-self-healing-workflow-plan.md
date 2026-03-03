@@ -58,14 +58,14 @@ The analyst proposes the strongest viable enforcement for each deviation:
 
 ## Acceptance Criteria
 
-- [ ] New "Deviation Analyst" defined in `compound/SKILL.md` as sequential Phase 1.5 (after parallel fan-out, before Constitution Promotion)
-- [ ] Analyst reads AGENTS.md hard rules and constitution.md principles
-- [ ] Analyst reads session-state.md for pre-compaction deviations
-- [ ] Only flags Always/Never violations (not Prefer rules)
-- [ ] For each deviation, outputs: rule violated, evidence, proposed enforcement type
-- [ ] Hook proposals shown inline (draft script) during Constitution Promotion (Accept/Skip/Edit)
-- [ ] No schema changes to compound-capture
-- [ ] No new directories or files beyond the SKILL.md edit
+- [x] New "Deviation Analyst" defined in `compound/SKILL.md` as sequential Phase 1.5 (after parallel fan-out, before Constitution Promotion)
+- [x] Analyst reads AGENTS.md hard rules and constitution.md principles
+- [x] Analyst reads session-state.md for pre-compaction deviations
+- [x] Only flags Always/Never violations (not Prefer rules)
+- [x] For each deviation, outputs: rule violated, evidence, proposed enforcement type
+- [x] Hook proposals shown inline (draft script) during Constitution Promotion (Accept/Skip/Edit)
+- [x] No schema changes to compound-capture
+- [x] No new directories or files beyond the SKILL.md edit
 
 ## Test Scenarios
 
