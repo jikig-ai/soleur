@@ -60,7 +60,11 @@ Exact commands to match current counts (61 agents, 3 commands, 55 skills):
 - Commands: `find plugins/soleur/commands -name '*.md' | wc -l`
 - MCP servers: hardcoded or count from plugin.json `mcpServers` array
 
-Validate these produce correct counts before deploying.
+Validate these produce correct counts before deploying. If counts drift due to directory structure changes, update the find patterns in the Action.
+
+### Approximate Line References
+
+Line numbers in this plan (e.g., "constitution.md line 50") are from the time of writing and may shift if other PRs merge first. Always read files before editing.
 
 ## Acceptance Criteria
 
@@ -88,6 +92,8 @@ Validate these produce correct counts before deploying.
 - Given two PRs merge within 5 seconds, when both Actions trigger, then the concurrency group queues them and both bump sequentially (3.8.3 then 3.8.4)
 - Given a direct push to main (no PR), when the Action runs, then it skips gracefully (no PR found)
 - Given a PR body contains shell metacharacters in the Changelog section, when the Action runs, then the content is safely written to CHANGELOG.md without injection
+- Given a PR body has a `## Changelog` heading with nothing under it, when the Action runs, then it falls back to the PR title (does not produce an empty entry)
+- Given a `workflow_dispatch` trigger with `bump_type: minor`, when the Action runs, then it bumps MINOR regardless of labels (manual escape hatch)
 
 ## Implementation Phases
 
@@ -98,7 +104,7 @@ Validate these produce correct counts before deploying.
 #### `.github/workflows/version-bump-and-release.yml`
 
 Workflow steps:
-1. Trigger: `on: push: branches: [main]` (no path filter — the Action itself decides whether to bump)
+1. Trigger: `on: push: branches: [main]` (no path filter — the Action itself decides whether to bump) + `workflow_dispatch` with `bump_type` choice input (escape hatch for manual releases)
 2. Concurrency: `group: "version-bump"`, `cancel-in-progress: false`
 3. Permissions: `contents: write`
 4. Checkout with `fetch-depth: 2` (need parent commit to diff)
@@ -117,9 +123,20 @@ Workflow steps:
     - `marketplace.json`: update `plugins[0].version` (via `jq`)
     - `README.md` (root): update badge URL (via `sed`)
     - `bug_report.yml`: update placeholder (via `sed`)
-14. **Commit and push:** `git add -A && git commit -m "chore(release): vX.Y.Z" && git push`
-15. **Create GitHub Release:** `gh release create "vNEXT" --notes-file /tmp/changelog.md`
-16. **Post to Discord:** Same pattern as current auto-release.yml (with secret check, truncation, jq payload)
+14. **Verify consistency:** Check all 6 files now contain the same version string before committing. If any mismatch, abort without pushing.
+15. **Commit and push:** Stage only the 6 explicit sync target files (never `git add -A`):
+    ```bash
+    git add plugins/soleur/.claude-plugin/plugin.json \
+           plugins/soleur/CHANGELOG.md \
+           plugins/soleur/README.md \
+           .claude-plugin/marketplace.json \
+           README.md \
+           .github/ISSUE_TEMPLATE/bug_report.yml
+    git commit -m "chore(release): vX.Y.Z"
+    git push
+    ```
+16. **Create GitHub Release:** `gh release create "vNEXT" --notes-file /tmp/changelog.md`
+17. **Post to Discord:** Same pattern as current auto-release.yml (with secret check, truncation, jq payload)
 
 #### `.github/PULL_REQUEST_TEMPLATE.md`
 
@@ -143,6 +160,7 @@ Workflow steps:
 Changes:
 - **Remove Phase 3.5** (merge main before version bump) — no longer needed
 - **Remove Phase 5** (version bump sealing operation) — moved to CI
+- **Remove version conflict resolution from Phase 7.5** — version files are never modified in feature branches, so conflict routing strategies for plugin.json/README badge/bug_report.yml are dead code
 - **Update Phase 6 checklist** — remove version-related items
 - **Update Phase 7** (PR creation) — add steps:
   - Analyze diff to determine bump type (MINOR/PATCH/MAJOR)
@@ -196,14 +214,17 @@ Changes:
 - Delete entirely (replaced by version-bump-and-release.yml)
 
 **File:** `.github/workflows/deploy-docs.yml`
-- Add `workflow_run` trigger:
+- Add `workflow_run` trigger with success check:
   ```yaml
   on:
     workflow_run:
       workflows: ["Version Bump and Release"]
       types: [completed]
+  jobs:
+    deploy:
+      if: ${{ github.event.workflow_run.conclusion == 'success' }}
   ```
-- This ensures docs rebuild after the version commit lands
+- This ensures docs rebuild after a successful version commit (not after failed bumps)
 
 ### Phase 6: Fix Pre-Existing Drift
 
@@ -239,7 +260,7 @@ Changes:
 - `.github/workflows/auto-release.yml`
 
 ### Files to Modify (10)
-- `plugins/soleur/skills/ship/SKILL.md` — remove Phase 3.5 + 5, add label + changelog
+- `plugins/soleur/skills/ship/SKILL.md` — remove Phase 3.5 + 5 + 7.5 version conflict routing, add label + changelog
 - `plugins/soleur/skills/merge-pr/SKILL.md` — remove Phase 4
 - `plugins/soleur/skills/one-shot/SKILL.md` — update ship description
 - `plugins/soleur/skills/compound-capture/SKILL.md` — minor rewording
