@@ -97,6 +97,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Run SpecFlow analysis (spec-flow-analyzer agent) on features that modify CI workflows or GitHub Actions -- it catches repo configuration blockers (auto-merge settings, rulesets, token permissions) before implementation begins
 - Multi-agent cascades (one agent spawning specialists via Task tool) require a pre-flight checklist: (1) `Task` must be in `--allowedTools` for CI workflows, (2) every specialist must have an explicit write target path in the delegation table, (3) every specialist must produce a writable artifact -- read-only analysis tasks need a concrete output file. Cascade failures are silent: missing tools, unspecified write targets, and no-output specialists all fail without error messages
 - Scheduled workflows that select issues by label must cascade through priority levels (p3-low → p2-medium → p1-high) rather than hardcoding a single tier -- a fixed filter produces idle runs when the target tier is empty while higher-priority bugs accumulate
+- Document environment-specific constraints (terminal capabilities, shell limitations) in AGENTS.md Hard Rules when Claude violates them without being told -- these are loaded every turn and prevent dead-end attempts
 
 ### Never
 

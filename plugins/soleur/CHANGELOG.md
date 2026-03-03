@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.8.1] - 2026-03-03
+
+### Fixed
+
+- **one-shot skill** -- Added explicit "immediately continue to step 4" instruction after work returns, preventing the orchestrator from stalling at the work-to-review handoff
+
 ## [3.8.0] - 2026-03-03
 
 ### Added
