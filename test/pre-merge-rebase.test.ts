@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, rmSync, chmodSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -11,12 +11,27 @@ const HOOK_PATH = join(
   "pre-merge-rebase.sh"
 );
 
+const GIT_ENV = {
+  ...process.env,
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_CONFIG_GLOBAL: "/dev/null",
+};
+
 function makeInput(command: string, cwd?: string): string {
   return JSON.stringify({
     tool_name: "Bash",
     tool_input: { command },
     ...(cwd ? { cwd } : {}),
   });
+}
+
+function spawnChecked(args: string[], opts: { cwd: string }) {
+  const result = Bun.spawnSync(args, { ...opts, env: GIT_ENV });
+  if (result.exitCode !== 0) {
+    const stderr = new TextDecoder().decode(result.stderr);
+    throw new Error(`Setup failed: ${args.join(" ")} exited ${result.exitCode}: ${stderr}`);
+  }
+  return result;
 }
 
 async function runHook(
@@ -26,6 +41,7 @@ async function runHook(
     stdin: new Response(input),
     stdout: "pipe",
     stderr: "pipe",
+    env: GIT_ENV,
   });
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -44,27 +60,36 @@ describe("pre-merge-rebase hook (no git repo needed)", () => {
     const result = await runHook(makeInput("gh pr view 123"));
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
   });
 
   test("non-gh command passes through immediately", async () => {
     const result = await runHook(makeInput("npm test"));
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
   });
 
   test("git commit command passes through immediately", async () => {
     const result = await runHook(makeInput("git commit -m 'fix: something'"));
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+  });
+
+  test("gh pr merge-request does not trigger hook (word boundary)", async () => {
+    const result = await runHook(makeInput("gh pr merge-request 123"));
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
   });
 
   test("chained command with gh pr merge is detected", async () => {
-    // This should be detected -- but without a valid cwd it will fail-open
+    // Detected but fails-open due to /nonexistent cwd
     const result = await runHook(
       makeInput("git add -A && gh pr merge 123 --squash --auto", "/nonexistent")
     );
     expect(result.exitCode).toBe(0);
-    // Without a valid git dir, it exits early (fail-open)
   });
 
   test("semicolon-chained gh pr merge is detected", async () => {
@@ -91,28 +116,21 @@ describe("pre-merge-rebase hook (with git repo)", () => {
   let remoteDir: string;
 
   beforeAll(() => {
-    // Create a bare "remote" repo and a local clone
     remoteDir = mkdtempSync(join(tmpdir(), "hook-test-remote-"));
     repoDir = mkdtempSync(join(tmpdir(), "hook-test-local-"));
 
-    // Initialize bare remote
-    Bun.spawnSync(["git", "init", "--bare"], { cwd: remoteDir });
+    spawnChecked(["git", "init", "--bare", "--initial-branch=main"], { cwd: remoteDir });
 
-    // Clone to local
     rmSync(repoDir, { recursive: true });
-    Bun.spawnSync(["git", "clone", remoteDir, repoDir]);
+    spawnChecked(["git", "clone", remoteDir, repoDir], { cwd: tmpdir() });
 
-    // Configure local repo
-    Bun.spawnSync(["git", "config", "user.email", "test@test.com"], {
+    spawnChecked(["git", "config", "user.email", "test@test.com"], { cwd: repoDir });
+    spawnChecked(["git", "config", "user.name", "Test"], { cwd: repoDir });
+
+    spawnChecked(["bash", "-c", "echo 'init' > file.txt && git add file.txt && git commit -m 'init'"], {
       cwd: repoDir,
     });
-    Bun.spawnSync(["git", "config", "user.name", "Test"], { cwd: repoDir });
-
-    // Create initial commit on main
-    Bun.spawnSync(["bash", "-c", "echo 'init' > file.txt && git add file.txt && git commit -m 'init'"], {
-      cwd: repoDir,
-    });
-    Bun.spawnSync(["git", "push", "origin", "main"], { cwd: repoDir });
+    spawnChecked(["git", "push", "origin", "main"], { cwd: repoDir });
   });
 
   afterAll(() => {
@@ -121,14 +139,12 @@ describe("pre-merge-rebase hook (with git repo)", () => {
   });
 
   beforeEach(() => {
-    // Reset local repo to clean state on main
-    Bun.spawnSync(["git", "checkout", "main"], { cwd: repoDir });
-    Bun.spawnSync(["git", "reset", "--hard", "origin/main"], { cwd: repoDir });
-    // Clean up any test branches
-    const branches = Bun.spawnSync(
-      ["git", "branch", "--list", "test-*"],
-      { cwd: repoDir }
-    );
+    spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
+    spawnChecked(["git", "reset", "--hard", "origin/main"], { cwd: repoDir });
+    const branches = Bun.spawnSync(["git", "branch", "--list", "test-*"], {
+      cwd: repoDir,
+      env: GIT_ENV,
+    });
     const branchList = new TextDecoder()
       .decode(branches.stdout)
       .trim()
@@ -136,65 +152,57 @@ describe("pre-merge-rebase hook (with git repo)", () => {
       .filter(Boolean)
       .map((b) => b.trim());
     for (const branch of branchList) {
-      Bun.spawnSync(["git", "branch", "-D", branch], { cwd: repoDir });
+      Bun.spawnSync(["git", "branch", "-D", branch], { cwd: repoDir, env: GIT_ENV });
     }
   });
 
   test("branch already up-to-date with main proceeds without rebase", async () => {
-    // Create a feature branch from current main
-    Bun.spawnSync(["git", "checkout", "-b", "test-uptodate"], { cwd: repoDir });
-    Bun.spawnSync(
+    spawnChecked(["git", "checkout", "-b", "test-uptodate"], { cwd: repoDir });
+    spawnChecked(
       ["bash", "-c", "echo 'feature' > feature.txt && git add feature.txt && git commit -m 'feature'"],
       { cwd: repoDir }
     );
-    Bun.spawnSync(["git", "push", "origin", "test-uptodate"], { cwd: repoDir });
+    spawnChecked(["git", "push", "origin", "test-uptodate"], { cwd: repoDir });
 
     const result = await runHook(
       makeInput("gh pr merge 123 --squash --auto", repoDir)
     );
 
     expect(result.exitCode).toBe(0);
-    // Should see the "already up-to-date" message on stderr
     expect(result.stderr).toContain("up-to-date");
-    // No JSON output (no deny, no additionalContext needed)
     expect(result.stdout).toBe("");
   });
 
   test("branch behind main triggers rebase and force-push", async () => {
-    // Create a feature branch
-    Bun.spawnSync(["git", "checkout", "-b", "test-behind"], { cwd: repoDir });
-    Bun.spawnSync(
+    spawnChecked(["git", "checkout", "-b", "test-behind"], { cwd: repoDir });
+    spawnChecked(
       ["bash", "-c", "echo 'feature' > feature.txt && git add feature.txt && git commit -m 'feature'"],
       { cwd: repoDir }
     );
-    Bun.spawnSync(["git", "push", "origin", "test-behind"], { cwd: repoDir });
+    spawnChecked(["git", "push", "origin", "test-behind"], { cwd: repoDir });
 
-    // Now advance main on remote (simulate another merged PR)
-    Bun.spawnSync(["git", "checkout", "main"], { cwd: repoDir });
-    Bun.spawnSync(
+    spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
+    spawnChecked(
       ["bash", "-c", "echo 'new-on-main' > main-change.txt && git add main-change.txt && git commit -m 'main advance'"],
       { cwd: repoDir }
     );
-    Bun.spawnSync(["git", "push", "origin", "main"], { cwd: repoDir });
+    spawnChecked(["git", "push", "origin", "main"], { cwd: repoDir });
 
-    // Switch back to feature branch (now behind main)
-    Bun.spawnSync(["git", "checkout", "test-behind"], { cwd: repoDir });
+    spawnChecked(["git", "checkout", "test-behind"], { cwd: repoDir });
 
     const result = await runHook(
       makeInput("gh pr merge 123 --squash --auto", repoDir)
     );
 
     expect(result.exitCode).toBe(0);
-    // Should return additionalContext about successful rebase
     const output = JSON.parse(result.stdout);
     expect(output.hookSpecificOutput.additionalContext).toContain("rebased");
     expect(output.hookSpecificOutput.additionalContext).toContain("test-behind");
   });
 
   test("uncommitted changes blocks merge with deny", async () => {
-    Bun.spawnSync(["git", "checkout", "-b", "test-dirty"], { cwd: repoDir });
-    // Create uncommitted change
-    Bun.spawnSync(["bash", "-c", "echo 'dirty' >> file.txt"], { cwd: repoDir });
+    spawnChecked(["git", "checkout", "-b", "test-dirty"], { cwd: repoDir });
+    Bun.spawnSync(["bash", "-c", "echo 'dirty' >> file.txt"], { cwd: repoDir, env: GIT_ENV });
 
     const result = await runHook(
       makeInput("gh pr merge 123 --squash --auto", repoDir)
@@ -209,10 +217,10 @@ describe("pre-merge-rebase hook (with git repo)", () => {
   });
 
   test("staged uncommitted changes blocks merge with deny", async () => {
-    Bun.spawnSync(["git", "checkout", "-b", "test-staged"], { cwd: repoDir });
+    spawnChecked(["git", "checkout", "-b", "test-staged"], { cwd: repoDir });
     Bun.spawnSync(
       ["bash", "-c", "echo 'staged' >> file.txt && git add file.txt"],
-      { cwd: repoDir }
+      { cwd: repoDir, env: GIT_ENV }
     );
 
     const result = await runHook(
@@ -228,24 +236,21 @@ describe("pre-merge-rebase hook (with git repo)", () => {
   });
 
   test("rebase conflict aborts and blocks with file list", async () => {
-    // Create a feature branch that modifies same file as main
-    Bun.spawnSync(["git", "checkout", "-b", "test-conflict"], { cwd: repoDir });
-    Bun.spawnSync(
+    spawnChecked(["git", "checkout", "-b", "test-conflict"], { cwd: repoDir });
+    spawnChecked(
       ["bash", "-c", "echo 'feature-content' > file.txt && git add file.txt && git commit -m 'feature change'"],
       { cwd: repoDir }
     );
-    Bun.spawnSync(["git", "push", "origin", "test-conflict"], { cwd: repoDir });
+    spawnChecked(["git", "push", "origin", "test-conflict"], { cwd: repoDir });
 
-    // Advance main with conflicting change
-    Bun.spawnSync(["git", "checkout", "main"], { cwd: repoDir });
-    Bun.spawnSync(
+    spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
+    spawnChecked(
       ["bash", "-c", "echo 'main-content' > file.txt && git add file.txt && git commit -m 'main conflict'"],
       { cwd: repoDir }
     );
-    Bun.spawnSync(["git", "push", "origin", "main"], { cwd: repoDir });
+    spawnChecked(["git", "push", "origin", "main"], { cwd: repoDir });
 
-    // Switch back to feature branch
-    Bun.spawnSync(["git", "checkout", "test-conflict"], { cwd: repoDir });
+    spawnChecked(["git", "checkout", "test-conflict"], { cwd: repoDir });
 
     const result = await runHook(
       makeInput("gh pr merge 123 --squash --auto", repoDir)
@@ -264,17 +269,15 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     // Verify rebase was aborted (working tree is clean)
     const status = Bun.spawnSync(["git", "status", "--short"], {
       cwd: repoDir,
+      env: GIT_ENV,
     });
     expect(new TextDecoder().decode(status.stdout).trim()).toBe("");
   });
 
   test("detached HEAD allows merge with warning", async () => {
-    // Detach HEAD
-    const headSha = Bun.spawnSync(["git", "rev-parse", "HEAD"], {
-      cwd: repoDir,
-    });
+    const headSha = spawnChecked(["git", "rev-parse", "HEAD"], { cwd: repoDir });
     const sha = new TextDecoder().decode(headSha.stdout).trim();
-    Bun.spawnSync(["git", "checkout", sha], { cwd: repoDir });
+    Bun.spawnSync(["git", "checkout", sha], { cwd: repoDir, env: GIT_ENV });
 
     const result = await runHook(
       makeInput("gh pr merge 123 --squash --auto", repoDir)
@@ -285,28 +288,70 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     expect(result.stdout).toBe("");
   });
 
+  test("main branch skips rebase silently", async () => {
+    const result = await runHook(
+      makeInput("gh pr merge 123 --squash --auto", repoDir)
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("");
+  });
+
+  test("push failure after rebase blocks merge with deny", async () => {
+    spawnChecked(["git", "checkout", "-b", "test-pushfail"], { cwd: repoDir });
+    spawnChecked(
+      ["bash", "-c", "echo 'feature' > pushfail.txt && git add pushfail.txt && git commit -m 'feature'"],
+      { cwd: repoDir }
+    );
+    spawnChecked(["git", "push", "origin", "test-pushfail"], { cwd: repoDir });
+
+    spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
+    spawnChecked(
+      ["bash", "-c", "echo 'advance' > advance2.txt && git add advance2.txt && git commit -m 'advance'"],
+      { cwd: repoDir }
+    );
+    spawnChecked(["git", "push", "origin", "main"], { cwd: repoDir });
+
+    spawnChecked(["git", "checkout", "test-pushfail"], { cwd: repoDir });
+
+    // Break only the push URL so fetch still works but push fails.
+    // This simulates a network error on push without affecting fetch.
+    spawnChecked(["git", "remote", "set-url", "--push", "origin", "/nonexistent-remote"], { cwd: repoDir });
+
+    try {
+      const result = await runHook(
+        makeInput("gh pr merge 123 --squash --auto", repoDir)
+      );
+
+      expect(result.exitCode).toBe(0);
+      const output = JSON.parse(result.stdout);
+      expect(output.hookSpecificOutput.permissionDecision).toBe("deny");
+      expect(output.hookSpecificOutput.permissionDecisionReason).toContain(
+        "force-push failed"
+      );
+    } finally {
+      // Restore push URL and abort any rebase state
+      spawnChecked(["git", "remote", "set-url", "--push", "origin", remoteDir], { cwd: repoDir });
+      Bun.spawnSync(["git", "rebase", "--abort"], { cwd: repoDir, env: GIT_ENV });
+    }
+  });
+
   test("hook is idempotent -- second run after rebase shows up-to-date", async () => {
-    // Create feature branch behind main
-    Bun.spawnSync(["git", "checkout", "-b", "test-idempotent"], {
-      cwd: repoDir,
-    });
-    Bun.spawnSync(
+    spawnChecked(["git", "checkout", "-b", "test-idempotent"], { cwd: repoDir });
+    spawnChecked(
       ["bash", "-c", "echo 'feature' > feature2.txt && git add feature2.txt && git commit -m 'feature'"],
       { cwd: repoDir }
     );
-    Bun.spawnSync(["git", "push", "origin", "test-idempotent"], {
-      cwd: repoDir,
-    });
+    spawnChecked(["git", "push", "origin", "test-idempotent"], { cwd: repoDir });
 
-    // Advance main
-    Bun.spawnSync(["git", "checkout", "main"], { cwd: repoDir });
-    Bun.spawnSync(
+    spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
+    spawnChecked(
       ["bash", "-c", "echo 'advance' > advance.txt && git add advance.txt && git commit -m 'advance'"],
       { cwd: repoDir }
     );
-    Bun.spawnSync(["git", "push", "origin", "main"], { cwd: repoDir });
+    spawnChecked(["git", "push", "origin", "main"], { cwd: repoDir });
 
-    Bun.spawnSync(["git", "checkout", "test-idempotent"], { cwd: repoDir });
+    spawnChecked(["git", "checkout", "test-idempotent"], { cwd: repoDir });
 
     // First run: triggers rebase
     const first = await runHook(
@@ -314,9 +359,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     );
     expect(first.exitCode).toBe(0);
     const firstOutput = JSON.parse(first.stdout);
-    expect(firstOutput.hookSpecificOutput.additionalContext).toContain(
-      "rebased"
-    );
+    expect(firstOutput.hookSpecificOutput.additionalContext).toContain("rebased");
 
     // Second run: should be up-to-date
     const second = await runHook(

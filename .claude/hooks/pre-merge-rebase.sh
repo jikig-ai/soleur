@@ -2,42 +2,25 @@
 # PreToolUse hook: auto-rebase against origin/main before gh pr merge.
 # Ensures the branch is current before merge to prevent post-queue conflicts.
 #
-# Design: This hook has SIDE EFFECTS (rebase + push), unlike guardrails.sh
-# which is pure inspection. Side effects are always beneficial (branch becomes
-# more current) and non-reversible (acceptable because staleness is never better).
-#
 # Error handling: fail-open on infrastructure errors (network, non-git context),
-# fail-closed on logical errors (conflicts, dirty tree).
+# fail-closed on logical errors (conflicts, dirty tree, push failure).
 
 set -eo pipefail
-# Note: -u (nounset) is omitted intentionally. Hook scripts must return JSON
-# on failure paths, and an unset variable causing immediate exit prevents the
-# structured error response that Claude Code needs to show the agent why the
-# tool call was blocked.
+# -u (nounset) omitted: hook failure paths must return JSON, not crash silently.
 
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
 
 # Early exit: only intercept gh pr merge commands.
-# Uses the (^|&&|\|\||;) pattern from guardrails.sh to catch chained commands.
-if ! echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+merge'; then
+# Word boundary (\s|$) prevents false positives on hypothetical merge-* subcommands.
+# Chain operator pattern from guardrails.sh catches chained commands.
+if ! echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*gh\s+pr\s+merge(\s|$)'; then
   exit 0
 fi
 
-# Determine the working directory.
-# Priority: cd in command > cwd from hook input > fail open.
-GIT_DIR=""
-if echo "$COMMAND" | grep -qE '^\s*cd\s+'; then
-  GIT_DIR=$(echo "$COMMAND" | sed -nE 's/^\s*cd\s+"?([^"&;]+)"?.*/\1/p' | xargs)
-fi
-HOOK_CWD=$(echo "$INPUT" | jq -r '.cwd // ""')
-
-if [[ -n "$GIT_DIR" ]] && [[ -d "$GIT_DIR" ]]; then
-  WORK_DIR="$GIT_DIR"
-elif [[ -n "$HOOK_CWD" ]] && [[ -d "$HOOK_CWD" ]]; then
-  WORK_DIR="$HOOK_CWD"
-else
-  # Not in a recognizable directory -- fail open
+# Determine working directory from hook input (.cwd is authoritative).
+WORK_DIR=$(echo "$INPUT" | jq -r '.cwd // ""')
+if [[ -z "$WORK_DIR" ]] || [[ ! -d "$WORK_DIR" ]]; then
   exit 0
 fi
 
@@ -50,6 +33,11 @@ fi
 CURRENT_BRANCH=$(git -C "$WORK_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null)
 if [[ "$CURRENT_BRANCH" == "HEAD" ]]; then
   echo "Warning: Detached HEAD state. Skipping auto-rebase." >&2
+  exit 0
+fi
+
+# Skip if already on main/master -- nothing to rebase
+if [[ "$CURRENT_BRANCH" == "main" ]] || [[ "$CURRENT_BRANCH" == "master" ]]; then
   exit 0
 fi
 
@@ -68,7 +56,7 @@ if ! git -C "$WORK_DIR" diff --quiet HEAD 2>/dev/null || \
 fi
 
 # Fetch latest main -- fail open on network error
-if ! git -C "$WORK_DIR" fetch origin main 2>/dev/null; then
+if ! git -C "$WORK_DIR" fetch origin main >/dev/null 2>&1; then
   echo "Warning: Could not fetch origin/main (network error). Proceeding with merge." >&2
   exit 0
 fi
@@ -106,16 +94,17 @@ if ! git -C "$WORK_DIR" rebase origin/main >/dev/null 2>&1; then
 fi
 
 # Rebase succeeded -- force push to update the remote branch.
-# --force-with-lease: prevents overwriting remote work pushed by others.
-# --force-if-includes: ensures local branch has incorporated remote tracking
-# branch state, protecting against background fetches weakening the lease.
-PUSH_OUTPUT=""
-if ! PUSH_OUTPUT=$(git -C "$WORK_DIR" push --force-with-lease --force-if-includes 2>&1); then
-  # Try fallback without --force-if-includes for older git versions
-  if ! PUSH_OUTPUT=$(git -C "$WORK_DIR" push --force-with-lease 2>&1); then
-    echo "Warning: Rebase succeeded but force-push failed: $PUSH_OUTPUT" >&2
-    # Still allow merge -- the agent may need to push manually
-  fi
+# --force-with-lease --force-if-includes: prevents overwriting remote work
+# and guards against background fetches weakening the lease (Git 2.30+).
+if ! PUSH_OUTPUT=$(git -C "$WORK_DIR" push --force-with-lease --force-if-includes origin HEAD 2>&1); then
+  jq -n --arg output "$PUSH_OUTPUT" '{
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: ("BLOCKED: Rebase succeeded but force-push failed. Push manually before merging. Error: " + $output)
+    }
+  }'
+  exit 0
 fi
 
 # Return success with context so the agent knows what happened
