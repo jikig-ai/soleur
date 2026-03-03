@@ -1,0 +1,361 @@
+name: Version Bump and Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: 'Version bump type (escape hatch for manual releases)'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+concurrency:
+  group: version-bump
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 2
+          token: ${{ github.token }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Check if plugin files changed
+        id: check_plugin
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Plugin bump forced via workflow_dispatch"
+            exit 0
+          fi
+
+          CHANGED=$(git diff --name-only HEAD~1 -- plugins/soleur/ | head -1)
+          if [ -z "$CHANGED" ]; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "No plugin files changed, skipping version bump"
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Plugin files changed, proceeding with version bump"
+          fi
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+
+      - name: Find merged PR
+        if: steps.check_plugin.outputs.changed == 'true'
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          DISPATCH_BUMP: ${{ github.event.inputs.bump_type }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "number=" >> $GITHUB_OUTPUT
+            echo "title=Manual version bump" >> $GITHUB_OUTPUT
+            echo "labels=" >> $GITHUB_OUTPUT
+            echo "" > /tmp/pr_body.txt
+            echo "body_file=/tmp/pr_body.txt" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Parse PR number from squash-merge commit message: "title (#NNN)"
+          PR_NUM=$(echo "$COMMIT_MSG" | grep -oP '\(#\K\d+(?=\))' | head -1)
+
+          if [ -z "$PR_NUM" ]; then
+            echo "::warning::No PR number found in commit message, skipping"
+            echo "number=" >> $GITHUB_OUTPUT
+            # Use first line of commit message as title
+            FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
+            echo "title=$FIRST_LINE" >> $GITHUB_OUTPUT
+            echo "labels=" >> $GITHUB_OUTPUT
+            echo "" > /tmp/pr_body.txt
+            echo "body_file=/tmp/pr_body.txt" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "number=$PR_NUM" >> $GITHUB_OUTPUT
+
+          # Fetch PR metadata
+          PR_TITLE=$(gh pr view "$PR_NUM" --json title --jq '.title' 2>/dev/null || echo "")
+          echo "title=$PR_TITLE" >> $GITHUB_OUTPUT
+
+          PR_LABELS=$(gh pr view "$PR_NUM" --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+          echo "labels=$PR_LABELS" >> $GITHUB_OUTPUT
+
+          # Write PR body to temp file to avoid shell interpolation issues
+          gh pr view "$PR_NUM" --json body --jq '.body // ""' > /tmp/pr_body.txt 2>/dev/null || echo "" > /tmp/pr_body.txt
+
+          echo "body_file=/tmp/pr_body.txt" >> $GITHUB_OUTPUT
+
+      - name: Determine bump type
+        if: steps.check_plugin.outputs.changed == 'true'
+        id: bump
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_BUMP: ${{ github.event.inputs.bump_type }}
+          PR_LABELS: ${{ steps.pr.outputs.labels }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "type=$DISPATCH_BUMP" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          if echo "$PR_LABELS" | grep -q "semver:major"; then
+            echo "type=major" >> $GITHUB_OUTPUT
+          elif echo "$PR_LABELS" | grep -q "semver:minor"; then
+            echo "type=minor" >> $GITHUB_OUTPUT
+          elif echo "$PR_LABELS" | grep -q "semver:patch"; then
+            echo "type=patch" >> $GITHUB_OUTPUT
+          else
+            echo "::warning::No semver label found on PR, defaulting to patch"
+            echo "type=patch" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Compute next version
+        if: steps.check_plugin.outputs.changed == 'true'
+        id: version
+        run: |
+          CURRENT=$(jq -r '.version' plugins/soleur/.claude-plugin/plugin.json)
+          echo "current=$CURRENT" >> $GITHUB_OUTPUT
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          BUMP_TYPE="${{ steps.bump.outputs.type }}"
+
+          case "$BUMP_TYPE" in
+            major) NEXT="$((MAJOR + 1)).0.0" ;;
+            minor) NEXT="${MAJOR}.$((MINOR + 1)).0" ;;
+            patch) NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+          esac
+
+          echo "next=$NEXT" >> $GITHUB_OUTPUT
+          echo "tag=v$NEXT" >> $GITHUB_OUTPUT
+          echo "Bumping $CURRENT -> $NEXT ($BUMP_TYPE)"
+
+      - name: Check idempotency
+        if: steps.check_plugin.outputs.changed == 'true'
+        id: idempotency
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" &>/dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Release $TAG already exists, skipping"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Extract changelog from PR body
+        if: steps.check_plugin.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
+        id: changelog
+        env:
+          PR_TITLE: ${{ steps.pr.outputs.title }}
+          NEXT: ${{ steps.version.outputs.next }}
+        run: |
+          BODY_FILE="/tmp/pr_body.txt"
+          TODAY=$(date +%Y-%m-%d)
+
+          # Extract content between ## Changelog and next ## heading
+          CHANGELOG=""
+          if [ -f "$BODY_FILE" ] && [ -s "$BODY_FILE" ]; then
+            CHANGELOG=$(awk '/^## Changelog/{found=1; next} /^## /{if(found) exit} found{print}' "$BODY_FILE")
+
+            # Trim leading/trailing whitespace
+            CHANGELOG=$(echo "$CHANGELOG" | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')
+          fi
+
+          # Fallback to PR title if no changelog section or empty
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="- $PR_TITLE"
+          fi
+
+          # Write changelog entry to temp file (safe from shell interpolation)
+          {
+            echo "## [$NEXT] - $TODAY"
+            echo ""
+            echo "$CHANGELOG"
+          } > /tmp/changelog_entry.txt
+
+          # Write release notes (just the body, no heading)
+          echo "$CHANGELOG" > /tmp/release_notes.txt
+
+      - name: Compute component counts
+        if: steps.check_plugin.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
+        id: counts
+        run: |
+          AGENTS=$(find plugins/soleur/agents -name '*.md' ! -name 'README.md' ! -name 'AGENTS.md' | wc -l)
+          SKILLS=$(find plugins/soleur/skills -name 'SKILL.md' | wc -l)
+          COMMANDS=$(find plugins/soleur/commands -name '*.md' | wc -l)
+          MCP_SERVERS=$(jq '.mcpServers | length' plugins/soleur/.claude-plugin/plugin.json)
+
+          echo "agents=$AGENTS" >> $GITHUB_OUTPUT
+          echo "skills=$SKILLS" >> $GITHUB_OUTPUT
+          echo "commands=$COMMANDS" >> $GITHUB_OUTPUT
+          echo "mcp_servers=$MCP_SERVERS" >> $GITHUB_OUTPUT
+          echo "Counts: $AGENTS agents, $COMMANDS commands, $SKILLS skills, $MCP_SERVERS MCP servers"
+
+      - name: Update version files
+        if: steps.check_plugin.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+          CURRENT: ${{ steps.version.outputs.current }}
+          AGENTS: ${{ steps.counts.outputs.agents }}
+          SKILLS: ${{ steps.counts.outputs.skills }}
+          COMMANDS: ${{ steps.counts.outputs.commands }}
+          MCP_SERVERS: ${{ steps.counts.outputs.mcp_servers }}
+        run: |
+          # 1. plugin.json -- version + description with updated counts
+          DESCRIPTION="A full AI organization across engineering, finance, marketing, legal, operations, product, sales, and support. ${AGENTS} agents, ${COMMANDS} commands, ${SKILLS} skills, and ${MCP_SERVERS} MCP servers that compound your company knowledge over time."
+          jq --arg v "$NEXT" --arg d "$DESCRIPTION" \
+            '.version = $v | .description = $d' \
+            plugins/soleur/.claude-plugin/plugin.json > /tmp/plugin.json
+          mv /tmp/plugin.json plugins/soleur/.claude-plugin/plugin.json
+
+          # 2. CHANGELOG.md -- insert new version entry before the first existing version
+          awk -v entry_file="/tmp/changelog_entry.txt" '
+            /^## \[/ && !inserted {
+              while ((getline line < entry_file) > 0) print line
+              print ""
+              inserted=1
+            }
+            { print }
+          ' plugins/soleur/CHANGELOG.md > /tmp/CHANGELOG.md
+          mv /tmp/CHANGELOG.md plugins/soleur/CHANGELOG.md
+
+          # 3. marketplace.json -- update plugins[0].version
+          jq --arg v "$NEXT" '.plugins[0].version = $v' \
+            .claude-plugin/marketplace.json > /tmp/marketplace.json
+          mv /tmp/marketplace.json .claude-plugin/marketplace.json
+
+          # 4. Root README.md -- update version badge
+          sed -i "s|version-${CURRENT}-blue|version-${NEXT}-blue|g" README.md
+
+          # 5. bug_report.yml -- update placeholder
+          sed -i "s|placeholder: \"${CURRENT}\"|placeholder: \"${NEXT}\"|g" .github/ISSUE_TEMPLATE/bug_report.yml
+
+          # 6. Plugin README.md -- update counts in description text
+          sed -i "s|[0-9]\+ agents, [0-9]\+ commands, [0-9]\+ skills|${AGENTS} agents, ${COMMANDS} commands, ${SKILLS} skills|g" plugins/soleur/README.md
+
+          # Update root README counts line
+          sed -i "s|[0-9]\+ agents across|${AGENTS} agents across|g" README.md
+
+      - name: Verify version consistency
+        if: steps.check_plugin.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+        run: |
+          PLUGIN_V=$(jq -r '.version' plugins/soleur/.claude-plugin/plugin.json)
+          MARKET_V=$(jq -r '.plugins[0].version' .claude-plugin/marketplace.json)
+
+          ERRORS=0
+          if [ "$PLUGIN_V" != "$NEXT" ]; then
+            echo "::error::plugin.json version mismatch: expected $NEXT, got $PLUGIN_V"
+            ERRORS=$((ERRORS + 1))
+          fi
+          if [ "$MARKET_V" != "$NEXT" ]; then
+            echo "::error::marketplace.json version mismatch: expected $NEXT, got $MARKET_V"
+            ERRORS=$((ERRORS + 1))
+          fi
+          if ! grep -q "version-${NEXT}-blue" README.md; then
+            echo "::error::Root README badge not updated to $NEXT"
+            ERRORS=$((ERRORS + 1))
+          fi
+          if ! grep -q "\"${NEXT}\"" .github/ISSUE_TEMPLATE/bug_report.yml; then
+            echo "::error::bug_report.yml placeholder not updated to $NEXT"
+            ERRORS=$((ERRORS + 1))
+          fi
+          if ! grep -q "## \[${NEXT}\]" plugins/soleur/CHANGELOG.md; then
+            echo "::error::CHANGELOG.md entry not found for $NEXT"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          if [ "$ERRORS" -gt 0 ]; then
+            echo "::error::Version consistency check failed with $ERRORS errors, aborting"
+            exit 1
+          fi
+          echo "All version files verified at $NEXT"
+
+      - name: Commit and push
+        if: steps.check_plugin.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+        run: |
+          git add \
+            plugins/soleur/.claude-plugin/plugin.json \
+            plugins/soleur/CHANGELOG.md \
+            plugins/soleur/README.md \
+            .claude-plugin/marketplace.json \
+            README.md \
+            .github/ISSUE_TEMPLATE/bug_report.yml
+
+          git commit -m "chore(release): v${NEXT}"
+          git push
+
+      - name: Create GitHub Release
+        if: steps.check_plugin.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file /tmp/release_notes.txt
+
+      - name: Post to Discord
+        if: steps.check_plugin.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "DISCORD_WEBHOOK_URL secret not set, skipping Discord notification"
+            exit 0
+          fi
+
+          BODY=$(cat /tmp/release_notes.txt)
+          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+          RELEASE_URL="${REPO_URL}/releases/tag/${TAG}"
+
+          # Truncate body to 1900 chars for Discord's 2000 char limit
+          if [ ${#BODY} -gt 1900 ]; then
+            BODY="${BODY:0:1897}..."
+          fi
+
+          MESSAGE=$(printf '**Soleur %s released!**\n\n%s\n\nFull release notes: %s' \
+            "$TAG" "$BODY" "$RELEASE_URL")
+
+          PAYLOAD=$(jq -n --arg content "$MESSAGE" '{content: $content}')
+
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL")
+
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Discord notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Discord notification failed (HTTP $HTTP_CODE)"
+          fi
+
+      - name: Trigger docs deploy
+        if: steps.check_plugin.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run deploy-docs.yml --ref main 2>/dev/null || echo "::warning::Could not trigger docs deploy"
