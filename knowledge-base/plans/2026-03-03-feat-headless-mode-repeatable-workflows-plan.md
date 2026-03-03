@@ -10,7 +10,7 @@ date: 2026-03-03
 
 Add a `--headless` flag convention to Soleur skills so they can run without interactive prompts. When `$ARGUMENTS` contains `--headless`, skills use sensible defaults instead of calling AskUserQuestion. This enforces the existing constitution rule (line 71) that every prompt must have a bypass path for programmatic callers.
 
-**Scope:** ship, compound, work skills + worktree-manager.sh `--yes` flag + constitution update + lefthook enforcement check. Two scheduled GitHub Actions workflows (ship-merge, compound-review) are **descoped to follow-up issues** based on SpecFlow analysis findings (see [Descoped Items](#descoped-items)).
+**Scope:** ship, compound (+ compound-capture), work skills + worktree-manager.sh `--yes` flag + constitution update. This PR addresses **local headless mode** — a human runs `skill: soleur:ship --headless` locally to avoid routine confirmations. Unattended CI headless (scheduled GitHub Actions workflows) is descoped to follow-up issues.
 
 ## Problem Statement / Motivation
 
@@ -28,52 +28,52 @@ Enforce the existing `$ARGUMENTS` bypass convention. Each skill handles `--headl
 
 ### Flag Parsing Convention
 
-Skills parse `--headless` from `$ARGUMENTS` using word-boundary matching, then strip it before processing remaining positional arguments:
+If `$ARGUMENTS` contains `--headless`, set headless mode. Strip `--headless` from `$ARGUMENTS` before processing remaining positional arguments.
 
-```
-# In SKILL.md instruction text:
-If $ARGUMENTS contains the word --headless (word-boundary match, not substring):
-  Set HEADLESS_MODE = true
-  Strip --headless from $ARGUMENTS before further processing
-  All AskUserQuestion calls use sensible defaults instead of prompting
-```
-
-**Word-boundary matching prevents false positives:** `--headless-test` or `mentioning --headless in prose` must NOT trigger headless mode. The pattern is: `$ARGUMENTS` split by whitespace, check if any token equals exactly `--headless`.
+**Naming convention:** `--headless` for skills (semantic: "non-interactive mode"). `--yes` for shell scripts (POSIX convention: auto-confirm prompts). These are independent flags for different layers.
 
 ### Flag Propagation
 
-`--headless` does NOT propagate automatically through Skill tool invocations. When ship invokes compound, it must explicitly pass the flag: `skill: soleur:compound --headless`. Each skill is responsible for forwarding the flag to child skill invocations when in headless mode.
+`--headless` does NOT propagate automatically through Skill tool invocations. Each skill is responsible for explicitly forwarding the flag to child skill invocations:
+
+- ship → `skill: soleur:compound --headless`
+- compound → `skill: soleur:compound-capture --headless`
+- work → `skill: soleur:compound --headless` and `skill: soleur:ship --headless` (Phase 4 handoff, when invoked directly)
 
 ## Technical Considerations
 
-### Prompt Inventory (from deep-read analysis)
+### Prompt Inventory
 
-**ship (2 prompts to bypass):**
+**ship (4 prompts to bypass):**
 
 | Location | Current Prompt | Headless Default |
 |----------|---------------|-----------------|
 | Phase 2 | "Run /compound to capture learnings?" | Auto-invoke `skill: soleur:compound --headless` |
+| Phase 4 | "Test files missing — write tests now?" | Continue without writing (CI gate catches this) |
 | Phase 6 | "Confirm PR title/body before editing" | Auto-accept generated title/body from diff analysis |
+| Phase 7 | "Flaky CI check — proceed or wait?" | Abort (consistent with headless abort-on-error principle) |
 
 **compound (5 prompts to bypass):**
 
 | Location | Current Prompt | Headless Default |
 |----------|---------------|-----------------|
-| Constitution promotion | "Promote anything to constitution?" | Auto-promote using LLM judgment (max 3 per run) |
+| Constitution promotion | "Promote anything to constitution?" | Auto-promote using LLM judgment |
 | Route-to-definition | "Accept/Skip/Edit component edit?" | Auto-accept LLM-proposed edit |
 | Auto-consolidation | "Proceed with consolidation?" + per-proposal gates | Auto-accept all proposals |
 | Decision menu | 7-option menu after capture | Auto-select "Continue workflow" |
 | Worktree cleanup | "Feature complete? Clean up worktree?" | Auto-skip (cleanup-merged handles this) |
 
-**work (5 prompts, all conditional on interactive mode):**
+**compound-capture (3 additional prompts):**
 
 | Location | Current Prompt | Headless Default |
 |----------|---------------|-----------------|
-| Phase 1 | "Continue on current branch or create new?" | Continue on current branch |
-| Phase 1 | "Clarifying questions + approval gate" | Skip (pipeline pre-validates input) |
-| Phase 2 | "Tier 0 parallelism offer" | Auto-select without prompting |
-| Phase 2 | "Tier A/B agent teams offer" | Auto-accept Tier B if eligible |
-| Phase 4 | Handoff decision | Detect invocation context, auto-continue |
+| Step 2 | "I need a few details to document this properly" | Infer from session context; skip fields that can't be inferred |
+| Step 3 | "Found similar issue — create new, update existing?" | Create new doc with cross-reference |
+| Auto-consolidation Step E | "Archive the source artifacts?" | Auto-archive (yes) |
+
+**work (0 new changes needed):**
+
+Work already has pipeline mode that skips all prompts when `$ARGUMENTS` contains a file path. `--headless` is stripped from `$ARGUMENTS` and pipeline mode handles the rest. The only addition: forward `--headless` to compound and ship in the Phase 4 handoff when invoked directly by the user.
 
 **worktree-manager.sh (4 `read -r` calls):**
 
@@ -86,89 +86,67 @@ If $ARGUMENTS contains the word --headless (word-boundary match, not substring):
 
 ### Safety Constraints
 
-**Branch requirement for headless compound:** Headless compound must abort if on `main` or `master`. Auto-promoted rules go through PR review. Add an explicit check:
+**Branch requirement for headless compound:** Headless compound must abort if on `main` or `master`. This is defense-in-depth — PreToolUse hooks and AGENTS.md already enforce this, but a one-liner check in compound catches it at the skill level too.
 
-```
-If HEADLESS_MODE and (branch is main or master):
-  Abort with error: "Headless compound cannot run on main. Create a branch first."
-```
-
-**Auto-promotion volume limit:** Max 3 constitution promotions per headless compound run. Deduplication via substring match against existing rules. Prevents constitution.md bloat.
+**Deduplication:** Constitution promotions use substring match against existing rules to prevent duplicates.
 
 **Error handling in headless mode:**
 - Test failure in headless ship → abort pipeline, do not attempt auto-fix
 - Merge conflict in headless ship → abort pipeline, log conflicting files
+- Flaky CI in headless ship → abort (do not auto-proceed past failed checks)
 - YAML validation failure in headless compound → skip the problematic learning, continue with remaining
-- All abort conditions produce non-zero exit code for CI reporting
+- All abort conditions produce clear error messages for the user to investigate
 
 ### Constitution Update
 
-Add to the `$ARGUMENTS` bypass rule (line 71) a reference implementation:
+Add to the `$ARGUMENTS` bypass rule (line 71):
 
 ```markdown
-**Headless mode convention:** When `$ARGUMENTS` contains `--headless` (exact word match),
-all AskUserQuestion prompts use sensible defaults. Skills must:
+**Headless mode convention:** When `$ARGUMENTS` contains `--headless`,
+all interactive prompts use sensible defaults. Skills must:
 1. Strip `--headless` from $ARGUMENTS before processing remaining args
 2. Forward `--headless` to any child Skill tool invocations
-3. Abort on unrecoverable errors instead of prompting (non-zero exit)
-4. Never run headless on main/master when writing to constitution.md
+3. Abort on unrecoverable errors instead of prompting
+4. Never run headless compound on main/master
 ```
-
-### Lefthook Enforcement
-
-Add a pre-commit check (warning, not blocking) that greps skills for `AskUserQuestion` and verifies the same file also contains `--headless` or a bypass pattern. Skills that are intentionally interactive-only (brainstorm, plan, brainstorm-techniques) are excluded from the check.
 
 ## Acceptance Criteria
 
-- [ ] `skill: soleur:ship --headless` runs to completion without any AskUserQuestion calls
-- [ ] `skill: soleur:compound --headless` auto-promotes learnings (max 3) without human approval
+- [ ] `skill: soleur:ship --headless` runs to completion without any interactive prompts
+- [ ] `skill: soleur:compound --headless` auto-promotes learnings without human approval
 - [ ] `skill: soleur:compound --headless` aborts if on main/master branch
 - [ ] `skill: soleur:work --headless knowledge-base/specs/feat-foo/tasks.md` strips `--headless` and processes the plan path correctly
 - [ ] `worktree-manager.sh create feat-foo --yes` completes without `read -r` prompt
 - [ ] `worktree-manager.sh cleanup --yes` completes without `read -r` prompt
 - [ ] Constitution.md updated with `--headless` convention
-- [ ] Lefthook check warns on new AskUserQuestion without bypass
 
 ## Test Scenarios
 
-- Given `$ARGUMENTS` is `--headless`, when ship invokes compound, then compound receives `--headless` and skips all prompts
-- Given `$ARGUMENTS` is `--headless knowledge-base/specs/feat-foo/tasks.md`, when work parses arguments, then `--headless` is detected AND `knowledge-base/specs/feat-foo/tasks.md` is treated as the plan path
-- Given headless compound runs on main branch, when constitution promotion triggers, then compound aborts with error
-- Given headless compound runs on feat-branch, when 5 learnings are promotion-worthy, then only 3 are promoted (max cap)
-- Given headless ship runs, when tests fail, then pipeline aborts with non-zero exit
-- Given `worktree-manager.sh create feat-foo --yes`, when the branch already exists, then auto-switches without prompting
-- Given `$ARGUMENTS` is `--headless-test`, when ship checks for headless mode, then headless mode is NOT activated (word-boundary match)
+- Given `--headless` ship invokes compound, which invokes compound-capture, then compound-capture also receives `--headless` and skips all prompts (full propagation chain)
+- Given `$ARGUMENTS` is `--headless knowledge-base/specs/feat-foo/tasks.md`, when work parses arguments, then `--headless` is stripped and the plan path is treated correctly
+- Given headless compound runs on main branch, then compound aborts with error before any promotions
+- Given headless ship runs and tests fail, then pipeline aborts with clear error message
+- Given headless ship runs and CI is flaky, then pipeline aborts (does not auto-proceed)
+- Given `worktree-manager.sh create feat-foo --yes` and the branch already exists, then auto-switches without prompting
+- Given `$ARGUMENTS` is `--headless` with no plan path, when work receives it, then work fails with a clear error (headless work requires a plan)
 
 ## Descoped Items
 
-The following items from the original spec are descoped to follow-up GitHub issues based on SpecFlow analysis:
+The following items are descoped to follow-up GitHub issues:
 
-**1. scheduled-ship-merge.yml (Gap 7, 8, 9)**
-- "Qualifying PRs" criteria are undefined and require careful design
-- Workflow architecture is fundamentally different from single-skill invocation
-- Interaction with existing auto-merge needs deduplication logic
-- **Follow-up issue:** Define qualifying criteria, workflow architecture, and concurrency handling
+**1. scheduled-ship-merge.yml** — "Qualifying PRs" criteria undefined, workflow architecture different from single-skill invocation, needs deduplication with existing auto-merge.
 
-**2. scheduled-compound-review.yml (Gap 13, 14)**
-- Compound requires session context (errors, investigation steps, solutions) that doesn't exist in a cron job
-- Route-to-definition cannot function without session history
-- This needs a new compound mode that accepts git-log or issue-based input
-- **Follow-up issue:** Design "sessionless compound" architecture for scheduled execution
+**2. scheduled-compound-review.yml** — Compound requires session context that doesn't exist in a cron job. Needs a new "sessionless compound" architecture.
 
-**3. PreToolUse hook verification in claude-code-action (Gap 10, 11, 12)**
-- Whether hooks fire in claude-code-action is unknown and needs empirical testing
-- This is a prerequisite for all scheduled workflows but not for local headless mode
-- **Follow-up issue:** Verify hook execution, add inline branch checks as fallback if needed
+**3. PreToolUse hook verification in claude-code-action** — Whether hooks fire is unknown, needs empirical testing. Prerequisite for CI headless, not local headless.
 
 ## Dependencies & Risks
 
-**Risk: Constitution bloat from auto-promotion.** Mitigation: 3-per-run cap, deduplication, PR review.
+**Risk: Constitution bloat from auto-promotion.** Mitigation: deduplication via substring match, PR review as the quality gate.
 
-**Risk: `--headless` flag interpreted as plan path by work skill.** Mitigation: Explicit strip-before-process convention documented in constitution.
+**Risk: `--headless` flag interpreted as plan path by work skill.** Mitigation: strip `--headless` before processing, documented in constitution.
 
-**Risk: Compound HARD RULE about constitution promotion.** The HARD RULE says "MUST run even in pipelines." Headless mode satisfies this — promotion runs, it just auto-approves. The HARD RULE is about not skipping promotion, not about requiring human approval.
-
-**Dependency: No scheduled workflows in this PR.** The skill-level headless work is independent and can ship without the Actions workflows.
+**Risk: Compound HARD RULE about constitution promotion.** Headless mode satisfies the HARD RULE — promotion runs, it just auto-approves. The rule is about not skipping promotion, not about requiring human approval.
 
 ## References & Research
 
@@ -178,6 +156,7 @@ The following items from the original spec are descoped to follow-up GitHub issu
 - Schedule skill flag pattern: `plugins/soleur/skills/schedule/SKILL.md:18`
 - Ship skill: `plugins/soleur/skills/ship/SKILL.md`
 - Compound skill: `plugins/soleur/skills/compound/SKILL.md`
+- Compound-capture skill: `plugins/soleur/skills/compound-capture/SKILL.md`
 - Work skill: `plugins/soleur/skills/work/SKILL.md`
 - Worktree manager: `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`
 - Merge-pr (reference headless skill): `plugins/soleur/skills/merge-pr/SKILL.md`
