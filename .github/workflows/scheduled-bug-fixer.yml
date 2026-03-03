@@ -1,0 +1,91 @@
+# Daily bot-fix agent for low-priority bugs.
+# Picks the oldest open issue with priority/p3-low + type/bug (excluding
+# bot-fix/attempted), then invokes soleur:fix-issue to attempt a single-file
+# fix and open a PR for human review.
+# Phase 2 of #370. Runs after daily triage (04:00 UTC).
+# To test manually: gh workflow run scheduled-bug-fixer.yml
+#
+# Security: Issue content is read by the claude-code-action agent via gh CLI,
+# not interpolated into shell commands. The label creation and issue selection
+# steps use only hardcoded strings and GitHub API output.
+
+name: "Scheduled: Bug Fixer"
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Override: fix a specific issue number'
+        required: false
+        type: string
+
+concurrency:
+  group: schedule-bug-fixer
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  fix-bug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
+
+      - name: Pre-create labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create "bot-fix/attempted" \
+            --description "Bot attempted fix but failed" \
+            --color "D93F0B" 2>/dev/null || true
+
+      - name: Select issue
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OVERRIDE: ${{ inputs.issue_number }}
+        run: |
+          if [[ -n "$OVERRIDE" ]]; then
+            echo "issue=$OVERRIDE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          ISSUE=$(gh issue list \
+            --label "priority/p3-low" \
+            --label "type/bug" \
+            --state open \
+            --json number,title,labels,createdAt \
+            --jq '[.[] | select(.labels | map(.name) | index("bot-fix/attempted") | not)] | sort_by(.createdAt) | .[0].number // empty')
+
+          if [[ -z "$ISSUE" ]]; then
+            echo "No qualifying issues found"
+            exit 0
+          fi
+
+          echo "issue=$ISSUE" >> "$GITHUB_OUTPUT"
+
+      - name: Fix issue
+        if: steps.select.outputs.issue
+        uses: anthropics/claude-code-action@64c7a0ef71df67b14cb4471f4d9c8565c61042bf # v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
+          plugins: 'soleur@soleur'
+          claude_args: >-
+            --model claude-sonnet-4-6
+            --max-turns 25
+            --allowedTools Bash,Read,Write,Edit,Glob,Grep
+          prompt: |
+            Run /soleur:fix-issue ${{ steps.select.outputs.issue }}
