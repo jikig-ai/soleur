@@ -24,6 +24,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Shell scripts use snake_case for function names and local variables, SCREAMING_SNAKE_CASE for global constants
 - Shell functions must declare all variables with `local`; error messages go to stderr (`>&2`)
 - Shell scripts use `[[ ]]` double-bracket tests and validate required arguments early with exit 1 and usage message
+- When upgrading `set -e` to `set -euo pipefail`, audit three vectors: (1) bare positional args (`$1`, `$2`) in dispatch functions need `${N:-}` guards for `-u`, (2) `grep` in pipelines returns exit 1 on no match which `-o pipefail` propagates -- append `|| true`, (3) unassigned variables in conditional paths need defaults
 - TypeScript, JSON, and HTML templates use 2-space indentation throughout
 - TypeScript uses `import type` for type-only imports
 - TypeScript uses inline `export` at declaration site, not separate `export {}` blocks
@@ -40,6 +41,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Never use shell variable expansion (`${VAR}`, `$VAR`, `$()`) in bash code blocks within skill, command, or agent .md files -- use angle-bracket prose placeholders (`<variable-name>`) with substitution instructions instead, or relative paths (e.g., `./plugins/soleur/...`) for plugin-relative paths; the ship skill's "No command substitution" pattern is the reference implementation
 - Never anchor guardrail grep patterns to `^` alone -- the Bash tool chains commands with `&&`, `;`, and `||`, so a `^`-anchored pattern only catches the first command; match at command boundaries with `(^|&&|\|\||;)` instead
 - Never use "Announce to the user", "Output to the user", or "and stop" as terminal instructions in skills that can be invoked by pipelines (one-shot, ship) -- the model interprets these as implicit stop signals; use "Return control immediately" or "proceed to the next step in the orchestrator's sequence" for pipeline-compatible handoff, with a conditional single-line output for direct user invocation
+- Sub-skills that return control to an orchestrator must output a structured continuation marker (e.g., `## Work Phase Complete`), not natural-language completion phrases ("Implementation complete.") -- the orchestrator must include an explicit CONTINUATION GATE block that names the marker and forbids ending the turn; conclusive-sounding text is interpreted as a turn boundary even when followed by "proceed to next step"
 - Never write bash code blocks in agent/skill prompts that trigger Claude Code's approval heuristics -- pre-combine multiple blocks into a single `;`-joined command (models insert `echo "---"` separators otherwise), avoid quoted strings starting with dashes (`"---"`, `"-flag"`), and keep commands simple enough to auto-approve; if a command requires user consent, the agent blocks waiting for input it will never receive when running as a subagent
 
 ### Prefer
