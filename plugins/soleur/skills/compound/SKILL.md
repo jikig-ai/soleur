@@ -18,7 +18,16 @@ Captures problem solutions while context is fresh, creating structured documenta
 ```bash
 skill: soleur:compound               # Document the most recent fix
 skill: soleur:compound [brief context]  # Provide additional context hint
+skill: soleur:compound --headless    # Headless mode: auto-approve all prompts
 ```
+
+## Headless Mode Detection
+
+If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headless` from `$ARGUMENTS` before processing remaining args.
+
+**Branch safety check:** If `HEADLESS_MODE=true`, run `git branch --show-current`. If the result is `main` or `master`, abort immediately with: "Error: headless compound cannot run on main/master. Checkout a feature branch first." This is defense-in-depth alongside PreToolUse hooks.
+
+When `HEADLESS_MODE=true`, forward `--headless` to the `compound-capture` invocation (e.g., `skill: soleur:compound-capture --headless`).
 
 ## Phase 0: Setup
 
@@ -138,11 +147,13 @@ category: [category]
 module: [module]
 ```
 
-### Constitution Promotion (Manual)
+### Constitution Promotion (Manual or Auto)
 
 HARD RULE: This phase MUST run even when compound is invoked inside an automated pipeline (one-shot, ship). The model has historically rationalized skipping this as "pipeline mode optimization" -- that is a protocol violation. Constitution promotion and route-to-definition are the phases that prevent repeated mistakes across sessions. If the pipeline is time-constrained, present proposals with a 5-second timeout per item, but never skip entirely.
 
-After saving the learning, prompt the user:
+**Headless mode:** If `HEADLESS_MODE=true`, auto-promote using LLM judgment. Review recent learnings, determine if any warrant constitution promotion, select the domain and category using LLM judgment, generate the principle text, and check for duplicates via substring match against existing rules in `constitution.md`. Skip any principle that is already covered. Append non-duplicate principles and commit. Do not prompt the user.
+
+**Interactive mode:** After saving the learning, prompt the user:
 
 **Question:** "Promote anything to constitution?"
 
@@ -166,7 +177,8 @@ After constitution promotion, compound routes the captured learning to the skill
 
 1. Detect which skills, agents, or commands were invoked in this conversation. Also check session-state.md `### Components Invoked` for components from preceding pipeline phases.
 2. Propose a one-line bullet edit to the most relevant section of the target definition file
-3. User confirms with Accept/Skip/Edit
+3. **Headless mode:** If `HEADLESS_MODE=true`, auto-accept the LLM-proposed edit without prompting.
+4. **Interactive mode:** User confirms with Accept/Skip/Edit
 
 See compound-capture Step 8 for the full flow.
 
@@ -197,15 +209,17 @@ The automatic consolidation:
 
 1. **Discovers artifacts** -- extracts the feature slug by stripping `feat/`, `feat-`, `fix/`, or `fix-` prefix from the branch name, then globs `knowledge-base/{brainstorms,plans}/*<slug>*` and `knowledge-base/specs/feat-<slug>/` (excluding `*/archive/`)
 2. **Extracts knowledge** -- a single agent reads all artifacts and proposes updates to `constitution.md`, component docs, and overview `README.md`
-3. **Approval flow** -- proposals presented one at a time with Accept/Skip/Edit; idempotency checked via substring match
-4. **Archives sources** -- runs `bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` to move all discovered artifacts to `archive/` subdirectories via `git mv` with `YYYYMMDD-HHMMSS` timestamp prefix
+3. **Approval flow** -- **Headless mode:** auto-accept all proposals (idempotency still checked via substring match). **Interactive mode:** proposals presented one at a time with Accept/Skip/Edit; idempotency checked via substring match
+4. **Archives sources** -- runs `bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` to move all discovered artifacts to `archive/` subdirectories via `git mv` with `YYYYMMDD-HHMMSS` timestamp prefix. **Headless mode:** auto-confirm archival without prompting
 5. **Single commit** -- overview edits and archival moves committed together for clean `git revert`
 
 If no artifacts are found for the feature slug, consolidation is skipped silently. See the `compound-capture` skill for full implementation details.
 
 ### Worktree Cleanup (Manual)
 
-At the end, if on a feature branch:
+**Headless mode:** If `HEADLESS_MODE=true`, skip worktree cleanup entirely (cleanup-merged handles this post-merge).
+
+**Interactive mode:** At the end, if on a feature branch:
 
 **Question:** "Feature complete? Clean up worktree?"
 
@@ -284,7 +298,7 @@ File created:
 This documentation will be searchable for future reference when similar
 issues occur in the Email Processing or Brief System modules.
 
-What's next?
+What's next?  (Headless mode: auto-selects "Continue workflow")
 1. Continue workflow (recommended)
 2. Add to Required Reading
 3. Link related documentation

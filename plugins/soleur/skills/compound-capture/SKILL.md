@@ -15,6 +15,10 @@ preconditions:
 
 **Purpose:** Automatically document solved problems to build searchable institutional knowledge with category-based organization (enum-validated problem types).
 
+## Headless Mode Detection
+
+If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headless` from `$ARGUMENTS` before processing remaining args. Headless mode affects Steps 2, 3, 5, and auto-consolidation Step E.
+
 ## Overview
 
 This skill captures problem solutions immediately after confirmation, creating structured documentation that serves as a searchable knowledge base for future sessions.
@@ -88,7 +92,11 @@ If no session errors are found, skip this extraction silently.
 - OS version
 - File/line references
 
-**BLOCKING REQUIREMENT:** If critical context is missing (module name, exact error, stage, or resolution steps), ask user and WAIT for response before proceeding to Step 3:
+**BLOCKING REQUIREMENT:** If critical context is missing (module name, exact error, stage, or resolution steps):
+
+**Headless mode:** Infer missing fields from session context (conversation history, session-state.md, git log). Skip any field that cannot be reasonably inferred — do not prompt. Proceed to Step 3 with whatever context is available.
+
+**Interactive mode:** Ask user and WAIT for response before proceeding to Step 3:
 
 ```
 I need a few details to document this properly:
@@ -116,7 +124,9 @@ ls knowledge-base/learnings/[category]/
 
 **IF similar issue found:**
 
-THEN present decision options:
+**Headless mode:** Auto-select "Create new doc with cross-reference" without prompting.
+
+**Interactive mode:** Present decision options:
 
 ```
 Found similar issue: knowledge-base/learnings/[path]
@@ -179,6 +189,8 @@ Please provide corrected values.
 ```
 
 **GATE ENFORCEMENT:** Do NOT proceed to Step 6 (Create Documentation) until YAML frontmatter passes all validation rules defined in `schema.yaml`.
+
+**Headless mode exception:** If `HEADLESS_MODE=true` and YAML validation fails after auto-correction attempts, skip the problematic learning and continue with remaining work. Log the skipped learning for manual review.
 
 </validation_gate>
 </step>
@@ -422,6 +434,10 @@ The script discovers artifacts matching the current branch's feature slug, creat
 
 **Context-aware archival confirmation:**
 
+**Headless mode:** Auto-archive without prompting (equivalent to answering "Y").
+
+**Interactive mode:**
+
 If at least one proposal was accepted:
 
 ```text
@@ -455,7 +471,9 @@ After commit, proceed to the decision menu.
 
 ## Decision Menu After Capture
 
-After successful documentation, present options and WAIT for user response:
+**Headless mode:** If `HEADLESS_MODE=true`, auto-select "Continue workflow" without presenting the menu.
+
+**Interactive mode:** After successful documentation, present options and WAIT for user response:
 
 ```
 ✓ Solution documented

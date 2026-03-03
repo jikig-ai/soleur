@@ -13,6 +13,9 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Auto-confirm flag (--yes skips all interactive prompts)
+YES_FLAG=false
+
 # Get repo root
 GIT_ROOT=$(git rev-parse --show-toplevel)
 WORKTREE_DIR="$GIT_ROOT/.worktrees"
@@ -80,8 +83,13 @@ create_worktree() {
   # Check if worktree already exists
   if [[ -d "$worktree_path" ]]; then
     echo -e "${YELLOW}Worktree already exists at: $worktree_path${NC}"
-    echo -e "Switch to it instead? (y/n)"
-    read -r response
+    local response="n"
+    if [[ "$YES_FLAG" == "true" ]]; then
+      response="y"
+    else
+      echo -e "Switch to it instead? (y/n)"
+      read -r response
+    fi
     if [[ "$response" == "y" ]]; then
       switch_worktree "$branch_name"
     fi
@@ -92,8 +100,13 @@ create_worktree() {
   echo "  From: $from_branch"
   echo "  Path: $worktree_path"
   echo ""
-  echo "Proceed? (y/n)"
-  read -r response
+  local response
+  if [[ "$YES_FLAG" == "true" ]]; then
+    response="y"
+  else
+    echo "Proceed? (y/n)"
+    read -r response
+  fi
 
   if [[ "$response" != "y" ]]; then
     echo -e "${YELLOW}Cancelled${NC}"
@@ -226,6 +239,10 @@ switch_worktree() {
   local worktree_name="$1"
 
   if [[ -z "$worktree_name" ]]; then
+    if [[ "$YES_FLAG" == "true" ]]; then
+      echo -e "${RED}Error: --yes requires a worktree name argument${NC}"
+      exit 1
+    fi
     list_worktrees
     echo -e "${BLUE}Switch to which worktree? (enter name)${NC}"
     read -r worktree_name
@@ -312,8 +329,13 @@ cleanup_worktrees() {
   fi
 
   echo ""
-  echo -e "Remove $found worktree(s)? (y/n)"
-  read -r response
+  local response
+  if [[ "$YES_FLAG" == "true" ]]; then
+    response="y"
+  else
+    echo -e "Remove $found worktree(s)? (y/n)"
+    read -r response
+  fi
 
   if [[ "$response" != "y" ]]; then
     echo -e "${YELLOW}Cleanup cancelled${NC}"
@@ -583,7 +605,10 @@ show_help() {
   cat << EOF
 Git Worktree Manager
 
-Usage: worktree-manager.sh <command> [options]
+Usage: worktree-manager.sh [--yes] <command> [options]
+
+Global Flags:
+  --yes                               Auto-confirm all prompts (for headless/scripted use)
 
 Commands:
   create <branch-name> [from-branch]  Create new worktree (copies .env files automatically)
@@ -620,5 +645,15 @@ Examples:
 EOF
 }
 
+# Parse --yes flag from arguments before dispatching
+args=()
+for arg in "$@"; do
+  if [[ "$arg" == "--yes" ]]; then
+    YES_FLAG=true
+  else
+    args+=("$arg")
+  fi
+done
+
 # Run
-main "$@"
+main "${args[@]+"${args[@]}"}"
