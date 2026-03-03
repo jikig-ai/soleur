@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.9.0] - 2026-03-03
+
+### Added
+
+- **work skill -- Tier 0 (Lifecycle Parallelism)** -- New execution tier that spawns two parallel agents (code and tests) from a shared interface contract using ATDD discipline. The coordinator generates file scopes and public interface signatures, agents execute concurrently, and test-fix-loop integrates their output. Docs are written sequentially after GREEN. Sits before the existing Tier A/B/C cascade with LLM-based eligibility judgment. Pipeline mode auto-selects when eligible.
+- **work-lifecycle-parallel.md reference file** -- Full Tier 0 protocol document covering 6 steps: offer/auto-select, generate contract, spawn agents, collect/commit, test-fix-loop, sequential docs
+
 ## [3.8.2] - 2026-03-03
 
 ### Changed
