@@ -279,7 +279,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 Implementation is complete. Determine how this skill was invoked and act accordingly:
 
-**If invoked by one-shot** (the conversation contains `soleur:one-shot` skill output earlier): Return control immediately. Do not invoke ship, review, or compound — the orchestrator handles the sequence. Output a single line: "Implementation complete." and stop.
+**If invoked by one-shot** (the conversation contains `soleur:one-shot` skill output earlier): Return control immediately. Do not invoke ship, review, or compound — the orchestrator handles the remaining steps. Output "Implementation complete." then proceed to the next step in the orchestrator's sequence.
 
 **If invoked directly by the user** (no one-shot orchestrator): Continue through the post-implementation pipeline automatically. Do NOT stop and wait — the earlier learning "Workflow Completion is Not Task Completion" applies. Run these steps in order:
 

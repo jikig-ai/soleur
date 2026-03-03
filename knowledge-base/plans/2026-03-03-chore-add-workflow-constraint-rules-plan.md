@@ -3,7 +3,7 @@ title: "chore: add workflow constraint rules and DO NOT guards to CLAUDE.md"
 type: chore
 date: 2026-03-03
 issue: "#389"
-version_bump: none
+version_bump: PATCH
 deepened: 2026-03-03
 ---
 
@@ -149,14 +149,14 @@ Add to `## Architecture > ### Never`:
 
 ## Acceptance Criteria
 
-- [ ] AGENTS.md `## Hard Rules` section includes rebase-before-merge rule
-- [ ] AGENTS.md `## Hard Rules` section includes read-before-edit rule
-- [ ] AGENTS.md `## Hard Rules` section includes hook awareness rule listing all 4 guards
-- [ ] constitution.md `## Architecture > ### Always` includes rebase-before-PR rule
-- [ ] constitution.md `## Architecture > ### Never` includes never-edit-without-read rule
-- [ ] No duplicate rules between AGENTS.md and constitution.md (AGENTS.md = gotchas-only, constitution.md = full conventions)
-- [ ] AGENTS.md stays under 40 lines (currently 29 lines; adding 3 rules = ~32 lines, well within the lean principle)
-- [ ] All existing PreToolUse hook tests still pass (`bun test`)
+- [x] AGENTS.md `## Hard Rules` section includes rebase-before-merge rule
+- [x] AGENTS.md `## Hard Rules` section includes read-before-edit rule
+- [x] AGENTS.md `## Hard Rules` section includes hook awareness rule listing all 4 guards
+- [x] constitution.md `## Architecture > ### Always` includes rebase-before-PR rule
+- [x] constitution.md `## Architecture > ### Never` includes never-edit-without-read rule
+- [x] No duplicate rules between AGENTS.md and constitution.md (AGENTS.md = gotchas-only, constitution.md = full conventions)
+- [x] AGENTS.md stays under 40 lines (currently 29 lines; adding 3 rules = ~32 lines, well within the lean principle)
+- [x] All existing PreToolUse hook tests still pass (`bun test`)
 
 ## Test Scenarios
 

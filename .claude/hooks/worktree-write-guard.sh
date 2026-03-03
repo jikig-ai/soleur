@@ -1,6 +1,7 @@
 #!/bin/bash
 # PreToolUse hook for Write and Edit tools.
 # Blocks file writes to the main repo checkout when worktrees exist.
+# NOTE: When adding or modifying guards, update AGENTS.md hook awareness rule to match.
 # Prevents the recurring problem of agents creating files on main instead of
 # in the active worktree (screenshots, knowledge-base artifacts, etc.).
 

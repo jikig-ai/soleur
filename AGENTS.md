@@ -11,6 +11,9 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 - Never `rm -rf` on the current directory, a worktree path, or the repo root.
 - MCP tools (Playwright, etc.) resolve paths from the repo root, not the shell CWD. Always pass absolute paths to MCP tools when in a worktree.
 - When a command exits non-zero or prints a warning, investigate before proceeding. Never treat a failed step as success.
+- Before merging any PR, rebase on origin/main (`git fetch origin main && git rebase origin/main`). Never use interactive rebase (`-i`).
+- Always read a file before editing it. The Edit tool rejects unread files, but context compaction erases prior reads -- re-read after any compaction event.
+- PreToolUse hooks block: commits on main, rm -rf on worktrees, --delete-branch with active worktrees, writes to main repo when worktrees exist. Work with these guards, not around them.
 
 ## Workflow Gates
 
