@@ -1,0 +1,41 @@
+---
+layout: base.njk
+---
+{% set articleDate = date | dateToRfc3339 %}
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": "{{ title }}",
+  "description": "{{ description }}",
+  "datePublished": "{{ articleDate }}",
+  "url": "{{ site.url }}/articles/{{ page.fileSlug }}.html",
+  "author": {
+    "@type": "Organization",
+    "name": "{{ site.name }}",
+    "url": "{{ site.url }}"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "{{ site.name }}",
+    "url": "{{ site.url }}"
+  }
+}
+</script>
+
+<section class="hero">
+  <div class="container">
+    <h1>{{ title }}</h1>
+    <p class="subtitle">{{ description }}</p>
+    <time class="article-date" datetime="{{ articleDate }}">{{ articleDate }}</time>
+  </div>
+</section>
+
+<section class="content">
+  <div class="container">
+    <div class="prose">
+      {{ content | safe }}
+    </div>
+  </div>
+</section>
