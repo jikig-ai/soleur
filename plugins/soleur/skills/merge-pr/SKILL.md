@@ -82,7 +82,7 @@ git status --porcelain
 If output is non-empty, stop:
 
 ```text
-STOPPED: Uncommitted changes detected. Commit or stash before running merge-pr.
+STOPPED: Uncommitted changes detected. Commit changes before running merge-pr.
 ```
 
 ### 1.3 Compound has run

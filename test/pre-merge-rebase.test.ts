@@ -156,7 +156,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     }
   });
 
-  test("branch already up-to-date with main proceeds without rebase", async () => {
+  test("branch already up-to-date with main proceeds without sync", async () => {
     spawnChecked(["git", "checkout", "-b", "test-uptodate"], { cwd: repoDir });
     spawnChecked(
       ["bash", "-c", "echo 'feature' > feature.txt && git add feature.txt && git commit -m 'feature'"],
@@ -173,7 +173,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     expect(result.stdout).toBe("");
   });
 
-  test("branch behind main triggers rebase and force-push", async () => {
+  test("branch behind main triggers merge and push", async () => {
     spawnChecked(["git", "checkout", "-b", "test-behind"], { cwd: repoDir });
     spawnChecked(
       ["bash", "-c", "echo 'feature' > feature.txt && git add feature.txt && git commit -m 'feature'"],
@@ -196,7 +196,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
 
     expect(result.exitCode).toBe(0);
     const output = JSON.parse(result.stdout);
-    expect(output.hookSpecificOutput.additionalContext).toContain("rebased");
+    expect(output.hookSpecificOutput.additionalContext).toContain("merged");
     expect(output.hookSpecificOutput.additionalContext).toContain("test-behind");
   });
 
@@ -235,7 +235,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     );
   });
 
-  test("rebase conflict aborts and blocks with file list", async () => {
+  test("merge conflict aborts and blocks with file list", async () => {
     spawnChecked(["git", "checkout", "-b", "test-conflict"], { cwd: repoDir });
     spawnChecked(
       ["bash", "-c", "echo 'feature-content' > file.txt && git add file.txt && git commit -m 'feature change'"],
@@ -260,13 +260,13 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     const output = JSON.parse(result.stdout);
     expect(output.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(output.hookSpecificOutput.permissionDecisionReason).toContain(
-      "Rebase against origin/main failed"
+      "Merge of origin/main failed"
     );
     expect(output.hookSpecificOutput.permissionDecisionReason).toContain(
       "file.txt"
     );
 
-    // Verify rebase was aborted (working tree is clean)
+    // Verify merge was aborted (working tree is clean)
     const status = Bun.spawnSync(["git", "status", "--short"], {
       cwd: repoDir,
       env: GIT_ENV,
@@ -288,7 +288,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     expect(result.stdout).toBe("");
   });
 
-  test("main branch skips rebase silently", async () => {
+  test("main branch skips sync silently", async () => {
     const result = await runHook(
       makeInput("gh pr merge 123 --squash --auto", repoDir)
     );
@@ -297,7 +297,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     expect(result.stdout).toBe("");
   });
 
-  test("push failure after rebase blocks merge with deny", async () => {
+  test("push failure after merge blocks with deny", async () => {
     spawnChecked(["git", "checkout", "-b", "test-pushfail"], { cwd: repoDir });
     spawnChecked(
       ["bash", "-c", "echo 'feature' > pushfail.txt && git add pushfail.txt && git commit -m 'feature'"],
@@ -327,16 +327,16 @@ describe("pre-merge-rebase hook (with git repo)", () => {
       const output = JSON.parse(result.stdout);
       expect(output.hookSpecificOutput.permissionDecision).toBe("deny");
       expect(output.hookSpecificOutput.permissionDecisionReason).toContain(
-        "force-push failed"
+        "push failed"
       );
     } finally {
-      // Restore push URL and abort any rebase state
+      // Restore push URL and abort any merge state
       spawnChecked(["git", "remote", "set-url", "--push", "origin", remoteDir], { cwd: repoDir });
-      Bun.spawnSync(["git", "rebase", "--abort"], { cwd: repoDir, env: GIT_ENV });
+      Bun.spawnSync(["git", "merge", "--abort"], { cwd: repoDir, env: GIT_ENV });
     }
   });
 
-  test("hook is idempotent -- second run after rebase shows up-to-date", async () => {
+  test("hook is idempotent -- second run after merge shows up-to-date", async () => {
     spawnChecked(["git", "checkout", "-b", "test-idempotent"], { cwd: repoDir });
     spawnChecked(
       ["bash", "-c", "echo 'feature' > feature2.txt && git add feature2.txt && git commit -m 'feature'"],
@@ -353,13 +353,13 @@ describe("pre-merge-rebase hook (with git repo)", () => {
 
     spawnChecked(["git", "checkout", "test-idempotent"], { cwd: repoDir });
 
-    // First run: triggers rebase
+    // First run: triggers merge
     const first = await runHook(
       makeInput("gh pr merge 123 --squash --auto", repoDir)
     );
     expect(first.exitCode).toBe(0);
     const firstOutput = JSON.parse(first.stdout);
-    expect(firstOutput.hookSpecificOutput.additionalContext).toContain("rebased");
+    expect(firstOutput.hookSpecificOutput.additionalContext).toContain("merged");
 
     // Second run: should be up-to-date
     const second = await runHook(
