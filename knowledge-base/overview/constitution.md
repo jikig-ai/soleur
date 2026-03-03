@@ -62,10 +62,10 @@ Project principles organized by domain. Add principles as you learn them.
 
 - Verify the root cause before implementing any fix -- reproduce the error or run the simplest diagnostic first; do not change code based on a guess
 - Core workflow stages (brainstorm, plan, work, review, compound, one-shot) are skills invoked via the Skill tool; only three commands remain (`go`, `sync`, `help`) using the `soleur:` prefix to avoid collisions with built-in commands
-- Never bump version files (plugin.json, CHANGELOG.md version entries, README badge, marketplace.json, bug_report.yml) in feature branches -- `version-bump-and-release.yml` handles all 6 files at merge time via semver labels set by `/ship`
+- Never edit version fields in `plugin.json` or `marketplace.json` (frozen sentinels). Version is derived from git tags -- `version-bump-and-release.yml` creates GitHub Releases with `vX.Y.Z` tags at merge time via semver labels set by `/ship`
 - Always set a `semver:patch`, `semver:minor`, or `semver:major` label on PRs that touch `plugins/soleur/` -- CI uses this label to determine the version bump at merge time
 - When adding a new skill, manually register it in `docs/_data/skills.js` SKILL_CATEGORIES -- skill discovery does not recurse and the docs site will silently omit unregistered skills
-- Component counts (agents, skills, commands) are auto-computed at merge time by CI -- do not hardcode counts in version bump commits
+- Component counts (agents, skills, commands) are computed at docs build time by `stats.js` -- do not hardcode counts in committed files
 - Organize agents by domain first (engineering/, etc.), then by function (review/, design/). Cross-domain agents stay at root level (research/, workflow/)
 - Skills must have a SKILL.md file and may include scripts/, references/, and assets/ subdirectories; directories under `skills/` without SKILL.md must be deleted or converted to proper skills
 - Every SKILL.md interactive prompt (AskUserQuestion) must accept an `$ARGUMENTS` bypass path for programmatic callers -- agents and pipeline skills cannot answer interactive prompts; provide flag-based argument passthrough (e.g., `--name`, `--yes`) that skips the prompt when present
@@ -76,6 +76,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Skill instructions that use `git mv` must prepend `git add` on the source file to handle untracked files created during the session -- `git add` on an already-tracked file is a no-op
 - New commands must be idempotent -- running the same command twice must not create duplicates or corrupt state
 - Run code review and compound (skill: `soleur:compound`) before committing -- the commit is the gate, not the PR; run compound automatically, do not ask whether to run it; compound must never be placed after `git push` or CI because compound produces a commit that invalidates CI and creates an infinite loop
+- When CI needs to record metadata (version numbers, changelogs, counts), prefer API artifacts (git tags, GitHub Releases) over committed files -- committed files require write access to protected branches and create merge conflicts across parallel branches
 - Skills invoked mid-pipeline must never use stop/return/done language in their handoff -- scope what they skip (e.g., "do not invoke ship"), but never imply end-of-turn; the calling pipeline controls turn boundaries, not the callee skill
 - When reading file content during an active git merge conflict, use stage numbers: `git show :2:<path>` (ours) and `git show :3:<path>` (theirs); `git show HEAD:<path>` only returns one side and discards the incoming changes
 - When resolving merge conflicts in large files (CHANGELOG.md, constitution.md), the Write tool replaces the ENTIRE file -- read the full base from `git show HEAD:<path>` and reconstruct the complete file; there is no "rest of file" to preserve

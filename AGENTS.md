@@ -21,7 +21,7 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 
 - Zero agents until user confirms direction. Present a concise summary first, ask if they want to go deeper, only then launch research.
 - Before every commit, run compound (`skill: soleur:compound`). Do not ask whether to run it -- just run it.
-- Never bump version files in feature branches. Version bumping (plugin.json, CHANGELOG.md, README badge, marketplace.json, bug_report.yml) is handled by `version-bump-and-release.yml` at merge time via semver labels. Set labels with `/ship`.
+- Never bump version files in feature branches. Version is derived from git tags — CI creates GitHub Releases with `vX.Y.Z` tags at merge time via semver labels. Set labels with `/ship`. Do NOT edit `plugin.json` version (frozen sentinel) or `marketplace.json` version.
 - Use `/ship` to automate the full commit/push/PR workflow. It enforces review and compound gates.
 - After marking a PR ready, run `gh pr merge <number> --squash --auto` to queue auto-merge, then poll `gh pr view <number> --json state --jq .state` until MERGED, then `cleanup-merged`. Never stop at "waiting for CI" -- actively poll and merge in the same session.
 - At session start, from the repo root: run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged && git worktree list`.

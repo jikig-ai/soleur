@@ -33,11 +33,13 @@ Before your first pull request can be merged, you must sign the [Individual Cont
 
 ### Plugin changes
 
-Changes to files under `plugins/soleur/` must update three files together:
+Changes to files under `plugins/soleur/` require:
 
-- **`plugin.json`** -- bump the version (MAJOR for breaking, MINOR for new agent/command/skill, PATCH for fixes)
-- **`CHANGELOG.md`** -- document what changed
+- **PR body `## Changelog` section** -- describe what changed (CI uses this as the GitHub Release body)
+- **`semver:patch|minor|major` label** -- CI bumps the version from the latest release tag at merge time
 - **`README.md`** -- verify component counts and tables are accurate
+
+Do NOT edit `plugin.json` or `marketplace.json` version fields -- they are frozen sentinels (`0.0.0-dev`).
 
 See the [plugin development guide](plugins/soleur/AGENTS.md) for the full checklist including skill compliance requirements.
 

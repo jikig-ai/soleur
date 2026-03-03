@@ -2,13 +2,13 @@
 
 ## Versioning Requirements
 
-**Version bumping is automated.** The `version-bump-and-release.yml` GitHub Action handles all version updates at merge time. Feature branches must NOT edit version files.
+**Version is derived from git tags.** The `version-bump-and-release.yml` GitHub Action creates GitHub Releases with `vX.Y.Z` tags via `gh release create` — it never pushes commits to main.
 
 ### How It Works
 
 1. PR author adds a `## Changelog` section to the PR body (template provided)
 2. `/ship` skill analyzes the diff and sets a `semver:patch`, `semver:minor`, or `semver:major` label
-3. On merge to main, the Action reads the label, bumps version in all 6 files, creates a GitHub Release, and posts to Discord
+3. On merge to main, the Action reads the label, computes the next version from the latest release tag, creates a GitHub Release, and posts to Discord
 
 ### Semver Label Rules
 
@@ -21,7 +21,7 @@
 Before committing ANY changes:
 
 - [ ] README.md component counts verified (tables accurate)
-- [ ] Do NOT edit: `plugin.json` version, `CHANGELOG.md` version entries, root `README.md` badge, `bug_report.yml` placeholder, `marketplace.json` version — these are managed by CI
+- [ ] Do NOT edit: `plugin.json` version field (frozen sentinel `0.0.0-dev`), `marketplace.json` version — these are intentionally static
 - [ ] PR body includes a `## Changelog` section describing changes
 
 ### Directory Structure
@@ -191,4 +191,4 @@ Domain leaders are agents that orchestrate a business domain's specialist team. 
 
 ## Documentation
 
-See `knowledge-base/learnings/plugin-versioning-requirements.md` for detailed versioning workflow.
+Version is derived from git tags via GitHub Releases. See the `version-bump-and-release.yml` workflow for details.

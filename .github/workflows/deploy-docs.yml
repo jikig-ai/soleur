@@ -8,8 +8,6 @@ on:
       - 'plugins/soleur/agents/**'
       - 'plugins/soleur/skills/**'
       - 'plugins/soleur/commands/**'
-      - 'plugins/soleur/CHANGELOG.md'
-      - 'plugins/soleur/.claude-plugin/plugin.json'
       - 'eleventy.config.js'
   workflow_run:
     workflows: ["Version Bump and Release"]
@@ -47,6 +45,8 @@ jobs:
 
       - name: Build docs
         run: npx @11ty/eleventy
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Validate SEO
         run: bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site
