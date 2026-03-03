@@ -8,6 +8,18 @@ date: 2026-03-03
 
 Standardize all shell scripts to use `#!/usr/bin/env bash` instead of `#!/bin/bash`, conforming to the constitution convention. This was flagged during code review of PR #399 and tracked as issue #403.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-03
+**Sections enhanced:** 1 (`set -euo pipefail` gap analysis)
+**Method:** Source-level audit of `worktree-manager.sh` (624 lines) and `check_setup.sh` (61 lines)
+
+### Key Improvements
+
+1. **Scope expanded from shebang-only to full shell convention compliance** -- source audit confirmed both scripts with `set -e` are compatible with `set -euo pipefail`, so the upgrade is included in this PR instead of deferred
+2. **Drive-by fix for bracket convention** -- `check_setup.sh` line 27 uses `[ ]` instead of `[[ ]]`, violating constitution convention; fixed alongside other changes
+3. **Concrete evidence replaces speculative assessment** -- original plan hedged on `-uo pipefail` safety; deepened plan includes line-by-line audit results proving compatibility
+
 ## Problem Statement
 
 The constitution (`knowledge-base/overview/constitution.md`, line 23) requires:
@@ -36,7 +48,9 @@ Replace `#!/bin/bash` with `#!/usr/bin/env bash` in all four files. For the two 
 - [ ] `.claude/hooks/worktree-write-guard.sh` shebang updated
 - [ ] `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` shebang updated
 - [ ] `plugins/soleur/skills/rclone/scripts/check_setup.sh` shebang updated
-- [ ] `set -euo pipefail` gap assessed for `worktree-manager.sh` and `check_setup.sh`
+- [ ] `worktree-manager.sh` upgraded from `set -e` to `set -euo pipefail`
+- [ ] `check_setup.sh` upgraded from `set -e` to `set -euo pipefail`
+- [ ] `check_setup.sh` line 27: `[ -z "$REMOTES" ]` changed to `[[ -z "$REMOTES" ]]`
 - [ ] `grep -r '#!/bin/bash' --include='*.sh'` returns zero results
 - [ ] Existing tests pass (`bun test`)
 
@@ -56,13 +70,13 @@ Replace `#!/bin/bash` with `#!/usr/bin/env bash` in all four files. For the two 
 
 ### `set -euo pipefail` gap analysis
 
-Two scripts use `set -e` alone:
+Two scripts use `set -e` alone. Source-level audit of both scripts confirms they are **compatible with `-uo pipefail`** and should be upgraded in this PR alongside the shebang fix.
 
-**`worktree-manager.sh`**: Uses `set -e` only. The script uses unquoted variable expansions and conditional patterns that may break with `-u` (unset variable errors). A full `-uo pipefail` upgrade should be assessed but is a separate concern from the shebang fix. If `-uo pipefail` would require refactoring variable handling, file a follow-up issue rather than blocking this PR.
+**`worktree-manager.sh`** (624 lines): All optional positional parameters use `${N:-default}` syntax (lines 72, 129, 543), which is safe under `nounset`. Associative array lookups use `${branch_to_worktree[$branch]:-}` (line 401). `|| true` guards on `git pull` (lines 106, 157) prevent `pipefail` failures. No bare `$1`/`$2` references without defaults. **Verdict: safe to upgrade to `set -euo pipefail`.**
 
-**`check_setup.sh`**: Uses `set -e` only. Similar assessment needed. The script checks for `rclone` installation and may have patterns incompatible with strict `-u` mode.
+**`check_setup.sh`** (61 lines): `REMOTES` is always assigned (line 25, with `|| true`). The `for remote in $REMOTES` loop (line 50) handles empty strings correctly (loop body is never entered). No unset variable references. **Verdict: safe to upgrade to `set -euo pipefail`.** Also note: line 27 uses `[ -z "$REMOTES" ]` instead of `[[ -z "$REMOTES" ]]`, which violates the constitution's double-bracket convention -- fix as a drive-by.
 
-Recommendation: Fix the shebang in this PR. If `-uo pipefail` upgrade requires non-trivial refactoring, file a separate issue to avoid scope creep.
+**Recommendation: Upgrade both scripts to `set -euo pipefail` in this PR.** The audit confirms zero incompatibilities, so deferring to a follow-up issue would be unnecessary process overhead for a safe change. Also fix the `[ ]` to `[[ ]]` in `check_setup.sh` line 27.
 
 ### Version bump
 
@@ -82,16 +96,29 @@ This touches `plugins/soleur/` files (`skills/git-worktree/scripts/worktree-mana
 #!/usr/bin/env bash
 ```
 
-### `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` (line 1)
+### `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` (lines 1, 7)
 
 ```bash
 #!/usr/bin/env bash
 ```
 
-### `plugins/soleur/skills/rclone/scripts/check_setup.sh` (line 1)
+```bash
+set -euo pipefail
+```
+
+### `plugins/soleur/skills/rclone/scripts/check_setup.sh` (lines 1, 4, 27)
 
 ```bash
 #!/usr/bin/env bash
+```
+
+```bash
+set -euo pipefail
+```
+
+```bash
+# Line 27: fix bracket convention
+if [[ -z "$REMOTES" ]]; then
 ```
 
 ## SpecFlow Analysis
@@ -100,9 +127,8 @@ This is a mechanical find-and-replace with no conditional logic, no CI workflow 
 
 ## Non-goals
 
-- Upgrading `set -e` to `set -euo pipefail` in scripts that currently lack it (separate issue if needed)
 - Changing shebangs in non-shell files or documentation code blocks
-- Modifying any script logic or behavior
+- Modifying any script logic or behavior beyond the shebang, `set` flags, and bracket convention fixes
 
 ## References
 
