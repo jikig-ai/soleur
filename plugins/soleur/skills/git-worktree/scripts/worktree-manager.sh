@@ -1,10 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Git Worktree Manager
 # Handles creating, listing, switching, and cleaning up Git worktrees
 # KISS principle: Simple, interactive, opinionated
 
-set -e
+set -euo pipefail
 
 # Colors for output
 RED='\033[0;31m'
@@ -371,7 +371,7 @@ cleanup_merged_worktrees() {
 
   # Find branches with [gone] tracking (robust detection)
   local gone_branches
-  gone_branches=$(git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads 2>/dev/null | grep '\[gone\]' | cut -d' ' -f1)
+  gone_branches=$(git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads 2>/dev/null | grep '\[gone\]' | cut -d' ' -f1 || true)
 
   if [[ -z "$gone_branches" ]]; then
     [[ "$verbose" == "true" ]] && echo -e "${GREEN}No merged branches to clean up${NC}"
@@ -544,19 +544,19 @@ main() {
 
   case "$command" in
     create)
-      create_worktree "$2" "$3"
+      create_worktree "${2:-}" "${3:-}"
       ;;
     feature|feat)
-      create_for_feature "$2" "$3"
+      create_for_feature "${2:-}" "${3:-}"
       ;;
     list|ls)
       list_worktrees
       ;;
     switch|go)
-      switch_worktree "$2"
+      switch_worktree "${2:-}"
       ;;
     copy-env|env)
-      copy_env_to_worktree "$2"
+      copy_env_to_worktree "${2:-}"
       ;;
     cleanup|clean)
       cleanup_worktrees

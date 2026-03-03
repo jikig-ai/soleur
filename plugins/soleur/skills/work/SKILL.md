@@ -128,6 +128,18 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    Before starting the sequential task loop, check for parallelization opportunities:
 
+   **Step 0: Tier 0 pre-check (Lifecycle Parallelism)**
+
+   Read the plan. Apply a single judgment: "Does this plan have distinct code and test workstreams that can be assigned to separate agents with non-overlapping file scopes?"
+
+   - If yes (interactive mode): offer Tier 0 to the user
+   - If yes (pipeline mode): auto-select Tier 0 without prompting
+   - If declined or ineligible: fall through to Step 1 below
+
+   **Read `plugins/soleur/skills/work/references/work-lifecycle-parallel.md` now** for the full Tier 0 protocol (offer/auto-select, generate contract, spawn 2 agents, collect/commit, test-fix-loop, docs). If Tier 0 executes, proceed directly to Phase 3 after completing Step 06 of the protocol. If declined, fall through to Step 1.
+
+   ---
+
    **Step 1: Analyze independence**
 
    Read the TaskList. Identify tasks that have no `blockedBy` dependencies and reference
@@ -140,7 +152,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    ---
 
-   **Pipeline mode override:** If running in pipeline mode (plan file argument detected in Phase 1), skip Tier A entirely and auto-accept Tier B without prompting. Do not present "Run as Agent Team?" or "Run in parallel?" questions -- proceed directly to Step B2 of the Subagent Fan-Out protocol if 3+ independent tasks exist, otherwise fall through to Tier C.
+   **Pipeline mode override:** If running in pipeline mode (plan file argument detected in Phase 1), auto-select Tier 0 if eligible (Step 0 above). If Tier 0 is ineligible, skip Tier A entirely and auto-accept Tier B without prompting. Do not present "Run as Agent Team?" or "Run in parallel?" questions -- proceed directly to Step B2 of the Subagent Fan-Out protocol if 3+ independent tasks exist, otherwise fall through to Tier C.
 
    ---
 
@@ -279,7 +291,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 Implementation is complete. Determine how this skill was invoked and act accordingly:
 
-**If invoked by one-shot** (the conversation contains `soleur:one-shot` skill output earlier): Return control immediately. Do not invoke ship, review, or compound — the orchestrator handles the remaining steps. Output "Implementation complete." then proceed to the next step in the orchestrator's sequence.
+**If invoked by one-shot** (the conversation contains `soleur:one-shot` skill output earlier): Do not invoke ship, review, or compound — the orchestrator handles those. Output exactly `## Work Phase Complete` (this is a continuation marker, NOT a turn-ending statement) and then **immediately continue executing the next numbered step in the one-shot sequence** (step 4: review). Do NOT end your turn after outputting this marker.
 
 **If invoked directly by the user** (no one-shot orchestrator): Continue through the post-implementation pipeline automatically. Do NOT stop and wait — the earlier learning "Workflow Completion is Not Task Completion" applies. Run these steps in order:
 
