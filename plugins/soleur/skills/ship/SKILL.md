@@ -9,6 +9,17 @@ description: This skill should be used when preparing a feature for production d
 
 **CRITICAL: No command substitution.** Never use `$()` in Bash commands. When a step says "get value X, then use it in command Y", run them as **two separate Bash tool calls** -- first get the value, then use it literally in the next call. This avoids Claude Code's security prompt for command substitution.
 
+## Headless Mode Detection
+
+If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headless` from `$ARGUMENTS` before processing remaining args.
+
+When `HEADLESS_MODE=true`:
+- Phase 2: auto-invoke `skill: soleur:compound --headless` (forward flag, no user prompt)
+- Phase 4: if test files are missing, continue without writing (CI gate catches this)
+- Phase 6: auto-accept generated PR title/body without user confirmation
+- Phase 7: if CI is flaky or unrelated check fails, abort pipeline (do not ask whether to proceed)
+- All failure conditions: abort with clear error message, do not prompt
+
 ## Phase 0: Context Detection
 
 Detect the current environment:
@@ -73,9 +84,13 @@ Search for unarchived artifacts matching the feature name (excluding `archive/` 
 - Plans: `knowledge-base/plans/*FEATURE*`
 - Spec directory: `knowledge-base/specs/feat-FEATURE/`
 
-**If unarchived artifacts exist:** Do NOT offer Skip. List the found artifacts and explain that compound must run to consolidate and archive them before shipping. Then use `skill: soleur:compound`. The compound flow will automatically consolidate and archive the artifacts on `feat-*` branches.
+**If unarchived artifacts exist:** Do NOT offer Skip. List the found artifacts and explain that compound must run to consolidate and archive them before shipping. Then use `skill: soleur:compound` (or `skill: soleur:compound --headless` if `HEADLESS_MODE=true`). The compound flow will automatically consolidate and archive the artifacts on `feat-*` branches.
 
-**If no unarchived artifacts exist:** Offer the standard choice:
+**If no unarchived artifacts exist:**
+
+**Headless mode:** Auto-invoke `skill: soleur:compound --headless` without prompting.
+
+**Interactive mode:** Offer the standard choice:
 
 "No learnings documented for this feature. Run /compound to capture what you learned?"
 
@@ -129,7 +144,11 @@ Replace `HASH` with the actual commit hash. Filter results for `.ts`, `.js`, `.r
 
 For each new source file, check if a corresponding test file exists (e.g., `foo.ts` -> `foo.test.ts` or `foo.spec.ts`). Report any source files missing test coverage.
 
-**If test files are missing:** Ask the user whether to write tests now or continue without them. Do not silently proceed.
+**If test files are missing:**
+
+**Headless mode:** Continue without writing tests (CI gate catches missing coverage).
+
+**Interactive mode:** Ask the user whether to write tests now or continue without them. Do not silently proceed.
 
 Then run the project's test suite:
 
@@ -185,7 +204,7 @@ Replace `BRANCH_NAME` with the actual branch name.
 **If an open PR exists:**
 
 1. The PR was likely created as a draft earlier in the workflow.
-2. Confirm the PR title and body with the user before editing.
+2. **Headless mode:** Auto-accept the generated PR title/body from diff analysis. **Interactive mode:** Confirm the PR title and body with the user before editing.
 3. Update the PR. Pass the body as a multi-line string (no `$()` needed):
 
    ```bash
@@ -346,7 +365,7 @@ Poll every 10 seconds until state is `MERGED`.
    ```
 
 2. If the failure is in tests: investigate the failing test, fix locally, commit, push, re-queue auto-merge.
-3. If the failure is in a flaky or unrelated check: warn the user and ask whether to proceed or wait for a re-run.
+3. If the failure is in a flaky or unrelated check: **Headless mode:** abort the pipeline with a clear error message (do not auto-proceed past failed checks). **Interactive mode:** warn the user and ask whether to proceed or wait for a re-run.
 
 **CRITICAL: Do NOT use `--delete-branch` on merge.** The guardrails hook blocks `--delete-branch` whenever ANY worktree exists in the repo -- not just the one for the branch being merged -- so the restriction applies unconditionally during parallel development. Merge with `--squash` only, then `cleanup-merged` handles branch deletion after removing the worktree.
 
@@ -372,4 +391,4 @@ This detects `[gone]` branches (where the remote was deleted after merge), remov
 - **Never edit version fields.** `plugin.json` and `marketplace.json` versions are frozen sentinels (`0.0.0-dev`). Version is derived from git tags via GitHub Releases at build time.
 - **Ask before running /compound.** The user may have already documented learnings.
 - **Do not block on missing artifacts.** Not every change needs a brainstorm or plan.
-- **Confirm the PR title and body** with the user before creating it.
+- **Confirm the PR title and body** with the user before creating it (skip in headless mode).

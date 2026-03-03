@@ -47,12 +47,12 @@
 **Files:** `plugins/soleur/skills/compound-capture/SKILL.md`
 
 ### 1.6 Add `--headless` bypass to ship skill
-- [ ] Add `--headless` detection
-- [ ] Phase 2: auto-invoke `skill: soleur:compound --headless` (forward flag)
-- [ ] Phase 4 (missing tests): continue without writing
-- [ ] Phase 6: auto-accept generated PR title/body
-- [ ] Phase 7 (flaky CI): abort pipeline
-- [ ] All failure conditions: abort with clear error, do not prompt
+- [x] Add `--headless` detection
+- [x] Phase 2: auto-invoke `skill: soleur:compound --headless` (forward flag)
+- [x] Phase 4 (missing tests): continue without writing
+- [x] Phase 6: auto-accept generated PR title/body
+- [x] Phase 7 (flaky CI): abort pipeline
+- [x] All failure conditions: abort with clear error, do not prompt
 
 **Files:** `plugins/soleur/skills/ship/SKILL.md`
 
