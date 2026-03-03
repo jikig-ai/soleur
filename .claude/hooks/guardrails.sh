@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # PreToolUse guardrail hook for Bash commands.
 # Blocks: commits on main, rm -rf on worktrees, --delete-branch with active worktrees.
 # NOTE: When adding or modifying guards, update AGENTS.md hook awareness rule to match.
