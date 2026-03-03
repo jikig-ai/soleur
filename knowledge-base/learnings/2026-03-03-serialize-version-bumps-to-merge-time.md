@@ -34,6 +34,11 @@ Key design decisions:
 
 When CI needs to record metadata (version numbers, changelogs), prefer API artifacts (tags, releases) over committed files. Committed files require write access to protected branches and create merge conflicts. Git tags and GitHub Releases are created via API without touching `refs/heads/main`.
 
+## Session Errors
+
+1. `git add` on a `git rm`'d file fails — the file is already staged for deletion, so `git add` with the deleted path returns `fatal: pathspec did not match any files`. Stage only the modified files separately.
+2. `gh release view` piped to `sed` needs a fallback `|| echo "0.0.0"` — when no releases exist, `gh release view` exits non-zero and the pipeline fails silently.
+
 ## Tags
 
 category: integration-issues
