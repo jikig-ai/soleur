@@ -103,7 +103,7 @@ Iteration N:
 | `git stash push -m "..."` | `git add -A && git commit -m "test-fix-loop: checkpoint iteration N"` | Save current state as rollback point |
 | `git stash drop` | No-op (checkpoint commit stays in history) | Discard rollback point, keep progress |
 | `git stash pop` (revert one iteration) | `git reset --hard HEAD` | Discard uncommitted working tree changes |
-| `git stash pop` (revert all) | `git reset --hard <initial_sha>` | Revert to pre-loop state |
+| `git stash pop` (revert all) | `git reset --hard <initial-sha>` | Revert to pre-loop state |
 | Clean stash at end | Squash at PR merge | Clean up intermediate commits |
 
 ### Termination Cleanup
@@ -169,18 +169,18 @@ The existing check (line 38: "Run `git status --porcelain`. If output is non-emp
 
 ## Acceptance Criteria
 
-- [ ] AC1: `plugins/soleur/skills/test-fix-loop/SKILL.md` contains zero occurrences of `git stash`
-- [ ] AC2: Checkpoint commits use `git add -A && git commit -m "test-fix-loop: checkpoint iteration N"` pattern (with prose placeholders, no `$()`)
-- [ ] AC3: Rollback on regression uses `git reset --hard` to discard uncommitted working tree changes
-- [ ] AC4: Rollback on circular/non-convergence/max-iterations uses `git reset --hard <initial-sha>` to revert all progress
-- [ ] AC5: Success path stages fixes without committing (preserving existing behavior -- user reviews and commits via `/ship`)
-- [ ] AC6: Progress path leaves fixes in working tree; next iteration's checkpoint commits them
-- [ ] AC7: The skill description in SKILL.md frontmatter no longer mentions "git stash isolation"
-- [ ] AC8: The termination conditions table is updated to reference commit-based rollback instead of stash-based
-- [ ] AC9: The Key Principles section reflects commit-based isolation instead of stash-based
-- [ ] AC10: `plugins/soleur/README.md` skill table description updated (currently says "git stash isolation")
-- [ ] AC11: `plugins/soleur/CHANGELOG.md` is NOT edited (version bumping is automated at merge time)
-- [ ] AC12: No `$()` shell variable expansion in SKILL.md code blocks (use prose placeholders per constitution)
+- [x] AC1: `plugins/soleur/skills/test-fix-loop/SKILL.md` contains zero occurrences of `git stash`
+- [x] AC2: Checkpoint commits use `git add -A && git commit -m "test-fix-loop: checkpoint iteration N"` pattern (with prose placeholders, no `$()`)
+- [x] AC3: Rollback on regression uses `git reset --hard` to discard uncommitted working tree changes
+- [x] AC4: Rollback on circular/non-convergence/max-iterations uses `git reset --hard <initial-sha>` to revert all progress
+- [x] AC5: Success path stages fixes without committing (preserving existing behavior -- user reviews and commits via `/ship`)
+- [x] AC6: Progress path leaves fixes in working tree; next iteration's checkpoint commits them
+- [x] AC7: The skill description in SKILL.md frontmatter no longer mentions "git stash isolation"
+- [x] AC8: The termination conditions table is updated to reference commit-based rollback instead of stash-based
+- [x] AC9: The Key Principles section reflects commit-based isolation instead of stash-based
+- [x] AC10: `plugins/soleur/README.md` skill table description updated (currently says "git stash isolation")
+- [x] AC11: `plugins/soleur/CHANGELOG.md` is NOT edited (version bumping is automated at merge time)
+- [x] AC12: No `$()` shell variable expansion in SKILL.md code blocks (use prose placeholders per constitution)
 
 ## Test Scenarios
 
