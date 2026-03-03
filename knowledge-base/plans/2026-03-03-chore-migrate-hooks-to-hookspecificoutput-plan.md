@@ -167,12 +167,12 @@ jq -n --arg names "$WORKTREE_NAMES" --arg path "$GIT_ROOT/.worktrees/<name>/$REL
 
 ## Acceptance Criteria
 
-- [ ] `guardrails.sh` uses `hookSpecificOutput` with `permissionDecision: "deny"` for all 3 guards
-- [ ] `worktree-write-guard.sh` uses `hookSpecificOutput` with `permissionDecision: "deny"` and `jq -n --arg` for safe variable interpolation
-- [ ] No remaining `"decision":"block"` patterns in PreToolUse hooks (`.claude/hooks/guardrails.sh`, `.claude/hooks/worktree-write-guard.sh`)
-- [ ] `stop-hook.sh` is NOT modified (Stop hooks use different format)
-- [ ] All hooks still produce valid JSON output (no stdout corruption)
-- [ ] Guard behavior is unchanged -- same conditions trigger, same messages displayed
+- [x] `guardrails.sh` uses `hookSpecificOutput` with `permissionDecision: "deny"` for all 3 guards
+- [x] `worktree-write-guard.sh` uses `hookSpecificOutput` with `permissionDecision: "deny"` and `jq -n --arg` for safe variable interpolation
+- [x] No remaining `"decision":"block"` patterns in PreToolUse hooks (`.claude/hooks/guardrails.sh`, `.claude/hooks/worktree-write-guard.sh`)
+- [x] `stop-hook.sh` is NOT modified (Stop hooks use different format)
+- [x] All hooks still produce valid JSON output (no stdout corruption)
+- [x] Guard behavior is unchanged -- same conditions trigger, same messages displayed
 
 ## Test Scenarios
 
