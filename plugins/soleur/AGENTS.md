@@ -2,13 +2,15 @@
 
 ## Versioning Requirements
 
-**IMPORTANT**: Every change to this plugin MUST include updates to all three files:
+**Version bumping is automated.** The `version-bump-and-release.yml` GitHub Action handles all version updates at merge time. Feature branches must NOT edit version files.
 
-1. **`.claude-plugin/plugin.json`** - Bump version using semver
-2. **`CHANGELOG.md`** - Document changes using Keep a Changelog format
-3. **`README.md`** - Verify/update component counts and tables
+### How It Works
 
-### Version Bumping Rules
+1. PR author adds a `## Changelog` section to the PR body (template provided)
+2. `/ship` skill analyzes the diff and sets a `semver:patch`, `semver:minor`, or `semver:major` label
+3. On merge to main, the Action reads the label, bumps version in all 6 files, creates a GitHub Release, and posts to Discord
+
+### Semver Label Rules
 
 - **MAJOR** (1.0.0 → 2.0.0): Breaking changes, major reorganization
 - **MINOR** (1.0.0 → 1.1.0): New agents, commands, or skills
@@ -18,15 +20,9 @@
 
 Before committing ANY changes:
 
-- [ ] Version bumped in `.claude-plugin/plugin.json`
-- [ ] CHANGELOG.md updated with changes
-- [ ] README.md component counts verified
-- [ ] README.md tables accurate (agents, commands, skills)
-- [ ] plugin.json description matches current counts
-- [ ] Root `README.md` version badge matches new version
-- [ ] `.github/ISSUE_TEMPLATE/bug_report.yml` placeholder matches new version
-- [ ] `.claude-plugin/marketplace.json` plugin version matches new version
-- [ ] If rebasing, commit version bump files BEFORE running `git rebase` -- unstaged version changes cause rebase abort
+- [ ] README.md component counts verified (tables accurate)
+- [ ] Do NOT edit: `plugin.json` version, `CHANGELOG.md` version entries, root `README.md` badge, `bug_report.yml` placeholder, `marketplace.json` version — these are managed by CI
+- [ ] PR body includes a `## Changelog` section describing changes
 
 ### Directory Structure
 
@@ -191,7 +187,7 @@ Domain leaders are agents that orchestrate a business domain's specialist team. 
 5. Verify token budget: `shopt -s globstar && grep -h 'description:' agents/**/*.md | wc -w` (under 2,500)
 6. Update docs data files: `agents.js` (DOMAIN_META, DOMAIN_CSS_VARS, domainOrder), `style.css` (CSS variable). Landing page and legal docs update automatically from data.
 7. Update AGENTS.md (directory tree, domain leader table) and README.md (agent section, counts)
-8. Version bump (MINOR) and CHANGELOG
+8. PR must have `semver:minor` label and `## Changelog` section (CI handles version bump at merge time)
 
 ## Documentation
 
