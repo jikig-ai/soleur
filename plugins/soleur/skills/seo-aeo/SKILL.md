@@ -107,3 +107,5 @@ Run the standalone validation script against built output.
    - **Exit 1:** Show failing checks and recommend running `seo-aeo fix`
 
 Validation script: [validate-seo.sh](./scripts/validate-seo.sh)
+
+**Known limitation:** validate-seo.sh only checks named AI bot entries -- wildcard `User-agent: *` blocks are not detected. A site blocking all bots via wildcard will pass validation.

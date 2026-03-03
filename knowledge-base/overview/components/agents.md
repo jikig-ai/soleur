@@ -1,6 +1,6 @@
 ---
 component: agents
-updated: 2026-02-12
+updated: 2026-03-03
 primary_location: plugins/soleur/agents/
 ---
 
@@ -10,11 +10,11 @@ AI agents that perform specialized tasks during the development workflow. Each a
 
 ## Purpose
 
-Provide specialized AI capabilities for specific tasks like code review, research, design verification, and workflow automation. Agents allow the main workflow commands to delegate complex analysis to focused, expert-level AI personas.
+Provide specialized AI capabilities across 8 business domains. Each domain has a leader agent (C-level) that orchestrates specialists, enabling a Company-as-a-Service architecture where any business function can be delegated to an AI agent.
 
 ## Responsibilities
 
-- Perform deep analysis within a specific domain (security, performance, patterns)
+- Perform deep analysis within a specific domain (security, performance, legal, marketing, etc.)
 - Provide consistent, reproducible results following defined instructions
 - Return structured findings for use by other commands
 - Execute in parallel when multiple perspectives are needed
@@ -32,8 +32,8 @@ Task({
 ```
 
 **Naming convention:** Agents are named by their directory path under `agents/`:
-- Engineering agents: `soleur:engineering:review:<name>` or `soleur:engineering:design:<name>`
-- Cross-domain agents: `soleur:research:<name>` or `soleur:workflow:<name>`
+- Domain agents: `soleur:<domain>:<name>` (e.g., `soleur:finance:cfo`)
+- Nested agents: `soleur:<domain>:<function>:<name>` (e.g., `soleur:engineering:review:security-sentinel`)
 
 ## Data Flow
 
@@ -50,13 +50,17 @@ graph LR
 3. Agent reads relevant files, analyzes, and returns findings
 4. Parent command consolidates results
 
-## Categories
+## Categories (61 agents across 8 domains)
 
-Agents are organized by domain first, then by function. Cross-domain agents stay at root level.
+### Engineering (27 agents)
 
-### Engineering (15 agents)
+#### CTO (1)
 
-#### Review (14)
+| Agent | Purpose |
+|-------|---------|
+| `cto` | Assess technical implications, flag architecture concerns during planning |
+
+#### Review (15)
 
 Code review specialists that catch issues before PR:
 
@@ -71,23 +75,34 @@ Code review specialists that catch issues before PR:
 | `deployment-verification-agent` | Go/No-Go deployment checklists |
 | `dhh-rails-reviewer` | Rails review from DHH's perspective |
 | `kieran-rails-reviewer` | Rails code with strict conventions |
-| `legacy-code-expert` | Safely modify untested legacy code using Feathers' dependency-breaking techniques |
+| `legacy-code-expert` | Safely modify untested legacy code using Feathers' techniques |
 | `pattern-recognition-specialist` | Design patterns and anti-patterns |
 | `performance-oracle` | Performance analysis and optimization |
 | `security-sentinel` | Security audits and vulnerabilities |
-| `test-design-reviewer` | Score test quality using Farley's 8 properties with weighted rubric |
+| `semgrep-sast` | Deterministic static analysis using semgrep rules |
+| `test-design-reviewer` | Score test quality using Farley's 8 properties |
 
 #### Design (1)
 
 | Agent | Purpose |
 |-------|---------|
-| `ddd-architect` | Domain-Driven Design with strategic bounded contexts and tactical patterns |
+| `ddd-architect` | Domain-Driven Design with bounded contexts and aggregate design |
 
-### Cross-domain (7 agents)
+#### Discovery (2)
+
+| Agent | Purpose |
+|-------|---------|
+| `agent-finder` | Find community agents for missing tech stack coverage |
+| `functional-discovery` | Check if planned features already exist in registries |
+
+#### Infrastructure (2)
+
+| Agent | Purpose |
+|-------|---------|
+| `infra-security` | Audit domain security, configure DNS/Cloudflare via MCP |
+| `terraform-architect` | Generate and review Terraform configurations |
 
 #### Research (5)
-
-Gather context and best practices:
 
 | Agent | Purpose |
 |-------|---------|
@@ -97,42 +112,96 @@ Gather context and best practices:
 | `learnings-researcher` | Search knowledge-base/learnings/ for relevant solutions |
 | `repo-research-analyst` | Repository structure and conventions |
 
-#### Workflow (2)
-
-Automate repetitive tasks:
+#### Workflow (1)
 
 | Agent | Purpose |
 |-------|---------|
 | `pr-comment-resolver` | Address PR review comments |
+
+### Finance (4 agents)
+
+| Agent | Purpose |
+|-------|---------|
+| `cfo` | Orchestrate finance domain, assess financial posture |
+| `budget-analyst` | Budget plans, spending allocation, burn rate modeling |
+| `financial-reporter` | Financial summaries, cash flow, investor-ready reports |
+| `revenue-analyst` | Revenue tracking, P&L projections, financial forecasts |
+
+### Legal (3 agents)
+
+| Agent | Purpose |
+|-------|---------|
+| `clo` | Orchestrate legal domain, assess legal posture |
+| `legal-compliance-auditor` | Audit documents for compliance gaps and consistency |
+| `legal-document-generator` | Generate draft legal documents |
+
+### Marketing (11 agents)
+
+| Agent | Purpose |
+|-------|---------|
+| `cmo` | Orchestrate marketing domain, unified strategy |
+| `analytics-analyst` | Tracking implementations, event taxonomies, A/B tests |
+| `brand-architect` | Brand identity workshops, voice and tone, visual direction |
+| `conversion-optimizer` | Landing pages, signup flows, paywall optimization |
+| `copywriter` | Landing pages, email sequences, cold outreach, social content |
+| `growth-strategist` | Content strategy, keyword research, content auditing |
+| `paid-media-strategist` | Google/Meta/LinkedIn campaign structure and targeting |
+| `pricing-strategist` | SaaS pricing, tier design, value metric selection |
+| `programmatic-seo-specialist` | Template-driven SEO page generation at scale |
+| `retention-strategist` | Churn prevention, payment recovery, referral programs |
+| `seo-aeo-analyst` | Technical SEO and AI Engine Optimization audits |
+
+### Operations (4 agents)
+
+| Agent | Purpose |
+|-------|---------|
+| `coo` | Orchestrate operations domain, recommend actions |
+| `ops-advisor` | Track operational expenses, manage domains |
+| `ops-provisioner` | Set up SaaS accounts, configure tools |
+| `ops-research` | Research domains, hosting providers, cost optimization |
+
+### Product (5 agents)
+
+| Agent | Purpose |
+|-------|---------|
+| `cpo` | Orchestrate product domain, validate business models |
+| `business-validator` | Structured market research and business model assessment |
+| `competitive-intelligence` | Recurring competitive landscape monitoring |
 | `spec-flow-analyzer` | Analyze specifications for gaps and edge cases |
+| `ux-design-lead` | Visual designs in .pen files using Pencil MCP tools |
+
+### Sales (4 agents)
+
+| Agent | Purpose |
+|-------|---------|
+| `cro` | Orchestrate sales domain, pipeline strategy |
+| `deal-architect` | Proposals, SOWs, battlecards, objection handling |
+| `outbound-strategist` | Outbound prospecting sequences, ICP targeting |
+| `pipeline-analyst` | Pipeline health, deal velocity, stage criteria |
+
+### Support (3 agents)
+
+| Agent | Purpose |
+|-------|---------|
+| `cco` | Orchestrate support domain, assess support posture |
+| `community-manager` | Community engagement analysis, weekly digests |
+| `ticket-triage` | Classify and route GitHub issues by severity and domain |
 
 ## Dependencies
 
 - **Internal**: None (agents are standalone)
 - **External**: Claude Code Task tool, various CLI tools per agent
 
-## Examples
-
-**Run security review:**
-
-```markdown
-Task security-sentinel("Review authentication changes in src/auth/")
-```
-
-**Run multiple reviewers in parallel:**
-
-```markdown
-Task kieran-rails-reviewer("Review controller changes")
-Task code-simplicity-reviewer("Check for over-engineering")
-Task security-sentinel("Audit permission checks")
-```
-
 ## Related Files
 
-- `plugins/soleur/agents/engineering/review/` - Engineering review agents
-- `plugins/soleur/agents/engineering/design/` - Engineering design agents
-- `plugins/soleur/agents/research/` - Research agents
-- `plugins/soleur/agents/workflow/` - Workflow agents
+- `plugins/soleur/agents/engineering/` - Engineering agents (review, design, discovery, infra, research, workflow)
+- `plugins/soleur/agents/finance/` - Finance agents
+- `plugins/soleur/agents/legal/` - Legal agents
+- `plugins/soleur/agents/marketing/` - Marketing agents
+- `plugins/soleur/agents/operations/` - Operations agents
+- `plugins/soleur/agents/product/` - Product agents (includes design/ subdirectory)
+- `plugins/soleur/agents/sales/` - Sales agents
+- `plugins/soleur/agents/support/` - Support agents
 
 ## See Also
 

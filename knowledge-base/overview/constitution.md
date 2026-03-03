@@ -30,13 +30,16 @@ Project principles organized by domain. Add principles as you learn them.
 - CSS is organized into `@layer` cascade layers in order: reset, tokens, base, layout, components, utilities; custom properties follow semantic naming (`--color-*`, `--font-*`, `--text-*`, `--space-*`)
 - CHANGELOG follows Keep a Changelog format with `### Added`, `### Changed`, `### Fixed`, `### Removed` section headers under `## [X.Y.Z] - YYYY-MM-DD` version entries
 - Plan files use `YYYY-MM-DD-<type>-<descriptive-name>-plan.md` filename format; learning files use `YYYY-MM-DD-<descriptive-slug>.md` format
+- Learning files must include YAML frontmatter with `title`, `date`, `category`, and `tags` fields; optional fields include `symptoms`, `module`, and `synced_to`
+- Plan files must include YAML frontmatter with `title` (conventional commit prefix), `type` (fix/feat), and `date` fields
+- Linting configuration overrides (`.markdownlint.json`, `.eslintrc`, etc.) must include inline comments or a companion doc explaining the rationale for each disabled rule
 
 ### Never
 
 - Avoid second person ("you should") - use objective language ("To accomplish X, do Y")
 - Never use shell variable expansion (`${VAR}`, `$VAR`, `$()`) in bash code blocks within skill, command, or agent .md files -- use angle-bracket prose placeholders (`<variable-name>`) with substitution instructions instead, or relative paths (e.g., `./plugins/soleur/...`) for plugin-relative paths; the ship skill's "No command substitution" pattern is the reference implementation
 - Never anchor guardrail grep patterns to `^` alone -- the Bash tool chains commands with `&&`, `;`, and `||`, so a `^`-anchored pattern only catches the first command; match at command boundaries with `(^|&&|\|\||;)` instead
-- Never use "Announce to the user" or "Output to the user" as terminal instructions in skills that can be invoked by pipelines (one-shot, ship) -- the model interprets these as implicit stop signals; use "Return control immediately" for pipeline-compatible handoff, with a conditional single-line output for direct user invocation
+- Never use "Announce to the user", "Output to the user", or "and stop" as terminal instructions in skills that can be invoked by pipelines (one-shot, ship) -- the model interprets these as implicit stop signals; use "Return control immediately" or "proceed to the next step in the orchestrator's sequence" for pipeline-compatible handoff, with a conditional single-line output for direct user invocation
 - Never write bash code blocks in agent/skill prompts that trigger Claude Code's approval heuristics -- pre-combine multiple blocks into a single `;`-joined command (models insert `echo "---"` separators otherwise), avoid quoted strings starting with dashes (`"---"`, `"-flag"`), and keep commands simple enough to auto-approve; if a command requires user consent, the agent blocks waiting for input it will never receive when running as a subagent
 
 ### Prefer
@@ -49,6 +52,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Prefer numeric literal underscores as thousand separators for readability (e.g., `3_000` instead of `3000`)
 - Prefer a language identifier after triple backticks in code blocks (e.g., ```bash, ```yaml -- never bare ```)
 - Prefer verb-noun naming for skill directories where applicable (e.g., `deploy-docs`, `release-announce`, `resolve-pr-parallel`)
+- Prefer `# --- Section Name ---` comment headers in shell scripts to separate logical sections
 
 ## Architecture
 
@@ -61,7 +65,7 @@ Project principles organized by domain. Add principles as you learn them.
 - When adding a new skill, manually register it in `docs/_data/skills.js` SKILL_CATEGORIES -- skill discovery does not recurse and the docs site will silently omit unregistered skills
 - After version bumps, diff root README agent/skill counts against plugin README counts -- they drift independently and have diverged multiple times
 - Organize agents by domain first (engineering/, etc.), then by function (review/, design/). Cross-domain agents stay at root level (research/, workflow/)
-- Skills must have a SKILL.md file and may include scripts/, references/, and assets/ subdirectories
+- Skills must have a SKILL.md file and may include scripts/, references/, and assets/ subdirectories; directories under `skills/` without SKILL.md must be deleted or converted to proper skills
 - Every SKILL.md interactive prompt (AskUserQuestion) must accept an `$ARGUMENTS` bypass path for programmatic callers -- agents and pipeline skills cannot answer interactive prompts; provide flag-based argument passthrough (e.g., `--name`, `--yes`) that skips the prompt when present
 - Lifecycle workflows with hooks must cover every state transition with a cleanup trigger; verify no gaps between create, ship, merge, and session-start
 - At session start, run `worktree-manager.sh cleanup-merged` to remove worktrees whose remote branches are [gone]; this is the recovery mechanism for the merge-then-session-end gap where cleanup was deferred
@@ -97,6 +101,8 @@ Project principles organized by domain. Add principles as you learn them.
 - Run SpecFlow analysis (spec-flow-analyzer agent) on features that modify CI workflows or GitHub Actions -- it catches repo configuration blockers (auto-merge settings, rulesets, token permissions) before implementation begins
 - Multi-agent cascades (one agent spawning specialists via Task tool) require a pre-flight checklist: (1) `Task` must be in `--allowedTools` for CI workflows, (2) every specialist must have an explicit write target path in the delegation table, (3) every specialist must produce a writable artifact -- read-only analysis tasks need a concrete output file. Cascade failures are silent: missing tools, unspecified write targets, and no-output specialists all fail without error messages
 - Scheduled workflows that select issues by label must cascade through priority levels (p3-low → p2-medium → p1-high) rather than hardcoding a single tier -- a fixed filter produces idle runs when the target tier is empty while higher-priority bugs accumulate
+- Before creating a PR or merging, rebase feature branch on latest origin/main (`git fetch origin main && git rebase origin/main`) -- parallel feature branches that bump versions without rebasing cause merge conflicts that require manual resolution
+- Document environment-specific constraints (terminal capabilities, shell limitations) in AGENTS.md Hard Rules when Claude violates them without being told -- these are loaded every turn and prevent dead-end attempts
 
 ### Never
 
@@ -113,6 +119,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Never spawn file-modifying agents (ops-provisioner, brand-architect, etc.) from the main branch -- create a worktree first; agents that edit project files should include a defensive branch check as a safety net, but the primary enforcement belongs at the caller (command/skill) layer
 - Never nest command `.md` files in subdirectories under `commands/` -- the plugin loader treats subdirectory names as namespace segments, causing double-namespacing (e.g., `commands/soleur/go.md` becomes `soleur:soleur:go` instead of `soleur:go`)
 - Never construct filesystem paths from git ref names -- use `git worktree list --porcelain` to resolve actual worktree paths; refs use `/` separators (e.g., `feat/fix-x`) but worktree directories may use `-` (e.g., `feat-fix-x`), causing silent path mismatches
+- Never attempt to edit a file that has not been read in the current conversation context -- the Edit tool will reject it, and context compaction erases prior reads; re-read after compaction
 
 ### Prefer
 
