@@ -59,6 +59,6 @@
 ## Phase 2: Follow-Up Issues
 
 ### 2.1 Create follow-up issues for descoped items
-- [ ] Issue: "feat: scheduled-ship-merge workflow" — qualifying criteria, workflow architecture, concurrency
-- [ ] Issue: "feat: scheduled-compound-review workflow" — sessionless compound for cron execution
-- [ ] Issue: "feat: verify PreToolUse hooks in claude-code-action" — empirical test, add inline fallbacks
+- [x] Issue: "feat: scheduled-ship-merge workflow" — #417
+- [x] Issue: "feat: scheduled-compound-review workflow" — #418
+- [x] Issue: "feat: verify PreToolUse hooks in claude-code-action" — #419
