@@ -43,16 +43,16 @@ Replace `#!/bin/bash` with `#!/usr/bin/env bash` in all four files. For the two 
 
 ## Acceptance Criteria
 
-- [ ] All `.sh` files use `#!/usr/bin/env bash` shebang
-- [ ] `.claude/hooks/guardrails.sh` shebang updated
-- [ ] `.claude/hooks/worktree-write-guard.sh` shebang updated
-- [ ] `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` shebang updated
-- [ ] `plugins/soleur/skills/rclone/scripts/check_setup.sh` shebang updated
-- [ ] `worktree-manager.sh` upgraded from `set -e` to `set -euo pipefail`
-- [ ] `check_setup.sh` upgraded from `set -e` to `set -euo pipefail`
-- [ ] `check_setup.sh` line 27: `[ -z "$REMOTES" ]` changed to `[[ -z "$REMOTES" ]]`
-- [ ] `grep -r '#!/bin/bash' --include='*.sh'` returns zero results
-- [ ] Existing tests pass (`bun test`)
+- [x] All `.sh` files use `#!/usr/bin/env bash` shebang
+- [x] `.claude/hooks/guardrails.sh` shebang updated
+- [x] `.claude/hooks/worktree-write-guard.sh` shebang updated
+- [x] `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` shebang updated
+- [x] `plugins/soleur/skills/rclone/scripts/check_setup.sh` shebang updated
+- [x] `worktree-manager.sh` upgraded from `set -e` to `set -euo pipefail`
+- [x] `check_setup.sh` upgraded from `set -e` to `set -euo pipefail`
+- [x] `check_setup.sh` line 27: `[ -z "$REMOTES" ]` changed to `[[ -z "$REMOTES" ]]`
+- [x] `grep -r '#!/bin/bash' --include='*.sh'` returns zero results
+- [x] Existing tests pass (`bun test`)
 
 ## Test Scenarios
 
