@@ -31,11 +31,6 @@ jobs:
           fetch-depth: 2
           token: ${{ github.token }}
 
-      - name: Configure git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
       - name: Check if plugin files changed
         id: check_plugin
         run: |
@@ -130,12 +125,14 @@ jobs:
       - name: Compute next version
         if: steps.check_plugin.outputs.changed == 'true'
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUMP_TYPE: ${{ steps.bump.outputs.type }}
         run: |
-          CURRENT=$(jq -r '.version' plugins/soleur/.claude-plugin/plugin.json)
+          CURRENT=$(gh release view --json tagName --jq '.tagName // "v0.0.0"' 2>/dev/null | sed 's/^v//' || echo "0.0.0")
           echo "current=$CURRENT" >> $GITHUB_OUTPUT
 
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-          BUMP_TYPE="${{ steps.bump.outputs.type }}"
 
           case "$BUMP_TYPE" in
             major) NEXT="$((MAJOR + 1)).0.0" ;;
@@ -166,10 +163,8 @@ jobs:
         id: changelog
         env:
           PR_TITLE: ${{ steps.pr.outputs.title }}
-          NEXT: ${{ steps.version.outputs.next }}
         run: |
           BODY_FILE="/tmp/pr_body.txt"
-          TODAY=$(date +%Y-%m-%d)
 
           # Extract content between ## Changelog and next ## heading
           CHANGELOG=""
@@ -185,127 +180,8 @@ jobs:
             CHANGELOG="- $PR_TITLE"
           fi
 
-          # Write changelog entry to temp file (safe from shell interpolation)
-          {
-            echo "## [$NEXT] - $TODAY"
-            echo ""
-            echo "$CHANGELOG"
-          } > /tmp/changelog_entry.txt
-
           # Write release notes (just the body, no heading)
           echo "$CHANGELOG" > /tmp/release_notes.txt
-
-      - name: Compute component counts
-        if: steps.check_plugin.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
-        id: counts
-        run: |
-          AGENTS=$(find plugins/soleur/agents -name '*.md' ! -name 'README.md' ! -name 'AGENTS.md' | wc -l)
-          SKILLS=$(find plugins/soleur/skills -name 'SKILL.md' | wc -l)
-          COMMANDS=$(find plugins/soleur/commands -name '*.md' | wc -l)
-          MCP_SERVERS=$(jq '.mcpServers | length' plugins/soleur/.claude-plugin/plugin.json)
-
-          echo "agents=$AGENTS" >> $GITHUB_OUTPUT
-          echo "skills=$SKILLS" >> $GITHUB_OUTPUT
-          echo "commands=$COMMANDS" >> $GITHUB_OUTPUT
-          echo "mcp_servers=$MCP_SERVERS" >> $GITHUB_OUTPUT
-          echo "Counts: $AGENTS agents, $COMMANDS commands, $SKILLS skills, $MCP_SERVERS MCP servers"
-
-      - name: Update version files
-        if: steps.check_plugin.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
-        env:
-          NEXT: ${{ steps.version.outputs.next }}
-          CURRENT: ${{ steps.version.outputs.current }}
-          AGENTS: ${{ steps.counts.outputs.agents }}
-          SKILLS: ${{ steps.counts.outputs.skills }}
-          COMMANDS: ${{ steps.counts.outputs.commands }}
-          MCP_SERVERS: ${{ steps.counts.outputs.mcp_servers }}
-        run: |
-          # 1. plugin.json -- version + description with updated counts
-          DESCRIPTION="A full AI organization across engineering, finance, marketing, legal, operations, product, sales, and support. ${AGENTS} agents, ${COMMANDS} commands, ${SKILLS} skills, and ${MCP_SERVERS} MCP servers that compound your company knowledge over time."
-          jq --arg v "$NEXT" --arg d "$DESCRIPTION" \
-            '.version = $v | .description = $d' \
-            plugins/soleur/.claude-plugin/plugin.json > /tmp/plugin.json
-          mv /tmp/plugin.json plugins/soleur/.claude-plugin/plugin.json
-
-          # 2. CHANGELOG.md -- insert new version entry before the first existing version
-          awk -v entry_file="/tmp/changelog_entry.txt" '
-            /^## \[/ && !inserted {
-              while ((getline line < entry_file) > 0) print line
-              print ""
-              inserted=1
-            }
-            { print }
-          ' plugins/soleur/CHANGELOG.md > /tmp/CHANGELOG.md
-          mv /tmp/CHANGELOG.md plugins/soleur/CHANGELOG.md
-
-          # 3. marketplace.json -- update plugins[0].version
-          jq --arg v "$NEXT" '.plugins[0].version = $v' \
-            .claude-plugin/marketplace.json > /tmp/marketplace.json
-          mv /tmp/marketplace.json .claude-plugin/marketplace.json
-
-          # 4. Root README.md -- update version badge
-          sed -i "s|version-${CURRENT}-blue|version-${NEXT}-blue|g" README.md
-
-          # 5. bug_report.yml -- update placeholder
-          sed -i "s|placeholder: \"${CURRENT}\"|placeholder: \"${NEXT}\"|g" .github/ISSUE_TEMPLATE/bug_report.yml
-
-          # 6. Plugin README.md -- update counts in description text
-          sed -i "s|[0-9]\+ agents, [0-9]\+ commands, [0-9]\+ skills|${AGENTS} agents, ${COMMANDS} commands, ${SKILLS} skills|g" plugins/soleur/README.md
-
-          # Update root README counts line
-          sed -i "s|[0-9]\+ agents across|${AGENTS} agents across|g" README.md
-
-      - name: Verify version consistency
-        if: steps.check_plugin.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
-        env:
-          NEXT: ${{ steps.version.outputs.next }}
-        run: |
-          PLUGIN_V=$(jq -r '.version' plugins/soleur/.claude-plugin/plugin.json)
-          MARKET_V=$(jq -r '.plugins[0].version' .claude-plugin/marketplace.json)
-
-          ERRORS=0
-          if [ "$PLUGIN_V" != "$NEXT" ]; then
-            echo "::error::plugin.json version mismatch: expected $NEXT, got $PLUGIN_V"
-            ERRORS=$((ERRORS + 1))
-          fi
-          if [ "$MARKET_V" != "$NEXT" ]; then
-            echo "::error::marketplace.json version mismatch: expected $NEXT, got $MARKET_V"
-            ERRORS=$((ERRORS + 1))
-          fi
-          if ! grep -q "version-${NEXT}-blue" README.md; then
-            echo "::error::Root README badge not updated to $NEXT"
-            ERRORS=$((ERRORS + 1))
-          fi
-          if ! grep -q "\"${NEXT}\"" .github/ISSUE_TEMPLATE/bug_report.yml; then
-            echo "::error::bug_report.yml placeholder not updated to $NEXT"
-            ERRORS=$((ERRORS + 1))
-          fi
-          if ! grep -q "## \[${NEXT}\]" plugins/soleur/CHANGELOG.md; then
-            echo "::error::CHANGELOG.md entry not found for $NEXT"
-            ERRORS=$((ERRORS + 1))
-          fi
-
-          if [ "$ERRORS" -gt 0 ]; then
-            echo "::error::Version consistency check failed with $ERRORS errors, aborting"
-            exit 1
-          fi
-          echo "All version files verified at $NEXT"
-
-      - name: Commit and push
-        if: steps.check_plugin.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
-        env:
-          NEXT: ${{ steps.version.outputs.next }}
-        run: |
-          git add \
-            plugins/soleur/.claude-plugin/plugin.json \
-            plugins/soleur/CHANGELOG.md \
-            plugins/soleur/README.md \
-            .claude-plugin/marketplace.json \
-            README.md \
-            .github/ISSUE_TEMPLATE/bug_report.yml
-
-          git commit -m "chore(release): v${NEXT}"
-          git push
 
       - name: Create GitHub Release
         if: steps.check_plugin.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
@@ -352,10 +228,3 @@ jobs:
           else
             echo "::warning::Discord notification failed (HTTP $HTTP_CODE)"
           fi
-
-      - name: Trigger docs deploy
-        if: steps.check_plugin.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh workflow run deploy-docs.yml --ref main 2>/dev/null || echo "::warning::Could not trigger docs deploy"
