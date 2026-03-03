@@ -75,21 +75,23 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 ### Phase 1: Quick Start
 
+**Pipeline detection:** If `$ARGUMENTS` contains a file path (ends in `.md` or matches a path-like pattern), this skill is running in **pipeline mode** (invoked by one-shot or another orchestrator). In pipeline mode, skip all interactive approval gates and proceed directly. If `$ARGUMENTS` is empty or a plain text description, this is **interactive mode** — keep the approval gates below.
+
 1. **Read Plan and Clarify**
 
    - Read the work document completely
    - Review any references or links provided in the plan
    - Before proceeding, verify the plan does not contradict conventions in AGENTS.md and constitution.md: file format (markdown tables not YAML), kebab-case naming, directory structure (agents recurse, skills flat), required frontmatter fields, shell script conventions
-   - If anything is unclear or ambiguous, ask clarifying questions now
-   - Get user approval to proceed
-   - **Do not skip this** - better to ask questions now than build the wrong thing
+   - **Interactive mode only:** If anything is unclear or ambiguous, ask clarifying questions now. Get user approval to proceed. **Do not skip this** - better to ask questions now than build the wrong thing.
+   - **Pipeline mode:** Skip clarifying questions and approval. Proceed directly to step 2.
 
 2. **Setup Environment**
 
    First, check the current branch by running `git branch --show-current`. Then determine the default branch by running `git symbolic-ref refs/remotes/origin/HEAD` and extracting the branch name. If that fails, check whether `origin/main` exists (fallback to `master`).
 
    **If already on a feature branch** (not the default branch):
-   - Ask: "Continue working on `[current_branch]`, or create a new branch?"
+   - **Interactive mode only:** Ask: "Continue working on `[current_branch]`, or create a new branch?"
+   - **Pipeline mode:** Continue on current branch without asking.
    - If continuing, proceed to step 3
    - If creating new, follow Option A or B below
 
