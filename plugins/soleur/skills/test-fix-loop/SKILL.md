@@ -1,6 +1,6 @@
 ---
 name: test-fix-loop
-description: This skill should be used when autonomously iterating on test failures until all tests pass or a termination condition is met. It runs the test suite, diagnoses failures, applies minimal fixes, and re-runs in a loop with git stash isolation. Triggers on "test fix loop", "fix failing tests", "make tests pass", "iterate until green".
+description: This skill should be used when autonomously iterating on test failures until all tests pass or a termination condition is met. It runs the test suite, diagnoses failures, applies minimal fixes, and re-runs in a loop with checkpoint commit isolation. Triggers on "test fix loop", "fix failing tests", "make tests pass", "iterate until green".
 ---
 
 # Test-Fix Loop
@@ -35,7 +35,7 @@ If no runner is detected, ask the user for the test command.
 
 ### Require Clean Working Tree
 
-Run `git status --porcelain`. If output is non-empty, STOP and tell the user to commit or stash their changes first. A dirty working tree will cause stash interleaving.
+Run `git status --porcelain`. If output is non-empty, STOP and tell the user to commit their changes first.
 
 ### Pre-flight Confirmation
 
@@ -46,6 +46,8 @@ no per-iteration approval.
 </decision_gate>
 
 ## Phase 1: Test-Fix Loop
+
+Record the current commit SHA as `<initial-sha>` before entering the loop. This is the rollback target if the loop terminates on failure after multiple iterations.
 
 Run the initial test suite. If all tests pass, exit with "All tests already pass. Nothing to fix."
 
@@ -63,12 +65,12 @@ Before attempting fixes, check whether to stop:
 
 | Condition | Detection | Action |
 |-----------|-----------|--------|
-| All tests pass | Zero failures | Drop stash, stage fixes, report success |
-| Max iterations | iteration == limit | Drop stash (keep partial progress), report |
-| Regression | Failure count increased vs previous iteration | Pop stash (revert to last good state), report |
-| Circular fix | Failure name set matches any prior iteration | Pop stash (revert), report |
-| Non-convergence | Failure count unchanged for 2 consecutive iterations | Pop stash (revert), report |
-| Build error persists | Same compilation error after fix attempt | Pop stash (revert), report |
+| All tests pass | Zero failures | Stage fixes with `git add -A`, report success |
+| Max iterations | iteration == limit | `git reset --hard <initial-sha>` (revert all iterations), report |
+| Regression | Failure count increased vs previous iteration | `git reset --hard HEAD` (discard uncommitted fixes), report |
+| Circular fix | Failure name set matches any prior iteration | `git reset --hard <initial-sha>` (revert all iterations), report |
+| Non-convergence | Failure count unchanged for 2 consecutive iterations | `git reset --hard <initial-sha>` (revert all iterations), report |
+| Build error persists | Same compilation error after fix attempt | `git reset --hard <initial-sha>` (revert all iterations), report |
 
 If a termination condition triggers, skip to the Diagnostic Report.
 
@@ -82,21 +84,23 @@ For each cluster, apply the diagnostic-first rule:
 - Read the implementation code referenced by the error
 - Identify the root cause before proposing a fix
 
-### 4. Stash and Fix
+### 4. Checkpoint and Fix
 
 <critical_sequence>
-Stash the current working tree as a rollback checkpoint before applying fixes:
+Commit the current working tree as a rollback checkpoint before applying fixes. Skip on iteration 1 if the tree is clean -- `<initial-sha>` already serves as the rollback point.
 
-    git stash push -m "test-fix-loop: checkpoint iteration N"
+    git add -A && git commit -m "test-fix-loop: checkpoint iteration N"
 
 Apply fixes to implementation code only. NEVER modify test files, add skip annotations, delete tests, or weaken assertions.
 
 Re-run the full test suite after applying fixes.
 
 Evaluate the result:
-- All pass: `git stash drop`, stage all fixes, report success, STOP
-- Failures decreased: `git stash drop` (keep progress), continue to next iteration
-- Regression or circular: `git stash pop` (revert this iteration's fixes), STOP
+- All pass: stage all fixes with `git add -A`, report success, STOP
+- Failures decreased: continue to next iteration (fixes stay in working tree; the next iteration's checkpoint commits them)
+- Regression: `git reset --hard HEAD` (discard uncommitted fixes, return to checkpoint), STOP
+- Circular or non-convergence: `git reset --hard <initial-sha>` (revert ALL iterations), STOP
+- Max iterations reached: `git reset --hard <initial-sha>` (revert ALL iterations), STOP
 </critical_sequence>
 
 ## Diagnostic Report
@@ -118,6 +122,6 @@ On success, fixes are staged but NOT committed. The user reviews and commits via
 - Diagnose before fixing -- never guess at the root cause
 - Fix implementation code only -- tests define the contract
 - Truncate aggressively -- failure summaries only, no full stack traces
-- Fail safe -- stash before every fix attempt, revert on regression
+- Fail safe -- checkpoint commit before every fix attempt, revert on regression
 - Exit early -- stop as soon as the trajectory indicates non-convergence
 - Stage, do not commit -- respect the Workflow Completion Protocol
