@@ -1,3 +1,7 @@
+---
+synced_to: [schedule]
+---
+
 # Learning: Scheduled Bot-Fix Workflow Patterns
 
 ## Problem

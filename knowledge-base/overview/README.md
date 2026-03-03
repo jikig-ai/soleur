@@ -91,9 +91,9 @@ Workflow stages are skills, invocable directly or via `/soleur:go`:
 
 | Component | Count | Description |
 |-----------|-------|-------------|
-| [Agents](./components/agents.md) | 45 | AI agents for specialized tasks |
+| [Agents](./components/agents.md) | 61 | AI agents for specialized tasks |
 | [Commands](./components/commands.md) | 3 | Slash commands for entry points |
-| [Skills](./components/skills.md) | 45 | Specialized capabilities |
+| [Skills](./components/skills.md) | 55 | Specialized capabilities |
 | [Knowledge Base](./components/knowledge-base.md) | 1 | Documentation system |
 
 Each component has detailed documentation in [components/](./components/) covering its purpose, available items, usage patterns, and conventions. See individual component docs for full reference.
@@ -108,17 +108,24 @@ Workflow skills like plan and work read the constitution automatically to guide 
 
 ```
 soleur/
+  apps/                     # Standalone applications
+    telegram-bridge/        # Telegram bot bridge to Claude
   plugins/soleur/           # The Claude Code plugin
-    agents/                 # AI agents by category
-      engineering/
-        review/             # Code review agents
-        design/             # Design agents
-      research/             # Research and analysis
-      workflow/             # Workflow automation
+    agents/                 # AI agents by domain (61 agents)
+      engineering/          # review/, design/, discovery/, infra/, research/, workflow/
+      finance/              # CFO, budget, revenue, reporting
+      legal/                # CLO, compliance auditor, document generator
+      marketing/            # CMO + 10 specialists
+      operations/           # COO, ops advisor/research/provisioner
+      product/              # CPO, business validator, competitive intel, design/
+      sales/                # CRO, deal architect, outbound, pipeline
+      support/              # CCO, community manager, ticket triage
     commands/               # Slash commands
-      soleur/               # Core workflow commands
-    skills/                 # Specialized capabilities
+      soleur/               # Core workflow commands (go, sync, help)
+    skills/                 # Specialized capabilities (56 skills)
     .claude-plugin/         # Plugin manifest
+  docs/                     # Documentation and legal content
+    legal/                  # Legal documents (ToS, privacy, GDPR, CLA)
   knowledge-base/           # Project documentation
     learnings/              # Documented solutions
     specs/                  # Feature specifications
@@ -126,6 +133,7 @@ soleur/
     plans/                  # Implementation plans
     overview/               # This documentation
       constitution.md       # Coding conventions
+  scripts/                  # Repo-level utility scripts
 ```
 
 ## Key Concepts
@@ -136,10 +144,16 @@ Every solved problem contributes to the knowledge base. Future similar problems 
 
 ### Agent Hierarchy
 
-Agents are organized by function:
-- **Review agents** catch issues before PR
-- **Research agents** gather context and best practices
-- **Workflow agents** automate repetitive tasks
+Agents are organized by domain first, then by function. Each business domain has a domain leader (C-level agent) that orchestrates specialists:
+
+- **Engineering** (27): CTO + review, design, discovery, infra, research, workflow agents
+- **Finance** (4): CFO + budget, revenue, reporting agents
+- **Legal** (3): CLO + compliance auditor, document generator
+- **Marketing** (11): CMO + brand, SEO, content, conversion, paid, pricing, retention agents
+- **Operations** (4): COO + ops advisor, research, provisioner
+- **Product** (5): CPO + business validator, competitive intel, spec flow, UX design
+- **Sales** (4): CRO + deal architect, outbound, pipeline
+- **Support** (3): CCO + community manager, ticket triage
 
 ### Knowledge-Base Lifecycle
 
