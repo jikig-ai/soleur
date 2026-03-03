@@ -1,0 +1,34 @@
+---
+title: Articles
+description: "Insights on company-as-a-service, agentic engineering, and building at scale with AI teams."
+layout: base.njk
+permalink: pages/articles.html
+---
+
+    <section class="page-hero">
+      <div class="container">
+        <h1>Soleur Articles</h1>
+        <p>Insights on company-as-a-service, agentic engineering, and building at scale with AI teams.</p>
+      </div>
+    </section>
+
+    <div class="container">
+      {%- if collections.articles and collections.articles.length > 0 %}
+      <div class="catalog-grid">
+        {%- for article in collections.articles | reverse %}
+        <a href="{{ article.url }}" class="component-card" style="text-decoration: none; color: inherit;">
+          <div class="card-header">
+            <span class="card-dot" style="background: var(--color-accent)"></span>
+            <span class="card-category">{{ article.date | dateToRfc3339 }}</span>
+          </div>
+          <h3 class="card-title">{{ article.data.title }}</h3>
+          <p class="card-description">{{ article.data.description }}</p>
+        </a>
+        {%- endfor %}
+      </div>
+      {%- else %}
+      <section class="category-section">
+        <p style="color: var(--color-text-secondary); text-align: center; padding: var(--space-16) 0;">Articles are coming soon. Follow our journey on <a href="{{ site.discord }}">Discord</a>.</p>
+      </section>
+      {%- endif %}
+    </div>

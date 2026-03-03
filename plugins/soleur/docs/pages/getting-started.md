@@ -1,14 +1,14 @@
 ---
-title: Getting Started
-description: "Getting Started - Install Soleur and start building smarter."
+title: Getting Started with Soleur
+description: "Install the Soleur Claude Code plugin and start running your company-as-a-service — AI agents for engineering, marketing, legal, finance, and more."
 layout: base.njk
 permalink: pages/getting-started.html
 ---
 
 <section class="hero">
   <div class="container">
-    <h1>Getting Started</h1>
-    <p class="subtitle">Install Soleur and start building smarter.</p>
+    <h1>Getting Started with Soleur</h1>
+    <p class="subtitle">Install the Claude Code plugin that gives you a full AI organization.</p>
   </div>
 </section>
 
@@ -16,9 +16,13 @@ permalink: pages/getting-started.html
   <div class="container">
     <div class="prose">
 
+## What Is Soleur?
+
+Soleur is a company-as-a-service platform — a single Claude Code plugin that deploys a full AI organization across your business. Instead of hiring across departments, you install one plugin and get agents that handle engineering, marketing, legal, finance, operations, product, sales, and support. Every problem you solve compounds into patterns that make the next one faster.
+
 ## Why Soleur
 
-Soleur gives a single founder the leverage of a full organization. **{{ stats.agents }} agents** across engineering, finance, marketing, legal, operations, product, sales, and support -- plus **{{ stats.skills }} skills** and **{{ stats.commands }} commands** -- that compound your company knowledge over time. Every problem you solve makes the next one easier.
+Soleur gives a single founder the operational capacity of a full organization. **{{ stats.agents }} agents** across engineering, finance, marketing, legal, operations, product, sales, and support -- plus **{{ stats.skills }} skills** and **{{ stats.commands }} commands** -- that compound your company knowledge over time. Every problem you solve makes the next one easier.
 
 ## Installation
 
