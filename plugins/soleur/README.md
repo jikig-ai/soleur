@@ -353,7 +353,7 @@ Or add them globally in `~/.claude/settings.json` for all projects.
 
 ## Version History
 
-See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
+See [GitHub Releases](https://github.com/jikig-ai/soleur/releases) for detailed version history.
 
 ## License
 
