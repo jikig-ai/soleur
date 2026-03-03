@@ -25,6 +25,8 @@ Project principles organized by domain. Add principles as you learn them.
 - Shell functions must declare all variables with `local`; error messages go to stderr (`>&2`)
 - Shell scripts use `[[ ]]` double-bracket tests and validate required arguments early with exit 1 and usage message
 - When upgrading `set -e` to `set -euo pipefail`, audit three vectors: (1) bare positional args (`$1`, `$2`) in dispatch functions need `${N:-}` guards for `-u`, (2) `grep` in pipelines returns exit 1 on no match which `-o pipefail` propagates -- append `|| true`, (3) unassigned variables in conditional paths need defaults
+- In shell scripts, `jq '.[0].field'` returns the literal string `null` (not empty) when the array is empty -- always use `// empty` (e.g., `jq '.[0].field // empty'`) so the output is truly empty and shell conditionals behave correctly
+- When extracting PR numbers from squash merge commit messages with grep/sed, restrict the pattern to the title line only (`git log --format=%s | head -1 | grep`) -- the commit body can contain unrelated `(#N)` references that produce false matches
 - TypeScript, JSON, and HTML templates use 2-space indentation throughout
 - TypeScript uses `import type` for type-only imports
 - TypeScript uses inline `export` at declaration site, not separate `export {}` blocks
@@ -191,6 +193,8 @@ Project principles organized by domain. Add principles as you learn them.
 - Add explicit compaction checkpoints to multi-phase workflows -- if context truncation occurs, write an inventory to a known file path (e.g., session-state.md) so downstream phases can recover; silent compaction has caused missing learnings and undocumented errors in pipelines
 - When fixing a prefix-stripping or pattern-matching bug, verify the fix code does not repeat the same single-variant assumption being corrected -- the initial worktree-manager.sh fix reproduced the exact `feat-`-only bug it was supposed to fix; multi-agent review catches this reliably but self-review often misses it
 - Prefer single-pattern grep guards over ANDing separate greps -- independent substring checks cannot enforce syntactic context (e.g., that `.worktrees/` is an `rm` argument, not comment text); combine into one regex that enforces proximity
+- Prefer `gh api repos/{owner}/{repo}/commits/{sha}/pulls` to map merge commits to PRs -- this is the authoritative source and avoids fragile commit message parsing; commit bodies often contain unrelated `(#N)` references that break regex extraction
+- When multiple fields of the same PR or issue are needed, consolidate into one `gh pr view <number> --json field1,field2,...` call instead of separate `gh pr view` invocations -- reduces API round trips and avoids rate-limit pressure in scripts that loop over many PRs
 - Prefer hook-based enforcement over documentation-only rules for agent discipline -- PreToolUse hooks make violations impossible rather than aspirational; reserve AGENTS.md hard rules for cases where hooks cannot intercept (e.g., reasoning errors, not tool calls)
 - Diagnostic scripts must print positive confirmation on success, not just absence of error -- silent success is indistinguishable from a skipped check; always emit an `[ok]` or equivalent status line for each verified condition
 - When adding a new sequential phase to an existing multi-agent pipeline, verify it does not exceed the pipeline's parallel subagent limit -- add as sequential (Phase N.5) rather than parallel when the limit is already reached
