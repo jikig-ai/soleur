@@ -140,6 +140,10 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    ---
 
+   **Pipeline mode override:** If running in pipeline mode (plan file argument detected in Phase 1), skip Tier A entirely and auto-accept Tier B without prompting. Do not present "Run as Agent Team?" or "Run in parallel?" questions -- proceed directly to Step B2 of the Subagent Fan-Out protocol if 3+ independent tasks exist, otherwise fall through to Tier C.
+
+   ---
+
    **Tier A: Agent Teams** (highest capability, ~7x token cost)
 
    **Read `plugins/soleur/skills/work/references/work-agent-teams.md` now** for the full Agent Teams protocol (offer, activate, spawn teammates, monitor/commit/shutdown). If declined or failed, fall through to Tier B.
