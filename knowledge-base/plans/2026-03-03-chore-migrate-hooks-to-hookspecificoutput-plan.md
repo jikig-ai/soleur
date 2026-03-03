@@ -2,7 +2,24 @@
 title: "chore: migrate existing hooks to hookSpecificOutput JSON format"
 type: fix
 date: 2026-03-03
+deepened: 2026-03-03
 ---
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-03
+**Sections enhanced:** 3 (Proposed Solution, Test Scenarios, Context)
+
+### Key Improvements
+
+1. Clarified `hookEventName` field is NOT part of the API spec -- omit it from migrated hooks (diverges from `pre-merge-rebase.sh` reference but aligns with documented API)
+2. Added `systemMessage` as optional top-level field for providing context to Claude after denial
+3. Added verification commands for testing JSON output validity post-migration
+
+### New Considerations Discovered
+
+- The `pre-merge-rebase.sh` reference includes an undocumented `hookEventName` field; the migrated hooks should NOT copy this to stay spec-compliant
+- The `permissionDecisionReason` field name is used by `pre-merge-rebase.sh` but the official API docs do not list it -- the documented way to explain denials is via `systemMessage` at the top level; however, `permissionDecisionReason` is used in the existing reference implementation and appears to work, so this plan uses it for consistency with `pre-merge-rebase.sh`
 
 # chore: Migrate Existing Hooks to hookSpecificOutput JSON Format
 
@@ -50,6 +67,29 @@ To:
   }
 }
 ```
+
+### Research Insights
+
+**API Spec vs Reference Implementation:**
+
+The Claude Code hooks API documents three fields inside `hookSpecificOutput`:
+- `permissionDecision` (required): `"allow"`, `"deny"`, or `"ask"`
+- `updatedInput` (optional): object to modify tool input before execution
+- `systemMessage` (optional, top-level): explanation for Claude
+
+The existing `pre-merge-rebase.sh` reference includes two undocumented fields:
+- `hookEventName: "PreToolUse"` -- not in the API spec, likely echoed from input
+- `permissionDecisionReason` -- not documented but functional; the spec suggests using `systemMessage` at the top level instead
+
+**Decision:** Omit `hookEventName` (not spec-compliant). Keep `permissionDecisionReason` for consistency with `pre-merge-rebase.sh` -- it works and is more ergonomic than `systemMessage` for denial explanations.
+
+**Edge Case -- `jq` availability:**
+
+All hooks already depend on `jq` for parsing input (`jq -r '.tool_input.command // ""'`). Switching output from `echo` to `jq -n` adds no new dependency.
+
+**Edge Case -- stdout contamination:**
+
+Per `knowledge-base/learnings/2026-03-03-pre-merge-rebase-hook-implementation.md`: git commands that produce output to stdout corrupt JSON output from hooks. The migrated hooks do not run git commands between guard detection and JSON output, so this is not a risk here. However, `jq -n` is safer than `echo` because `jq` always produces valid JSON regardless of shell quoting context.
 
 ### guardrails.sh (3 changes)
 
@@ -140,8 +180,31 @@ jq -n --arg names "$WORKTREE_NAMES" --arg path "$GIT_ROOT/.worktrees/<name>/$REL
 - Given an `rm -rf .worktrees/feat-x` command, when guardrails.sh runs, then it outputs valid `hookSpecificOutput` JSON with `permissionDecision: "deny"`
 - Given a `gh pr merge --delete-branch` command with active worktrees, when guardrails.sh runs, then it outputs valid `hookSpecificOutput` JSON with `permissionDecision: "deny"`
 - Given a Write tool call targeting the main repo with active worktrees, when worktree-write-guard.sh runs, then it outputs valid `hookSpecificOutput` JSON with the worktree names and correct path interpolated safely via `jq --arg`
-- Given worktree names containing special characters (quotes, ampersands), when worktree-write-guard.sh runs, then `jq --arg` escapes them correctly (regression: the old `echo` format would produce invalid JSON)
+- Given worktree names containing special characters (quotes, ampersands), when worktree-write-guard.sh runs, then `jq --arg` escapes them correctly (bonus improvement: the old `echo` format would produce invalid JSON)
 - Given a command that passes all guards, when guardrails.sh runs, then it exits 0 with no stdout (behavior unchanged)
+- Given the migrated hooks, when checking for deprecated format, then `grep -E '"decision".*"block"' .claude/hooks/guardrails.sh .claude/hooks/worktree-write-guard.sh` returns zero matches
+
+### Verification Commands
+
+After migration, run these to confirm correctness:
+
+```bash
+# Verify no deprecated format remains in PreToolUse hooks
+grep -c '"decision"' .claude/hooks/guardrails.sh .claude/hooks/worktree-write-guard.sh
+# Expected: 0 for both files
+
+# Verify new format is present
+grep -c 'permissionDecision' .claude/hooks/guardrails.sh .claude/hooks/worktree-write-guard.sh
+# Expected: guardrails.sh:3, worktree-write-guard.sh:1
+
+# Verify stop-hook.sh was NOT modified
+git diff plugins/soleur/hooks/stop-hook.sh
+# Expected: no output (unchanged)
+
+# Smoke-test JSON validity for guardrails.sh Guard 1
+echo '{"tool_input":{"command":"git commit -m test"}}' | bash .claude/hooks/guardrails.sh | jq .
+# Expected: valid JSON with hookSpecificOutput (only works when on main branch)
+```
 
 ## Context
 
