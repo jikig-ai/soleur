@@ -11,6 +11,9 @@ on:
       - 'plugins/soleur/CHANGELOG.md'
       - 'plugins/soleur/.claude-plugin/plugin.json'
       - 'eleventy.config.js'
+  workflow_run:
+    workflows: ["Version Bump and Release"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -24,6 +27,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name != 'workflow_run'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
