@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.8.4] - 2026-03-03
+
+### Fixed
+
+- **hooks (guardrails.sh, worktree-write-guard.sh)** -- Standardized shebang from `#!/bin/bash` to `#!/usr/bin/env bash` per constitution convention (closes #403)
+- **worktree-manager.sh** -- Upgraded `set -e` to `set -euo pipefail`; guarded bare `$2`/`$3` in main() dispatch with `${N:-}` defaults; appended `|| true` to grep pipeline in cleanup_merged_worktrees
+- **check_setup.sh** -- Upgraded `set -e` to `set -euo pipefail`; fixed `[ ]` to `[[ ]]` bracket convention
+- **one-shot SKILL.md** -- Added CONTINUATION GATE block after step 3 to prevent pipeline stall when work skill completes
+- **work SKILL.md** -- Replaced conclusive "Implementation complete." handoff with structured `## Work Phase Complete` continuation marker
+
+### Changed
+
+- **constitution** -- Added shell pipefail three-vector audit rule and sub-skill continuation marker rule
+
 ## [3.8.3] - 2026-03-03
 
 ### Fixed
