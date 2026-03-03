@@ -49,7 +49,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Prefer ASCII characters unless the file already contains Unicode
 - Use imperative/infinitive form for instructions (verb-first)
 - When spawning parallel subagents to generate HTML pages, provide an explicit CSS class name reference list (not the full CSS file) -- subagents independently invent class names that don't match the shared stylesheet
-- After version bumps, grep all HTML docs for hardcoded version strings (`grep -r "vX.Y.Z" plugins/soleur/docs/`) and update them -- the versioning triad extends to any file displaying version badges
+- After merges that bump versions, CI updates all version files automatically -- no manual grep needed; if HTML docs contain hardcoded version strings, file an issue to template them
 - Prefer numbered phase sections (Phase 1, Phase 2) in SKILL.md for multi-step workflows, with XML semantic tags (`<critical_sequence>`, `<decision_gate>`, `<validation_gate>`) to mark control flow
 - Prefer numeric literal underscores as thousand separators for readability (e.g., `3_000` instead of `3000`)
 - Prefer a language identifier after triple backticks in code blocks (e.g., ```bash, ```yaml -- never bare ```)
@@ -62,10 +62,10 @@ Project principles organized by domain. Add principles as you learn them.
 
 - Verify the root cause before implementing any fix -- reproduce the error or run the simplest diagnostic first; do not change code based on a guess
 - Core workflow stages (brainstorm, plan, work, review, compound, one-shot) are skills invoked via the Skill tool; only three commands remain (`go`, `sync`, `help`) using the `soleur:` prefix to avoid collisions with built-in commands
-- Every plugin change must update three files: plugin.json (version), CHANGELOG.md, and README.md (counts/tables); `.claude-plugin/marketplace.json` plugin version must also be kept in sync
-- Always fetch and check main before version bumps (`git fetch origin main && git log --oneline origin/main -3`) -- parallel feature branches that bump without checking cause version collisions that require rebase
+- Never bump version files (plugin.json, CHANGELOG.md version entries, README badge, marketplace.json, bug_report.yml) in feature branches -- `version-bump-and-release.yml` handles all 6 files at merge time via semver labels set by `/ship`
+- Always set a `semver:patch`, `semver:minor`, or `semver:major` label on PRs that touch `plugins/soleur/` -- CI uses this label to determine the version bump at merge time
 - When adding a new skill, manually register it in `docs/_data/skills.js` SKILL_CATEGORIES -- skill discovery does not recurse and the docs site will silently omit unregistered skills
-- After version bumps, diff root README agent/skill counts against plugin README counts -- they drift independently and have diverged multiple times
+- Component counts (agents, skills, commands) are auto-computed at merge time by CI -- do not hardcode counts in version bump commits
 - Organize agents by domain first (engineering/, etc.), then by function (review/, design/). Cross-domain agents stay at root level (research/, workflow/)
 - Skills must have a SKILL.md file and may include scripts/, references/, and assets/ subdirectories; directories under `skills/` without SKILL.md must be deleted or converted to proper skills
 - Every SKILL.md interactive prompt (AskUserQuestion) must accept an `$ARGUMENTS` bypass path for programmatic callers -- agents and pipeline skills cannot answer interactive prompts; provide flag-based argument passthrough (e.g., `--name`, `--yes`) that skips the prompt when present
@@ -77,7 +77,6 @@ Project principles organized by domain. Add principles as you learn them.
 - New commands must be idempotent -- running the same command twice must not create duplicates or corrupt state
 - Run code review and compound (skill: `soleur:compound`) before committing -- the commit is the gate, not the PR; run compound automatically, do not ask whether to run it; compound must never be placed after `git push` or CI because compound produces a commit that invalidates CI and creates an infinite loop
 - Skills invoked mid-pipeline must never use stop/return/done language in their handoff -- scope what they skip (e.g., "do not invoke ship"), but never imply end-of-turn; the calling pipeline controls turn boundaries, not the callee skill
-- Version bump must run after compound in all workflow paths -- compound's route-to-definition phase can stage plugin file edits, and version bump must capture these; version bump is a sealing operation that snapshots the final state before push
 - When reading file content during an active git merge conflict, use stage numbers: `git show :2:<path>` (ours) and `git show :3:<path>` (theirs); `git show HEAD:<path>` only returns one side and discards the incoming changes
 - When resolving merge conflicts in large files (CHANGELOG.md, constitution.md), the Write tool replaces the ENTIRE file -- read the full base from `git show HEAD:<path>` and reconstruct the complete file; there is no "rest of file" to preserve
 - Before staging files after a merge, grep staged content for conflict markers: `git diff --cached | grep -E '^\+(<{7}|={7}|>{7})'` -- conflict markers are invisible in normal review and have been committed undetected
@@ -104,7 +103,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Run SpecFlow analysis (spec-flow-analyzer agent) on features that modify CI workflows or GitHub Actions -- it catches repo configuration blockers (auto-merge settings, rulesets, token permissions) before implementation begins
 - Multi-agent cascades (one agent spawning specialists via Task tool) require a pre-flight checklist: (1) `Task` must be in `--allowedTools` for CI workflows, (2) every specialist must have an explicit write target path in the delegation table, (3) every specialist must produce a writable artifact -- read-only analysis tasks need a concrete output file. Cascade failures are silent: missing tools, unspecified write targets, and no-output specialists all fail without error messages
 - Scheduled workflows that select issues by label must cascade through priority levels (p3-low → p2-medium → p1-high) rather than hardcoding a single tier -- a fixed filter produces idle runs when the target tier is empty while higher-priority bugs accumulate
-- Before creating a PR or merging, rebase feature branch on latest origin/main (`git fetch origin main && git rebase origin/main`) -- parallel feature branches that bump versions without rebasing cause merge conflicts that require manual resolution
+- Before creating a PR or merging, rebase feature branch on latest origin/main (`git fetch origin main && git rebase origin/main`) -- rebasing ensures a clean merge even when multiple PRs land in sequence
 - Document environment-specific constraints (terminal capabilities, shell limitations) in AGENTS.md Hard Rules when Claude violates them without being told -- these are loaded every turn and prevent dead-end attempts
 
 ### Never
@@ -150,7 +149,7 @@ Project principles organized by domain. Add principles as you learn them.
 - When merging or consolidating duplicate functionality, prefer a single inline implementation over separate files/agents/skills until complexity demands extraction
 - When simplifying a multi-command system, prefer migrating workflow stages to skills and adding a router command (go) -- skills are discoverable by agents and invocable via the Skill tool, while commands are invisible to agents; keep only entry-point commands that need slash-command UX
 - Prefer inline instructions over Task agents for deterministic checks (shell commands with binary pass/fail outcomes) -- agents add LLM round-trip latency to what would otherwise be millisecond operations
-- Plans should specify version bump intent (MINOR/PATCH/MAJOR) not exact version numbers, to avoid conflicts between parallel feature branches
+- Plans should specify semver label intent (minor/patch/major) -- `/ship` sets the PR label and CI applies the bump at merge time, avoiding version conflicts between parallel feature branches
 - Experimental feature flags should self-manage within execution scope -- activate on user consent, deactivate on completion or failure -- never require manual setup for features that already have a consent prompt
 - Before designing new infrastructure (metadata schemas, detection engines, new directories), check if the existing codebase already has a pattern that solves the problem -- e.g., the review command's conditional agents section was sufficient for project-aware filtering without a metadata system
 - Before planning large directory restructures, run a Phase 0 loader test -- move one component, reload, verify it is still discoverable. Different component types have different recursion behavior (agents recurse, skills do not)
@@ -163,7 +162,7 @@ Project principles organized by domain. Add principles as you learn them.
 - When bundling external plugins, embed only the mechanism (hooks, scripts) -- do not create new user-facing commands unless the user explicitly requests them; internal infrastructure does not need user-facing surface area
 - Route users to specialized agents through existing commands (e.g., brainstorm routes to brand-architect) rather than creating new entry points -- keeps the user workflow unified and avoids proliferating slash commands
 - Inventory component counts and descriptions from source file frontmatter rather than hardcoding -- docs stay accurate when the same files the plugin loader reads are the source of truth
-- Reconcile agent/skill/command counts from actual files (`find agents -name '*.md' | wc -l`) at merge time, not by incrementing the previous number -- parallel worktrees each increment from stale baselines, causing drift
+- Component counts are reconciled from actual files by CI at merge time (`find agents -name '*.md' | wc -l`) -- never hardcode counts in feature branches; parallel worktrees each increment from stale baselines, causing drift
 - When self-hosting Google Fonts, check if the CSS API returns the same URL for multiple weights -- if so, use one woff2 file with `font-weight: <min> <max>` range syntax instead of downloading duplicate files
 - After batch sed operations across multiple files, verify changes landed with `grep -rL` (list files NOT matching) -- sed's append/insert commands fail silently when the address pattern doesn't match
 - Agents that depend on external MCP servers (stdio binaries from IDE extensions) must include a graceful degradation check -- only HTTP MCP servers can be bundled in plugin.json; stdio servers require separate installation and the agent must detect unavailability and stop with clear installation instructions

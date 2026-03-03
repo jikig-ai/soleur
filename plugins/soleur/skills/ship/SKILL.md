@@ -1,11 +1,11 @@
 ---
 name: ship
-description: This skill should be used when preparing a feature for production deployment. It enforces the complete feature lifecycle checklist, ensuring all artifacts are committed, documentation is updated, learnings are captured, and version is bumped before creating a PR. Triggers on "ready to ship", "create PR", "ship it", "ready to merge", "/ship".
+description: This skill should be used when preparing a feature for production deployment. It enforces the complete feature lifecycle checklist, ensuring all artifacts are committed, documentation is updated, and learnings are captured before creating a PR. Version bumping happens automatically in CI at merge time. Triggers on "ready to ship", "create PR", "ship it", "ready to merge", "/ship".
 ---
 
 # ship Skill
 
-**Purpose:** Enforce the full feature lifecycle before creating a PR, preventing missed steps like forgotten /compound runs, uncommitted artifacts, and missing version bumps.
+**Purpose:** Enforce the full feature lifecycle before creating a PR, preventing missed steps like forgotten /compound runs and uncommitted artifacts. Version bumping is handled by CI at merge time via semver labels.
 
 **CRITICAL: No command substitution.** Never use `$()` in Bash commands. When a step says "get value X, then use it in command Y", run them as **two separate Bash tool calls** -- first get the value, then use it literally in the next call. This avoids Claude Code's security prompt for command substitution.
 
@@ -109,19 +109,6 @@ Replace `HASH` with the actual commit hash from Step 1. Do NOT use `$()` to comb
 
 **If no new components:** Skip this step.
 
-## Phase 3.5: Merge Main Before Version Bump
-
-Merge the latest main branch to ensure version bumps start from the current version, reducing merge conflicts on version files:
-
-```bash
-git fetch origin main
-git merge origin/main
-```
-
-**If merge conflicts arise:** Resolve them now (before version bump). This is cheaper than resolving version conflicts after bumping.
-
-**If merge is clean:** Proceed to Phase 4.
-
 ## Phase 4: Run Tests
 
 First, verify that new source files have corresponding test files:
@@ -152,47 +139,7 @@ bun test
 
 **If tests fail:** Stop and fix before proceeding.
 
-## Phase 5: Version Bump
-
-Check if plugin files were modified in this branch.
-
-**Step 1** (separate Bash call): Get the merge base hash (reuse from Phase 3 if already obtained).
-
-```bash
-git merge-base HEAD origin/main
-```
-
-**Step 2** (separate Bash call): Use the hash literally.
-
-```bash
-git diff --name-only HASH..HEAD -- plugins/soleur/
-```
-
-Replace `HASH` with the actual commit hash. Do NOT use `$()` to combine these.
-
-**If plugin files were modified:**
-
-Read `plugins/soleur/AGENTS.md` for versioning rules, then:
-
-1. Determine bump type:
-   - New skill/command/agent -> MINOR (e.g., 1.6.0 -> 1.7.0)
-   - Bug fix/docs only -> PATCH (e.g., 1.6.0 -> 1.6.1)
-   - Breaking changes -> MAJOR (e.g., 1.6.0 -> 2.0.0)
-
-2. Update these three files (the versioning triad):
-   - `plugins/soleur/.claude-plugin/plugin.json` (version field)
-   - `plugins/soleur/CHANGELOG.md` (new entry with today's date)
-   - `plugins/soleur/README.md` (verify component counts)
-
-3. Sync version to all external references:
-   - `README.md` (root) -- update the version badge: `![Version](https://img.shields.io/badge/version-X.Y.Z-blue)`
-   - `README.md` (root) -- verify the "With ❤️ by Soleur" badge is present
-   - `.github/ISSUE_TEMPLATE/bug_report.yml` -- update the placeholder version
-   - `.claude-plugin/marketplace.json` -- update the plugin version field
-
-**If no plugin files modified:** Skip version bump.
-
-## Phase 6: Final Checklist
+## Phase 5: Final Checklist
 
 Create a TodoWrite checklist summarizing the state:
 
@@ -203,15 +150,13 @@ Ship Checklist for [branch name]:
 - [x/skip] Learnings captured (/compound)
 - [x/skip] README updated (component counts)
 - [x/skip] Tests pass
-- [x/skip] Version bumped (plugin.json + CHANGELOG + README)
-- [x/skip] Version synced (root README badge + bug report template)
 - [ ] Push to remote
-- [ ] Create PR
+- [ ] Create PR with semver label
 - [ ] PR is mergeable (no conflicts)
 - [ ] CI checks pass
 ```
 
-## Phase 7: Push and Create PR
+## Phase 6: Push and Create PR
 
 Push the branch to remote. Get the branch name first:
 
@@ -247,6 +192,9 @@ Replace `BRANCH_NAME` with the actual branch name.
    gh pr edit PR_NUMBER --title "the pr title" --body "## Summary
    - bullet points
 
+   ## Changelog
+   - changelog entries describing what changed
+
    ## Test plan
    - checklist
 
@@ -271,6 +219,9 @@ Fall through to creating a new PR. This handles cases where the user entered the
 gh pr create --title "the pr title" --body "## Summary
 - bullet points
 
+## Changelog
+- changelog entries describing what changed
+
 ## Test plan
 - checklist
 
@@ -281,7 +232,43 @@ Do not quote flag names -- write `--title` not `"--title"`.
 
 Present the PR URL to the user.
 
-## Phase 7.5: Verify PR Mergeability
+### Semver Label and Changelog
+
+After the PR is created or updated, determine the appropriate semver label and apply it.
+
+**Step 1:** Analyze the diff to determine bump type. Get the merge base hash (reuse from Phase 3 if already obtained):
+
+```bash
+git merge-base HEAD origin/main
+```
+
+Then, in a separate Bash call, check for new components:
+
+```bash
+git diff --name-status HASH..HEAD -- plugins/soleur/commands/ plugins/soleur/skills/ plugins/soleur/agents/
+```
+
+Replace `HASH` with the actual commit hash.
+
+**Step 2:** Determine the bump type:
+
+- **MAJOR**: Breaking changes (removed commands, renamed agents, restructured plugin interface)
+- **MINOR**: New agents, skills, or commands added (any `A` status files in the diff above)
+- **PATCH**: Everything else (bug fixes, doc updates, improvements to existing components)
+
+**Step 3:** Apply the semver label to the PR:
+
+```bash
+gh pr edit PR_NUMBER --add-label semver:patch
+```
+
+Replace `semver:patch` with `semver:minor` or `semver:major` as appropriate. Replace `PR_NUMBER` with the actual PR number.
+
+**Step 4:** Generate a `## Changelog` section from the changes and update the PR body to include it. The changelog should describe what changed in user-facing terms (not file paths). If the PR body already has a `## Changelog` section, update it.
+
+**Step 5:** Validate consistency -- if new agents, skills, or commands were detected in Step 1 but the label is `semver:patch`, warn the user that the label may be incorrect. New components typically warrant `semver:minor`.
+
+## Phase 6.5: Verify PR Mergeability
 
 After pushing (or after any subsequent push), verify the PR has no merge conflicts with the base branch:
 
@@ -290,7 +277,7 @@ git fetch origin main
 gh pr view --json mergeable,mergeStateStatus | jq '{mergeable, mergeStateStatus}'
 ```
 
-**If `mergeable` is `MERGEABLE`:** Continue to Phase 8.
+**If `mergeable` is `MERGEABLE`:** Continue to Phase 7.
 
 **If `mergeable` is `CONFLICTING`:**
 
@@ -307,8 +294,6 @@ gh pr view --json mergeable,mergeStateStatus | jq '{mergeable, mergeStateStatus}
    ```
 
 3. Read each conflicted file and resolve. Common conflict patterns:
-   - **Version numbers** (plugin.json, README badge, bug_report.yml): Keep the higher version from the feature branch
-   - **CHANGELOG entries**: Keep both entries in descending version order
    - **Component counts**: Use the feature branch count (it includes the new additions)
    - **Code conflicts**: Resolve based on intent of both changes
 
@@ -342,7 +327,7 @@ Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks report
 
 **If auto-merge fails to queue:** Check `gh api repos/{owner}/{repo} --jq '.allow_auto_merge'` -- it must be `true`.
 
-## Phase 8: Poll for Merge and Cleanup
+## Phase 7: Poll for Merge and Cleanup
 
 After auto-merge is queued, poll until the PR is merged. Do NOT ask "merge now or later?" -- auto-merge handles it.
 
@@ -367,9 +352,9 @@ Poll every 10 seconds until state is `MERGED`.
 
 **If merged (either now or user says "merge PR" later in the session):**
 
-1. **Release creation is automatic.** When a merge to main includes a plugin.json version change, the `auto-release.yml` GitHub Actions workflow creates a GitHub Release and posts to Discord. No manual step needed.
+1. **Version bump and release are automatic.** The `version-bump-and-release.yml` GitHub Actions workflow reads the PR's `semver:*` label, bumps version files, updates CHANGELOG.md, creates a GitHub Release, and posts to Discord. No manual step needed.
 
-   If the workflow did not fire (e.g., path filter didn't match), run `/release-announce` manually as a fallback.
+   If the workflow did not fire (e.g., no semver label was set), run `/release-announce` manually as a fallback.
 
 2. Clean up worktree and local branch:
 
@@ -383,7 +368,8 @@ This detects `[gone]` branches (where the remote was deleted after merge), remov
 
 ## Important Rules
 
-- **Never skip the versioning triad.** If plugin files changed, all three files must be updated.
+- **Always set a semver label.** Every PR that touches `plugins/soleur/` must have a `semver:patch`, `semver:minor`, or `semver:major` label. CI uses this label to bump the version at merge time.
+- **Never bump version files in feature branches.** Version bumping (plugin.json, CHANGELOG.md, README badge, bug_report.yml, marketplace.json) is handled by `version-bump-and-release.yml` at merge time. Editing these files in feature branches creates merge conflicts.
 - **Ask before running /compound.** The user may have already documented learnings.
 - **Do not block on missing artifacts.** Not every change needs a brainstorm or plan.
 - **Confirm the PR title and body** with the user before creating it.

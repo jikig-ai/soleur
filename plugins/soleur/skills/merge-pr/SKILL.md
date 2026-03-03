@@ -1,11 +1,11 @@
 ---
 name: merge-pr
-description: This skill should be used when merging a feature branch to main with automatic conflict resolution and cleanup. It automates the merge pipeline -- merging main into the feature branch, resolving conflicts, bumping version, pushing, creating a PR, waiting for CI, merging, and cleaning up the worktree. Triggers on "merge this PR", "merge my branch", "auto-merge", "merge and cleanup".
+description: This skill should be used when merging a feature branch to main with automatic conflict resolution and cleanup. It automates the merge pipeline -- merging main into the feature branch, resolving conflicts, pushing, creating a PR, waiting for CI, merging, and cleaning up the worktree. Triggers on "merge this PR", "merge my branch", "auto-merge", "merge and cleanup".
 ---
 
 # merge-pr Skill
 
-**Purpose:** Automate the merge pipeline for a single PR -- replacing the manual execution of `/ship` Phases 3.5-8. Runs lights-out: merge main, resolve conflicts, version bump, push, create PR, wait for CI, merge, and cleanup.
+**Purpose:** Automate the merge pipeline for a single PR -- replacing the manual execution of `/ship` Phases 3.5-8. Runs lights-out: merge main, resolve conflicts, push, create PR, wait for CI, merge, and cleanup.
 
 **Relationship to /ship:** Both skills are independent user-invoked entry points. `/ship` handles artifact validation, compound, and documentation (Phases 0-3). This skill handles the merge-through-cleanup pipeline. They do NOT invoke each other.
 
@@ -117,6 +117,8 @@ git merge origin/main
 
 **If merge conflicts (exit code non-zero):** Proceed to Phase 3.
 
+> **Note:** Version bumping is handled automatically by CI at merge time. This skill does not bump versions.
+
 ## Phase 3: Conflict Resolution
 
 Identify conflicted files:
@@ -131,19 +133,9 @@ For each conflicted file, apply the appropriate resolution strategy:
 
 | File Pattern | Strategy |
 |-------------|----------|
-| `plugins/soleur/.claude-plugin/plugin.json` | Accept main's version (Phase 4 re-bumps) |
 | `plugins/soleur/CHANGELOG.md` | Merge both sides -- see 3.2 |
 | `plugins/soleur/README.md` | Accept feature branch component counts |
-| `README.md` (root) | Accept main's version badge (Phase 4 re-bumps) |
-| `.github/ISSUE_TEMPLATE/bug_report.yml` | Accept main's placeholder (Phase 4 re-bumps) |
 | Everything else | Claude-assisted resolution -- see 3.3 |
-
-**For version files where "accept main's version" is the strategy:**
-
-```bash
-git checkout --theirs <file>
-git add <file>
-```
 
 **For README.md (accept feature branch):**
 
@@ -219,68 +211,7 @@ After all conflicts are resolved:
 git commit -m "merge: resolve conflicts with origin/main"
 ```
 
-## Phase 4: Version Bump (Conditional)
-
-Check if any files under `plugins/soleur/` were modified in this branch:
-
-```bash
-git diff --name-only origin/main...HEAD -- plugins/soleur/
-```
-
-**If no plugin files changed:** Skip this phase entirely. Announce "No plugin files changed -- skipping version bump."
-
-**If plugin files changed:**
-
-### 4.1 Determine bump type
-
-Check for new component files:
-
-```bash
-git diff --name-only --diff-filter=A origin/main...HEAD -- \
-  plugins/soleur/skills/ \
-  plugins/soleur/agents/ \
-  plugins/soleur/commands/
-```
-
-- If new files in skills/, agents/, or commands/ directories: **MINOR** bump
-- Otherwise: **PATCH** bump
-
-### 4.2 Read current version
-
-```bash
-cat plugins/soleur/.claude-plugin/plugin.json
-```
-
-Extract the `"version"` field. This is the base version to bump from.
-
-### 4.3 Update versioning triad
-
-1. **plugin.json:** Update the `"version"` field. If component counts changed, also update the `"description"` field.
-
-2. **CHANGELOG.md:** Add a new entry at the top of the version list with today's date. Use Keep a Changelog format with `### Added`, `### Changed`, `### Fixed`, `### Removed` sections as appropriate. Write the entry based on the changes in this branch.
-
-3. **README.md (plugin):** Verify component counts in the table match actual counts. Update if needed.
-
-### 4.4 Update sync targets
-
-4. **README.md (root):** Update the version badge: `![Version](https://img.shields.io/badge/version-X.Y.Z-blue)`
-
-5. **bug_report.yml:** Update the `placeholder:` field on line 36 of `.github/ISSUE_TEMPLATE/bug_report.yml`
-
-### 4.5 Commit version bump
-
-```bash
-git add plugins/soleur/.claude-plugin/plugin.json \
-       plugins/soleur/CHANGELOG.md \
-       plugins/soleur/README.md \
-       README.md \
-       .github/ISSUE_TEMPLATE/bug_report.yml
-git commit -m "chore: bump version to X.Y.Z"
-```
-
-If the commit fails due to a pre-commit hook (e.g., markdownlint on the CHANGELOG entry), fix the linting issue and retry the commit once.
-
-## Phase 5: Push and PR
+## Phase 4: Push and PR
 
 Push the branch to remote:
 
@@ -317,9 +248,9 @@ Derive the title from the branch name and changes. Use `feat:` for features, `fi
 
 Announce the PR URL.
 
-## Phase 6: CI and Merge
+## Phase 5: CI and Merge
 
-### 6.1 Queue Auto-Merge
+### 5.1 Queue Auto-Merge
 
 ```bash
 gh pr merge <number> --squash --auto
@@ -327,9 +258,9 @@ gh pr merge <number> --squash --auto
 
 This queues the merge. GitHub waits for all branch protection requirements (CI checks, CLA) to pass, then merges automatically. Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks reported" when CI hasn't registered yet.
 
-**NEVER use `--delete-branch`.** The guardrails hook blocks it when any worktree exists. Branch cleanup is handled by `cleanup-merged` in Phase 7.
+**NEVER use `--delete-branch`.** The guardrails hook blocks it when any worktree exists. Branch cleanup is handled by `cleanup-merged` in Phase 6.
 
-### 6.2 Poll for Merge
+### 5.2 Poll for Merge
 
 Poll until the PR state is MERGED:
 
@@ -355,15 +286,15 @@ Starting SHA for rollback: <starting-sha>
 To rollback: git reset --hard <starting-sha> && git push --force-with-lease origin <branch-name>
 ```
 
-## Phase 7: Cleanup and Report
+## Phase 6: Cleanup and Report
 
-### 7.1 Navigate to repo root
+### 6.1 Navigate to repo root
 
 The `cleanup-merged` script skips the current working directory's worktree. Navigate to the main repo root first:
 
 Navigate to the main repository root directory (the parent of `.worktrees/`). Run `cd` to the repo root path, then verify with `pwd`.
 
-### 7.2 Run cleanup
+### 6.2 Run cleanup
 
 ```bash
 bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
@@ -371,7 +302,7 @@ bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-me
 
 This detects `[gone]` branches (remote deleted after merge), removes worktrees, archives spec directories, deletes local branches, and pulls latest main so the next worktree branches from the current state.
 
-### 7.3 End-of-run report
+### 6.3 End-of-run report
 
 Print a summary:
 
@@ -379,7 +310,6 @@ Print a summary:
 merge-pr complete!
 
 PR: #<number> (<URL>)
-Version: <X.Y.Z> (or "no version bump")
 Merge SHA: <sha>
 Cleanup: <worktrees cleaned or "no cleanup needed">
 
@@ -390,7 +320,7 @@ Replace `<starting-sha>` with the SHA recorded at the start of the pipeline.
 
 ## Rollback
 
-If the pipeline fails partway through and the branch has unwanted commits (merge + version bump), rollback to the starting state:
+If the pipeline fails partway through and the branch has unwanted commits (e.g., merge commit), rollback to the starting state:
 
 ```bash
 git reset --hard <starting-sha>
@@ -407,5 +337,3 @@ The starting SHA is recorded in Phase 0 and printed in the end-of-run report.
 - **Never use `--delete-branch`** with `gh pr merge`. Use `cleanup-merged` for branch deletion.
 - **Never commit on main.** All commits happen on the feature branch.
 - **CHANGELOG integrity is critical.** Read both sides via `:2:` and `:3:` stage numbers. Verify line count after writing. Never truncate.
-- **Version bump is conditional.** Skip entirely if no files under `plugins/soleur/` changed.
-- **Accept main's version for most version files.** The version bump step overwrites them anyway. CHANGELOG and plugin README are the exceptions.

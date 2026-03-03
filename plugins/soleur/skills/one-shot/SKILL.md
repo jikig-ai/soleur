@@ -98,7 +98,7 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 4. Use the **Skill tool**: `skill: soleur:review`
 5. Use the **Skill tool**: `skill: soleur:resolve-todo-parallel`
 6. Use the **Skill tool**: `skill: soleur:compound`
-7. Use the **Skill tool**: `skill: soleur:ship`. Ship handles compound re-check (Phase 2), documentation verification (Phase 3), tests (Phase 4), version bump (Phase 5), push, PR creation, CI, merge, and cleanup.
+7. Use the **Skill tool**: `skill: soleur:ship`. Ship handles compound re-check (Phase 2), documentation verification (Phase 3), tests (Phase 4), semver label assignment, push, PR creation, CI, merge, and cleanup.
 8. Use the **Skill tool**: `skill: soleur:test-browser`
 9. Use the **Skill tool**: `skill: soleur:feature-video`
 10. Output `<promise>DONE</promise>` when video is in PR
