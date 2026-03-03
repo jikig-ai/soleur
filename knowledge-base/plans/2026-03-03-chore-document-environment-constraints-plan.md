@@ -93,11 +93,11 @@ This is deferred to a follow-up if documentation alone proves insufficient. The 
 
 ## Acceptance Criteria
 
-- [ ] AGENTS.md Hard Rules section includes a rule about Warp terminal escape sequences
-- [ ] AGENTS.md Hard Rules section includes a rule about non-interactive shell / no `sudo`
-- [ ] Constitution.md Architecture > Always section includes a principle about documenting environment-specific constraints in AGENTS.md
-- [ ] No plugin files modified (no version bump needed)
-- [ ] Existing AGENTS.md rules are not disrupted or reworded
+- [x] AGENTS.md Hard Rules section includes a rule about Warp terminal escape sequences
+- [x] AGENTS.md Hard Rules section includes a rule about non-interactive shell / no `sudo`
+- [x] Constitution.md Architecture > Always section includes a principle about documenting environment-specific constraints in AGENTS.md
+- [x] No plugin files modified (no version bump needed)
+- [x] Existing AGENTS.md rules are not disrupted or reworded
 
 ## Non-goals
 
