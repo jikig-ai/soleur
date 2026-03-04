@@ -2,24 +2,15 @@
 set -euo pipefail
 
 # --- Sentinel Check ---
-# Sentinel file tracks whether the welcome message has been shown.
-# Uses .local suffix to stay gitignored; per-project (relative path).
-SENTINEL_FILE=".claude/soleur-welcomed.local"
+PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || PROJECT_ROOT="."
+SENTINEL_FILE="${PROJECT_ROOT}/.claude/soleur-welcomed.local"
 
-if [[ -f "$SENTINEL_FILE" ]]; then
-  # Already welcomed -- allow session start without output
-  exit 0
-fi
+[[ -f "$SENTINEL_FILE" ]] && exit 0
 
 # --- First-Time Welcome ---
-# Create sentinel file. If this fails (read-only filesystem, permissions),
-# the welcome message will repeat next session -- acceptable degradation.
-mkdir -p .claude 2>/dev/null || true
+mkdir -p "${PROJECT_ROOT}/.claude" 2>/dev/null || true
 touch "$SENTINEL_FILE" 2>/dev/null || true
 
-# Output JSON with additional context for Claude.
-# SessionStart uses additionalContext (not systemMessage) to inject context
-# that Claude can see and act on.
 cat <<'WELCOME_JSON'
 {
   "hookSpecificOutput": {
@@ -28,5 +19,3 @@ cat <<'WELCOME_JSON'
   }
 }
 WELCOME_JSON
-
-exit 0
