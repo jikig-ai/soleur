@@ -43,7 +43,7 @@ Parse the arguments provided after the skill name:
 - `--keywords "kw1, kw2, kw3"` (optional): target keywords, comma-separated
 - `--path <output-path>` (optional): where to write the file
 
-**Default output path** (if `--path` not provided): auto-generate from topic slug as `blog/posts/YYYY-MM-DD-<slug>.md`. If `blog/posts/` does not exist, check for other common blog directories (`posts/`, `articles/`, `blog/`). If none exist, ask the user for the output path.
+**Default output path** (if `--path` not provided): auto-generate from topic slug as `plugins/soleur/docs/blog/YYYY-MM-DD-<slug>.md`.
 
 ## Phase 2: Generate Draft
 
@@ -67,23 +67,10 @@ Generate a full article draft that:
   description: "<Meta description, 120-160 characters, includes primary keyword>"
   tags:
     - <relevant-tag>
-  layout: "post.njk"
   ---
   ```
 
-- Includes JSON-LD Article structured data after the frontmatter:
-
-  ```html
-  <script type="application/ld+json">
-  {
-    "@context": "https://schema.org",
-    "@type": "Article",
-    "headline": "<title>",
-    "datePublished": "<date>",
-    "description": "<description>"
-  }
-  </script>
-  ```
+  Note: `layout: "blog-post.njk"` and `ogType: "article"` are inherited from `blog/blog.json` — do NOT add them to individual post frontmatter. The blog-post layout handles BlogPosting JSON-LD and OG meta tags automatically — do NOT generate inline JSON-LD in the post body.
 
 - Generates a FAQ section with FAQPage schema if the topic naturally raises 2+ questions. Include the FAQ schema inline:
 
@@ -131,6 +118,6 @@ Report: "Article written to `<path>`. Review and commit when ready."
 - Read the brand guide Voice section during draft generation, not as a separate post-hoc validation pass
 - If outline is provided, follow it. If not, generate a reasonable article structure from the topic.
 - Do not scaffold blog infrastructure. If missing, direct the user to the docs-site skill.
-- JSON-LD should use schema.org/Article type. Use BlogPosting if writing into a blog/ directory.
+- The blog-post.njk layout generates BlogPosting JSON-LD automatically. Do not duplicate it in the post body.
 - Frontmatter fields should match existing posts in the target directory when possible.
 - If the brand guide's `## Channel Notes > ### Blog` section is missing, generate content using only the `## Voice` section (no error).

@@ -952,9 +952,29 @@
     line-height: 1.7;
   }
 
-  /* Article date */
-  .article-date {
-    display: block;
+  /* Blog tag chips */
+  .blog-tag-chip {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    text-transform: lowercase;
+    padding: 4px 12px;
+    border-radius: 4px;
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-secondary);
+  }
+
+  .blog-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  .blog-post-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
     margin-top: var(--space-2);
     color: var(--color-text-secondary);
     font-size: var(--text-sm);
