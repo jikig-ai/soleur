@@ -132,17 +132,17 @@ The key change: "generate" intent signals are distinguished from "build" by chec
 
 ## Acceptance Criteria
 
-- [ ] P0: First session after install displays a welcome message with `/soleur:sync` and `/soleur:help` suggestions
-- [ ] P0: Welcome message only appears once (sentinel file prevents repeats)
-- [ ] P0: Welcome message does NOT appear on resume/clear/compact (only on `startup` sessions)
-- [ ] P0: Getting Started page has an "After Installing" callout section immediately after the install code block
-- [ ] P0: `.gitignore` includes `.claude/soleur-welcomed.local` entry
-- [ ] P1: "Common Workflows" and "Beyond Engineering" merged into a single "Example Workflows" section
-- [ ] P1: `/soleur:sync` positioned as the first recommended action after install
-- [ ] P1: "Try this first" callout uses a CSS class (no inline styles)
-- [ ] P2: `/soleur:go generate our privacy policy` routes through brainstorm domain detection to CLO, not through one-shot
-- [ ] P2: `/soleur:go generate a REST API` still routes to one-shot (build intent)
-- [ ] P2: Ambiguous inputs still prompt the user to choose
+- [x] P0: First session after install displays a welcome message with `/soleur:sync` and `/soleur:help` suggestions
+- [x] P0: Welcome message only appears once (sentinel file prevents repeats)
+- [x] P0: Welcome message does NOT appear on resume/clear/compact (only on `startup` sessions)
+- [x] P0: Getting Started page has an "After Installing" callout section immediately after the install code block
+- [x] P0: `.gitignore` includes `.claude/soleur-welcomed.local` entry
+- [x] P1: "Common Workflows" and "Beyond Engineering" merged into a single "Example Workflows" section
+- [x] P1: `/soleur:sync` positioned as the first recommended action after install
+- [x] P1: "Try this first" callout uses a CSS class (no inline styles)
+- [x] P2: `/soleur:go generate our privacy policy` routes through brainstorm domain detection to CLO, not through one-shot
+- [x] P2: `/soleur:go generate a REST API` still routes to one-shot (build intent)
+- [x] P2: Ambiguous inputs still prompt the user to choose
 
 ## Test Scenarios
 

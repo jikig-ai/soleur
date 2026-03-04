@@ -30,6 +30,11 @@ Soleur gives a single founder the operational capacity of a full organization. *
   <pre><code>claude plugin install soleur</code></pre>
 </div>
 
+<div class="callout">
+  <strong>Existing project?</strong> Run <code>/soleur:sync</code> to analyze your codebase and populate the knowledge base.<br>
+  <strong>Starting fresh?</strong> Run <code>/soleur:go</code> and describe what you need.
+</div>
+
 ## The Workflow
 
 Soleur follows a structured 5-step workflow for software development:
@@ -83,7 +88,7 @@ The 5-step workflow (invoked automatically via `/soleur:go` or directly via Skil
   </div>
 </div>
 
-## Common Workflows
+## Example Workflows
 
 <div class="commands-list">
   <div class="command-item">
@@ -91,25 +96,20 @@ The 5-step workflow (invoked automatically via `/soleur:go` or directly via Skil
     <p>/soleur:go build [feature] &rarr; brainstorm &rarr; plan &rarr; work &rarr; review &rarr; compound</p>
   </div>
   <div class="command-item">
+    <code>Generating Legal Documents</code>
+    <p>/soleur:go generate legal documents &rarr; Terms, Privacy Policy, GDPR Policy, and more</p>
+  </div>
+  <div class="command-item">
     <code>Fixing a Bug</code>
     <p>/soleur:go fix [bug] &rarr; autonomous fix from plan to PR</p>
   </div>
-  <div class="command-item">
-    <code>Reviewing a PR</code>
-    <p>/soleur:go review &rarr; multi-agent review on existing PR</p>
-  </div>
-</div>
-
-## Beyond Engineering
-
-<div class="commands-list">
   <div class="command-item">
     <code>Defining Your Brand</code>
     <p>/soleur:go define our brand identity &rarr; interactive workshop producing a brand guide</p>
   </div>
   <div class="command-item">
-    <code>Generating Legal Documents</code>
-    <p>/soleur:go generate legal documents &rarr; Terms, Privacy Policy, GDPR Policy, and more</p>
+    <code>Reviewing a PR</code>
+    <p>/soleur:go review &rarr; multi-agent review on existing PR</p>
   </div>
   <div class="command-item">
     <code>Validating a Business Idea</code>
