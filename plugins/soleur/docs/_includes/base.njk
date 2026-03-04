@@ -8,7 +8,7 @@
   <meta property="og:title" content="{{ title }}{% if title != site.name %} - {{ site.name }}{% endif %}">
   <meta property="og:description" content="{{ description }}">
   <meta property="og:url" content="{{ site.url }}{{ page.url }}">
-  <meta property="og:type" content="website">
+  <meta property="og:type" content="{{ ogType | default('website') }}">
   <meta property="og:site_name" content="{{ site.name }}">
   <meta property="og:locale" content="en_US">
   <meta property="og:image" content="{{ site.url }}/images/og-image.png">
@@ -66,6 +66,8 @@
   <!-- Privacy-friendly analytics by Plausible -->
   <script async src="https://plausible.io/js/pa-unmpBTT7YXW_UsDCGRfHH.js"></script>
   <script>window.plausible=window.plausible||function(){(plausible.q=plausible.q||[]).push(arguments)},plausible.init=plausible.init||function(i){plausible.o=i||{}}; plausible.init()</script>
+  <link rel="alternate" type="application/atom+xml" title="Soleur Blog" href="/blog/feed.xml" />
+  {% block extraHead %}{% endblock %}
 </head>
 <body>
   <a href="#main-content" class="skip-link">Skip to main content</a>
@@ -78,13 +80,13 @@
     <label for="nav-toggle" class="nav-toggle-label" aria-label="Toggle navigation">&#9776;</label>
     <ul class="nav-links">
       {%- for item in site.nav %}
-      <li><a href="{{ item.url }}"{% if page.url == ('/' + item.url) %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
+      <li><a href="{{ item.url }}"{% if page.url == ('/' + item.url) or (item.url == 'blog/' and page.url.startsWith('/blog')) %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
       {%- endfor %}
     </ul>
   </header>
 
   <main id="main-content"{% if mainClass %} class="{{ mainClass }}"{% endif %}>
-    {{ content | safe }}
+    {% block content %}{{ content | safe }}{% endblock %}
   </main>
 
   <footer class="site-footer">
