@@ -68,6 +68,7 @@ jobs:
             --state open \
             --json headRefName \
             --jq '[.[].headRefName | select(startswith("bot-fix/")) | split("/")[1] | split("-")[0]] | unique | join(",")')
+          export OPEN_FIXES
           echo "Issues with open bot-fix PRs: ${OPEN_FIXES:-none}"
 
           for PRIORITY in priority/p3-low priority/p2-medium priority/p1-high; do
@@ -76,8 +77,8 @@ jobs:
               --label "type/bug" \
               --state open \
               --json number,title,labels,createdAt \
-              --jq --arg skip "$OPEN_FIXES" '
-                ($skip | split(",") | map(select(length > 0)) | map(tonumber? // empty)) as $skip_nums |
+              --jq '
+                ($ENV.OPEN_FIXES | split(",") | map(select(length > 0)) | map(tonumber? // empty)) as $skip_nums |
                 [.[] | select(
                   (.labels | map(.name) | index("bot-fix/attempted") | not) and
                   (.number | IN($skip_nums[]) | not)

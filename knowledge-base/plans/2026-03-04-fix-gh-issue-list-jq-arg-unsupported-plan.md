@@ -33,10 +33,10 @@ unknown arguments ["skip" "" "\n ($skip | split(\",\") ..."]
 
 ## Acceptance Criteria
 
-- [ ] The `Select issue` step in `scheduled-bug-fixer.yml` no longer uses `--arg` with `--jq`
-- [ ] The `OPEN_FIXES` shell variable is exported and accessed via `$ENV.OPEN_FIXES` in the jq expression
-- [ ] The jq filter logic (split, tonumber, IN exclusion) remains functionally identical
-- [ ] The learnings doc `knowledge-base/learnings/2026-03-03-scheduled-bot-fix-workflow-patterns.md` is updated to reflect the correct pattern (no `--arg`, use `$ENV`)
+- [x] The `Select issue` step in `scheduled-bug-fixer.yml` no longer uses `--arg` with `--jq`
+- [x] The `OPEN_FIXES` shell variable is exported and accessed via `$ENV.OPEN_FIXES` in the jq expression
+- [x] The jq filter logic (split, tonumber, IN exclusion) remains functionally identical
+- [x] The learnings doc `knowledge-base/learnings/2026-03-03-scheduled-bot-fix-workflow-patterns.md` is updated to reflect the correct pattern (no `--arg`, use `$ENV`)
 - [ ] Workflow runs successfully on `workflow_dispatch` trigger (or at next scheduled run)
 
 ## Test Scenarios
