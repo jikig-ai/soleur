@@ -952,6 +952,17 @@
     line-height: 1.7;
   }
 
+  /* Callout box for important guidance */
+  .callout {
+    padding: var(--space-4) var(--space-5);
+    background: var(--color-bg-secondary);
+    border-radius: 8px;
+    border-left: 3px solid var(--color-accent);
+    margin: var(--space-4) 0;
+  }
+  .callout code { font-weight: 600; color: var(--color-accent); }
+  .callout strong { color: var(--color-text); }
+
   /* Blog tag chips */
   .blog-tag-chip {
     display: inline-block;

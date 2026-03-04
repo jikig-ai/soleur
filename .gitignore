@@ -26,6 +26,7 @@ node_modules/
 .codex/
 .worktrees
 .claude/settings.local.json
+.claude/soleur-welcomed.local
 .playwright-mcp/
 .env
 _site/
