@@ -144,14 +144,14 @@ Then replace every `/tmp/pr_body.txt` with `${{ steps.tmpfiles.outputs.pr_body }
 
 ## Acceptance Criteria
 
-- [ ] No hardcoded `/tmp/` paths remain in `version-bump-and-release.yml`
-- [ ] All temp files are created via `mktemp` in a dedicated step
-- [ ] Temp file paths are passed between steps via `GITHUB_OUTPUT`
-- [ ] Existing step conditions (`if:`) and logic are unchanged
-- [ ] The `give_up()` function uses the secure path via `$PR_BODY_FILE` env var
-- [ ] The workflow_dispatch branch uses the secure path via `$PR_BODY_FILE` env var
-- [ ] The tmpfiles step has the same `if:` guard as downstream steps
-- [ ] `grep -n '/tmp/' .github/workflows/version-bump-and-release.yml` returns zero results
+- [x] No hardcoded `/tmp/` paths remain in `version-bump-and-release.yml`
+- [x] All temp files are created via `mktemp` in a dedicated step
+- [x] Temp file paths are passed between steps via `GITHUB_OUTPUT`
+- [x] Existing step conditions (`if:`) and logic are unchanged
+- [x] The `give_up()` function uses the secure path via `$PR_BODY_FILE` env var
+- [x] The workflow_dispatch branch uses the secure path via `$PR_BODY_FILE` env var
+- [x] The tmpfiles step has the same `if:` guard as downstream steps
+- [x] `grep -n '/tmp/' .github/workflows/version-bump-and-release.yml` returns zero results
 
 ## Test Scenarios
 
