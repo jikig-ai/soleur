@@ -31,10 +31,11 @@ Analyze the user input and classify into one of these intents:
 | Intent | Trigger Signals | Delegates To |
 |--------|----------------|--------------|
 | explore | Questions, "brainstorm", "think about", "let's explore", vague scope, no clear deliverable | `soleur:brainstorm` skill |
-| build | Bug fix, feature request, issue reference (#N), clear requirements, "fix", "add", "implement", "build" | `soleur:one-shot` skill |
+| build | Bug fix, feature request, issue reference (#N), clear engineering requirements, "fix", "add", "implement", "build" -- AND the target is code, infrastructure, or technical implementation | `soleur:one-shot` skill |
+| generate | The user wants to produce a non-code business artifact: legal documents, brand guides, policies, reports, strategies, marketing content, financial plans, or similar business deliverables. Distinguished from "build" by artifact type (document vs. code). | `soleur:brainstorm` skill |
 | review | "review PR", "check this code", "review #N", PR number reference | `soleur:review` skill |
 
-If the input does not clearly match one intent, use the **AskUserQuestion tool** to present all three options and let the user choose. Do not guess on ambiguous input.
+If the input does not clearly match one intent, use the **AskUserQuestion tool** to present all four options and let the user choose. Do not guess on ambiguous input.
 
 ## Step 3: Confirm Route
 
@@ -44,7 +45,7 @@ Use the **AskUserQuestion tool** to propose the classified intent:
 
 **Options:**
 1. The proposed intent (add "(Recommended)" to the label)
-2. The other two intents as alternatives
+2. The other three intents as alternatives
 
 ## Step 4: Delegate
 
@@ -52,6 +53,7 @@ After confirmation, invoke the selected skill using the **Skill tool** with the 
 
 - explore: `skill: soleur:brainstorm`
 - build: `skill: soleur:one-shot`
+- generate: `skill: soleur:brainstorm`
 - review: `skill: soleur:review`
 
 Pass the original user input text as the `args` parameter. Do not strip or modify the input.

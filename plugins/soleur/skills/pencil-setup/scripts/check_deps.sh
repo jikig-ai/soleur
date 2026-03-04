@@ -114,16 +114,17 @@ else
   fi
   echo "  [installing] Pencil extension..."
   if ! "$IDE" --install-extension highagency.pencildev 2>&1; then
-    echo "  [WARN] Extension install command returned non-zero"
+    echo "  [FAILED] Extension install command returned non-zero -- try manually from IDE marketplace"
+    echo "    Search for 'Pencil' in the $IDE Extensions panel, or visit:"
+    echo "    https://docs.pencil.dev/getting-started/installation"
+    exit 1
   fi
-  # Re-check after install attempt
+  # Re-check: confirm the binary is resolvable after a successful install command
   BINARY=$(detect_extension "$IDE")
   if [[ -n "$BINARY" ]]; then
     echo "  [ok] Pencil extension (installed)"
   else
-    echo "  [FAILED] Extension install -- try manually from IDE marketplace"
-    echo "    Search for 'Pencil' in the $IDE Extensions panel, or visit:"
-    echo "    https://docs.pencil.dev/getting-started/installation"
+    echo "  [FAILED] Extension installed but binary not found -- restart $IDE and re-run"
     exit 1
   fi
 fi
