@@ -1,3 +1,10 @@
+---
+title: '"and stop" Halt Language Breaks One-Shot Pipeline'
+date: 2026-03-03
+category: engineering
+tags: [integration-issues, skills/work, skills/one-shot, 2026-03-02-skill-handoff-blocks-pipeline-when-announcing.md]
+---
+
 # Learning: "and stop" Halt Language Breaks One-Shot Pipeline
 
 ## Problem

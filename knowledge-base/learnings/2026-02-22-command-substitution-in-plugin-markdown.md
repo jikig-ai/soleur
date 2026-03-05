@@ -1,3 +1,10 @@
+---
+title: $() command substitution in plugin markdown triggers Claude Code permission prompts
+date: 2026-02-22
+category: plugin-architecture
+tags: [integration-issues, plugin-architecture, command-substitution, permission-prompt]
+---
+
 # Learning: $() command substitution in plugin markdown triggers Claude Code permission prompts
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: Pencil Desktop ships its own MCP server binary
+date: 2026-02-27
+category: infrastructure
+tags: [integration-issues, pencil-setup]
+---
+
 # Learning: Pencil Desktop ships its own MCP server binary
 
 ## Problem

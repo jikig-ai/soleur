@@ -1,3 +1,10 @@
+---
+title: Command vs Skill Selection Criteria
+date: 2026-02-12
+category: plugin-architecture
+tags: [workflow-patterns, plugin-architecture, agents-cant-find-commands, command-skill-overlap]
+---
+
 # Learning: Command vs Skill Selection Criteria
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: Archiving slug extraction must match branch naming conventions
+date: 2026-02-22
+category: workflow-patterns
+tags: [logic-errors, knowledge-base-archiving]
+---
+
 # Learning: Archiving slug extraction must match branch naming conventions
 
 ## Problem

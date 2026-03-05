@@ -1,3 +1,10 @@
+---
+title: ops-provisioner modifies files on main instead of worktree
+date: 2026-02-22
+category: workflow-patterns
+tags: [workflow-patterns, agents/operations/ops-provisioner, files modified on main branch, worktree convention violated]
+---
+
 # Learning: ops-provisioner modifies files on main instead of worktree
 
 ## Problem

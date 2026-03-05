@@ -1,3 +1,10 @@
+---
+title: Automating Pencil MCP Registration via Skill
+date: 2026-02-27
+category: infrastructure
+tags: [integration-issues, pencil-setup, mcp-registration, claude mcp add fails on duplicate, stale mcp binary path after extension update]
+---
+
 # Learning: Automating Pencil MCP Registration via Skill
 
 ## Problem

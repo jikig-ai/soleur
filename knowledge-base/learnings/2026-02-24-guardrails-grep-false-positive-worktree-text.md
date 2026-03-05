@@ -1,3 +1,10 @@
+---
+title: Guardrails grep false positive on literal .worktrees/ in command text
+date: 2026-02-24
+category: workflow-patterns
+tags: [safety-mechanisms, .claude/hooks/guardrails.sh]
+---
+
 # Learning: Guardrails grep false positive on literal .worktrees/ in command text
 
 ## Problem

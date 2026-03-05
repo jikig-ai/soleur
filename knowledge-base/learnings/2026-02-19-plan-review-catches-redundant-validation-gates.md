@@ -1,3 +1,10 @@
+---
+title: Plan review catches redundant validation gates
+date: 2026-02-19
+category: engineering
+tags: [workflow-patterns, content-writer, growth-strategist, over-engineering, redundant validation, unnecessary phases]
+---
+
 # Learning: Plan review catches redundant validation gates
 
 ## Problem

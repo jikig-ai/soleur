@@ -1,3 +1,10 @@
+---
+title: Pull latest main after cleanup-merged
+date: 2026-02-24
+category: workflow-patterns
+tags: [integration-issues, git-worktree]
+---
+
 # Learning: Pull latest main after cleanup-merged
 
 ## Problem

@@ -1,16 +1,12 @@
 ---
 title: Context Compaction - Command Optimization Strategy
 date: 2026-02-22
-problem_type: performance_issue
-component: claude_code_plugin
+category: plugin-architecture
+tags: [context-window, command-optimization, static-content-extraction, token-budget, compaction-boundary]
 module: soleur-plugin-commands
+component: claude_code_plugin
+problem_type: performance_issue
 severity: high
-tags:
-  - context-window
-  - command-optimization
-  - static-content-extraction
-  - token-budget
-  - compaction-boundary
 status: completed
 ---
 

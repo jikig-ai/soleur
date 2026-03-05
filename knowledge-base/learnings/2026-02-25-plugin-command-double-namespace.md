@@ -1,3 +1,10 @@
+---
+title: Plugin command double-namespace and headless auto-load timing
+date: 2026-02-25
+category: plugin-architecture
+tags: [plugin-system, soleur-plugin]
+---
+
 # Learning: Plugin command double-namespace and headless auto-load timing
 
 ## Problem

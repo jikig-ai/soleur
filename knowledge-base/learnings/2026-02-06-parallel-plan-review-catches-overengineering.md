@@ -1,9 +1,11 @@
 ---
-module: soleur
+title: Parallel Plan Reviews Catch Over-Engineering and Factual Errors
 date: 2026-02-06
-problem_type: developer_experience
-component: planning
+category: engineering
 tags: [plan-review, over-engineering, yagni, api-validation]
+module: soleur
+component: planning
+problem_type: developer_experience
 severity: medium
 ---
 

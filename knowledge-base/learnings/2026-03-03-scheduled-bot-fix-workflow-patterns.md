@@ -1,4 +1,8 @@
 ---
+title: Scheduled Bot-Fix Workflow Patterns
+date: 2026-03-03
+category: engineering
+tags: [workflow-patterns, scheduled-bug-fixer]
 synced_to: [schedule]
 ---
 

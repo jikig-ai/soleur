@@ -1,3 +1,10 @@
+---
+title: Full Landscape Discovery Audit -- 75 Components vs Community
+date: 2026-02-19
+category: engineering
+tags: [discovery, functional-discovery, community-overlap, landscape-audit]
+---
+
 # Learning: Full Landscape Discovery Audit -- 75 Components vs Community
 
 ## Problem

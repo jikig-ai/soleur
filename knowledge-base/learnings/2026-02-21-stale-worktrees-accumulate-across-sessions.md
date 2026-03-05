@@ -1,3 +1,10 @@
+---
+title: Stale worktrees accumulate across sessions
+date: 2026-02-21
+category: workflow-patterns
+tags: [workflow-issues, git-worktree, ship, session-management, stale worktree, orphaned worktree, pr not merged, temp files in worktree]
+---
+
 # Learning: Stale worktrees accumulate across sessions
 
 ## Problem

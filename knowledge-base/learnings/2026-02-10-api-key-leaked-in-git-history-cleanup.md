@@ -1,3 +1,10 @@
+---
+title: API key leaked in git history -- full cleanup procedure
+date: 2026-02-10
+category: workflow-patterns
+tags: [security-issues, git, github, api key in git history, leaked secret, settings.local.json committed]
+---
+
 # Learning: API key leaked in git history -- full cleanup procedure
 
 ## Problem

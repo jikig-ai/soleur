@@ -1,3 +1,10 @@
+---
+title: Terraform Module Structure and Best Practices Research
+date: 2026-02-13
+category: infrastructure
+tags: [terraform, best, practices, research]
+---
+
 # Terraform Module Structure and Best Practices Research
 
 **Date:** 2026-02-13

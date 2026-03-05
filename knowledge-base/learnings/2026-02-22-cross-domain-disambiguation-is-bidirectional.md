@@ -1,3 +1,10 @@
+---
+title: Cross-Domain Disambiguation Is Bidirectional
+date: 2026-02-22
+category: agent-design
+tags: [integration-issues, agents]
+---
+
 # Learning: Cross-Domain Disambiguation Is Bidirectional
 
 ## Problem

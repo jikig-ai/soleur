@@ -1,10 +1,11 @@
 ---
-title: "base href for GitHub Pages breaks local dev server testing"
+title: base href for GitHub Pages breaks local dev server testing
+date: 2026-02-13
 category: implementation-patterns
 tags: [github-pages, base-href, local-testing, static-site, http-server]
+symptoms: [CSS and links broken when serving GitHub Pages site locally with python http.server]
 module: docs
-symptom: "CSS and links broken when serving GitHub Pages site locally with python http.server"
-root_cause: "base href='/soleur/' makes browser resolve all relative URLs under /soleur/ path, but local server serves from root /"
+root_cause: 'base href=''/soleur/'' makes browser resolve all relative URLs under /soleur/ path, but local server serves from root /'
 ---
 
 # base href Breaks Local Dev Server

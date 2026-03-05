@@ -1,11 +1,11 @@
 ---
 title: Model ID Update Patterns
+date: 2026-02-22
 category: configuration-fixes
 tags: [model-ids, claude-api, find-and-replace, reference-files, verification]
+symptoms: [Outdated Claude 3.x model IDs in reference files causing deprecation warnings]
 module: skills
-symptom: "Outdated Claude 3.x model IDs in reference files causing deprecation warnings"
-root_cause: "Model IDs hardcoded across multiple reference files without centralized constant"
-date: 2026-02-22
+root_cause: Model IDs hardcoded across multiple reference files without centralized constant
 ---
 
 # Learning: Model ID Update Patterns

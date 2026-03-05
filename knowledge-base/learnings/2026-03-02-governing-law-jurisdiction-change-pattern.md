@@ -1,3 +1,10 @@
+---
+title: Governing Law Jurisdiction Change Pattern
+date: 2026-03-02
+category: engineering
+tags: [legal-agents, legal, docs-site]
+---
+
 # Learning: Governing Law Jurisdiction Change Pattern
 
 ## Problem

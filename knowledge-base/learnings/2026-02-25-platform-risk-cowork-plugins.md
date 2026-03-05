@@ -1,3 +1,10 @@
+---
+title: Platform Risk Materialization -- Cowork Plugins
+date: 2026-02-25
+category: plugin-architecture
+tags: [workflow-patterns, business-validation]
+---
+
 # Learning: Platform Risk Materialization -- Cowork Plugins
 
 ## Problem

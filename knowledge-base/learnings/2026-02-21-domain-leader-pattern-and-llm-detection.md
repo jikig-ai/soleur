@@ -1,3 +1,10 @@
+---
+title: Domain Leader Pattern and LLM-Based Domain Detection
+date: 2026-02-21
+category: agent-design
+tags: [implementation-patterns, agents, commands, fragile keyword routing, no cross-agent coordination, marketing agents operating independently]
+---
+
 # Learning: Domain Leader Pattern and LLM-Based Domain Detection
 
 ## Problem

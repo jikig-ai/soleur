@@ -1,3 +1,10 @@
+---
+title: Guard 1 bypassed by chained git commands
+date: 2026-02-24
+category: workflow-patterns
+tags: [safety-mechanisms, .claude/hooks/guardrails.sh]
+---
+
 # Learning: Guard 1 bypassed by chained git commands
 
 ## Problem

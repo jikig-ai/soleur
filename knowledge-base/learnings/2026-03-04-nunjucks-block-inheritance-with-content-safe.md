@@ -1,3 +1,10 @@
+---
+title: 'Nunjucks block inheritance requires wrapping {{ content | safe }}'
+date: 2026-03-04
+category: engineering
+tags: [build-errors, eleventy-templates]
+---
+
 # Learning: Nunjucks block inheritance requires wrapping {{ content | safe }}
 
 ## Problem

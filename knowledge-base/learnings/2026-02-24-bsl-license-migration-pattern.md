@@ -1,3 +1,10 @@
+---
+title: BSL 1.1 License Migration Pattern
+date: 2026-02-24
+category: legal
+tags: [implementation-patterns, license-migration]
+---
+
 # Learning: BSL 1.1 License Migration Pattern
 
 ## Problem

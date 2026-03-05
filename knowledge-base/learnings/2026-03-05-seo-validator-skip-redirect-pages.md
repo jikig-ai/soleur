@@ -1,3 +1,10 @@
+---
+title: SEO validator should skip instant meta-refresh redirect pages
+date: 2026-03-05
+category: marketing
+tags: [build-errors, seo-aeo, deploy-docs workflow fails on redirect pages lacking seo metadata]
+---
+
 # Learning: SEO validator should skip instant meta-refresh redirect pages
 
 ## Problem

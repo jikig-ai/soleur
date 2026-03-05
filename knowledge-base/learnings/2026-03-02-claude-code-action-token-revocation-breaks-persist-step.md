@@ -1,3 +1,10 @@
+---
+title: claude-code-action Post-Step Revokes Token Before Persist Step
+date: 2026-03-02
+category: ci-cd
+tags: [integration-issues, ci-workflows, high]
+---
+
 # Learning: claude-code-action Post-Step Revokes Token Before Persist Step
 
 ## Problem

@@ -1,10 +1,11 @@
 ---
-title: "Agent prompts: embed sharp edges only"
+title: 'Agent prompts: embed sharp edges only'
+date: 2026-02-13
 category: agent-design
 tags: [agents, prompt-design, plan-review, simplicity]
+symptoms: [Agent plan or prompt is longer than the deliverable it describes]
 module: plugins/soleur/agents
-symptom: "Agent plan or prompt is longer than the deliverable it describes"
-root_cause: "Including knowledge Claude already has from training data"
+root_cause: Including knowledge Claude already has from training data
 ---
 
 # Agent Prompts: Embed Sharp Edges Only

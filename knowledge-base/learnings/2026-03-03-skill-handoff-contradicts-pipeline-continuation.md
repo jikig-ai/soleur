@@ -1,3 +1,10 @@
+---
+title: 'Skill Handoff "Return Control" Contradicts Pipeline Continuation'
+date: 2026-03-03
+category: plugin-architecture
+tags: [logic-errors, plugins/soleur/skills/work, plugins/soleur/skills/one-shot]
+---
+
 # Learning: Skill Handoff "Return Control" Contradicts Pipeline Continuation
 
 ## Problem
