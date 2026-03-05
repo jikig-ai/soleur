@@ -167,33 +167,33 @@ Worktrees do not share `node_modules/`. Must run `npm install` in the worktree b
 
 ### Deliverable 1: Keyword Vacuum Fixes
 
-- [ ] **Homepage H2s contain target keywords** (`plugins/soleur/docs/index.njk`)
+- [x] **Homepage H2s contain target keywords** (`plugins/soleur/docs/index.njk`)
   - "This Is the Way" section: H2 rewritten to include "company-as-a-service" or equivalent target keyword while preserving brand voice
   - "Your AI Organization" section: H2 rewritten to include relevant keywords
   - Final CTA H2 can remain non-keyword (it's a conversion element)
   - Section labels (`.section-label`) can remain as-is (decorative, low SEO weight)
-- [ ] **Agents page has introductory prose** (`plugins/soleur/docs/pages/agents.njk`)
+- [x] **Agents page has introductory prose** (`plugins/soleur/docs/pages/agents.njk`)
   - 2-3 paragraph introduction after the hero `</section>` close and before the `<div class="container">` containing the category nav
   - Wrapped in `<section class="content"><div class="container"><div class="prose">` (matching getting-started.md pattern)
   - Includes target keywords: "agentic engineering", "AI agents", "company-as-a-service", "cross-domain"
   - Explains what the agents do, why 8 domains matter, how they share context
   - FAQ section deferred to a later PR (avoid scope creep)
-- [ ] **Skills page has introductory prose** (`plugins/soleur/docs/pages/skills.njk`)
+- [x] **Skills page has introductory prose** (`plugins/soleur/docs/pages/skills.njk`)
   - 2-3 paragraph introduction after the hero `</section>` close and before the `<div class="container">` containing the category nav
   - Wrapped in `<section class="content"><div class="container"><div class="prose">` (matching getting-started.md pattern)
   - Includes target keywords: "agentic engineering", "compound engineering", "AI workflow"
   - Explains the brainstorm-plan-implement-review-compound lifecycle
-- [ ] All changes use existing CSS classes (`.prose`, `.container`, `.content` section wrappers)
-- [ ] No brand guide violations in new copy
-- [ ] No new CSS classes invented
+- [x] All changes use existing CSS classes (`.prose`, `.container`, `.content` section wrappers)
+- [x] No brand guide violations in new copy
+- [x] No new CSS classes invented
 
 ### Deliverable 2: Pillar Article
 
-- [ ] **Article file created** at `plugins/soleur/docs/blog/what-is-company-as-a-service.md`
-- [ ] **Frontmatter** includes: title, description (under 160 chars with primary keyword), date (2026-03-05), tags -- NO `layout` or `ogType` fields (inherited from blog.json)
-- [ ] **Primary keyword** "company as a service" appears in: H1 (via title), first 150 words, at least one H2
-- [ ] **Secondary keywords** appear in H2s or body: "CaaS platform", "full-stack AI organization", "agentic company", "solo founder"
-- [ ] **Word count** 2,500-3,000 words (per content strategy brief)
+- [x] **Article file created** at `plugins/soleur/docs/blog/what-is-company-as-a-service.md`
+- [x] **Frontmatter** includes: title, description (under 160 chars with primary keyword), date (2026-03-05), tags -- NO `layout` or `ogType` fields (inherited from blog.json)
+- [x] **Primary keyword** "company as a service" appears in: H1 (via title), first 150 words, at least one H2
+- [x] **Secondary keywords** appear in H2s or body: "CaaS platform", "full-stack AI organization", "agentic company", "solo founder"
+- [x] **Word count** 2,500-3,000 words (per content strategy brief)
 - [ ] **Structure follows content strategy checklist:**
   - Machine-readable summary in first paragraph (what, who, why)
   - Definition uses "is" format ("Company-as-a-Service is...")
@@ -213,21 +213,21 @@ Worktrees do not share `node_modules/`. Must run `npm install` in the worktree b
   - Declarative, ambitious tone -- no hedging ("might", "could", "potentially")
   - Concrete numbers from the product (agent counts, department counts, PR count)
   - Founder framed as decision-maker
-- [ ] **BlogPosting JSON-LD** rendered correctly via blog-post.njk layout (verified after build, not generated inline)
-- [ ] **OG tags and Twitter card** rendered correctly via base.njk layout
-- [ ] **Canonical URL** rendered correctly
+- [x] **BlogPosting JSON-LD** rendered correctly via blog-post.njk layout (verified after build, not generated inline)
+- [x] **OG tags and Twitter card** rendered correctly via base.njk layout
+- [x] **Canonical URL** rendered correctly
 
 ### Build and Validation
 
-- [ ] `npm install` succeeds in worktree
-- [ ] `npm run docs:build` succeeds with zero errors
-- [ ] `bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site` passes with zero failures
-- [ ] Blog post appears in blog index page at `/blog/`
-- [ ] Blog post accessible at `/blog/what-is-company-as-a-service/`
-- [ ] RSS feed includes the new post
-- [ ] Blog post HTML contains BlogPosting JSON-LD (from layout)
-- [ ] Blog post HTML contains FAQPage JSON-LD (from inline)
-- [ ] Blog post HTML contains canonical URL, OG tags, Twitter card (from base layout)
+- [x] `npm install` succeeds in worktree
+- [x] `npm run docs:build` succeeds with zero errors
+- [x] `bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site` passes with zero failures
+- [x] Blog post appears in blog index page at `/blog/`
+- [x] Blog post accessible at `/blog/what-is-company-as-a-service/`
+- [x] RSS feed includes the new post
+- [x] Blog post HTML contains BlogPosting JSON-LD (from layout)
+- [x] Blog post HTML contains FAQPage JSON-LD (from inline)
+- [x] Blog post HTML contains canonical URL, OG tags, Twitter card (from base layout)
 
 ## Test Scenarios
 
