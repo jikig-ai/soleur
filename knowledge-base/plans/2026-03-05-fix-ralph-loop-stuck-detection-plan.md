@@ -78,7 +78,7 @@ Changes to the stop hook (lines referenced from current file):
      - Remove state file
      - Exit 0 (allow session to stop)
 
-5. **Persist updated `stuck_count`** in frontmatter (same `sed` pattern used for iteration update at line 109)
+5. **Persist updated `stuck_count`** in frontmatter -- combine with the existing iteration `sed` update (line 109) into a single `sed` pass to avoid double disk I/O and TOCTOU race between writes
 
 #### `plugins/soleur/scripts/setup-ralph-loop.sh`
 
@@ -125,6 +125,7 @@ No changes needed. The one-shot skill invokes `setup-ralph-loop.sh` with `--comp
 - Given a ralph loop with stuck_threshold=3 and 2 consecutive empty responses followed by a substantive response, when the stop hook runs, then the counter resets and the loop continues
 - Given a ralph loop with stuck_threshold=0, when empty responses occur, then stuck detection is disabled and the loop continues normally
 - Given a ralph loop producing substantive output every iteration, when the stop hook runs, then stuck_count stays at 0 and the loop is unaffected
+- Given a ralph loop with both stuck_threshold=3 and max_iterations=10, when stuck detection triggers at iteration 5 (3 consecutive empty responses), then stuck detection wins (fires before iteration limit check) and terminates the loop
 
 ### Edge Cases
 
@@ -171,6 +172,17 @@ if [[ $STUCK_THRESHOLD -gt 0 ]] && [[ $STUCK_COUNT -ge $STUCK_THRESHOLD ]]; then
   rm "$RALPH_STATE_FILE"
   exit 0
 fi
+```
+
+Note: The existing iteration `sed` update and the new `stuck_count` update must be combined into a single `sed` pass:
+
+```bash
+# Combined frontmatter update (iteration + stuck_count in one pass)
+TEMP_FILE="${RALPH_STATE_FILE}.tmp.$$"
+sed -e "s/^iteration: .*/iteration: $NEXT_ITERATION/" \
+    -e "s/^stuck_count: .*/stuck_count: $STUCK_COUNT/" \
+    "$RALPH_STATE_FILE" > "$TEMP_FILE"
+mv "$TEMP_FILE" "$RALPH_STATE_FILE"
 ```
 
 ### `plugins/soleur/scripts/setup-ralph-loop.sh` (key additions)

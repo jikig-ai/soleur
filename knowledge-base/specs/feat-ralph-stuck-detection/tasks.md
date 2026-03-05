@@ -20,7 +20,7 @@
   - [ ] 2.2.4 Add stuck threshold check: if threshold > 0 and count >= threshold, terminate
   - [ ] 2.2.5 Print warning to stderr on stuck termination
   - [ ] 2.2.6 Remove state file on stuck termination
-  - [ ] 2.2.7 Persist updated `stuck_count` to state file frontmatter (alongside iteration update)
+  - [ ] 2.2.7 Combine `stuck_count` and `iteration` updates into a single `sed` pass (avoid TOCTOU and double disk I/O)
 
 ## Phase 3: Testing
 
@@ -32,5 +32,6 @@
   - [ ] 3.1.5 Test: backward compatibility with pre-existing state files (no stuck_count/stuck_threshold fields)
   - [ ] 3.1.6 Test: corrupted stuck_count defaults to 0
   - [ ] 3.1.7 Test: response exactly 20 chars counts as substantive
+  - [ ] 3.1.8 Test: stuck detection fires before max_iterations when both conditions could match
 - [ ] 3.2 Manual smoke test: create a ralph loop and verify stuck detection message appears after 3 empty iterations
 - [ ] 3.3 Verify one-shot pipeline unaffected (substantive output each iteration)
