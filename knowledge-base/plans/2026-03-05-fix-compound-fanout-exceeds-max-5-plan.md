@@ -82,12 +82,12 @@ Merge subagent #5 (Category Classifier) into subagent #6 (Documentation Writer).
 
 ## Acceptance Criteria
 
-- [ ] `plugins/soleur/skills/compound/SKILL.md` lists exactly 5 numbered parallel subagents (not 6)
-- [ ] The merged subagent (#5 Documentation Writer) includes all 6 responsibilities: determines optimal category, validates category against schema, suggests filename, assembles complete markdown file, validates YAML frontmatter, creates file in correct location
-- [ ] `knowledge-base/overview/constitution.md` line 201 requires NO changes -- verified it uses generic language ("the pipeline's parallel subagent limit") not a hardcoded count
-- [ ] The Success Output example in compound SKILL.md shows exactly 5 Primary Subagent Results with the Documentation Writer line covering both classification and assembly
-- [ ] No changes to `plugins/soleur/skills/compound-capture/SKILL.md` -- verified zero references to parallel subagent names
-- [ ] Phase 1.5 Deviation Analyst text (line 125) requires NO changes -- "to respect the max-5 parallel subagent limit" becomes accurate after the fix
+- [x] `plugins/soleur/skills/compound/SKILL.md` lists exactly 5 numbered parallel subagents (not 6)
+- [x] The merged subagent (#5 Documentation Writer) includes all 6 responsibilities: determines optimal category, validates category against schema, suggests filename, assembles complete markdown file, validates YAML frontmatter, creates file in correct location
+- [x] `knowledge-base/overview/constitution.md` line 201 requires NO changes -- verified it uses generic language ("the pipeline's parallel subagent limit") not a hardcoded count
+- [x] The Success Output example in compound SKILL.md shows exactly 5 Primary Subagent Results with the Documentation Writer line covering both classification and assembly
+- [x] No changes to `plugins/soleur/skills/compound-capture/SKILL.md` -- verified zero references to parallel subagent names
+- [x] Phase 1.5 Deviation Analyst text (line 125) requires NO changes -- "to respect the max-5 parallel subagent limit" becomes accurate after the fix
 - [ ] Compound runs correctly end-to-end after the change
 
 ## Test Scenarios
