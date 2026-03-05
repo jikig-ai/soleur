@@ -72,6 +72,13 @@ fi
 for f in "${html_files[@]}"; do
   page="${f#"$SITE_DIR"/}"
 
+  # Skip instant meta-refresh redirects (content="0;url=...")
+  # Only matches content="0" (instant) -- delayed refreshes (content="5") still get validated
+  if grep -qiE 'meta http-equiv="refresh" content="0[;"]' "$f"; then
+    pass "$page is a redirect (skipped SEO checks)"
+    continue
+  fi
+
   # Canonical URL
   if grep -q 'rel="canonical"' "$f"; then
     pass "$page has canonical URL"
