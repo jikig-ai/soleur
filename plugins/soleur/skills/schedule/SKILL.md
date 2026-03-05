@@ -57,6 +57,8 @@ fi
 echo "$SHA"
 ```
 
+For workflows that process PRs (e.g., ship-merge, compound-review), use `gh pr checks --required` for CI gating rather than reimplementing `statusCheckRollup` filtering in jq — GitHub CLI already respects the repo's required checks configuration.
+
 If `gh api` fails, **do not generate the workflow**. Display: "Could not resolve action SHAs. Check network connectivity and `gh auth status`, then retry." The user can retry when they have network access.
 
 **Step 3: Generate the workflow file**
