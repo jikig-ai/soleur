@@ -4,13 +4,14 @@ Source plan: `knowledge-base/plans/2026-03-05-fix-articles-seo-metadata-plan.md`
 
 ## Phase 1: Core Fix
 
-- [ ] 1.1 Update `plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh` -- add redirect detection (`meta http-equiv="refresh"`) with `continue` to skip SEO checks for redirect-only pages
+- [ ] 1.1 Update `plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh` -- add instant redirect detection (`content="0"` meta-refresh) with `continue` to skip SEO checks for redirect-only pages
 - [ ] 1.2 Verify existing tests still pass after script change
 
 ## Phase 2: Testing
 
-- [ ] 2.1 Add test case in `plugins/soleur/test/validate-seo.test.ts` for redirect page exclusion
-- [ ] 2.2 Run full test suite: `bun test plugins/soleur/test/validate-seo.test.ts`
+- [ ] 2.1 Add test case in `plugins/soleur/test/validate-seo.test.ts` for instant redirect page exclusion
+- [ ] 2.2 Add negative test case for delayed meta-refresh page (content="5") -- verify it is NOT skipped
+- [ ] 2.3 Run full test suite: `bun test plugins/soleur/test/validate-seo.test.ts`
 
 ## Phase 3: Integration Verification
 

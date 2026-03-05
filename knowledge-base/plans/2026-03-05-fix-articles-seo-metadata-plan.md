@@ -5,6 +5,18 @@ date: 2026-03-05
 semver: patch
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-05
+**Sections enhanced:** 3 (Implementation, Risks, Test Scenarios)
+**Research performed:** SEO redirect best practices, grep pattern edge case analysis
+
+### Key Improvements
+
+1. Tightened grep pattern to only match instant redirects (`content="0"`) -- delayed meta-refresh pages with visible content are still validated
+2. Added SEO context: Google treats `content="0"` meta-refresh as a permanent 301 redirect, passing full link equity to the destination
+3. Added test scenario for delayed meta-refresh pages (ensures they are NOT skipped)
+
 # Fix: Articles Page Missing SEO Metadata
 
 ## Problem
@@ -54,7 +66,17 @@ Option C is the correct choice because:
 - It aligns with the SEO validation's purpose: redirect pages have no content to index and search engines follow the redirect
 - It avoids adding unnecessary SEO metadata to a page that immediately redirects
 
-The `validate-seo.sh` loop should detect `meta http-equiv="refresh"` and skip the four checks for that page, logging a `SKIP` message instead.
+The `validate-seo.sh` loop should detect instant meta-refresh redirects (`content="0"`) and skip the four checks for that page, logging a `PASS` message instead.
+
+### Research Insights: SEO and Meta-Refresh Redirects
+
+Google treats instant meta-refresh (`content="0"`) as equivalent to a permanent 301 redirect -- link equity passes to the destination URL. The redirect page itself is not indexed; the destination is canonical. This means SEO metadata on the redirect page is genuinely unnecessary, not just an optimization.
+
+Delayed meta-refresh redirects (`content="5"` or higher) are treated as weaker signals and may result in the source page being indexed. Pages with delayed refresh AND visible content should still be validated for SEO metadata.
+
+**References:**
+- [Google: Redirects and Search](https://developers.google.com/search/docs/crawling-indexing/301-redirects) -- treats instant meta-refresh as permanent redirect
+- [Conductor: Are meta refresh redirects bad for SEO?](https://www.conductor.com/academy/redirects/faq/html-meta-redirect-bad-seo/) -- instant refresh passes authority
 
 ### Fallback: Option A
 
@@ -72,8 +94,9 @@ In the HTML pages loop (line 72), add a redirect detection check before the four
 for f in "${html_files[@]}"; do
   page="${f#"$SITE_DIR"/}"
 
-  # Skip redirect-only pages (meta http-equiv="refresh")
-  if grep -qi 'meta http-equiv="refresh"' "$f"; then
+  # Skip instant meta-refresh redirects (content="0;url=...")
+  # Only matches content="0" (instant) -- delayed refreshes (content="5") still get validated
+  if grep -qiE 'meta http-equiv="refresh" content="0[;"]' "$f"; then
     pass "$page is a redirect (skipped SEO checks)"
     continue
   fi
@@ -82,16 +105,18 @@ for f in "${html_files[@]}"; do
 done
 ```
 
-This preserves the page count in the "found N HTML page(s)" message but excludes redirects from the four mandatory checks.
+**Pattern rationale:** The regex `meta http-equiv="refresh" content="0[;"]` matches only instant redirects where `content` starts with `"0"` followed by either `;` (redirect URL) or `"` (bare refresh). This avoids false positives on delayed meta-refresh pages (`content="5;url=..."`) that may contain visible, indexable content requiring SEO metadata. The `-i` flag handles case variations in HTML attributes.
 
-### Task 2: Add test case for redirect page exclusion
+This preserves the page count in the "found N HTML page(s)" message but excludes instant redirects from the four mandatory checks.
+
+### Task 2: Add test cases for redirect page handling
 
 **File:** `plugins/soleur/test/validate-seo.test.ts`
 
-Add a test that creates a redirect page and verifies the script passes:
+Add two tests: one for instant redirect (skipped) and one for delayed redirect (still validated):
 
 ```typescript
-test("passes when a redirect page is present (meta refresh)", async () => {
+test("passes when an instant redirect page is present (meta refresh content=0)", async () => {
   setupSite();
   writeFileSync(
     `${TMP_DIR}/pages/articles.html`,
@@ -102,6 +127,19 @@ test("passes when a redirect page is present (meta refresh)", async () => {
   const stdout = await new Response(proc.stdout).text();
   expect(exitCode).toBe(0);
   expect(stdout).toContain("is a redirect (skipped SEO checks)");
+});
+
+test("fails when a delayed redirect page lacks SEO metadata (meta refresh content=5)", async () => {
+  setupSite();
+  writeFileSync(
+    `${TMP_DIR}/pages/slow-redirect.html`,
+    '<!DOCTYPE html>\n<html><head><meta http-equiv="refresh" content="5;url=/blog/"></head><body><p>Redirecting...</p></body></html>'
+  );
+  const proc = Bun.spawn(["bash", SCRIPT, TMP_DIR], { stdout: "pipe", stderr: "pipe" });
+  const exitCode = await proc.exited;
+  const stdout = await new Response(proc.stdout).text();
+  expect(exitCode).toBe(1);
+  expect(stdout).toContain("slow-redirect.html missing canonical URL");
 });
 ```
 
@@ -155,9 +193,14 @@ Confirm all tests pass, including the new redirect test.
 - Then: Step "Validate SEO" passes, deployment completes
 
 **Scenario 4: Future redirect pages auto-handled**
-- Given: A new redirect page `_site/pages/old-page.html` is added with `meta http-equiv="refresh"`
+- Given: A new redirect page `_site/pages/old-page.html` is added with `meta http-equiv="refresh" content="0;url=/new-page/"`
 - When: `validate-seo.sh` runs
 - Then: The new redirect is also skipped automatically
+
+**Scenario 5: Delayed meta-refresh pages are still validated**
+- Given: `_site/pages/slow-redirect.html` contains `meta http-equiv="refresh" content="5;url=/blog/"` and visible content
+- When: `validate-seo.sh` runs
+- Then: All four SEO checks are applied (page is NOT skipped because the redirect is delayed)
 
 ## Files Changed
 
@@ -168,8 +211,9 @@ Confirm all tests pass, including the new redirect test.
 
 ## Risks
 
-- **Low:** `grep -qi 'meta http-equiv="refresh"'` could match a page that has a refresh tag but also has visible content. This is unlikely in practice -- meta-refresh redirects are a well-established pattern for redirect-only pages.
-- **Mitigation:** The script logs `SKIP` for each redirect, making skipped pages visible in CI output for review.
+- **Low (mitigated by pattern tightening):** The original broad pattern `grep -qi 'meta http-equiv="refresh"'` would match delayed meta-refresh pages (e.g., `content="5"`) that have visible content and need SEO metadata. The tightened pattern `content="0[;"]` only matches instant redirects, eliminating this false positive.
+- **Negligible:** A page could have `content="0"` meta-refresh alongside visible content. This is a degenerate case -- instant redirects leave no time for users to see content. The CI log shows every skipped page for manual review.
+- **Mitigation:** The script logs `PASS: ... is a redirect (skipped SEO checks)` for each skipped page, making exclusions visible in CI output.
 
 ## PR Labels
 
