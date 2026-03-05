@@ -347,27 +347,27 @@ Creating a separate GitHub App to approve and merge bot PRs. Rejected as overeng
 
 ### Functional Requirements
 
-- [ ] `fix-issue` skill sets `bot-fix/auto-merge-eligible` or `bot-fix/review-required` label on created PRs
-- [ ] Auto-merge eligibility requires: single file changed, p3-low source issue, all tests pass
-- [ ] `scheduled-bug-fixer.yml` auto-merges eligible PRs via `gh pr merge --squash --auto`
-- [ ] `post-merge-monitor.yml` detects bot-fix merges on main and waits for CI
-- [ ] Post-merge CI failure triggers automatic revert PR, issue comment, and `bot-fix/reverted` label
-- [ ] Post-merge CI success triggers issue closure and `bot-fix/verified` label
-- [ ] Revert commits do NOT trigger the post-merge monitor (no infinite loop)
-- [ ] Discord notifications on auto-merge and auto-revert events
-- [ ] All new labels pre-created by workflows before use
+- [x] `fix-issue` skill sets `bot-fix/auto-merge-eligible` or `bot-fix/review-required` label on created PRs
+- [x] Auto-merge eligibility requires: single file changed, p3-low source issue, all tests pass
+- [x] `scheduled-bug-fixer.yml` auto-merges eligible PRs via `gh pr merge --squash --auto`
+- [x] `post-merge-monitor.yml` detects bot-fix merges on main and waits for CI
+- [x] Post-merge CI failure triggers automatic revert PR, issue comment, and `bot-fix/reverted` label
+- [x] Post-merge CI success triggers issue closure and `bot-fix/verified` label
+- [x] Revert commits do NOT trigger the post-merge monitor (no infinite loop)
+- [x] Discord notifications on auto-merge and auto-revert events
+- [x] All new labels pre-created by workflows before use
 
 ### Non-Functional Requirements
 
-- [ ] Post-merge monitor workflow completes within 15 minutes
-- [ ] No additional secrets required (uses `GITHUB_TOKEN` and existing `ANTHROPIC_API_KEY`)
+- [x] Post-merge monitor workflow completes within 15 minutes
+- [x] No additional secrets required (uses `GITHUB_TOKEN` and existing `ANTHROPIC_API_KEY`)
 - [ ] Revert mechanism tested via `workflow_dispatch` trigger before relying on scheduled runs
 
 ### Quality Gates
 
 - [ ] SpecFlow analysis completed on all workflow files
 - [ ] Rollback tested end-to-end (force a failing test, merge, verify revert)
-- [ ] Compound run captures learnings before commit
+- [x] Compound run captures learnings before commit
 
 ## Test Scenarios
 
@@ -377,7 +377,7 @@ Creating a separate GitHub App to approve and merge bot PRs. Rejected as overeng
 - Given a bot-fix PR with 2 files changed, when the auto-merge gate evaluates, then `bot-fix/review-required` label is added and no auto-merge occurs
 - Given a bot-fix PR from a p2-medium issue (cascaded priority), when the auto-merge gate evaluates, then `bot-fix/review-required` label is added
 - Given a bot-fix commit merged to main, when CI passes, then the source issue is closed with `bot-fix/verified` label
-- Given a bot-fix commit merged to main, when CI fails, then a revert PR is created, auto-merged, and the source issue gets `bot-fix/reverted` label
+- Given a bot-fix commit merged to main, when CI fails, then the commit is reverted directly on main and the source issue gets `bot-fix/reverted` label
 
 ### Regression Tests
 
