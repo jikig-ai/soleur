@@ -3,9 +3,22 @@ title: "fix: sanitize Discord mention patterns in release webhook"
 type: fix
 date: 2026-03-05
 semver: patch
+deepened: 2026-03-05
 ---
 
 # fix: Sanitize Discord mention patterns in release webhook
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-05
+**Sections enhanced:** 4 (Problem Statement, Proposed Solution, Test Scenarios, References)
+**Research sources:** Discord API documentation, project learnings, constitution review
+
+### Key Improvements
+
+1. Clarified Discord's default webhook mention behavior -- webhooks only parse user mentions by default, not `@everyone`/`@here`, but `allowed_mentions: {parse: []}` is still needed to block user/role mentions and as defense-in-depth
+2. Added the three valid `parse` array values (`"users"`, `"roles"`, `"everyone"`) from official API docs for implementer reference
+3. Added verification step to test scenarios -- `jq` dry-run to validate JSON structure before relying on CI
 
 ## Overview
 
@@ -17,7 +30,15 @@ In the "Post to Discord" step (`.github/workflows/version-bump-and-release.yml:2
 
 **Attack chain:** Merge access + PR body containing mention syntax + webhook having mention permissions. The issue is rated P3 because this requires merge access, but the fix is trivial and eliminates the risk entirely.
 
-**Root cause:** The `jq` payload construction at line 263 does not set the `allowed_mentions` field, so Discord uses its default behavior of parsing all mention types.
+**Root cause:** The `jq` payload construction at line 263 does not set the `allowed_mentions` field, so Discord uses its default mention-parsing behavior.
+
+### Research Insight: Discord Webhook Default Behavior
+
+Per Discord API docs (verified 2026-03-05): "In interactions and webhooks, only user mentions are parsed" by default. This means `@everyone` and `@here` are likely already suppressed for webhook messages without `allowed_mentions`. However, `<@USER_ID>` user mentions ARE parsed by default in webhooks, and `<@&ROLE_ID>` role mentions may also resolve depending on server configuration. The `allowed_mentions: {parse: []}` fix is still necessary to:
+
+1. Block user mention parsing (which IS active by default on webhooks)
+2. Guarantee `@everyone`/`@here` suppression regardless of future Discord API changes
+3. Provide explicit, auditable intent in the payload
 
 ## Proposed Solution
 
@@ -37,9 +58,22 @@ Use Discord's `allowed_mentions` API field to disable all mention parsing at the
 
 The `allowed_mentions.parse: []` setting tells Discord to render mention text literally (e.g., `@everyone` appears as plain text) without triggering any actual pings. This covers all mention types:
 
-- `@everyone` and `@here` (mass mentions)
-- `<@USER_ID>` and `<@!USER_ID>` (user mentions)
-- `<@&ROLE_ID>` (role mentions)
+- `@everyone` and `@here` (mass mentions) -- `parse` value: `"everyone"`
+- `<@USER_ID>` and `<@!USER_ID>` (user mentions) -- `parse` value: `"users"`
+- `<@&ROLE_ID>` (role mentions) -- `parse` value: `"roles"`
+
+### API Reference: AllowedMentions Object
+
+The `allowed_mentions` object supports four fields (Discord API docs):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `parse` | array of strings | Which mention categories to process: `"users"`, `"roles"`, `"everyone"` |
+| `roles` | array of snowflakes | Specific role IDs to allow (max 100) |
+| `users` | array of snowflakes | Specific user IDs to allow (max 100) |
+| `replied_user` | boolean | Whether to ping the replied-to message author (default: false) |
+
+Setting `parse: []` with no `roles`/`users` arrays suppresses all mention parsing entirely.
 
 ### Why `allowed_mentions` over sed stripping
 
@@ -68,6 +102,22 @@ The issue body suggests `sed 's/@everyone//g; s/@here//g'` but this approach has
 - Given a PR body containing `<@123456789>` (user mention syntax), when the release workflow runs, then the Discord message displays the raw text without resolving or pinging the user
 - Given a PR body containing `<@&987654321>` (role mention syntax), when the release workflow runs, then the Discord message displays the raw text without pinging the role
 - Given a normal PR body with no mention syntax, when the release workflow runs, then the Discord notification behaves identically to current behavior
+
+### Local Verification
+
+Before merging, validate the JSON payload structure locally:
+
+```bash
+# Verify jq produces valid JSON with allowed_mentions
+echo "Test @everyone body" | jq -n \
+  --arg content "$(cat)" \
+  --arg username "Sol" \
+  --arg avatar_url "https://example.com/logo.png" \
+  '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}'
+# Expected: valid JSON with "allowed_mentions":{"parse":[]}
+```
+
+Full end-to-end verification requires a real webhook URL and is best done post-merge on the next release.
 
 ## Context
 
@@ -100,7 +150,11 @@ Update the existing Discord webhook convention (line 92) to include `allowed_men
 
 ## References
 
-- Discord API `allowed_mentions` documentation: https://discord.com/developers/docs/resources/webhook#execute-webhook-jsonform-params
+- Discord API `allowed_mentions` object: https://docs.discord.com/developers/resources/message#allowed-mentions-object
+- Discord API Execute Webhook: https://docs.discord.com/developers/resources/webhook#execute-webhook
 - GitHub Issue: #427
 - PR #420 (where the vulnerability was found)
 - `.github/workflows/version-bump-and-release.yml:239-278` (the "Post to Discord" step)
+- Learning: `knowledge-base/learnings/2026-02-19-discord-bot-identity-and-webhook-behavior.md`
+- Learning: `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
+- Learning: `knowledge-base/learnings/2026-03-03-fix-release-notes-pr-extraction.md`
