@@ -112,6 +112,9 @@ Project principles organized by domain. Add principles as you learn them.
 - Before creating a PR or merging, merge latest origin/main into the feature branch (`git fetch origin main && git merge origin/main`) -- merging ensures a clean PR even when multiple PRs land in sequence
 - Document environment-specific constraints (terminal capabilities, shell limitations) in AGENTS.md Hard Rules when Claude violates them without being told -- these are loaded every turn and prevent dead-end attempts
 - Scheduled workflows that process PRs via claude-code-action must use PR merge state (`gh pr view --json state`) as the success signal in post steps, not the action's exit code -- claude-code-action exits 0 even when the agent aborts or fails to complete the task
+- `gh pr list --head` performs exact ref name matching, not prefix matching -- to find PRs by branch prefix, omit `--head` and filter with jq `select(.headRefName | startswith("prefix/"))`; `--head` is only reliable when the exact full branch name is known
+- All `workflow_dispatch` inputs must be validated against a strict regex before use in shell commands or `$GITHUB_OUTPUT` writes -- inputs are string-typed and accept arbitrary content including newlines; use `exit 1` on validation failure, not just a warning
+- Workflows that perform git operations against specific commits (revert, cherry-pick) must use `fetch-depth: 0` and validate that HEAD matches the expected SHA before acting -- `fetch-depth: 2` creates a race condition when additional commits land between trigger and execution
 
 ### Never
 

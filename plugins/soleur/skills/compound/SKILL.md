@@ -25,7 +25,7 @@ skill: soleur:compound --headless    # Headless mode: auto-approve all prompts
 
 If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headless` from `$ARGUMENTS` before processing remaining args.
 
-**Branch safety check:** If `HEADLESS_MODE=true`, run `git branch --show-current`. If the result is `main` or `master`, abort immediately with: "Error: headless compound cannot run on main/master. Checkout a feature branch first." This is defense-in-depth alongside PreToolUse hooks.
+**Branch safety check (defense-in-depth):** Run `git branch --show-current`. If the result is `main` or `master`, abort immediately with: "Error: compound cannot run on main/master. Checkout a feature branch first." This check fires in all modes (headless and interactive) as defense-in-depth alongside PreToolUse hooks -- it fires even if hooks are unavailable (e.g., in CI).
 
 When `HEADLESS_MODE=true`, forward `--headless` to the `compound-capture` invocation (e.g., `skill: soleur:compound-capture --headless`).
 

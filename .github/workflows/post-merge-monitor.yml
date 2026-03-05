@@ -1,0 +1,235 @@
+# Post-merge CI monitor for autonomous bot-fix pipeline.
+# Triggers via workflow_run when CI completes on main. Filters to bot-fix
+# commits (squashed PR title starts with "[bot-fix]"), then:
+# - On CI failure: reverts the commit directly on main, comments on the
+#   source issue, and labels it bot-fix/reverted
+# - On CI success: closes the source issue with bot-fix/verified label
+#
+# Infinite-loop guard: revert commits use GitHub's default format
+# "Revert '[bot-fix] ...'" which does NOT start with "[bot-fix]",
+# so the startsWith filter skips them.
+#
+# Phase 3 of #370. Ref #377.
+# To test manually: gh workflow run post-merge-monitor.yml -f conclusion=failure
+
+name: "Post-Merge Monitor"
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: 'Commit SHA to evaluate (dry-run testing)'
+        required: false
+        type: string
+      conclusion:
+        description: 'CI conclusion to simulate (success/failure)'
+        required: false
+        type: choice
+        options:
+          - failure
+          - success
+        default: failure
+
+concurrency:
+  group: post-merge-monitor
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  monitor:
+    # Only process CI runs for bot-fix commits on main
+    if: >-
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event.workflow_run.head_branch == 'main' &&
+       startsWith(github.event.workflow_run.head_commit.message, '[bot-fix]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Resolve commit and conclusion
+        id: commit
+        env:
+          DISPATCH_SHA: ${{ inputs.commit_sha }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          DISPATCH_CONCLUSION: ${{ inputs.conclusion }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          # --- Resolve SHA ---
+          SHA="${DISPATCH_SHA:-$RUN_SHA}"
+          if [[ -z "$SHA" ]]; then
+            echo "::warning::No commit SHA available"
+            exit 0
+          fi
+
+          # Validate SHA format (prevent argument injection)
+          if [[ ! "$SHA" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+            echo "::error::Invalid commit SHA format: $SHA"
+            exit 1
+          fi
+
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+          # --- Resolve conclusion ---
+          CONCLUSION="${DISPATCH_CONCLUSION:-$RUN_CONCLUSION}"
+          echo "conclusion=$CONCLUSION" >> "$GITHUB_OUTPUT"
+
+          # --- Verify bot-fix commit ---
+          COMMIT_MSG=$(git log -1 --format=%s "$SHA" 2>/dev/null || true)
+          if [[ -z "$COMMIT_MSG" ]]; then
+            echo "::warning::Could not read commit message for $SHA"
+            exit 0
+          fi
+
+          if [[ "$COMMIT_MSG" != \[bot-fix\]* ]]; then
+            echo "Commit $SHA is not a bot-fix commit, skipping"
+            echo "is_bot_fix=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "is_bot_fix=true" >> "$GITHUB_OUTPUT"
+
+      - name: Extract issue number
+        if: steps.commit.outputs.is_bot_fix == 'true'
+        id: extract
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT_SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          # Primary: find PR from commit SHA, then parse "Ref #N" from PR body.
+          # The squashed commit message uses the PR title (not the branch commit
+          # format), so the PR body's "Ref #N" is the reliable source.
+          PR_NUM=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${COMMIT_SHA}/pulls" \
+            --jq '.[0].number // empty' 2>/dev/null || true)
+
+          ISSUE_NUM=""
+          if [[ -n "$PR_NUM" ]]; then
+            ISSUE_NUM=$(gh pr view "$PR_NUM" \
+              --json body \
+              --jq '.body' 2>/dev/null | grep -oP 'Ref #\K\d+' | head -1 || true)
+          fi
+
+          # Fallback: try "Fix #N" from commit message (branch commits only)
+          if [[ -z "$ISSUE_NUM" ]]; then
+            COMMIT_MSG=$(git log -1 --format=%s "$COMMIT_SHA")
+            ISSUE_NUM=$(echo "$COMMIT_MSG" | grep -oP 'Fix #\K\d+' | head -1 || true)
+          fi
+
+          if [[ -z "$ISSUE_NUM" ]]; then
+            echo "::warning::Could not extract issue number from commit or PR body"
+            exit 0
+          fi
+
+          # Verify the issue has a bot-fix label (defense-in-depth)
+          HAS_BOT_LABEL=$(gh issue view "$ISSUE_NUM" \
+            --json labels \
+            --jq '[.labels[].name] | any(startswith("bot-fix/")) // empty' 2>/dev/null || true)
+          if [[ -z "$HAS_BOT_LABEL" || "$HAS_BOT_LABEL" == "false" ]]; then
+            echo "::warning::Issue #$ISSUE_NUM does not have a bot-fix label, skipping"
+            exit 0
+          fi
+
+          echo "Found source issue #$ISSUE_NUM"
+          echo "issue=$ISSUE_NUM" >> "$GITHUB_OUTPUT"
+
+      # --- CI Failure Path: Revert ---
+
+      - name: Revert on CI failure
+        if: >-
+          steps.commit.outputs.conclusion == 'failure' &&
+          steps.extract.outputs.issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUM: ${{ steps.extract.outputs.issue }}
+          COMMIT_SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          # Pull latest main to avoid stale-checkout race
+          git fetch origin main
+          git reset --hard origin/main
+
+          # Verify the expected bot-fix commit is still HEAD
+          if [[ "$(git rev-parse HEAD)" != "$COMMIT_SHA" ]]; then
+            echo "::warning::HEAD ($(git rev-parse HEAD)) != expected bot-fix commit ($COMMIT_SHA). Another push landed. Skipping revert."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git revert --no-edit HEAD
+          git push origin main
+
+          echo "[ok] Reverted bot-fix commit on main"
+
+          gh issue comment "$ISSUE_NUM" --body "**Bot Fix Reverted**
+
+          The autonomous fix was merged but caused CI failure on main.
+          The commit has been automatically reverted.
+
+          This issue is available for another fix attempt or manual investigation."
+
+          gh issue edit "$ISSUE_NUM" --add-label "bot-fix/reverted"
+          gh issue edit "$ISSUE_NUM" --remove-label "bot-fix/attempted" 2>/dev/null || true
+
+      # --- CI Success Path: Verify ---
+
+      - name: Verify on CI success
+        if: >-
+          steps.commit.outputs.conclusion == 'success' &&
+          steps.extract.outputs.issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUM: ${{ steps.extract.outputs.issue }}
+        run: |
+          gh issue edit "$ISSUE_NUM" --add-label "bot-fix/verified"
+          gh issue close "$ISSUE_NUM" \
+            --comment "Autonomous fix verified -- CI passed on main. Closing."
+          echo "[ok] Issue #$ISSUE_NUM closed with bot-fix/verified label"
+
+      # --- Discord Notification ---
+
+      - name: Discord notification
+        if: steps.extract.outputs.issue
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          ISSUE_NUM: ${{ steps.extract.outputs.issue }}
+          COMMIT_SHA: ${{ steps.commit.outputs.sha }}
+          CONCLUSION: ${{ steps.commit.outputs.conclusion }}
+        run: |
+          if [[ -z "$DISCORD_WEBHOOK_URL" ]]; then
+            echo "DISCORD_WEBHOOK_URL not set, skipping"
+            exit 0
+          fi
+          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+          if [[ "$CONCLUSION" == "failure" ]]; then
+            MESSAGE=$(printf '**[ALERT] Bot-fix reverted on main**\n\nIssue: %s/issues/%s\nCommit: %s/commit/%s\n\nCI failed after autonomous merge. Commit has been auto-reverted.' \
+              "$REPO_URL" "$ISSUE_NUM" "$REPO_URL" "$COMMIT_SHA")
+          else
+            MESSAGE=$(printf '**Bot-fix verified on main**\n\nIssue: %s/issues/%s (closed)\nCommit: %s/commit/%s\n\nCI passed after autonomous merge.' \
+              "$REPO_URL" "$ISSUE_NUM" "$REPO_URL" "$COMMIT_SHA")
+          fi
+          PAYLOAD=$(jq -n \
+            --arg content "$MESSAGE" \
+            --arg username "Sol" \
+            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
+            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL")
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Discord notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Discord notification failed (HTTP $HTTP_CODE)"
+          fi
