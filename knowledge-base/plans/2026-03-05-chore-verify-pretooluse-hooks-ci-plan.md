@@ -322,13 +322,13 @@ Two hooks match the `Bash` tool (guardrails.sh and pre-merge-rebase.sh). The tes
 
 ## Acceptance Criteria
 
-- [ ] Test workflow `.github/workflows/test-pretooluse-hooks.yml` created and runs successfully
+- [x] Test workflow `.github/workflows/test-pretooluse-hooks.yml` created and runs successfully
 - [ ] Guard 1 (commit on main) behavior documented for claude-code-action
 - [ ] Guard 2 (rm -rf worktrees) behavior documented for claude-code-action
 - [ ] Guard 4 (conflict markers) behavior documented for claude-code-action
 - [ ] pre-merge-rebase.sh behavior documented for claude-code-action
 - [ ] worktree-write-guard.sh behavior documented for claude-code-action
-- [ ] If hooks don't fire: inline fallback branch guards added to ship, compound, and work skills
+- [x] If hooks don't fire: inline fallback branch guards added to ship, compound, and work skills
 - [ ] If hooks do fire: learning file documenting confirmation created
 - [ ] Results documented in knowledge-base/learnings/ regardless of outcome
 
