@@ -15,7 +15,7 @@ Generate a new scheduled workflow.
 
 **Step 0: Check arguments**
 
-If `$ARGUMENTS` contains `--name`, `--skill`, `--cron`, and `--model` flags, extract values directly and skip to Step 2. Validate each value using the same rules below. If any required flag is missing, proceed to Step 1 for the missing parameters only.
+If `$ARGUMENTS` contains `--name`, `--skill`, `--cron`, and `--model` flags, extract values directly and skip to Step 2. Validate each value using the same rules below. If any required flag is missing, proceed to Step 1 for the missing parameters only. Optional flags: `--timeout` (minutes, default 30) and `--max-turns` (default 30).
 
 **Step 1: Collect inputs**
 
@@ -37,6 +37,10 @@ Use the **AskUserQuestion tool** to gather missing inputs one at a time:
    - Note: GitHub Actions cron has ~15-minute variance in trigger timing
 
 4. **Model** — Which Claude model to use. Default: `claude-sonnet-4-6` (good balance of cost and capability). Accept any valid Anthropic model identifier.
+
+5. **Timeout (minutes)** — Job-level timeout to prevent runaway billing. Default: 30. Validate: positive integer, minimum 5 minutes.
+
+6. **Max turns** — Maximum number of agent turns before stopping. Default: 30. Validate: positive integer, minimum 5 turns.
 
 **Step 2: Resolve action SHAs**
 
@@ -85,9 +89,18 @@ permissions:
 jobs:
   run-schedule:
     runs-on: ubuntu-latest
+    timeout-minutes: <TIMEOUT>
     steps:
       - name: Checkout repository
         uses: actions/checkout@<CHECKOUT_SHA> # v4
+
+      - name: Ensure label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create "scheduled-<NAME>" \
+            --description "Scheduled: <DISPLAY_NAME>" \
+            --color "0E8A16" 2>/dev/null || true
 
       - name: Run scheduled skill
         uses: anthropics/claude-code-action@<ACTION_SHA> # v1
@@ -95,7 +108,10 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/<REPO_OWNER>/<REPO_NAME>.git'
           plugins: 'soleur@soleur'
-          claude_args: '--model <MODEL> --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch'
+          claude_args: >-
+            --model <MODEL>
+            --max-turns <MAX_TURNS>
+            --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch
           prompt: |
             Run /soleur:<SKILL_NAME> on this repository.
             After your analysis is complete, create a GitHub issue titled
@@ -113,14 +129,16 @@ python3 -c "import yaml; yaml.safe_load(open('.github/workflows/scheduled-<NAME>
 
 Display a summary:
 
-```
+```text
 Schedule created: .github/workflows/scheduled-<NAME>.yml
 
-  Name:     <DISPLAY_NAME>
-  Skill:    /soleur:<SKILL_NAME>
-  Cron:     <CRON_EXPRESSION>
-  Model:    <MODEL>
-  Output:   GitHub Issues
+  Name:      <DISPLAY_NAME>
+  Skill:     /soleur:<SKILL_NAME>
+  Cron:      <CRON_EXPRESSION>
+  Model:     <MODEL>
+  Timeout:   <TIMEOUT> minutes
+  Max turns: <MAX_TURNS>
+  Output:    GitHub Issues
 
 Prerequisites:
   - ANTHROPIC_API_KEY must be set as a repository secret
@@ -168,8 +186,4 @@ Remove a scheduled workflow.
 - **Issue output only** — All scheduled runs report findings via GitHub Issues. PR and Discord output modes planned for v2.
 - **No state across runs** — Each scheduled run starts fresh. No mechanism to carry state between executions.
 - **No skill-specific arguments** — The template prompt does not pass arguments (e.g., `--tiers 0,3`) to the invoked skill. Manual prompt edit required after generation.
-- **No `--max-turns` in `claude_args`** — The template only includes `--model`. Skills that perform multiple WebSearch/WebFetch calls may need `--max-turns 30` added manually.
-- **No label pre-creation** — The template instructs issue creation with a label but does not pre-create it. Add a `gh label create ... || true` step manually.
-- **No `timeout-minutes`** — The template does not set a job-level timeout. LLM-backed workflows should add `timeout-minutes` to prevent runaway billing.
-- **No `--allowedTools` in `claude_args`** — `claude-code-action` blocks Bash, Write, WebSearch, and WebFetch by default. Skills that create GitHub issues or perform web research silently fail without `--allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch` in `claude_args`.
 - **No cascading priority selection** — Generated workflows that select issues by label hardcode a single priority tier. When that tier is empty, the bot sits idle while higher-priority bugs accumulate. Manually add a priority cascade loop (p3 -> p2 -> p1) after generation.

@@ -225,15 +225,15 @@ After this fix, the template achieves parity with all three reference workflows 
 
 ## Acceptance Criteria
 
-- [ ] Generated workflow YAML includes `timeout-minutes` on the job block (`plugins/soleur/skills/schedule/SKILL.md` Step 3 template)
-- [ ] Generated workflow YAML includes `--max-turns` in `claude_args` (`plugins/soleur/skills/schedule/SKILL.md` Step 3 template)
-- [ ] Generated workflow YAML includes a label pre-creation step with `gh label create ... || true` (`plugins/soleur/skills/schedule/SKILL.md` Step 3 template)
-- [ ] `claude_args` uses `>-` block scalar format for readability (`plugins/soleur/skills/schedule/SKILL.md` Step 3 template)
-- [ ] Known Limitations section accurately reflects current state -- stale items removed (`plugins/soleur/skills/schedule/SKILL.md` lines 166-176)
-- [ ] Step 1 collects timeout (default 30) and max-turns (default 30) inputs (`plugins/soleur/skills/schedule/SKILL.md` Step 1)
-- [ ] Step 0 `$ARGUMENTS` bypass supports `--timeout` and `--max-turns` flags (`plugins/soleur/skills/schedule/SKILL.md` Step 0)
-- [ ] Step 4 confirmation summary displays timeout and max-turns values (`plugins/soleur/skills/schedule/SKILL.md` Step 4)
-- [ ] Existing scheduled workflows remain unaffected (template change only -- verify with `git diff` that only SKILL.md is modified)
+- [x] Generated workflow YAML includes `timeout-minutes` on the job block (`plugins/soleur/skills/schedule/SKILL.md` Step 3 template)
+- [x] Generated workflow YAML includes `--max-turns` in `claude_args` (`plugins/soleur/skills/schedule/SKILL.md` Step 3 template)
+- [x] Generated workflow YAML includes a label pre-creation step with `gh label create ... || true` (`plugins/soleur/skills/schedule/SKILL.md` Step 3 template)
+- [x] `claude_args` uses `>-` block scalar format for readability (`plugins/soleur/skills/schedule/SKILL.md` Step 3 template)
+- [x] Known Limitations section accurately reflects current state -- stale items removed (`plugins/soleur/skills/schedule/SKILL.md` lines 166-176)
+- [x] Step 1 collects timeout (default 30) and max-turns (default 30) inputs (`plugins/soleur/skills/schedule/SKILL.md` Step 1)
+- [x] Step 0 `$ARGUMENTS` bypass supports `--timeout` and `--max-turns` flags (`plugins/soleur/skills/schedule/SKILL.md` Step 0)
+- [x] Step 4 confirmation summary displays timeout and max-turns values (`plugins/soleur/skills/schedule/SKILL.md` Step 4)
+- [x] Existing scheduled workflows remain unaffected (template change only -- verify with `git diff` that only SKILL.md is modified)
 
 ## Test Scenarios
 
