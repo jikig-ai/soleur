@@ -111,6 +111,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Scheduled workflows that select issues by label must cascade through priority levels (p3-low → p2-medium → p1-high) rather than hardcoding a single tier -- a fixed filter produces idle runs when the target tier is empty while higher-priority bugs accumulate
 - Before creating a PR or merging, merge latest origin/main into the feature branch (`git fetch origin main && git merge origin/main`) -- merging ensures a clean PR even when multiple PRs land in sequence
 - Document environment-specific constraints (terminal capabilities, shell limitations) in AGENTS.md Hard Rules when Claude violates them without being told -- these are loaded every turn and prevent dead-end attempts
+- Scheduled workflows that process PRs via claude-code-action must use PR merge state (`gh pr view --json state`) as the success signal in post steps, not the action's exit code -- claude-code-action exits 0 even when the agent aborts or fails to complete the task
 
 ### Never
 
@@ -141,6 +142,9 @@ Project principles organized by domain. Add principles as you learn them.
 - Use convention over configuration for paths: `feat-<name>` maps to `knowledge-base/specs/feat-<name>/` and `.worktrees/feat-<name>/`
 - Include sequence diagrams for complex flows
 - Complex commands should follow a four-phase pattern: Setup, Analyze, Review, Write
+- Scheduled workflows using claude-code-action should defer CI gating to GitHub's built-in required checks (`gh pr checks --required`) rather than reimplementing check status queries in jq -- GitHub already maintains the authoritative definition of "required checks"
+- Scheduled workflows that select one item per run should use label-based deduplication (apply a failure label on error, remove to re-queue) to prevent retrying without human intervention
+- New scheduled workflows should start with `workflow_dispatch` trigger only, adding cron after the pipeline is validated end-to-end -- premature cron on unverified pipelines wastes Actions minutes and generates noise
 - For user approval flows, present items one at a time with Accept, Skip, and Edit options
 - Start with manual workflows; add automation only when users explicitly request it
 - Commands should check for knowledge-base/ existence and fall back gracefully when not present
