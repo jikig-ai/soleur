@@ -97,21 +97,17 @@ This command launches multiple specialized subagents IN PARALLEL to maximize eff
 - Generates test cases if applicable
 - Returns: Prevention/testing content
 
-### 5. **Category Classifier** (Parallel)
+### 5. **Documentation Writer** (Parallel)
 
 - Determines optimal `knowledge-base/learnings/` category
 - Validates category against schema
 - Suggests filename based on slug
-- Returns: Final path and filename
-
-### 6. **Documentation Writer** (Parallel)
-
 - Assembles complete markdown file
 - Validates YAML frontmatter
 - Formats content for readability
 - Creates the file in correct location
 
-### 7. **Optional: Specialized Agent Invocation** (Post-Documentation)
+### 6. **Optional: Specialized Agent Invocation** (Post-Documentation)
 
 Based on problem type detected, automatically invoke applicable agents:
 
@@ -344,8 +340,7 @@ Primary Subagent Results:
   ✓ Solution Extractor: Extracted 3 code fixes
   ✓ Related Docs Finder: Found 2 related issues
   ✓ Prevention Strategist: Generated test cases
-  ✓ Category Classifier: knowledge-base/learnings/performance-issues/
-  ✓ Documentation Writer: Created complete markdown
+  ✓ Documentation Writer: Classified to performance-issues/, created complete markdown
 
 Specialized Agent Reviews (Auto-Triggered):
   ✓ performance-oracle: Validated query optimization approach
