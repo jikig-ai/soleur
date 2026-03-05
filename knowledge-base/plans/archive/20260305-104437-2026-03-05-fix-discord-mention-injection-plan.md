@@ -92,9 +92,9 @@ The issue body suggests `sed 's/@everyone//g; s/@here//g'` but this approach has
 
 ## Acceptance Criteria
 
-- [ ] The `jq` payload in the "Post to Discord" step includes `allowed_mentions: {parse: []}` -- file: `.github/workflows/version-bump-and-release.yml`
-- [ ] Release notes content is preserved verbatim (no sed stripping that alters text)
-- [ ] Existing webhook fields (`content`, `username`, `avatar_url`) remain unchanged
+- [x] The `jq` payload in the "Post to Discord" step includes `allowed_mentions: {parse: []}` -- file: `.github/workflows/version-bump-and-release.yml`
+- [x] Release notes content is preserved verbatim (no sed stripping that alters text)
+- [x] Existing webhook fields (`content`, `username`, `avatar_url`) remain unchanged
 
 ## Test Scenarios
 

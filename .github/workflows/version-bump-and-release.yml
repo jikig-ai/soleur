@@ -264,7 +264,7 @@ jobs:
             --arg content "$MESSAGE" \
             --arg username "Sol" \
             --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
-            '{content: $content, username: $username, avatar_url: $avatar_url}')
+            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
 
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Content-Type: application/json" \
