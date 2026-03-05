@@ -14,7 +14,7 @@
   - [ ] 2.1.4 Update help text with `--stuck-threshold` documentation
   - [ ] 2.1.5 Update setup output message with stuck detection info
 - [ ] 2.2 Modify `plugins/soleur/hooks/stop-hook.sh`
-  - [ ] 2.2.1 Parse `stuck_count` and `stuck_threshold` from frontmatter (with backward-compatible defaults)
+  - [ ] 2.2.1 Parse `stuck_count` and `stuck_threshold` from frontmatter (with `|| true` pipefail guards and backward-compatible defaults)
   - [ ] 2.2.2 Measure response length after whitespace stripping
   - [ ] 2.2.3 Increment or reset `stuck_count` based on response length threshold (20 chars)
   - [ ] 2.2.4 Add stuck threshold check: if threshold > 0 and count >= threshold, terminate
@@ -33,5 +33,6 @@
   - [ ] 3.1.6 Test: corrupted stuck_count defaults to 0
   - [ ] 3.1.7 Test: response exactly 20 chars counts as substantive
   - [ ] 3.1.8 Test: stuck detection fires before max_iterations when both conditions could match
+  - [ ] 3.1.9 Test: tool-use-only response (no text content) counts as minimal
 - [ ] 3.2 Manual smoke test: create a ralph loop and verify stuck detection message appears after 3 empty iterations
 - [ ] 3.3 Verify one-shot pipeline unaffected (substantive output each iteration)

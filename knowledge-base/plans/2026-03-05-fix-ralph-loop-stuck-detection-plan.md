@@ -3,7 +3,19 @@ title: "fix: Ralph Loop stuck-detection for empty/minimal responses"
 type: fix
 date: 2026-03-05
 semver: patch
+deepened: 2026-03-05
 ---
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-05
+**Sections enhanced:** 3 (Technical Approach, MVP, Test Scenarios)
+**Research sources:** constitution.md shell conventions, `set-euo-pipefail-upgrade-pitfalls` learning, `bundle-external-plugin-into-soleur` learning, stop-hook.sh source analysis
+
+### Key Improvements
+1. Fixed `set -euo pipefail` trap in MVP code: `grep` for missing frontmatter fields returns exit 1 under `pipefail`, aborting the hook -- must append `|| true`
+2. Clarified placement order: stuck detection fires AFTER completion promise check but BEFORE iteration increment, so normal completions bypass the counter entirely
+3. Added edge case for tool-use-only responses where `LAST_OUTPUT` extraction returns empty string (jq `map(select(.type == "text"))` yields nothing when response is all tool_use blocks)
 
 # fix: Ralph Loop stuck-detection for empty/minimal responses
 
@@ -63,14 +75,16 @@ Changes to the stop hook (lines referenced from current file):
 1. **Parse `stuck_count` and `stuck_threshold` from frontmatter** (after line 28):
    - Extract `stuck_count` (default 0) and `stuck_threshold` (default 3)
    - Validate as numeric, same pattern as `ITERATION` and `MAX_ITERATIONS` validation
+   - **Critical: append `|| true` to grep commands** -- under `set -euo pipefail`, `grep` exits 1 when the field is missing (pre-existing state files), which aborts the script. See learning: `2026-03-03-set-euo-pipefail-upgrade-pitfalls.md`
 
 2. **Measure response length** (after line 74, where `LAST_OUTPUT` is extracted):
    - Strip whitespace: `STRIPPED_OUTPUT=$(echo "$LAST_OUTPUT" | tr -d '[:space:]')`
    - Check length: `${#STRIPPED_OUTPUT}`
 
-3. **Update stuck counter** (new section before the "Not complete" block at line 95):
+3. **Update stuck counter** (new section AFTER completion promise check at line 93, BEFORE the "Not complete" block at line 95):
    - If length < 20: increment `stuck_count`
    - If length >= 20: reset `stuck_count` to 0
+   - **Placement rationale:** After the promise check so that a loop completing normally exits immediately without touching the counter. Before the iteration increment so stuck loops terminate before wasting another cycle.
 
 4. **Check stuck threshold** (after updating counter):
    - If `stuck_threshold` > 0 AND `stuck_count` >= `stuck_threshold`:
@@ -132,6 +146,7 @@ No changes needed. The one-shot skill invokes `setup-ralph-loop.sh` with `--comp
 - Given a response that is exactly 20 characters after whitespace stripping, when the stop hook runs, then it counts as substantive (>= 20, not > 20)
 - Given a state file without `stuck_count` or `stuck_threshold` fields (pre-existing state files from before this feature), when the stop hook runs, then defaults apply (stuck_count=0, stuck_threshold=3) and the hook does not error
 - Given a corrupted `stuck_count` value (non-numeric), when the stop hook runs, then it resets to 0 and logs a warning
+- Given a response that is entirely tool_use blocks (no text content), when the stop hook runs, then LAST_OUTPUT is empty, length is 0, and it counts as minimal
 
 ### Regression Tests
 
@@ -144,8 +159,10 @@ No changes needed. The one-shot skill invokes `setup-ralph-loop.sh` with `--comp
 ```bash
 # --- Stuck Detection ---
 # Parse stuck detection fields from frontmatter
-STUCK_COUNT=$(echo "$FRONTMATTER" | grep '^stuck_count:' | sed 's/stuck_count: *//')
-STUCK_THRESHOLD=$(echo "$FRONTMATTER" | grep '^stuck_threshold:' | sed 's/stuck_threshold: *//')
+# CRITICAL: || true guards prevent grep exit 1 from aborting under set -euo pipefail
+# when fields are missing (pre-existing state files without stuck_count/stuck_threshold)
+STUCK_COUNT=$(echo "$FRONTMATTER" | grep '^stuck_count:' | sed 's/stuck_count: *//' || true)
+STUCK_THRESHOLD=$(echo "$FRONTMATTER" | grep '^stuck_threshold:' | sed 's/stuck_threshold: *//' || true)
 
 # Default values for backward compatibility with pre-existing state files
 if [[ ! "$STUCK_COUNT" =~ ^[0-9]+$ ]]; then
@@ -156,6 +173,9 @@ if [[ ! "$STUCK_THRESHOLD" =~ ^[0-9]+$ ]]; then
 fi
 
 # Measure response substantiveness
+# Note: LAST_OUTPUT may be empty for tool-use-only responses (jq text extraction
+# yields nothing when all content blocks are type "tool_use"). This is fine --
+# empty string has length 0, which counts as minimal.
 STRIPPED_OUTPUT=$(echo "$LAST_OUTPUT" | tr -d '[:space:]')
 RESPONSE_LENGTH=${#STRIPPED_OUTPUT}
 
@@ -216,3 +236,4 @@ stuck_threshold: $STUCK_THRESHOLD
 - One-shot skill: `plugins/soleur/skills/one-shot/SKILL.md`
 - Bundling learning: `knowledge-base/learnings/implementation-patterns/2026-02-22-bundle-external-plugin-into-soleur.md`
 - Permission learning: `knowledge-base/learnings/2026-02-22-skill-code-fence-permission-flow.md`
+- Pipefail learning: `knowledge-base/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md`
