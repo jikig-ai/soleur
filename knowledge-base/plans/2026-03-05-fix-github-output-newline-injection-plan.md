@@ -2,7 +2,28 @@
 title: "fix: sanitize GITHUB_OUTPUT writes against newline injection"
 type: fix
 date: 2026-03-05
+deepened: 2026-03-05
 ---
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-05
+**Sections enhanced:** 4 (Attack Scenario, Proposed Solution, Technical Considerations, Test Scenarios)
+**Research sources:** GitHub official docs, OpenSSF guidance, local shell testing, institutional learnings
+
+### Key Improvements
+
+1. Corrected the attack scenario analysis -- `head -1` inside command substitution is safe against `\n` injection; the real vector is `\r` (carriage return) on line 77 and raw `jq -r` output on lines 118-119
+2. Added verified shell test results proving the `jq -r` vector produces real output forging
+3. Added GitHub's official multiline delimiter guidance and explained why it is inappropriate here
+4. Strengthened test scenarios with concrete shell verification commands
+
+### New Considerations Discovered
+
+- The `give_up` fallback (line 77) is only vulnerable to `\r` injection, not `\n` -- command substitution strips trailing newlines and `head -1` filters to one line
+- The `jq -r` vector (line 118) is the primary confirmed vulnerability -- verified with shell testing
+- GitHub's official docs do not provide specific GITHUB_OUTPUT sanitization guidance -- this is a gap in their security documentation
+- The `tr -d '\n\r'` approach concatenates rather than truncates, which is acceptable for single-line fields like titles and labels
 
 # fix: sanitize GITHUB_OUTPUT writes against newline injection
 
@@ -21,22 +42,51 @@ GitHub Actions' `$GITHUB_OUTPUT` file uses a `key=value\n` format. When a value 
 
 ### Attack Scenario
 
-An attacker with merge access crafts a commit message:
+#### Vector 1: `give_up` fallback (line 77) -- `\r` only
 
-```
-feat: innocent title
-labels=semver:major
-```
+The `give_up` function uses `echo "title=$(echo "$COMMIT_MSG" | head -1)"`. Shell testing confirms that command substitution `$(...)` strips trailing newlines, and `head -1` filters to the first line. A commit message with embedded `\n` does NOT inject because `head -1` runs inside the substitution:
 
-When this hits the `give_up` fallback path (API lookup fails), `$COMMIT_MSG` contains both lines. Even though `head -1` takes the first line for `title=`, the second line `labels=semver:major` is written directly to `$GITHUB_OUTPUT` via the `echo "$COMMIT_MSG"` expansion before `head -1` processes it -- because `echo` outputs the full string and `head -1` only filters its stdin, the shell command substitution `$(echo "$COMMIT_MSG" | head -1)` correctly returns only the first line. However, a more subtle attack using `\r` (carriage return) characters can bypass this:
-
-```
-feat: innocent title\rlabels=semver:major
+```bash
+# Verified: \n is not injectable through head -1 in command substitution
+COMMIT_MSG=$'feat: innocent title\nlabels=semver:major'
+echo "title=$(echo "$COMMIT_MSG" | head -1)"
+# Output: title=feat: innocent title  (safe -- second line is stripped)
 ```
 
-The `\r` makes `head -1` see this as a single line, but `$GITHUB_OUTPUT` parsing may treat `\r` as a line separator on some runners.
+However, `\r` (carriage return) IS preserved. A commit message containing `feat: innocent title\rlabels=semver:major` passes through `head -1` as a single line but includes the `\r`:
 
-The more reliable vector is line 118, where `jq -r '.title'` outputs the raw PR title string. If a PR title contains a literal newline (possible via API), the `echo` writes both lines to `$GITHUB_OUTPUT`.
+```bash
+# Verified: \r passes through head -1
+COMMIT_MSG=$'feat: innocent title\rlabels=semver:major'
+echo "title=$(echo "$COMMIT_MSG" | head -1)" | cat -A
+# Output: title=feat: innocent title^Mlabels=semver:major$
+```
+
+Whether `$GITHUB_OUTPUT` parsing treats `\r` as a line separator depends on the runner OS. Defense-in-depth: strip `\r` unconditionally.
+
+#### Vector 2: PR title from API (line 118) -- CONFIRMED VULNERABILITY
+
+This is the primary attack vector. When `jq -r '.title'` outputs a PR title containing a literal newline, the `echo "title=..."` format writes TWO separate lines to `$GITHUB_OUTPUT`:
+
+```bash
+# Verified: jq -r passes newlines through, echo writes them as separate lines
+PR_JSON='{"title":"feat: innocent title\nlabels=semver:major"}'
+echo "title=$(echo "$PR_JSON" | jq -r '.title')" | cat -A
+# Output:
+#   title=feat: innocent title$
+#   labels=semver:major$
+# ^^ TWO lines written to GITHUB_OUTPUT -- second line forges the labels output
+```
+
+The fix correctly prevents this:
+
+```bash
+printf 'title=%s\n' "$(echo "$PR_JSON" | jq -r '.title' | tr -d '\n\r')" | cat -A
+# Output: title=feat: innocent titlelabels=semver:major$
+# ^^ Single line -- newlines stripped, no injection possible
+```
+
+Note: `tr -d '\n\r'` concatenates the value rather than truncating it. For PR titles, this produces a garbled but safe value. The alternative (truncating at first newline) would require `head -1` instead of `tr -d`, but `tr -d` is more defensive since it also strips `\r`.
 
 ### Impact
 
@@ -61,6 +111,22 @@ printf 'title=%s\n' "$(echo "$PR_JSON" | jq -r '.title' | tr -d '\n\r')" >> "$GI
 ```
 
 For values that are controlled constants or come from validated sources (e.g., `changed=true`, `type=patch`, `exists=false`), keep `echo` but quote `"$GITHUB_OUTPUT"` consistently.
+
+### Research Insights
+
+**Why `printf` over `echo`:** `printf '%s\n'` treats the argument as a literal string and appends exactly one newline. `echo` has inconsistent behavior across shells (some interpret escape sequences, some don't) and can output multiple lines if the argument contains newlines. Using `printf` is the POSIX-portable safe choice.
+
+**Why NOT heredoc/delimiter syntax:** GitHub Actions supports a multiline output format using delimiters (`{name}<<{delimiter}\n{value}\n{delimiter}`). However, GitHub's own documentation warns: "If the value is completely arbitrary then you shouldn't use this format" because the delimiter itself could appear in the value. Since our values are single-line by design, `printf` + `tr` is simpler and more robust.
+
+**Why NOT environment variables as intermediary:** GitHub and OpenSSF recommend using `env:` blocks to pass untrusted inputs into shell scripts (prevents expression injection). This workflow already does that -- `COMMIT_MSG`, `PR_JSON` are passed via `env:`. The remaining vulnerability is in the `echo` output format, not the input handling.
+
+**Alternative considered -- `head -1` instead of `tr -d`:** Using `head -1` would truncate at the first newline rather than stripping all newlines (concatenating). For PR titles, truncation is arguably better (preserves meaning of the first line). However, `head -1` does not strip `\r`, requiring an additional `tr -d '\r'` regardless. The `tr -d '\n\r'` approach is a single operation that handles both characters.
+
+Sources:
+- [GitHub docs: workflow commands -- setting output parameters](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#setting-an-output-parameter)
+- [GitHub docs: script injection](https://docs.github.com/en/actions/concepts/security/script-injections)
+- [OpenSSF: mitigating attack vectors in GitHub workflows](https://openssf.org/blog/2024/08/12/mitigating-attack-vectors-in-github-workflows/)
+- [GitHub blog: four tips for secure workflows](https://github.blog/security/supply-chain-security/four-tips-to-keep-your-github-actions-workflows-secure/)
 
 ## Technical Considerations
 
@@ -94,11 +160,20 @@ For values that are controlled constants or come from validated sources (e.g., `
 2. Quote `$GITHUB_OUTPUT` consistently as `"$GITHUB_OUTPUT"` across all writes (shellcheck SC2086)
 3. Do not change the structure of controlled-value writes -- they are safe but should use consistent quoting
 
+### Edge Cases
+
+**`mktemp` paths with spaces:** On some runners, `mktemp` creates paths in `/tmp` which should never contain spaces, but `$TMPDIR` on macOS or custom environments could theoretically produce paths with special characters. The `echo "key=$(mktemp)"` pattern is safe because `mktemp` output is a single line without newlines. However, quoting `"$GITHUB_OUTPUT"` is still good practice for SC2086 compliance.
+
+**Empty `jq` output:** If `PR_JSON` is malformed and `jq -r '.title'` returns empty, `printf 'title=%s\n' ""` writes `title=\n` which sets an empty title output. This matches the current `echo` behavior -- no regression.
+
+**`jq -r` on missing field:** If `.title` is `null`, `jq -r` outputs the literal string `null`. The `// ""` fallback in jq (`'.title // ""'`) is not used here because the PR JSON is fetched from a validated PR number. If this becomes a concern, add `// ""` to the jq expression.
+
 ### Non-goals
 
-- Switching to GitHub's heredoc/delimiter-based multiline output syntax -- the values here are single-line by design, and delimiter syntax adds complexity without benefit
+- Switching to GitHub's heredoc/delimiter-based multiline output syntax -- the values here are single-line by design, and delimiter syntax adds complexity without benefit; GitHub docs warn "If the value is completely arbitrary then you shouldn't use this format"
 - Auditing `scheduled-bug-fixer.yml` -- its GITHUB_OUTPUT writes use numeric issue numbers from validated sources (workflow_dispatch input or jq-filtered API output)
 - Adding a reusable shell function for output writes -- the fix is 3 lines; abstraction would be overengineering
+- Adding `set -euo pipefail` to workflow steps -- out of scope and would require its own audit (see learning: `2026-03-03-set-euo-pipefail-upgrade-pitfalls.md` for the three failure modes to check)
 
 ## Acceptance Criteria
 
@@ -115,6 +190,32 @@ For values that are controlled constants or come from validated sources (e.g., `
 - Given a normal PR title like `feat: add user auth (#123)`, when PR metadata is extracted, then the title output matches exactly
 - Given a PR with labels `semver:patch,bug`, when labels are extracted, then the labels output matches exactly without newline contamination
 - Given a `workflow_dispatch` trigger, when the workflow runs, then all outputs use literal values (no untrusted input)
+
+### Research Insights: Verification Commands
+
+These shell commands can verify the fix locally without running the full workflow:
+
+```bash
+# Test 1: Verify \n injection is blocked on jq -r output
+PR_JSON='{"title":"feat: title\nlabels=semver:major"}'
+OUTPUT=$(printf 'title=%s\n' "$(echo "$PR_JSON" | jq -r '.title' | tr -d '\n\r')")
+[[ $(echo "$OUTPUT" | wc -l) -eq 1 ]] && echo "PASS: single line" || echo "FAIL: multi-line"
+
+# Test 2: Verify \r is stripped from commit message
+COMMIT_MSG=$'feat: title\rlabels=semver:major'
+OUTPUT=$(printf 'title=%s\n' "$(echo "$COMMIT_MSG" | head -1 | tr -d '\r')")
+echo "$OUTPUT" | cat -A | grep -q '\^M' && echo "FAIL: \\r present" || echo "PASS: \\r stripped"
+
+# Test 3: Verify clean input passes through unchanged
+PR_JSON='{"title":"feat: add user auth (#123)"}'
+OUTPUT=$(printf 'title=%s\n' "$(echo "$PR_JSON" | jq -r '.title' | tr -d '\n\r')")
+[[ "$OUTPUT" == "title=feat: add user auth (#123)" ]] && echo "PASS" || echo "FAIL: $OUTPUT"
+
+# Test 4: Verify labels pass through unchanged
+PR_JSON='{"labels":[{"name":"semver:patch"},{"name":"bug"}]}'
+OUTPUT=$(printf 'labels=%s\n' "$(echo "$PR_JSON" | jq -r '[.labels[].name] | join(",")' | tr -d '\n\r')")
+[[ "$OUTPUT" == "labels=semver:patch,bug" ]] && echo "PASS" || echo "FAIL: $OUTPUT"
+```
 
 ## Context
 
@@ -159,7 +260,21 @@ Additionally, quote all `$GITHUB_OUTPUT` references throughout the file for cons
 
 ## References
 
+### Internal
+
 - Issue: #425
 - PR #420 (where the vulnerability was found during review)
-- [GitHub docs: workflow commands](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#setting-an-output-parameter)
-- `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
+- `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md` -- SHA pinning, input validation, exit code checks
+- `knowledge-base/learnings/2026-03-03-fix-release-notes-pr-extraction.md` -- recent workflow fix that consolidated API calls
+- `knowledge-base/learnings/2026-03-03-serialize-version-bumps-to-merge-time.md` -- version bump workflow design rationale
+- `knowledge-base/learnings/2026-02-27-github-actions-sha-pinning-workflow.md` -- action pinning patterns
+- `knowledge-base/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md` -- why not to casually add `set -euo pipefail`
+
+### External
+
+- [GitHub docs: workflow commands -- setting output parameters](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#setting-an-output-parameter)
+- [GitHub docs: script injection](https://docs.github.com/en/actions/concepts/security/script-injections)
+- [GitHub docs: security hardening for Actions](https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions)
+- [OpenSSF: mitigating attack vectors in GitHub workflows](https://openssf.org/blog/2024/08/12/mitigating-attack-vectors-in-github-workflows/)
+- [GitHub blog: four tips for secure workflows](https://github.blog/security/supply-chain-security/four-tips-to-keep-your-github-actions-workflows-secure/)
+- [GitHub blog: catch workflow injections before attackers](https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/)
