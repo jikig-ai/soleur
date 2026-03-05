@@ -1,3 +1,10 @@
+---
+title: Domain prerequisites refactor -- table-driven routing and token budget recovery
+date: 2026-02-22
+category: engineering
+tags: [logic-errors, brainstorm-routing, token-budget, table-driven-config, domain-enumeration, scalability]
+---
+
 # Learning: Domain prerequisites refactor -- table-driven routing and token budget recovery
 
 ## Problem

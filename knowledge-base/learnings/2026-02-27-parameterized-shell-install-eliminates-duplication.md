@@ -1,3 +1,10 @@
+---
+title: Parameterized shell install function eliminates tool-specific duplication
+date: 2026-02-27
+category: shell-scripting
+tags: [code-quality, feature-video]
+---
+
 # Learning: Parameterized shell install function eliminates tool-specific duplication
 
 ## Problem

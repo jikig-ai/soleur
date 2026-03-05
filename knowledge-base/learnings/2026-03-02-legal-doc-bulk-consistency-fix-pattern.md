@@ -1,3 +1,10 @@
+---
+title: Legal Document Bulk Consistency Fix Pattern
+date: 2026-03-02
+category: legal
+tags: [integration-issues, legal-documents]
+---
+
 # Learning: Legal Document Bulk Consistency Fix Pattern
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: Repurpose existing message for streaming to avoid flicker
+date: 2026-03-02
+category: infrastructure
+tags: [implementation-patterns, telegram-bridge]
+---
+
 # Learning: Repurpose existing message for streaming to avoid flicker
 
 ## Problem

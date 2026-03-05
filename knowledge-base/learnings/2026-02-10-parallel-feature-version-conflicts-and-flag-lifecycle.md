@@ -1,3 +1,10 @@
+---
+title: Parallel feature branches create version bump conflicts; experimental flags should self-manage
+date: 2026-02-10
+category: engineering
+tags: [integration-issues, plugin-versioning, work-command, version already taken, user friction for experimental features]
+---
+
 # Learning: Parallel feature branches create version bump conflicts; experimental flags should self-manage
 
 ## Problem

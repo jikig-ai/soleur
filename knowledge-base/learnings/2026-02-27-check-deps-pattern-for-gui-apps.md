@@ -1,3 +1,10 @@
+---
+title: Adapting check_deps.sh Pattern for GUI Desktop Apps
+date: 2026-02-27
+category: engineering
+tags: [integration-issues, pencil-setup, check-deps, dependency check for gui app without package manager, pencil cli name collision with evolus/pencil]
+---
+
 # Learning: Adapting check_deps.sh Pattern for GUI Desktop Apps
 
 ## Problem

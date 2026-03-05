@@ -1,3 +1,10 @@
+---
+title: Docs site uses undefined CSS variable --accent
+date: 2026-02-22
+category: ui-css
+tags: [ui-bugs, docs-site]
+---
+
 # Learning: Docs site uses undefined CSS variable --accent
 
 ## Problem

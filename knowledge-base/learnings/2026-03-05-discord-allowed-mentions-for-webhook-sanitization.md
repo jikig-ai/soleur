@@ -1,3 +1,10 @@
+---
+title: Use allowed_mentions to sanitize Discord webhook content
+date: 2026-03-05
+category: infrastructure
+tags: [security-issues, github-actions]
+---
+
 # Learning: Use allowed_mentions to sanitize Discord webhook content
 
 ## Problem

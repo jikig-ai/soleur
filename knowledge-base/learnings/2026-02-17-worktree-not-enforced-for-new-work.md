@@ -1,3 +1,10 @@
+---
+title: Worktree creation not enforced for new feature work
+date: 2026-02-17
+category: workflow-patterns
+tags: [workflow-patterns, agents.md, work done on main checkout instead of worktree]
+---
+
 # Learning: Worktree creation not enforced for new feature work
 
 ## Problem

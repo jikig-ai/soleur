@@ -1,4 +1,8 @@
 ---
+title: Legal Agent Dogfooding -- Cross-Document Consistency
+date: 2026-02-20
+category: legal
+tags: [integration-issues, legal-agents, [legal-document-generator, legal-compliance-auditor, dogfooding, cross-document-consistency, gdpr]]
 synced_to: [legal-document-generator]
 ---
 

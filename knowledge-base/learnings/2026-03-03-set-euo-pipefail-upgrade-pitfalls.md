@@ -1,3 +1,10 @@
+---
+title: set -euo pipefail upgrade pitfalls in dispatch scripts
+date: 2026-03-03
+category: shell-scripting
+tags: [runtime-errors, plugins/soleur/skills/git-worktree]
+---
+
 # Learning: set -euo pipefail upgrade pitfalls in dispatch scripts
 
 ## Problem

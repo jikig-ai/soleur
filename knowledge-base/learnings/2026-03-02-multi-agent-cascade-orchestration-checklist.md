@@ -1,3 +1,10 @@
+---
+title: Multi-agent cascade orchestration checklist
+date: 2026-03-02
+category: agent-design
+tags: [integration-issues, competitive-intelligence, multi-agent-cascade]
+---
+
 # Learning: Multi-agent cascade orchestration checklist
 
 ## Problem

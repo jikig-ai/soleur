@@ -1,3 +1,10 @@
+---
+title: CI Plugin Discovery and Version Hygiene for Schedule Skill
+date: 2026-02-27
+category: ci-cd
+tags: [integration-issues, schedule, marketplace, versioning]
+---
+
 # Learning: CI Plugin Discovery and Version Hygiene for Schedule Skill
 
 ## Problem

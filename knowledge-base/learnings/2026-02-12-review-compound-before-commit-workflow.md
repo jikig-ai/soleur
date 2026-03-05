@@ -1,9 +1,11 @@
 ---
-module: soleur-plugin
+title: Run Review and Compound Before Commit, Not After
 date: 2026-02-12
-problem_type: workflow-issue
-component: brainstorm, compound, review
+category: workflow-patterns
 tags: [workflow, review, compound, commit-protocol, anti-sycophancy]
+module: soleur-plugin
+component: brainstorm, compound, review
+problem_type: workflow-issue
 severity: medium
 ---
 

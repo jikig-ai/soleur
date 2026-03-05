@@ -1,10 +1,11 @@
 ---
-title: "Parallel subagent HTML generation creates CSS class mismatches"
+title: Parallel subagent HTML generation creates CSS class mismatches
+date: 2026-02-13
 category: implementation-patterns
 tags: [subagents, parallel, css, html, static-site, naming-conventions]
+symptoms: [HTML pages use CSS class names that don't exist in the stylesheet]
 module: docs
-symptom: "HTML pages use CSS class names that don't exist in the stylesheet"
-root_cause: "Independent subagents generating HTML pages in parallel each invent their own CSS class names instead of referencing the shared stylesheet"
+root_cause: Independent subagents generating HTML pages in parallel each invent their own CSS class names instead of referencing the shared stylesheet
 ---
 
 # Parallel Subagent CSS Class Mismatch

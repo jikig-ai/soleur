@@ -1,3 +1,10 @@
+---
+title: Workshop Agents as Subagents Require Manual Gate Relay
+date: 2026-02-24
+category: agent-design
+tags: [integration-issues, agents/product, skills/brainstorm]
+---
+
 # Learning: Workshop Agents as Subagents Require Manual Gate Relay
 
 ## Problem

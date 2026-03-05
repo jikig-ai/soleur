@@ -1,3 +1,10 @@
+---
+title: Pencil Desktop is not required for Pencil MCP
+date: 2026-02-27
+category: infrastructure
+tags: [integration-issues, pencil-setup]
+---
+
 # Learning: Pencil Desktop is not required for Pencil MCP
 
 ## Problem

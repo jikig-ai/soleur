@@ -1,3 +1,10 @@
+---
+title: Domain Leader Extension Simplification Pattern
+date: 2026-02-22
+category: agent-design
+tags: [implementation-patterns, agents, commands]
+---
+
 # Learning: Domain Leader Extension Simplification Pattern
 
 ## Problem

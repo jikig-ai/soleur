@@ -1,3 +1,10 @@
+---
+title: Worktree missing node_modules causes silent Eleventy hang
+date: 2026-02-26
+category: workflow-patterns
+tags: [build-errors, docs, git-worktree]
+---
+
 # Learning: Worktree missing node_modules causes silent Eleventy hang
 
 ## Problem

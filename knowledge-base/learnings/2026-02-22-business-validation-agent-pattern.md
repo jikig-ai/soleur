@@ -1,3 +1,10 @@
+---
+title: Business Validation Workshop Agent and Product Domain Leader Pattern
+date: 2026-02-22
+category: agent-design
+tags: [implementation-patterns, agents/product, commands/brainstorm, no business validation gate, product domain without coordinator, workshop pattern not yet reused]
+---
+
 # Learning: Business Validation Workshop Agent and Product Domain Leader Pattern
 
 ## Problem

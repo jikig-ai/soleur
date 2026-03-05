@@ -1,3 +1,10 @@
+---
+title: Documentation Consolidation Migration
+date: 2026-02-06
+category: documentation
+tags: [workflow-issues, documentation, medium, documentation-gap, inadequate-documentation]
+---
+
 # Learning: Documentation Consolidation Migration
 
 ## Problem

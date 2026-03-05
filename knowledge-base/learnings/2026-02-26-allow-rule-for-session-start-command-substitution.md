@@ -1,3 +1,10 @@
+---
+title: Allow rule for session-start command substitution
+date: 2026-02-26
+category: plugin-architecture
+tags: [integration-issues, .claude/settings.json, "command contains $() command substitution" prompt on every session start]
+---
+
 # Learning: Allow rule for session-start command substitution
 
 ## Problem

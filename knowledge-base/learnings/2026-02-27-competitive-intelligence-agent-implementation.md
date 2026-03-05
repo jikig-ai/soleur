@@ -1,3 +1,10 @@
+---
+title: Competitive Intelligence Agent + Skill Implementation
+date: 2026-02-27
+category: agent-design
+tags: [implementation-patterns, product-agents]
+---
+
 # Learning: Competitive Intelligence Agent + Skill Implementation
 
 ## Problem

@@ -1,9 +1,11 @@
 ---
+title: GEO/AEO Methodology Incorporation
+date: 2026-02-20
 category: implementation-patterns
+tags: [seo, aeo, geo, growth, content-strategy]
 module: plugins/soleur
 component: marketing
 severity: medium
-tags: [seo, aeo, geo, growth, content-strategy]
 ---
 
 # Learning: GEO/AEO Methodology Incorporation

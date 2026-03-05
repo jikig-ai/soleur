@@ -1,3 +1,10 @@
+---
+title: Functional Overlap Discovery Agent Pattern
+date: 2026-02-19
+category: agent-design
+tags: [implementation-patterns, plugin-discovery]
+---
+
 # Learning: Functional Overlap Discovery Agent Pattern
 
 ## Problem

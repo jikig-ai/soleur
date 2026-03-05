@@ -1,3 +1,10 @@
+---
+title: Headless Mode Bypass Convention for LLM Skill Instructions
+date: 2026-03-03
+category: plugin-architecture
+tags: [integration-issues, soleur plugin skills]
+---
+
 # Learning: Headless Mode Bypass Convention for LLM Skill Instructions
 
 ## Problem

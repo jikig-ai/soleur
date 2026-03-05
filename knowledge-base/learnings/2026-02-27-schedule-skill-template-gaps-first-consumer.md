@@ -1,3 +1,10 @@
+---
+title: Schedule Skill Template Gaps (First Consumer)
+date: 2026-02-27
+category: plugin-architecture
+tags: [integration-issues, schedule, github-actions]
+---
+
 # Learning: Schedule Skill Template Gaps (First Consumer)
 
 ## Problem

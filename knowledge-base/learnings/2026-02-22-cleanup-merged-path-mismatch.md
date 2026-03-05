@@ -1,3 +1,10 @@
+---
+title: cleanup-merged fails silently when branch names contain slashes
+date: 2026-02-22
+category: workflow-patterns
+tags: [runtime-errors, plugins/soleur/skills/git-worktree, stale worktrees persist after cleanup-merged reports success]
+---
+
 # Learning: cleanup-merged fails silently when branch names contain slashes
 
 ## Problem

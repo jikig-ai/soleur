@@ -1,3 +1,10 @@
+---
+title: CMO-Orchestrated Strategy Review Pattern
+date: 2026-03-03
+category: marketing
+tags: [process-issues, marketing, medium, #236]
+---
+
 # Learning: CMO-Orchestrated Strategy Review Pattern
 
 ## Problem

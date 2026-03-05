@@ -1,3 +1,10 @@
+---
+title: Thin Router Over Migration for Command Simplification
+date: 2026-02-22
+category: engineering
+tags: [implementation-patterns, plugin-commands]
+---
+
 # Learning: Thin Router Over Migration for Command Simplification
 
 ## Problem

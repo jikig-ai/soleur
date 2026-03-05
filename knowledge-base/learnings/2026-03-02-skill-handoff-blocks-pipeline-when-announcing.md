@@ -1,3 +1,10 @@
+---
+title: 'Skill handoff instructions block pipelines when they tell the model to "announce"'
+date: 2026-03-02
+category: plugin-architecture
+tags: [logic-errors, plugins/soleur/skills/work]
+---
+
 # Learning: Skill handoff instructions block pipelines when they tell the model to "announce"
 
 ## Problem

@@ -1,10 +1,11 @@
 ---
-name: Ship Integration Pattern for Post-Merge Steps
-description: How to extend /ship with conditional post-merge skill invocations
+title: Ship Integration Pattern for Post-Merge Steps
 date: 2026-02-12
 category: workflow-patterns
-module: plugins/soleur
 tags: [ship, skill-integration, post-merge, release-announce]
+module: plugins/soleur
+description: How to extend /ship with conditional post-merge skill invocations
+name: Ship Integration Pattern for Post-Merge Steps
 ---
 
 # Ship Integration Pattern for Post-Merge Steps

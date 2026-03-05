@@ -1,3 +1,10 @@
+---
+title: Spec-Driven Workflow Implementation
+date: 2026-02-06
+category: engineering
+tags: [architecture, workflow, simplification]
+---
+
 # Learnings: Spec-Driven Workflow Implementation
 
 **Date:** 2026-02-06

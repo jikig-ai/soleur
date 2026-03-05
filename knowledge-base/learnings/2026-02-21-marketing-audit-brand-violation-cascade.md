@@ -1,4 +1,8 @@
 ---
+title: 'Marketing Audit: Brand Violation Cascade Patterns'
+date: 2026-02-21
+category: marketing
+tags: [brand, audit, marketing, legal, documentation, drift, enforcement, specflow, readme, counts]
 synced_to: [cmo]
 ---
 

@@ -1,3 +1,10 @@
+---
+title: 'Skill `!` code fence permission flow fails silently'
+date: 2026-02-22
+category: plugin-architecture
+tags: [tool-integration, skills, one-shot, ralph-loop, skill tool returns error instead of showing permission prompt for bash command in code fence]
+---
+
 # Learning: Skill `!` code fence permission flow fails silently
 
 ## Problem

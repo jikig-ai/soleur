@@ -1,3 +1,10 @@
+---
+title: Security agents in open-source repos must output inline-only
+date: 2026-02-16
+category: agent-design
+tags: [architecture-decisions, agents/engineering/infra, security audit data exposure, sensitive aggregated findings in public repos]
+---
+
 # Learning: Security agents in open-source repos must output inline-only
 
 ## Problem

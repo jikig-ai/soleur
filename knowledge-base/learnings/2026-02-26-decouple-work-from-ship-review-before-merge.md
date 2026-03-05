@@ -1,3 +1,10 @@
+---
+title: Decouple work from ship to enable review before merge
+date: 2026-02-26
+category: workflow-patterns
+tags: [architecture, work, one-shot, ship]
+---
+
 # Learning: Decouple work from ship to enable review before merge
 
 ## Problem

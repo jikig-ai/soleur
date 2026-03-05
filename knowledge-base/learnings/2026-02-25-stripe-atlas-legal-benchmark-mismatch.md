@@ -1,3 +1,10 @@
+---
+title: Stripe Atlas is corporate formation docs, not SaaS legal policies
+date: 2026-02-25
+category: legal
+tags: [integration-issues, legal-agents]
+---
+
 # Learning: Stripe Atlas is corporate formation docs, not SaaS legal policies
 
 ## Problem

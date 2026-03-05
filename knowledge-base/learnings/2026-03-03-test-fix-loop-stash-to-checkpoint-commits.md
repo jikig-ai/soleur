@@ -1,3 +1,10 @@
+---
+title: Replace git stash with checkpoint commits for worktree-safe rollback
+date: 2026-03-03
+category: workflow-patterns
+tags: [integration-issues, test-fix-loop]
+---
+
 # Learning: Replace git stash with checkpoint commits for worktree-safe rollback
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: Worktree Write Guard — Enforce File Isolation via PreToolUse Hook
+date: 2026-02-26
+category: workflow-patterns
+tags: [integration-issues, git-worktree, guardrails]
+---
+
 # Learning: Worktree Write Guard — Enforce File Isolation via PreToolUse Hook
 
 ## Problem
