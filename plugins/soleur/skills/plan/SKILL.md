@@ -30,6 +30,8 @@ if [[ -f "CLAUDE.md" ]]; then
 fi
 ```
 
+**Branch safety check (defense-in-depth):** Run `git branch --show-current`. If the result is `main` or `master`, abort immediately with: "Error: plan cannot run on main/master. Checkout a feature branch first." This check fires in all modes as defense-in-depth alongside PreToolUse hooks -- it fires even if hooks are unavailable (e.g., in CI).
+
 **Check for knowledge-base directory and load context:**
 
 Check if `knowledge-base/` directory exists. If it does:
