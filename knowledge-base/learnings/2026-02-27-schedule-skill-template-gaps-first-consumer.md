@@ -13,32 +13,23 @@ The `soleur:schedule` skill generates workflow YAML from a fixed template, but t
 
 ## Solution
 
-After generating the workflow with `/soleur:schedule create`, manually apply these fixes:
+All six gaps have been resolved in the template. Five are now generated automatically; one remains manual:
 
-1. **Skill-specific arguments**: The template prompt says `Run /soleur:<SKILL_NAME> on this repository.` with no way to pass arguments like `--tiers 0,3`. Edit the prompt line to include them.
+1. **Skill-specific arguments** (MANUAL): The template prompt says `Run /soleur:<SKILL_NAME> on this repository.` with no way to pass arguments like `--tiers 0,3`. Edit the prompt line to include them after generation.
 
-2. **`--max-turns` in `claude_args`**: The template only includes `--model`. For agents that perform multiple WebSearch/WebFetch calls (competitive intelligence, growth analysis), add `--max-turns 30` (or more) to prevent premature termination.
+2. ~~**`--max-turns` in `claude_args`**~~: Fixed in #443. Template now includes `--max-turns <MAX_TURNS>` (default 30) in `claude_args` using `>-` block scalar format.
 
-3. **Label pre-creation**: The template instructs the agent to create an issue with a label, but `gh issue create --label foo` fails if the label doesn't exist. Add a pre-step:
-   ```yaml
-   - name: Ensure label exists
-     env:
-       GH_TOKEN: ${{ github.token }}
-     run: |
-       gh label create scheduled-<name> \
-         --description "Description" \
-         --color "0E8A16" 2>/dev/null || true
-   ```
+3. ~~**Label pre-creation**~~: Fixed in #443. Template now includes an "Ensure label exists" step with `gh label create ... 2>/dev/null || true`.
 
-4. **`timeout-minutes`**: The template has no job-level timeout. LLM-backed workflows should set `timeout-minutes: 30` (or similar) to prevent runaway billing if the agent gets stuck.
+4. ~~**`timeout-minutes`**~~: Fixed in #443. Template now includes `timeout-minutes: <TIMEOUT>` (default 30) on the job block.
 
-5. **`id-token: write` permission**: `claude-code-action` requires OIDC token access for authentication. Without `id-token: write` in the permissions block, the action fails immediately with "Could not fetch an OIDC token." The existing `claude-code-review.yml` includes this permission, but the schedule skill template did not. [Updated 2026-02-27]
+5. ~~**`id-token: write` permission**~~: Fixed in #341. Template includes `id-token: write` in the permissions block.
 
-6. **`--allowedTools` in `claude_args`**: `claude-code-action` blocks Bash, Write, WebSearch, and WebFetch by default. The agent generated a full competitive analysis report but all 3 `gh issue create` attempts were silently permission-denied. Add `--allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch` to `claude_args`. Without this, the workflow completes "successfully" (exit 0) but produces no output artifact. [Updated 2026-02-27]
+6. ~~**`--allowedTools` in `claude_args`**~~: Fixed in #344. Template includes `--allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch` in `claude_args`.
 
 ## Key Insight
 
-The schedule skill template is a starting point, not a complete workflow. Every generated workflow needs a review pass for: argument passthrough, turn limits, label existence, timeout caps, OIDC permissions, and tool allowlists. The `claude-code-action` sandbox is restrictive by default — the most dangerous gap is `--allowedTools` because the workflow reports success even when all Bash commands are silently blocked.
+After #443 (and prior fixes #321, #341, #344), the schedule skill template generates complete workflows that match the reference implementations. The only remaining manual step is skill-specific argument passthrough. The `claude-code-action` sandbox is restrictive by default — the most dangerous gap was `--allowedTools` because the workflow reports success even when all Bash commands are silently blocked (now fixed in the template).
 
 ## Session Errors
 
