@@ -229,12 +229,14 @@ gh pr list --head <branch-name> --json number,state | jq '.[] | select(.state ==
 
 **If a PR exists:** Announce the PR number and proceed.
 
-**If no PR exists:** Create one with `gh pr create`. Pass the body via HEREDOC to preserve formatting:
+**If no PR exists:** Before creating, detect associated issue numbers from the branch name (e.g., `fix/123-desc`) and commit messages (`git log origin/main..HEAD --oneline`). Then create the PR:
 
 ```bash
 gh pr create --title "<type>: <description>" --body "
 ## Summary
 <bullet points summarizing changes>
+
+Closes #ISSUE_NUMBER
 
 ## Test plan
 - [ ] CI passes
@@ -244,7 +246,7 @@ Generated with [Claude Code](https://claude.com/claude-code)
 "
 ```
 
-Derive the title from the branch name and changes. Use `feat:` for features, `fix:` for bug fixes.
+If an issue number was detected, include the `Closes #N` line. If none, omit it. Derive the title from the branch name and changes. Use `feat:` for features, `fix:` for bug fixes.
 
 Announce the PR URL.
 
