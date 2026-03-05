@@ -139,6 +139,9 @@ if [[ -z "$PROMPT_TEXT" ]]; then
 fi
 
 # Update iteration and stuck_count in frontmatter (single sed pass, portable across macOS and Linux)
+# Note: on legacy state files without stuck_count field, the sed is a no-op for that line.
+# The counter will not persist across iterations. Acceptable because legacy files are only
+# created by pre-stuck-detection versions of setup-ralph-loop.sh; all new loops include the field.
 TEMP_FILE="${RALPH_STATE_FILE}.tmp.$$"
 sed -e "s/^iteration: .*/iteration: $NEXT_ITERATION/" \
     -e "s/^stuck_count: .*/stuck_count: $STUCK_COUNT/" \

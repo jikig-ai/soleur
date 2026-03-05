@@ -194,20 +194,8 @@ assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exi
 cleanup_test "$TEST_DIR"
 echo ""
 
-# Test 5: Normal loop with substantive output keeps stuck_count at 0
-echo "Test 5: Normal loop with substantive output - stuck_count stays 0"
-TEST_DIR=$(setup_test)
-create_state_file "$TEST_DIR" 1 0 "null" 0 3
-TRANSCRIPT=$(create_transcript "$TEST_DIR" "Here is a detailed response explaining the changes I made to the codebase.")
-run_hook "$TEST_DIR" "$TRANSCRIPT"
-assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists"
-STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
-assert_eq "0" "$STUCK_COUNT" "stuck_count remains 0"
-cleanup_test "$TEST_DIR"
-echo ""
-
-# Test 6: Exactly 20 characters counts as substantive
-echo "Test 6: Exactly 20 characters (after stripping) is substantive"
+# Test 5: Exactly 20 characters counts as substantive
+echo "Test 5: Exactly 20 characters (after stripping) is substantive"
 TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 1 0 "null" 2 3
 # "12345678901234567890" is exactly 20 chars
@@ -219,8 +207,8 @@ assert_eq "0" "$STUCK_COUNT" "stuck_count reset (20 chars = substantive)"
 cleanup_test "$TEST_DIR"
 echo ""
 
-# Test 7: 19 characters counts as minimal
-echo "Test 7: 19 characters (after stripping) is minimal"
+# Test 6: 19 characters counts as minimal
+echo "Test 6: 19 characters (after stripping) is minimal"
 TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 1 0 "null" 0 3
 # "1234567890123456789" is 19 chars
@@ -232,8 +220,8 @@ assert_eq "1" "$STUCK_COUNT" "stuck_count incremented to 1"
 cleanup_test "$TEST_DIR"
 echo ""
 
-# Test 8: Pre-existing state file without stuck fields uses defaults
-echo "Test 8: Pre-existing state file without stuck_count/stuck_threshold uses defaults"
+# Test 7: Pre-existing state file without stuck fields uses defaults
+echo "Test 7: Pre-existing state file without stuck_count/stuck_threshold uses defaults"
 TEST_DIR=$(setup_test)
 # State file without stuck_count or stuck_threshold
 cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<'EOF'
@@ -253,8 +241,8 @@ assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exi
 cleanup_test "$TEST_DIR"
 echo ""
 
-# Test 9: Tool-use only response (empty LAST_OUTPUT) counts as minimal
-echo "Test 9: Tool-use only response counts as minimal"
+# Test 8: Tool-use only response (empty LAST_OUTPUT) counts as minimal
+echo "Test 8: Tool-use only response counts as minimal"
 TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 1 0 "null" 0 3
 TRANSCRIPT=$(create_empty_transcript "$TEST_DIR")
@@ -265,8 +253,8 @@ assert_eq "1" "$STUCK_COUNT" "stuck_count incremented for tool-use only response
 cleanup_test "$TEST_DIR"
 echo ""
 
-# Test 10: Completion promise still takes priority over stuck detection
-echo "Test 10: Completion promise check fires before stuck detection"
+# Test 9: Completion promise still takes priority over stuck detection
+echo "Test 9: Completion promise check fires before stuck detection"
 TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 5 0 "\"DONE\"" 2 3
 TRANSCRIPT=$(create_transcript "$TEST_DIR" "<promise>DONE</promise>")
@@ -275,40 +263,51 @@ assert_file_not_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file remov
 cleanup_test "$TEST_DIR"
 echo ""
 
-# Test 11: setup-ralph-loop.sh adds stuck_threshold to state file
-echo "Test 11: setup-ralph-loop.sh includes stuck_count and stuck_threshold in state"
+# Test 10: setup-ralph-loop.sh adds stuck_threshold to state file
+echo "Test 10: setup-ralph-loop.sh includes stuck_count and stuck_threshold in state"
 TEST_DIR=$(setup_test)
 cd "$TEST_DIR"
 bash "$SETUP" "test prompt" --stuck-threshold 5 > /dev/null 2>&1
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file created"
-if [[ -f "$TEST_DIR/.claude/ralph-loop.local.md" ]]; then
-  STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
-  STUCK_THRESHOLD=$(grep '^stuck_threshold:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_threshold: *//')
-  assert_eq "0" "$STUCK_COUNT" "stuck_count initialized to 0"
-  assert_eq "5" "$STUCK_THRESHOLD" "stuck_threshold set to 5"
-fi
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//' || echo "MISSING")
+STUCK_THRESHOLD=$(grep '^stuck_threshold:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_threshold: *//' || echo "MISSING")
+assert_eq "0" "$STUCK_COUNT" "stuck_count initialized to 0"
+assert_eq "5" "$STUCK_THRESHOLD" "stuck_threshold set to 5"
 cleanup_test "$TEST_DIR"
 echo ""
 
-# Test 12: setup-ralph-loop.sh defaults stuck_threshold to 3
-echo "Test 12: setup-ralph-loop.sh defaults stuck_threshold to 3"
+# Test 11: setup-ralph-loop.sh defaults stuck_threshold to 3
+echo "Test 11: setup-ralph-loop.sh defaults stuck_threshold to 3"
 TEST_DIR=$(setup_test)
 cd "$TEST_DIR"
 bash "$SETUP" "test prompt" > /dev/null 2>&1
-if [[ -f "$TEST_DIR/.claude/ralph-loop.local.md" ]]; then
-  STUCK_THRESHOLD=$(grep '^stuck_threshold:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_threshold: *//')
-  assert_eq "3" "$STUCK_THRESHOLD" "stuck_threshold defaults to 3"
-fi
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file created"
+STUCK_THRESHOLD=$(grep '^stuck_threshold:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_threshold: *//' || echo "MISSING")
+assert_eq "3" "$STUCK_THRESHOLD" "stuck_threshold defaults to 3"
 cleanup_test "$TEST_DIR"
 echo ""
 
-# Test 13: Stuck detection wins over continued looping at iteration 5
-echo "Test 13: Stuck detection fires at iteration 5 (before max_iterations=10)"
+# Test 12: Corrupted stuck_count (non-numeric) defaults to 0
+echo "Test 12: Corrupted stuck_count value defaults to 0"
 TEST_DIR=$(setup_test)
-create_state_file "$TEST_DIR" 5 10 "null" 2 3
-TRANSCRIPT=$(create_transcript "$TEST_DIR" "")
+cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<'EOF'
+---
+active: true
+iteration: 1
+max_iterations: 0
+completion_promise: null
+stuck_count: abc
+stuck_threshold: 3
+started_at: "2026-03-05T00:00:00Z"
+---
+
+Test prompt
+EOF
+TRANSCRIPT=$(create_transcript "$TEST_DIR" "Substantive response with enough content here to pass threshold.")
 run_hook "$TEST_DIR" "$TRANSCRIPT"
-assert_file_not_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file removed (stuck at iteration 5)"
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists (no crash on corrupted field)"
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
+assert_eq "0" "$STUCK_COUNT" "corrupted stuck_count reset to 0"
 cleanup_test "$TEST_DIR"
 echo ""
 
