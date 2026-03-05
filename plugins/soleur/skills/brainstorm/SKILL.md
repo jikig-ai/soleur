@@ -34,6 +34,8 @@ fi
 
 Read `CLAUDE.md` if it exists - apply project conventions during brainstorming.
 
+**Branch safety check (defense-in-depth):** Run `git branch --show-current`. If the result is `main` or `master`, abort immediately with: "Error: brainstorm cannot run on main/master. Checkout a feature branch first." This check fires in all modes as defense-in-depth alongside PreToolUse hooks -- it fires even if hooks are unavailable (e.g., in CI).
+
 **Plugin loader constraint:** Before proposing namespace changes (bare commands, command-to-skill migration), verify plugin loader constraints -- bare namespace commands are not supported, and commands/skills have different frontmatter and argument handling.
 
 Evaluate whether brainstorming is needed based on the feature description.
