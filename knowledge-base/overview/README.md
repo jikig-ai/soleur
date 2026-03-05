@@ -102,7 +102,9 @@ Each component has detailed documentation in [components/](./components/) coveri
 
 The [constitution](./constitution.md) defines project principles organized by domain (Code Style, Architecture, Testing, Proposals, Specs, Tasks). Each domain uses **Always/Never/Prefer** categories to express rules at different levels of strictness.
 
-Workflow skills like plan and work read the constitution automatically to guide decisions. `/soleur:sync` discovers new conventions from the codebase and writes them as constitution rules. The compound skill promotes learnings to constitution principles when appropriate.
+Workflow skills like plan and work read the constitution automatically to guide decisions. `/soleur:sync` discovers new conventions from the codebase and writes them as constitution rules. The compound skill promotes learnings to constitution principles when appropriate and monitors the always-loaded rule count to prevent governance bloat.
+
+Rules enforced by PreToolUse hooks are annotated with `[hook-enforced: <script>]` to mark bidirectional traceability between prose rules and mechanical enforcement.
 
 ## Directory Structure
 

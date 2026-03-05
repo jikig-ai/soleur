@@ -139,7 +139,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    - Skipping compound before commit
    - Treating a failed command as success
 
-4. **Propose enforcement.** For each detected deviation, determine if an existing hook already covers it. If yes, note the existing hook and skip. If no, propose enforcement following the hierarchy:
+4. **Propose enforcement.** For each detected deviation, first check if an existing PreToolUse hook already covers it by scanning `.claude/hooks/*.sh` comment headers. If a hook already enforces the rule, note "already hook-enforced" and skip the proposal. If no hook covers it, propose enforcement following the hierarchy:
    - **PreToolUse hook** (preferred) — mechanical prevention, cannot be bypassed
    - **Skill instruction** — checked when skill runs, can be overridden
    - **Prose rule** (last resort) — requires agent compliance, weakest enforcement
@@ -169,9 +169,11 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 
 6. **Feed into Constitution Promotion.** Present each deviation to the user via the existing Accept/Skip/Edit gate in the Constitution Promotion section below. Accepted hook proposals should be manually copied to `.claude/hooks/` after testing — never auto-install.
 
+7. **Rule budget count.** After deviation analysis, count always-loaded rules: `grep -c '^- ' knowledge-base/overview/constitution.md` + `grep -c '^- ' AGENTS.md`. Output: `"Rule budget: N always-loaded rules (constitution: X, AGENTS.md: Y)"`. If N > 250, append: `"[WARNING] Rule budget exceeded (N/250). Consider retiring hook-enforced rules or migrating advisory rules to skill/agent instructions."`
+
 ### Empty Case
 
-If no deviations are detected, output: "Deviation Analyst: no violations found." and proceed to Knowledge Base Integration.
+If no deviations are detected, output: "Deviation Analyst: no violations found." followed by the rule budget count from step 7, then proceed to Knowledge Base Integration.
 
 ## Knowledge Base Integration
 

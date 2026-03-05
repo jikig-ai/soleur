@@ -4,14 +4,14 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 
 ## Hard Rules
 
-- Never commit directly to main. Create a worktree: `git worktree add .worktrees/feat-<name> -b feat/<name>`. If one exists for the task, use it.
-- Never `--delete-branch` with `gh pr merge`. Use `gh pr merge <number> --squash --auto`, then poll with `gh pr view <number> --json state --jq .state` until MERGED, then run `cleanup-merged`.
-- Never edit files in the main repo when a worktree is active. Run `pwd` before every file write or git command to verify you're in `.worktrees/<name>/`.
+- Never commit directly to main [hook-enforced: guardrails.sh Guard 1]. Create a worktree: `git worktree add .worktrees/feat-<name> -b feat/<name>`. If one exists for the task, use it.
+- Never `--delete-branch` with `gh pr merge` [hook-enforced: guardrails.sh Guard 3]. Use `gh pr merge <number> --squash --auto`, then poll with `gh pr view <number> --json state --jq .state` until MERGED, then run `cleanup-merged`.
+- Never edit files in the main repo when a worktree is active [hook-enforced: worktree-write-guard.sh]. Run `pwd` before every file write or git command to verify you're in `.worktrees/<name>/`.
 - Never `git stash` in worktrees. Commit WIP first, then merge.
-- Never `rm -rf` on the current directory, a worktree path, or the repo root.
+- Never `rm -rf` on the current directory, a worktree path, or the repo root [hook-enforced: guardrails.sh Guard 2].
 - MCP tools (Playwright, etc.) resolve paths from the repo root, not the shell CWD. Always pass absolute paths to MCP tools when in a worktree.
 - When a command exits non-zero or prints a warning, investigate before proceeding. Never treat a failed step as success.
-- Before merging any PR, merge origin/main into the feature branch (`git fetch origin main && git merge origin/main`).
+- Before merging any PR, merge origin/main into the feature branch [hook-enforced: pre-merge-rebase.sh] (`git fetch origin main && git merge origin/main`).
 - Always read a file before editing it. The Edit tool rejects unread files, but context compaction erases prior reads -- re-read after any compaction event.
 - PreToolUse hooks block: commits on main, rm -rf on worktrees, --delete-branch with active worktrees, writes to main repo when worktrees exist, commits with conflict markers in staged content. Work with these guards, not around them.
 - The host terminal is Warp. Do not attempt automated terminal manipulation via escape sequences (cursor position queries, TUI rendering, and similar sequences are intercepted by Warp's tmux control mode and silently fail).
