@@ -26,6 +26,7 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 - After marking a PR ready, run `gh pr merge <number> --squash --auto` to queue auto-merge, then poll `gh pr view <number> --json state --jq .state` until MERGED, then `cleanup-merged`. Never stop at "waiting for CI" -- actively poll and merge in the same session.
 - At session start, from the repo root: run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged && git worktree list`.
 - When an audit identifies pre-existing issues, create GitHub issues to track them before fixing. Don't just note them in conversation -- file them.
+- When creating PRs that resolve a GitHub issue, include `Closes #N` in the PR **body** (not just the title). Parenthetical `(#N)` in titles creates a link but does NOT trigger auto-close.
 
 ## Communication
 
