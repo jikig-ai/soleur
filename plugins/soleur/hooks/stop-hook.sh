@@ -27,6 +27,21 @@ MAX_ITERATIONS=$(echo "$FRONTMATTER" | grep '^max_iterations:' | sed 's/max_iter
 # Extract completion_promise and strip surrounding quotes if present
 COMPLETION_PROMISE=$(echo "$FRONTMATTER" | grep '^completion_promise:' | sed 's/completion_promise: *//' | sed 's/^"\(.*\)"$/\1/')
 
+# --- Stuck Detection ---
+# Parse stuck detection fields from frontmatter
+# CRITICAL: || true guards prevent grep exit 1 from aborting under set -euo pipefail
+# when fields are missing (pre-existing state files without stuck_count/stuck_threshold)
+STUCK_COUNT=$(echo "$FRONTMATTER" | grep '^stuck_count:' | sed 's/stuck_count: *//' || true)
+STUCK_THRESHOLD=$(echo "$FRONTMATTER" | grep '^stuck_threshold:' | sed 's/stuck_threshold: *//' || true)
+
+# Default values for backward compatibility with pre-existing state files
+if [[ ! "$STUCK_COUNT" =~ ^[0-9]+$ ]]; then
+  STUCK_COUNT=0
+fi
+if [[ ! "$STUCK_THRESHOLD" =~ ^[0-9]+$ ]]; then
+  STUCK_THRESHOLD=3
+fi
+
 # Validate numeric fields before arithmetic operations
 if [[ ! "$ITERATION" =~ ^[0-9]+$ ]]; then
   echo "Warning: Ralph loop state file corrupted (iteration: '$ITERATION'). Stopping." >&2
@@ -73,11 +88,8 @@ LAST_OUTPUT=$(echo "$LAST_LINE" | jq -r '
   join("\n")
 ' 2>/dev/null) || true
 
-if [[ -z "$LAST_OUTPUT" ]]; then
-  echo "Warning: Failed to parse assistant message. Stopping." >&2
-  rm "$RALPH_STATE_FILE"
-  exit 0
-fi
+# Empty LAST_OUTPUT is valid for tool-use-only responses -- do not terminate
+# The stuck detection counter below handles repeated empty outputs
 
 # Check for completion promise (only if set)
 if [[ "$COMPLETION_PROMISE" != "null" ]] && [[ -n "$COMPLETION_PROMISE" ]]; then
@@ -92,6 +104,28 @@ if [[ "$COMPLETION_PROMISE" != "null" ]] && [[ -n "$COMPLETION_PROMISE" ]]; then
   fi
 fi
 
+# --- Stuck Detection: Measure and Update ---
+# Measure response substantiveness (strip whitespace, check length)
+# Note: LAST_OUTPUT may be empty for tool-use-only responses (jq text extraction
+# yields nothing when all content blocks are type "tool_use"). This is fine --
+# empty string has length 0, which counts as minimal.
+STRIPPED_OUTPUT=$(echo "$LAST_OUTPUT" | tr -d '[:space:]')
+RESPONSE_LENGTH=${#STRIPPED_OUTPUT}
+
+# Update stuck counter
+if [[ $RESPONSE_LENGTH -lt 20 ]]; then
+  STUCK_COUNT=$((STUCK_COUNT + 1))
+else
+  STUCK_COUNT=0
+fi
+
+# Check stuck threshold (0 = disabled)
+if [[ $STUCK_THRESHOLD -gt 0 ]] && [[ $STUCK_COUNT -ge $STUCK_THRESHOLD ]]; then
+  echo "Ralph loop: terminated after $STUCK_COUNT consecutive empty responses (stuck detection)" >&2
+  rm "$RALPH_STATE_FILE"
+  exit 0
+fi
+
 # Not complete - continue loop with SAME PROMPT
 NEXT_ITERATION=$((ITERATION + 1))
 
@@ -104,9 +138,11 @@ if [[ -z "$PROMPT_TEXT" ]]; then
   exit 0
 fi
 
-# Update iteration in frontmatter (portable across macOS and Linux)
+# Update iteration and stuck_count in frontmatter (single sed pass, portable across macOS and Linux)
 TEMP_FILE="${RALPH_STATE_FILE}.tmp.$$"
-sed "s/^iteration: .*/iteration: $NEXT_ITERATION/" "$RALPH_STATE_FILE" > "$TEMP_FILE"
+sed -e "s/^iteration: .*/iteration: $NEXT_ITERATION/" \
+    -e "s/^stuck_count: .*/stuck_count: $STUCK_COUNT/" \
+    "$RALPH_STATE_FILE" > "$TEMP_FILE"
 mv "$TEMP_FILE" "$RALPH_STATE_FILE"
 
 # Build system message with iteration count and completion promise info

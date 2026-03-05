@@ -122,14 +122,14 @@ No changes needed. The one-shot skill invokes `setup-ralph-loop.sh` with `--comp
 
 ## Acceptance Criteria
 
-- [ ] Stop hook detects N consecutive minimal responses and auto-terminates
-- [ ] Warning message printed to stderr before termination: `"Ralph loop: terminated after N consecutive empty responses (stuck detection)"`
-- [ ] State file (`.claude/ralph-loop.local.md`) cleaned up on stuck-detection termination
-- [ ] Normal loops (with substantive output) are unaffected -- stuck_count resets on every substantive response
-- [ ] Configurable threshold via `stuck_threshold` frontmatter field (default 3)
-- [ ] `--stuck-threshold <n>` flag added to `setup-ralph-loop.sh`
-- [ ] `--stuck-threshold 0` disables stuck detection
-- [ ] Existing tests and hook behavior unaffected for non-stuck scenarios
+- [x] Stop hook detects N consecutive minimal responses and auto-terminates
+- [x] Warning message printed to stderr before termination: `"Ralph loop: terminated after N consecutive empty responses (stuck detection)"`
+- [x] State file (`.claude/ralph-loop.local.md`) cleaned up on stuck-detection termination
+- [x] Normal loops (with substantive output) are unaffected -- stuck_count resets on every substantive response
+- [x] Configurable threshold via `stuck_threshold` frontmatter field (default 3)
+- [x] `--stuck-threshold <n>` flag added to `setup-ralph-loop.sh`
+- [x] `--stuck-threshold 0` disables stuck detection
+- [x] Existing tests and hook behavior unaffected for non-stuck scenarios
 
 ## Test Scenarios
 
