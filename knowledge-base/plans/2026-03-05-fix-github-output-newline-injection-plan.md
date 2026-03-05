@@ -177,11 +177,11 @@ Sources:
 
 ## Acceptance Criteria
 
-- [ ] All 3 untrusted GITHUB_OUTPUT writes use `printf 'key=%s\n'` with `tr -d '\n\r'` on the value
-- [ ] All `$GITHUB_OUTPUT` references are quoted as `"$GITHUB_OUTPUT"` (consistent style)
-- [ ] `mktemp` output writes remain using `echo` (safe, but quoted)
-- [ ] No behavioral change for clean inputs (PR titles and commit messages without embedded newlines)
-- [ ] Workflow YAML passes `actionlint` (if available) or manual review
+- [x] All 3 untrusted GITHUB_OUTPUT writes use `printf 'key=%s\n'` with `tr -d '\n\r'` on the value
+- [x] All `$GITHUB_OUTPUT` references are quoted as `"$GITHUB_OUTPUT"` (consistent style)
+- [x] `mktemp` output writes remain using `echo` (safe, but quoted)
+- [x] No behavioral change for clean inputs (PR titles and commit messages without embedded newlines)
+- [x] Workflow YAML passes `actionlint` (if available) or manual review
 
 ## Test Scenarios
 
