@@ -17,9 +17,9 @@ Issue: #377
 - [ ] 2.1 Read current `.github/workflows/scheduled-bug-fixer.yml`
 - [ ] 2.2 Add label pre-creation step for new labels
   - `bot-fix/auto-merge-eligible`, `bot-fix/review-required`, `bot-fix/verified`, `bot-fix/reverted`
-- [ ] 2.3 Add post-fix step: detect newly created bot-fix PR
-  - Parse PR number from open `bot-fix/*` branches created in this run
-- [ ] 2.4 Add auto-merge gate step
+- [ ] 2.3 Add post-fix step (OUTSIDE claude-code-action): detect newly created bot-fix PR
+  - Use `gh pr list --head "bot-fix/" --state open --json number --jq '.[0].number // empty'`
+- [ ] 2.4 Add auto-merge gate step (runs with GITHUB_TOKEN, not agent token)
   - [ ] 2.4.1 Check PR has `bot-fix/auto-merge-eligible` label
   - [ ] 2.4.2 Verify single file changed via `gh pr diff --stat`
   - [ ] 2.4.3 Run `gh pr merge <number> --squash --auto` if eligible
@@ -29,34 +29,37 @@ Issue: #377
 ## Phase 3: Post-Merge CI Monitor
 
 - [ ] 3.1 Create `.github/workflows/post-merge-monitor.yml`
-  - [ ] 3.1.1 Trigger on `push` to `main`
-  - [ ] 3.1.2 Job condition: `startsWith(github.event.head_commit.message, '[bot-fix]')`
-  - [ ] 3.1.3 Extract source issue number from commit message
-- [ ] 3.2 Implement CI wait step
-  - Poll `gh run list --commit <sha> --workflow ci.yml` until complete
-- [ ] 3.3 Implement revert-on-failure path
-  - [ ] 3.3.1 `git revert HEAD --no-edit`
-  - [ ] 3.3.2 Push to `revert-bot-fix-<N>` branch
-  - [ ] 3.3.3 Create revert PR and auto-merge
+  - [ ] 3.1.1 Use `workflow_run` trigger on CI completion (NOT `push` + polling)
+  - [ ] 3.1.2 Add `workflow_dispatch` input for dry-run testing (commit SHA)
+  - [ ] 3.1.3 Job condition: filter to `[bot-fix]`-prefixed commit messages on main
+- [ ] 3.2 Implement issue number extraction from commit message
+  - Fallback to `gh api repos/{owner}/{repo}/commits/{sha}/pulls` for PR body parsing
+- [ ] 3.3 Implement revert-on-failure path (direct push to main, NOT revert PR)
+  - [ ] 3.3.1 `git config` user as `github-actions[bot]`
+  - [ ] 3.3.2 `git revert --no-edit HEAD`
+  - [ ] 3.3.3 `git push origin main` (direct push, no branch/PR)
   - [ ] 3.3.4 Comment on source issue about revert
   - [ ] 3.3.5 Add `bot-fix/reverted` label, remove `bot-fix/attempted`
 - [ ] 3.4 Implement verify-on-success path
   - [ ] 3.4.1 Add `bot-fix/verified` label to source issue
   - [ ] 3.4.2 Close source issue with comment
-- [ ] 3.5 Add infinite-loop guard (skip revert commits)
-- [ ] 3.6 Add concurrency group to prevent parallel monitor runs
+- [ ] 3.5 Verify infinite-loop guard: revert commit message `Revert "[bot-fix]..."` does NOT match `startsWith('[bot-fix]')`
+- [ ] 3.6 Verify GITHUB_TOKEN push is not blocked by any ruleset (Force Push Prevention only blocks deletion and non-fast-forward)
 
 ## Phase 4: Monitoring and Alerting
 
 - [ ] 4.1 Add Discord webhook step to post-merge-monitor for auto-revert (critical alert)
-- [ ] 4.2 Add Discord webhook step to post-merge-monitor for verified success
+  - Reuse payload pattern from `version-bump-and-release.yml` (explicit username, avatar_url, allowed_mentions)
+- [ ] 4.2 Add Discord webhook step for verified success (informational)
 - [ ] 4.3 Verify `DISCORD_WEBHOOK_URL` secret exists; graceful skip if not configured
 
 ## Phase 5: Testing and Validation
 
 - [ ] 5.1 Run SpecFlow analysis on both workflow files
-- [ ] 5.2 Manual end-to-end test: create a test p3-low bug issue, trigger workflow_dispatch
-- [ ] 5.3 Verify auto-merge path works (PR auto-merged, CI passes, issue closed)
-- [ ] 5.4 Verify rollback path works (introduce deliberate test failure, verify revert)
-- [ ] 5.5 Run compound before commit
-- [ ] 5.6 Commit and push, create PR with `semver:minor` label
+- [ ] 5.2 Merge workflow files to main first (human PR) -- `workflow_run` requires file on default branch
+- [ ] 5.3 Test auto-merge path: create test p3-low bug issue, trigger `workflow_dispatch` on scheduled-bug-fixer
+- [ ] 5.4 Verify auto-merge queues correctly and CI-then-merge completes
+- [ ] 5.5 Test rollback path: introduce deliberate test failure, verify revert via `workflow_dispatch` on post-merge-monitor
+- [ ] 5.6 Verify Discord notifications fire for both success and revert cases
+- [ ] 5.7 Run compound before commit
+- [ ] 5.8 Commit and push, create PR with `semver:minor` label
