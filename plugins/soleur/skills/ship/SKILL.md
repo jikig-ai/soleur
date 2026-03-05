@@ -31,6 +31,8 @@ git worktree list
 pwd
 ```
 
+**Branch safety check (defense-in-depth):** If the branch from the command above is `main` or `master`, abort immediately with: "Error: ship cannot run on main/master. Checkout a feature branch first." This is defense-in-depth alongside PreToolUse hooks -- it fires even if hooks are unavailable (e.g., in CI).
+
 Load project conventions:
 
 ```bash

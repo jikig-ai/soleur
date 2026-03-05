@@ -1,0 +1,126 @@
+# Empirical verification that PreToolUse hooks fire in claude-code-action.
+# Tests each guardrail guard and the write guard using a deterministic prompt.
+# Manual-only (workflow_dispatch) to avoid recurring API costs.
+# Related: #419
+# To test: gh workflow run test-pretooluse-hooks.yml
+#
+# Security: This workflow uses NO untrusted event inputs in run: commands.
+# All strings are hardcoded. The prompt input to claude-code-action is a
+# static string, not derived from user-controlled event data.
+
+name: "Test: PreToolUse Hooks"
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: test-pretooluse-hooks
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  test-hooks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: main
+
+      - name: Verify hook scripts are executable
+        run: |
+          chmod +x .claude/hooks/*.sh
+          echo "=== Hook files ==="
+          ls -la .claude/hooks/
+          echo "=== jq version ==="
+          jq --version
+          echo "=== Branch ==="
+          git rev-parse --abbrev-ref HEAD
+
+      - name: Test hooks via claude-code-action
+        uses: anthropics/claude-code-action@64c7a0ef71df67b14cb4471f4d9c8565c61042bf # v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
+          plugins: 'soleur@soleur'
+          claude_args: '--model claude-sonnet-4-6 --max-turns 20 --allowedTools Bash,Read,Write,Edit,Glob,Grep'
+          prompt: |
+            You are testing whether PreToolUse hooks fire in claude-code-action.
+            Run each test below IN ORDER. For each test, report PASS (hook blocked
+            the action) or FAIL (action succeeded without hook intervention).
+
+            IMPORTANT: Do NOT attempt to work around any blocked actions. If a hook
+            blocks a command, that is the expected PASS result.
+
+            ## Test 0: Prerequisites
+            Run these commands and report the output:
+            - jq --version
+            - ls -la .claude/hooks/
+            - cat .claude/settings.json
+            - git rev-parse --abbrev-ref HEAD
+            Report: which branch you are on and whether hook files exist.
+
+            ## Test 1: Guard 1 - Commit on main
+            Run: git commit --allow-empty -m "test: hook verification guard 1"
+            If blocked with "BLOCKED: Committing directly to main" -> PASS
+            If the commit succeeds -> FAIL
+
+            ## Test 2: Guard 2 - rm -rf worktrees
+            First run: mkdir -p .worktrees/test-hook-verification
+            Then run: rm -rf .worktrees/test-hook-verification
+            If blocked with "BLOCKED: rm -rf on worktree paths" -> PASS
+            If the removal succeeds -> FAIL
+
+            ## Test 3: Guard 3 - --delete-branch with worktrees
+            The .worktrees/test-hook-verification directory should still exist
+            from Test 2 (Guard 2 blocked its removal). If not, run:
+            mkdir -p .worktrees/test-guard3
+            Then run: gh pr merge 1 --delete-branch --squash
+            If blocked with "BLOCKED: --delete-branch with active worktrees" -> PASS
+            If the command runs without hook intervention -> FAIL
+            (The gh command itself may fail for other reasons like "PR not found"
+            -- that is fine. We are testing whether the hook fires, not the command.)
+
+            ## Test 4: Guard 4 - Conflict markers
+            Run these commands in sequence:
+            1. echo '<<<<<<< HEAD' > test-conflict.txt
+            2. git add test-conflict.txt
+            3. git commit -m "test: conflict marker guard"
+            If blocked with "BLOCKED: Staged content contains conflict markers" -> PASS
+            If the commit succeeds -> FAIL
+            Clean up: git reset HEAD test-conflict.txt && rm -f test-conflict.txt
+
+            ## Test 5: Write guard
+            Run: mkdir -p .worktrees/test-write-guard
+            Then use the Write tool to write "test" to a file at the repo root
+            called test-write-guard.txt (NOT inside .worktrees/).
+            If blocked with "BLOCKED: Writing to main repo checkout" -> PASS
+            If the write succeeds -> FAIL
+            Clean up with Bash: rmdir .worktrees/test-write-guard 2>/dev/null; rmdir .worktrees/test-guard3 2>/dev/null; rmdir .worktrees/test-hook-verification 2>/dev/null; rm -f test-write-guard.txt
+            (Note: rmdir is used instead of rm -rf to avoid triggering Guard 2.
+            Cleanup failure is benign -- the CI runner is ephemeral.)
+
+            NOTE: pre-merge-rebase.sh is not tested here because it requires a
+            real remote PR with branch state. Its "deny" path (uncommitted changes)
+            could be tested, but was descoped to keep --max-turns low. Track in a
+            follow-up if needed.
+
+            ## Summary
+            Output a markdown table with these exact columns:
+            | Test | Hook | Result | Details |
+            |------|------|--------|---------|
+            | 0 | Prerequisites | (info) | Branch name, hook files present |
+            | 1 | Guard 1 (commit on main) | PASS/FAIL | Exact message received |
+            | 2 | Guard 2 (rm -rf worktrees) | PASS/FAIL | Exact message received |
+            | 3 | Guard 3 (--delete-branch) | PASS/FAIL | Exact message received |
+            | 4 | Guard 4 (conflict markers) | PASS/FAIL | Exact message received |
+            | 5 | Write guard | PASS/FAIL | Exact message received |
+
+            Then output your conclusion:
+            - If all guards PASS: "CONCLUSION: All PreToolUse hooks fire in claude-code-action."
+            - If any guard FAIL: "CONCLUSION: Some hooks do NOT fire. Fallback guards needed."
