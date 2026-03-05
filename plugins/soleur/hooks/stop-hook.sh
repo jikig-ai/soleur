@@ -20,8 +20,8 @@ if [[ ! -f "$RALPH_STATE_FILE" ]]; then
   exit 0
 fi
 
-# Parse markdown frontmatter (YAML between ---) and extract values
-FRONTMATTER=$(sed -n '/^---$/,/^---$/{ /^---$/d; p; }' "$RALPH_STATE_FILE")
+# Parse markdown frontmatter (YAML between first and second --- only)
+FRONTMATTER=$(awk '/^---$/{c++; next} c==1' "$RALPH_STATE_FILE")
 ITERATION=$(echo "$FRONTMATTER" | grep '^iteration:' | sed 's/iteration: *//')
 MAX_ITERATIONS=$(echo "$FRONTMATTER" | grep '^max_iterations:' | sed 's/max_iterations: *//')
 # Extract completion_promise and strip surrounding quotes if present
@@ -138,14 +138,17 @@ if [[ -z "$PROMPT_TEXT" ]]; then
   exit 0
 fi
 
-# Update iteration and stuck_count in frontmatter (single sed pass, portable across macOS and Linux)
-# Note: on legacy state files without stuck_count field, the sed is a no-op for that line.
+# Update iteration and stuck_count in first frontmatter block only (awk scoped to c==1)
+# Note: on legacy state files without stuck_count field, the awk match is a no-op for that line.
 # The counter will not persist across iterations. Acceptable because legacy files are only
 # created by pre-stuck-detection versions of setup-ralph-loop.sh; all new loops include the field.
 TEMP_FILE="${RALPH_STATE_FILE}.tmp.$$"
-sed -e "s/^iteration: .*/iteration: $NEXT_ITERATION/" \
-    -e "s/^stuck_count: .*/stuck_count: $STUCK_COUNT/" \
-    "$RALPH_STATE_FILE" > "$TEMP_FILE"
+awk -v iter="$NEXT_ITERATION" -v sc="$STUCK_COUNT" '
+  /^---$/ { c++; print; next }
+  c==1 && /^iteration:/ { print "iteration: " iter; next }
+  c==1 && /^stuck_count:/ { print "stuck_count: " sc; next }
+  { print }
+' "$RALPH_STATE_FILE" > "$TEMP_FILE"
 mv "$TEMP_FILE" "$RALPH_STATE_FILE"
 
 # Build system message with iteration count and completion promise info

@@ -311,6 +311,93 @@ assert_eq "0" "$STUCK_COUNT" "corrupted stuck_count reset to 0"
 cleanup_test "$TEST_DIR"
 echo ""
 
+# Test 13: Prompt containing --- does not leak into FRONTMATTER
+echo "Test 13: Prompt body with --- does not leak into frontmatter"
+TEST_DIR=$(setup_test)
+cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<'EOF'
+---
+active: true
+iteration: 1
+max_iterations: 0
+completion_promise: null
+stuck_count: 0
+stuck_threshold: 3
+started_at: "2026-03-05T00:00:00Z"
+---
+
+Build a REST API with proper error handling.
+---
+Use standard HTTP status codes.
+EOF
+TRANSCRIPT=$(create_transcript "$TEST_DIR" "This is a substantive response with plenty of content to exceed the threshold.")
+run_hook "$TEST_DIR" "$TRANSCRIPT"
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists"
+ITERATION=$(grep '^iteration:' "$TEST_DIR/.claude/ralph-loop.local.md" | head -1 | sed 's/iteration: *//')
+assert_eq "2" "$ITERATION" "iteration updated to 2"
+# Verify the raw state file preserves --- and text after it in the prompt body
+# (The awk prompt extractor on line 133 consumes bare --- lines -- that's pre-existing behavior.)
+RAW_FILE=$(cat "$TEST_DIR/.claude/ralph-loop.local.md")
+assert_contains "$RAW_FILE" "Build a REST API with proper error handling." "prompt text before --- preserved in state file"
+assert_contains "$RAW_FILE" "Use standard HTTP status codes." "prompt text after --- preserved in state file"
+# Verify frontmatter was not corrupted by prompt --- leaking into parser
+FRONTMATTER=$(awk '/^---$/{c++; next} c==1' "$TEST_DIR/.claude/ralph-loop.local.md")
+assert_contains "$FRONTMATTER" "iteration: 2" "frontmatter contains updated iteration"
+assert_contains "$FRONTMATTER" "stuck_count: 0" "frontmatter contains correct stuck_count"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 14: Prompt containing iteration: text is preserved after update
+echo "Test 14: Prompt body with iteration: text is preserved verbatim"
+TEST_DIR=$(setup_test)
+cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<'EOF'
+---
+active: true
+iteration: 1
+max_iterations: 0
+completion_promise: null
+stuck_count: 0
+stuck_threshold: 3
+started_at: "2026-03-05T00:00:00Z"
+---
+
+Check iteration: current status of deployment.
+EOF
+TRANSCRIPT=$(create_transcript "$TEST_DIR" "This is a substantive response with plenty of content to exceed the threshold.")
+run_hook "$TEST_DIR" "$TRANSCRIPT"
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists"
+ITERATION=$(grep '^iteration:' "$TEST_DIR/.claude/ralph-loop.local.md" | head -1 | sed 's/iteration: *//')
+assert_eq "2" "$ITERATION" "frontmatter iteration updated to 2"
+PROMPT_BODY=$(awk '/^---$/{i++; next} i>=2' "$TEST_DIR/.claude/ralph-loop.local.md")
+assert_contains "$PROMPT_BODY" "iteration: current status of deployment" "prompt iteration: text preserved"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 15: Prompt containing stuck_count: text is preserved after update
+echo "Test 15: Prompt body with stuck_count: text is preserved verbatim"
+TEST_DIR=$(setup_test)
+cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<'EOF'
+---
+active: true
+iteration: 1
+max_iterations: 0
+completion_promise: null
+stuck_count: 0
+stuck_threshold: 3
+started_at: "2026-03-05T00:00:00Z"
+---
+
+Monitor stuck_count: should be zero.
+EOF
+TRANSCRIPT=$(create_transcript "$TEST_DIR" "This is a substantive response with plenty of content to exceed the threshold.")
+run_hook "$TEST_DIR" "$TRANSCRIPT"
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists"
+STUCK_COUNT_FM=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | head -1 | sed 's/stuck_count: *//')
+assert_eq "0" "$STUCK_COUNT_FM" "frontmatter stuck_count reset to 0"
+PROMPT_BODY=$(awk '/^---$/{i++; next} i>=2' "$TEST_DIR/.claude/ralph-loop.local.md")
+assert_contains "$PROMPT_BODY" "stuck_count: should be zero" "prompt stuck_count: text preserved"
+cleanup_test "$TEST_DIR"
+echo ""
+
 # --- Summary ---
 
 echo "=== Results ==="

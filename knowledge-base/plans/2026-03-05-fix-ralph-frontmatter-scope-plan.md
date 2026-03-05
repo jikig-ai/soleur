@@ -98,12 +98,12 @@ The proposed parser uses `c`. For readability, normalize both the new parser and
 
 ## Acceptance Criteria
 
-- [ ] Frontmatter parser (`FRONTMATTER=...`) only reads lines between the first and second `---` markers in `plugins/soleur/hooks/stop-hook.sh`
-- [ ] sed update pass is replaced with awk that only substitutes `iteration:` and `stuck_count:` inside the first frontmatter block in `plugins/soleur/hooks/stop-hook.sh`
-- [ ] Prompt text containing `---`, `iteration:`, or `stuck_count:` is preserved verbatim through a loop iteration
-- [ ] All existing tests in `plugins/soleur/test/ralph-loop-stuck-detection.test.sh` continue to pass
-- [ ] New test cases cover the two bug scenarios (prompt with `---`, prompt with `iteration:` text)
-- [ ] Comments on the changed lines updated to reflect awk usage
+- [x] Frontmatter parser (`FRONTMATTER=...`) only reads lines between the first and second `---` markers in `plugins/soleur/hooks/stop-hook.sh`
+- [x] sed update pass is replaced with awk that only substitutes `iteration:` and `stuck_count:` inside the first frontmatter block in `plugins/soleur/hooks/stop-hook.sh`
+- [x] Prompt text containing `---`, `iteration:`, or `stuck_count:` is preserved verbatim through a loop iteration
+- [x] All existing tests in `plugins/soleur/test/ralph-loop-stuck-detection.test.sh` continue to pass
+- [x] New test cases cover the two bug scenarios (prompt with `---`, prompt with `iteration:` text)
+- [x] Comments on the changed lines updated to reflect awk usage
 
 ## Test Scenarios
 

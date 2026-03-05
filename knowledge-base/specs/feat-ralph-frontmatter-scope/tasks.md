@@ -5,16 +5,16 @@ Issue: #455
 
 ## Phase 1: Core Fix
 
-- [ ] 1.1 Replace sed frontmatter parser with scoped awk (`plugins/soleur/hooks/stop-hook.sh` line 24)
-- [ ] 1.2 Replace sed update pass with scoped awk (`plugins/soleur/hooks/stop-hook.sh` lines 146-148)
-- [ ] 1.3 Update inline comments to reflect awk usage
+- [x] 1.1 Replace sed frontmatter parser with scoped awk (`plugins/soleur/hooks/stop-hook.sh` line 24)
+- [x] 1.2 Replace sed update pass with scoped awk (`plugins/soleur/hooks/stop-hook.sh` lines 146-148)
+- [x] 1.3 Update inline comments to reflect awk usage
 
 ## Phase 2: Testing
 
-- [ ] 2.1 Add test: prompt body containing `---` does not leak into FRONTMATTER (`plugins/soleur/test/ralph-loop-stuck-detection.test.sh`)
-- [ ] 2.2 Add test: prompt body containing `iteration:` text is preserved verbatim after update
-- [ ] 2.3 Add test: prompt body containing `stuck_count:` text is preserved verbatim after update
-- [ ] 2.4 Run full existing test suite to verify no regressions
+- [x] 2.1 Add test: prompt body containing `---` does not leak into FRONTMATTER (`plugins/soleur/test/ralph-loop-stuck-detection.test.sh`)
+- [x] 2.2 Add test: prompt body containing `iteration:` text is preserved verbatim after update
+- [x] 2.3 Add test: prompt body containing `stuck_count:` text is preserved verbatim after update
+- [x] 2.4 Run full existing test suite to verify no regressions
 
 ## Phase 3: Ship
 
