@@ -90,15 +90,19 @@ def extract_inline_tags(content):
             # Detect key: value format (CORA-style inline metadata)
             lines = raw.strip().split("\n")
             if all(":" in line for line in lines if line.strip()):
-                # Extract values as tags, skip keys like "category", "severity"
+                # Extract values as tags, split comma-separated values
                 tags = []
                 for line in lines:
                     if ":" not in line:
                         continue
                     val = line.split(":", 1)[1].strip()
-                    val = val.replace("_", "-").lower()
-                    if val:
-                        tags.append(val)
+                    # Split comma-separated values into individual tags
+                    for part in val.split(","):
+                        part = part.strip().replace("_", "-").lower()
+                        # Remove YAML-unsafe chars
+                        part = re.sub(r"[#\[\]{}()$\"']", "", part).strip()
+                        if part:
+                            tags.append(part)
                 return tags
             return normalize_tags(raw)
 
