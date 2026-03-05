@@ -99,11 +99,11 @@ Placing the guard immediately after convention loading (line 31) and before know
 
 ## Acceptance Criteria
 
-- [ ] `brainstorm/SKILL.md` aborts on main/master before writing any files (`plugins/soleur/skills/brainstorm/SKILL.md`)
-- [ ] `plan/SKILL.md` aborts on main/master before writing any files (`plugins/soleur/skills/plan/SKILL.md`)
-- [ ] Guard phrasing matches compound/ship: "defense-in-depth alongside PreToolUse hooks"
-- [ ] Guard placement is before any file-writing or research phases
-- [ ] No other behavioral changes to either skill
+- [x] `brainstorm/SKILL.md` aborts on main/master before writing any files (`plugins/soleur/skills/brainstorm/SKILL.md`)
+- [x] `plan/SKILL.md` aborts on main/master before writing any files (`plugins/soleur/skills/plan/SKILL.md`)
+- [x] Guard phrasing matches compound/ship: "defense-in-depth alongside PreToolUse hooks"
+- [x] Guard placement is before any file-writing or research phases
+- [x] No other behavioral changes to either skill
 
 ## Test Scenarios
 
