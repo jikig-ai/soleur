@@ -3,6 +3,12 @@
 # Blocks: commits on main, rm -rf on worktrees, --delete-branch with active worktrees,
 # commits with conflict markers in staged content.
 # NOTE: When adding or modifying guards, update AGENTS.md hook awareness rule to match.
+#
+# Corresponding prose rules:
+#   Guard 1: AGENTS.md "Never commit directly to main", constitution.md "Never allow agents to work directly on the default branch"
+#   Guard 2: AGENTS.md "Never rm -rf on the current directory, a worktree path, or the repo root"
+#   Guard 3: AGENTS.md "Never --delete-branch with gh pr merge"
+#   Guard 4: constitution.md "grep staged content for conflict markers"
 
 set -euo pipefail
 

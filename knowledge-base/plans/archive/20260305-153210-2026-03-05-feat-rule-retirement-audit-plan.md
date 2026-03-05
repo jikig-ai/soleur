@@ -91,13 +91,13 @@ All changes are to markdown files (AGENTS.md, constitution.md, compound SKILL.md
 
 ## Acceptance Criteria
 
-- [ ] 5 AGENTS.md rules annotated with `[enforced: ...]` cross-references
-- [ ] 4 constitution.md rules annotated with `[hook-enforced: ...]`
-- [ ] 3 hook scripts have corresponding prose rule comments
-- [ ] Compound Phase 1.5 prints rule budget count after Deviation Analyst output
-- [ ] Compound warns when always-loaded rules exceed 250
-- [ ] Deviation Analyst checks for existing hooks before proposing new enforcement rules
-- [ ] GitHub issue filed for "revisit automated audit at 300+ rules"
+- [x] 5 AGENTS.md rules annotated with `[hook-enforced: ...]` cross-references
+- [x] 4 constitution.md rules annotated with `[hook-enforced: ...]`
+- [x] 3 hook scripts have corresponding prose rule comments
+- [x] Compound Phase 1.5 prints rule budget count after Deviation Analyst output
+- [x] Compound warns when always-loaded rules exceed 250
+- [x] Deviation Analyst checks for existing hooks before proposing new enforcement rules
+- [x] GitHub issue filed for "revisit automated audit at 300+ rules" (#451)
 
 ## Test Scenarios
 
