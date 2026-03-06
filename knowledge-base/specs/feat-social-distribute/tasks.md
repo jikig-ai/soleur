@@ -68,8 +68,8 @@ issue: 458
 
 ## Phase 3: Registration & Counts
 
-- [ ] 3.1 Add `social-distribute` to `SKILL_CATEGORIES` in `plugins/soleur/docs/_data/skills.js`
-- [ ] 3.2 Grep old skill count across repo, update all references (plugin.json description, plugin README, root README, brand-guide.md)
+- [x] 3.1 Add `social-distribute` to `SKILL_CATEGORIES` in `plugins/soleur/docs/_data/skills.js`
+- [x] 3.2 Grep old skill count across repo, update all references (plugin.json description, plugin README, root README, brand-guide.md)
 - [ ] 3.3 Commit registration updates
 
 ## Phase 4: Verification

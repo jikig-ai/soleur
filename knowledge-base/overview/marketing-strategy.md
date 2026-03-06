@@ -14,7 +14,7 @@ depends_on:
 
 ## Executive Summary
 
-Soleur is the Company-as-a-Service platform -- 61 agents, 55 skills, 3 commands -- built for solo founders who refuse to accept that scale requires headcount. The product is mature (420+ merged PRs, daily dogfooding across 8 domains). The marketing is not.
+Soleur is the Company-as-a-Service platform -- 61 agents, 56 skills, 3 commands -- built for solo founders who refuse to accept that scale requires headcount. The product is mature (420+ merged PRs, daily dogfooding across 8 domains). The marketing is not.
 
 **Current state:** Strong brand identity, zero distribution. The website serves people who already know Soleur but is invisible to anyone discovering the category. Content score 2/10. AEO 1.6/10. Zero target keywords in body copy. No blog infrastructure. No social proof. No testimonials. No case studies.
 
@@ -78,7 +78,7 @@ These are the structural advantages that competitors cannot replicate by shippin
 | Level | Message | Supporting Proof |
 |-------|---------|-----------------|
 | H1 (Hero) | "Build a Billion-Dollar Company. Alone." | Amodei's 2026 prediction. Soleur's thesis: this is an engineering problem, not science fiction. |
-| H2 (Value Prop) | "The Company-as-a-Service Platform" | 61 agents. 55 skills. 8 domains. Every department from strategy to shipping. |
+| H2 (Value Prop) | "The Company-as-a-Service Platform" | 61 agents. 56 skills. 8 domains. Every department from strategy to shipping. |
 | H3 (Differentiator) | "Not a copilot. Not an assistant. A full AI organization that reviews, plans, builds, remembers, and self-improves." | Cross-domain coherence. Compounding knowledge base. Workflow orchestration. |
 | H3 (Proof Point) | "Every decision teaches the system. Every project starts faster than the last." | Knowledge compounding across sessions. The 100th session is dramatically more productive than the 1st. |
 | H3 (Social Proof) | "Designed, built, and shipped by Soleur -- using Soleur." | 420+ merged PRs. Daily dogfooding across all 8 domains. The platform runs itself. |

@@ -102,7 +102,7 @@ Even at 10% of replacement value, the justified price is $75-320/month.
 
 | Tier | Price | Target | Includes |
 |------|-------|--------|----------|
-| **Open Source** | Free (Apache-2.0) | All users | Full plugin: 61 agents, 55 skills, 3 commands. Local knowledge base. Terminal-first workflow. Self-hosted. |
+| **Open Source** | Free (Apache-2.0) | All users | Full plugin: 61 agents, 56 skills, 3 commands. Local knowledge base. Terminal-first workflow. Self-hosted. |
 | **Pro** | $49/month | Solo founders with active products | Cloud-synced knowledge base (access from any machine). Hosted agent execution (background tasks). Priority model access. Analytics dashboard. Email support. |
 | **Team** | $99/month (up to 3 seats) | Small founding teams | Everything in Pro + shared knowledge base across team members. Role-based agent permissions. Collaboration features. |
 
