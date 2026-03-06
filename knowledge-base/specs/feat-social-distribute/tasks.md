@@ -11,10 +11,10 @@ issue: 458
 
 ## Phase 0: Prep (Bug Fixes)
 
-- [ ] 0.1 Fix discord-content SKILL.md: add `allowed_mentions: {parse: []}` to webhook curl payload
-- [ ] 0.2 Fix CaaS blog article: wrong Lovable citation link (line 27 links to Cursor CNBC article)
-- [ ] 0.3 Fix CaaS blog article: remove duplicate WhatsApp paragraph (lines 122 vs 126)
-- [ ] 0.4 Audit all remaining citations and statistics in CaaS article for accuracy
+- [x] 0.1 Fix discord-content SKILL.md: add `allowed_mentions: {parse: []}` to webhook curl payload
+- [x] 0.2 Fix CaaS blog article: wrong Lovable citation link (line 27 links to Cursor CNBC article)
+- [x] 0.3 Fix CaaS blog article: remove duplicate WhatsApp paragraph (lines 122 vs 126)
+- [x] 0.4 Audit all remaining citations and statistics in CaaS article for accuracy
 - [ ] 0.5 Commit fixes
 
 ## Phase 1: Brand Guide Extension
