@@ -100,6 +100,7 @@ When adding or modifying agents, verify compliance:
 ### Token Budget Check (Required when adding agents)
 
 - [ ] Run: `grep -h 'description:' agents/**/*.md | wc -w` -- cumulative word count must stay under ~2500 words (~3.3k tokens, well under the 15k threshold)
+- [ ] Reserve ~5 words per sibling needing disambiguation when budgeting the new agent's description -- large domains (marketing: 11 specialists) consume budget faster
 - [ ] Detailed instructions, frameworks, and examples belong in the agent body (after `---`), not in `description:`
 
 ### Quick Validation Command

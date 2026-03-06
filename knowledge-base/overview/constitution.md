@@ -254,6 +254,18 @@ Project principles organized by domain. Add principles as you learn them.
 
 ### Prefer
 
+## Content
+
+### Always
+
+- Verify all quantitative claims, attributed quotes, and factual assertions against their cited source URL via WebFetch before presenting content for user approval -- every statistic must have a linked, fetchable source ("no naked numbers"); if the source cannot be verified, flag the claim for user review rather than publishing silently [enforced: fact-checker agent via content-writer Phase 2.5]
+
+### Never
+
+### Prefer
+
+- Prefer softening unverifiable claims (e.g., "thousands" instead of "9,000") over removing them entirely, when the general direction is supported by available evidence
+
 ## Specs
 
 ### Always

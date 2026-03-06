@@ -95,7 +95,35 @@ Generate a full article draft that:
 
 **If existing posts are present** in the target directory, read 1-2 of them to match frontmatter schema, layout name, and tag conventions.
 
+## Phase 2.5: Citation Verification
+
+<validation_gate>
+
+After generating the draft, verify all factual claims before presenting to the user.
+
+Invoke the fact-checker agent via the Task tool, passing the full draft content:
+
+```text
+Task fact-checker: "Verify this draft:
+
+<full draft text>"
+```
+
+Parse the returned Verification Report. For each claim:
+
+- **PASS**: No annotation needed
+- **FAIL**: Insert `[FAIL: <reason>]` inline after the claim in the draft
+- **UNSOURCED**: Insert `[UNSOURCED]` inline after the claim in the draft
+
+If the fact-checker agent is unavailable (e.g., Task tool not accessible), warn: "Citation verification skipped -- fact-checker agent not available. Proceed with manual verification." Continue to Phase 3.
+
+Re-verification runs after each Edit cycle in Phase 3 -- when the user selects "Edit" and the draft is regenerated in Phase 2, Phase 2.5 re-runs on the updated draft.
+
+</validation_gate>
+
 ## Phase 3: User Approval
+
+If Phase 2.5 produced a Verification Report, display the summary first (total claims, verified, failed, unsourced), then present the draft with any inline FAIL/UNSOURCED markers visible. If all claims passed, note "All citations verified." If verification was skipped, note "Citation verification was skipped -- manual review recommended."
 
 Present the generated draft with word count displayed. Use the **AskUserQuestion tool** with three options:
 
@@ -121,4 +149,4 @@ Report: "Article written to `<path>`. Review and commit when ready."
 - The blog-post.njk layout generates BlogPosting JSON-LD automatically. Do not duplicate it in the post body.
 - Frontmatter fields should match existing posts in the target directory when possible.
 - If the brand guide's `## Channel Notes > ### Blog` section is missing, generate content using only the `## Voice` section (no error).
-- Every factual claim, statistic, and attributed quote must have a verifiable source URL. Do not publish "naked numbers" without a linked, retrievable citation. Fetch each cited URL and confirm it supports the claim before presenting the draft.
+- Every factual claim, statistic, and attributed quote must have a verifiable source URL. Phase 2.5 enforces this via the fact-checker agent -- claims without citations are flagged as UNSOURCED and claims with unsupporting sources are flagged as FAIL [enforced: fact-checker agent via Phase 2.5].
