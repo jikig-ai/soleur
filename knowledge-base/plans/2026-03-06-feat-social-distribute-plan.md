@@ -5,13 +5,16 @@ date: 2026-03-06
 issue: 458
 pr: 457
 branch: feat-social-distribute
+semver: minor
 ---
 
 # Social Distribution Workflow
 
 ## Overview
 
-Build a `social-distribute` skill that takes a published blog article and generates platform-specific content variants for 5 social channels, posting to Discord (webhook) and X/Twitter (API) automatically, with formatted text output for IndieHackers, Reddit, and Hacker News. Also fix inaccuracies in the CaaS blog article and extend the brand guide with social channel notes.
+Build a `social-distribute` skill that takes a published blog article and generates platform-specific content variants for 5 social channels, posting to Discord (webhook) automatically and outputting formatted text for X/Twitter, IndieHackers, Reddit, and Hacker News. Also fix inaccuracies in the CaaS blog article and extend the brand guide with channel notes for Discord and X/Twitter.
+
+[Updated 2026-03-06: X/Twitter API posting deferred to v2 -- account doesn't exist yet. Headless mode deferred. Distribution checklist doc cut. IndieHackers/Reddit/HN channel notes deferred until posting history exists.]
 
 ## Problem Statement
 
@@ -19,21 +22,20 @@ The first blog article shipped 2026-03-05 with zero social distribution. The mar
 
 ## Proposed Solution
 
-A single `social-distribute` skill following the discord-content pattern (prerequisites -> generate -> approve -> post) expanded to 5 platforms. Brand guide gets new channel notes sections. Blog article gets an accuracy fix pass.
+A single `social-distribute` skill following the discord-content pattern (prerequisites -> generate -> approve -> post) expanded to 5 platforms. Brand guide gets channel notes for Discord and X/Twitter. Blog article gets an accuracy fix pass.
 
 ### Architecture
 
 ```
 User invokes /soleur:social-distribute <blog-path>
 
-  1. Prerequisites check (brand guide, env vars)
-  2. Read blog post + resolve template variables + strip HTML
+  1. Prerequisites check (brand guide, Discord webhook env var)
+  2. Read blog post, pass content + current stats as context
   3. Read brand guide Voice + Channel Notes per platform
-  4. Read content repurposing table (optional editorial brief)
-  5. Generate 5 variants via copywriter agent delegation
-  6. Present all variants, sequential per-platform approval
-  7. Post to Discord (webhook) and X/Twitter (API)
-  8. Output formatted text for manual platforms
+  4. Generate 5 variants (LLM handles content adaptation)
+  5. Present all variants, approval for Discord only
+  6. Post to Discord (webhook)
+  7. Output formatted text for X/Twitter, IndieHackers, Reddit, HN
 ```
 
 ### Key design decisions from research
@@ -44,49 +46,24 @@ User invokes /soleur:social-distribute <blog-path>
 | Include `allowed_mentions: {parse: []}` in webhook | Constitution mandate + discord-content has this bug | `2026-03-05-discord-allowed-mentions.md` |
 | Inline brand voice validation (no separate phase) | Three independent reviews killed the separate validator idea | `2026-02-12-brand-guide-contract.md` |
 | Sequential per-platform approval | Matches discord-content pattern; rejection skips platform, doesn't abort | SpecFlow analysis |
-| Resolve template vars by reading `_data/stats.js` and `_data/site.json` | Blog source has `{{ stats.agents }}` 8+ times; literal syntax in tweets is broken | SpecFlow analysis |
-| Strip `<script>` and `<details>` blocks before generation | JSON-LD and FAQ accordions are meaningless in social posts | SpecFlow analysis |
-| Graceful degradation on API failure (not just missing keys) | 401, 403, 429, timeout all degrade to text output | SpecFlow analysis |
-| Support `--headless` flag | CMO/community-manager may invoke autonomously | `2026-03-03-headless-mode.md` |
+| Pass current stats as LLM context (not template resolution) | Blog source has `{{ stats.agents }}` 8+ times; LLM handles naturally with context | Plan review simplification |
+| LLM ignores markup artifacts with prompt instruction | JSON-LD and FAQ accordions are meaningless in social posts; no preprocessing needed | Plan review simplification |
 
 ## Technical Considerations
 
-### Template Variable Resolution
+### Template Variable Handling
 
-Blog posts contain Nunjucks variables (`{{ stats.agents }}`, `{{ site.url }}`). The skill must:
-1. Read `plugins/soleur/docs/_data/stats.js` and execute the counting logic (count `.md` files in agent/skill/command dirs)
-2. Read `plugins/soleur/docs/_data/site.json` for `site.url`
-3. Replace `{{ stats.agents }}`, `{{ stats.skills }}`, `{{ stats.commands }}`, `{{ stats.departments }}`, `{{ site.url }}` in the article text before passing to content generation
+Blog posts contain Nunjucks variables (`{{ stats.agents }}`, `{{ site.url }}`). Rather than reimplementing template resolution, the skill:
+1. Runs simple shell commands to get current counts: `find agents -name '*.md' | wc -l` etc.
+2. Reads `plugins/soleur/docs/_data/site.json` for `site.url`
+3. Passes the raw article content plus current stats as context to the LLM generation prompt
+4. The LLM naturally substitutes the correct values when generating social variants
 
-### Content Preprocessing Pipeline
+No preprocessing pipeline needed — the LLM handles markup stripping, table normalization, and variable substitution implicitly via prompt instruction.
 
-Before generating variants, the skill strips:
-- `<script>` blocks (JSON-LD schema markup)
-- `<details>` blocks (FAQ accordions)
-- YAML frontmatter (already parsed for title/description)
-- Markdown tables (converted to prose by the LLM during generation)
+### X/Twitter (Deferred to v2)
 
-### X/Twitter API v2 Integration
-
-**Environment variables:**
-- `X_BEARER_TOKEN` — App-only authentication (read operations)
-- `X_API_KEY` — OAuth 1.0a consumer key
-- `X_API_SECRET` — OAuth 1.0a consumer secret
-- `X_ACCESS_TOKEN` — OAuth 1.0a user access token
-- `X_ACCESS_TOKEN_SECRET` — OAuth 1.0a user access secret
-
-OAuth 1.0a is required for tweet posting (write operations). OAuth 2.0 PKCE would require a token refresh mechanism — too complex for v1.
-
-**Thread posting:**
-1. Post first tweet via `POST https://api.twitter.com/2/tweets`
-2. Post each subsequent tweet with `reply.in_reply_to_tweet_id` set to the previous tweet's ID
-3. On failure mid-thread: report posted tweets with URLs, output remaining tweets as text
-
-**Graceful degradation triggers:**
-- Missing env vars → output text
-- 401/403 (auth failure) → output text, show error
-- 429 (rate limit) → output text, show retry-after
-- Network timeout → output text, show error
+X/Twitter API posting is deferred until an account and API keys exist. In v1, the skill generates an X/Twitter thread as formatted text output. When API integration is added later, it will use OAuth 1.0a with env vars: `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET`.
 
 ### Discord Webhook
 
@@ -105,22 +82,19 @@ Same curl pattern as discord-content but with `allowed_mentions`:
 
 Exact heading strings (skill parses by heading contract):
 - `### X/Twitter` — Thread format, 280-char limit, hook-first, numbering convention, link placement
-- `### IndieHackers` — Building update format, transparent metrics, markdown support
-- `### Reddit` — Subreddit targets (r/ClaudeAI, r/SaaS, r/solopreneur), self-post vs. link-post guidance, anti-self-promotion norms
-- `### Hacker News` — Title conventions, "Show HN" vs. direct submit guidance, no marketing language
+- IndieHackers, Reddit, HN channel notes deferred until posting history exists (v2)
 
 ### Approval Flow
 
 ```
 1. Show all 5 variants in a summary view
-2. For each platform with API posting (Discord, X/Twitter):
+2. For Discord:
    - AskUserQuestion: Accept / Edit / Skip
-   - Accept → post immediately
+   - Accept → post via webhook
    - Edit → regenerate with feedback, re-present
-   - Skip → move to next platform
-3. For manual platforms (IndieHackers, Reddit, HN):
+   - Skip → move to manual output
+3. For all other platforms (X/Twitter, IndieHackers, Reddit, HN):
    - Output formatted text to terminal
-   - Optionally write to file
 4. Show distribution summary (posted, skipped, manual)
 ```
 
@@ -134,37 +108,51 @@ New skill requires updates to:
 5. Root `README.md` — Update skill count
 6. `knowledge-base/overview/brand-guide.md` — Update component counts if referenced
 
+## Non-Goals
+
+- X/Twitter API posting (deferred to v2 when account exists)
+- Headless/autonomous mode (deferred until generation quality is validated)
+- Distribution checklist document (the skill IS the checklist)
+- IndieHackers/Reddit/HN brand guide channel notes (write after posting history exists)
+- Engagement monitoring or analytics
+- Scheduled posting / delayed publishing
+- Email newsletter distribution
+
+## Rollback Plan
+
+All changes are additive (new skill, new brand guide sections, blog fixes). Rollback = revert the PR. No data migrations, no infrastructure changes.
+
+## Affected Teams
+
+Solo founder only. No external dependencies. Discord webhook already exists and is used by discord-content and release-announce.
+
 ## Acceptance Criteria
 
 - [ ] `/soleur:social-distribute <path>` generates 5 platform variants from a blog post
-- [ ] Template variables (`{{ stats.agents }}` etc.) are resolved to actual values in all variants
+- [ ] All variants contain actual numbers, not template syntax like `{{ stats.agents }}`
 - [ ] Discord post includes `allowed_mentions: {parse: []}` in webhook payload
 - [ ] Discord post sent via webhook after user approval
-- [ ] X/Twitter thread posted via API after user approval (or text output if no keys/API failure)
-- [ ] IndieHackers, Reddit, HN formatted text output to terminal
-- [ ] Rejection of one platform skips it without aborting others
-- [ ] Brand guide has `### X/Twitter`, `### IndieHackers`, `### Reddit`, `### Hacker News` channel notes
-- [ ] Post-publish distribution checklist exists at `knowledge-base/marketing/post-publish-distribution.md`
-- [ ] CaaS blog article inaccuracies fixed (wrong Lovable link, duplicate WhatsApp paragraph, verify 9K plugins claim)
+- [ ] X/Twitter, IndieHackers, Reddit, HN formatted text output to terminal
+- [ ] Skipping Discord continues to manual platform output
+- [ ] Brand guide has `### X/Twitter` channel notes
+- [ ] CaaS blog article inaccuracies fixed (wrong Lovable link, duplicate WhatsApp paragraph)
+- [ ] discord-content skill's missing `allowed_mentions` fixed
 - [ ] Skill registered in skills.js and skill counts updated across repo
-- [ ] `--headless` flag supported for autonomous invocation
 
 ## Test Scenarios
 
-- Given a valid blog post path with template variables, when social-distribute runs, then all variants contain resolved numbers (not `{{ stats.agents }}`)
-- Given no `X_API_KEY` env var, when social-distribute runs, then X/Twitter variant is output as text (no API call attempted)
+- Given a valid blog post path with template variables, when social-distribute runs, then all variants contain resolved numbers
+- Given no `DISCORD_WEBHOOK_URL` env var, when social-distribute runs, then Discord is skipped and manual output proceeds
 - Given a Discord webhook that returns 500, when posting, then the skill outputs the draft text and shows the error
-- Given user selects "Skip" for Discord, when approval continues, then X/Twitter and manual platforms still proceed
-- Given `--headless` flag, when invoked, then all platforms are auto-approved and posted/output without AskUserQuestion prompts
+- Given user selects "Skip" for Discord, when approval continues, then manual platform output still proceeds
 - Given a blog post with `<script>` JSON-LD block, when generating variants, then no schema markup appears in any social post
-- Given X/Twitter thread posting where tweet 4 of 7 fails, then tweets 1-3 are reported with URLs and tweets 5-7 are output as text
 
 ## Dependencies & Risks
 
 | Dependency | Risk | Mitigation |
 |------------|------|------------|
-| X/Twitter account doesn't exist yet | Can't test API posting | Skill degrades to text output; X integration is additive |
-| Brand guide channel notes don't exist yet | Can't generate brand-consistent variants | Write notes in Phase 1 before building skill |
+| X/Twitter account doesn't exist yet | Can't test API posting | Text output only in v1; API posting is a v2 follow-up |
+| Brand guide X/Twitter channel notes don't exist yet | Can't generate brand-consistent X variants | Write notes in Phase 1 before building skill |
 | discord-content has `allowed_mentions` bug | Inconsistency if not fixed | Fix as part of this PR |
 | Content repurposing table only has 3 articles | Skill works without it (table is optional editorial context) | Skill generates variants from article content alone; table is bonus |
 
@@ -189,5 +177,4 @@ New skill requires updates to:
 - `2026-02-19-discord-bot-identity.md` — Webhook payloads must include explicit `username` and `avatar_url`
 - `2026-02-22-new-skill-creation-lifecycle.md` — 6-file registration checklist
 - `2026-02-22-skill-count-propagation.md` — Grep old count across repo before updating
-- `2026-03-03-headless-mode.md` — Support `--headless` for autonomous invocation
 - `2026-02-18-token-env-var-not-cli-arg.md` — Secrets via env vars, never CLI args
