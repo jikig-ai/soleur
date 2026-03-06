@@ -70,11 +70,11 @@ issue: 458
 
 - [x] 3.1 Add `social-distribute` to `SKILL_CATEGORIES` in `plugins/soleur/docs/_data/skills.js`
 - [x] 3.2 Grep old skill count across repo, update all references (plugin.json description, plugin README, root README, brand-guide.md)
-- [ ] 3.3 Commit registration updates
+- [x] 3.3 Commit registration updates
 
 ## Phase 4: Verification
 
-- [ ] 4.1 Merge origin/main into feature branch
+- [x] 4.1 Merge origin/main into feature branch
 - [ ] 4.2 Run `/soleur:social-distribute` against the CaaS blog post
 - [ ] 4.3 Verify Discord post appears correctly in the channel
 - [ ] 4.4 Verify all 5 platform variants are generated with correct formatting
