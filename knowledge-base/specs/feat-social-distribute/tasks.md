@@ -15,12 +15,12 @@ issue: 458
 - [x] 0.2 Fix CaaS blog article: wrong Lovable citation link (line 27 links to Cursor CNBC article)
 - [x] 0.3 Fix CaaS blog article: remove duplicate WhatsApp paragraph (lines 122 vs 126)
 - [x] 0.4 Audit all remaining citations and statistics in CaaS article for accuracy
-- [ ] 0.5 Commit fixes
+- [x] 0.5 Commit fixes
 
 ## Phase 1: Brand Guide Extension
 
-- [ ] 1.1 Read current brand guide channel notes section (`knowledge-base/overview/brand-guide.md`)
-- [ ] 1.2 Write `### X/Twitter` channel notes (tone, thread format, 280-char limit, hook-first, numbering, link placement, hashtag policy)
+- [x] 1.1 Read current brand guide channel notes section (`knowledge-base/overview/brand-guide.md`)
+- [x] 1.2 Write `### X/Twitter` channel notes (tone, thread format, 280-char limit, hook-first, numbering, link placement, hashtag policy)
 - [ ] 1.3 Commit brand guide update
 
 ## Phase 2: Social Distribute Skill (Core)
