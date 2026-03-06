@@ -194,7 +194,7 @@ All content must pass these checks before publication:
 - [ ] No prohibited terms: "AI-powered", "leverage AI", "just/simply", "assistant/copilot", startup jargon ("disrupt", "synergy")
 - [ ] Declarative voice, no hedging ("might", "could", "potentially")
 - [ ] Founder framed as decision-maker, system as executor
-- [ ] Concrete numbers when available (61 agents, 55 skills, 420+ PRs)
+- [ ] Concrete numbers when available (61 agents, 56 skills, 420+ PRs)
 - [ ] Short, punchy sentences in marketing copy
 - [ ] Never called a "plugin" or "tool" (exception: literal CLI commands and technical docs)
 

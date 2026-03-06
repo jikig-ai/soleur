@@ -147,6 +147,21 @@ The visual identity follows the **Solar Forge** direction: raw power being shape
 - Example issue response: "Confirmed. The agent resolver doesn't recurse into nested skill directories. Fix in #74."
 - Example PR description: "Add brand-architect agent and discord-content skill. Enables interactive brand workshops and Discord content generation from brand guide."
 
+### X/Twitter
+
+- Full brand voice. Declarative, concrete, no hedging. Every tweet should read like a statement, not a question.
+- **Thread format:** Hook tweet (standalone value, no "thread" announcement) > Numbered body tweets (2/ 3/ 4/) > Final tweet with article link and one-line CTA.
+- **280-character limit** is enforced per tweet during generation, not as a post-hoc trim.
+- Hook-first: the first tweet must deliver a complete, compelling idea that works even if nobody clicks "Show more." No "I just wrote about..." openers.
+- Links go in the final tweet only. Mid-thread links break reading flow and reduce impressions.
+- No hashtags in body tweets. One relevant hashtag in the final tweet is acceptable if it adds discoverability (e.g., #solofounder, #buildinpublic). Never more than two.
+- No emojis in hook tweets. Body tweets may use one structural emoji (arrow, checkmark) per tweet if it aids scanning.
+- Metrics and numbers land hardest. Lead with concrete data when available: "420+ merged PRs. 40+ agents. 8 departments. One founder."
+- Never use "excited to announce" or "we're thrilled." State what shipped and why it matters.
+- Example hook: "The other 70% of running a company is still manual. AI solved coding. Nothing solved the rest."
+- Example thread body: "2/ Company-as-a-Service runs every department with AI agents that share a compounding knowledge base. Marketing knows what engineering decided. Legal references the privacy policy. Context flows everywhere."
+- Example final tweet: "Full breakdown of what CaaS means and why it matters for solo founders:\n\nhttps://soleur.ai/blog/what-is-company-as-a-service/\n\n#solofounder"
+
 ### Website / Landing Page
 
 - Full brand energy. This is where the ambition lives at maximum volume.

@@ -24,7 +24,7 @@ But the other 70% remains manual. A solo founder using Cursor for code still wri
 
 The result is a founder who builds at the speed of AI but operates at the speed of one person. [TechCrunch noted](https://techcrunch.com/2025/02/01/ai-agents-could-birth-the-first-one-person-unicorn-but-at-what-societal-cost/) that AI agents could birth the first one-person unicorn -- but only if they extend beyond engineering into every function a company needs.
 
-The numbers tell the story. Over [9,000 Claude Code plugins](https://www.nxcode.io/resources/news/one-person-unicorn-context-engineering-solo-founder-guide-2026) exist as of 2026. The overwhelming majority focus on engineering tasks. The market is saturated with code-writing agents and undersupplied with agents that handle the rest of a business. Meanwhile, [Lovable reached $200 million in ARR](https://www.cnbc.com/2026/02/24/cursor-announces-major-update-as-ai-coding-agent-battle-heats-up.html) at a $6.6 billion valuation -- proving that founders are willing to pay for AI that extends beyond code. The demand exists. The infrastructure does not.
+The numbers tell the story. Thousands of Claude Code plugins exist as of 2026. The overwhelming majority focus on engineering tasks. The market is saturated with code-writing agents and undersupplied with agents that handle the rest of a business. Meanwhile, [Lovable reached $200 million in ARR](https://techcrunch.com/2025/12/18/vibe-coding-startup-lovable-raises-330m-at-a-6-6b-valuation/) at a $6.6 billion valuation -- proving that founders are willing to pay for AI that extends beyond code. The demand exists. The infrastructure does not.
 
 Company-as-a-service exists to close that gap. It takes the same principle that made AI coding tools transformative -- specialized agents doing expert work -- and applies it to the entire company.
 
@@ -85,7 +85,7 @@ Consider the alternative. A solo founder using [Notion Custom Agents](https://ww
 
 ### Institutional Memory That Compounds
 
-[Anthropic launched Cowork Plugins](https://techcrunch.com/2026/02/24/anthropic-launches-new-push-for-enterprise-agents-with-plugins-for-finance-engineering-and-design/) covering six domains with first-party integrations. [Notion shipped Custom Agents](https://www.notion.com/releases/2026-02-24) that operate within workspaces. Both are stateless -- they execute tasks but do not compound knowledge across sessions.
+[Anthropic launched Cowork Plugins](https://techcrunch.com/2026/02/24/anthropic-launches-new-push-for-enterprise-agents-with-plugins-for-finance-engineering-and-design/) covering multiple business domains with first-party integrations. [Notion shipped Custom Agents](https://www.notion.com/releases/2026-02-24) that operate within workspaces. Both are stateless -- they execute tasks but do not compound knowledge across sessions.
 
 The compounding model works differently. Every problem solved produces a learning. Every learning informs the next solution. Over hundreds of sessions, the knowledge base accumulates patterns, gotchas, architectural decisions, and proven approaches. The system does not start from zero each time -- it starts from everything it has learned.
 
@@ -115,15 +115,11 @@ The billion-dollar solo company is no longer a thought experiment. It is an acti
 
 Dario Amodei, CEO of Anthropic, [stated in an interview with Inc.com](https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609): "There will be a one-person billion-dollar company in 2026" -- assigning it a 70-80% probability.
 
-Sam Altman, CEO of OpenAI, [placed it in his predictions](https://felloai.com/2025/09/sam-altman-other-ai-leaders-the-next-1b-startup-will-be-a-one-person-company/): "The first year that there is a one-person billion-dollar company... would have been unimaginable without AI -- and now will happen."
+Sam Altman, CEO of OpenAI, described a [betting pool among tech CEOs](https://fortune.com/2024/02/04/sam-altman-one-person-unicorn-silicon-valley-founder-myth/) for "the first year that there is a one-person billion-dollar company" -- something he called "unimaginable without AI" that "now will happen."
 
 Mike Krieger, co-founder of Instagram, [told Inc.com](https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609) that he built a billion-dollar company with 13 people -- and that with current AI capabilities, the two co-founders could probably manage it alone with Claude.
 
-The precedent already exists. WhatsApp reached 55 employees and a $19 billion acquisition -- roughly $345 million per employee. Instagram had 13 employees when it hit a billion users. The pattern is clear: the most valuable companies per employee are the ones that maximize leverage per person.
-
-Company-as-a-service is the mechanism that makes the next leap possible. When every business function runs through a compounding AI organization, the minimum viable team size approaches one.
-
-The pattern is accelerating. WhatsApp reached its $19 billion acquisition with 55 employees -- roughly $345 million per employee. Instagram had 13 people when it hit a billion users. Each generation of infrastructure reduces the minimum viable team size. Company-as-a-service is the infrastructure that pushes that number toward one.
+The precedent already exists. WhatsApp reached 55 employees and a $19 billion acquisition -- roughly $345 million per employee. Instagram had 13 employees when it was acquired for $1 billion. Each generation of infrastructure reduces the minimum viable team size. Company-as-a-service is the infrastructure that pushes that number toward one.
 
 The question is not whether this future arrives. It is who defines the category. The platform that establishes what "company-as-a-service" means now will set the standard for the next decade of solo-founder infrastructure.
 

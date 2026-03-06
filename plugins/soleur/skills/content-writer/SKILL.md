@@ -121,3 +121,4 @@ Report: "Article written to `<path>`. Review and commit when ready."
 - The blog-post.njk layout generates BlogPosting JSON-LD automatically. Do not duplicate it in the post body.
 - Frontmatter fields should match existing posts in the target directory when possible.
 - If the brand guide's `## Channel Notes > ### Blog` section is missing, generate content using only the `## Voice` section (no error).
+- Every factual claim, statistic, and attributed quote must have a verifiable source URL. Do not publish "naked numbers" without a linked, retrievable citation. Fetch each cited URL and confirm it supports the claim before presenting the draft.

@@ -63,7 +63,7 @@ Pages that exist on soleur.ai but have SEO deficiencies identified in the conten
 | Issue | Current State | Action | Effort |
 |-------|--------------|--------|--------|
 | Generic description | "Claude Code plugin providing 32 AI agents..." | Rewrite with platform positioning and target keywords (see content-audit.md Section 4.9) | Low |
-| Agent/skill counts outdated | States 32 agents, 41 skills | Update to 61 agents, 55 skills, 3 commands | Low |
+| Agent/skill counts outdated | States 32 agents, 41 skills | Update to 61 agents, 56 skills, 3 commands | Low |
 
 **Combined effort:** 15 minutes.
 
