@@ -258,12 +258,9 @@ Project principles organized by domain. Add principles as you learn them.
 
 ### Always
 
-- Verify all quantitative claims, attributed quotes, and factual assertions against their cited source URL via WebFetch before presenting content for user approval. If the source cannot be verified (URL unreachable, content not extractable, page does not support the claim), flag the claim for user review -- do not silently publish unverified claims [enforced: fact-checker agent via content-writer Phase 2.5]
-- Every published statistic must have a linked, fetchable source URL -- no naked numbers [enforced: fact-checker agent via content-writer Phase 2.5]
+- Verify all quantitative claims, attributed quotes, and factual assertions against their cited source URL via WebFetch before presenting content for user approval -- every statistic must have a linked, fetchable source ("no naked numbers"); if the source cannot be verified, flag the claim for user review rather than publishing silently [enforced: fact-checker agent via content-writer Phase 2.5]
 
 ### Never
-
-- Never publish content with unverified citations. If verification is not possible (e.g., fact-checker agent unavailable), warn the user that manual verification is required [enforced: fact-checker agent via content-writer Phase 2.5]
 
 ### Prefer
 

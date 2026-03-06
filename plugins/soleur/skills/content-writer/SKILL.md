@@ -104,12 +104,8 @@ After generating the draft, verify all factual claims before presenting to the u
 Invoke the fact-checker agent via the Task tool, passing the full draft content:
 
 ```text
-Task fact-checker: "Verify all citations, statistics, and attributed quotes in this draft.
-For each claim with a URL, fetch the URL and confirm the page supports the claim.
-Return a Verification Report with Verified Claims, Failed Claims, Unsourced Claims,
-and Summary sections.
+Task fact-checker: "Verify this draft:
 
-Draft content:
 <full draft text>"
 ```
 
