@@ -261,23 +261,23 @@ Per the agent domain checklist learning, adding a new agent to an existing domai
 
 ## Acceptance Criteria
 
-- [ ] `plugins/soleur/agents/marketing/fact-checker.md` agent exists with WebFetch-based verification protocol
-- [ ] Agent description is under 45 words and includes disambiguation sentence
-- [ ] Agent cumulative description word count stays under 2,500
-- [ ] `plugins/soleur/skills/content-writer/SKILL.md` includes Phase 2.5 that invokes fact-checker via Task tool
-- [ ] Phase 2.5 passes the generated draft content to the fact-checker agent
-- [ ] Each citation in a draft is fetched via WebFetch and verified (pass/fail per claim)
-- [ ] Naked numbers (stats without source URLs) are flagged as UNSOURCED
-- [ ] Attributed quotes are checked against the cited page content
-- [ ] Verification report follows the structured heading contract with evidence for PASS verdicts
-- [ ] User sees verification status per claim during Phase 3 approval
-- [ ] Re-verification runs after each Edit cycle in Phase 3
-- [ ] Constitution rule added under `## Content` section with enforcement annotation
-- [ ] CMO delegation table in `cmo.md` includes fact-checker row
-- [ ] Copywriter agent description updated with reverse disambiguation
-- [ ] README.md agent count updated (61 -> 62)
-- [ ] `plugins/soleur/AGENTS.md` CMO domain leader table updated (11 -> 12 specialists)
-- [ ] Graceful degradation: if fact-checker is unavailable, warn and continue
+- [x] `plugins/soleur/agents/marketing/fact-checker.md` agent exists with WebFetch-based verification protocol
+- [x] Agent description is under 45 words and includes disambiguation sentence
+- [x] Agent cumulative description word count stays under 2,500 (result: 2,499)
+- [x] `plugins/soleur/skills/content-writer/SKILL.md` includes Phase 2.5 that invokes fact-checker via Task tool
+- [x] Phase 2.5 passes the generated draft content to the fact-checker agent
+- [x] Each citation in a draft is fetched via WebFetch and verified (pass/fail per claim)
+- [x] Naked numbers (stats without source URLs) are flagged as UNSOURCED
+- [x] Attributed quotes are checked against the cited page content
+- [x] Verification report follows the structured heading contract with evidence for PASS verdicts
+- [x] User sees verification status per claim during Phase 3 approval
+- [x] Re-verification runs after each Edit cycle in Phase 3
+- [x] Constitution rule added under `## Content` section with enforcement annotation
+- [x] CMO delegation table in `cmo.md` includes fact-checker row
+- [x] Copywriter agent description updated with reverse disambiguation
+- [x] README.md agent count -- skipped per constitution (CI reconciles at merge time)
+- [x] `plugins/soleur/AGENTS.md` CMO domain leader table updated (11 -> 12 specialists)
+- [x] Graceful degradation: if fact-checker is unavailable, warn and continue
 
 ## Test Scenarios
 
