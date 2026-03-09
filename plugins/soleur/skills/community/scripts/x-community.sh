@@ -225,6 +225,16 @@ x_request() {
     429)
       local retry_after
       retry_after=$(echo "$body" | jq -r '.retry_after // 5' 2>/dev/null || echo "5")
+      # Clamp retry_after to sane range [1, 60]
+      # Use printf to truncate float to integer for arithmetic comparison
+      # (sleep accepts floats natively, but bash (( )) does not)
+      local retry_int
+      retry_int=$(printf '%.0f' "$retry_after" 2>/dev/null || echo "5")
+      if (( retry_int > 60 )); then
+        retry_after=60
+      elif (( retry_int < 1 )); then
+        retry_after=1
+      fi
       echo "Rate limited. Retrying after ${retry_after}s (attempt $((depth + 1))/3)..." >&2
       sleep "$retry_after"
       x_request "$method" "$endpoint" "$json_body" "$((depth + 1))"

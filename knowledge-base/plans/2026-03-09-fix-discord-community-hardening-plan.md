@@ -156,18 +156,18 @@ Discord snowflake IDs are always numeric. Validating early prevents injection vi
 
 ## Acceptance Criteria
 
-- [ ] `discord-community.sh` catch-all error extraction has `|| echo "Unknown error"` bash fallback
-- [ ] `discord-community.sh` curl call suppresses stderr with `2>/dev/null`
-- [ ] `discord-community.sh` curl failure produces a clear error message and exits 1
-- [ ] `discord-setup.sh` validates JSON on 2xx responses before returning body
-- [ ] `discord-community.sh` 429 handler clamps `retry_after` to range [1, 60]
-- [ ] `discord-setup.sh` 429 handler clamps `retry_after` to range [1, 60]
-- [ ] `x-community.sh` 429 handler clamps `retry_after` to range [1, 60]
-- [ ] `retry_after` clamping handles float values (e.g., `1.234`) without bash arithmetic errors
-- [ ] `discord-community.sh` `cmd_messages` validates `channel_id` as numeric
-- [ ] `discord-setup.sh` `cmd_list_channels` validates `guild_id` parameter as numeric
-- [ ] `discord-setup.sh` `cmd_create_webhook` validates `channel_id` as numeric
-- [ ] All existing callers continue to work without modification
+- [x] `discord-community.sh` catch-all error extraction has `|| echo "Unknown error"` bash fallback
+- [x] `discord-community.sh` curl call suppresses stderr with `2>/dev/null`
+- [x] `discord-community.sh` curl failure produces a clear error message and exits 1
+- [x] `discord-setup.sh` validates JSON on 2xx responses before returning body
+- [x] `discord-community.sh` 429 handler clamps `retry_after` to range [1, 60]
+- [x] `discord-setup.sh` 429 handler clamps `retry_after` to range [1, 60]
+- [x] `x-community.sh` 429 handler clamps `retry_after` to range [1, 60]
+- [x] `retry_after` clamping handles float values (e.g., `1.234`) without bash arithmetic errors
+- [x] `discord-community.sh` `cmd_messages` validates `channel_id` as numeric
+- [x] `discord-setup.sh` `cmd_list_channels` validates `guild_id` parameter as numeric
+- [x] `discord-setup.sh` `cmd_create_webhook` validates `channel_id` as numeric
+- [x] All existing callers continue to work without modification
 
 ## Test Scenarios
 
