@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-03
-last_reviewed: 2026-03-03
+last_updated: 2026-03-09
+last_reviewed: 2026-03-09
 review_cadence: quarterly
 depends_on:
   - knowledge-base/overview/brand-guide.md
@@ -40,9 +40,10 @@ depends_on:
 | **v0.dev** | $0 Free, $20/mo Premium, $30/mo Team | Freemium | Yes (frontend) | No | No | Vercel ecosystem. Next.js focused. |
 | **Replit Agent** | $20/mo Core, $95/mo Pro | Usage-based (effort) | Yes (cloud) | No | Limited | Pricing backlash from effort-based model. |
 | **Notion AI** | $10/mo add-on per user | Add-on | No | Yes (workspace agents) | Yes (workspace context) | 35M+ users. Custom Agents launched Feb 2026. |
-| **Tanka** | Free beta, pricing TBD | Unknown | No | Partial (communication-centric) | Yes (EverMemOS memory graphs) | Closest memory architecture to Soleur. No pricing yet. |
-| **SoloCEO** | $2,000 diagnostic (beta 2026) | One-time | No | Yes (advisory) | No | Advisory-only. One-time diagnostic, not ongoing. |
-| **Systeme.io** | $0 Free, $27/mo Startup, $47/mo Webinar, $97/mo Unlimited | Freemium | No | Marketing/sales only | No | Traditional SaaS. No AI agents. |
+| **Polsia** | $50/mo + 20% revenue share + 20% ad spend share | Hybrid (subscription + revenue share) | Yes (autonomous) | Yes (engineering, marketing, ops, sales outreach, social media) | No (no structured cross-domain knowledge base) | Most direct CaaS competitor. $1M ARR in 1 month. 1,100+ managed companies. $50 "roughly breaks even on AI costs" -- real revenue is the 20% cuts. |
+| **Tanka** | $0/user/mo (<50 users), $299/mo (50+ users) | Freemium | No | Partial (communication-centric) | Yes (EverMemOS memory graphs) | Closest memory architecture to Soleur. Free for solo founders. |
+| **SoloCEO** | Unknown (previously $2,000 diagnostic) | Unknown | No | Yes (advisory) | No | Advisory-only. Limited public information. |
+| **Systeme.io** | $0 Free, $17/mo Startup, $97/mo Unlimited | Freemium | No | Marketing/sales only | No | Traditional SaaS. No AI agents. Startup plan dropped from $27 to $17. |
 
 ---
 
@@ -58,9 +59,10 @@ The competitive landscape establishes clear price anchors:
 | AI coding agent (autonomous) | $20-95/month | Usage-based credits, engineering-only |
 | AI web app builder | $0-50/month | Freemium, engineering-only |
 | AI workspace agent | $10/month add-on | Bundled with existing workspace tool |
-| Multi-domain AI platform | Does not exist at scale | No established anchor |
+| Autonomous AI company operator | $50/month + 20% revenue share | Polsia: subscription breaks even on AI costs, revenue share is profit |
+| Multi-domain AI platform (human-in-loop) | No established anchor | Soleur would be first in this segment |
 
-**Key insight:** No multi-domain AI platform for solo founders has established a price point. Soleur is defining a new category. The risk is being anchored against engineering-only tools ($15-40/month) rather than being valued as a replacement for an entire team.
+**Key insight:** Polsia has established the first CaaS price anchor at $50/month + 20% revenue share. This validates that solo founders will pay $50/month for autonomous company operation. However, Polsia's real revenue comes from the 20% cuts (revenue + ad spend), not the subscription. Soleur's $49/month flat-rate model avoids revenue share friction -- founders keep 100% of what they earn. The risk shifts from "being anchored against $15-40 engineering tools" to "being compared against Polsia's $50 + 20% model." The framing must emphasize: Soleur costs the same monthly but takes no cut of your revenue.
 
 ### Replacement Stack Cost Analysis
 
@@ -169,6 +171,7 @@ When pricing launches, the page must frame the value correctly. Draft messaging:
 | Cowork plugins commoditize domain breadth for free | High | High | Differentiate on compounding knowledge and workflow orchestration. Price the persistence, not the breadth. |
 | Open-source version provides 80%+ of value | Medium | High | Ensure Pro tier has clear infrastructure value (cloud sync, hosted execution) that cannot be self-hosted easily. |
 | Price compression forces below $49/month | Medium | Medium | $29/month floor still works at scale. The value metric (knowledge compounding) creates retention regardless of price point. |
+| Polsia's $50 + 20% share anchors CaaS pricing expectations | Medium | Medium | Founders may expect CaaS platforms to cost ~$50/month. Soleur's $49 flat rate is competitive and avoids the 20% revenue share. Position as "same price, you keep 100%." The revenue share is a vulnerability for Polsia at scale -- a founder earning $50k/month pays $10k to Polsia. |
 | Enterprise demand emerges before solo-founder validation | Low | Low | Good problem to have. Enterprise tier at custom pricing. Do not pivot to enterprise until solo-founder thesis is validated. |
 
 ---
@@ -178,7 +181,7 @@ When pricing launches, the page must frame the value correctly. Draft messaging:
 | Model | Pros | Cons | Verdict |
 |-------|------|------|---------|
 | **Usage-based (per agent execution)** | Scales with value. Low entry barrier. | Unpredictable costs frustrate solo founders. Replit's backlash is a cautionary tale. | Reject |
-| **Success tax (% of revenue)** | Aligns incentives. Mentioned on vision page. | Requires revenue tracking integration. Trust barrier. Complex to implement. Too early. | Defer -- revisit if platform enables direct revenue generation |
+| **Success tax (% of revenue)** | Aligns incentives. Mentioned on vision page. Polsia validates model at $50/mo + 20% share ($1M ARR). | Requires revenue tracking integration. Trust barrier. 20% share creates friction at scale (a company earning $10k/month pays $2k to Polsia). Polsia's model works because they provision all infrastructure. | Defer -- Polsia proves this works for fully autonomous operation. For human-in-loop, pure subscription may be more compelling. Founders who choose Soleur likely want control, which correlates with not wanting revenue share. |
 | **Freemium with domain gating** | Free engineering, paid non-engineering domains. | Fragments the experience. Violates the "integration IS the product" thesis. | Reject |
 | **One-time license** | Simple. No recurring obligation. | Does not fund ongoing development. Knowledge compounding needs ongoing infrastructure. | Reject |
 | **Donation / sponsorship** | Community goodwill. Open-source aligned. | Does not build a business. Incompatible with "billion-dollar company" thesis. | Reject |
@@ -195,4 +198,4 @@ When pricing launches, the page must frame the value correctly. Draft messaging:
 
 ---
 
-_Generated: 2026-03-03. Sources: competitive-intelligence.md (2026-03-02), business-validation.md (2026-02-25), brand-guide.md (2026-02-21)._
+_Updated: 2026-03-09. Sources: competitive-intelligence.md (2026-03-09), business-validation.md (2026-03-09), brand-guide.md (2026-02-21)._
