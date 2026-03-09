@@ -3,9 +3,25 @@ title: "fix: discord-community.sh missing jq fallback and curl stderr suppressio
 type: fix
 date: 2026-03-09
 semver: patch
+deepened: 2026-03-09
 ---
 
 # fix: discord-community.sh missing jq fallback and curl stderr suppression
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-09
+**Sections enhanced:** Fix 4 (critical bug found), Test Scenarios, Acceptance Criteria
+**Review perspectives applied:** security-sentinel, code-quality, code-simplicity, spec-flow-analyzer
+
+### Key Improvements
+1. **Critical: Fix 4 float arithmetic bug** -- Discord returns `retry_after` as a float (e.g., `1.234`), and bash `(( ))` arithmetic fails on non-integers under `set -euo pipefail`. Changed to `printf '%.0f'` truncation.
+2. Added negative `retry_after` clamping (floor at 1s) to prevent `sleep 0` or `sleep -1`.
+3. Added three missing test scenarios for float, negative, and zero `retry_after` values.
+
+### New Considerations Discovered
+- The `set -euo pipefail` float trap is documented in `knowledge-base/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md` -- same class of bug (arithmetic on values that may not be pure integers).
+- `sleep` accepts floats natively, so non-clamped float values like `1.5` work fine. Only the comparison/clamping code needs integer handling.
 
 ## Overview
 
@@ -87,11 +103,19 @@ Matches `discord-community.sh:82-86` and `x-community.sh:203-207`.
 
 ### Fix 4: Clamp retry_after to max 60s (all three scripts)
 
+**Critical edge case:** Discord returns `retry_after` as a float (e.g., `1.234`). Bash `(( ))` arithmetic fails on non-integer values with `syntax error: invalid arithmetic operator`, which is fatal under `set -euo pipefail`. The `sleep` command accepts floats natively, so only the comparison needs integer handling.
+
 **Pattern to apply in each 429 handler:**
 ```bash
-# After extracting retry_after, clamp to sane max
-if (( retry_after > 60 )); then
+# After extracting retry_after, clamp to sane range [1, 60]
+# Use printf to truncate float to integer for arithmetic comparison
+# (sleep accepts floats natively, but bash (( )) does not)
+local retry_int
+retry_int=$(printf '%.0f' "$retry_after" 2>/dev/null || echo "5")
+if (( retry_int > 60 )); then
   retry_after=60
+elif (( retry_int < 1 )); then
+  retry_after=1
 fi
 ```
 
@@ -100,7 +124,7 @@ Apply to:
 - `discord-setup.sh:102-106` (after `retry_after` extraction and null check)
 - `x-community.sh:227` (after `retry_after` extraction)
 
-60 seconds is the ceiling -- Discord's documented rate limits are typically 1-5s. Anything higher is either a bug or adversarial.
+60 seconds is the ceiling -- Discord's documented rate limits are typically 1-5s. Anything higher is either a bug or adversarial. Floor of 1s prevents `sleep 0` (immediate retry loop) or `sleep` with negative values.
 
 ### Fix 5: Validate channel_id as numeric (discord-community.sh + discord-setup.sh)
 
@@ -136,9 +160,10 @@ Discord snowflake IDs are always numeric. Validating early prevents injection vi
 - [ ] `discord-community.sh` curl call suppresses stderr with `2>/dev/null`
 - [ ] `discord-community.sh` curl failure produces a clear error message and exits 1
 - [ ] `discord-setup.sh` validates JSON on 2xx responses before returning body
-- [ ] `discord-community.sh` 429 handler clamps `retry_after` to max 60s
-- [ ] `discord-setup.sh` 429 handler clamps `retry_after` to max 60s
-- [ ] `x-community.sh` 429 handler clamps `retry_after` to max 60s
+- [ ] `discord-community.sh` 429 handler clamps `retry_after` to range [1, 60]
+- [ ] `discord-setup.sh` 429 handler clamps `retry_after` to range [1, 60]
+- [ ] `x-community.sh` 429 handler clamps `retry_after` to range [1, 60]
+- [ ] `retry_after` clamping handles float values (e.g., `1.234`) without bash arithmetic errors
 - [ ] `discord-community.sh` `cmd_messages` validates `channel_id` as numeric
 - [ ] `discord-setup.sh` `cmd_list_channels` validates `guild_id` parameter as numeric
 - [ ] `discord-setup.sh` `cmd_create_webhook` validates `channel_id` as numeric
@@ -148,9 +173,13 @@ Discord snowflake IDs are always numeric. Validating early prevents injection vi
 
 - Given `discord-community.sh` receives a non-JSON body on a non-2xx response, when the catch-all handler runs, then the error message contains "Unknown error" (not empty)
 - Given `discord-community.sh` with `DISCORD_BOT_TOKEN` set, when curl writes to stderr (e.g., TLS warning), then stderr output is suppressed
+- Given `discord-community.sh` with an unreachable API endpoint, when curl fails to connect, then it exits 1 with "Failed to connect" error
 - Given `discord-setup.sh` receives valid HTTP 200 with malformed body `{not json`, when the 2xx handler runs, then it exits 1 with "malformed JSON" error
-- Given any script receives a 429 with `retry_after: 3600`, when the retry handler runs, then `sleep` is called with 60 (clamped)
+- Given any script receives a 429 with `retry_after: 3600`, when the retry handler runs, then `sleep` is called with 60 (clamped to max)
 - Given any script receives a 429 with `retry_after: 3`, when the retry handler runs, then `sleep` is called with 3 (no clamping needed)
+- Given any script receives a 429 with `retry_after: 1.234` (float), when the retry handler runs, then no bash arithmetic error occurs and `sleep` is called with the float value
+- Given any script receives a 429 with `retry_after: 0`, when the retry handler runs, then `sleep` is called with 1 (clamped to floor)
+- Given any script receives a 429 with `retry_after: -5`, when the retry handler runs, then `sleep` is called with 1 (clamped to floor)
 - Given `cmd_messages` is called with `channel_id="abc"`, when validation runs, then it exits 1 with "must be numeric" error
 - Given `cmd_messages` is called with `channel_id="123456789"`, when validation runs, then it passes and proceeds to API call
 - Given `cmd_create_webhook` is called with `channel_id="../../admin"`, when validation runs, then it exits 1 (path traversal blocked by numeric check)
@@ -162,6 +191,8 @@ Discord snowflake IDs are always numeric. Validating early prevents injection vi
 - Reference patterns: Each fix already exists in at least one of the three scripts -- this is a cross-pollination task
 - Learning: `knowledge-base/learnings/2026-03-09-depth-limited-api-retry-pattern.md`
 - Learning: `knowledge-base/learnings/2026-03-09-external-api-scope-calibration.md`
+- Learning: `knowledge-base/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md` (float arithmetic trap in Fix 4)
+- Learning: `knowledge-base/learnings/2026-02-18-token-env-var-not-cli-arg.md` (curl stderr suppression rationale)
 
 ## References
 

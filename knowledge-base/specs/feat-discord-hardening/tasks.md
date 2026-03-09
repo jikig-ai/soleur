@@ -15,10 +15,12 @@
 - Append `|| echo "Unknown error"` after `2>/dev/null`
 - Reference: `discord-setup.sh:113` pattern
 
-### 1.3 Clamp retry_after to max 60s in 429 handler
+### 1.3 Clamp retry_after to range [1, 60] in 429 handler
 - File: `plugins/soleur/skills/community/scripts/discord-community.sh`
 - Function: `discord_request()` line 100
-- After extracting retry_after, add: `if (( retry_after > 60 )); then retry_after=60; fi`
+- CRITICAL: Discord returns `retry_after` as a float -- bash `(( ))` fails on non-integers
+- Use `printf '%.0f'` to truncate to integer for comparison, keep original float for `sleep`
+- Clamp: floor 1s (prevent `sleep 0` / negative), ceiling 60s (prevent DoS hang)
 
 ### 1.4 Add channel_id numeric validation to cmd_messages
 - File: `plugins/soleur/skills/community/scripts/discord-community.sh`
@@ -33,10 +35,11 @@
 - Add `jq .` validation before echoing body
 - Reference: `discord-community.sh:82-86` pattern
 
-### 2.2 Clamp retry_after to max 60s in 429 handler
+### 2.2 Clamp retry_after to range [1, 60] in 429 handler
 - File: `plugins/soleur/skills/community/scripts/discord-setup.sh`
 - Function: `discord_request()` lines 102-106
-- After retry_after extraction and null check, add max clamp
+- After retry_after extraction and null check, use `printf '%.0f'` for integer comparison
+- Same float-safe pattern as task 1.3
 
 ### 2.3 Add channel_id/guild_id numeric validation
 - File: `plugins/soleur/skills/community/scripts/discord-setup.sh`
@@ -45,10 +48,10 @@
 
 ## Phase 3: x-community.sh Fix
 
-### 3.1 Clamp retry_after to max 60s in 429 handler
+### 3.1 Clamp retry_after to range [1, 60] in 429 handler
 - File: `plugins/soleur/skills/community/scripts/x-community.sh`
 - Function: `x_request()` line 227
-- After extracting retry_after, add max clamp
+- Same float-safe `printf '%.0f'` pattern as tasks 1.3 and 2.2
 
 ## Phase 4: Verification
 
