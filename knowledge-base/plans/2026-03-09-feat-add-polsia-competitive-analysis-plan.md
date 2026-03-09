@@ -135,12 +135,12 @@ Confirm that `knowledge-base/overview/competitive-intelligence.md` contains a Po
 
 ## Acceptance Criteria
 
-- [ ] Polsia appears in the Tier 3 table of `knowledge-base/overview/business-validation.md` with correct competitor name, approach, and differentiation
-- [ ] `last_updated` frontmatter in `business-validation.md` is set to `2026-03-09`
+- [x] Polsia appears in the Tier 3 table of `knowledge-base/overview/business-validation.md` with correct competitor name, approach, and differentiation
+- [x] `last_updated` frontmatter in `business-validation.md` is set to `2026-03-09`
 - [ ] `/soleur:competitive-analysis` scan completes without errors
 - [ ] `knowledge-base/overview/competitive-intelligence.md` contains a Polsia entry in the Tier 3 overlap matrix with Overlap, Differentiation, and Convergence Risk columns populated
 - [ ] Cascade results section shows all 4 specialists (growth-strategist, pricing-strategist, deal-architect, programmatic-seo-specialist) completed
-- [ ] No existing competitor entries are modified or removed during the business-validation.md edit (the competitive-analysis scan may update existing entries in competitive-intelligence.md -- that is expected)
+- [x] No existing competitor entries are modified or removed during the business-validation.md edit (the competitive-analysis scan may update existing entries in competitive-intelligence.md -- that is expected)
 
 ## Test Scenarios
 
