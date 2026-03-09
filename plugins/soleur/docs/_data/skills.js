@@ -4,11 +4,12 @@ import yaml from "yaml";
 
 // Category mapping -- update here when skills are added/reorganized
 // Source of truth: plugins/soleur/docs/pages/skills.html
-// Last verified: 2026-03-06 (4 categories, 53 skills)
+// Last verified: 2026-03-09 (4 categories, 57 skills)
 const SKILL_CATEGORIES = {
   // Content & Release (16)
   "brainstorm-techniques": "Review & Planning",
   changelog: "Content & Release",
+  community: "Content & Release",
   compound: "Content & Release",
   "compound-capture": "Content & Release",
   "content-writer": "Content & Release",

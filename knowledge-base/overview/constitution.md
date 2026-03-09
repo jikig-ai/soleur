@@ -152,6 +152,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Start with manual workflows; add automation only when users explicitly request it
 - Commands should check for knowledge-base/ existence and fall back gracefully when not present
 - Run `/soleur:plan_review` before implementing plans with new directories, external APIs, or complex algorithms
+- Before designing around an external API, verify its current pricing tier, rate limits, and capabilities via live documentation -- never rely on model training data for API commercial terms; pricing changes outpace training cycles
 - Parallel subagent fan-out requires explicit user consent, bounded agent count (max 5), and lead-coordinated commits (subagents do not commit independently)
 - Multi-tiered parallel execution model: Agent Teams (persistent teammates with peer-to-peer messaging) > Subagent Fan-Out (Task tool with max 5) > Sequential -- select the highest available tier that the task warrants
 - Lead-coordinated commits in all parallel execution modes -- teammates and subagents propose changes, only the lead agent commits

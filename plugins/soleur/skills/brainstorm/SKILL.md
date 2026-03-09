@@ -109,6 +109,7 @@ Use the **AskUserQuestion tool** to ask questions **one at a time**.
 - Start broad (purpose, users) then narrow (constraints, edge cases)
 - Validate assumptions explicitly
 - Ask about success criteria
+- If the feature involves an external API, verify its current pricing/tier capabilities via live docs before assuming scope -- model training data is stale for API commercial terms
 
 **Exit condition:** Continue until the idea is clear OR user says "proceed"
 

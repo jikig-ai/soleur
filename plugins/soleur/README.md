@@ -39,9 +39,9 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 
 | Component | Count |
 |-----------|-------|
-| Agents | 61 |
+| Agents | 62 |
 | Commands | 3 |
-| Skills | 54 |
+| Skills | 57 |
 | MCP Servers | 3 |
 
 ## Agents
@@ -181,7 +181,7 @@ Agents are organized by domain, then by function.
 | Agent | Description |
 |-------|-------------|
 | `cco` | Support domain leader -- orchestrates support strategy and delegates to specialist agents |
-| `community-manager` | Analyze community engagement, generate weekly digests, and report health metrics across Discord and GitHub |
+| `community-manager` | Analyze community engagement, generate digests, and assess health metrics across Discord, GitHub, and X/Twitter |
 | `ticket-triage` | Classify and route GitHub issues by severity (P1/P2/P3) and domain |
 
 ## Commands
@@ -203,6 +203,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `brainstorm-techniques` | Explore intent, approaches, and design decisions |
 | `changelog` | Create engaging changelogs for recent merges |
 | `compound` | Document solved problems to compound team knowledge |
+| `community` | Manage community presence across Discord, GitHub, and X/Twitter |
 | `compound-capture` | Capture solved problems as categorized documentation |
 | `deploy-docs` | Validate and prepare documentation for deployment |
 | `docs-site` | Scaffold Eleventy documentation sites with data-driven catalogs |
