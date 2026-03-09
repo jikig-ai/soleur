@@ -27,30 +27,30 @@
 ## Phase 2: Community SKILL.md + Agent Update
 
 ### 2.1 Create SKILL.md
-- [ ] Write frontmatter (name: community, third-person description)
-- [ ] Implement platform detection (check all required env vars per platform)
-- [ ] Implement `digest` sub-command (multi-platform data collection, unified digest file)
-- [ ] Implement `health` sub-command (cross-platform metrics display)
-- [ ] Implement `platforms` sub-command (list, validate, report status)
-- [ ] Add `--headless` bypass for all prompts
-- [ ] Add `$ARGUMENTS` passthrough for programmatic callers
+- [x] Write frontmatter (name: community, third-person description)
+- [x] Implement platform detection (check all required env vars per platform)
+- [x] Implement `digest` sub-command (multi-platform data collection, unified digest file)
+- [x] Implement `health` sub-command (cross-platform metrics display)
+- [x] Implement `platforms` sub-command (list, validate, report status)
+- [x] Add `--headless` bypass for all prompts
+- [x] Add `$ARGUMENTS` passthrough for programmatic callers
 
 ### 2.2 Register skill
-- [ ] Add `community` to `SKILL_CATEGORIES` in `docs/_data/skills.js`
+- [x] Add `community` to `SKILL_CATEGORIES` in `docs/_data/skills.js`
 
 ### 2.3 Update community-manager.md
-- [ ] Update description to mention X alongside Discord and GitHub
-- [ ] Add social-distribute disambiguation sentence
-- [ ] Add X env var requirements to prerequisites
-- [ ] List x-community.sh and x-setup.sh in scripts section
-- [ ] Add X metrics section to digest capability (additive -- preserve existing headings)
-- [ ] Include X metrics in health report
-- [ ] Analyze X activity in content suggestions
-- [ ] Note X channel notes from brand guide for tone
+- [x] Update description to mention X alongside Discord and GitHub
+- [x] Add social-distribute disambiguation sentence
+- [x] Add X env var requirements to prerequisites
+- [x] List x-community.sh and x-setup.sh in scripts section
+- [x] Add X metrics section to digest capability (additive -- preserve existing headings)
+- [x] Include X metrics in health report
+- [x] Analyze X activity in content suggestions
+- [x] Note X channel notes from brand guide for tone
 
 ### 2.4 Update supporting files
-- [ ] Update CCO delegation table in cco.md (unconditional -- capabilities expanded)
-- [ ] Run agent description token budget check (under 2500 words)
+- [x] Update CCO delegation table in cco.md (unconditional -- capabilities expanded)
+- [x] Run agent description token budget check (under 2500 words)
 
 ### 2.5 Verification
 - [ ] Test X credentials and API access with real account

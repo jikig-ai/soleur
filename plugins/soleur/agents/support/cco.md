@@ -34,7 +34,7 @@ Prioritize support actions and dispatch specialist agents.
 | Agent | When to delegate |
 |-------|-----------------|
 | ticket-triage | Classify and route open GitHub issues by severity and domain |
-| community-manager | Generate community digests, assess community health, suggest content |
+| community-manager | Generate community digests, assess community health across Discord/GitHub/X, suggest content |
 
 When delegating to multiple independent agents, use a single message with multiple Task tool calls.
 
