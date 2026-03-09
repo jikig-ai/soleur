@@ -47,31 +47,12 @@ Test prompt
 EOF
 }
 
-create_transcript() {
-  local dir="$1"
-  local text_content="$2"
-
-  local transcript_file="$dir/transcript.jsonl"
-  # Create a valid JSONL assistant message
-  echo "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"$text_content\"}]}}" > "$transcript_file"
-  echo "$transcript_file"
-}
-
-create_empty_transcript() {
-  local dir="$1"
-
-  local transcript_file="$dir/transcript.jsonl"
-  # Tool-use only response (no text blocks)
-  echo "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"test\",\"name\":\"Read\",\"input\":{\"file_path\":\"/tmp/test\"}}]}}" > "$transcript_file"
-  echo "$transcript_file"
-}
-
 run_hook() {
   local dir="$1"
-  local transcript_path="$2"
+  local message="${2:-}"
 
   local hook_input
-  hook_input=$(jq -n --arg tp "$transcript_path" '{"transcript_path": $tp}')
+  hook_input=$(jq -n --arg msg "$message" '{"last_assistant_message": $msg}')
 
   cd "$dir"
   echo "$hook_input" | bash "$HOOK" 2>/dev/null || true
@@ -79,10 +60,10 @@ run_hook() {
 
 run_hook_stderr() {
   local dir="$1"
-  local transcript_path="$2"
+  local message="${2:-}"
 
   local hook_input
-  hook_input=$(jq -n --arg tp "$transcript_path" '{"transcript_path": $tp}')
+  hook_input=$(jq -n --arg msg "$message" '{"last_assistant_message": $msg}')
 
   cd "$dir"
   echo "$hook_input" | bash "$HOOK" 2>&1 1>/dev/null || true
@@ -155,8 +136,7 @@ echo ""
 echo "Test 1: 3 consecutive empty responses triggers termination"
 TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 5 0 "null" 2 3
-TRANSCRIPT=$(create_transcript "$TEST_DIR" "")
-run_hook "$TEST_DIR" "$TRANSCRIPT"
+run_hook "$TEST_DIR" ""
 assert_file_not_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file removed after stuck detection"
 cleanup_test "$TEST_DIR"
 echo ""
@@ -165,8 +145,7 @@ echo ""
 echo "Test 2: Warning message printed to stderr on stuck termination"
 TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 5 0 "null" 2 3
-TRANSCRIPT=$(create_transcript "$TEST_DIR" "")
-STDERR_OUTPUT=$(run_hook_stderr "$TEST_DIR" "$TRANSCRIPT")
+STDERR_OUTPUT=$(run_hook_stderr "$TEST_DIR" "")
 assert_contains "$STDERR_OUTPUT" "terminated after" "stderr contains termination warning"
 assert_contains "$STDERR_OUTPUT" "consecutive empty responses" "stderr mentions empty responses"
 cleanup_test "$TEST_DIR"
@@ -176,8 +155,7 @@ echo ""
 echo "Test 3: Substantive response resets stuck_count to 0"
 TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 2 0 "null" 2 3
-TRANSCRIPT=$(create_transcript "$TEST_DIR" "This is a substantive response with plenty of content to exceed the threshold.")
-run_hook "$TEST_DIR" "$TRANSCRIPT"
+run_hook "$TEST_DIR" "This is a substantive response with plenty of content to exceed the threshold."
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists (loop continues)"
 STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
 assert_eq "0" "$STUCK_COUNT" "stuck_count reset to 0"
@@ -188,8 +166,7 @@ echo ""
 echo "Test 4: stuck_threshold=0 disables stuck detection"
 TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 5 0 "null" 10 0
-TRANSCRIPT=$(create_transcript "$TEST_DIR" "")
-run_hook "$TEST_DIR" "$TRANSCRIPT"
+run_hook "$TEST_DIR" ""
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists (detection disabled)"
 cleanup_test "$TEST_DIR"
 echo ""
@@ -198,9 +175,7 @@ echo ""
 echo "Test 5: Exactly 20 characters (after stripping) is substantive"
 TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 1 0 "null" 2 3
-# "12345678901234567890" is exactly 20 chars
-TRANSCRIPT=$(create_transcript "$TEST_DIR" "12345678901234567890")
-run_hook "$TEST_DIR" "$TRANSCRIPT"
+run_hook "$TEST_DIR" "12345678901234567890"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists"
 STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
 assert_eq "0" "$STUCK_COUNT" "stuck_count reset (20 chars = substantive)"
@@ -211,9 +186,7 @@ echo ""
 echo "Test 6: 19 characters (after stripping) is minimal"
 TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 1 0 "null" 0 3
-# "1234567890123456789" is 19 chars
-TRANSCRIPT=$(create_transcript "$TEST_DIR" "1234567890123456789")
-run_hook "$TEST_DIR" "$TRANSCRIPT"
+run_hook "$TEST_DIR" "1234567890123456789"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists"
 STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
 assert_eq "1" "$STUCK_COUNT" "stuck_count incremented to 1"
@@ -235,21 +208,19 @@ started_at: "2026-03-05T00:00:00Z"
 
 Test prompt
 EOF
-TRANSCRIPT=$(create_transcript "$TEST_DIR" "Substantive response with enough content here to pass threshold.")
-run_hook "$TEST_DIR" "$TRANSCRIPT"
+run_hook "$TEST_DIR" "Substantive response with enough content here to pass threshold."
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists (no crash on missing fields)"
 cleanup_test "$TEST_DIR"
 echo ""
 
-# Test 8: Tool-use only response (empty LAST_OUTPUT) counts as minimal
-echo "Test 8: Tool-use only response counts as minimal"
+# Test 8: Empty message counts as minimal (simulates tool-use-only response)
+echo "Test 8: Empty message counts as minimal"
 TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 1 0 "null" 0 3
-TRANSCRIPT=$(create_empty_transcript "$TEST_DIR")
-run_hook "$TEST_DIR" "$TRANSCRIPT"
+run_hook "$TEST_DIR" ""
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists (only 1 empty, threshold is 3)"
 STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
-assert_eq "1" "$STUCK_COUNT" "stuck_count incremented for tool-use only response"
+assert_eq "1" "$STUCK_COUNT" "stuck_count incremented for empty message"
 cleanup_test "$TEST_DIR"
 echo ""
 
@@ -257,8 +228,7 @@ echo ""
 echo "Test 9: Completion promise check fires before stuck detection"
 TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 5 0 "\"DONE\"" 2 3
-TRANSCRIPT=$(create_transcript "$TEST_DIR" "<promise>DONE</promise>")
-run_hook "$TEST_DIR" "$TRANSCRIPT"
+run_hook "$TEST_DIR" "<promise>DONE</promise>"
 assert_file_not_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file removed (promise matched)"
 cleanup_test "$TEST_DIR"
 echo ""
@@ -303,8 +273,7 @@ started_at: "2026-03-05T00:00:00Z"
 
 Test prompt
 EOF
-TRANSCRIPT=$(create_transcript "$TEST_DIR" "Substantive response with enough content here to pass threshold.")
-run_hook "$TEST_DIR" "$TRANSCRIPT"
+run_hook "$TEST_DIR" "Substantive response with enough content here to pass threshold."
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists (no crash on corrupted field)"
 STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
 assert_eq "0" "$STUCK_COUNT" "corrupted stuck_count reset to 0"
@@ -329,8 +298,7 @@ Build a REST API with proper error handling.
 ---
 Use standard HTTP status codes.
 EOF
-TRANSCRIPT=$(create_transcript "$TEST_DIR" "This is a substantive response with plenty of content to exceed the threshold.")
-run_hook "$TEST_DIR" "$TRANSCRIPT"
+run_hook "$TEST_DIR" "This is a substantive response with plenty of content to exceed the threshold."
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists"
 ITERATION=$(grep '^iteration:' "$TEST_DIR/.claude/ralph-loop.local.md" | head -1 | sed 's/iteration: *//')
 assert_eq "2" "$ITERATION" "iteration updated to 2"
@@ -362,8 +330,7 @@ started_at: "2026-03-05T00:00:00Z"
 
 Check iteration: current status of deployment.
 EOF
-TRANSCRIPT=$(create_transcript "$TEST_DIR" "This is a substantive response with plenty of content to exceed the threshold.")
-run_hook "$TEST_DIR" "$TRANSCRIPT"
+run_hook "$TEST_DIR" "This is a substantive response with plenty of content to exceed the threshold."
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists"
 ITERATION=$(grep '^iteration:' "$TEST_DIR/.claude/ralph-loop.local.md" | head -1 | sed 's/iteration: *//')
 assert_eq "2" "$ITERATION" "frontmatter iteration updated to 2"
@@ -388,13 +355,41 @@ started_at: "2026-03-05T00:00:00Z"
 
 Monitor stuck_count: should be zero.
 EOF
-TRANSCRIPT=$(create_transcript "$TEST_DIR" "This is a substantive response with plenty of content to exceed the threshold.")
-run_hook "$TEST_DIR" "$TRANSCRIPT"
+run_hook "$TEST_DIR" "This is a substantive response with plenty of content to exceed the threshold."
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists"
 STUCK_COUNT_FM=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | head -1 | sed 's/stuck_count: *//')
 assert_eq "0" "$STUCK_COUNT_FM" "frontmatter stuck_count reset to 0"
 PROMPT_BODY=$(awk '/^---$/{i++; next} i>=2' "$TEST_DIR/.claude/ralph-loop.local.md")
 assert_contains "$PROMPT_BODY" "stuck_count: should be zero" "prompt stuck_count: text preserved"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 16: Hook exits 0 from a non-root CWD when state file does not exist
+echo "Test 16: Hook exits 0 from subdirectory when no state file"
+TEST_DIR=$(setup_test)
+# Initialize a git repo so git rev-parse --show-toplevel works
+git -C "$TEST_DIR" init -q
+mkdir -p "$TEST_DIR/sub/deep"
+# No state file created -- hook should exit 0 cleanly
+cd "$TEST_DIR/sub/deep"
+HOOK_OUTPUT=$(echo '{}' | bash "$HOOK" 2>&1) || true
+EXIT_CODE=$?
+assert_eq "0" "$EXIT_CODE" "hook exits 0 when no state file from subdirectory"
+assert_eq "" "$HOOK_OUTPUT" "no output when no state file"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 17: Hook finds state file at project root when CWD is a subdirectory
+echo "Test 17: Hook finds state file from subdirectory via git rev-parse"
+TEST_DIR=$(setup_test)
+git -C "$TEST_DIR" init -q
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+mkdir -p "$TEST_DIR/sub/deep"
+cd "$TEST_DIR/sub/deep"
+run_hook "$TEST_DIR/sub/deep" "This is a substantive response with plenty of content to exceed the threshold."
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file found and updated from subdirectory"
+ITERATION=$(grep '^iteration:' "$TEST_DIR/.claude/ralph-loop.local.md" | head -1 | sed 's/iteration: *//')
+assert_eq "2" "$ITERATION" "iteration updated from subdirectory"
 cleanup_test "$TEST_DIR"
 echo ""
 

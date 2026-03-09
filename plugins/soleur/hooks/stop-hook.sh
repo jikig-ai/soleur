@@ -9,16 +9,18 @@
 
 set -euo pipefail
 
-# Read hook input from stdin (advanced stop hook API)
-HOOK_INPUT=$(cat)
+# Resolve project root (worktree-safe: CWD may be .worktrees/feat-* instead of repo root)
+PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || PROJECT_ROOT="."
+RALPH_STATE_FILE="${PROJECT_ROOT}/.claude/ralph-loop.local.md"
 
-# Check if ralph-loop is active
-RALPH_STATE_FILE=".claude/ralph-loop.local.md"
-
+# Check if ralph-loop is active BEFORE reading stdin
 if [[ ! -f "$RALPH_STATE_FILE" ]]; then
   # No active loop - allow exit
   exit 0
 fi
+
+# Read hook input from stdin (advanced stop hook API)
+HOOK_INPUT=$(cat)
 
 # Parse markdown frontmatter (YAML between first and second --- only)
 FRONTMATTER=$(awk '/^---$/{c++; next} c==1' "$RALPH_STATE_FILE")
@@ -62,31 +64,8 @@ if [[ $MAX_ITERATIONS -gt 0 ]] && [[ $ITERATION -ge $MAX_ITERATIONS ]]; then
   exit 0
 fi
 
-# Get transcript path from hook input
-TRANSCRIPT_PATH=$(echo "$HOOK_INPUT" | jq -r '.transcript_path')
-
-if [[ ! -f "$TRANSCRIPT_PATH" ]]; then
-  echo "Warning: Ralph loop transcript not found ($TRANSCRIPT_PATH). Stopping." >&2
-  rm "$RALPH_STATE_FILE"
-  exit 0
-fi
-
-# Read last assistant message from transcript (JSONL format)
-if ! grep -q '"role":"assistant"' "$TRANSCRIPT_PATH"; then
-  echo "Warning: No assistant messages in transcript. Stopping." >&2
-  rm "$RALPH_STATE_FILE"
-  exit 0
-fi
-
-LAST_LINE=$(grep '"role":"assistant"' "$TRANSCRIPT_PATH" | tail -1)
-
-# Parse JSON to extract text content
-LAST_OUTPUT=$(echo "$LAST_LINE" | jq -r '
-  .message.content |
-  map(select(.type == "text")) |
-  map(.text) |
-  join("\n")
-' 2>/dev/null) || true
+# Extract last assistant message directly from hook input (stop hook API)
+LAST_OUTPUT=$(echo "$HOOK_INPUT" | jq -r '.last_assistant_message // ""')
 
 # Empty LAST_OUTPUT is valid for tool-use-only responses -- do not terminate
 # The stuck detection counter below handles repeated empty outputs
