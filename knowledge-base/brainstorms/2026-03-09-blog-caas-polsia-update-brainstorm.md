@@ -28,8 +28,12 @@ The article is Soleur's category-defining piece. It currently positions Soleur a
 
 4. **Update the comparison table** -- Light touch: note that CaaS itself has philosophical variants (autonomous vs. human-in-the-loop) in the Knowledge column or as a footnote after the table.
 
+## Resolved Questions
+
+- **FAQ "first" claim:** Use "a pioneering CaaS platform" -- softer chronological claim that implies early mover without asserting exclusivity.
+- **New FAQ entry:** No. The philosophical split will be covered in the article body. Keep existing FAQs lean.
+- **Prediction quotes:** Still current (Amodei, Altman, Krieger quotes verified during citation fix PR #461). No update needed.
+
 ## Open Questions
 
-- Should the FAQ answer about "first CaaS platform" be reworded to "pioneering" or "early" or simply describe Soleur's approach without chronological claims?
-- Does the "Future of CaaS" section need its prediction quotes updated, or are the Amodei/Altman/Krieger quotes still current?
-- Should we add a new FAQ entry like "Are there different types of CaaS?" to introduce the philosophical split in Q&A format?
+- Exact wording for the line 13 intro paragraph "first" claim (may differ from FAQ approach)
