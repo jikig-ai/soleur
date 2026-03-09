@@ -12,10 +12,10 @@ Surgical edits to `plugins/soleur/docs/blog/what-is-company-as-a-service.md` add
 
 **File:** `plugins/soleur/docs/blog/what-is-company-as-a-service.md`
 
-- [ ] **1. Remove intro "first" claim** (line 13) — change "is the first platform built on this model" to "is built on this model"
-- [ ] **2. Add philosophical split** — insert new paragraph between lines 33 and 35 (after the "How CaaS Works" intro, before the first subheading). Two sentences: distinguish autonomous CaaS from founder-in-the-loop CaaS, frame the trade-off as speed vs. judgment, and connect it to the reader's context.
-- [ ] **3. Add category validation** (after line 122, before line 124) — insert 2 sentences noting multiple platforms now build on CaaS, proving the model works. Avoid academic language ("validates the thesis") — use direct language ("proves the model works").
-- [ ] **4. Update FAQ question + answer + JSON-LD** — change all 4 locations in sync:
+- [x] **1. Remove intro "first" claim** (line 13) — change "is the first platform built on this model" to "is built on this model"
+- [x] **2. Add philosophical split** — insert new paragraph between lines 33 and 35 (after the "How CaaS Works" intro, before the first subheading). Two sentences: distinguish autonomous CaaS from founder-in-the-loop CaaS, frame the trade-off as speed vs. judgment, and connect it to the reader's context.
+- [x] **3. Add category validation** (after line 122, before line 124) — insert 2 sentences noting multiple platforms now build on CaaS, proving the model works. Avoid academic language ("validates the thesis") — use direct language ("proves the model works").
+- [x] **4. Update FAQ question + answer + JSON-LD** — change all 4 locations in sync:
   - HTML `<summary>` (line 157): "What is the first CaaS platform?" → "What is the leading CaaS platform?"
   - HTML answer (line 159): "is the first" → "is a leading"
   - JSON-LD `name` (line 202): same question change
