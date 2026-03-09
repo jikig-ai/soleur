@@ -8,6 +8,9 @@
 
 set -euo pipefail
 
+# Resolve project root (worktree-safe: CWD may be .worktrees/feat-* instead of repo root)
+PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || PROJECT_ROOT="."
+
 # Parse arguments
 PROMPT_PARTS=()
 MAX_ITERATIONS=0
@@ -117,7 +120,7 @@ if [[ -z "$PROMPT" ]]; then
 fi
 
 # Create state file for stop hook (markdown with YAML frontmatter)
-mkdir -p .claude
+mkdir -p "${PROJECT_ROOT}/.claude"
 
 # Quote completion promise for YAML if it contains special chars or is not null
 if [[ -n "$COMPLETION_PROMISE" ]] && [[ "$COMPLETION_PROMISE" != "null" ]]; then
@@ -126,7 +129,7 @@ else
   COMPLETION_PROMISE_YAML="null"
 fi
 
-cat > .claude/ralph-loop.local.md <<EOF
+cat > "${PROJECT_ROOT}/.claude/ralph-loop.local.md" <<EOF
 ---
 active: true
 iteration: 1
