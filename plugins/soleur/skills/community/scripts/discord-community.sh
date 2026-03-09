@@ -59,12 +59,23 @@ validate_env() {
 
 discord_request() {
   local endpoint="$1"
+  local depth="${2:-0}"
+
+  if (( depth >= 3 )); then
+    echo "Error: Discord API rate limit exceeded after 3 retries." >&2
+    exit 2
+  fi
+
   local response http_code body
 
-  response=$(curl -s -w "\n%{http_code}" \
+  # Suppress stderr to prevent token leakage in curl debug output
+  if ! response=$(curl -s -w "\n%{http_code}" \
     -H "Authorization: Bot ${DISCORD_BOT_TOKEN}" \
     -H "Content-Type: application/json" \
-    "${DISCORD_API}${endpoint}")
+    "${DISCORD_API}${endpoint}" 2>/dev/null); then
+    echo "Error: Failed to connect to Discord API (endpoint: ${endpoint})." >&2
+    exit 1
+  fi
 
   http_code=$(echo "$response" | tail -1)
   body=$(echo "$response" | sed '$d')
@@ -90,14 +101,24 @@ discord_request() {
       ;;
     429)
       local retry_after
-      retry_after=$(echo "$body" | jq -r '.retry_after // 5' 2>/dev/null)
-      echo "Rate limited. Retrying after ${retry_after}s..." >&2
+      retry_after=$(echo "$body" | jq -r '.retry_after // 5' 2>/dev/null || echo "5")
+      # Clamp retry_after to sane range [1, 60]
+      # Use printf to truncate float to integer for arithmetic comparison
+      # (sleep accepts floats natively, but bash (( )) does not)
+      local retry_int
+      retry_int=$(printf '%.0f' "$retry_after" 2>/dev/null || echo "5")
+      if (( retry_int > 60 )); then
+        retry_after=60
+      elif (( retry_int < 1 )); then
+        retry_after=1
+      fi
+      echo "Rate limited. Retrying after ${retry_after}s (attempt $((depth + 1))/3)..." >&2
       sleep "$retry_after"
-      discord_request "$endpoint"
+      discord_request "$endpoint" "$((depth + 1))"
       ;;
     *)
       local message
-      message=$(echo "$body" | jq -r '.message // "Unknown error"' 2>/dev/null)
+      message=$(echo "$body" | jq -r '.message // "Unknown error"' 2>/dev/null || echo "Unknown error")
       echo "Error: Discord API returned HTTP ${http_code}: ${message}" >&2
       exit 1
       ;;
@@ -106,8 +127,18 @@ discord_request() {
 
 # --- Commands ---
 
+validate_snowflake_id() {
+  local id="$1"
+  local label="$2"
+  if [[ ! "$id" =~ ^[0-9]+$ ]]; then
+    echo "Error: ${label} must be numeric. Got: ${id}" >&2
+    exit 1
+  fi
+}
+
 cmd_messages() {
   local channel_id="${1:?Usage: discord-community.sh messages <channel_id> [limit] [after_id]}"
+  validate_snowflake_id "$channel_id" "channel_id"
   local limit="${2:-100}"
   local after_id="${3:-}"
 

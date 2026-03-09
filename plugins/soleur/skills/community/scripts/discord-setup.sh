@@ -55,6 +55,13 @@ discord_request() {
   local endpoint="$1"
   local method="${2:-GET}"
   local data="${3:-}"
+  local depth="${4:-0}"
+
+  if (( depth >= 3 )); then
+    echo "Error: Discord API rate limit exceeded after 3 retries." >&2
+    exit 2
+  fi
+
   local response http_code body
   local curl_args=(
     -s -w "\n%{http_code}"
@@ -79,6 +86,11 @@ discord_request() {
 
   case "$http_code" in
     2[0-9][0-9])
+      # Validate JSON
+      if ! echo "$body" | jq . >/dev/null 2>&1; then
+        echo "Error: Discord API returned malformed JSON for ${endpoint}" >&2
+        exit 1
+      fi
       echo "$body"
       ;;
     401)
@@ -93,13 +105,20 @@ discord_request() {
       ;;
     429)
       local retry_after
-      retry_after=$(echo "$body" | jq -r '.retry_after // 5' 2>/dev/null)
-      if [[ -z "$retry_after" ]] || [[ "$retry_after" == "null" ]]; then
-        retry_after=5
+      retry_after=$(echo "$body" | jq -r '.retry_after // 5' 2>/dev/null || echo "5")
+      # Clamp retry_after to sane range [1, 60]
+      # Use printf to truncate float to integer for arithmetic comparison
+      # (sleep accepts floats natively, but bash (( )) does not)
+      local retry_int
+      retry_int=$(printf '%.0f' "$retry_after" 2>/dev/null || echo "5")
+      if (( retry_int > 60 )); then
+        retry_after=60
+      elif (( retry_int < 1 )); then
+        retry_after=1
       fi
-      echo "Rate limited. Retrying after ${retry_after}s..." >&2
+      echo "Rate limited. Retrying after ${retry_after}s (attempt $((depth + 1))/3)..." >&2
       sleep "$retry_after"
-      discord_request "$endpoint" "$method" "$data"
+      discord_request "$endpoint" "$method" "$data" "$((depth + 1))"
       ;;
     *)
       local message
@@ -111,6 +130,15 @@ discord_request() {
 }
 
 # --- Commands ---
+
+validate_snowflake_id() {
+  local id="$1"
+  local label="$2"
+  if [[ ! "$id" =~ ^[0-9]+$ ]]; then
+    echo "Error: ${label} must be numeric. Got: ${id}" >&2
+    exit 1
+  fi
+}
 
 cmd_validate_token() {
   require_token
@@ -145,6 +173,7 @@ cmd_discover_guilds() {
 
 cmd_list_channels() {
   local guild_id="${1:?Usage: discord-setup.sh list-channels <guild_id>}"
+  validate_snowflake_id "$guild_id" "guild_id"
   require_token
 
   discord_request "/guilds/${guild_id}/channels" | \
@@ -153,6 +182,7 @@ cmd_list_channels() {
 
 cmd_create_webhook() {
   local channel_id="${1:?Usage: discord-setup.sh create-webhook <channel_id>}"
+  validate_snowflake_id "$channel_id" "channel_id"
   require_token
 
   local result
@@ -174,6 +204,7 @@ cmd_create_webhook() {
 cmd_write_env() {
   local guild_id="${1:?Usage: discord-setup.sh write-env <guild_id> <webhook_url>}"
   local webhook_url="${2:?Usage: discord-setup.sh write-env <guild_id> <webhook_url>}"
+  validate_snowflake_id "$guild_id" "guild_id"
   require_token
 
   local repo_root
