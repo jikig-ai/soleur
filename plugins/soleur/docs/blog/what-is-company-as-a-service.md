@@ -10,7 +10,7 @@ tags:
 
 Company-as-a-Service (CaaS) is a new category of platform where a single AI organization runs every department of a business -- engineering, marketing, legal, finance, operations, product, sales, and support. Instead of hiring specialists or stitching together dozens of SaaS tools, a founder installs one platform and gets a full AI organization that plans, builds, reviews, and compounds institutional knowledge across every business function.
 
-[Soleur]({{ site.url }}) is the first platform built on this model. Soleur deploys {{ stats.agents }} AI agents across {{ stats.departments }} departments, all sharing a compounding knowledge base that makes every project faster and more informed than the last.
+[Soleur]({{ site.url }}) is built on this model. Soleur deploys {{ stats.agents }} AI agents across {{ stats.departments }} departments, all sharing a compounding knowledge base that makes every project faster and more informed than the last.
 
 This article defines what company-as-a-service means, how it differs from existing models, the technology that makes it possible, and why 2026 is the year the category emerges.
 
@@ -31,6 +31,8 @@ Company-as-a-service exists to close that gap. It takes the same principle that 
 ## How Company-as-a-Service Works
 
 A CaaS platform operates on three architectural pillars: a multi-domain agent organization, a compounding knowledge base, and workflow orchestration. Each pillar addresses a different failure mode of the current stack. Agents solve the expertise gap. The knowledge base solves the memory gap. Workflow orchestration solves the coordination gap.
+
+Not all CaaS platforms approach this the same way. Some run fully autonomously -- the AI decides priorities, executes tasks, and reports results. Others keep the founder as decision-maker while the AI handles execution. The trade-off is speed versus judgment, and the right choice depends on how much domain context the founder brings.
 
 ### Multi-Domain Agent Organization
 
@@ -121,6 +123,8 @@ Mike Krieger, co-founder of Instagram, [told Inc.com](https://www.inc.com/ben-sh
 
 The precedent already exists. WhatsApp reached 55 employees and a $19 billion acquisition -- roughly $345 million per employee. Instagram had 13 employees when it was acquired for $1 billion. Each generation of infrastructure reduces the minimum viable team size. Company-as-a-service is the infrastructure that pushes that number toward one.
 
+The category is already taking shape. Multiple platforms are building on the company-as-a-service model, each with different assumptions about how much autonomy the AI should have. The variety of approaches proves the model -- this is not one company's marketing term but an emerging infrastructure category.
+
 The question is not whether this future arrives. It is who defines the category. The platform that establishes what "company-as-a-service" means now will set the standard for the next decade of solo-founder infrastructure.
 
 ## Frequently Asked Questions
@@ -154,9 +158,9 @@ Not exactly. AI agents are the building blocks. CaaS is the architecture. Runnin
 </details>
 
 <details>
-<summary>What is the first CaaS platform?</summary>
+<summary>What is the leading CaaS platform?</summary>
 
-[Soleur]({{ site.url }}pages/getting-started.html) is the first company-as-a-service platform. It deploys {{ stats.agents }} AI agents across {{ stats.departments }} business departments, with a compounding knowledge base that makes every project faster and more informed than the last.
+[Soleur]({{ site.url }}pages/getting-started.html) is a leading company-as-a-service platform. It deploys {{ stats.agents }} AI agents across {{ stats.departments }} business departments, with a compounding knowledge base that makes every project faster and more informed than the last.
 
 </details>
 
@@ -199,10 +203,10 @@ Not exactly. AI agents are the building blocks. CaaS is the architecture. Runnin
     },
     {
       "@type": "Question",
-      "name": "What is the first CaaS platform?",
+      "name": "What is the leading CaaS platform?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Soleur is the first company-as-a-service platform. It deploys AI agents across every business department, with a compounding knowledge base that makes every project faster than the last."
+        "text": "Soleur is a leading company-as-a-service platform. It deploys AI agents across every business department, with a compounding knowledge base that makes every project faster than the last."
       }
     }
   ]
