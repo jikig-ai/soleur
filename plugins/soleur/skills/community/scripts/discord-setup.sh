@@ -55,6 +55,13 @@ discord_request() {
   local endpoint="$1"
   local method="${2:-GET}"
   local data="${3:-}"
+  local depth="${4:-0}"
+
+  if (( depth >= 3 )); then
+    echo "Error: Discord API rate limit exceeded after 3 retries." >&2
+    exit 2
+  fi
+
   local response http_code body
   local curl_args=(
     -s -w "\n%{http_code}"
@@ -97,9 +104,9 @@ discord_request() {
       if [[ -z "$retry_after" ]] || [[ "$retry_after" == "null" ]]; then
         retry_after=5
       fi
-      echo "Rate limited. Retrying after ${retry_after}s..." >&2
+      echo "Rate limited. Retrying after ${retry_after}s (attempt $((depth + 1))/3)..." >&2
       sleep "$retry_after"
-      discord_request "$endpoint" "$method" "$data"
+      discord_request "$endpoint" "$method" "$data" "$((depth + 1))"
       ;;
     *)
       local message

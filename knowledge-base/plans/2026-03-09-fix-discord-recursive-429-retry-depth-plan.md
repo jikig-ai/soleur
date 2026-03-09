@@ -54,16 +54,16 @@ All callers pass 1-3 args today, so adding `depth` as arg 4 with a default is ba
 
 ## Acceptance Criteria
 
-- [ ] `discord-community.sh` `discord_request` accepts a `depth` parameter with default 0
-- [ ] `discord-community.sh` exits with code 2 when `depth >= 3`
-- [ ] `discord-community.sh` 429 handler passes incremented depth to recursive call
-- [ ] `discord-community.sh` 429 log message includes attempt count (e.g., "attempt 1/3")
-- [ ] `discord-setup.sh` `discord_request` accepts a `depth` parameter with default 0
-- [ ] `discord-setup.sh` exits with code 2 when `depth >= 3`
-- [ ] `discord-setup.sh` 429 handler passes incremented depth to recursive call
-- [ ] `discord-setup.sh` 429 log message includes attempt count
-- [ ] Exit code 2 (not 1) on exhaustion, matching `x_request` convention
-- [ ] Existing callers continue working without modification (backward-compatible)
+- [x] `discord-community.sh` `discord_request` accepts a `depth` parameter with default 0
+- [x] `discord-community.sh` exits with code 2 when `depth >= 3`
+- [x] `discord-community.sh` 429 handler passes incremented depth to recursive call
+- [x] `discord-community.sh` 429 log message includes attempt count (e.g., "attempt 1/3")
+- [x] `discord-setup.sh` `discord_request` accepts a `depth` parameter with default 0
+- [x] `discord-setup.sh` exits with code 2 when `depth >= 3`
+- [x] `discord-setup.sh` 429 handler passes incremented depth to recursive call
+- [x] `discord-setup.sh` 429 log message includes attempt count
+- [x] Exit code 2 (not 1) on exhaustion, matching `x_request` convention
+- [x] Existing callers continue working without modification (backward-compatible)
 
 ## Test Scenarios
 
