@@ -127,17 +127,18 @@ discord_request() {
 
 # --- Commands ---
 
-validate_channel_id() {
-  local channel_id="$1"
-  if [[ ! "$channel_id" =~ ^[0-9]+$ ]]; then
-    echo "Error: channel_id must be numeric. Got: ${channel_id}" >&2
+validate_snowflake_id() {
+  local id="$1"
+  local label="$2"
+  if [[ ! "$id" =~ ^[0-9]+$ ]]; then
+    echo "Error: ${label} must be numeric. Got: ${id}" >&2
     exit 1
   fi
 }
 
 cmd_messages() {
   local channel_id="${1:?Usage: discord-community.sh messages <channel_id> [limit] [after_id]}"
-  validate_channel_id "$channel_id"
+  validate_snowflake_id "$channel_id" "channel_id"
   local limit="${2:-100}"
   local after_id="${3:-}"
 

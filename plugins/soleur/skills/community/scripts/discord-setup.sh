@@ -106,9 +106,6 @@ discord_request() {
     429)
       local retry_after
       retry_after=$(echo "$body" | jq -r '.retry_after // 5' 2>/dev/null || echo "5")
-      if [[ -z "$retry_after" ]] || [[ "$retry_after" == "null" ]]; then
-        retry_after=5
-      fi
       # Clamp retry_after to sane range [1, 60]
       # Use printf to truncate float to integer for arithmetic comparison
       # (sleep accepts floats natively, but bash (( )) does not)
@@ -207,6 +204,7 @@ cmd_create_webhook() {
 cmd_write_env() {
   local guild_id="${1:?Usage: discord-setup.sh write-env <guild_id> <webhook_url>}"
   local webhook_url="${2:?Usage: discord-setup.sh write-env <guild_id> <webhook_url>}"
+  validate_snowflake_id "$guild_id" "guild_id"
   require_token
 
   local env_file=".env"
