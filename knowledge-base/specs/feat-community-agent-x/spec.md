@@ -44,17 +44,21 @@ The community-manager agent is hardcoded to Discord + GitHub. It cannot monitor 
 | ID | Requirement |
 |----|-------------|
 | TR1 | X API authentication via OAuth 1.0a (User Context) for Free tier |
-| TR2 | All platform scripts use `curl` + `jq` — no additional dependencies |
+| TR2 | All platform scripts use `curl` + `jq` + `openssl` — no additional installs beyond standard system tools |
 | TR3 | Env var detection determines enabled platforms: `DISCORD_BOT_TOKEN` → Discord, `X_API_KEY` → X, GitHub always enabled via `gh` CLI |
 | TR4 | Adapter scripts must exit non-zero with clear error messages on auth failure or rate limit |
 | TR5 | Brand guide `## Channel Notes > ### X/Twitter` section consumed for engagement tone |
 | TR6 | Engagement replies require user approval via AskUserQuestion pattern (same as discord-content) |
 | TR7 | Existing Discord functionality must not regress — all current community-manager capabilities work unchanged |
 
+## X API Access Notes
+
+As of early 2026, X API has migrated to a **pay-per-use credit system**. Legacy tiers (Free/Basic/Pro) are being phased out. The Free tier is extremely limited (1 request per 24 hours on most endpoints). Meaningful API access (reading mentions, timelines, posting tweets) requires purchasing credits in the Developer Console. Scripts are designed to work with whatever access level is provisioned.
+
 ## Dependencies
 
 - **Blocking:** X account registration (@soleur preferred) — manual founder action
-- **Blocking:** X Developer Portal account + API key provisioning — manual founder action
+- **Blocking:** X Developer Portal account + API key/credit provisioning — manual founder action
 - **Non-blocking:** social-distribute skill update to note X account exists (separate follow-up)
 
 ## Success Criteria

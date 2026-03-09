@@ -6,23 +6,23 @@
 ## Phase 1: X/Twitter Integration
 
 ### 1.0 Pre-work
-- [ ] Update spec.md TR2 to include `openssl` in allowed dependencies
-- [ ] Verify X API Free tier endpoints (hard gate -- scope depends on result)
-- [ ] Document actual Free tier scope vs. brainstorm assumptions
+- [x] Update spec.md TR2 to include `openssl` in allowed dependencies
+- [x] Verify X API Free tier endpoints (hard gate -- scope depends on result)
+- [x] Document actual Free tier scope vs. brainstorm assumptions
 
 ### 1.1 Create x-setup.sh
-- [ ] Implement `validate-credentials` (GET /2/users/me with OAuth 1.0a)
-- [ ] Implement `write-env` (write 4 env vars to `.env` with chmod 600)
-- [ ] Implement `verify` (round-trip API check)
-- [ ] Suppress curl stderr during auth requests
+- [x] Implement `validate-credentials` (GET /2/users/me with OAuth 1.0a)
+- [x] Implement `write-env` (write 4 env vars to `.env` with chmod 600)
+- [x] Implement `verify` (round-trip API check)
+- [x] Suppress curl stderr during auth requests
 
 ### 1.2 Create x-community.sh
-- [ ] Implement OAuth 1.0a signing helper function (HMAC-SHA1 via openssl)
-- [ ] Implement `x_request` helper (HTTP status capture, 429 retry with max 3 depth, auth error handling)
-- [ ] Implement `fetch-metrics` (GET /2/users/me -- follower/following/tweet counts)
-- [ ] Implement `post-tweet` (POST /2/tweets with optional --reply-to TWEET_ID)
-- [ ] Only add read commands (fetch-mentions, fetch-timeline) if Free tier verification confirms support
-- [ ] Test openssl absence detection (clear error message)
+- [x] Implement OAuth 1.0a signing helper function (HMAC-SHA1 via openssl)
+- [x] Implement `x_request` helper (HTTP status capture, 429 retry with max 3 depth, auth error handling)
+- [x] Implement `fetch-metrics` (GET /2/users/me -- follower/following/tweet counts)
+- [x] Implement `post-tweet` (POST /2/tweets with optional --reply-to TWEET_ID)
+- [x] Only add read commands (fetch-mentions, fetch-timeline) if Free tier verification confirms support
+- [x] Test openssl absence detection (clear error message)
 
 ## Phase 2: Community SKILL.md + Agent Update
 
