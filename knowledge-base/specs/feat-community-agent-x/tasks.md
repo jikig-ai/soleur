@@ -1,0 +1,68 @@
+# Tasks: Add X/Twitter Support to Community Agent
+
+**Issue:** #127
+**Plan:** `knowledge-base/plans/2026-03-09-feat-community-agent-platform-adapter-plan.md`
+
+## Phase 1: X/Twitter Integration
+
+### 1.0 Pre-work
+- [ ] Update spec.md TR2 to include `openssl` in allowed dependencies
+- [ ] Verify X API Free tier endpoints (hard gate -- scope depends on result)
+- [ ] Document actual Free tier scope vs. brainstorm assumptions
+
+### 1.1 Create x-setup.sh
+- [ ] Implement `validate-credentials` (GET /2/users/me with OAuth 1.0a)
+- [ ] Implement `write-env` (write 4 env vars to `.env` with chmod 600)
+- [ ] Implement `verify` (round-trip API check)
+- [ ] Suppress curl stderr during auth requests
+
+### 1.2 Create x-community.sh
+- [ ] Implement OAuth 1.0a signing helper function (HMAC-SHA1 via openssl)
+- [ ] Implement `x_request` helper (HTTP status capture, 429 retry with max 3 depth, auth error handling)
+- [ ] Implement `fetch-metrics` (GET /2/users/me -- follower/following/tweet counts)
+- [ ] Implement `post-tweet` (POST /2/tweets with optional --reply-to TWEET_ID)
+- [ ] Only add read commands (fetch-mentions, fetch-timeline) if Free tier verification confirms support
+- [ ] Test openssl absence detection (clear error message)
+
+## Phase 2: Community SKILL.md + Agent Update
+
+### 2.1 Create SKILL.md
+- [ ] Write frontmatter (name: community, third-person description)
+- [ ] Implement platform detection (check all required env vars per platform)
+- [ ] Implement `digest` sub-command (multi-platform data collection, unified digest file)
+- [ ] Implement `health` sub-command (cross-platform metrics display)
+- [ ] Implement `platforms` sub-command (list, validate, report status)
+- [ ] Add `--headless` bypass for all prompts
+- [ ] Add `$ARGUMENTS` passthrough for programmatic callers
+
+### 2.2 Register skill
+- [ ] Add `community` to `SKILL_CATEGORIES` in `docs/_data/skills.js`
+
+### 2.3 Update community-manager.md
+- [ ] Update description to mention X alongside Discord and GitHub
+- [ ] Add social-distribute disambiguation sentence
+- [ ] Add X env var requirements to prerequisites
+- [ ] List x-community.sh and x-setup.sh in scripts section
+- [ ] Add X metrics section to digest capability (additive -- preserve existing headings)
+- [ ] Include X metrics in health report
+- [ ] Analyze X activity in content suggestions
+- [ ] Note X channel notes from brand guide for tone
+
+### 2.4 Update supporting files
+- [ ] Update CCO delegation table in cco.md (unconditional -- capabilities expanded)
+- [ ] Run agent description token budget check (under 2500 words)
+
+### 2.5 Verification
+- [ ] Test X credentials and API access with real account
+- [ ] Test multi-platform digest generation
+- [ ] Test platform detection with partial env vars
+- [ ] Verify Discord functionality not regressed (existing scripts untouched)
+- [ ] Verify `/soleur:community` is invocable and discoverable
+- [ ] Verify skill appears on docs site
+
+## Deferred (file as separate issues)
+
+- [ ] File issue: `engage` sub-command for interactive X mention engagement
+- [ ] File issue: Platform adapter interface refactor (for when platform #4 arrives)
+- [ ] File issue: X monitoring commands requiring Basic tier (fetch-mentions, fetch-timeline)
+- [ ] File issue: discord-community.sh recursive 429 retry bug (pre-existing, no depth limit)
