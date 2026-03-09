@@ -53,16 +53,16 @@
 - [x] Run agent description token budget check (under 2500 words)
 
 ### 2.5 Verification
-- [ ] Test X credentials and API access with real account
-- [ ] Test multi-platform digest generation
-- [ ] Test platform detection with partial env vars
-- [ ] Verify Discord functionality not regressed (existing scripts untouched)
-- [ ] Verify `/soleur:community` is invocable and discoverable
-- [ ] Verify skill appears on docs site
+- [ ] Test X credentials and API access with real account (blocked: account not registered)
+- [ ] Test multi-platform digest generation (blocked: X account not registered)
+- [x] Test platform detection with partial env vars (missing creds → clear error)
+- [x] Verify Discord functionality not regressed (existing scripts untouched, syntax OK)
+- [x] Verify `/soleur:community` is invocable and discoverable (SKILL.md + skills.js)
+- [x] Verify skill appears on docs site (registered in skills.js)
 
 ## Deferred (file as separate issues)
 
-- [ ] File issue: `engage` sub-command for interactive X mention engagement
-- [ ] File issue: Platform adapter interface refactor (for when platform #4 arrives)
-- [ ] File issue: X monitoring commands requiring Basic tier (fetch-mentions, fetch-timeline)
-- [ ] File issue: discord-community.sh recursive 429 retry bug (pre-existing, no depth limit)
+- [x] File issue: `engage` sub-command for interactive X mention engagement (#469)
+- [x] File issue: Platform adapter interface refactor (for when platform #4 arrives) (#470)
+- [x] File issue: X monitoring commands requiring Basic tier (fetch-mentions, fetch-timeline) (#471)
+- [x] File issue: discord-community.sh recursive 429 retry bug (pre-existing, no depth limit) (#472)

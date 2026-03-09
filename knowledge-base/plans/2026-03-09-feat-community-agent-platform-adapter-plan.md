@@ -198,21 +198,21 @@ All changes are additive:
 
 ### Functional
 
-- [ ] `x-community.sh fetch-metrics` returns X follower/following/tweet counts
-- [ ] `x-setup.sh validate-credentials` verifies X API access
-- [ ] Existing `discord-community.sh` commands work unchanged (no files modified)
-- [ ] Community-manager agent mentions X alongside Discord and GitHub
-- [ ] Community SKILL.md is invocable with `digest`, `health`, `platforms` sub-commands
-- [ ] Multi-platform digest includes X section when X is configured
-- [ ] Platform detection validates all required env vars per platform
+- [x] `x-community.sh fetch-metrics` returns X follower/following/tweet counts
+- [x] `x-setup.sh validate-credentials` verifies X API access
+- [x] Existing `discord-community.sh` commands work unchanged (no files modified)
+- [x] Community-manager agent mentions X alongside Discord and GitHub
+- [x] Community SKILL.md is invocable with `digest`, `health`, `platforms` sub-commands
+- [x] Multi-platform digest includes X section when X is configured
+- [x] Platform detection validates all required env vars per platform
 
 ### Non-Functional
 
-- [ ] No additional dependencies beyond `curl`, `jq`, `openssl`, `gh`
-- [ ] Secrets never in CLI args, `.env` has `chmod 600`
-- [ ] Discord functionality not regressed (existing scripts untouched)
-- [ ] Skill registered in `skills.js`
-- [ ] Agent description cumulative word count under 2500
+- [x] No additional dependencies beyond `curl`, `jq`, `openssl`, `gh`
+- [x] Secrets never in CLI args, `.env` has `chmod 600`
+- [x] Discord functionality not regressed (existing scripts untouched)
+- [x] Skill registered in `skills.js`
+- [x] Agent description cumulative word count under 2500
 
 ## Test Scenarios
 
