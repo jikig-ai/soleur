@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-02-22
+last_updated: 2026-03-09
 ---
 
 # Expenses
@@ -12,6 +12,7 @@ last_updated: 2026-02-22
 | Hetzner CX22 | Hetzner | hosting | 5.83 | 2026-03-01 | 2 vCPU, 4 GB RAM, 40 GB SSD, eu-central |
 | soleur.ai | Cloudflare | domain | 70.00 | 2028-02-16 | 2-year registration required for .ai TLD |
 | Plausible Analytics | Plausible | saas | 0.00 | 2026-03-24 | Free trial until ~2026-03-24, then $9/mo Growth plan |
+| X API | X Corp | api | 0.00 | - | Free tier, pay-per-use; @soleur_ai account |
 
 ## One-Time
 

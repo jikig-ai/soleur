@@ -176,7 +176,9 @@ cmd_write_env() {
   local webhook_url="${2:?Usage: discord-setup.sh write-env <guild_id> <webhook_url>}"
   require_token
 
-  local env_file=".env"
+  local repo_root
+  repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  local env_file="${repo_root}/.env"
 
   # Remove existing Discord vars if .env exists
   if [[ -f "$env_file" ]]; then
@@ -204,14 +206,18 @@ cmd_write_env() {
 
 cmd_verify() {
   # Verify .env configuration by running guild-info
-  if [[ ! -f ".env" ]]; then
-    echo "Error: .env file not found." >&2
+  local repo_root
+  repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  local env_file="${repo_root}/.env"
+
+  if [[ ! -f "$env_file" ]]; then
+    echo "Error: .env file not found at ${env_file}" >&2
     exit 1
   fi
 
-  # shellcheck disable=SC1091
+  # shellcheck disable=SC1090
   set -a
-  source .env
+  source "$env_file"
   set +a
 
   if [[ -z "${DISCORD_BOT_TOKEN:-}" ]] || [[ -z "${DISCORD_GUILD_ID:-}" ]]; then
