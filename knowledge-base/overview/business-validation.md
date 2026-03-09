@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-02-25
+last_updated: 2026-03-09
 last_reviewed: 2026-03-02
 review_cadence: quarterly
 ---
@@ -72,6 +72,7 @@ The competitive landscape spans six tiers, from platform-native competition to l
 |---|---|---|
 | [SoloCEO](https://soloceoai.com) | AI executive board: 12 AI board members (CFO, CMO, COO, etc.) analyze business simultaneously. $2,000 diagnostic, beta 2026. | Closest CaaS competitor. Advisory-only (diagnostic + recommendations), not operational. One-time analysis, not an ongoing workflow. No engineering domain, no compounding knowledge base. |
 | [Tanka](https://tanka.ai) | AI co-founder platform with persistent memory, smart replies, landing page generation. Integrates Slack, WhatsApp, Gmail, Notion. | Memory-native like Soleur, but communication-centric. No engineering workflow, no legal domain, no structured knowledge base that compounds across business domains. |
+| [Polsia](https://polsia.com) | Autonomous AI company-operating platform built on Claude Agent SDK. Role-based agents (CEO, Engineer, Growth Manager) run nightly autonomous cycles of development, marketing, operations, and outbound sales. $50/month + 20% revenue share. 1,100+ managed companies. $1M ARR. | Cloud-hosted, fully autonomous (no human-in-the-loop). Covers 5+ domains (engineering, marketing, ops, support, sales outreach) vs. Soleur's 8. No legal, finance, or product domains. No structured knowledge base that compounds across domains. No Claude Code integration. Proprietary, closed-source. Autonomous output quality reportedly basic. Shares Soleur's Anthropic platform dependency. |
 | [Lovable.dev](https://lovable.dev) | AI full-stack React app builder. $20M ARR in 2 months. | Website/app generation only. No legal, marketing, ops, or finance domains. No institutional memory across sessions. |
 | [Bolt.new](https://bolt.new) | AI web app builder with framework flexibility. ~$100M ARR projected 2025. | Fastest to prototype but engineering-only. No cross-domain agents or compounding knowledge base. |
 | [v0.dev](https://v0.dev) | Vercel's AI Next.js app generator with built-in databases. | Highest code quality but engineering-only. No business operations, no multi-domain workflow. |

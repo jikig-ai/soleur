@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-03
-last_reviewed: 2026-03-03
+last_updated: 2026-03-09
+last_reviewed: 2026-03-09
 review_cadence: quarterly
 depends_on:
   - knowledge-base/overview/brand-guide.md
@@ -14,7 +14,7 @@ depends_on:
 
 ## Purpose
 
-This document defines what content Soleur needs, why, in what order, and how it connects to the marketing strategy. It synthesizes findings from the content audit (2026-02-19), keyword research (2026-02-19), and competitive intelligence (2026-03-02).
+This document defines what content Soleur needs, why, in what order, and how it connects to the marketing strategy. It synthesizes findings from the content audit (2026-02-19), keyword research (2026-02-19), and competitive intelligence (2026-03-09).
 
 ---
 
@@ -66,7 +66,18 @@ Five content gaps block Soleur's organic discovery and category authority. Ranke
 - Connection to Every.to's compound engineering methodology
 - Comparison table: vibe coding vs. agentic engineering vs. compound engineering
 
-### Gap 5: Price Justification Framework (Medium)
+### Gap 5: Autopilot vs. Decision-Maker Positioning Against Polsia (Critical) [NEW 2026-03-09]
+
+**What is missing:** Polsia has emerged as the most direct CaaS competitor, crossing $1M ARR in one month with 1,100+ autonomously managed companies. Polsia runs a fully autonomous model (CEO agent decides everything, founder receives morning summary). No content anywhere articulates why Soleur's founder-in-the-loop philosophy produces better outcomes than full autonomy. This is the most urgent new content gap.
+
+**Why it matters:** Polsia validates the CaaS market thesis but proposes a fundamentally different answer: remove the human entirely. Solo founders evaluating both platforms need content that frames the trade-off clearly. Without it, Polsia's "AI runs your company while you sleep" narrative goes unchallenged. The philosophical split (autopilot vs. decision-maker) is Soleur's single clearest differentiator against Polsia and should be established before Polsia defines the narrative.
+
+**Content needed:**
+- Pillar article: "Autopilot vs. Decision-Maker: Two Models for AI Company Operation"
+- Comparison page: "Soleur vs. Polsia" (honest positioning on philosophy, domain coverage, knowledge persistence)
+- Blog post: "Why Human Judgment Compounds Better Than Full Autonomy" (data-driven argument using Soleur's 420+ PR history as evidence)
+
+### Gap 6: Price Justification Framework (Medium)
 
 **What is missing:** When pricing launches, founders will compare the price to individual tools ($15-25/month for Cursor, Devin, Windsurf). No content frames the cost against the replacement stack: brand agency ($5-15k), lawyer ($300-500/hour), marketing tools ($50-200/month), product management tools ($10-30/month), combined. Without this framing, the price appears to compete with coding tools rather than replacing an entire team.
 
@@ -94,6 +105,7 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 |-------|------|-------|----------|----------|
 | What Is Company-as-a-Service? | Pillar explainer | 2,500-3,000 | P1 | Week 2 |
 | The Billion-Dollar Solo Company | Thought leadership | 2,500-3,500 | P1 | Week 2-3 |
+| Autopilot vs. Decision-Maker: Two Models for AI Company Operation | Position paper | 2,000-2,500 | P1 | Week 2-3 |
 | The Agentic Era: What Changes When AI Runs Your Company | Essay | 2,000-2,500 | P3 | Week 9+ |
 | The Agentic Company Glossary | Reference | 2,000-3,000 | P3 | Week 9+ |
 
@@ -119,6 +131,7 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 
 | Piece | Type | Words | Priority | Timeline |
 |-------|------|-------|----------|----------|
+| Soleur vs. Polsia | Comparison page | 1,500-2,000 | P1 | Week 2-3 |
 | Soleur vs. Alternatives | Comparison page | 1,500-2,000 | P2 | Week 5-6 |
 | The Solopreneur AI Stack: Engineering Layer | Guide | 1,500-2,000 | P2 | Week 5-6 |
 | AI Agent Consumability Guide | Technical guide | 1,500 | P3 | Week 9+ |
@@ -235,6 +248,7 @@ Each pillar article generates derivative content for multiple channels. This max
 |---------------|-----------------|-------------|-------------------|--------------|
 | What Is CaaS? | 7-tweet thread defining the category | Channel post with key points | "What we mean by Company-as-a-Service" | Submit article directly |
 | Billion-Dollar Solo Company | Quote thread (Amodei, Altman predictions + Soleur's take) | Discussion prompt: "When does the first solo unicorn happen?" | Building update with thesis link | Submit article directly |
+| Autopilot vs. Decision-Maker | Thread: "Two philosophies for AI company operation. One removes you. One amplifies you." | Discussion: "Would you let AI run your company autonomously?" | Position post with Polsia comparison | Submit article directly |
 | Agentic Engineering | Before/after thread (vibe coding vs. agentic engineering) | Workflow screenshot + explanation | Technical deep dive post | Submit article directly |
 
 ---
@@ -258,4 +272,4 @@ Each pillar article generates derivative content for multiple channels. This max
 
 ---
 
-_Generated: 2026-03-03. Sources: content-plan.md (2026-02-19), content-audit.md (2026-02-19), competitive-intelligence.md (2026-03-02), brand-guide.md (2026-02-21)._
+_Updated: 2026-03-09. Sources: content-plan.md (2026-02-19), content-audit.md (2026-02-19), competitive-intelligence.md (2026-03-09), brand-guide.md (2026-02-21)._
