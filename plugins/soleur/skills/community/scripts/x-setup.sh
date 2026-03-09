@@ -231,7 +231,9 @@ cmd_validate_credentials() {
 cmd_write_env() {
   require_credentials
 
-  local env_file=".env"
+  local repo_root
+  repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  local env_file="${repo_root}/.env"
 
   # Remove existing X vars if .env exists
   if [[ -f "$env_file" ]]; then
@@ -261,14 +263,18 @@ cmd_write_env() {
 
 cmd_verify() {
   # Verify .env configuration by running validate-credentials
-  if [[ ! -f ".env" ]]; then
-    echo "Error: .env file not found." >&2
+  local repo_root
+  repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  local env_file="${repo_root}/.env"
+
+  if [[ ! -f "$env_file" ]]; then
+    echo "Error: .env file not found at ${env_file}" >&2
     exit 1
   fi
 
-  # shellcheck disable=SC1091
+  # shellcheck disable=SC1090
   set -a
-  source .env
+  source "$env_file"
   set +a
 
   local missing=()

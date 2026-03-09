@@ -25,14 +25,22 @@ Accept the tool name, purpose, and signup URL from the user. Check `knowledge-ba
 
 Check if agent-browser is available by running `agent-browser --help`.
 
-**If agent-browser is available:**
+**If Playwright MCP tools are available** (preferred):
+
+1. Navigate to the signup page: `browser_navigate` to `<signup_url>`
+2. Snapshot the page: `browser_snapshot` to identify form fields
+3. Fill non-sensitive fields using `browser_click` and `browser_fill_form`
+4. For file uploads (logos, avatars): use `browser_file_upload` with absolute paths (MCP resolves from repo root, not CWD)
+5. When reaching payment or credential fields, stop and move to the pause step
+
+**If agent-browser CLI is available** (fallback):
 
 1. Open the signup page: `agent-browser open <signup_url>`
 2. Take a snapshot: `agent-browser snapshot -i`
-3. Fill non-sensitive fields (email, organization name, plan selection) using `agent-browser fill` and `agent-browser click`
-4. When reaching payment fields (credit card, billing address), stop and move to the pause step
+3. Fill non-sensitive fields using `agent-browser fill` and `agent-browser click`
+4. When reaching payment fields, stop and move to the pause step
 
-**If agent-browser is not available:**
+**If neither is available:**
 
 Provide the signup URL and step-by-step instructions for the user to complete signup manually.
 
@@ -79,3 +87,8 @@ NEVER click buttons that trigger purchases, payments, or charges.
 NEVER fill payment form fields (credit card, CVV, billing address).
 
 When reaching any sensitive field or action, pause and ask the user to complete it manually.
+
+## Sharp Edges
+
+- When provisioning API keys with paired credentials (e.g., OAuth Consumer Key + Access Token), regenerating the primary key invalidates dependent tokens. Always regenerate in dependency order: primary key first, then dependent tokens.
+- Playwright MCP tools resolve file paths from the repo root, not the shell CWD. Always use absolute paths when uploading files from a worktree.
