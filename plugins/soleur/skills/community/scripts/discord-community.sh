@@ -59,6 +59,13 @@ validate_env() {
 
 discord_request() {
   local endpoint="$1"
+  local depth="${2:-0}"
+
+  if (( depth >= 3 )); then
+    echo "Error: Discord API rate limit exceeded after 3 retries." >&2
+    exit 2
+  fi
+
   local response http_code body
 
   response=$(curl -s -w "\n%{http_code}" \
@@ -90,10 +97,10 @@ discord_request() {
       ;;
     429)
       local retry_after
-      retry_after=$(echo "$body" | jq -r '.retry_after // 5' 2>/dev/null)
-      echo "Rate limited. Retrying after ${retry_after}s..." >&2
+      retry_after=$(echo "$body" | jq -r '.retry_after // 5' 2>/dev/null || echo "5")
+      echo "Rate limited. Retrying after ${retry_after}s (attempt $((depth + 1))/3)..." >&2
       sleep "$retry_after"
-      discord_request "$endpoint"
+      discord_request "$endpoint" "$((depth + 1))"
       ;;
     *)
       local message
