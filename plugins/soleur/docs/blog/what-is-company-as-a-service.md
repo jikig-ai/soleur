@@ -10,21 +10,21 @@ tags:
 
 Company-as-a-Service (CaaS) is a new category of platform where a single AI organization runs every department of a business -- engineering, marketing, legal, finance, operations, product, sales, and support. Instead of hiring specialists or stitching together dozens of SaaS tools, a founder installs one platform and gets a full AI organization that plans, builds, reviews, and compounds institutional knowledge across every business function.
 
-The term was coined by [Soleur]({{ site.url }}), the first platform built on this model. Soleur deploys {{ stats.agents }} AI agents across {{ stats.departments }} departments, all sharing a compounding knowledge base that makes every project faster and more informed than the last.
+[Soleur]({{ site.url }}) is the first platform built on this model. Soleur deploys {{ stats.agents }} AI agents across {{ stats.departments }} departments, all sharing a compounding knowledge base that makes every project faster and more informed than the last.
 
 This article defines what company-as-a-service means, how it differs from existing models, the technology that makes it possible, and why 2026 is the year the category emerges.
 
 ## The Problem CaaS Solves
 
-Running a company requires far more than writing code. Research from the [Bureau of Labor Statistics](https://www.bls.gov/ooh/management/top-executives.htm) shows that executives spend the majority of their time on coordination, planning, and communication -- not production. For solo founders, this means roughly 70% of running a business has nothing to do with engineering.
+Running a company requires far more than writing code. The [Bureau of Labor Statistics](https://www.bls.gov/ooh/management/top-executives.htm) describes the core duties of top executives as planning strategies, coordinating work activities, and communicating with stakeholders. For solo founders, the bulk of running a business has nothing to do with engineering.
 
-The market responded to the engineering 30% with remarkable speed. Cursor reached [$1 billion in annual recurring revenue](https://www.cnbc.com/2026/02/24/cursor-announces-major-update-as-ai-coding-agent-battle-heats-up.html) at a $29.3 billion valuation. Devin dropped its price from $500 to [$20 per month](https://venturebeat.com/programming-development/devin-2-0-is-here-cognition-slashes-price-of-ai-software-engineer-to-20-per-month-from-500). GitHub Copilot embedded itself into millions of development workflows. Engineering AI is solved -- or at least commoditized.
+The market responded to the engineering slice with remarkable speed. Cursor reached [$1 billion in annual recurring revenue](https://www.cnbc.com/2026/02/24/cursor-announces-major-update-as-ai-coding-agent-battle-heats-up.html) at a $29.3 billion valuation. Devin dropped its price from $500 to [$20 per month](https://venturebeat.com/programming-development/devin-2-0-is-here-cognition-slashes-price-of-ai-software-engineer-to-20-per-month-from-500). GitHub Copilot embedded itself into millions of development workflows. Engineering AI is solved -- or at least commoditized.
 
-But the other 70% remains manual. A solo founder using Cursor for code still writes their own marketing strategy, drafts their own legal documents, builds their own financial models, and manages their own sales pipeline. They patch together separate tools for each function: one for project management, one for design, one for analytics, one for legal compliance. Each tool operates in isolation. None of them know about the others.
+But the rest remains manual. A solo founder using Cursor for code still writes their own marketing strategy, drafts their own legal documents, builds their own financial models, and manages their own sales pipeline. They patch together separate tools for each function: one for project management, one for design, one for analytics, one for legal compliance. Each tool operates in isolation. None of them know about the others.
 
 The result is a founder who builds at the speed of AI but operates at the speed of one person. [TechCrunch noted](https://techcrunch.com/2025/02/01/ai-agents-could-birth-the-first-one-person-unicorn-but-at-what-societal-cost/) that AI agents could birth the first one-person unicorn -- but only if they extend beyond engineering into every function a company needs.
 
-The numbers tell the story. Thousands of Claude Code plugins exist as of 2026. The overwhelming majority focus on engineering tasks. The market is saturated with code-writing agents and undersupplied with agents that handle the rest of a business. Meanwhile, [Lovable reached $200 million in ARR](https://techcrunch.com/2025/12/18/vibe-coding-startup-lovable-raises-330m-at-a-6-6b-valuation/) at a $6.6 billion valuation -- proving that founders are willing to pay for AI that extends beyond code. The demand exists. The infrastructure does not.
+The numbers tell the story. The Claude Code plugin ecosystem is growing fast, but the overwhelming majority of plugins focus on engineering tasks. The market is saturated with code-writing agents and undersupplied with agents that handle the rest of a business. Meanwhile, Lovable [reached $200 million in ARR](https://techcrunch.com/2025/11/19/as-lovable-hits-200m-arr-its-ceo-credits-staying-in-europe-for-its-success/) and [raised $330 million at a $6.6 billion valuation](https://techcrunch.com/2025/12/18/vibe-coding-startup-lovable-raises-330m-at-a-6-6b-valuation/) -- proving that founders are willing to pay for AI that extends beyond code. The demand exists. The infrastructure does not.
 
 Company-as-a-service exists to close that gap. It takes the same principle that made AI coding tools transformative -- specialized agents doing expert work -- and applies it to the entire company.
 
@@ -44,7 +44,7 @@ The defining feature of CaaS is cross-domain institutional memory. Every decisio
 
 The brand guide informs marketing copy. The competitive analysis shapes product positioning. The legal audit references the privacy policy. A pricing decision triggers updates to sales battlecards. This cross-domain coherence is the structural moat that separates CaaS from running {{ stats.departments }} disconnected tools.
 
-Soleur's knowledge base has compounded across 420+ merged pull requests. The 100th session is dramatically more productive than the first -- not because the agents improved, but because the institutional knowledge accumulated.
+Soleur's knowledge base has compounded across hundreds of merged pull requests. The 100th session is dramatically more productive than the first -- not because the agents improved, but because the institutional knowledge accumulated.
 
 ### Workflow Orchestration
 
@@ -58,12 +58,12 @@ This lifecycle applies to every domain -- not just engineering. A marketing camp
 
 Company-as-a-service is a distinct model. Here is how it compares to existing categories:
 
-| Model | What It Provides | How It Works | Knowledge Persistence |
-|-------|-----------------|--------------|----------------------|
-| **SaaS** (Software-as-a-Service) | Software tools you operate | You use the tool manually | Data stored, no cross-tool intelligence |
-| **AIaaS** (AI-as-a-Service) | AI capabilities you integrate | You embed AI into your workflows | Stateless per request |
-| **BPaaS** (Business Process-as-a-Service) | Business processes outsourced | External teams handle functions | Knowledge stays with the vendor |
-| **CaaS** (Company-as-a-Service) | A full AI organization | Agents operate autonomously across every department | Compounding institutional memory you own |
+| Model | Provides | Knowledge |
+|-------|----------|-----------|
+| **SaaS** | Software tools you operate manually | Data stored, no cross-tool intelligence |
+| **AIaaS** | AI capabilities you embed into workflows | Stateless per request |
+| **BPaaS** | Business processes run by external teams | Knowledge stays with the vendor |
+| **CaaS** | A full AI organization across every department | Compounding institutional memory you own |
 
 SaaS gives you a hammer. AIaaS gives you a smarter hammer. BPaaS hires someone to swing the hammer. CaaS gives you an entire construction crew that remembers every building they have built together.
 
@@ -85,7 +85,7 @@ Consider the alternative. A solo founder using [Notion Custom Agents](https://ww
 
 ### Institutional Memory That Compounds
 
-[Anthropic launched Cowork Plugins](https://techcrunch.com/2026/02/24/anthropic-launches-new-push-for-enterprise-agents-with-plugins-for-finance-engineering-and-design/) covering multiple business domains with first-party integrations. [Notion shipped Custom Agents](https://www.notion.com/releases/2026-02-24) that operate within workspaces. Both are stateless -- they execute tasks but do not compound knowledge across sessions.
+[Anthropic launched Cowork Plugins](https://techcrunch.com/2026/02/24/anthropic-launches-new-push-for-enterprise-agents-with-plugins-for-finance-engineering-and-design/) covering multiple business domains with first-party integrations. [Notion shipped Custom Agents](https://www.notion.com/releases/2026-02-24) that operate within workspaces. Both persist data within their respective environments, but neither compounds cross-domain institutional knowledge that accumulates across sessions and informs future decisions.
 
 The compounding model works differently. Every problem solved produces a learning. Every learning informs the next solution. Over hundreds of sessions, the knowledge base accumulates patterns, gotchas, architectural decisions, and proven approaches. The system does not start from zero each time -- it starts from everything it has learned.
 
@@ -105,7 +105,7 @@ CaaS is built for a specific kind of builder.
 
 **Technical builders who want business operations to compound.** Founders who have experienced the productivity gains of AI coding tools and want the same compounding effect applied to every other business function. The operational knowledge should accumulate, not reset with every new project.
 
-The common thread: these are people who think in terms of businesses, not just products. They understand that building a company requires more than building software, and they want the non-engineering 70% to compound with the same velocity as the engineering 30%.
+The common thread: these are people who think in terms of businesses, not just products. They understand that building a company requires more than building software, and they want every non-engineering function to compound with the same velocity as their code.
 
 CaaS is not for everyone. Large teams with dedicated departments do not need an AI organization -- they have a human one. Companies with unlimited budgets for agencies and contractors can outsource each function independently. CaaS exists specifically for the constraint that defines solo founders: the ambition is organizational, but the team is not.
 
@@ -113,7 +113,7 @@ CaaS is not for everyone. Large teams with dedicated departments do not need an 
 
 The billion-dollar solo company is no longer a thought experiment. It is an active prediction from the leaders building the technology.
 
-Dario Amodei, CEO of Anthropic, [stated in an interview with Inc.com](https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609): "There will be a one-person billion-dollar company in 2026" -- assigning it a 70-80% probability.
+Dario Amodei, CEO of Anthropic, [predicted in an interview with Inc.com](https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609) that a one-person billion-dollar company would emerge by 2026 -- assigning it a 70-80% probability.
 
 Sam Altman, CEO of OpenAI, described a [betting pool among tech CEOs](https://fortune.com/2024/02/04/sam-altman-one-person-unicorn-silicon-valley-founder-myth/) for "the first year that there is a one-person billion-dollar company" -- something he called "unimaginable without AI" that "now will happen."
 
@@ -142,7 +142,7 @@ SaaS provides software tools you operate manually. CaaS provides a full AI organ
 <details>
 <summary>Who is company-as-a-service for?</summary>
 
-CaaS is built for solo founders and small teams (1-3 people) building real companies who need operational depth across every business function. It serves technical builders who want the non-engineering 70% of running a company to compound with the same velocity as their engineering work.
+CaaS is built for solo founders and small teams (1-3 people) building real companies who need operational depth across every business function. It serves technical builders who want every non-engineering function to compound with the same velocity as their code.
 
 </details>
 
