@@ -6,6 +6,9 @@
   "github": "https://github.com/jikig-ai/soleur",
   "discord": "https://discord.gg/PYZbPBKMUY",
   "x": "https://x.com/soleur_ai",
+  "newsletter": {
+    "username": "soleur"
+  },
   "nav": [
     { "label": "Get Started", "url": "pages/getting-started.html" },
     { "label": "Agents", "url": "pages/agents.html" },
