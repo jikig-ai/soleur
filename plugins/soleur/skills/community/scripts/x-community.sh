@@ -411,25 +411,28 @@ cmd_fetch_mentions() {
       fi
 
       # Transform: join includes.users to data by author_id
-      echo "$body" | jq '{
-        mentions: [
-          .data[] as $tweet |
-          ($tweet.author_id) as $aid |
-          ((.includes.users // [])[] | select(.id == $aid)) as $user |
-          {
-            id: $tweet.id,
-            text: $tweet.text,
-            author_username: ($user.username // "unknown"),
-            author_name: ($user.name // "unknown"),
-            created_at: $tweet.created_at,
-            conversation_id: $tweet.conversation_id
+      # Use INDEX to build a lookup map so tweets without a matching user
+      # are preserved with "unknown" fallbacks (not silently dropped)
+      echo "$body" | jq '
+        ((.includes.users // []) | INDEX(.id)) as $users |
+        {
+          mentions: [
+            .data[] |
+            ($users[.author_id] // {}) as $user |
+            {
+              id: .id,
+              text: .text,
+              author_username: ($user.username // "unknown"),
+              author_name: ($user.name // "unknown"),
+              created_at: .created_at,
+              conversation_id: .conversation_id
+            }
+          ],
+          meta: {
+            newest_id: (.meta.newest_id // null),
+            result_count: (.meta.result_count // 0)
           }
-        ],
-        meta: {
-          newest_id: (.meta.newest_id // null),
-          result_count: (.meta.result_count // 0)
-        }
-      }'
+        }'
       ;;
     401)
       echo "Error: X API returned 401 Unauthorized." >&2

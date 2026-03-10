@@ -66,7 +66,7 @@ describe("x-community.sh fetch-mentions -- --max-results validation", () => {
 
     expect(result.exitCode).toBe(1);
     const stderr = decode(result.stderr);
-    expect(stderr.length).toBeGreaterThan(0);
+    expect(stderr).toContain("must be a numeric value");
   });
 
   test("--max-results too high (200) exits 1 with range error", () => {
@@ -77,7 +77,7 @@ describe("x-community.sh fetch-mentions -- --max-results validation", () => {
 
     expect(result.exitCode).toBe(1);
     const stderr = decode(result.stderr);
-    expect(stderr.length).toBeGreaterThan(0);
+    expect(stderr).toContain("between 5 and 100");
   });
 
   test("--max-results too low (2) exits 1 with range error", () => {
@@ -88,7 +88,18 @@ describe("x-community.sh fetch-mentions -- --max-results validation", () => {
 
     expect(result.exitCode).toBe(1);
     const stderr = decode(result.stderr);
-    expect(stderr.length).toBeGreaterThan(0);
+    expect(stderr).toContain("between 5 and 100");
+  });
+
+  test("--max-results without value exits 1", () => {
+    const result = Bun.spawnSync(
+      ["bash", SCRIPT_PATH, "fetch-mentions", "--max-results"],
+      { env: FAKE_CREDS_ENV }
+    );
+
+    expect(result.exitCode).toBe(1);
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("--max-results");
   });
 });
 
@@ -105,7 +116,18 @@ describe("x-community.sh fetch-mentions -- --since-id validation", () => {
 
     expect(result.exitCode).toBe(1);
     const stderr = decode(result.stderr);
-    expect(stderr.length).toBeGreaterThan(0);
+    expect(stderr).toContain("must be a numeric value");
+  });
+
+  test("--since-id without value exits 1", () => {
+    const result = Bun.spawnSync(
+      ["bash", SCRIPT_PATH, "fetch-mentions", "--since-id"],
+      { env: FAKE_CREDS_ENV }
+    );
+
+    expect(result.exitCode).toBe(1);
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("--since-id");
   });
 });
 
@@ -122,6 +144,95 @@ describe("x-community.sh fetch-mentions -- unknown flag", () => {
 
     expect(result.exitCode).toBe(1);
     const stderr = decode(result.stderr);
-    expect(stderr.length).toBeGreaterThan(0);
+    expect(stderr).toContain("Unknown option");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// jq transform (unit test using jq directly)
+// ---------------------------------------------------------------------------
+
+describe("x-community.sh fetch-mentions -- jq transform", () => {
+  const JQ_TRANSFORM = `
+    ((.includes.users // []) | INDEX(.id)) as $users |
+    {
+      mentions: [
+        .data[] |
+        ($users[.author_id] // {}) as $user |
+        {
+          id: .id,
+          text: .text,
+          author_username: ($user.username // "unknown"),
+          author_name: ($user.name // "unknown"),
+          created_at: .created_at,
+          conversation_id: .conversation_id
+        }
+      ],
+      meta: {
+        newest_id: (.meta.newest_id // null),
+        result_count: (.meta.result_count // 0)
+      }
+    }`;
+
+  test("joins includes.users to data by author_id", () => {
+    const input = JSON.stringify({
+      data: [
+        { id: "1", text: "hello @soleur", author_id: "100", created_at: "2026-03-10T00:00:00Z", conversation_id: "1" },
+      ],
+      includes: { users: [{ id: "100", username: "alice", name: "Alice" }] },
+      meta: { newest_id: "1", result_count: 1 },
+    });
+
+    const result = Bun.spawnSync(["jq", JQ_TRANSFORM], {
+      stdin: new Response(input),
+      env: NO_CREDS_ENV,
+    });
+
+    expect(result.exitCode).toBe(0);
+    const output = JSON.parse(decode(result.stdout));
+    expect(output.mentions).toHaveLength(1);
+    expect(output.mentions[0].author_username).toBe("alice");
+    expect(output.mentions[0].author_name).toBe("Alice");
+    expect(output.meta.newest_id).toBe("1");
+  });
+
+  test("preserves tweets when includes.users is missing", () => {
+    const input = JSON.stringify({
+      data: [
+        { id: "2", text: "hey @soleur", author_id: "200", created_at: "2026-03-10T00:00:00Z", conversation_id: "2" },
+      ],
+      meta: { newest_id: "2", result_count: 1 },
+    });
+
+    const result = Bun.spawnSync(["jq", JQ_TRANSFORM], {
+      stdin: new Response(input),
+      env: NO_CREDS_ENV,
+    });
+
+    expect(result.exitCode).toBe(0);
+    const output = JSON.parse(decode(result.stdout));
+    expect(output.mentions).toHaveLength(1);
+    expect(output.mentions[0].author_username).toBe("unknown");
+    expect(output.mentions[0].author_name).toBe("unknown");
+  });
+
+  test("preserves tweets when author_id has no match in includes.users", () => {
+    const input = JSON.stringify({
+      data: [
+        { id: "3", text: "question @soleur", author_id: "300", created_at: "2026-03-10T00:00:00Z", conversation_id: "3" },
+      ],
+      includes: { users: [{ id: "999", username: "other", name: "Other" }] },
+      meta: { newest_id: "3", result_count: 1 },
+    });
+
+    const result = Bun.spawnSync(["jq", JQ_TRANSFORM], {
+      stdin: new Response(input),
+      env: NO_CREDS_ENV,
+    });
+
+    expect(result.exitCode).toBe(0);
+    const output = JSON.parse(decode(result.stdout));
+    expect(output.mentions).toHaveLength(1);
+    expect(output.mentions[0].author_username).toBe("unknown");
   });
 });

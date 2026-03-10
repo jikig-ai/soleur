@@ -338,17 +338,17 @@ If the post fails, report the error for that mention and continue to the next.
 
 After all mentions have been processed (not per-reply), update the since-id state file with the `newest_id` from the fetch response.
 
-Resolve the repo root and write the state file:
+Resolve the repo root and write the state file. Create the directory, write the newest ID, then set permissions:
 
 ```bash
 mkdir -p <repo_root>/.soleur
 ```
 
+Write the `newest_id` value (from `meta.newest_id` in the fetch response) to `<repo_root>/.soleur/x-engage-since-id`, then restrict permissions:
+
 ```bash
 chmod 600 <repo_root>/.soleur/x-engage-since-id
 ```
-
-Write the `newest_id` value (from `meta.newest_id` in the fetch response) to `<repo_root>/.soleur/x-engage-since-id`.
 
 Replace `<repo_root>` with the output of `git rev-parse --show-toplevel`.
 
