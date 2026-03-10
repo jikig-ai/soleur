@@ -23,26 +23,9 @@ If files do not exist, proceed without baseline context.
 
 Accept the tool name, purpose, and signup URL from the user. Check `knowledge-base/ops/expenses.md` for existing entries matching this tool. If an entry exists, warn the user and ask whether to proceed (upgrade/reconfigure) or stop.
 
-Check if agent-browser is available by running `agent-browser --help`.
+Use Playwright MCP tools to automate the signup flow. Fill non-sensitive fields; when reaching payment or credential fields, stop and move to the pause step.
 
-**If Playwright MCP tools are available** (preferred):
-
-1. Navigate to the signup page: `browser_navigate` to `<signup_url>`
-2. Snapshot the page: `browser_snapshot` to identify form fields
-3. Fill non-sensitive fields using `browser_click` and `browser_fill_form`
-4. For file uploads (logos, avatars): use `browser_file_upload` with absolute paths (MCP resolves from repo root, not CWD)
-5. When reaching payment or credential fields, stop and move to the pause step
-
-**If agent-browser CLI is available** (fallback):
-
-1. Open the signup page: `agent-browser open <signup_url>`
-2. Take a snapshot: `agent-browser snapshot -i`
-3. Fill non-sensitive fields using `agent-browser fill` and `agent-browser click`
-4. When reaching payment fields, stop and move to the pause step
-
-**If neither is available:**
-
-Provide the signup URL and step-by-step instructions for the user to complete signup manually.
+**Fallback:** If Playwright MCP tools are unavailable, use agent-browser CLI. If neither is available, provide the signup URL and manual instructions as a last resort -- investigate why browser tools are unavailable.
 
 **Pause for user action:**
 
@@ -52,16 +35,15 @@ When the flow requires user action outside the browser (payment, email verificat
 
 After the user confirms payment is complete:
 
-1. Navigate to the tool's dashboard or settings page using agent-browser (or provide the URL if unavailable)
-2. Take a snapshot to understand the current state
-3. Guide through initial configuration steps (add site/project, copy integration snippet, configure options)
-4. If the tool requires code changes in the project (script tags, env vars, config files), make those changes using the Edit or Write tools
+1. Navigate to the tool's dashboard or settings page and take a snapshot to understand the current state
+2. Guide through initial configuration steps (add site/project, copy integration snippet, configure options)
+3. If the tool requires code changes in the project (script tags, env vars, config files), make those changes using the Edit or Write tools
 
 ## Verify + Record
 
 **Verification:**
 
-1. Take a browser screenshot of the configured dashboard as proof of setup
+1. Take a screenshot of the configured dashboard as proof of setup. Fall back to agent-browser CLI if Playwright MCP tools are unavailable.
 2. If an integration test is applicable (e.g., visit the project's site, then check the tool's dashboard for the recorded event), perform it and screenshot the result
 
 **Record the expense:**

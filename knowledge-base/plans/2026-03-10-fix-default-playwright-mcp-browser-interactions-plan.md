@@ -119,17 +119,17 @@ The community-manager agent does not perform browser-based verification workflow
 
 ## Acceptance Criteria
 
-- [ ] constitution.md Architecture > Prefer section contains a rule establishing Playwright MCP as the default for browser interactions
-- [ ] ops-provisioner Setup section defaults to Playwright MCP without an `agent-browser --help` check
-- [ ] ops-provisioner Setup section positions manual instructions as "last resort," not a normal fallback
-- [ ] ops-provisioner Configure section (line 55) defaults to Playwright MCP instead of agent-browser
-- [ ] ops-provisioner Verify section (lines 64-65) explicitly references Playwright MCP for screenshots and navigation
-- [ ] ops-research uses Playwright MCP as the default browser navigation method
-- [ ] ops-research positions manual instructions as "last resort"
-- [ ] constitution.md line 89 mentions Playwright MCP tools as preferred, with agent-browser as fallback
-- [ ] All agents retain graceful degradation (agent-browser fallback, then manual as last resort)
-- [ ] Existing safety rules (no credentials, no payments, pause for sensitive fields) are preserved unchanged
-- [ ] No changes to community-manager (it does not perform browser-based workflows)
+- [x] constitution.md Architecture > Prefer section contains a rule establishing Playwright MCP as the default for browser interactions
+- [x] ops-provisioner Setup section defaults to Playwright MCP without an `agent-browser --help` check
+- [x] ops-provisioner Setup section positions manual instructions as "last resort," not a normal fallback
+- [x] ops-provisioner Configure section (line 55) defaults to Playwright MCP instead of agent-browser
+- [x] ops-provisioner Verify section (lines 64-65) explicitly references Playwright MCP for screenshots and navigation
+- [x] ops-research uses Playwright MCP as the default browser navigation method
+- [x] ops-research positions manual instructions as "last resort"
+- [x] constitution.md line 89 mentions Playwright MCP tools as preferred, with agent-browser as fallback
+- [x] All agents retain graceful degradation (agent-browser fallback, then manual as last resort)
+- [x] Existing safety rules (no credentials, no payments, pause for sensitive fields) are preserved unchanged
+- [x] No changes to community-manager (it does not perform browser-based workflows)
 
 ## Test Scenarios
 
