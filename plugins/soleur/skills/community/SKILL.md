@@ -109,6 +109,8 @@ X/Twitter must be enabled (all 4 credential variables set). If X is not configur
 - Created on first run with `mkdir -p .soleur && chmod 600` before writing
 - Updated only after all mentions are processed (not per-reply)
 
+**Free tier degradation:** If `fetch-mentions` returns 403 (client-not-enrolled), the community-manager agent switches to manual mode — prompting for tweet URLs instead of fetching mentions automatically. The rest of the pipeline (brand-voice draft, approval, post-tweet) runs unchanged. See Capability 4 Step 1b. When the paid tier activates, this fallback is never triggered.
+
 If `--headless` is set, skip all mentions with a summary message ("Skipped N mentions in headless mode -- engage requires interactive approval"). No replies are posted in headless mode.
 
 ## Sub-Command Menu
