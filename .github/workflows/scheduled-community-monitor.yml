@@ -1,0 +1,144 @@
+# Daily community monitoring using the community-manager agent.
+# Fetches Discord activity and X/Twitter metrics, generates a digest
+# committed to knowledge-base/community/, and creates a GitHub Issue
+# with the daily report. No autonomous posting -- human approval preserved.
+# Implements #145: Run Community Agent continuously.
+# Start with workflow_dispatch only; add cron after validating end-to-end.
+# To test manually: gh workflow run scheduled-community-monitor.yml
+#
+# Security: This workflow does NOT use any untrusted event inputs
+# in run: commands. All data is collected by the claude-code-action agent
+# via shell scripts, not interpolated into shell commands.
+
+name: "Scheduled: Community Monitor"
+
+on:
+  workflow_dispatch:
+  # TODO: Add cron after validating end-to-end with manual dispatch
+  # schedule:
+  #   - cron: '0 8 * * *'
+
+concurrency:
+  group: schedule-community-monitor
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  id-token: write
+
+jobs:
+  community-monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Ensure label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create "scheduled-community-monitor" \
+            --description "Daily community monitoring report" \
+            --color "0E8A16" 2>/dev/null || true
+
+      - name: Run community monitor
+        uses: anthropics/claude-code-action@1dd74842e568f373608605d9e45c9e854f65f543 # v1.0.63
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
+          plugins: 'soleur@soleur'
+          claude_args: '--model claude-sonnet-4-6 --max-turns 30 --allowedTools Bash,Read,Write,Edit,Glob,Grep'
+          prompt: |
+            You are a community monitoring agent. Your job is to generate a daily
+            community digest and create a GitHub Issue summarizing the findings.
+
+            IMPORTANT: This is an automated CI workflow. The AGENTS.md rule
+            "Never commit directly to main" does NOT apply here. You are
+            explicitly authorized to commit and push to main in this context.
+
+            ## Instructions
+
+            1. **Detect platforms** by checking environment variables:
+               - Discord: enabled if both DISCORD_BOT_TOKEN and DISCORD_GUILD_ID are set
+               - X/Twitter: enabled if ALL of X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN,
+                 X_ACCESS_TOKEN_SECRET are set
+               - If neither Discord nor X is configured, create a GitHub Issue titled
+                 "[Scheduled] Community Monitor - FAILED" with label
+                 "scheduled-community-monitor" explaining the misconfiguration, then stop.
+
+            2. **Collect data** from enabled platforms using existing scripts:
+               - Discord: run `plugins/soleur/skills/community/scripts/discord-community.sh`
+                 with subcommands: guild-info, members, channels (to list channel IDs),
+                 then messages <channel_id> 100 for each channel.
+               - X/Twitter: run `plugins/soleur/skills/community/scripts/x-community.sh fetch-metrics`
+                 ONLY. Do NOT call fetch-mentions or fetch-timeline (they return 403 on
+                 Free tier and waste turns). TODO: re-enable when paid API tier is activated.
+               - GitHub: run `plugins/soleur/skills/community/scripts/github-community.sh`
+                 with subcommands: activity 1, contributors 1, discussions 1.
+                 Use a 1-day lookback window (not the default 7-day).
+               - If a script fails, log the error and continue with other platforms.
+
+            3. **Read brand guide** at knowledge-base/overview/brand-guide.md (section ## Voice)
+               before writing any content. Match the brand voice in the digest.
+
+            4. **Generate digest** and write to knowledge-base/community/YYYY-MM-DD-digest.md
+               (use today's date). Follow the digest file contract from the community-manager
+               agent: frontmatter with period_start/period_end/generated_at, then sections
+               ## Period, ## Activity Summary, ## Top Contributors, and optional sections
+               ## Trending Topics, ## GitHub Activity, ## X/Twitter Metrics.
+               Summarize and aggregate -- do not store raw message transcripts. Brief
+               contextual quotes (under 100 chars) with attribution are acceptable.
+               If the file already exists for today, overwrite it.
+
+            5. **Commit and push** the digest:
+               ```
+               mkdir -p knowledge-base/community
+               git add knowledge-base/community/
+               git diff --cached --quiet && echo "No changes to commit" && exit 0
+               git commit -m "docs: daily community digest"
+               git push origin main || { git pull --rebase origin main && git push origin main; }
+               ```
+
+            6. **Create GitHub Issue** titled "[Scheduled] Community Monitor - YYYY-MM-DD"
+               with label "scheduled-community-monitor". Include a condensed summary:
+               platform status, key metrics, notable items, and a link to the digest file.
+
+      - name: Discord notification (failure)
+        if: failure()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if [[ -z "$DISCORD_WEBHOOK_URL" ]]; then
+            echo "DISCORD_WEBHOOK_URL not set, skipping failure notification"
+            exit 0
+          fi
+
+          RUN_URL="${REPO_URL}/actions/runs/${RUN_ID}"
+          MESSAGE=$(printf '**Community Monitor failed**\n\nWorkflow run: %s\n\nCheck logs for details.' \
+            "$RUN_URL")
+          PAYLOAD=$(jq -n \
+            --arg content "$MESSAGE" \
+            --arg username "Sol" \
+            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
+            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL")
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Discord failure notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Discord failure notification failed (HTTP $HTTP_CODE)"
+          fi
