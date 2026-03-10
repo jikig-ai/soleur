@@ -8,7 +8,7 @@ permalink: pages/legal/gdpr-policy.html
 <section class="page-hero">
   <div class="container">
     <h1>GDPR Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated February 26, 2026 (CLA signature processing)</p>
+    <p>Effective February 20, 2026 | Last Updated March 10, 2026 (newsletter subscription data)</p>
   </div>
 </section>
 
@@ -19,7 +19,7 @@ permalink: pages/legal/gdpr-policy.html
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** February 26, 2026 (CLA signature processing)
+**Last Updated:** March 10, 2026 (newsletter subscription data)
 
 ---
 
@@ -67,15 +67,19 @@ For website analytics via Plausible Analytics, the lawful basis is **legitimate 
 
 For processing of GitHub profile data when users contribute to the Soleur repository (issues, pull requests, discussions), the lawful basis is **legitimate interest** (Article 6(1)(f)) -- facilitating community participation in the project. The balancing test considers: (a) the processing is limited to publicly available GitHub profile data voluntarily shared by the user, (b) the user initiated the interaction, (c) the processing is necessary for the stated purpose, and (d) users can withdraw by deleting their GitHub contributions.
 
-### 3.5 Contributor License Agreement (CLA) Signatures
+### 3.4 Contributor License Agreement (CLA) Signatures
 
 For processing of CLA signature data when contributors sign the Contributor License Agreement via GitHub pull requests, the lawful basis is **legitimate interest** (Article 6(1)(f)). The data processed consists of the contributor's GitHub username, signature timestamp, and associated pull request reference.
 
 **Balancing test:** (1) Maintaining an enforceable record of contributor intellectual property license grants is a legitimate interest of the project maintainer, required to support dual licensing under the Business Source License 1.1. (2) The processing is limited to the minimum data necessary -- only the GitHub username (already public), timestamp, and PR reference are collected. No additional personal data is requested. (3) Contributors' rights are not overridden because they voluntarily initiate the process by submitting a pull request and explicitly consenting by posting the signing comment. Signature data is stored on a dedicated branch (`cla-signatures`) in the public repository. Retention is indefinite because the license grants are irrevocable; however, contributors may request deletion of their signature record, noting that the underlying license grant survives deletion per the CLA terms (Section 8(e)).
 
-### 3.4 Legal and GDPR Inquiry Handling
+### 3.5 Legal and GDPR Inquiry Handling
 
 For processing personal data contained in data subject rights requests and legal inquiries sent to legal@jikigai.com, the lawful basis is **legal obligation** (Article 6(1)(c)) for GDPR requests (fulfilling our obligations under Articles 12-22) and **legitimate interest** (Article 6(1)(f)) for other legal inquiries.
+
+### 3.6 Newsletter Subscription
+
+For processing of email addresses when visitors subscribe to the Soleur newsletter via the Docs Site, the lawful basis is **consent** (Article 6(1)(a)). Subscribers actively opt in by submitting the signup form and confirming their subscription via a double opt-in confirmation email sent by Buttondown. Consent may be withdrawn at any time by unsubscribing via the link included in every newsletter email. Upon withdrawal, the email address is removed from the active subscriber list.
 
 ---
 
@@ -83,14 +87,16 @@ For processing personal data contained in data subject rights requests and legal
 
 ### 4.1 Data NOT Collected by Soleur
 
-Soleur does not collect, store, or process the following categories of personal data:
+The Soleur **Plugin** does not collect, store, or process the following categories of personal data:
 
-- Names, email addresses, or contact information
+- Names or physical contact information
 - Account credentials or authentication tokens
 - IP addresses or device identifiers
 - Location data
 - Financial or payment information
 - Content generated through the plugin (knowledge-base files, brainstorms, plans, code)
+
+**Note:** The Docs Site collects email addresses from visitors who voluntarily subscribe to the newsletter (see Section 3.6). This data is processed by Buttondown, not by the Plugin.
 
 ### 4.2 Data That May Be Processed by Third Parties
 
@@ -103,6 +109,7 @@ The following data may be processed by third-party services when users interact 
 | GitHub account data | GitHub (via repository) | Issue tracking, contributions |
 | Name, email, inquiry content | Proton AG (via Proton Mail) | Handling legal and GDPR inquiries (legal@jikigai.com) |
 | GitHub username, signature timestamp, PR reference | GitHub (via CLA Assistant) | Recording CLA signature for contributor IP license grants |
+| Email address | Buttondown (via newsletter signup) | Managing newsletter subscriptions and delivering newsletter emails |
 
 Users are responsible for reviewing the privacy policies of these third-party services.
 
@@ -128,7 +135,7 @@ The Docs Site uses **Plausible Analytics** ([plausible.io](https://plausible.io)
 
 ## 5. Data Subject Rights
 
-Under the GDPR, data subjects in the EEA have the following rights. Because Soleur does not collect or process personal data, most of these rights are exercisable only against the relevant third-party service providers:
+Under the GDPR, data subjects in the EEA have the following rights. Because Soleur's data collection is limited (newsletter email addresses via Buttondown, CLA signatures via GitHub), most of these rights are exercisable against the relevant third-party service providers or by unsubscribing from the newsletter:
 
 ### 5.1 Rights Exercisable Against Third Parties
 
@@ -212,13 +219,14 @@ Given that Soleur's own data processing is limited to standard web hosting (via 
 
 Jikigai maintains an internal record of processing activities as required by Article 30(1) of the GDPR. The SME exemption under Article 30(5) does not apply because, although Jikigai has fewer than 250 employees, the documentation site hosting constitutes non-occasional processing (continuous web hosting).
 
-The register documents five processing activities:
+The register documents six processing activities:
 
 1. **Documentation website hosting** (soleur.ai via GitHub Pages) -- IP addresses, browser metadata of visitors
 2. **Website analytics** (soleur.ai via Plausible Analytics) -- page URLs, referrer URLs, country (derived from IP, not stored), device type, browser type. Legal basis: legitimate interest (Article 6(1)(f)). No personal data is stored; IP addresses are discarded after geolocation. Plausible Analytics is hosted in the EU.
 3. **Source repository management** (GitHub) -- contributor profile data, issue reporters
 4. **Legal and GDPR inquiry handling** (legal@jikigai.com) -- names, email addresses, inquiry content
 5. **CLA signature collection** (GitHub CLA Assistant) -- GitHub username, signature timestamp, pull request reference. Legal basis: legitimate interest (Article 6(1)(f)). Signature data is stored on the `cla-signatures` branch in the public repository. Retention is indefinite (irrevocable license grants).
+6. **Newsletter subscription management** (soleur.ai via Buttondown) -- email addresses of newsletter subscribers. Legal basis: consent (Article 6(1)(a)). Data is processed by Buttondown (US-based, SCCs in place). Retention: until the subscriber unsubscribes. Double opt-in is used to verify consent.
 
 The register is maintained internally and is available on request to the competent supervisory authority (CNIL for France). Since the 2018 reform of the Loi Informatique et Libertes, no registration or prior declaration to the CNIL is required.
 
@@ -241,7 +249,7 @@ Given Jikigai's minimal processing activities, the most likely breach scenario w
 
 ## 12. Children's Data
 
-Soleur is designed for professional use by solo founders and technical builders. It is not directed at children under the age of 16. We do not knowingly collect personal data from children. Because Soleur does not collect personal data from any users, no specific age-verification mechanism is implemented.
+Soleur is designed for professional use by solo founders and technical builders. It is not directed at children under the age of 16. We do not knowingly collect personal data from children. The only personal data collected by the Docs Site is email addresses voluntarily provided by newsletter subscribers, and no specific age-verification mechanism is implemented for this collection beyond the double opt-in confirmation process.
 
 ---
 
