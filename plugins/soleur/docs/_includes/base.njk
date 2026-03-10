@@ -19,6 +19,8 @@
   <meta name="twitter:title" content="{{ title }}{% if title != site.name %} - {{ site.name }}{% endif %}">
   <meta name="twitter:description" content="{{ description }}">
   <meta name="twitter:image" content="{{ site.url }}/images/og-image.png">
+  <meta name="twitter:site" content="@soleur_ai">
+  <meta name="twitter:creator" content="@soleur_ai">
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -100,6 +102,11 @@
         <li><a href="{{ link.url }}"{% if link.external %} target="_blank" rel="noopener"{% endif %}>{{ link.label }}</a></li>
         {%- endfor %}
       </ul>
+      <div class="footer-social">
+        <a href="{{ site.discord }}" target="_blank" rel="noopener" aria-label="Discord">Discord</a>
+        <a href="{{ site.github }}" target="_blank" rel="noopener" aria-label="GitHub">GitHub</a>
+        <a href="{{ site.x }}" target="_blank" rel="noopener" aria-label="X / Twitter">X</a>
+      </div>
       <span class="footer-tagline">Designed, built, and shipped by {{ site.name }} &mdash; using {{ site.name }}.</span>
     </div>
   </footer>

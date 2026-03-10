@@ -154,16 +154,16 @@ The insertion order in the HTML matters for the stacking order: `footer-left` > 
 
 ## Acceptance Criteria
 
-- [ ] `plugins/soleur/docs/_data/site.json` contains `"x": "https://x.com/soleur_ai"`
-- [ ] Community page Connect section shows three cards: Discord, X/Twitter, GitHub
-- [ ] X/Twitter card links to `https://x.com/soleur_ai` with `target="_blank" rel="noopener"`
-- [ ] X/Twitter card dot uses `#E7E9EA` (not `#000000`)
-- [ ] `base.njk` includes `<meta name="twitter:site" content="@soleur_ai">`
-- [ ] `base.njk` includes `<meta name="twitter:creator" content="@soleur_ai">`
-- [ ] `brand-guide.md` specifies `@soleur_ai` handle in the X/Twitter section
-- [ ] Footer contains social links for Discord, GitHub, and X on all pages
-- [ ] Footer social links use `--color-text-secondary` token (not shorthand)
-- [ ] Docs site builds without errors (`npx @11ty/eleventy --input=plugins/soleur/docs --output=_site`)
+- [x] `plugins/soleur/docs/_data/site.json` contains `"x": "https://x.com/soleur_ai"`
+- [x] Community page Connect section shows three cards: Discord, X/Twitter, GitHub
+- [x] X/Twitter card links to `https://x.com/soleur_ai` with `target="_blank" rel="noopener"`
+- [x] X/Twitter card dot uses `#E7E9EA` (not `#000000`)
+- [x] `base.njk` includes `<meta name="twitter:site" content="@soleur_ai">`
+- [x] `base.njk` includes `<meta name="twitter:creator" content="@soleur_ai">`
+- [x] `brand-guide.md` specifies `@soleur_ai` handle in the X/Twitter section
+- [x] Footer contains social links for Discord, GitHub, and X on all pages
+- [x] Footer social links use `--color-text-secondary` token (not shorthand)
+- [x] Docs site builds without errors (`npx @11ty/eleventy --input=plugins/soleur/docs --output=_site`)
 - [ ] All three community cards render correctly at desktop (>1024px), tablet (769-1024px), and mobile (<768px) breakpoints
 
 ## Test Scenarios

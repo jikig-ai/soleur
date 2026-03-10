@@ -330,6 +330,18 @@
   }
   .community-text a { color: var(--color-accent); }
 
+  /* Footer social links */
+  .footer-social {
+    display: flex;
+    gap: var(--space-4);
+  }
+  .footer-social a {
+    font-size: var(--text-xs);
+    color: var(--color-text-secondary);
+    text-decoration: none;
+  }
+  .footer-social a:hover { color: var(--color-text); }
+
   /* Command cards (wider) */
   .command-card {
     display: grid;
