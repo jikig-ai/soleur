@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-03-09
+last_updated: 2026-03-10
 ---
 
 # Expenses
@@ -13,6 +13,7 @@ last_updated: 2026-03-09
 | soleur.ai | Cloudflare | domain | 70.00 | 2028-02-16 | 2-year registration required for .ai TLD |
 | Plausible Analytics | Plausible | saas | 0.00 | 2026-03-24 | Free trial until ~2026-03-24, then $9/mo Growth plan |
 | X API | X Corp | api | 0.00 | - | Free tier, pay-per-use; @soleur_ai account |
+| X API Basic (DEFERRED) | X Corp | api | 100.00 | - | DEFERRED: $100/mo Basic tier for fetch-mentions/timeline. Trigger: first paying customer or $500 MRR. See #497 |
 
 ## One-Time
 

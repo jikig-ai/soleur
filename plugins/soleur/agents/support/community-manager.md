@@ -270,6 +270,30 @@ Parse the JSON output. The `mentions` array contains objects with `id`, `text`, 
 
 If `result_count` is 0 or the `mentions` array is empty, report "No recent mentions found" and end the session.
 
+### Step 1b: Handle Fetch Failure (Free Tier Fallback)
+
+If `fetch-mentions` exits non-zero:
+
+1. Check stderr output for "requires paid API access" (client-not-enrolled signal).
+2. If found — **switch to manual mode:**
+   - Report: "fetch-mentions requires paid API access (Free tier). Switching to manual mode."
+   - Enter manual loop:
+     a. Prompt via AskUserQuestion: "Paste a tweet URL or numeric tweet ID to reply to (or 'done' to finish):"
+     b. Parse input:
+        - If URL matches `https://(x\.com|twitter\.com)/.+/status/(\d+)` — extract tweet ID from the numeric segment after `/status/`
+        - If all-numeric — use directly as tweet ID
+        - Otherwise — report "Unrecognized format. Expected a tweet URL (x.com or twitter.com) or numeric tweet ID." and re-prompt
+     c. Draft a brand-voice reply for this tweet (follow Step 3 constraints)
+     d. Present for approval (follow Step 4 flow, without "Skip all remaining" since there is no remaining list)
+     e. If accepted, post via `x-community.sh post-tweet "<reply_text>" --reply-to <tweet_id>`
+     f. After processing, return to (a) — loop until user types "done"
+   - Do NOT update since-id state file in manual mode
+   - Display session summary with "Tweets replied to" (not "Mentions processed")
+3. If "requires paid API access" NOT found in stderr — this is a different 403 error (permissions, suspension). Report the full error and stop. Do not enter manual mode.
+4. If the error is not a 403 at all (network failure, 401, etc.) — report error and stop. Do not enter manual mode.
+
+**Headless mode:** If `--headless` is set and fetch-mentions returns 403 with client-not-enrolled, report: "Cannot engage in headless mode on Free tier — fetch-mentions requires paid API access and manual fallback requires interactive input." Display summary with 0 processed and stop.
+
 ### Step 2: Read Brand Guide
 
 Read `knowledge-base/overview/brand-guide.md` and locate two sections:
