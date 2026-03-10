@@ -207,6 +207,10 @@ Project principles organized by domain. Add principles as you learn them.
 - Prefer hook-based enforcement over documentation-only rules for agent discipline -- PreToolUse hooks make violations impossible rather than aspirational; reserve AGENTS.md hard rules for cases where hooks cannot intercept (e.g., reasoning errors, not tool calls); when a rule gains hook enforcement, annotate it with `[hook-enforced: <script> <guard>]` and add a corresponding prose rule comment to the hook script for bidirectional traceability
 - Diagnostic scripts must print positive confirmation on success, not just absence of error -- silent success is indistinguishable from a skipped check; always emit an `[ok]` or equivalent status line for each verified condition
 - When adding a new sequential phase to an existing multi-agent pipeline, verify it does not exceed the pipeline's parallel subagent limit -- add as sequential (Phase N.5) rather than parallel when the limit is already reached
+- Never use bare `pip install` on modern Linux (Ubuntu 24.04+, Fedora 38+) -- PEP 668 blocks system-wide installs; use `python3 -m venv .venv && source .venv/bin/activate && pip install` or `pipx` for CLI tools; document venv requirements in skill SKILL.md Phase 0 when Python dependencies are needed
+- Never use `fonts.google.com/download` for programmatic font acquisition -- the endpoint requires browser JavaScript; use the `google/fonts` GitHub repository (`raw.githubusercontent.com/google/fonts/main/ofl/<font>/`) for direct TTF file access; always validate downloads with `file <path> | grep -q TrueType` before use
+- When generating images with Pillow, size text as a percentage of image height (headlines 12-16%, secondary 8-12%, tertiary 4-6%) rather than guessing absolute pixel values -- absolute guesses consistently undersize by 2x on banner-scale images (1500x500+)
+- Before building a pipeline that depends on AI image generation, verify quota with a minimal test request -- API keys may authenticate for text but lack image generation quota on free tiers; fail fast at Phase 0, not after font downloads and mockup design
 
 ## Testing
 

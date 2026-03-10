@@ -2,7 +2,7 @@
 
 **Issue:** #483
 **Branch:** feat-x-banner
-**Status:** Draft
+**Status:** Complete
 
 ## Problem Statement
 
@@ -40,9 +40,9 @@ The @soleur_ai X account lacks a banner/header image, leaving the profile incomp
 
 ## Acceptance Criteria
 
-- [ ] Banner image is 1500x500px
-- [ ] Banner uses only brand colors and typography
-- [ ] Core content visible in center 60% (mobile safe zone)
-- [ ] Banner uploaded to @soleur_ai profile
-- [ ] Brand guide updated with banner specs
-- [ ] Avatar does not obscure key content (bottom-left safe area respected)
+- [x] Banner image is 1500x500px
+- [x] Banner uses only brand colors and typography
+- [x] Core content visible in center 60% (mobile safe zone)
+- [x] Banner uploaded to @soleur_ai profile
+- [x] Brand guide updated with banner specs
+- [x] Avatar does not obscure key content (bottom-left safe area respected)

@@ -7,6 +7,34 @@ description: This skill should be used when generating and editing images using 
 
 Generate and edit images using Google's Gemini API. The environment variable `GEMINI_API_KEY` must be set.
 
+## Phase 0: Pre-Flight Checks
+
+Before generating images, verify both environment and quota:
+
+1. **Environment:** Confirm `GEMINI_API_KEY` is set (the scripts check this)
+2. **Python dependencies:** Install in a venv (`python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`) -- bare `pip install` is blocked by PEP 668 on modern Linux
+3. **Image generation quota:** Free-tier API keys authenticate successfully but may have zero quota for image generation. Run a minimal test request before building the full pipeline:
+
+```bash
+python3 -c "
+import os
+from google import genai
+from google.genai import types
+client = genai.Client(api_key=os.environ['GEMINI_API_KEY'])
+try:
+    r = client.models.generate_content(
+        model='gemini-2.5-flash-image',
+        contents=['Generate a 1x1 pixel red square'],
+        config=types.GenerateContentConfig(response_modalities=['TEXT', 'IMAGE']),
+    )
+    print('[ok] Image generation quota available')
+except Exception as e:
+    print(f'[FAIL] Image generation quota: {e}')
+"
+```
+
+If quota is unavailable, fall back to Pillow-only generation (solid/gradient backgrounds with text overlay).
+
 ## Default Model
 
 | Model | Resolution | Best For |

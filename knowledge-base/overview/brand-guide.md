@@ -162,6 +162,21 @@ The visual identity follows the **Solar Forge** direction: raw power being shape
 - Example thread body: "2/ Company-as-a-Service runs every department with AI agents that share a compounding knowledge base. Marketing knows what engineering decided. Legal references the privacy policy. Context flows everywhere."
 - Example final tweet: "Full breakdown of what CaaS means and why it matters for solo founders:\n\nhttps://soleur.ai/blog/what-is-company-as-a-service/\n\n#solofounder"
 
+#### Profile Banner
+
+| Property | Value |
+|----------|-------|
+| Dimensions | 1500x500px (3:1 aspect ratio) |
+| File | `plugins/soleur/docs/images/x-banner-1500x500.png` |
+| Background | `#0A0A0A` with gold gradient edge accents (`#D4B36A` left, `#B8923E` right) |
+| Wordmark | "S O L E U R" -- Inter 500, 52px, gold `#C9A962`, centered horizontally, upper third |
+| Thesis | "Build a Billion-Dollar Company. Alone." -- Cormorant Garamond 500, 82px, white `#FFFFFF`, centered |
+| Metrics | "60+ Agents · 8 Departments · 1 Founder" -- Inter 400, 26px, secondary `#848484`, below thesis |
+| Gold accent line | 1px horizontal, fading from center, at y=355 |
+| Mobile safe zone | Center 900px (60%) contains all text -- verified |
+| Avatar overlap | Bottom-left clear of critical content |
+| Generated with | Pillow (programmatic -- no AI image generation) |
+
 ### Website / Landing Page
 
 - Full brand energy. This is where the ambition lives at maximum volume.
