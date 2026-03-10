@@ -27,9 +27,9 @@ Present a structured comparison table with a recommendation and explain why. Ask
 
 ## Browser Navigation
 
-Check if agent-browser is available by running `agent-browser --help`.
+Use Playwright MCP tools to navigate to the chosen provider's website and inspect live pricing or availability.
 
-If available, navigate to the chosen provider's website to check live availability or pricing. If not available, provide direct URLs and tell the user to navigate manually.
+**Fallback:** If Playwright MCP tools are unavailable, use agent-browser CLI. If neither is available, provide direct URLs as a last resort.
 
 ## Safety Rules
 

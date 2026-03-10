@@ -86,7 +86,7 @@ Project principles organized by domain. Add principles as you learn them.
 - When resolving merge conflicts in large files (CHANGELOG.md, constitution.md), the Write tool replaces the ENTIRE file -- read the full base from `git show HEAD:<path>` and reconstruct the complete file; there is no "rest of file" to preserve
 - Before staging files after a merge, grep staged content for conflict markers: `git diff --cached | grep -E '^\+(<{7}|={7}|>{7})'` -- conflict markers are invisible in normal review and have been committed undetected [hook-enforced: guardrails.sh Guard 4]
 - When modifying agent instructions (adding checks, changing behavior), also update any skill Task prompts that reference the agent with hardcoded check lists -- stale prompts silently ignore new agent capabilities
-- Infrastructure agents that wire external services (DNS, SSL, Pages) must own the full verification loop -- use `gh` CLI, `openssl`, `curl`, and `agent-browser` to verify each step programmatically instead of asking the user to check manually; only stop for genuine decisions, not mechanical verification
+- Infrastructure agents that wire external services (DNS, SSL, Pages) must own the full verification loop -- use Playwright MCP tools (browser_navigate, browser_snapshot, browser_click), `gh` CLI, `openssl`, and `curl` to verify each step programmatically instead of asking the user to check manually; fall back to agent-browser CLI if MCP tools are unavailable; only stop for genuine decisions, not mechanical verification
 - Pencil MCP edits require three conditions: (1) the .pen file tab must be visible in Cursor so the editor webview connects via WebSocket, (2) after `batch_design` operations, the user must Ctrl+S to flush changes to disk (no programmatic save exists), (3) always `batch_get` current property values before `batch_design` updates -- mockup values diverge from live CSS
 - Network and external service failures must degrade gracefully -- warn (if interactive) and continue rather than abort the workflow
 - All Discord webhook payloads must include explicit `username`, `avatar_url`, and `allowed_mentions: {parse: []}` fields rather than relying on webhook defaults -- webhook messages freeze author identity at post time; only delete+repost changes identity on existing messages; omitting `allowed_mentions` enables mention injection from unsanitized content
@@ -135,6 +135,7 @@ Project principles organized by domain. Add principles as you learn them.
 
 ### Prefer
 
+- When browser interaction is needed, default to Playwright MCP tools (browser_navigate, browser_snapshot, browser_click, browser_fill_form, browser_file_upload) -- fall back to agent-browser CLI only if MCP tools are unavailable; manual instructions are a last resort, not a default
 - Plugin infrastructure (agents, commands, skills) is intentionally static - behavior changes require editing markdown files, not runtime registration
 - Use skills for agent-discoverable capabilities and workflow stages; use commands only for entry-point routing (go), knowledge-base sync (sync), and help -- commands are invisible to agents
 - Verify documentation against implementation reality before trusting it; treat docs about "what exists" as hypotheses to verify
