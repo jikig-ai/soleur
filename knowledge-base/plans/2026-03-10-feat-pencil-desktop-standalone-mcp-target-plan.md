@@ -238,16 +238,16 @@ For CI/CD or terminal-only environments, Pencil Desktop requires a display serve
 
 ## Acceptance Criteria
 
-- [ ] `check_deps.sh` succeeds when Pencil Desktop is installed but no IDE exists
-- [ ] `check_deps.sh` outputs `PREFERRED_BINARY`, `PREFERRED_APP`, and `PREFERRED_MODE` values
+- [x] `check_deps.sh` succeeds when Pencil Desktop is installed but no IDE exists
+- [x] `check_deps.sh` outputs `PREFERRED_BINARY`, `PREFERRED_APP`, and `PREFERRED_MODE` values
 - [ ] MCP registration works with Desktop as the target (via CLI or binary path)
 - [ ] Pencil MCP tools (`batch_design`, `batch_get`, `open_document`) work when connected to Desktop
-- [ ] Auto-launch Desktop if installed but not running (macOS and Linux)
-- [ ] Falls back to IDE path when Desktop is not available (no regression)
-- [ ] Works on both macOS and Linux
-- [ ] `SKILL.md` no longer lists IDE as a hard prerequisite
-- [ ] Constitution.md Pencil rule updated for Desktop mode
-- [ ] `pencil` CLI name collision with evolus/pencil is guarded against
+- [x] Auto-launch Desktop if installed but not running (macOS and Linux)
+- [x] Falls back to IDE path when Desktop is not available (no regression)
+- [x] Works on both macOS and Linux
+- [x] `SKILL.md` no longer lists IDE as a hard prerequisite
+- [x] Constitution.md Pencil rule updated for Desktop mode
+- [x] `pencil` CLI name collision with evolus/pencil is guarded against
 
 ## Test Scenarios
 
