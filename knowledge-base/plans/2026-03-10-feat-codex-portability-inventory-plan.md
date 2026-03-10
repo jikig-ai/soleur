@@ -30,9 +30,9 @@ Phase 3: Write inventory document (stats, table, gap analysis)
 
 Refresh the Codex capability baseline so classifications are accurate.
 
-- [ ] 1.1 Fetch current Codex docs (skills, agents, MCP, hooks, config) via WebFetch
-- [ ] 1.2 Create `knowledge-base/specs/feat-codex-portability-inventory/codex-baseline.md` with current capabilities and verification date
-- [ ] 1.3 Create equivalence mapping table (each primitive → Codex equivalent or "none")
+- [x] 1.1 Fetch current Codex docs (skills, agents, MCP, hooks, config) via WebFetch
+- [x] 1.2 Create `knowledge-base/specs/feat-codex-portability-inventory/codex-baseline.md` with current capabilities and verification date
+- [x] 1.3 Create equivalence mapping table (each primitive → Codex equivalent or "none")
 
 **Primitives to scan** (10 categories, MEDIUM and HIGH risk only):
 
@@ -55,12 +55,12 @@ LOW-risk primitives excluded: `model: inherit` (config-level, trivial mapping), 
 
 Grep all components in a single pass. Classify as you go using worst-primitive-wins.
 
-- [ ] 2.1 Enumerate all components:
+- [x] 2.1 Enumerate all components:
   - Agents: `plugins/soleur/agents/**/*.md` (excluding AGENTS.md, README.md)
   - Skills: `plugins/soleur/skills/*/` (scan entire directory — SKILL.md + references/ + scripts/ + assets/)
   - Commands: `plugins/soleur/commands/*.md`
-- [ ] 2.2 For each component, grep for all 10 primitives and record matches
-- [ ] 2.3 Classify each component:
+- [x] 2.2 For each component, grep for all 10 primitives and record matches
+- [x] 2.3 Classify each component:
 
 | Classification | Criteria | Color |
 |---------------|----------|-------|
@@ -69,24 +69,24 @@ Grep all components in a single pass. Classify as you go using worst-primitive-w
 | **Red** | Contains any HIGH-risk primitive (AskUserQuestion, Task/subagent, Skill tool, hookSpecificOutput, MCP tools, SessionStart/Stop). Requires rewrite. | 🔴 |
 | **N/A** | Component exists solely to serve Claude Code architecture (e.g., `heal-skill`, `skill-creator`, `pencil-setup`). No purpose on Codex. | ⚪ |
 
-- [ ] 2.4 Flag N/A candidates: must reference Claude Code plugin infrastructure with zero user-facing value independent of the platform
-- [ ] 2.5 Note inter-component dependencies as you scan (which skills invoke other skills via `skill:`, which spawn subagents via `Task`)
+- [x] 2.4 Flag N/A candidates: must reference Claude Code plugin infrastructure with zero user-facing value independent of the platform
+- [x] 2.5 Note inter-component dependencies as you scan (which skills invoke other skills via `skill:`, which spawn subagents via `Task`)
 
 ### Phase 3: Write Inventory Document
 
 Compile into `knowledge-base/specs/feat-codex-portability-inventory/inventory.md`.
 
-- [ ] 3.1 Summary statistics: green/yellow/red/N/A counts and percentages
-- [ ] 3.2 Full component inventory table: Name, Type, Domain, Classification, Primitives Found, Codex Equivalent
-- [ ] 3.3 Gap analysis per non-portable primitive: usage count, files affected, Codex equivalent (or "none")
-- [ ] 3.4 CI/Infrastructure note: mention GitHub Actions workflows and PreToolUse hook scripts as platform-locked infrastructure (not counted in the 122 components)
+- [x] 3.1 Summary statistics: green/yellow/red/N/A counts and percentages
+- [x] 3.2 Full component inventory table: Name, Type, Domain, Classification, Primitives Found, Codex Equivalent
+- [x] 3.3 Gap analysis per non-portable primitive: usage count, files affected, Codex equivalent (or "none")
+- [x] 3.4 CI/Infrastructure note: mention GitHub Actions workflows and PreToolUse hook scripts as platform-locked infrastructure (not counted in the 122 components)
 
 ## Acceptance Criteria
 
-- [ ] All 122 components classified (green/yellow/red/N/A)
-- [ ] Each non-green component has gap annotation: which primitives block and Codex equivalent
-- [ ] Codex capability baseline documented with verification date
-- [ ] No code changes to existing Soleur plugin files
+- [x] All 122 components classified (green/yellow/red/N/A)
+- [x] Each non-green component has gap annotation: which primitives block and Codex equivalent
+- [x] Codex capability baseline documented with verification date
+- [x] No code changes to existing Soleur plugin files
 
 ## Dependencies & Risks
 
