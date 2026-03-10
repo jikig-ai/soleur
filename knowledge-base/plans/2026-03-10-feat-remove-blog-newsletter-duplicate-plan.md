@@ -29,12 +29,12 @@ Blog post pages render two newsletter signup forms: one inline within the blog p
 
 ## Acceptance Criteria
 
-- [ ] Blog post pages render exactly one newsletter signup form (the footer one from `base.njk`)
-- [ ] The footer newsletter form (`location="footer"`) continues to appear on all pages including blog posts
-- [ ] The homepage newsletter form (`location="homepage"` in `index.njk` line 219-220) is unaffected
-- [ ] The `newsletter-form.njk` partial is not deleted (still used by `base.njk` and `index.njk`)
-- [ ] No CSS changes needed (`.newsletter-section` styles remain for footer and homepage instances)
-- [ ] Plausible analytics `Newsletter Signup` event with `location: footer` continues to fire on blog pages
+- [x] Blog post pages render exactly one newsletter signup form (the footer one from `base.njk`)
+- [x] The footer newsletter form (`location="footer"`) continues to appear on all pages including blog posts
+- [x] The homepage newsletter form (`location="homepage"` in `index.njk` line 219-220) is unaffected
+- [x] The `newsletter-form.njk` partial is not deleted (still used by `base.njk` and `index.njk`)
+- [x] No CSS changes needed (`.newsletter-section` styles remain for footer and homepage instances)
+- [x] Plausible analytics `Newsletter Signup` event with `location: footer` continues to fire on blog pages
 
 ## Test Scenarios
 
