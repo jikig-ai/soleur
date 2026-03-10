@@ -174,10 +174,11 @@ The visual identity follows the **Solar Forge** direction: raw power being shape
 | Wordmark | "S O L E U R" -- Inter 500, 52px, gold `#C9A962`, centered horizontally, upper third |
 | Thesis | "Build a Billion-Dollar Company. Alone." -- Cormorant Garamond 500, 82px, white `#FFFFFF`, centered |
 | Metrics | "60+ Agents · 8 Departments · 1 Founder" -- Inter 400, 26px, secondary `#848484`, below thesis |
-| Gold accent line | 1px horizontal, fading from center, at y=355 |
+| Gold accent line | 1px horizontal, 600px wide centered, 40% opacity, at y=325 |
 | Mobile safe zone | Center 900px (60%) contains all text -- verified |
 | Avatar overlap | Bottom-left clear of critical content |
-| Generated with | Pillow (programmatic -- no AI image generation) |
+| Source file | `knowledge-base/design/brand/brand-x-banner.pen` |
+| Generated with | Pencil MCP (design) + Pillow (PNG export) |
 
 ### Website / Landing Page
 
