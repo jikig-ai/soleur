@@ -5,6 +5,7 @@
   "description": "The company-as-a-service platform. A Claude Code plugin that gives solo founders a full AI organization across every business department.",
   "github": "https://github.com/jikig-ai/soleur",
   "discord": "https://discord.gg/PYZbPBKMUY",
+  "x": "https://x.com/soleur_ai",
   "nav": [
     { "label": "Get Started", "url": "pages/getting-started.html" },
     { "label": "Agents", "url": "pages/agents.html" },

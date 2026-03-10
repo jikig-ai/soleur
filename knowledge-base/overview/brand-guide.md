@@ -149,6 +149,8 @@ The visual identity follows the **Solar Forge** direction: raw power being shape
 
 ### X/Twitter
 
+**Handle:** [@soleur_ai](https://x.com/soleur_ai)
+
 - Full brand voice. Declarative, concrete, no hedging. Every tweet should read like a statement, not a question.
 - **Thread format:** Hook tweet (standalone value, no "thread" announcement) > Numbered body tweets (2/ 3/ 4/) > Final tweet with article link and one-line CTA.
 - **280-character limit** is enforced per tweet during generation, not as a post-hoc trim.
