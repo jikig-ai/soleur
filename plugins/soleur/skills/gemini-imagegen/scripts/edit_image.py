@@ -20,7 +20,9 @@ import sys
 
 from PIL import Image
 from google import genai
-from google.genai import types
+from google.genai import errors, types
+
+from _error_handling import handle_api_error, parse_image_response
 
 
 def edit_image(
@@ -70,26 +72,17 @@ def edit_image(
     
     config = types.GenerateContentConfig(**config_kwargs)
     
-    response = client.models.generate_content(
-        model=model,
-        contents=[instruction, input_image],
-        config=config,
-    )
-    
-    text_response = None
-    image_saved = False
-    
-    for part in response.parts:
-        if part.text is not None:
-            text_response = part.text
-        elif part.inline_data is not None:
-            image = part.as_image()
-            image.save(output_path)
-            image_saved = True
-    
-    if not image_saved:
-        raise RuntimeError("No image was generated. Check your instruction and try again.")
-    
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=[instruction, input_image],
+            config=config,
+        )
+    except errors.APIError as e:
+        handle_api_error(e)
+
+    image, text_response = parse_image_response(response)
+    image.save(output_path)
     return text_response
 
 

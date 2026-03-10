@@ -19,7 +19,9 @@ import os
 import sys
 
 from google import genai
-from google.genai import types
+from google.genai import errors, types
+
+from _error_handling import check_quota, handle_api_error, parse_image_response
 
 
 def generate_image(
@@ -61,26 +63,17 @@ def generate_image(
     
     config = types.GenerateContentConfig(**config_kwargs)
     
-    response = client.models.generate_content(
-        model=model,
-        contents=[prompt],
-        config=config,
-    )
-    
-    text_response = None
-    image_saved = False
-    
-    for part in response.parts:
-        if part.text is not None:
-            text_response = part.text
-        elif part.inline_data is not None:
-            image = part.as_image()
-            image.save(output_path)
-            image_saved = True
-    
-    if not image_saved:
-        raise RuntimeError("No image was generated. Check your prompt and try again.")
-    
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=[prompt],
+            config=config,
+        )
+    except errors.APIError as e:
+        handle_api_error(e)
+
+    image, text_response = parse_image_response(response)
+    image.save(output_path)
     return text_response
 
 
@@ -90,8 +83,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
-    parser.add_argument("prompt", help="Text prompt describing the image")
-    parser.add_argument("output", help="Output file path (e.g., output.png)")
+    parser.add_argument("prompt", nargs="?", help="Text prompt describing the image")
+    parser.add_argument("output", nargs="?", help="Output file path (e.g., output.png)")
     parser.add_argument(
         "--model", "-m",
         default="gemini-2.5-flash-image",
@@ -108,9 +101,30 @@ def main():
         choices=["1K", "2K", "4K"],
         help="Image resolution (4K only available with pro model)"
     )
-    
+    parser.add_argument(
+        "--check-quota",
+        action="store_true",
+        help="Verify image generation quota without generating an image"
+    )
+
     args = parser.parse_args()
-    
+
+    if not args.check_quota and (not args.prompt or not args.output):
+        parser.error("prompt and output are required (unless --check-quota is used)")
+
+    if args.check_quota:
+        try:
+            api_key = os.environ.get("GEMINI_API_KEY")
+            if not api_key:
+                print("GEMINI_API_KEY environment variable not set", file=sys.stderr)
+                sys.exit(1)
+            client = genai.Client(api_key=api_key)
+            check_quota(client, model=args.model)
+        except Exception as e:
+            print(f"[FAIL] {e}", file=sys.stderr)
+            sys.exit(1)
+        return
+
     try:
         text = generate_image(
             prompt=args.prompt,
@@ -119,11 +133,11 @@ def main():
             aspect_ratio=args.aspect,
             image_size=args.size,
         )
-        
+
         print(f"Image saved to: {args.output}")
         if text:
             print(f"Model response: {text}")
-            
+
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)

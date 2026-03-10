@@ -29,7 +29,9 @@ from pathlib import Path
 
 from PIL import Image
 from google import genai
-from google.genai import types
+from google.genai import errors, types
+
+from _error_handling import NoImageError, handle_api_error, parse_image_response
 
 
 class ImageChat:
@@ -76,19 +78,24 @@ class ImageChat:
         
         if not contents:
             return None, None
-        
-        response = self.chat.send_message(contents)
-        
-        text_response = None
-        image_response = None
-        
-        for part in response.parts:
-            if part.text is not None:
-                text_response = part.text
-            elif part.inline_data is not None:
-                image_response = part.as_image()
-                self.current_image = image_response
-        
+
+        try:
+            response = self.chat.send_message(contents)
+        except errors.APIError as e:
+            handle_api_error(e)
+
+        try:
+            image_response, text_response = parse_image_response(response)
+            self.current_image = image_response
+        except NoImageError:
+            # In interactive chat, text-only responses are normal
+            text_response = None
+            if response.parts:
+                for part in response.parts:
+                    if part.text is not None:
+                        text_response = part.text
+            image_response = None
+
         return text_response, image_response
     
     def save_image(self, filename: str | None = None) -> str | None:
