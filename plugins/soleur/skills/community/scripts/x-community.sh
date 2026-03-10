@@ -408,6 +408,18 @@ cmd_fetch_mentions() {
     esac
   done
 
+  # Validate --since is ISO 8601 UTC (prevents query param injection)
+  if [[ -n "$since" && ! "$since" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+    echo "Error: --since must be ISO 8601 UTC format (YYYY-MM-DDTHH:MM:SSZ)" >&2
+    exit 1
+  fi
+
+  # Validate --max is a positive integer (prevents query param injection)
+  if [[ ! "$max_results" =~ ^[0-9]+$ ]]; then
+    echo "Error: --max must be a positive integer, got '${max_results}'" >&2
+    exit 1
+  fi
+
   # Clamp max_results to API range 5-100
   if (( max_results < 5 )); then
     echo "Warning: --max ${max_results} is below API minimum of 5, clamping to 5." >&2
@@ -446,6 +458,12 @@ cmd_fetch_timeline() {
         ;;
     esac
   done
+
+  # Validate --max is a positive integer (prevents query param injection)
+  if [[ ! "$max_results" =~ ^[0-9]+$ ]]; then
+    echo "Error: --max must be a positive integer, got '${max_results}'" >&2
+    exit 1
+  fi
 
   # Clamp max_results to API range 5-100
   if (( max_results < 5 )); then
