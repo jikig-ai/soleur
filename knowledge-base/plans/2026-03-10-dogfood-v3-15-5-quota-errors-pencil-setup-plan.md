@@ -370,20 +370,20 @@ This catches a failure mode where the extension is installed but the binary has 
 
 ## Acceptance Criteria
 
-- [ ] All 16 unit tests in `test_error_handling.py` pass
-- [ ] `--check-quota` flag works and prints actionable message for each error category
-- [ ] `--check-quota` exits with code 1 on failure (not 0)
-- [ ] All 5 gemini-imagegen scripts import from `_error_handling`
-- [ ] No script accesses `response.candidates[N].finish_reason` or `.candidates`
-- [ ] `multi_turn_chat.py` correctly catches `NoImageError` for text-only responses
-- [ ] `check_deps.sh` detects Cursor + extension as IDE tier correctly
-- [ ] `check_deps.sh` outputs correct `PREFERRED_MODE=ide`, `PREFERRED_BINARY`, `PREFERRED_APP=cursor`
-- [ ] Detected MCP binary path is executable and is an ELF binary
-- [ ] Detected binary path contains `linux-x64` platform suffix (not darwin/windows)
-- [ ] VS Code `--app` value is `visual_studio_code` (not `code`)
-- [ ] Evolus/pencil collision guard prints info message and falls through
-- [ ] Full pencil-setup skill flow completes MCP registration with remove-then-add pattern
-- [ ] Post-dogfood cleanup removes pencil MCP registration
+- [x] All 16 unit tests in `test_error_handling.py` pass
+- [x] `--check-quota` flag works and prints actionable message for each error category (key has quota, returned `[ok]`)
+- [N/A] `--check-quota` exits with code 1 on failure (key has quota -- cannot test failure path without a quota-less key)
+- [x] All 5 gemini-imagegen scripts import from `_error_handling`
+- [x] No script accesses `response.candidates[N].finish_reason` or `.candidates` (only a comment in `_error_handling.py`)
+- [x] `multi_turn_chat.py` correctly catches `NoImageError` for text-only responses
+- [N/A] `check_deps.sh` detects Cursor + extension as IDE tier correctly (Desktop binary found first -- Tier 2 wins over Tier 3)
+- [x] `check_deps.sh` outputs correct `PREFERRED_MODE=desktop_binary`, `PREFERRED_BINARY=.../mcp-server-linux-x64`, `PREFERRED_APP=pencil` (Desktop tier, not IDE as originally expected)
+- [x] Detected MCP binary path is executable and is an ELF binary (ELF 64-bit LSB executable, x86-64)
+- [x] Detected binary path contains `linux-x64` platform suffix (not darwin/windows)
+- [x] VS Code `--app` value is `visual_studio_code` (not `code`) -- confirmed at line 115 of check_deps.sh
+- [x] Evolus/pencil collision guard prints info message and falls through (required realistic fake binary that rejects unknown subcommands)
+- [x] Full pencil-setup skill flow completes MCP registration with remove-then-add pattern (`claude mcp add` connected successfully)
+- [x] Post-dogfood cleanup removes pencil MCP registration
 
 ## Test Scenarios
 
@@ -400,7 +400,7 @@ This catches a failure mode where the extension is installed but the binary has 
 ## Non-Goals
 
 - Writing new code or modifying existing implementations
-- Testing on macOS or with Pencil Desktop installed (not available in this environment)
+- Testing on macOS (not available in this environment). Note: Pencil Desktop WAS available as an extracted AppImage
 - Testing the Gemini Pro model (quota may not cover it)
 - Registering Pencil MCP permanently (this is verification only -- clean up after)
 - Adding unit tests for `UnknownApiResponseError` and `FunctionInvocationError` (noted for future work)
