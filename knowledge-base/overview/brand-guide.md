@@ -164,6 +164,41 @@ The visual identity follows the **Solar Forge** direction: raw power being shape
 - Example thread body: "2/ Company-as-a-Service runs every department with AI agents that share a compounding knowledge base. Marketing knows what engineering decided. Legal references the privacy policy. Context flows everywhere."
 - Example final tweet: "Full breakdown of what CaaS means and why it matters for solo founders:\n\nhttps://soleur.ai/blog/what-is-company-as-a-service/\n\n#solofounder"
 
+#### Engagement Guardrails
+
+These guardrails apply in both automatic mode (fetch-mentions) and manual mode (Free tier 403 fallback). The human reviewer is the enforcement mechanism.
+
+**Topics to avoid:**
+- Political, partisan, or religiously divisive topics
+- Competitor criticism or comparisons -- state what Soleur does, never what others lack
+- Unverified claims or speculation about roadmap dates
+- Anything requiring legal review (pricing commitments, data handling details beyond the privacy policy)
+- Trending hashtags or memes with unclear associations -- meanings shift fast
+
+**Exception:** Engaging with #solofounder, #buildinpublic, and AI/developer tooling communities is encouraged even when conversations touch on industry trends. The prohibition targets partisan, religious, and inflammatory topics, not the broader tech ecosystem.
+
+**When to skip a mention:**
+- Abusive, harassing, or spam content
+- Off-topic mentions with no connection to Soleur or solo-founder topics
+- Rage-bait or provocative threads designed to generate outrage
+- Likely bot accounts (no profile image, alphanumeric handle, zero followers)
+- Threads where replying would amplify negative sentiment
+- Mentions that are retweets or quote-tweets of Soleur content -- the RT is sufficient engagement
+- Accounts whose recent content creates brand association risk -- any reply ties Soleur to that account's content
+
+**Reply cadence:**
+- Maximum 10 replies per engagement session
+- Space replies naturally -- do not post 10 replies in 2 minutes. X's algorithm penalizes rapid-fire bursts that look automated.
+- One reply per thread -- do not enter extended back-and-forth. Escalate complex questions to Discord or docs.
+- Default to skipping when unsure -- silence is safer than a misaligned reply
+
+**Tone in replies:**
+- Match the register of the original tweet (technical question gets a technical answer, casual mention gets a concise acknowledgment)
+- Never argue or debate -- state the position once, then disengage
+- Redirect complex questions to docs or Discord rather than attempting a 280-character answer
+- Credit insight in feature suggestions ("Solid idea. Filed as #N." not "Thanks for the feedback!")
+- Maintain a human voice -- avoid phrases that sound templated or auto-generated
+
 #### Profile Banner
 
 | Property | Value |

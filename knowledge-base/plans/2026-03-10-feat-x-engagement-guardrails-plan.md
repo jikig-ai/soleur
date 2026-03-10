@@ -195,15 +195,15 @@ This is a documentation-only change. The guardrails become effective through the
 
 ## Acceptance Criteria
 
-- [ ] `#### Engagement Guardrails` section exists under `### X/Twitter` in `knowledge-base/overview/brand-guide.md`
-- [ ] Section covers: topics to avoid, when to skip, reply cadence, tone matching
-- [ ] Topics to avoid includes exception clause for legitimate tech ecosystem conversations
-- [ ] When to skip includes brand association risk criterion
-- [ ] Reply cadence includes anti-automation spacing guidance
-- [ ] Heading contract preserved -- `## Voice`, `## Channel Notes`, `### X/Twitter` headings unchanged
-- [ ] `#### Profile Banner` sub-heading remains below the new section (document structure intact)
-- [ ] Content follows brand guide writing conventions (imperative/infinitive form, no second person)
-- [ ] Guardrails apply to both automatic (fetch-mentions) and manual (403 fallback) modes -- no mode-specific language
+- [x] `#### Engagement Guardrails` section exists under `### X/Twitter` in `knowledge-base/overview/brand-guide.md`
+- [x] Section covers: topics to avoid, when to skip, reply cadence, tone matching
+- [x] Topics to avoid includes exception clause for legitimate tech ecosystem conversations
+- [x] When to skip includes brand association risk criterion
+- [x] Reply cadence includes anti-automation spacing guidance
+- [x] Heading contract preserved -- `## Voice`, `## Channel Notes`, `### X/Twitter` headings unchanged
+- [x] `#### Profile Banner` sub-heading remains below the new section (document structure intact)
+- [x] Content follows brand guide writing conventions (imperative/infinitive form, no second person)
+- [x] Guardrails apply to both automatic (fetch-mentions) and manual (403 fallback) modes -- no mode-specific language
 
 ## Test Scenarios
 
