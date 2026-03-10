@@ -34,7 +34,7 @@ fi
 
 Read `CLAUDE.md` if it exists - apply project conventions during brainstorming.
 
-**Branch safety check (defense-in-depth):** Run `git branch --show-current`. If the result is `main` or `master`, abort immediately with: "Error: brainstorm cannot run on main/master. Checkout a feature branch first." This check fires in all modes as defense-in-depth alongside PreToolUse hooks -- it fires even if hooks are unavailable (e.g., in CI).
+**Branch safety check (defense-in-depth):** Run `git branch --show-current`. If the result is `main` or `master`, and `knowledge-base/` exists, create the worktree immediately (pulling Phase 3 forward) so that dialogue and file writes happen on a feature branch. Derive the feature name from the feature description (kebab-case). Run `./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh feature <name>`, then `cd .worktrees/feat-<name>`. Set `WORKTREE_CREATED_EARLY=true` so Phase 3 skips worktree creation. If `knowledge-base/` does not exist, abort with: "Error: brainstorm cannot run on main/master without knowledge-base/. Checkout a feature branch first." This check fires in all modes as defense-in-depth alongside PreToolUse hooks -- it fires even if hooks are unavailable (e.g., in CI).
 
 **Plugin loader constraint:** Before proposing namespace changes (bare commands, command-to-skill migration), verify plugin loader constraints -- bare namespace commands are not supported, and commands/skills have different frontmatter and argument handling.
 
@@ -86,6 +86,10 @@ Assess whether the feature description has implications for specific business do
 
 ### Phase 1: Understand the Idea
 
+#### 1.0 External Platform Verification (if applicable)
+
+If the feature description references an external platform, marketplace, or service, **WebFetch the URL first** before launching any research agents. Classify by: (1) self-service or waitlist? (2) discovery surface or procurement layer? (3) does it accept the product category? This 30-second gate prevents spawning agents that analyze a false premise.
+
 #### 1.1 Research (Context Gathering)
 
 Run these agents **in parallel** to gather context before dialogue:
@@ -130,6 +134,8 @@ Use **AskUserQuestion tool** to ask which approach the user prefers.
 ### Phase 3: Create Worktree (if knowledge-base/ exists)
 
 **IMPORTANT:** Create the worktree BEFORE writing any files so all artifacts go on the feature branch.
+
+**If `WORKTREE_CREATED_EARLY=true`** (worktree was created in Phase 0 branch safety check), skip steps 1-2 below and proceed to step 3 (set worktree path).
 
 **Check for knowledge-base directory:**
 
