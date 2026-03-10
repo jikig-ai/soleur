@@ -92,43 +92,32 @@ Per learnings:
 
 ## Implementation Phases
 
-### Phase 1: Prerequisites and Design (~20% of work)
+### Phase 1: Design and Generate
 
 1. Verify `GEMINI_API_KEY` is set
 2. Download Inter and Cormorant Garamond .ttf fonts from Google Fonts
-3. Create Pencil mockup (`.pen` file) at 1500x500 layout
-4. Screenshot mockup for reference
-
-### Phase 2: Image Generation (~30% of work)
-
-1. Generate background texture via Gemini (`gemini-3-pro-image-preview`, 21:9, 2K)
+3. Create Pencil mockup (`.pen` file) at 1500x500 layout for visual reference
+4. Generate background texture via Gemini (`gemini-3-pro-image-preview`, 21:9, 2K)
    - Prompt: dark forge atmosphere, gold gradient accents at edges, no text, brand colors only
-2. Center-crop from 21:9 to 1500x500 with Pillow
-3. Overlay text with Pillow using brand fonts:
+5. Center-crop from 21:9 to 1500x500 with Pillow
+6. Overlay text with Pillow using brand fonts:
    - "S O L E U R" wordmark (Inter 500, gold, center-top area)
    - "Build a Billion-Dollar Company. Alone." (Cormorant Garamond 500, white, center)
-   - Optional: "60+ Agents · 8 Departments · 1 Founder" (Inter 400, secondary gray, below thesis)
-4. Save to `plugins/soleur/docs/images/x-banner-1500x500.png`
-5. Generate version without metrics for comparison
+   - Try metrics "60+ Agents · 8 Departments · 1 Founder" (Inter 400, secondary gray) — remove if cluttered
+7. Save to `plugins/soleur/docs/images/x-banner-1500x500.png`
 
-### Phase 3: Upload to X (~20% of work)
+### Phase 2: Upload to X
 
 1. Screenshot current @soleur_ai profile state (backup)
 2. Navigate to X settings via Playwright MCP (headed mode)
-3. Upload banner image
-4. Save profile
-5. Screenshot updated profile for verification
+3. Upload banner image, save profile
+4. Screenshot updated profile for verification
 
-### Phase 4: Documentation (~15% of work)
+### Phase 3: Document and Finalize
 
-1. Add "### Social Media Assets" section to brand guide under "## Channel Notes > ### X/Twitter"
-2. Document banner specs: dimensions, typography, colors, file path
-3. Commit all artifacts
-
-### Phase 5: Compound (~15% of work)
-
-1. Run `soleur:compound` to capture learnings (Gemini prompt engineering, Playwright X upload flow)
-2. Final commit and push
+1. Add banner specs to brand guide under `### X/Twitter` in `## Channel Notes`
+2. Run `soleur:compound` to capture learnings
+3. Commit all artifacts and push
 
 ## References
 
