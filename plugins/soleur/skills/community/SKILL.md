@@ -13,6 +13,7 @@ Manage community presence across Discord, GitHub, and X/Twitter. Detects enabled
 
 ```text
 community [sub-command] [--headless] [--platform PLATFORM]
+community engage [--max-results N] [--headless]
 ```
 
 If `$ARGUMENTS` is empty or unrecognized, present the sub-command menu below.
@@ -38,7 +39,7 @@ Platform scripts are located at `plugins/soleur/skills/community/scripts/`:
 - [discord-community.sh](./scripts/discord-community.sh) -- Discord Bot API wrapper (messages, members, guild-info, channels)
 - [discord-setup.sh](./scripts/discord-setup.sh) -- Discord credential setup and validation
 - [github-community.sh](./scripts/github-community.sh) -- GitHub API wrapper (activity, contributors, discussions)
-- [x-community.sh](./scripts/x-community.sh) -- X/Twitter API v2 wrapper (fetch-metrics, post-tweet)
+- [x-community.sh](./scripts/x-community.sh) -- X/Twitter API v2 wrapper (fetch-metrics, fetch-mentions, post-tweet)
 - [x-setup.sh](./scripts/x-setup.sh) -- X/Twitter credential setup and validation
 
 ## Sub-Commands
@@ -81,6 +82,35 @@ X/Twitter: [enabled] | [not configured -- missing X_API_KEY, X_API_SECRET, X_ACC
    - Discord: "Run `plugins/soleur/skills/community/scripts/discord-setup.sh` to configure"
    - X/Twitter: "Run `plugins/soleur/skills/community/scripts/x-setup.sh validate-credentials` to verify, or `x-setup.sh write-env` to save credentials"
 
+### `engage`
+
+Reply to recent X/Twitter mentions using brand-voice drafts with human approval. Spawns the `community-manager` agent with engagement instructions.
+
+X/Twitter must be enabled (all 4 credential variables set). If X is not configured, report "X/Twitter not configured" and stop.
+
+**Flow:**
+
+1. Run platform detection -- verify X/Twitter is enabled
+2. Read the since-id state file (`.soleur/x-engage-since-id`, resolved via `git rev-parse --show-toplevel`). If the file exists and contains a valid numeric ID, pass it as `--since-id` to the fetch command. If missing or non-numeric, skip (fetches last N mentions).
+3. Spawn agent: `community-manager` with prompt: "Engage with recent X/Twitter mentions. Use Capability 4: Mention Engagement. Max results: [N]. Since ID: [ID or none]."
+4. The agent fetches mentions via `x-community.sh fetch-mentions`
+5. For each mention, the agent drafts a reply following brand guide voice (`knowledge-base/overview/brand-guide.md` sections `## Voice` and `## Channel Notes > ### X/Twitter`). If the brand guide is missing, the agent warns but proceeds with a professional, declarative tone.
+6. Each draft is presented via AskUserQuestion with options:
+   - **Accept** -- post this reply via `x-community.sh post-tweet --reply-to <mention_id>`
+   - **Edit** -- modify the reply text (validate 280-character limit; re-prompt if over)
+   - **Skip** -- move to the next mention
+   - **Skip all remaining** -- end the session (available after the first mention)
+7. After all mentions are processed, the agent updates the since-id state file with the `newest_id` from the fetch response and displays a session summary (processed, posted, skipped counts).
+
+**Since-id state file:**
+
+- Path: `.soleur/x-engage-since-id` (relative to repo root)
+- Format: plain text, single line containing the tweet ID
+- Created on first run with `mkdir -p .soleur && chmod 600` before writing
+- Updated only after all mentions are processed (not per-reply)
+
+If `--headless` is set, skip all mentions with a summary message ("Skipped N mentions in headless mode -- engage requires interactive approval"). No replies are posted in headless mode.
+
 ## Sub-Command Menu
 
 If no sub-command is provided, present options using the AskUserQuestion tool:
@@ -91,6 +121,7 @@ If no sub-command is provided, present options using the AskUserQuestion tool:
 1. **digest** -- Generate a multi-platform community digest
 2. **health** -- Display community health metrics
 3. **platforms** -- List platform configuration status
+4. **engage** -- Reply to recent X/Twitter mentions
 
 ## Important Guidelines
 

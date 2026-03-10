@@ -3,8 +3,9 @@
 #
 # Usage: x-community.sh <command> [args]
 # Commands:
-#   fetch-metrics                    - Fetch account metrics (followers, following, tweets)
-#   post-tweet <text> [--reply-to ID] - Post a tweet (optionally as a reply)
+#   fetch-metrics                                    - Fetch account metrics (followers, following, tweets)
+#   fetch-mentions [--max-results N] [--since-id ID] - Fetch recent mentions of the authenticated user
+#   post-tweet <text> [--reply-to ID]                - Post a tweet (optionally as a reply)
 #
 # Environment variables (required):
 #   X_API_KEY              - API key (consumer key)
@@ -250,6 +251,223 @@ x_request() {
 
 # --- Commands ---
 
+# Resolve the authenticated user's numeric ID via GET /2/users/me
+get_authenticated_user_id() {
+  local url="${X_API}/2/users/me"
+
+  local auth_header
+  auth_header=$(oauth_sign "GET" "$url")
+
+  local response http_code body
+  if ! response=$(curl -s -w "\n%{http_code}" \
+    -H "Authorization: ${auth_header}" \
+    "$url" 2>/dev/null); then
+    echo "Error: Failed to connect to X API." >&2
+    exit 1
+  fi
+
+  http_code=$(echo "$response" | tail -1)
+  body=$(echo "$response" | sed '$d')
+
+  case "$http_code" in
+    2[0-9][0-9])
+      local user_id
+      user_id=$(echo "$body" | jq -r '.data.id // empty' 2>/dev/null)
+      if [[ -z "${user_id:-}" ]]; then
+        echo "Error: Could not extract user ID from /2/users/me response." >&2
+        exit 1
+      fi
+      echo "$user_id"
+      ;;
+    401)
+      echo "Error: X API returned 401 Unauthorized." >&2
+      echo "Your credentials may be expired or invalid." >&2
+      echo "" >&2
+      echo "To fix:" >&2
+      echo "  1. Go to https://developer.x.com/en/portal/dashboard" >&2
+      echo "  2. Regenerate your Access Token and Secret" >&2
+      echo "  3. Update environment variables" >&2
+      exit 1
+      ;;
+    403)
+      echo "Error: X API returned 403 Forbidden." >&2
+      echo "Your app may lack the required permissions." >&2
+      exit 1
+      ;;
+    429)
+      echo "Error: X API rate limit exceeded while resolving user ID." >&2
+      exit 2
+      ;;
+    *)
+      local message
+      message=$(echo "$body" | jq -r '.detail // .title // "Unknown error"' 2>/dev/null || echo "Unknown error")
+      echo "Error: X API returned HTTP ${http_code}: ${message}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+cmd_fetch_mentions() {
+  local max_results=10
+  local since_id=""
+
+  # Parse optional arguments
+  while [[ $# -gt 0 ]]; do
+    case "${1:-}" in
+      --max-results)
+        local mr_val="${2:-}"
+        if [[ -z "$mr_val" ]]; then
+          echo "Error: --max-results requires a numeric value." >&2
+          exit 1
+        fi
+        if ! [[ "$mr_val" =~ ^[0-9]+$ ]]; then
+          echo "Error: --max-results must be a numeric value, got '${mr_val}'." >&2
+          exit 1
+        fi
+        if (( mr_val < 5 || mr_val > 100 )); then
+          echo "Error: --max-results must be between 5 and 100, got ${mr_val}." >&2
+          exit 1
+        fi
+        max_results="$mr_val"
+        shift 2
+        ;;
+      --since-id)
+        local si_val="${2:-}"
+        if [[ -z "$si_val" ]]; then
+          echo "Error: --since-id requires a numeric value." >&2
+          exit 1
+        fi
+        if ! [[ "$si_val" =~ ^[0-9]+$ ]]; then
+          echo "Error: --since-id must be a numeric value, got '${si_val}'." >&2
+          exit 1
+        fi
+        since_id="$si_val"
+        shift 2
+        ;;
+      *)
+        echo "Error: Unknown option '${1:-}'" >&2
+        echo "Usage: x-community.sh fetch-mentions [--max-results N] [--since-id ID]" >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  # Resolve authenticated user ID
+  local user_id
+  user_id=$(get_authenticated_user_id)
+
+  # Build query parameters for OAuth signing and URL
+  local base_url="${X_API}/2/users/${user_id}/mentions"
+  local -a query_params=()
+  query_params+=("max_results=${max_results}")
+  query_params+=("tweet.fields=author_id,created_at,conversation_id")
+  query_params+=("expansions=author_id")
+  query_params+=("user.fields=username,name")
+
+  if [[ -n "$since_id" ]]; then
+    query_params+=("since_id=${since_id}")
+  fi
+
+  # Sign request with all query params included in signature
+  local auth_header
+  auth_header=$(oauth_sign "GET" "$base_url" "${query_params[@]}")
+
+  # Build query string for URL
+  local query_string=""
+  local qp
+  for qp in "${query_params[@]}"; do
+    local qk="${qp%%=*}"
+    local qv="${qp#*=}"
+    if [[ -n "$query_string" ]]; then
+      query_string+="&"
+    fi
+    query_string+="$(urlencode "$qk")=$(urlencode "$qv")"
+  done
+
+  local response http_code body
+  if ! response=$(curl -s -w "\n%{http_code}" \
+    -H "Authorization: ${auth_header}" \
+    "${base_url}?${query_string}" 2>/dev/null); then
+    echo "Error: Failed to connect to X API." >&2
+    exit 1
+  fi
+
+  http_code=$(echo "$response" | tail -1)
+  body=$(echo "$response" | sed '$d')
+
+  case "$http_code" in
+    2[0-9][0-9])
+      if ! echo "$body" | jq . >/dev/null 2>&1; then
+        echo "Error: X API returned malformed JSON for /2/users/${user_id}/mentions" >&2
+        exit 1
+      fi
+
+      # Handle empty data (no mentions)
+      local data_count
+      data_count=$(echo "$body" | jq '.data | length // 0' 2>/dev/null || echo "0")
+      if [[ "$data_count" == "0" ]] || [[ "$data_count" == "null" ]]; then
+        echo '{"mentions":[],"meta":{"newest_id":null,"result_count":0}}'
+        return 0
+      fi
+
+      # Transform: join includes.users to data by author_id
+      echo "$body" | jq '{
+        mentions: [
+          .data[] as $tweet |
+          ($tweet.author_id) as $aid |
+          ((.includes.users // [])[] | select(.id == $aid)) as $user |
+          {
+            id: $tweet.id,
+            text: $tweet.text,
+            author_username: ($user.username // "unknown"),
+            author_name: ($user.name // "unknown"),
+            created_at: $tweet.created_at,
+            conversation_id: $tweet.conversation_id
+          }
+        ],
+        meta: {
+          newest_id: (.meta.newest_id // null),
+          result_count: (.meta.result_count // 0)
+        }
+      }'
+      ;;
+    401)
+      echo "Error: X API returned 401 Unauthorized." >&2
+      echo "Your credentials may be expired or invalid." >&2
+      echo "" >&2
+      echo "To fix:" >&2
+      echo "  1. Go to https://developer.x.com/en/portal/dashboard" >&2
+      echo "  2. Regenerate your Access Token and Secret" >&2
+      echo "  3. Update environment variables" >&2
+      exit 1
+      ;;
+    403)
+      echo "Error: X API returned 403 Forbidden." >&2
+      echo "Your app may lack the required permissions or your account may be suspended." >&2
+      exit 1
+      ;;
+    429)
+      local retry_after
+      retry_after=$(echo "$body" | jq -r '.retry_after // 5' 2>/dev/null || echo "5")
+      local retry_int
+      retry_int=$(printf '%.0f' "$retry_after" 2>/dev/null || echo "5")
+      if (( retry_int > 60 )); then
+        retry_after=60
+      elif (( retry_int < 1 )); then
+        retry_after=1
+      fi
+      echo "Error: X API rate limit exceeded. Retry after ${retry_after}s." >&2
+      exit 2
+      ;;
+    *)
+      local message
+      message=$(echo "$body" | jq -r '.detail // .title // "Unknown error"' 2>/dev/null || echo "Unknown error")
+      echo "Error: X API returned HTTP ${http_code}: ${message}" >&2
+      exit 1
+      ;;
+  esac
+}
+
 cmd_fetch_metrics() {
   local url="/2/users/me"
   local fields="user.fields=public_metrics,description,created_at"
@@ -346,8 +564,9 @@ main() {
     echo "Usage: x-community.sh <command> [args]" >&2
     echo "" >&2
     echo "Commands:" >&2
-    echo "  fetch-metrics                      - Fetch account metrics" >&2
-    echo "  post-tweet <text> [--reply-to ID]  - Post a tweet" >&2
+    echo "  fetch-metrics                                    - Fetch account metrics" >&2
+    echo "  fetch-mentions [--max-results N] [--since-id ID] - Fetch recent mentions" >&2
+    echo "  post-tweet <text> [--reply-to ID]                - Post a tweet" >&2
     exit 1
   fi
 
@@ -356,8 +575,9 @@ main() {
   require_credentials
 
   case "$command" in
-    fetch-metrics) cmd_fetch_metrics ;;
-    post-tweet)    cmd_post_tweet "$@" ;;
+    fetch-metrics)  cmd_fetch_metrics ;;
+    fetch-mentions) cmd_fetch_mentions "$@" ;;
+    post-tweet)     cmd_post_tweet "$@" ;;
     *)
       echo "Error: Unknown command '${command}'" >&2
       echo "Run 'x-community.sh' without arguments for usage." >&2
