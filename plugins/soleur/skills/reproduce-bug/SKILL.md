@@ -95,3 +95,18 @@ Add a comment to the issue with:
 3. **Screenshots** - Visual evidence of the bug (upload captured screenshots)
 4. **Relevant Code** - File paths and line numbers
 5. **Suggested Fix** - If one exists
+
+## Phase 5: Cleanup
+
+After uploading screenshots to the issue comment, remove local screenshot artifacts. Playwright MCP writes to the main repo root when invoked from a worktree.
+
+```bash
+# Remove bug reproduction screenshots from current working directory
+rm -f bug-*.png
+
+# If in a worktree, also clean the main repo root
+MAIN_REPO=$(git rev-parse --show-superproject-working-tree 2>/dev/null)
+if [[ -n "$MAIN_REPO" ]]; then
+  rm -f "$MAIN_REPO"/bug-*.png
+fi
+```
