@@ -206,17 +206,17 @@ Per constitution.md and existing patterns:
 
 ## Acceptance Criteria
 
-- [ ] `x-community.sh fetch-mentions` returns recent @mentions as JSON (with paid API access)
-- [ ] `x-community.sh fetch-timeline` returns recent tweets as JSON (with paid API access)
-- [ ] `x-community.sh fetch-mentions` returns clear 403 error with endpoint path and paid access guidance (without credits)
-- [ ] `x-community.sh fetch-timeline` returns clear 403 error with endpoint path and paid access guidance (without credits)
-- [ ] `--since` flag on `fetch-mentions` filters by start_time
-- [ ] `--max` flag on both commands controls result count (5-100 per API schema)
-- [ ] Empty results (no mentions/tweets) return `[]` not an error
-- [ ] Existing `fetch-metrics` and `post-tweet` commands unchanged (refactored `cmd_fetch_metrics` produces identical output)
-- [ ] `get_request` helper handles 401, 403, 429 (retry), JSON validation consistently
-- [ ] Community-manager agent doc notes paid access requirement
-- [ ] Usage text and SKILL.md updated with new commands
+- [x] `x-community.sh fetch-mentions` returns recent @mentions as JSON (with paid API access)
+- [x] `x-community.sh fetch-timeline` returns recent tweets as JSON (with paid API access)
+- [x] `x-community.sh fetch-mentions` returns clear 403 error with endpoint path and paid access guidance (without credits)
+- [x] `x-community.sh fetch-timeline` returns clear 403 error with endpoint path and paid access guidance (without credits)
+- [x] `--since` flag on `fetch-mentions` filters by start_time
+- [x] `--max` flag on both commands controls result count (5-100 per API schema)
+- [x] Empty results (no mentions/tweets) return `[]` not an error
+- [x] Existing `fetch-metrics` and `post-tweet` commands unchanged (refactored `cmd_fetch_metrics` produces identical output)
+- [x] `get_request` helper handles 401, 403, 429 (retry), JSON validation consistently
+- [x] Community-manager agent doc notes paid access requirement
+- [x] Usage text and SKILL.md updated with new commands
 
 ## Test Scenarios
 

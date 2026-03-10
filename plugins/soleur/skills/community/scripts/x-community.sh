@@ -3,8 +3,10 @@
 #
 # Usage: x-community.sh <command> [args]
 # Commands:
-#   fetch-metrics                    - Fetch account metrics (followers, following, tweets)
-#   post-tweet <text> [--reply-to ID] - Post a tweet (optionally as a reply)
+#   fetch-metrics                              - Fetch account metrics (followers, following, tweets)
+#   fetch-mentions [--since ISO8601] [--max N] - Fetch recent @mentions (paid API)
+#   fetch-timeline [--max N]                   - Fetch recent tweets (paid API)
+#   post-tweet <text> [--reply-to ID]          - Post a tweet (optionally as a reply)
 #
 # Environment variables (required):
 #   X_API_KEY              - API key (consumer key)
@@ -248,20 +250,48 @@ x_request() {
   esac
 }
 
-# --- Commands ---
+# --- GET request helper ---
 
-cmd_fetch_metrics() {
-  local url="/2/users/me"
-  local fields="user.fields=public_metrics,description,created_at"
+# Make an authenticated GET request to the X API with query params
+# Arguments: endpoint query_params [depth]
+# Query params are included in the OAuth signature
+# Retries on 429 up to 3 times
+get_request() {
+  local endpoint="$1"
+  local query_params="${2:-}"
+  local depth="${3:-0}"
 
-  # OAuth params need to include query string params for signing
+  if (( depth >= 3 )); then
+    echo "Error: X API rate limit exceeded after 3 retries for ${endpoint}." >&2
+    exit 2
+  fi
+
+  local url="${X_API}${endpoint}"
+
+  # Build OAuth signature with query params included
   local auth_header
-  auth_header=$(oauth_sign "GET" "${X_API}${url}" "${fields}")
+  if [[ -n "$query_params" ]]; then
+    # Split query_params on & and pass as varargs to oauth_sign
+    local -a param_args=()
+    local param
+    while IFS= read -r param; do
+      [[ -n "$param" ]] && param_args+=("$param")
+    done <<< "${query_params//&/$'\n'}"
+    auth_header=$(oauth_sign "GET" "$url" "${param_args[@]}")
+  else
+    auth_header=$(oauth_sign "GET" "$url")
+  fi
+
+  # Build request URL with query string
+  local request_url="$url"
+  if [[ -n "$query_params" ]]; then
+    request_url="${url}?${query_params}"
+  fi
 
   local response http_code body
   if ! response=$(curl -s -w "\n%{http_code}" \
     -H "Authorization: ${auth_header}" \
-    "${X_API}${url}?${fields}" 2>/dev/null); then
+    "$request_url" 2>/dev/null); then
     echo "Error: Failed to connect to X API." >&2
     exit 1
   fi
@@ -271,30 +301,170 @@ cmd_fetch_metrics() {
 
   case "$http_code" in
     2[0-9][0-9])
-      # Extract and format metrics
-      echo "$body" | jq '{
-        username: .data.username,
-        name: .data.name,
-        description: .data.description,
-        created_at: .data.created_at,
-        metrics: .data.public_metrics
-      }'
+      # Validate JSON
+      if ! echo "$body" | jq . >/dev/null 2>&1; then
+        echo "Error: X API returned malformed JSON for ${endpoint}" >&2
+        exit 1
+      fi
+      echo "$body"
       ;;
     401)
-      echo "Error: X API returned 401 Unauthorized." >&2
+      echo "Error: X API returned 401 Unauthorized for ${endpoint}." >&2
+      echo "Your credentials may be expired or invalid." >&2
+      echo "" >&2
+      echo "To fix:" >&2
+      echo "  1. Go to https://developer.x.com/en/portal/dashboard" >&2
+      echo "  2. Regenerate your Access Token and Secret" >&2
+      echo "  3. Update environment variables" >&2
+      exit 1
+      ;;
+    403)
+      local reason
+      reason=$(echo "$body" | jq -r '.reason // "unknown"' 2>/dev/null || echo "unknown")
+      echo "Error: X API returned 403 Forbidden for ${endpoint}." >&2
+      if [[ "$reason" == "client-not-enrolled" ]]; then
+        echo "This endpoint requires paid API access." >&2
+        echo "Visit https://developer.x.com to purchase credits." >&2
+      elif [[ "$reason" == "official-client-forbidden" ]]; then
+        echo "Your app may lack the required permissions." >&2
+      else
+        echo "Your app may lack the required permissions or your account may be suspended." >&2
+      fi
       exit 1
       ;;
     429)
-      echo "Error: X API rate limit exceeded." >&2
-      exit 2
+      local retry_after
+      retry_after=$(echo "$body" | jq -r '.retry_after // 5' 2>/dev/null || echo "5")
+      local retry_int
+      retry_int=$(printf '%.0f' "$retry_after" 2>/dev/null || echo "5")
+      if (( retry_int > 60 )); then
+        retry_after=60
+      elif (( retry_int < 1 )); then
+        retry_after=1
+      fi
+      echo "Rate limited. Retrying after ${retry_after}s (attempt $((depth + 1))/3)..." >&2
+      sleep "$retry_after"
+      get_request "$endpoint" "$query_params" "$((depth + 1))"
       ;;
     *)
       local message
       message=$(echo "$body" | jq -r '.detail // .title // "Unknown error"' 2>/dev/null || echo "Unknown error")
-      echo "Error: X API returned HTTP ${http_code}: ${message}" >&2
+      echo "Error: X API returned HTTP ${http_code} for ${endpoint}: ${message}" >&2
       exit 1
       ;;
   esac
+}
+
+# Resolve the authenticated user's numeric ID
+resolve_user_id() {
+  local response
+  response=$(get_request "/2/users/me" "")
+
+  local user_id
+  user_id=$(echo "$response" | jq -r '.data.id' 2>/dev/null || echo "")
+
+  if [[ ! "$user_id" =~ ^[0-9]+$ ]]; then
+    echo "Error: Failed to resolve user ID from /2/users/me." >&2
+    echo "Response did not contain a valid numeric ID." >&2
+    exit 1
+  fi
+
+  echo "$user_id"
+}
+
+# --- Commands ---
+
+cmd_fetch_metrics() {
+  local body
+  body=$(get_request "/2/users/me" "user.fields=public_metrics,description,created_at")
+
+  echo "$body" | jq '{
+    username: .data.username,
+    name: .data.name,
+    description: .data.description,
+    created_at: .data.created_at,
+    metrics: .data.public_metrics
+  }'
+}
+
+cmd_fetch_mentions() {
+  local since=""
+  local max_results=10
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --since)
+        since="${2:?--since requires an ISO 8601 timestamp}"
+        shift 2
+        ;;
+      --max)
+        max_results="${2:?--max requires a number}"
+        shift 2
+        ;;
+      *)
+        echo "Error: Unknown option '$1'" >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  # Clamp max_results to API range 5-100
+  if (( max_results < 5 )); then
+    echo "Warning: --max ${max_results} is below API minimum of 5, clamping to 5." >&2
+    max_results=5
+  elif (( max_results > 100 )); then
+    echo "Warning: --max ${max_results} is above API maximum of 100, clamping to 100." >&2
+    max_results=100
+  fi
+
+  local user_id
+  user_id=$(resolve_user_id)
+
+  local query_params="tweet.fields=created_at,author_id,public_metrics,text&max_results=${max_results}"
+  if [[ -n "$since" ]]; then
+    query_params="${query_params}&start_time=${since}"
+  fi
+
+  local body
+  body=$(get_request "/2/users/${user_id}/mentions" "$query_params")
+
+  echo "$body" | jq '.data // []'
+}
+
+cmd_fetch_timeline() {
+  local max_results=10
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --max)
+        max_results="${2:?--max requires a number}"
+        shift 2
+        ;;
+      *)
+        echo "Error: Unknown option '$1'" >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  # Clamp max_results to API range 5-100
+  if (( max_results < 5 )); then
+    echo "Warning: --max ${max_results} is below API minimum of 5, clamping to 5." >&2
+    max_results=5
+  elif (( max_results > 100 )); then
+    echo "Warning: --max ${max_results} is above API maximum of 100, clamping to 100." >&2
+    max_results=100
+  fi
+
+  local user_id
+  user_id=$(resolve_user_id)
+
+  local query_params="tweet.fields=created_at,public_metrics,text&max_results=${max_results}"
+
+  local body
+  body=$(get_request "/2/users/${user_id}/tweets" "$query_params")
+
+  echo "$body" | jq '.data // []'
 }
 
 cmd_post_tweet() {
@@ -346,8 +516,10 @@ main() {
     echo "Usage: x-community.sh <command> [args]" >&2
     echo "" >&2
     echo "Commands:" >&2
-    echo "  fetch-metrics                      - Fetch account metrics" >&2
-    echo "  post-tweet <text> [--reply-to ID]  - Post a tweet" >&2
+    echo "  fetch-metrics                              - Fetch account metrics" >&2
+    echo "  fetch-mentions [--since ISO8601] [--max N] - Fetch recent @mentions (paid API)" >&2
+    echo "  fetch-timeline [--max N]                   - Fetch recent tweets (paid API)" >&2
+    echo "  post-tweet <text> [--reply-to ID]          - Post a tweet" >&2
     exit 1
   fi
 
@@ -356,8 +528,10 @@ main() {
   require_credentials
 
   case "$command" in
-    fetch-metrics) cmd_fetch_metrics ;;
-    post-tweet)    cmd_post_tweet "$@" ;;
+    fetch-metrics)  cmd_fetch_metrics ;;
+    fetch-mentions) cmd_fetch_mentions "$@" ;;
+    fetch-timeline) cmd_fetch_timeline "$@" ;;
+    post-tweet)     cmd_post_tweet "$@" ;;
     *)
       echo "Error: Unknown command '${command}'" >&2
       echo "Run 'x-community.sh' without arguments for usage." >&2
