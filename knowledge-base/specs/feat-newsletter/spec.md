@@ -32,7 +32,7 @@ Add a newsletter CTA section to the homepage (index.njk) with brand-aligned copy
 
 ### FR3: Signup Form — Blog Page
 
-Add a newsletter signup prompt on the blog index page (blog.njk) and/or at the end of individual blog articles. Captures readers already engaged with content.
+Add a newsletter signup prompt at the end of individual blog articles via the `blog-post.njk` layout (after the `.prose` content div, not inside it). Captures readers already engaged with content.
 
 ### FR4: Double Opt-In Flow
 
