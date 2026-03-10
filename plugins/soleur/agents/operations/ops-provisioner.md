@@ -80,6 +80,25 @@ After verification, gather the expense details:
 
 After recording, summarize: the tool name, plan and cost, dashboard URL, verification status, and any code changes made.
 
+## Public Surface Check
+
+After recording the expense, assess whether the newly provisioned tool has any user-visible presence -- social links, analytics badges, embeds, status page links, or landing page mentions.
+
+If the tool has user-visible presence:
+
+1. Read `plugins/soleur/docs/_data/site.json` and check if the tool's URL is listed
+2. Search `plugins/soleur/docs/pages/` for references to the tool
+3. Check `knowledge-base/overview/brand-guide.md` for the tool's handle or name
+
+If any reference is missing, warn the user:
+
+```text
+This tool has public-facing presence but the docs site does not reference it yet.
+Missing from: <list-of-files>. Consider filing an issue to update the website.
+```
+
+If the tool has no public-facing presence (e.g., internal monitoring, CI tooling), skip this check. The community skill has a platform-specific version of this check for social platforms.
+
 ## Safety Rules
 
 NEVER enter credentials, passwords, API keys, or payment information.
