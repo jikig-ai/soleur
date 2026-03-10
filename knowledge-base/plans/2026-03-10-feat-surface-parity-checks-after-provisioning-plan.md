@@ -145,14 +145,14 @@ Per code-simplicity and YAGNI principles:
 
 ## Acceptance Criteria
 
-- [ ] `plugins/soleur/skills/community/SKILL.md` includes a "Platform Surface Check" section listing the surface files to verify after platform setup
-- [ ] `plugins/soleur/agents/operations/ops-provisioner.md` includes a "Public Surface Check" phase after "Verify + Record" and before "Safety Rules"
-- [ ] Both checks list correct file paths (`plugins/soleur/docs/_data/site.json`, `plugins/soleur/docs/pages/community.njk`, `knowledge-base/overview/brand-guide.md`)
-- [ ] Ops-provisioner check is generic (uses a semantic question, not hard-coded to social platforms) and suggests filing a follow-up issue when gaps are found
-- [ ] Community skill check is scoped to social/community platforms specifically
-- [ ] Neither check blocks the provisioning workflow -- warnings only
-- [ ] No `$()` or shell variable expansion in the SKILL.md additions (use angle-bracket placeholders)
-- [ ] Ops-provisioner section placement is between "Verify + Record" and "Safety Rules" (maintains the Setup > Configure > Verify+Record > Surface Check > Safety flow)
+- [x] `plugins/soleur/skills/community/SKILL.md` includes a "Platform Surface Check" section listing the surface files to verify after platform setup
+- [x] `plugins/soleur/agents/operations/ops-provisioner.md` includes a "Public Surface Check" phase after "Verify + Record" and before "Safety Rules"
+- [x] Both checks list correct file paths (`plugins/soleur/docs/_data/site.json`, `plugins/soleur/docs/pages/community.njk`, `knowledge-base/overview/brand-guide.md`)
+- [x] Ops-provisioner check is generic (uses a semantic question, not hard-coded to social platforms) and suggests filing a follow-up issue when gaps are found
+- [x] Community skill check is scoped to social/community platforms specifically
+- [x] Neither check blocks the provisioning workflow -- warnings only
+- [x] No `$()` or shell variable expansion in the SKILL.md additions (use angle-bracket placeholders)
+- [x] Ops-provisioner section placement is between "Verify + Record" and "Safety Rules" (maintains the Setup > Configure > Verify+Record > Surface Check > Safety flow)
 
 ## Test Scenarios
 

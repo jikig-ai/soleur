@@ -101,3 +101,23 @@ If no sub-command is provided, present options using the AskUserQuestion tool:
 - The `community-manager` agent handles data collection, analysis, and output formatting
 - This skill is the entry point; the agent does the work
 - Ownership boundary: community = monitoring + engagement. Broadcasting/distribution is handled by the `social-distribute` skill.
+
+## Platform Surface Check
+
+After a new platform is set up and verified via its setup script (confirmed by the `platforms` sub-command showing `[enabled]`), check whether the platform has been added to all public-facing surfaces. Read each file and verify:
+
+| File | What to look for |
+|------|------------------|
+| `plugins/soleur/docs/_data/site.json` | URL entry for the platform |
+| `plugins/soleur/docs/pages/community.njk` | Card in the Connect section |
+| `knowledge-base/overview/brand-guide.md` | Platform handle mention |
+
+If any surface is missing, output a warning:
+
+```text
+[WARNING] Platform <platform-name> is missing from: <list of files>.
+These files need updating before the integration is complete.
+Consider filing: gh issue create --title 'feat(docs): add <platform-name> to website and brand guide'
+```
+
+This check does not block provisioning -- it is advisory only.
