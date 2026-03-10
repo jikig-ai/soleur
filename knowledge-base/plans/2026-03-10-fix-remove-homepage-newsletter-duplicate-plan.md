@@ -29,11 +29,11 @@ The homepage (`index.njk`) renders two newsletter signup forms: one inline at li
 
 ## Acceptance Criteria
 
-- [ ] Homepage renders exactly one newsletter signup form (the footer one from `base.njk`)
-- [ ] The footer newsletter form (`location="footer"`) continues to appear on all pages including the homepage
-- [ ] The `newsletter-form.njk` partial is not deleted (still used by `base.njk`)
-- [ ] No CSS changes needed (`.newsletter-section` styles remain for the footer instance)
-- [ ] Plausible analytics `Newsletter Signup` event with `location: footer` continues to fire on the homepage
+- [x] Homepage renders exactly one newsletter signup form (the footer one from `base.njk`)
+- [x] The footer newsletter form (`location="footer"`) continues to appear on all pages including the homepage
+- [x] The `newsletter-form.njk` partial is not deleted (still used by `base.njk`)
+- [x] No CSS changes needed (`.newsletter-section` styles remain for the footer instance)
+- [x] Plausible analytics `Newsletter Signup` event with `location: footer` continues to fire on the homepage
 
 ## Test Scenarios
 
