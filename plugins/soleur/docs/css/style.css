@@ -953,6 +953,7 @@
     .landing-quote blockquote { font-size: var(--text-xl); }
     .section-title { font-size: var(--text-2xl); }
     .footer-inner { flex-direction: column; gap: var(--space-4); text-align: center; }
+    .footer-social { justify-content: center; }
   }
 
   @media (min-width: 769px) and (max-width: 1024px) {
