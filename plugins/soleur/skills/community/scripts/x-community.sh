@@ -323,6 +323,8 @@ get_request() {
       reason=$(echo "$body" | jq -r '.reason // "unknown"' 2>/dev/null || echo "unknown")
       echo "Error: X API returned 403 Forbidden for ${endpoint}." >&2
       if [[ "$reason" == "client-not-enrolled" ]]; then
+        # CONTRACT: community-manager agent matches on this string for 403 fallback detection.
+        # Changing this message requires updating agents/support/community-manager.md Capability 4 Step 1b.
         echo "This endpoint requires paid API access." >&2
         echo "Visit https://developer.x.com to purchase credits." >&2
       elif [[ "$reason" == "official-client-forbidden" ]]; then
