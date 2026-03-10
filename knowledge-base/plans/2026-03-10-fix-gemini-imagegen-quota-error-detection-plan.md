@@ -115,14 +115,14 @@ All 5 scripts repeat the same `generate_content()` call-and-parse pattern. Extra
 
 ## Acceptance Criteria
 
-- [ ] All 5 scripts catch `google.genai.errors.ClientError` with code 429 and display a "QUOTA EXHAUSTED" message (`generate_image.py`, `edit_image.py`, `compose_images.py`, `gemini_images.py`, `multi_turn_chat.py`)
-- [ ] All 5 scripts catch `ClientError` with code 403 and display a "PERMISSION DENIED" message
-- [ ] Generic "check your prompt" / silent failure replaced with specific error categories (safety filter, empty response)
-- [ ] `generate_image.py --check-quota` validates quota before generation (exit 0 on success, exit 1 on failure)
-- [ ] `gemini_images.py` library class raises on missing image parts instead of silently returning
-- [ ] Error handling logic is shared (not duplicated 5 times) -- either via a helper module or centralized in `gemini_images.py`
-- [ ] Existing functionality unchanged when quota is available (no regression)
-- [ ] No code accesses `response.candidates[N].finish_reason` (avoids SDK hang bug #2024)
+- [x] All 5 scripts catch `google.genai.errors.ClientError` with code 429 and display a "QUOTA EXHAUSTED" message (`generate_image.py`, `edit_image.py`, `compose_images.py`, `gemini_images.py`, `multi_turn_chat.py`)
+- [x] All 5 scripts catch `ClientError` with code 403 and display a "PERMISSION DENIED" message
+- [x] Generic "check your prompt" / silent failure replaced with specific error categories (safety filter, empty response)
+- [x] `generate_image.py --check-quota` validates quota before generation (exit 0 on success, exit 1 on failure)
+- [x] `gemini_images.py` library class raises on missing image parts instead of silently returning
+- [x] Error handling logic is shared (not duplicated 5 times) -- either via a helper module or centralized in `gemini_images.py`
+- [x] Existing functionality unchanged when quota is available (no regression)
+- [x] No code accesses `response.candidates[N].finish_reason` (avoids SDK hang bug #2024)
 
 ## Test Scenarios
 
