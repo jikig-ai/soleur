@@ -244,6 +244,142 @@ Display 3-5 content suggestions with:
 - Why it would be valuable (based on community signals)
 - Suggested format (Discord post, discussion thread, announcement)
 
+## Capability 4: Mention Engagement
+
+Reply to recent X/Twitter mentions with brand-voice drafts, presenting each for user approval before posting.
+
+### Step 1: Fetch Mentions
+
+Fetch recent mentions using the `fetch-mentions` command. If a since-id was provided by the skill, include it to fetch only newer mentions.
+
+Without a since-id:
+
+```bash
+plugins/soleur/skills/community/scripts/x-community.sh fetch-mentions --max-results <max_results>
+```
+
+With a since-id:
+
+```bash
+plugins/soleur/skills/community/scripts/x-community.sh fetch-mentions --max-results <max_results> --since-id <since_id>
+```
+
+Replace `<max_results>` with the requested count (default 10) and `<since_id>` with the stored tweet ID.
+
+Parse the JSON output. The `mentions` array contains objects with `id`, `text`, `author_username`, `author_name`, `created_at`, and `conversation_id`. The `meta` object contains `newest_id` and `result_count`.
+
+If `result_count` is 0 or the `mentions` array is empty, report "No recent mentions found" and end the session.
+
+### Step 2: Read Brand Guide
+
+Read `knowledge-base/overview/brand-guide.md` and locate two sections:
+
+- `## Voice` -- overall brand voice guidelines
+- `## Channel Notes > ### X/Twitter` -- X-specific tone guidance ("Declarative, concrete, no hedging")
+
+If `brand-guide.md` does not exist, warn:
+
+```text
+[WARNING] Brand guide not found at knowledge-base/overview/brand-guide.md.
+Proceeding with professional, declarative tone. Replies may not match brand voice.
+```
+
+Continue with engagement even if the brand guide is missing. Default to a professional, declarative tone without hedging.
+
+### Step 3: Draft Replies
+
+For each mention, draft a reply that:
+
+- Addresses the mention's question or statement directly
+- Follows the brand guide voice (declarative, concrete, no hedging)
+- Stays within 280 characters (count before presenting, redraft if over)
+- Includes a concrete actionable next step when applicable
+- Does not start with "Thanks for reaching out" or similar pleasantries
+- Does not use hashtags unless the original mention uses them
+- Does not start with "I just..." or hedging phrases
+
+### Step 4: Present for Approval
+
+Present each mention and its draft reply to the user via AskUserQuestion.
+
+Format:
+
+```text
+Mention from @<author_username> (<created_at>):
+"<mention_text>"
+
+Draft reply (<char_count>/280 chars):
+"<draft_reply>"
+```
+
+Options for the first mention:
+
+- **Accept** -- post this reply
+- **Edit** -- modify the reply text
+- **Skip** -- move to next mention
+
+After the first mention, add a fourth option:
+
+- **Skip all remaining** -- end the session without processing remaining mentions
+
+**Edit flow:** When the user selects Edit, accept the revised text. Validate it is within 280 characters. If over 280, report the character count and ask for a shorter version. Repeat until valid, then proceed as if Accept was selected.
+
+**Skip all remaining:** When selected, mark all remaining mentions as skipped and proceed to the summary.
+
+### Step 5: Post Accepted Replies
+
+For each accepted reply, post it as a reply to the original mention:
+
+```bash
+plugins/soleur/skills/community/scripts/x-community.sh post-tweet "<reply_text>" --reply-to <mention_id>
+```
+
+Replace `<reply_text>` with the approved reply text and `<mention_id>` with the mention's tweet ID.
+
+If the post fails, report the error for that mention and continue to the next.
+
+### Step 6: Update Since-ID State
+
+After all mentions have been processed (not per-reply), update the since-id state file with the `newest_id` from the fetch response.
+
+Resolve the repo root and write the state file. Create the directory, write the newest ID, then set permissions:
+
+```bash
+mkdir -p <repo_root>/.soleur
+```
+
+Write the `newest_id` value (from `meta.newest_id` in the fetch response) to `<repo_root>/.soleur/x-engage-since-id`, then restrict permissions:
+
+```bash
+chmod 600 <repo_root>/.soleur/x-engage-since-id
+```
+
+Replace `<repo_root>` with the output of `git rev-parse --show-toplevel`.
+
+Only update the file if `newest_id` is non-null. If the fetch returned no mentions, do not modify the existing state file.
+
+### Step 7: Display Session Summary
+
+After processing all mentions, display a summary:
+
+```text
+Engagement Session Summary
+==========================
+Mentions fetched:  <total>
+Replies posted:    <posted>
+Mentions skipped:  <skipped>
+Mentions errored:  <errored>
+```
+
+If in headless mode, display instead:
+
+```text
+Engagement Session Summary (headless)
+=====================================
+Mentions fetched: <total>
+Skipped <total> mentions in headless mode -- engage requires interactive approval.
+```
+
 ## Important Guidelines
 
 - For Discord setup, direct users to `plugins/soleur/skills/community/scripts/discord-setup.sh`

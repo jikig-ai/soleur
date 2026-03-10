@@ -3,10 +3,10 @@
 #
 # Usage: x-community.sh <command> [args]
 # Commands:
-#   fetch-metrics                              - Fetch account metrics (followers, following, tweets)
-#   fetch-mentions [--since ISO8601] [--max N] - Fetch recent @mentions (paid API)
-#   fetch-timeline [--max N]                   - Fetch recent tweets (paid API)
-#   post-tweet <text> [--reply-to ID]          - Post a tweet (optionally as a reply)
+#   fetch-metrics                                    - Fetch account metrics (followers, following, tweets)
+#   fetch-mentions [--max-results N] [--since-id ID] - Fetch recent mentions of the authenticated user
+#   fetch-timeline [--max N]                         - Fetch recent tweets (paid API)
+#   post-tweet <text> [--reply-to ID]                - Post a tweet (optionally as a reply)
 #
 # Environment variables (required):
 #   X_API_KEY              - API key (consumer key)
@@ -388,59 +388,95 @@ cmd_fetch_metrics() {
 }
 
 cmd_fetch_mentions() {
-  local since=""
   local max_results=10
+  local since_id=""
 
+  # Parse optional arguments
   while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --since)
-        since="${2:?--since requires an ISO 8601 timestamp}"
+    case "${1:-}" in
+      --max-results)
+        local mr_val="${2:-}"
+        if [[ -z "$mr_val" ]]; then
+          echo "Error: --max-results requires a numeric value." >&2
+          exit 1
+        fi
+        if ! [[ "$mr_val" =~ ^[0-9]+$ ]]; then
+          echo "Error: --max-results must be a numeric value, got '${mr_val}'." >&2
+          exit 1
+        fi
+        if (( mr_val < 5 || mr_val > 100 )); then
+          echo "Error: --max-results must be between 5 and 100, got ${mr_val}." >&2
+          exit 1
+        fi
+        max_results="$mr_val"
         shift 2
         ;;
-      --max)
-        max_results="${2:?--max requires a number}"
+      --since-id)
+        local si_val="${2:-}"
+        if [[ -z "$si_val" ]]; then
+          echo "Error: --since-id requires a numeric value." >&2
+          exit 1
+        fi
+        if ! [[ "$si_val" =~ ^[0-9]+$ ]]; then
+          echo "Error: --since-id must be a numeric value, got '${si_val}'." >&2
+          exit 1
+        fi
+        since_id="$si_val"
         shift 2
         ;;
       *)
-        echo "Error: Unknown option '$1'" >&2
+        echo "Error: Unknown option '${1:-}'" >&2
+        echo "Usage: x-community.sh fetch-mentions [--max-results N] [--since-id ID]" >&2
         exit 1
         ;;
     esac
   done
 
-  # Validate --since is ISO 8601 UTC (prevents query param injection)
-  if [[ -n "$since" && ! "$since" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
-    echo "Error: --since must be ISO 8601 UTC format (YYYY-MM-DDTHH:MM:SSZ)" >&2
-    exit 1
-  fi
-
-  # Validate --max is a positive integer (prevents query param injection)
-  if [[ ! "$max_results" =~ ^[0-9]+$ ]]; then
-    echo "Error: --max must be a positive integer, got '${max_results}'" >&2
-    exit 1
-  fi
-
-  # Clamp max_results to API range 5-100
-  if (( max_results < 5 )); then
-    echo "Warning: --max ${max_results} is below API minimum of 5, clamping to 5." >&2
-    max_results=5
-  elif (( max_results > 100 )); then
-    echo "Warning: --max ${max_results} is above API maximum of 100, clamping to 100." >&2
-    max_results=100
-  fi
-
+  # Resolve authenticated user ID
   local user_id
   user_id=$(resolve_user_id)
 
-  local query_params="tweet.fields=created_at,author_id,public_metrics,text&max_results=${max_results}"
-  if [[ -n "$since" ]]; then
-    query_params="${query_params}&start_time=${since}"
+  # Build query parameters
+  local query_params="max_results=${max_results}&tweet.fields=author_id,created_at,conversation_id&expansions=author_id&user.fields=username,name"
+  if [[ -n "$since_id" ]]; then
+    query_params="${query_params}&since_id=${since_id}"
   fi
 
+  # Use shared GET helper with retry and enhanced error handling
   local body
   body=$(get_request "/2/users/${user_id}/mentions" "$query_params")
 
-  echo "$body" | jq '.data // []'
+  # Handle empty data (no mentions)
+  local data_count
+  data_count=$(echo "$body" | jq '.data | length // 0' 2>/dev/null || echo "0")
+  if [[ "$data_count" == "0" ]] || [[ "$data_count" == "null" ]]; then
+    echo '{"mentions":[],"meta":{"newest_id":null,"result_count":0}}'
+    return 0
+  fi
+
+  # Transform: join includes.users to data by author_id
+  # Use INDEX to build a lookup map so tweets without a matching user
+  # are preserved with "unknown" fallbacks (not silently dropped)
+  echo "$body" | jq '
+    ((.includes.users // []) | INDEX(.id)) as $users |
+    {
+      mentions: [
+        .data[] |
+        ($users[.author_id] // {}) as $user |
+        {
+          id: .id,
+          text: .text,
+          author_username: ($user.username // "unknown"),
+          author_name: ($user.name // "unknown"),
+          created_at: .created_at,
+          conversation_id: .conversation_id
+        }
+      ],
+      meta: {
+        newest_id: (.meta.newest_id // null),
+        result_count: (.meta.result_count // 0)
+      }
+    }'
 }
 
 cmd_fetch_timeline() {
@@ -534,10 +570,10 @@ main() {
     echo "Usage: x-community.sh <command> [args]" >&2
     echo "" >&2
     echo "Commands:" >&2
-    echo "  fetch-metrics                              - Fetch account metrics" >&2
-    echo "  fetch-mentions [--since ISO8601] [--max N] - Fetch recent @mentions (paid API)" >&2
-    echo "  fetch-timeline [--max N]                   - Fetch recent tweets (paid API)" >&2
-    echo "  post-tweet <text> [--reply-to ID]          - Post a tweet" >&2
+    echo "  fetch-metrics                                    - Fetch account metrics" >&2
+    echo "  fetch-mentions [--max-results N] [--since-id ID] - Fetch recent mentions" >&2
+    echo "  fetch-timeline [--max N]                         - Fetch recent tweets (paid API)" >&2
+    echo "  post-tweet <text> [--reply-to ID]                - Post a tweet" >&2
     exit 1
   fi
 
