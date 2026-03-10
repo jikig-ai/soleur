@@ -271,8 +271,12 @@ get_authenticated_user_id() {
 
   case "$http_code" in
     2[0-9][0-9])
+      if ! echo "$body" | jq . >/dev/null 2>&1; then
+        echo "Error: X API returned malformed JSON for /2/users/me" >&2
+        exit 1
+      fi
       local user_id
-      user_id=$(echo "$body" | jq -r '.data.id // empty' 2>/dev/null)
+      user_id=$(echo "$body" | jq -r '.data.id // empty')
       if [[ -z "${user_id:-}" ]]; then
         echo "Error: Could not extract user ID from /2/users/me response." >&2
         exit 1
