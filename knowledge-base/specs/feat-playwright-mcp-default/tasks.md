@@ -18,7 +18,9 @@ Closes: #485
 - [ ] 2.4 Move agent-browser CLI to an explicit "Fallback" subsection
 - [ ] 2.5 Rewrite "If neither is available" to "Last resort" with language indicating this path should rarely trigger
 - [ ] 2.6 Update the Configure section to reference Playwright MCP as default (line 55 references agent-browser)
-- [ ] 2.7 Preserve all existing safety rules unchanged
+- [ ] 2.7 Update the Verify section (lines 64-65) to explicitly reference `browser_take_screenshot` and `browser_navigate`
+- [ ] 2.8 Preserve all existing safety rules unchanged
+- [ ] 2.9 Follow sharp-edges-only principle: keep instructions minimal, focus on hierarchy declaration not Playwright tutorials
 
 ## Phase 3: ops-research update
 

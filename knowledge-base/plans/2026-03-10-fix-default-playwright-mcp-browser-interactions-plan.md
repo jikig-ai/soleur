@@ -5,6 +5,24 @@ date: 2026-03-10
 semver: patch
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-10
+**Sections enhanced:** 4 (Proposed Solution, Technical Considerations, Acceptance Criteria, Test Scenarios)
+**Research sources:** 3 learnings (agent-prompt-sharp-edges, pencil-mcp-local-binary, x-provisioning-playwright), constitution.md MCP patterns, ops-provisioner full file audit
+
+### Key Improvements
+
+1. Added ops-provisioner Verify section update (missed in original plan -- "Take a browser screenshot" is tool-agnostic)
+2. Applied agent-prompt-sharp-edges principle: instructions should only contain what the model would get wrong without them
+3. Added test scenario for Verify section browser interaction
+4. Consolidated Changes 1 and 4 (both target constitution.md) into a single change for clarity
+
+### New Considerations Discovered
+
+- ops-provisioner Verify section (lines 60-65) also uses browser interaction without specifying the tool -- needs Playwright MCP default
+- Agent instructions should follow the "sharp edges only" principle: Claude already knows how to use Playwright MCP tools from training data; only the path resolution gotcha and sensitive field rules are genuine sharp edges
+
 # fix: default to Playwright MCP for all browser interactions
 
 ## Overview
@@ -39,12 +57,23 @@ File: `knowledge-base/overview/constitution.md` (Architecture > Prefer section)
 
 ### Change 2: ops-provisioner update
 
-Restructure the Setup section:
+Restructure the Setup, Configure, and Verify sections:
 
 - Remove the `agent-browser --help` availability check (irrelevant to MCP tool availability)
 - Make Playwright MCP the default path (no conditional check needed -- MCP tools are always available when the plugin is active)
 - Move agent-browser CLI to an explicit "Fallback" section
 - Change "If neither is available" manual instructions to "Last resort" with language that makes it clear this path should rarely trigger
+- Update Configure section (line 55) to default to Playwright MCP instead of agent-browser
+- Update Verify section (lines 64-65) to explicitly reference `browser_take_screenshot` and `browser_navigate` instead of generic "take a browser screenshot"
+
+### Research Insights (agent-prompt-sharp-edges principle)
+
+Per learning `2026-02-13-agent-prompt-sharp-edges-only.md`: agent instructions should contain only what the model would get wrong without them. Claude already knows how to use `browser_navigate`, `browser_snapshot`, `browser_click`, and `browser_fill_form` from training data. The instructions should focus on:
+- **Sharp edge 1:** MCP path resolution from repo root (already in Sharp Edges section)
+- **Sharp edge 2:** Never enter credentials/payments (already in Safety Rules)
+- **Sharp edge 3:** The fallback hierarchy (Playwright MCP > agent-browser > manual)
+
+Do NOT add lengthy step-by-step Playwright tutorials -- the numbered steps in the MVP snippets are sufficient as a quick reference, but their purpose is hierarchy declaration, not teaching the model how to use Playwright.
 
 File: `plugins/soleur/agents/operations/ops-provisioner.md`
 
@@ -57,10 +86,12 @@ File: `plugins/soleur/agents/operations/ops-provisioner.md`
 
 File: `plugins/soleur/agents/operations/ops-research.md`
 
-### Change 4: constitution.md update
+### Change 4: constitution.md line 89 update (consolidates with Change 1)
 
-- Update line 89 to list Playwright MCP tools alongside `gh`, `openssl`, `curl` as verification tools
-- Add or update the MCP preference to reflect Playwright MCP as the default browser interaction method
+Both Changes 1 and 4 target constitution.md. Implementation should be a single atomic edit:
+
+1. Add new Prefer rule to Architecture > Prefer section (Change 1)
+2. Update line 89 to replace `agent-browser` with Playwright MCP as the primary browser tool (Change 4)
 
 File: `knowledge-base/overview/constitution.md`
 
@@ -75,12 +106,24 @@ The community-manager agent does not perform browser-based verification workflow
 - **Sensitive field handling**: The ops-provisioner safety rules already cover never entering credentials, payments, or MFA. These rules stay unchanged.
 - **No code changes**: All changes are to agent instruction markdown files. No scripts, no CI, no tests affected.
 
+### Research Insights
+
+**Institutional learnings applied:**
+- `2026-02-14-pencil-mcp-local-binary-constraint.md`: Confirms Playwright MCP (like Pencil MCP) is a stdio binary that cannot be bundled in plugin.json. The graceful degradation check pattern (check tool availability, degrade with clear message) applies identically.
+- `2026-02-13-agent-prompt-sharp-edges-only.md`: Agent instructions should contain only what the model would get wrong without them. The Playwright tool usage steps are a quick-reference hierarchy declaration, not a tutorial. Claude already knows how to use these tools.
+- `2026-03-09-x-provisioning-playwright-automation.md`: Validates the Playwright MCP provisioning pattern in production. The credential pairing gotcha is already captured in ops-provisioner's Sharp Edges section.
+
+**Edge cases:**
+- Playwright MCP tools may be unavailable in CI environments or when running Claude Code headlessly (no browser process). The three-tier fallback ensures the agent does not hard-fail.
+- When multiple browser tabs are open, `browser_snapshot` returns the active tab only. For multi-page verification flows (e.g., visit project site then check analytics dashboard), use `browser_navigate` to switch between pages rather than assuming both are visible.
+
 ## Acceptance Criteria
 
 - [ ] constitution.md Architecture > Prefer section contains a rule establishing Playwright MCP as the default for browser interactions
 - [ ] ops-provisioner Setup section defaults to Playwright MCP without an `agent-browser --help` check
 - [ ] ops-provisioner Setup section positions manual instructions as "last resort," not a normal fallback
 - [ ] ops-provisioner Configure section (line 55) defaults to Playwright MCP instead of agent-browser
+- [ ] ops-provisioner Verify section (lines 64-65) explicitly references Playwright MCP for screenshots and navigation
 - [ ] ops-research uses Playwright MCP as the default browser navigation method
 - [ ] ops-research positions manual instructions as "last resort"
 - [ ] constitution.md line 89 mentions Playwright MCP tools as preferred, with agent-browser as fallback
@@ -94,6 +137,7 @@ The community-manager agent does not perform browser-based verification workflow
 - Given ops-research is invoked to check a provider's website, when Playwright MCP tools are available, then it uses `browser_navigate` and `browser_snapshot` to inspect the page
 - Given Playwright MCP tools are unavailable (e.g., MCP server not configured), when an agent needs browser interaction, then it falls back to agent-browser CLI
 - Given both Playwright MCP and agent-browser are unavailable, when an agent needs browser interaction, then it provides manual instructions as a last resort with clear language that this is not the normal path
+- Given ops-provisioner Verify section, when taking a screenshot of the configured dashboard, then it uses `browser_take_screenshot` instead of generic "take a browser screenshot"
 - Given the constitution.md Architecture > Prefer section, when read during planning or review, then the Playwright MCP default rule is present and unambiguous
 
 ## Non-goals
@@ -148,6 +192,17 @@ After the user confirms payment is complete:
 2. Take a snapshot (`browser_snapshot`) to understand the current state
 3. Guide through initial configuration steps (add site/project, copy integration snippet, configure options)
 4. If the tool requires code changes in the project (script tags, env vars, config files), make those changes using the Edit or Write tools
+```
+
+### ops-provisioner.md (updated Verify section)
+
+```markdown
+## Verify + Record
+
+**Verification:**
+
+1. Take a screenshot of the configured dashboard using `browser_take_screenshot` as proof of setup
+2. If an integration test is applicable (e.g., navigate to the project's site with `browser_navigate`, then check the tool's dashboard for the recorded event), perform it and screenshot the result
 ```
 
 ### ops-research.md (restructured Browser Navigation section)
