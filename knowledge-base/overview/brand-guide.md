@@ -180,22 +180,21 @@ These guardrails apply in both automatic mode (fetch-mentions) and manual mode (
 **When to skip a mention:**
 - Abusive, harassing, or spam content
 - Off-topic mentions with no connection to Soleur or solo-founder topics
-- Rage-bait or provocative threads designed to generate outrage
-- Likely bot accounts (no profile image, alphanumeric handle, zero followers)
+- Mentions that are themselves rage-bait or provocative in tone (thread-level context review is a human reviewer responsibility during the approval step)
+- Likely bot accounts (alphanumeric handle pattern, generic or empty display name)
 - Threads where replying would amplify negative sentiment
 - Mentions that are retweets or quote-tweets of Soleur content -- the RT is sufficient engagement
-- Accounts whose recent content creates brand association risk -- any reply ties Soleur to that account's content
+- Accounts whose mention content creates brand association risk (full account history review is a human reviewer responsibility during the approval step)
 
 **Reply cadence:**
 - Maximum 10 replies per engagement session
-- Space replies naturally -- do not post 10 replies in 2 minutes. X's algorithm penalizes rapid-fire bursts that look automated.
+- Minimum 2-minute gap between posting replies. X's algorithm penalizes rapid-fire bursts that look automated.
 - One reply per thread -- do not enter extended back-and-forth. Escalate complex questions to Discord or docs.
 - Default to skipping when unsure -- silence is safer than a misaligned reply
 
 **Tone in replies:**
 - Match the register of the original tweet (technical question gets a technical answer, casual mention gets a concise acknowledgment)
 - Never argue or debate -- state the position once, then disengage
-- Redirect complex questions to docs or Discord rather than attempting a 280-character answer
 - Credit insight in feature suggestions ("Solid idea. Filed as #N." not "Thanks for the feedback!")
 - Maintain a human voice -- avoid phrases that sound templated or auto-generated
 
