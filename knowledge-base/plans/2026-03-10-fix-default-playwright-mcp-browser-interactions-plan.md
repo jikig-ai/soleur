@@ -23,17 +23,19 @@ Three agents reference browser-based workflows with varying levels of Playwright
 
 4. **constitution.md** (`knowledge-base/overview/constitution.md`) -- Line 89 references `agent-browser` as a verification tool for infrastructure agents alongside `gh`, `openssl`, and `curl`. Should mention Playwright MCP as the preferred browser tool.
 
-Additionally, **AGENTS.md** has a hard rule about MCP path resolution but no hard rule establishing Playwright MCP as the default for browser interaction.
+Additionally, there is no documented convention establishing Playwright MCP as the default for browser interaction. The rule belongs in constitution.md's Architecture > Prefer section (not AGENTS.md Hard Rules, which loads on every turn for every agent -- unnecessary bloat for a rule that applies to only 2 agents).
 
 ## Proposed Solution
 
-### Change 1: AGENTS.md hard rule
+### Change 1: constitution.md Prefer rule (not AGENTS.md Hard Rule)
 
-Add a new hard rule establishing the browser interaction hierarchy:
+[Updated 2026-03-10 per plan review: moved from AGENTS.md Hard Rules to constitution.md Architecture > Prefer to avoid system prompt bloat -- only 2 agents need browser interaction, but Hard Rules load on every turn for every agent.]
 
-> When browser interaction is needed, default to Playwright MCP tools (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_fill_form`, `browser_file_upload`). Fall back to agent-browser CLI only if MCP tools are unavailable. Never default to "provide manual instructions" -- always attempt browser automation first, pausing only for sensitive fields (credentials, payments, MFA).
+Add a Prefer rule to constitution.md Architecture section establishing the browser interaction hierarchy:
 
-File: `AGENTS.md`
+> When browser interaction is needed, default to Playwright MCP tools (browser_navigate, browser_snapshot, browser_click, browser_fill_form, browser_file_upload) -- fall back to agent-browser CLI only if MCP tools are unavailable; manual instructions are a last resort, not a default
+
+File: `knowledge-base/overview/constitution.md` (Architecture > Prefer section)
 
 ### Change 2: ops-provisioner update
 
@@ -75,12 +77,13 @@ The community-manager agent does not perform browser-based verification workflow
 
 ## Acceptance Criteria
 
-- [ ] AGENTS.md contains a hard rule establishing Playwright MCP as the default for browser interactions
-- [ ] ops-provisioner defaults to Playwright MCP without an `agent-browser --help` check
-- [ ] ops-provisioner positions manual instructions as "last resort," not a normal fallback
+- [ ] constitution.md Architecture > Prefer section contains a rule establishing Playwright MCP as the default for browser interactions
+- [ ] ops-provisioner Setup section defaults to Playwright MCP without an `agent-browser --help` check
+- [ ] ops-provisioner Setup section positions manual instructions as "last resort," not a normal fallback
+- [ ] ops-provisioner Configure section (line 55) defaults to Playwright MCP instead of agent-browser
 - [ ] ops-research uses Playwright MCP as the default browser navigation method
 - [ ] ops-research positions manual instructions as "last resort"
-- [ ] constitution.md line 89 mentions Playwright MCP tools alongside agent-browser
+- [ ] constitution.md line 89 mentions Playwright MCP tools as preferred, with agent-browser as fallback
 - [ ] All agents retain graceful degradation (agent-browser fallback, then manual as last resort)
 - [ ] Existing safety rules (no credentials, no payments, pause for sensitive fields) are preserved unchanged
 - [ ] No changes to community-manager (it does not perform browser-based workflows)
@@ -91,7 +94,7 @@ The community-manager agent does not perform browser-based verification workflow
 - Given ops-research is invoked to check a provider's website, when Playwright MCP tools are available, then it uses `browser_navigate` and `browser_snapshot` to inspect the page
 - Given Playwright MCP tools are unavailable (e.g., MCP server not configured), when an agent needs browser interaction, then it falls back to agent-browser CLI
 - Given both Playwright MCP and agent-browser are unavailable, when an agent needs browser interaction, then it provides manual instructions as a last resort with clear language that this is not the normal path
-- Given the AGENTS.md hard rules section, when read by any agent, then the Playwright MCP default rule is present and unambiguous
+- Given the constitution.md Architecture > Prefer section, when read during planning or review, then the Playwright MCP default rule is present and unambiguous
 
 ## Non-goals
 
@@ -102,10 +105,16 @@ The community-manager agent does not perform browser-based verification workflow
 
 ## MVP
 
-### AGENTS.md (new hard rule)
+### constitution.md (new Prefer rule in Architecture section)
 
 ```markdown
-- When browser interaction is needed, default to Playwright MCP tools (browser_navigate, browser_snapshot, browser_click, browser_fill_form, browser_file_upload). Fall back to agent-browser CLI only if MCP tools are unavailable. Never default to "provide manual instructions" -- always attempt browser automation first, pausing only for sensitive fields (credentials, payments, MFA).
+- When browser interaction is needed, default to Playwright MCP tools (browser_navigate, browser_snapshot, browser_click, browser_fill_form, browser_file_upload) -- fall back to agent-browser CLI only if MCP tools are unavailable; manual instructions are a last resort, not a default
+```
+
+### constitution.md (updated line 89)
+
+```markdown
+- Infrastructure agents that wire external services (DNS, SSL, Pages) must own the full verification loop -- use Playwright MCP tools (browser_navigate, browser_snapshot, browser_click), `gh` CLI, `openssl`, and `curl` to verify each step programmatically instead of asking the user to check manually; fall back to agent-browser CLI if MCP tools are unavailable; only stop for genuine decisions, not mechanical verification
 ```
 
 ### ops-provisioner.md (restructured Setup section)
@@ -126,6 +135,19 @@ Use Playwright MCP tools to automate the signup flow:
 **Fallback (agent-browser CLI):** If Playwright MCP tools are unavailable, use agent-browser CLI commands (`agent-browser open`, `agent-browser snapshot`, `agent-browser fill`, `agent-browser click`).
 
 **Last resort:** If no browser automation is available, provide the signup URL and step-by-step instructions. This path should rarely trigger -- investigate why browser tools are unavailable.
+```
+
+### ops-provisioner.md (updated Configure section)
+
+```markdown
+## Configure
+
+After the user confirms payment is complete:
+
+1. Navigate to the tool's dashboard or settings page using Playwright MCP (`browser_navigate`). Fall back to agent-browser if MCP tools are unavailable.
+2. Take a snapshot (`browser_snapshot`) to understand the current state
+3. Guide through initial configuration steps (add site/project, copy integration snippet, configure options)
+4. If the tool requires code changes in the project (script tags, env vars, config files), make those changes using the Edit or Write tools
 ```
 
 ### ops-research.md (restructured Browser Navigation section)
@@ -150,4 +172,4 @@ Use Playwright MCP tools to navigate to the chosen provider's website:
 - `knowledge-base/overview/constitution.md:89` -- Infrastructure verification tools
 - `knowledge-base/learnings/2026-03-09-x-provisioning-playwright-automation.md` -- Learnings from the X provisioning
 - `knowledge-base/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md` -- MCP path resolution gotcha
-- `AGENTS.md` -- Hard rules location
+- `knowledge-base/overview/constitution.md` -- Architecture > Prefer section for new browser hierarchy rule

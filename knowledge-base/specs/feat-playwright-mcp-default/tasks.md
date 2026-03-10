@@ -3,11 +3,12 @@
 Source: `knowledge-base/plans/2026-03-10-fix-default-playwright-mcp-browser-interactions-plan.md`
 Closes: #485
 
-## Phase 1: AGENTS.md hard rule
+## Phase 1: constitution.md browser hierarchy rule
 
-- [ ] 1.1 Read `AGENTS.md` Hard Rules section
-- [ ] 1.2 Add new hard rule establishing Playwright MCP as default for browser interactions
-- [ ] 1.3 Position the rule near the existing MCP path resolution rule for logical grouping
+- [ ] 1.1 Read `knowledge-base/overview/constitution.md`
+- [ ] 1.2 Add Prefer rule to Architecture section establishing Playwright MCP as default for browser interactions
+- [ ] 1.3 Update line 89 to list Playwright MCP tools as the preferred browser tool, with agent-browser as fallback
+- [ ] 1.4 Verify no other constitution entries need updating for consistency
 
 ## Phase 2: ops-provisioner update
 
@@ -28,16 +29,10 @@ Closes: #485
 - [ ] 3.5 Change "tell the user to navigate manually" to last-resort language
 - [ ] 3.6 Preserve all existing safety rules unchanged
 
-## Phase 4: constitution.md update
+## Phase 4: Verification
 
-- [ ] 4.1 Read `knowledge-base/overview/constitution.md`
-- [ ] 4.2 Update line 89 to list Playwright MCP tools as the preferred browser tool, with agent-browser as fallback
-- [ ] 4.3 Verify no other constitution entries need updating for consistency
-
-## Phase 5: Verification
-
-- [ ] 5.1 Grep all agent files for remaining `agent-browser --help` checks that should use Playwright MCP first
-- [ ] 5.2 Grep all agent files for "manually" or "manual instructions" to verify none remain as default paths (only as last resort)
-- [ ] 5.3 Verify community-manager.md was NOT modified
-- [ ] 5.4 Run `markdownlint` on all modified files
-- [ ] 5.5 Run compound (`skill: soleur:compound`)
+- [ ] 4.1 Grep all agent files for remaining `agent-browser --help` checks that should use Playwright MCP first
+- [ ] 4.2 Grep all agent files for "manually" or "manual instructions" to verify none remain as default paths (only as last resort)
+- [ ] 4.3 Verify community-manager.md was NOT modified
+- [ ] 4.4 Run `markdownlint` on all modified files
+- [ ] 4.5 Run compound (`skill: soleur:compound`)
