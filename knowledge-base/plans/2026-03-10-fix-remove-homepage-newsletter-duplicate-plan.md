@@ -3,6 +3,24 @@ title: "fix: Remove duplicate newsletter signup from homepage"
 type: fix
 date: 2026-03-10
 semver: patch
+deepened: 2026-03-10
+---
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-10
+**Sections enhanced:** 2 (Build Verification, Template Inheritance Analysis)
+**Research sources:** Nunjucks block inheritance learning, Eleventy worktree build learning, base.njk template verification
+
+### Key Improvements
+1. Added worktree-safe verification alternative -- Eleventy build fails in worktrees due to relative path bug in `agents.js` (documented in `knowledge-base/learnings/2026-03-10-eleventy-build-fails-in-worktree.md`); added grep-based source file verification as primary method
+2. Verified template inheritance claim against actual `base.njk` source: `{% block content %}` ends at line 91, footer newsletter is at lines 94-95 -- confirmed outside the block
+3. Confirmed `index.njk` does NOT use `{% block content %}` override -- its content flows through the default `{{ content | safe }}` rendering in the parent block, meaning the in-page newsletter is injected as body content while the footer newsletter renders independently
+
+### New Considerations Discovered
+- The `newsletter-form.njk` JS handler in `base.njk` (lines 118-146) uses `document.querySelectorAll('.newsletter-form').forEach(...)` -- reducing from 2 forms to 1 on the homepage means the forEach still works correctly (iterates over 1 element instead of 2)
+- After this change, `newsletter-form.njk` has exactly one caller (`base.njk` line 95). The `location` variable and `id="newsletter-{{ location }}"` mechanism becomes single-use but is harmless to keep
+
 ---
 
 # fix: Remove duplicate newsletter signup from homepage
@@ -25,17 +43,27 @@ The homepage (`index.njk`) renders two newsletter signup forms: one inline at li
 
 ### Build Verification
 
-After the edit, run an Eleventy build and verify HTML output:
+**Primary method (worktree-safe):** Verify source templates directly, since the Eleventy build fails in worktrees due to relative path resolution in `agents.js` (see `knowledge-base/learnings/2026-03-10-eleventy-build-fails-in-worktree.md`):
+
+```bash
+# Verify index.njk no longer includes newsletter-form
+grep -c 'newsletter-form' plugins/soleur/docs/index.njk
+# Expected: 0
+
+# Verify base.njk still includes footer newsletter
+grep -c 'newsletter-form' plugins/soleur/docs/_includes/base.njk
+# Expected: 2 (one include at line 95, one querySelectorAll in JS at line 118)
+
+# Verify partial still exists
+test -f plugins/soleur/docs/_includes/newsletter-form.njk && echo "OK"
+```
+
+**Secondary method (main repo only):** If running from the main checkout (not a worktree), build and verify HTML output:
 
 ```bash
 cd plugins/soleur/docs && npx @11ty/eleventy --quiet
-# Verify homepage has exactly one newsletter form
 grep -c 'newsletter-form' _site/index.html
 # Expected: 1 (footer only, not 2)
-
-# Verify a non-blog page also has exactly one
-grep -c 'newsletter-form' _site/pages/getting-started/index.html
-# Expected: 1 (footer only)
 ```
 
 ## Implementation
@@ -95,3 +123,4 @@ This follows the same pattern as PR #525, which removed the duplicate newsletter
 - Existing blog newsletter plan: `knowledge-base/plans/2026-03-10-feat-remove-blog-newsletter-duplicate-plan.md`
 - Newsletter implementation plan: `knowledge-base/plans/2026-03-10-feat-newsletter-email-capture-plan.md`
 - Learning: `knowledge-base/learnings/2026-03-04-nunjucks-block-inheritance-with-content-safe.md` (confirms block inheritance safety)
+- Learning: `knowledge-base/learnings/2026-03-10-eleventy-build-fails-in-worktree.md` (worktree build limitation -- use source grep instead)

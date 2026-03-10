@@ -4,12 +4,11 @@
 
 - [ ] 1.1 Remove newsletter include from `plugins/soleur/docs/index.njk` (lines 218-220: comment, set location, include)
 
-## Phase 2: Verification
+## Phase 2: Verification (worktree-safe -- no Eleventy build needed)
 
-- [ ] 2.1 Run Eleventy build: `cd plugins/soleur/docs && npx @11ty/eleventy --quiet`
-- [ ] 2.2 Verify homepage has exactly 1 newsletter form: `grep -c 'newsletter-form' _site/index.html` (expected: 1)
-- [ ] 2.3 Verify footer newsletter still renders on homepage (visual check or grep for `newsletter-footer`)
-- [ ] 2.4 Verify non-homepage pages unaffected: `grep -c 'newsletter-form' _site/pages/getting-started/index.html` (expected: 1)
+- [ ] 2.1 Verify `index.njk` no longer includes newsletter-form: `grep -c 'newsletter-form' plugins/soleur/docs/index.njk` (expected: 0)
+- [ ] 2.2 Verify `base.njk` still includes footer newsletter: `grep -c 'newsletter-form' plugins/soleur/docs/_includes/base.njk` (expected: 2)
+- [ ] 2.3 Verify `newsletter-form.njk` partial still exists
 
 ## Phase 3: Ship
 
