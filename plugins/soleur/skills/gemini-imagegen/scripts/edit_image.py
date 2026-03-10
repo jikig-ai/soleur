@@ -22,7 +22,7 @@ from PIL import Image
 from google import genai
 from google.genai import errors, types
 
-from _error_handling import check_response_for_image, handle_api_error
+from _error_handling import handle_api_error, parse_image_response
 
 
 def edit_image(
@@ -78,12 +78,11 @@ def edit_image(
             contents=[instruction, input_image],
             config=config,
         )
-    except errors.ClientError as e:
-        handle_api_error(e)
-    except errors.ServerError as e:
+    except errors.APIError as e:
         handle_api_error(e)
 
-    text_response, _ = check_response_for_image(response, output_path)
+    image, text_response = parse_image_response(response)
+    image.save(output_path)
     return text_response
 
 

@@ -11,24 +11,21 @@ from _error_handling import (
     QuotaExhaustedError,
     SafetyFilterError,
     check_quota,
-    check_response_for_image,
-    check_response_parts,
     handle_api_error,
+    parse_image_response,
 )
 
 
 def _make_client_error(code: int, message: str = "test error"):
     """Create a ClientError with the given code using the real constructor."""
     response_json = {"error": {"message": message, "code": code}}
-    err = errors.ClientError(code, response_json)
-    return err
+    return errors.ClientError(code, response_json)
 
 
 def _make_server_error(code: int = 500, message: str = "server error"):
     """Create a ServerError with the given code using the real constructor."""
     response_json = {"error": {"message": message, "code": code}}
-    err = errors.ServerError(code, response_json)
-    return err
+    return errors.ServerError(code, response_json)
 
 
 def _make_response(parts=None):
@@ -88,35 +85,34 @@ class TestHandleApiError(unittest.TestCase):
         self.assertIs(ctx.exception.__cause__, err)
 
 
-class TestCheckResponseForImage(unittest.TestCase):
+class TestParseImageResponse(unittest.TestCase):
     def test_raises_on_empty_parts(self):
         response = _make_response(parts=None)
         with self.assertRaises(NoImageError) as ctx:
-            check_response_for_image(response, "/tmp/out.png")
+            parse_image_response(response)
         self.assertIn("empty response", str(ctx.exception))
 
     def test_raises_on_empty_list(self):
         response = _make_response(parts=[])
         with self.assertRaises(NoImageError):
-            check_response_for_image(response, "/tmp/out.png")
+            parse_image_response(response)
 
-    def test_saves_image_and_returns_text(self):
+    def test_returns_image_and_text(self):
         text_part = _make_text_part("Here's your image")
         image_part = _make_image_part()
         response = _make_response(parts=[text_part, image_part])
 
-        text, saved = check_response_for_image(response, "/tmp/out.png")
+        image, text = parse_image_response(response)
 
         self.assertEqual(text, "Here's your image")
-        self.assertTrue(saved)
-        image_part.as_image.return_value.save.assert_called_once_with("/tmp/out.png")
+        self.assertIsNotNone(image)
 
     def test_safety_filter_detected_via_text(self):
         text_part = _make_text_part("The image was blocked by safety policy")
         response = _make_response(parts=[text_part])
 
         with self.assertRaises(SafetyFilterError) as ctx:
-            check_response_for_image(response, "/tmp/out.png")
+            parse_image_response(response)
         self.assertIn("SAFETY FILTER", str(ctx.exception))
 
     def test_no_image_text_only(self):
@@ -124,48 +120,31 @@ class TestCheckResponseForImage(unittest.TestCase):
         response = _make_response(parts=[text_part])
 
         with self.assertRaises(NoImageError) as ctx:
-            check_response_for_image(response, "/tmp/out.png")
+            parse_image_response(response)
         self.assertIn("text only", str(ctx.exception))
 
     def test_image_only_no_text(self):
         image_part = _make_image_part()
         response = _make_response(parts=[image_part])
 
-        text, saved = check_response_for_image(response, "/tmp/out.png")
+        image, text = parse_image_response(response)
 
         self.assertIsNone(text)
-        self.assertTrue(saved)
+        self.assertIsNotNone(image)
 
-
-class TestCheckResponseParts(unittest.TestCase):
-    def test_raises_on_empty_parts(self):
-        response = _make_response(parts=None)
-        with self.assertRaises(NoImageError):
-            check_response_parts(response)
-
-    def test_returns_image_and_text(self):
-        text_part = _make_text_part("description")
-        image_part = _make_image_part()
-        response = _make_response(parts=[text_part, image_part])
-
-        img, text = check_response_parts(response)
-
-        self.assertIsNotNone(img)
-        self.assertEqual(text, "description")
-
-    def test_safety_filter_via_text(self):
-        text_part = _make_text_part("Content was blocked due to harmful concerns")
+    def test_safety_keywords_case_insensitive(self):
+        text_part = _make_text_part("This content was BLOCKED by our POLICY")
         response = _make_response(parts=[text_part])
 
         with self.assertRaises(SafetyFilterError):
-            check_response_parts(response)
+            parse_image_response(response)
 
-    def test_no_image_raises(self):
+    def test_no_false_positive_on_unrelated_text(self):
         text_part = _make_text_part("Just text, no special keywords present")
         response = _make_response(parts=[text_part])
 
         with self.assertRaises(NoImageError):
-            check_response_parts(response)
+            parse_image_response(response)
 
 
 class TestCheckQuota(unittest.TestCase):
@@ -178,7 +157,7 @@ class TestCheckQuota(unittest.TestCase):
         # Should not raise
         check_quota(client, model="gemini-2.5-flash-image")
 
-    def test_quota_exhausted(self):
+    def test_quota_exhausted_via_api_error(self):
         client = MagicMock()
         err = _make_client_error(429, "Quota exceeded")
         client.models.generate_content.side_effect = err
@@ -186,15 +165,14 @@ class TestCheckQuota(unittest.TestCase):
         with self.assertRaises(QuotaExhaustedError):
             check_quota(client, model="gemini-2.5-flash-image")
 
-    def test_no_image_in_response(self):
+    def test_no_image_in_response_raises(self):
         client = MagicMock()
         text_part = _make_text_part("no image here")
         response = _make_response(parts=[text_part])
         client.models.generate_content.return_value = response
 
-        with self.assertRaises(SystemExit) as ctx:
+        with self.assertRaises(NoImageError):
             check_quota(client, model="gemini-2.5-flash-image")
-        self.assertEqual(ctx.exception.code, 1)
 
 
 if __name__ == "__main__":

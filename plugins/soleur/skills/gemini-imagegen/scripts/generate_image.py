@@ -21,7 +21,7 @@ import sys
 from google import genai
 from google.genai import errors, types
 
-from _error_handling import check_quota, check_response_for_image, handle_api_error
+from _error_handling import check_quota, handle_api_error, parse_image_response
 
 
 def generate_image(
@@ -69,12 +69,11 @@ def generate_image(
             contents=[prompt],
             config=config,
         )
-    except errors.ClientError as e:
-        handle_api_error(e)
-    except errors.ServerError as e:
+    except errors.APIError as e:
         handle_api_error(e)
 
-    text_response, _ = check_response_for_image(response, output_path)
+    image, text_response = parse_image_response(response)
+    image.save(output_path)
     return text_response
 
 
@@ -121,8 +120,6 @@ def main():
                 sys.exit(1)
             client = genai.Client(api_key=api_key)
             check_quota(client, model=args.model)
-        except SystemExit:
-            raise
         except Exception as e:
             print(f"[FAIL] {e}", file=sys.stderr)
             sys.exit(1)

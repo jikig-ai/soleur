@@ -22,7 +22,7 @@ from PIL import Image
 from google import genai
 from google.genai import errors, types
 
-from _error_handling import check_response_for_image, check_response_parts, handle_api_error
+from _error_handling import handle_api_error, parse_image_response
 
 
 AspectRatio = Literal["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]
@@ -105,14 +105,13 @@ class GeminiImageGenerator:
                 contents=[prompt],
                 config=config,
             )
-        except errors.ClientError as e:
-            handle_api_error(e)
-        except errors.ServerError as e:
+        except errors.APIError as e:
             handle_api_error(e)
 
-        text, _ = check_response_for_image(response, str(output))
+        image, text = parse_image_response(response)
+        image.save(output)
         return output, text
-    
+
     def edit(
         self,
         input_image: str | Path | Image.Image,
@@ -149,14 +148,13 @@ class GeminiImageGenerator:
                 contents=[instruction, input_image],
                 config=config,
             )
-        except errors.ClientError as e:
-            handle_api_error(e)
-        except errors.ServerError as e:
+        except errors.APIError as e:
             handle_api_error(e)
 
-        text, _ = check_response_for_image(response, str(output))
+        image, text = parse_image_response(response)
+        image.save(output)
         return output, text
-    
+
     def compose(
         self,
         instruction: str,
@@ -199,12 +197,11 @@ class GeminiImageGenerator:
                 contents=contents,
                 config=config,
             )
-        except errors.ClientError as e:
-            handle_api_error(e)
-        except errors.ServerError as e:
+        except errors.APIError as e:
             handle_api_error(e)
 
-        text, _ = check_response_for_image(response, str(output))
+        image, text = parse_image_response(response)
+        image.save(output)
         return output, text
     
     def chat(self) -> "ImageChat":
@@ -242,14 +239,11 @@ class ImageChat:
 
         try:
             response = self._chat.send_message(contents)
-        except errors.ClientError as e:
-            handle_api_error(e)
-        except errors.ServerError as e:
+        except errors.APIError as e:
             handle_api_error(e)
 
-        img, text = check_response_parts(response)
-        if img is not None:
-            self.current_image = img
+        img, text = parse_image_response(response)
+        self.current_image = img
 
         return img, text
     
