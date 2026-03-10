@@ -386,3 +386,4 @@ For most features: tests + linting + following patterns is sufficient.
 - **Forgetting TodoWrite** - Track progress or lose track of what's done
 - **80% done syndrome** - Finish the feature, don't move on early
 - **Over-reviewing simple changes** - Save reviewer agents for complex work
+- **Silent plan omissions** - When dropping a conditional plan item, document why in the commit or plan
