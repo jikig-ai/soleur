@@ -8,26 +8,26 @@
 
 ## Phase 1: Setup + Content (Weeks 1-2)
 
-### 1.1 Onboarding Audit [auto]
-- [ ] 1.1.1 Check Getting Started nav position (must be top 3)
-- [ ] 1.1.2 Fresh install test: `claude plugin install soleur` on a new project
-- [ ] 1.1.3 Test `/soleur:sync` on project with no knowledge-base
-- [ ] 1.1.4 Test 3 non-engineering domain tasks end-to-end
-- [ ] 1.1.5 Document "first 5 minutes" flow
-- [ ] 1.1.6 Fix blockers found
-- [ ] 1.1.7 Write audit report to `knowledge-base/specs/feat-product-strategy/onboarding-audit.md`
+### 1.1 Onboarding Audit [auto] -- DONE
+- [x] 1.1.1 Check Getting Started nav position (must be top 3) -- PASS
+- [x] 1.1.2 Fresh install test: `claude plugin install soleur` on a new project -- PASS with caveats
+- [x] 1.1.3 Test `/soleur:sync` on project with no knowledge-base -- PASS
+- [x] 1.1.4 Test 3 non-engineering domain tasks end-to-end -- PASS (legal, brand, competitive)
+- [x] 1.1.5 Document "first 5 minutes" flow -- FAIL (see audit report)
+- [x] 1.1.6 Fix blockers found -- 3 blockers identified, tracked in #432 (CLOSED 2026-03-04)
+- [x] 1.1.7 Write audit report to `knowledge-base/specs/feat-product-strategy/onboarding-audit.md`
 
-### 1.2 Write Case Studies [auto + human]
-- [ ] 1.2.1 Write case study: Legal document generation (9 docs from scratch)
-- [ ] 1.2.2 Write case study: Brand guide creation
-- [ ] 1.2.3 Write case study: Competitive intelligence scan
-- [ ] 1.2.4 Write case study: Business validation workshop
-- [ ] 1.2.5 Write case study: Operations management
-- [ ] 1.2.6 Review all against brand guide voice
+### 1.2 Write Case Studies [auto + human] -- DONE (drafts)
+- [x] 1.2.1 Write case study: Legal document generation (9 docs from scratch)
+- [x] 1.2.2 Write case study: Brand guide creation
+- [x] 1.2.3 Write case study: Competitive intelligence scan
+- [x] 1.2.4 Write case study: Business validation workshop
+- [x] 1.2.5 Write case study: Operations management
+- [x] 1.2.6 Review all against brand guide voice -- reviewed 2026-03-10, approved
 
-### 1.3 Interview Guide [auto]
-- [ ] 1.3.1 Write interview guide with questions, definitions, and response table
-- [ ] 1.3.2 Save to `knowledge-base/specs/feat-product-strategy/interview-guide.md`
+### 1.3 Interview Guide [auto] -- DONE
+- [x] 1.3.1 Write interview guide with questions, definitions, and response table
+- [x] 1.3.2 Save to `knowledge-base/specs/feat-product-strategy/interview-guide.md`
 
 ### 1.4 Publish Case Studies [human]
 - [ ] 1.4.1 Post to Discord (via discord-content skill)
@@ -72,11 +72,11 @@
 - [ ] 3.2.5 Write gate assessment to `knowledge-base/specs/feat-product-strategy/gate-assessment.md`
 - [ ] 3.2.6 Make decision: proceed / iterate / pivot
 
-## Separate: Blog Infrastructure [auto]
+## Separate: Blog Infrastructure [auto] -- DONE
 
-Track as separate GitHub issue -- not part of validation timeline.
+Merged from main (built in separate PRs). Case studies migrated 2026-03-10.
 
-- [ ] S.1 Create `plugins/soleur/docs/pages/blog/` directory and listing page
-- [ ] S.2 Add blog to nav configuration
-- [ ] S.3 Set up post template with frontmatter (title, date, description, tags)
-- [ ] S.4 Migrate case studies to blog posts
+- [x] S.1 Create `plugins/soleur/docs/pages/blog/` directory and listing page
+- [x] S.2 Add blog to nav configuration
+- [x] S.3 Set up post template with frontmatter (title, date, description, tags)
+- [x] S.4 Migrate case studies to blog posts
