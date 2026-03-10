@@ -1,3 +1,10 @@
+---
+title: Worktree cleanup gap after mid-session PR merge
+date: 2026-02-09
+category: workflow-patterns
+tags: [workflow-issues, git-worktree, ship, worktree not cleaned after merge, stale worktree, gone branch]
+---
+
 # Learning: Worktree cleanup gap after mid-session PR merge
 
 ## Problem

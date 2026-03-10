@@ -1,0 +1,24 @@
+<section class="newsletter-section">
+  <div class="container">
+    <h2>Stay in the loop</h2>
+    <p>Monthly updates about Soleur — new agents, skills, and what we're building next.</p>
+    <form class="newsletter-form" id="newsletter-{{ location }}"
+      action="https://buttondown.com/api/emails/embed-subscribe/{{ site.newsletter.username }}"
+      method="post">
+      <label for="newsletter-email-{{ location }}" class="sr-only">Email address</label>
+      <input type="email" name="email" id="newsletter-email-{{ location }}"
+        placeholder="you@example.com" required autocomplete="email" inputmode="email"
+        aria-describedby="newsletter-privacy-{{ location }}" />
+      <input type="hidden" name="embed" value="1" />
+      <div class="honeypot-trap" aria-hidden="true">
+        <input type="text" name="url" tabindex="-1" autocomplete="off" />
+      </div>
+      <button type="submit" class="btn btn-primary">Subscribe</button>
+      <p id="newsletter-privacy-{{ location }}" class="newsletter-privacy">
+        Monthly updates about Soleur. Unsubscribe anytime.
+        <a href="/pages/legal/privacy-policy/">Privacy Policy</a>
+      </p>
+      <div class="newsletter-status" aria-live="polite" role="status"></div>
+    </form>
+  </div>
+</section>

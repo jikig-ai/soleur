@@ -1,0 +1,6 @@
+{
+  "tags": "blog",
+  "layout": "blog-post.njk",
+  "permalink": "blog/{{ page.fileSlug }}/index.html",
+  "ogType": "article"
+}

@@ -1,3 +1,10 @@
+---
+title: effortLevel is Not a Valid settings.json Field
+date: 2026-02-24
+category: engineering
+tags: [configuration-fixes, claude-code-settings]
+---
+
 # Learning: effortLevel is Not a Valid settings.json Field
 
 ## Problem

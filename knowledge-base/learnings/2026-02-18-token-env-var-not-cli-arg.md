@@ -1,11 +1,12 @@
 ---
-title: "Pass secrets via env var, never as CLI arguments"
+title: Pass secrets via env var, never as CLI arguments
+date: 2026-02-18
 category: implementation-patterns
 tags: [security, bash, secrets, discord, cli]
+symptoms: [Bot token visible in ps aux and shell history]
 module: community
-symptom: "Bot token visible in ps aux and shell history"
-root_cause: "Passing token as positional argument to script"
 synced_to: [infra-security]
+root_cause: Passing token as positional argument to script
 ---
 
 # Pass secrets via env var, never as CLI arguments

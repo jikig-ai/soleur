@@ -65,7 +65,7 @@ graph LR
 4. Claude's capabilities enhanced for the domain
 5. Higher quality output in that domain
 
-## Categories (55 skills)
+## Categories (56 skills)
 
 ### Core Workflow (6)
 
@@ -155,11 +155,12 @@ The primary development lifecycle, invocable directly or via `/soleur:go`:
 | `legal-generate` | Generate draft legal documents |
 | `legal-audit` | Audit existing legal documents for compliance gaps |
 
-### Social & Community (2)
+### Social & Community (3)
 
 | Skill | Purpose |
 |-------|---------|
 | `discord-content` | Create and post community content to Discord |
+| `social-distribute` | Distribute blog articles across 5 social platforms |
 | `community` | Community engagement scripts (structurally incomplete -- no SKILL.md) |
 
 ### Development Style (4)

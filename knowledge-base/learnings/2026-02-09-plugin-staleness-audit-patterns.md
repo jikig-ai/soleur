@@ -1,3 +1,10 @@
+---
+title: Plugin staleness audit patterns
+date: 2026-02-09
+category: plugin-architecture
+tags: [maintenance, plugin, stale-references, count-mismatch, unused-agents]
+---
+
 # Learning: Plugin staleness audit patterns
 
 ## Problem

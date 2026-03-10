@@ -1,6 +1,6 @@
 ---
 name: fix-issue
-description: This skill should be used when attempting an automated single-file fix for a GitHub issue. It reads the issue, creates a branch, makes a fix, runs tests, and opens a PR for human review. Triggers on "fix issue", "bot fix", "fix-issue".
+description: This skill should be used when attempting an automated single-file fix for a GitHub issue. It reads the issue, creates a branch, makes a fix, runs tests, opens a PR, and labels it for auto-merge eligibility or human review. Triggers on "fix issue", "bot fix", "fix-issue".
 ---
 
 # Fix Issue
@@ -107,6 +107,30 @@ EOF
 ```
 
 Use `Ref #N` in the PR body. Never use `Closes`, `Fixes`, or `Resolves` -- the human reviewer decides when to close the issue.
+
+## Phase 5.5: Auto-Merge Eligibility Check
+
+After opening the PR, evaluate whether it qualifies for autonomous merge. All three conditions must be true:
+
+1. **Single file changed** -- the fix touched exactly one file (always true if Phase 3 constraints held)
+2. **Source issue was `priority/p3-low`** -- check the labels fetched in Phase 1
+3. **Tests passed with no new failures** -- Phase 4 completed without aborting
+
+If all three conditions are met, label the PR for auto-merge:
+
+```bash
+gh pr edit <PR_NUMBER> --add-label "bot-fix/auto-merge-eligible"
+```
+
+If any condition is not met (higher priority source issue, test concerns, multi-file fix that was allowed through), label for human review:
+
+```bash
+gh pr edit <PR_NUMBER> --add-label "bot-fix/review-required"
+```
+
+Extract `<PR_NUMBER>` from the `gh pr create` output in Phase 5. Exactly one of the two labels must be applied -- never both, never neither.
+
+Note: The auto-merge gate in `scheduled-bug-fixer.yml` independently re-checks file count and priority. This label is a signal, not the sole gate -- defense-in-depth ensures a mislabeled PR cannot bypass mechanical checks.
 
 ## Phase 6: Failure Handler
 

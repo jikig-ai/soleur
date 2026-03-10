@@ -3,6 +3,10 @@
 # Merges origin/main into the feature branch to ensure it is current before merge.
 # Note: filename says "rebase" for historical reasons; strategy is merge (not rebase).
 #
+# Corresponding prose rules:
+#   AGENTS.md "Before merging any PR, merge origin/main into the feature branch"
+#   constitution.md "Before creating a PR or merging, merge latest origin/main into the feature branch"
+#
 # Error handling: fail-open on infrastructure errors (network, non-git context),
 # fail-closed on logical errors (conflicts, dirty tree, push failure).
 

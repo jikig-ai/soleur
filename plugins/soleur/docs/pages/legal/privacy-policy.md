@@ -17,7 +17,7 @@ permalink: pages/legal/privacy-policy.html
     <div class="prose">
 
 **Effective Date:** February 20, 2026
-**Last Updated:** February 21, 2026 (analytics disclosure)
+**Last Updated:** March 10, 2026 (newsletter subscription data)
 
 ## 1. Introduction
 
@@ -89,6 +89,17 @@ This data is stored in the Soleur GitHub repository on a dedicated branch (`cla-
 
 **Retention:** CLA signature data is retained indefinitely because the license grants in the CLA are irrevocable and survive any withdrawal of the signature record. If you exercise your right to erasure under GDPR Article 17, your signature record may be deleted, but the license grants made under the CLA continue in full effect for all contributions made prior to deletion, as stated in the CLA itself.
 
+### 4.6 Newsletter Subscription Data
+
+If you subscribe to the Soleur newsletter via the signup form on the Docs Site, we collect your **email address** for the purpose of sending periodic newsletter emails. This data is processed by **Buttondown** ([buttondown.com](https://buttondown.com)), a third-party newsletter platform, on our behalf.
+
+- **Data collected:** Email address only.
+- **Purpose:** Sending periodic newsletter emails about Soleur updates, features, and content.
+- **Lawful basis:** Consent (Article 6(1)(a) GDPR) -- you actively opt in by submitting the signup form and confirming your subscription via the double opt-in confirmation email.
+- **Double opt-in:** After submitting your email, Buttondown sends a confirmation email. Your subscription is only activated after you click the confirmation link. This ensures informed, verified consent.
+- **Retention:** Your email address is retained by Buttondown until you unsubscribe. You can unsubscribe at any time via the link in every newsletter email. Upon unsubscription, your email is removed from the active subscriber list.
+- **Third-party processor:** Buttondown acts as a data processor. See Section 5.4 for details.
+
 ## 5. Third-Party Services
 
 ### 5.1 Anthropic Claude API
@@ -106,7 +117,15 @@ The Soleur Plugin is designed to work with the Anthropic Claude API through the 
 - The Docs Site is hosted on GitHub Pages.
 - GitHub's data practices are governed by [GitHub's Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
 
-### 5.3 Other Third-Party Integrations
+### 5.3 Buttondown (Newsletter)
+
+We use **Buttondown** ([buttondown.com](https://buttondown.com)) to manage newsletter subscriptions and deliver newsletter emails. When you subscribe to our newsletter, your email address is transmitted to and stored by Buttondown. Buttondown acts as a data processor on our behalf.
+
+- Buttondown's privacy practices are governed by [Buttondown's Privacy Policy](https://buttondown.com/legal/privacy).
+- Buttondown is a US-based service. International data transfers are covered by Standard Contractual Clauses (SCCs).
+- Buttondown does not share subscriber email addresses with third parties for marketing purposes.
+
+### 5.4 Other Third-Party Integrations
 
 The Plugin may interact with other third-party tools and APIs as part of your development workflow (e.g., MCP servers, browser automation tools). These interactions are initiated by you, configured by you, and use your own credentials. Soleur does not control or monitor these interactions.
 
@@ -122,11 +141,14 @@ For website analytics via Plausible Analytics, the lawful basis is **legitimate 
 
 If you interact with the GitHub repository (e.g., filing issues), the legal basis for processing your GitHub profile information in that context is **legitimate interest** (Article 6(1)(f) GDPR) -- facilitating community participation in the project. The balancing test for this interest considers: (a) the processing is limited to publicly available GitHub profile data voluntarily shared by the user, (b) the user initiated the interaction, (c) the processing is necessary for the stated purpose (community participation), and (d) the user can withdraw by deleting their GitHub contributions.
 
+For newsletter subscriptions, the legal basis is **consent** (Article 6(1)(a) GDPR). You provide consent by submitting the signup form and confirming your subscription via the double opt-in email. You may withdraw consent at any time by unsubscribing.
+
 ## 7. Data Retention
 
 - **Plugin data:** All data created by the Plugin is stored locally on your machine. You control its retention and deletion entirely.
 - **Docs Site data:** Any data collected by GitHub Pages is retained according to GitHub's data retention policies.
 - **Repository interaction data:** Issues, pull requests, and other contributions are retained on GitHub according to its standard policies and your own account settings.
+- **Newsletter subscription data:** Your email address is retained by Buttondown for as long as you remain subscribed. Upon unsubscription, your email is removed from the active subscriber list. Buttondown may retain anonymized aggregate data (e.g., subscriber counts) after unsubscription.
 
 ## 8. Your Rights
 

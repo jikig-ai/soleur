@@ -1,3 +1,10 @@
+---
+title: Pre-Merge Rebase Hook Implementation
+date: 2026-03-03
+category: workflow-patterns
+tags: [integration-issues, claude-hooks]
+---
+
 # Learning: Pre-Merge Rebase Hook Implementation
 
 ## Problem

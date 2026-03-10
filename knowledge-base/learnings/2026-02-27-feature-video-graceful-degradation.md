@@ -1,3 +1,10 @@
+---
+title: Feature Video Graceful Degradation
+date: 2026-02-27
+category: engineering
+tags: [integration-issues, feature-video]
+---
+
 # Learning: Feature Video Graceful Degradation
 
 ## Problem

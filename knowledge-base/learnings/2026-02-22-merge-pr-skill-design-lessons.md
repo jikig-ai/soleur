@@ -1,9 +1,11 @@
 ---
-module: soleur
+title: merge-pr Skill Design Lessons
 date: 2026-02-22
-problem_type: developer_experience
-component: skill-design
+category: workflow-patterns
 tags: [merge-pr, skill-design, git, conflict-resolution, version-bump, compound, overengineering]
+module: soleur
+component: skill-design
+problem_type: developer_experience
 severity: medium
 ---
 

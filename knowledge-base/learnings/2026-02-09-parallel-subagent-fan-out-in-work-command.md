@@ -1,3 +1,10 @@
+---
+title: 'Parallel subagent fan-out pattern in /soleur:work'
+date: 2026-02-09
+category: agent-design
+tags: [implementation-patterns, soleur-plugin, parallel-execution, fan-out-pattern, task-tool, subagent-coordination, worktree-awareness]
+---
+
 # Learning: Parallel subagent fan-out pattern in /soleur:work
 
 ## Problem

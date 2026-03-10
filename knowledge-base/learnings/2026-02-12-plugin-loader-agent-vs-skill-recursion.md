@@ -1,3 +1,10 @@
+---
+title: Plugin Loader Recurses for Agents but NOT for Skills
+date: 2026-02-12
+category: agent-design
+tags: [implementation-patterns, plugin-architecture, skill-not-found, skill-not-discovered, nested-directory-skill-missing]
+---
+
 # Learning: Plugin Loader Recurses for Agents but NOT for Skills
 
 ## Problem

@@ -8,10 +8,14 @@
 
 set -euo pipefail
 
+# Resolve project root (worktree-safe: CWD may be .worktrees/feat-* instead of repo root)
+PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || PROJECT_ROOT="."
+
 # Parse arguments
 PROMPT_PARTS=()
 MAX_ITERATIONS=0
 COMPLETION_PROMISE="null"
+STUCK_THRESHOLD=3
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -28,6 +32,7 @@ ARGUMENTS:
 OPTIONS:
   --max-iterations <n>           Maximum iterations before auto-stop (default: unlimited)
   --completion-promise '<text>'  Promise phrase (USE QUOTES for multi-word)
+  --stuck-threshold <n>          Consecutive empty responses before auto-stop (default: 3, 0 to disable)
   -h, --help                     Show this help message
 
 DESCRIPTION:
@@ -36,6 +41,11 @@ DESCRIPTION:
 
   To signal completion, output: <promise>YOUR_PHRASE</promise>
 
+  Stuck detection: If the assistant produces N consecutive responses with
+  fewer than 20 characters of text content, the loop auto-terminates.
+  This prevents infinite cycling after crash recovery. Set --stuck-threshold 0
+  to disable.
+
 EXAMPLES:
   /soleur:ralph-loop Build a todo API --completion-promise 'DONE' --max-iterations 20
   /soleur:ralph-loop --max-iterations 10 Fix the auth bug
@@ -43,8 +53,9 @@ EXAMPLES:
   /soleur:ralph-loop --completion-promise 'TASK COMPLETE' Create a REST API
 
 STOPPING:
-  Only by reaching --max-iterations or detecting --completion-promise.
-  Or manually remove the state file: rm .claude/ralph-loop.local.md
+  By reaching --max-iterations, detecting --completion-promise, or
+  stuck detection (N consecutive empty responses). Or manually remove
+  the state file: rm .claude/ralph-loop.local.md
 
 MONITORING:
   # View current iteration:
@@ -75,6 +86,18 @@ HELP_EOF
       COMPLETION_PROMISE="$2"
       shift 2
       ;;
+    --stuck-threshold)
+      if [[ -z "${2:-}" ]]; then
+        echo "Error: --stuck-threshold requires a number argument" >&2
+        exit 1
+      fi
+      if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+        echo "Error: --stuck-threshold must be a non-negative integer, got: $2" >&2
+        exit 1
+      fi
+      STUCK_THRESHOLD="$2"
+      shift 2
+      ;;
     *)
       PROMPT_PARTS+=("$1")
       shift
@@ -97,7 +120,7 @@ if [[ -z "$PROMPT" ]]; then
 fi
 
 # Create state file for stop hook (markdown with YAML frontmatter)
-mkdir -p .claude
+mkdir -p "${PROJECT_ROOT}/.claude"
 
 # Quote completion promise for YAML if it contains special chars or is not null
 if [[ -n "$COMPLETION_PROMISE" ]] && [[ "$COMPLETION_PROMISE" != "null" ]]; then
@@ -106,12 +129,14 @@ else
   COMPLETION_PROMISE_YAML="null"
 fi
 
-cat > .claude/ralph-loop.local.md <<EOF
+cat > "${PROJECT_ROOT}/.claude/ralph-loop.local.md" <<EOF
 ---
 active: true
 iteration: 1
 max_iterations: $MAX_ITERATIONS
 completion_promise: $COMPLETION_PROMISE_YAML
+stuck_count: 0
+stuck_threshold: $STUCK_THRESHOLD
 started_at: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ---
 

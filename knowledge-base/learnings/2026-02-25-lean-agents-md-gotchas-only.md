@@ -1,3 +1,10 @@
+---
+title: Lean AGENTS.md -- gotchas-only based on research
+date: 2026-02-25
+category: agent-design
+tags: [architecture, agents.md]
+---
+
 # Learning: Lean AGENTS.md -- gotchas-only based on research
 
 ## Problem

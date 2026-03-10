@@ -60,3 +60,5 @@ rm /path/to/main-repo/*.png  # review first with ls *.png to avoid deleting legi
 ## Key Takeaway
 
 MCP servers resolve relative paths from their own process CWD (main repo root), not the Bash session CWD. Always use absolute paths for MCP tool file outputs when working in a worktree. Bash CLI tools (e.g., `agent-browser screenshot`) are unaffected since they inherit the shell CWD.
+
+**Update (2026-03-10):** The `.gitignore` now has a blanket `*.png` rule as a safety net. Skills that produce screenshots (test-browser, reproduce-bug, feature-video) also have cleanup phases. See `2026-03-10-gitignore-blanket-rules-with-negation.md`.

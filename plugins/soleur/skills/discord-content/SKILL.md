@@ -81,7 +81,7 @@ First get the webhook URL with `printenv DISCORD_WEBHOOK_URL`, then use the lite
 ```bash
 curl -s -o /dev/null -w "%{http_code}" \
   -H "Content-Type: application/json" \
-  -d "{\"content\": \"ESCAPED_CONTENT\", \"username\": \"Sol\", \"avatar_url\": \"AVATAR_URL\"}" \
+  -d "{\"content\": \"ESCAPED_CONTENT\", \"username\": \"Sol\", \"avatar_url\": \"AVATAR_URL\", \"allowed_mentions\": {\"parse\": []}}" \
   "<webhook-url>"
 ```
 

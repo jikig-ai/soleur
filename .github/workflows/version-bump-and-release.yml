@@ -35,21 +35,30 @@ jobs:
         id: check_plugin
         run: |
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "Plugin bump forced via workflow_dispatch"
             exit 0
           fi
 
           CHANGED=$(git diff --name-only HEAD~1 -- plugins/soleur/ | head -1)
           if [ -z "$CHANGED" ]; then
-            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No plugin files changed, skipping version bump"
           else
-            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "Plugin files changed, proceeding with version bump"
           fi
         env:
           EVENT_NAME: ${{ github.event_name }}
+
+      - name: Create secure temp files
+        if: steps.check_plugin.outputs.changed == 'true'
+        id: tmpfiles
+        run: |
+          echo "pr_body=$(mktemp)" >> "$GITHUB_OUTPUT"
+          echo "release_notes=$(mktemp)" >> "$GITHUB_OUTPUT"
+          echo "current_tag=$(mktemp)" >> "$GITHUB_OUTPUT"
+          echo "gh_err=$(mktemp)" >> "$GITHUB_OUTPUT"
 
       - name: Find merged PR
         if: steps.check_plugin.outputs.changed == 'true'
@@ -58,25 +67,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
+          PR_BODY_FILE: ${{ steps.tmpfiles.outputs.pr_body }}
         run: |
           # Fallback: emit empty PR metadata and use commit message as title
           give_up() {
             local reason="$1"
             echo "::warning::${reason}, using commit message as title"
-            echo "number=" >> $GITHUB_OUTPUT
-            echo "title=$(echo "$COMMIT_MSG" | head -1)" >> $GITHUB_OUTPUT
-            echo "labels=" >> $GITHUB_OUTPUT
-            echo "" > /tmp/pr_body.txt
-            echo "body_file=/tmp/pr_body.txt" >> $GITHUB_OUTPUT
+            echo "number=" >> "$GITHUB_OUTPUT"
+            printf 'title=%s\n' "$(echo "$COMMIT_MSG" | head -1 | tr -d '\n\r')" >> "$GITHUB_OUTPUT"
+            echo "labels=" >> "$GITHUB_OUTPUT"
+            echo "" > "$PR_BODY_FILE"
+            echo "body_file=$PR_BODY_FILE" >> "$GITHUB_OUTPUT"
             exit 0
           }
 
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "number=" >> $GITHUB_OUTPUT
-            echo "title=Manual version bump" >> $GITHUB_OUTPUT
-            echo "labels=" >> $GITHUB_OUTPUT
-            echo "" > /tmp/pr_body.txt
-            echo "body_file=/tmp/pr_body.txt" >> $GITHUB_OUTPUT
+            echo "number=" >> "$GITHUB_OUTPUT"
+            echo "title=Manual version bump" >> "$GITHUB_OUTPUT"
+            echo "labels=" >> "$GITHUB_OUTPUT"
+            echo "" > "$PR_BODY_FILE"
+            echo "body_file=$PR_BODY_FILE" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -104,11 +114,11 @@ jobs:
           PR_JSON=$(gh pr view "$PR_NUM" --json number,title,labels,body 2>/dev/null) \
             || give_up "#$PR_NUM is not a PR"
 
-          echo "number=$PR_NUM" >> $GITHUB_OUTPUT
-          echo "title=$(echo "$PR_JSON" | jq -r '.title')" >> $GITHUB_OUTPUT
-          echo "labels=$(echo "$PR_JSON" | jq -r '[.labels[].name] | join(",")')" >> $GITHUB_OUTPUT
-          echo "$PR_JSON" | jq -r '.body // ""' > /tmp/pr_body.txt
-          echo "body_file=/tmp/pr_body.txt" >> $GITHUB_OUTPUT
+          echo "number=$PR_NUM" >> "$GITHUB_OUTPUT"
+          printf 'title=%s\n' "$(echo "$PR_JSON" | jq -r '.title' | tr -d '\n\r')" >> "$GITHUB_OUTPUT"
+          printf 'labels=%s\n' "$(echo "$PR_JSON" | jq -r '[.labels[].name] | join(",")' | tr -d '\n\r')" >> "$GITHUB_OUTPUT"
+          echo "$PR_JSON" | jq -r '.body // ""' > "$PR_BODY_FILE"
+          echo "body_file=$PR_BODY_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Determine bump type
         if: steps.check_plugin.outputs.changed == 'true'
@@ -119,19 +129,19 @@ jobs:
           PR_LABELS: ${{ steps.pr.outputs.labels }}
         run: |
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "type=$DISPATCH_BUMP" >> $GITHUB_OUTPUT
+            echo "type=$DISPATCH_BUMP" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           if echo "$PR_LABELS" | grep -q "semver:major"; then
-            echo "type=major" >> $GITHUB_OUTPUT
+            echo "type=major" >> "$GITHUB_OUTPUT"
           elif echo "$PR_LABELS" | grep -q "semver:minor"; then
-            echo "type=minor" >> $GITHUB_OUTPUT
+            echo "type=minor" >> "$GITHUB_OUTPUT"
           elif echo "$PR_LABELS" | grep -q "semver:patch"; then
-            echo "type=patch" >> $GITHUB_OUTPUT
+            echo "type=patch" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::No semver label found on PR, defaulting to patch"
-            echo "type=patch" >> $GITHUB_OUTPUT
+            echo "type=patch" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Compute next version
@@ -140,20 +150,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           BUMP_TYPE: ${{ steps.bump.outputs.type }}
+          CURRENT_TAG_FILE: ${{ steps.tmpfiles.outputs.current_tag }}
+          GH_ERR_FILE: ${{ steps.tmpfiles.outputs.gh_err }}
         run: |
           # Separate "no releases yet" from "API error"
-          if ! gh release view --json tagName --jq '.tagName' > /tmp/current_tag 2>/tmp/gh_err; then
-            if grep -q "release not found" /tmp/gh_err; then
+          if ! gh release view --json tagName --jq '.tagName' > "$CURRENT_TAG_FILE" 2>"$GH_ERR_FILE"; then
+            if grep -q "release not found" "$GH_ERR_FILE"; then
               CURRENT="0.0.0"
               echo "No existing releases, starting from 0.0.0"
             else
-              echo "::error::gh release view failed: $(cat /tmp/gh_err)"
+              echo "::error::gh release view failed: $(cat "$GH_ERR_FILE")"
               exit 1
             fi
           else
-            CURRENT=$(sed 's/^v//' /tmp/current_tag)
+            CURRENT=$(sed 's/^v//' "$CURRENT_TAG_FILE")
           fi
-          echo "current=$CURRENT" >> $GITHUB_OUTPUT
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
 
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
 
@@ -170,8 +182,8 @@ jobs:
             *) echo "::error::Unknown bump type: $BUMP_TYPE"; exit 1 ;;
           esac
 
-          echo "next=$NEXT" >> $GITHUB_OUTPUT
-          echo "tag=v$NEXT" >> $GITHUB_OUTPUT
+          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "tag=v$NEXT" >> "$GITHUB_OUTPUT"
           echo "Bumping $CURRENT -> $NEXT ($BUMP_TYPE)"
 
       - name: Check idempotency
@@ -182,10 +194,10 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           if gh release view "$TAG" &>/dev/null; then
-            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "Release $TAG already exists, skipping"
           else
-            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Extract changelog from PR body
@@ -193,9 +205,9 @@ jobs:
         id: changelog
         env:
           PR_TITLE: ${{ steps.pr.outputs.title }}
+          BODY_FILE: ${{ steps.tmpfiles.outputs.pr_body }}
+          RELEASE_NOTES_FILE: ${{ steps.tmpfiles.outputs.release_notes }}
         run: |
-          BODY_FILE="/tmp/pr_body.txt"
-
           # Extract content between ## Changelog and next ## heading
           CHANGELOG=""
           if [ -f "$BODY_FILE" ] && [ -s "$BODY_FILE" ]; then
@@ -211,30 +223,32 @@ jobs:
           fi
 
           # Write release notes (just the body, no heading)
-          echo "$CHANGELOG" > /tmp/release_notes.txt
+          echo "$CHANGELOG" > "$RELEASE_NOTES_FILE"
 
       - name: Create GitHub Release
         if: steps.check_plugin.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_NOTES_FILE: ${{ steps.tmpfiles.outputs.release_notes }}
         run: |
           gh release create "$TAG" \
             --title "$TAG" \
-            --notes-file /tmp/release_notes.txt
+            --notes-file "$RELEASE_NOTES_FILE"
 
       - name: Post to Discord
         if: steps.check_plugin.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_NOTES_FILE: ${{ steps.tmpfiles.outputs.release_notes }}
         run: |
           if [ -z "$DISCORD_WEBHOOK_URL" ]; then
             echo "DISCORD_WEBHOOK_URL secret not set, skipping Discord notification"
             exit 0
           fi
 
-          BODY=$(cat /tmp/release_notes.txt)
+          BODY=$(cat "$RELEASE_NOTES_FILE")
           REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
           RELEASE_URL="${REPO_URL}/releases/tag/${TAG}"
 
@@ -250,7 +264,7 @@ jobs:
             --arg content "$MESSAGE" \
             --arg username "Sol" \
             --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
-            '{content: $content, username: $username, avatar_url: $avatar_url}')
+            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
 
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Content-Type: application/json" \

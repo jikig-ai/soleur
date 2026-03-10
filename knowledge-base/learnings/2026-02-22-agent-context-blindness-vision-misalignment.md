@@ -1,3 +1,10 @@
+---
+title: Agent Context-Blindness Causes Vision Misalignment
+date: 2026-02-22
+category: agent-design
+tags: [logic-errors, business-validator, cpo, onboarding, misaligned business validation, onboarding describes dev plugin not platform]
+---
+
 # Learning: Agent Context-Blindness Causes Vision Misalignment
 
 ## Problem

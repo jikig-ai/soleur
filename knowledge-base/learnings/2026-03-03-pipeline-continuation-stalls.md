@@ -1,3 +1,10 @@
+---
+title: Pipeline continuation stalls when work skill output sounds conclusive
+date: 2026-03-03
+category: engineering
+tags: [workflow-patterns, plugins/soleur/skills/one-shot]
+---
+
 # Learning: Pipeline continuation stalls when work skill output sounds conclusive
 
 ## Problem

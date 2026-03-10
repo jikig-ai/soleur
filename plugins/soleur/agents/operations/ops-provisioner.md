@@ -23,18 +23,9 @@ If files do not exist, proceed without baseline context.
 
 Accept the tool name, purpose, and signup URL from the user. Check `knowledge-base/ops/expenses.md` for existing entries matching this tool. If an entry exists, warn the user and ask whether to proceed (upgrade/reconfigure) or stop.
 
-Check if agent-browser is available by running `agent-browser --help`.
+Use Playwright MCP tools to automate the signup flow. Fill non-sensitive fields; when reaching payment or credential fields, stop and move to the pause step.
 
-**If agent-browser is available:**
-
-1. Open the signup page: `agent-browser open <signup_url>`
-2. Take a snapshot: `agent-browser snapshot -i`
-3. Fill non-sensitive fields (email, organization name, plan selection) using `agent-browser fill` and `agent-browser click`
-4. When reaching payment fields (credit card, billing address), stop and move to the pause step
-
-**If agent-browser is not available:**
-
-Provide the signup URL and step-by-step instructions for the user to complete signup manually.
+**Fallback:** If Playwright MCP tools are unavailable, use agent-browser CLI. If neither is available, provide the signup URL and manual instructions as a last resort -- investigate why browser tools are unavailable.
 
 **Pause for user action:**
 
@@ -44,16 +35,15 @@ When the flow requires user action outside the browser (payment, email verificat
 
 After the user confirms payment is complete:
 
-1. Navigate to the tool's dashboard or settings page using agent-browser (or provide the URL if unavailable)
-2. Take a snapshot to understand the current state
-3. Guide through initial configuration steps (add site/project, copy integration snippet, configure options)
-4. If the tool requires code changes in the project (script tags, env vars, config files), make those changes using the Edit or Write tools
+1. Navigate to the tool's dashboard or settings page and take a snapshot to understand the current state
+2. Guide through initial configuration steps (add site/project, copy integration snippet, configure options)
+3. If the tool requires code changes in the project (script tags, env vars, config files), make those changes using the Edit or Write tools
 
 ## Verify + Record
 
 **Verification:**
 
-1. Take a browser screenshot of the configured dashboard as proof of setup
+1. Take a screenshot of the configured dashboard as proof of setup. Fall back to agent-browser CLI if Playwright MCP tools are unavailable.
 2. If an integration test is applicable (e.g., visit the project's site, then check the tool's dashboard for the recorded event), perform it and screenshot the result
 
 **Record the expense:**
@@ -72,6 +62,25 @@ After verification, gather the expense details:
 
 After recording, summarize: the tool name, plan and cost, dashboard URL, verification status, and any code changes made.
 
+## Public Surface Check
+
+After recording the expense, assess whether the newly provisioned tool has any user-visible presence -- social links, analytics badges, embeds, status page links, or landing page mentions.
+
+If the tool has user-visible presence:
+
+1. Read `plugins/soleur/docs/_data/site.json` and check if the tool's URL is listed
+2. Search `plugins/soleur/docs/pages/` for references to the tool
+3. Check `knowledge-base/overview/brand-guide.md` for the tool's handle or name
+
+If any reference is missing, warn the user:
+
+```text
+This tool has public-facing presence but the docs site does not reference it yet.
+Missing from: <list-of-files>. Consider filing an issue to update the website.
+```
+
+If the tool has no public-facing presence (e.g., internal monitoring, CI tooling), skip this check. The community skill has a platform-specific version of this check for social platforms.
+
 ## Safety Rules
 
 NEVER enter credentials, passwords, API keys, or payment information.
@@ -79,3 +88,8 @@ NEVER click buttons that trigger purchases, payments, or charges.
 NEVER fill payment form fields (credit card, CVV, billing address).
 
 When reaching any sensitive field or action, pause and ask the user to complete it manually.
+
+## Sharp Edges
+
+- When provisioning API keys with paired credentials (e.g., OAuth Consumer Key + Access Token), regenerating the primary key invalidates dependent tokens. Always regenerate in dependency order: primary key first, then dependent tokens.
+- Playwright MCP tools resolve file paths from the repo root, not the shell CWD. Always use absolute paths when uploading files from a worktree.

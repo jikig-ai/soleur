@@ -1,3 +1,10 @@
+---
+title: Skill Count Appears in 5+ Active Files
+date: 2026-02-22
+category: plugin-architecture
+tags: [implementation-patterns, plugin-architecture, stale-count, wrong-skill-count, brand-guide-stale]
+---
+
 # Learning: Skill Count Appears in 5+ Active Files
 
 ## Problem

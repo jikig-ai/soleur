@@ -1,4 +1,8 @@
 ---
+title: 'Growth Strategist Agent & Skill Development'
+date: 2026-02-19
+category: agent-design
+tags: [integration-issues, plugins/soleur, agent-not-found, over-specified-prompts, stale-counts, skill-registration-gap, sub-command-merging]
 synced_to: [skill-creator]
 ---
 

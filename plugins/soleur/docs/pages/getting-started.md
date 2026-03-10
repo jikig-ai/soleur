@@ -1,14 +1,14 @@
 ---
-title: Getting Started
-description: "Getting Started - Install Soleur and start building smarter."
+title: Getting Started with Soleur
+description: "Install the Soleur Claude Code plugin and start running your company-as-a-service — AI agents for engineering, marketing, legal, finance, and more."
 layout: base.njk
 permalink: pages/getting-started.html
 ---
 
 <section class="hero">
   <div class="container">
-    <h1>Getting Started</h1>
-    <p class="subtitle">Install Soleur and start building smarter.</p>
+    <h1>Getting Started with Soleur</h1>
+    <p class="subtitle">Install the Claude Code plugin that gives you a full AI organization.</p>
   </div>
 </section>
 
@@ -16,14 +16,23 @@ permalink: pages/getting-started.html
   <div class="container">
     <div class="prose">
 
+## What Is Soleur?
+
+Soleur is a company-as-a-service platform — a single Claude Code plugin that deploys a full AI organization across your business. Instead of hiring across departments, you install one plugin and get agents that handle engineering, marketing, legal, finance, operations, product, sales, and support. Every problem you solve compounds into patterns that make the next one faster.
+
 ## Why Soleur
 
-Soleur gives a single founder the leverage of a full organization. **{{ stats.agents }} agents** across engineering, finance, marketing, legal, operations, product, sales, and support -- plus **{{ stats.skills }} skills** and **{{ stats.commands }} commands** -- that compound your company knowledge over time. Every problem you solve makes the next one easier.
+Soleur gives a single founder the operational capacity of a full organization. **{{ stats.agents }} agents** across engineering, finance, marketing, legal, operations, product, sales, and support -- plus **{{ stats.skills }} skills** and **{{ stats.commands }} commands** -- that compound your company knowledge over time. Every problem you solve makes the next one easier.
 
 ## Installation
 
 <div class="quickstart-code">
   <pre><code>claude plugin install soleur</code></pre>
+</div>
+
+<div class="callout">
+  <strong>Existing project?</strong> Run <code>/soleur:sync</code> to analyze your codebase and populate the knowledge base.<br>
+  <strong>Starting fresh?</strong> Run <code>/soleur:go</code> and describe what you need.
 </div>
 
 ## The Workflow
@@ -79,7 +88,7 @@ The 5-step workflow (invoked automatically via `/soleur:go` or directly via Skil
   </div>
 </div>
 
-## Common Workflows
+## Example Workflows
 
 <div class="commands-list">
   <div class="command-item">
@@ -87,25 +96,20 @@ The 5-step workflow (invoked automatically via `/soleur:go` or directly via Skil
     <p>/soleur:go build [feature] &rarr; brainstorm &rarr; plan &rarr; work &rarr; review &rarr; compound</p>
   </div>
   <div class="command-item">
+    <code>Generating Legal Documents</code>
+    <p>/soleur:go generate legal documents &rarr; Terms, Privacy Policy, GDPR Policy, and more</p>
+  </div>
+  <div class="command-item">
     <code>Fixing a Bug</code>
     <p>/soleur:go fix [bug] &rarr; autonomous fix from plan to PR</p>
   </div>
-  <div class="command-item">
-    <code>Reviewing a PR</code>
-    <p>/soleur:go review &rarr; multi-agent review on existing PR</p>
-  </div>
-</div>
-
-## Beyond Engineering
-
-<div class="commands-list">
   <div class="command-item">
     <code>Defining Your Brand</code>
     <p>/soleur:go define our brand identity &rarr; interactive workshop producing a brand guide</p>
   </div>
   <div class="command-item">
-    <code>Generating Legal Documents</code>
-    <p>/soleur:go generate legal documents &rarr; Terms, Privacy Policy, GDPR Policy, and more</p>
+    <code>Reviewing a PR</code>
+    <p>/soleur:go review &rarr; multi-agent review on existing PR</p>
   </div>
   <div class="command-item">
     <code>Validating a Business Idea</code>

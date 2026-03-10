@@ -31,6 +31,8 @@ git worktree list
 pwd
 ```
 
+**Branch safety check (defense-in-depth):** If the branch from the command above is `main` or `master`, abort immediately with: "Error: ship cannot run on main/master. Checkout a feature branch first." This is defense-in-depth alongside PreToolUse hooks -- it fires even if hooks are unavailable (e.g., in CI).
+
 Load project conventions:
 
 ```bash
@@ -177,6 +179,25 @@ Ship Checklist for [branch name]:
 
 ## Phase 6: Push and Create PR
 
+### Detect Associated Issue
+
+Before creating or editing the PR, detect if the work resolves a GitHub issue. Check these sources (in order, stop at first match):
+
+1. **Branch name:** Extract issue number from patterns like `fix/123-description`, `feat/issue-123`, `fix-123`, or any segment matching `\b(\d+)\b` after a `fix` or `issue` prefix.
+2. **Commit messages:** Search recent branch commits for `#N` references:
+
+   ```bash
+   git log origin/main..HEAD --oneline
+   ```
+
+   Extract any `#N` references from the output.
+
+3. **User context:** If the user mentioned an issue number earlier in the conversation, use it.
+
+If an issue number is found, store it as `ISSUE_NUMBER` for use in the PR body below. If multiple are found, use all of them. If none are found, omit the `Closes` line from the PR body.
+
+**Important:** Use `Closes #N` syntax (not `Ref #N`, not `(#N)` in the title). GitHub only auto-closes issues when the PR body contains a keyword (`Closes`, `Fixes`, or `Resolves`) followed by the issue reference.
+
 Push the branch to remote. Get the branch name first:
 
 ```bash
@@ -211,6 +232,8 @@ Replace `BRANCH_NAME` with the actual branch name.
    gh pr edit PR_NUMBER --title "the pr title" --body "## Summary
    - bullet points
 
+   Closes #ISSUE_NUMBER
+
    ## Changelog
    - changelog entries describing what changed
 
@@ -219,6 +242,8 @@ Replace `BRANCH_NAME` with the actual branch name.
 
    Generated with [Claude Code](https://claude.com/claude-code)"
    ```
+
+   If `ISSUE_NUMBER` was detected, include the `Closes #N` line. If multiple issues, list each (`Closes #N, Closes #M`). If no issue was detected, omit the `Closes` line entirely.
 
    Do not quote flag names -- write `--title` not `"--title"`.
 
@@ -238,6 +263,8 @@ Fall through to creating a new PR. This handles cases where the user entered the
 gh pr create --title "the pr title" --body "## Summary
 - bullet points
 
+Closes #ISSUE_NUMBER
+
 ## Changelog
 - changelog entries describing what changed
 
@@ -246,6 +273,8 @@ gh pr create --title "the pr title" --body "## Summary
 
 Generated with [Claude Code](https://claude.com/claude-code)"
 ```
+
+If `ISSUE_NUMBER` was detected, include the `Closes #N` line. If no issue was detected, omit it.
 
 Do not quote flag names -- write `--title` not `"--title"`.
 

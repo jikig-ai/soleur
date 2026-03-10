@@ -9,23 +9,40 @@
 
 set -euo pipefail
 
-# Read hook input from stdin (advanced stop hook API)
-HOOK_INPUT=$(cat)
+# Resolve project root (worktree-safe: CWD may be .worktrees/feat-* instead of repo root)
+PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || PROJECT_ROOT="."
+RALPH_STATE_FILE="${PROJECT_ROOT}/.claude/ralph-loop.local.md"
 
-# Check if ralph-loop is active
-RALPH_STATE_FILE=".claude/ralph-loop.local.md"
-
+# Check if ralph-loop is active BEFORE reading stdin
 if [[ ! -f "$RALPH_STATE_FILE" ]]; then
   # No active loop - allow exit
   exit 0
 fi
 
-# Parse markdown frontmatter (YAML between ---) and extract values
-FRONTMATTER=$(sed -n '/^---$/,/^---$/{ /^---$/d; p; }' "$RALPH_STATE_FILE")
+# Read hook input from stdin (advanced stop hook API)
+HOOK_INPUT=$(cat)
+
+# Parse markdown frontmatter (YAML between first and second --- only)
+FRONTMATTER=$(awk '/^---$/{c++; next} c==1' "$RALPH_STATE_FILE")
 ITERATION=$(echo "$FRONTMATTER" | grep '^iteration:' | sed 's/iteration: *//')
 MAX_ITERATIONS=$(echo "$FRONTMATTER" | grep '^max_iterations:' | sed 's/max_iterations: *//')
 # Extract completion_promise and strip surrounding quotes if present
 COMPLETION_PROMISE=$(echo "$FRONTMATTER" | grep '^completion_promise:' | sed 's/completion_promise: *//' | sed 's/^"\(.*\)"$/\1/')
+
+# --- Stuck Detection ---
+# Parse stuck detection fields from frontmatter
+# CRITICAL: || true guards prevent grep exit 1 from aborting under set -euo pipefail
+# when fields are missing (pre-existing state files without stuck_count/stuck_threshold)
+STUCK_COUNT=$(echo "$FRONTMATTER" | grep '^stuck_count:' | sed 's/stuck_count: *//' || true)
+STUCK_THRESHOLD=$(echo "$FRONTMATTER" | grep '^stuck_threshold:' | sed 's/stuck_threshold: *//' || true)
+
+# Default values for backward compatibility with pre-existing state files
+if [[ ! "$STUCK_COUNT" =~ ^[0-9]+$ ]]; then
+  STUCK_COUNT=0
+fi
+if [[ ! "$STUCK_THRESHOLD" =~ ^[0-9]+$ ]]; then
+  STUCK_THRESHOLD=3
+fi
 
 # Validate numeric fields before arithmetic operations
 if [[ ! "$ITERATION" =~ ^[0-9]+$ ]]; then
@@ -47,37 +64,11 @@ if [[ $MAX_ITERATIONS -gt 0 ]] && [[ $ITERATION -ge $MAX_ITERATIONS ]]; then
   exit 0
 fi
 
-# Get transcript path from hook input
-TRANSCRIPT_PATH=$(echo "$HOOK_INPUT" | jq -r '.transcript_path')
+# Extract last assistant message directly from hook input (stop hook API)
+LAST_OUTPUT=$(echo "$HOOK_INPUT" | jq -r '.last_assistant_message // ""')
 
-if [[ ! -f "$TRANSCRIPT_PATH" ]]; then
-  echo "Warning: Ralph loop transcript not found ($TRANSCRIPT_PATH). Stopping." >&2
-  rm "$RALPH_STATE_FILE"
-  exit 0
-fi
-
-# Read last assistant message from transcript (JSONL format)
-if ! grep -q '"role":"assistant"' "$TRANSCRIPT_PATH"; then
-  echo "Warning: No assistant messages in transcript. Stopping." >&2
-  rm "$RALPH_STATE_FILE"
-  exit 0
-fi
-
-LAST_LINE=$(grep '"role":"assistant"' "$TRANSCRIPT_PATH" | tail -1)
-
-# Parse JSON to extract text content
-LAST_OUTPUT=$(echo "$LAST_LINE" | jq -r '
-  .message.content |
-  map(select(.type == "text")) |
-  map(.text) |
-  join("\n")
-' 2>/dev/null) || true
-
-if [[ -z "$LAST_OUTPUT" ]]; then
-  echo "Warning: Failed to parse assistant message. Stopping." >&2
-  rm "$RALPH_STATE_FILE"
-  exit 0
-fi
+# Empty LAST_OUTPUT is valid for tool-use-only responses -- do not terminate
+# The stuck detection counter below handles repeated empty outputs
 
 # Check for completion promise (only if set)
 if [[ "$COMPLETION_PROMISE" != "null" ]] && [[ -n "$COMPLETION_PROMISE" ]]; then
@@ -92,6 +83,28 @@ if [[ "$COMPLETION_PROMISE" != "null" ]] && [[ -n "$COMPLETION_PROMISE" ]]; then
   fi
 fi
 
+# --- Stuck Detection: Measure and Update ---
+# Measure response substantiveness (strip whitespace, check length)
+# Note: LAST_OUTPUT may be empty for tool-use-only responses (jq text extraction
+# yields nothing when all content blocks are type "tool_use"). This is fine --
+# empty string has length 0, which counts as minimal.
+STRIPPED_OUTPUT=$(echo "$LAST_OUTPUT" | tr -d '[:space:]')
+RESPONSE_LENGTH=${#STRIPPED_OUTPUT}
+
+# Update stuck counter
+if [[ $RESPONSE_LENGTH -lt 20 ]]; then
+  STUCK_COUNT=$((STUCK_COUNT + 1))
+else
+  STUCK_COUNT=0
+fi
+
+# Check stuck threshold (0 = disabled)
+if [[ $STUCK_THRESHOLD -gt 0 ]] && [[ $STUCK_COUNT -ge $STUCK_THRESHOLD ]]; then
+  echo "Ralph loop: terminated after $STUCK_COUNT consecutive empty responses (stuck detection)" >&2
+  rm "$RALPH_STATE_FILE"
+  exit 0
+fi
+
 # Not complete - continue loop with SAME PROMPT
 NEXT_ITERATION=$((ITERATION + 1))
 
@@ -104,9 +117,17 @@ if [[ -z "$PROMPT_TEXT" ]]; then
   exit 0
 fi
 
-# Update iteration in frontmatter (portable across macOS and Linux)
+# Update iteration and stuck_count in first frontmatter block only (awk scoped to c==1)
+# Note: on legacy state files without stuck_count field, the awk match is a no-op for that line.
+# The counter will not persist across iterations. Acceptable because legacy files are only
+# created by pre-stuck-detection versions of setup-ralph-loop.sh; all new loops include the field.
 TEMP_FILE="${RALPH_STATE_FILE}.tmp.$$"
-sed "s/^iteration: .*/iteration: $NEXT_ITERATION/" "$RALPH_STATE_FILE" > "$TEMP_FILE"
+awk -v iter="$NEXT_ITERATION" -v sc="$STUCK_COUNT" '
+  /^---$/ { c++; print; next }
+  c==1 && /^iteration:/ { print "iteration: " iter; next }
+  c==1 && /^stuck_count:/ { print "stuck_count: " sc; next }
+  { print }
+' "$RALPH_STATE_FILE" > "$TEMP_FILE"
 mv "$TEMP_FILE" "$RALPH_STATE_FILE"
 
 # Build system message with iteration count and completion promise info

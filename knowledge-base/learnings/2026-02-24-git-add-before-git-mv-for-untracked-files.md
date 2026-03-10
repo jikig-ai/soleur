@@ -1,3 +1,10 @@
+---
+title: Always git add before git mv in skill instructions
+date: 2026-02-24
+category: workflow-patterns
+tags: [build-errors, skills]
+---
+
 # Learning: Always git add before git mv in skill instructions
 
 ## Problem

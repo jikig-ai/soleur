@@ -1,3 +1,10 @@
+---
+title: GDPR Article 30 Compliance Audit Pattern
+date: 2026-02-21
+category: legal
+tags: [integration-issues, legal-agents, gdpr, article-30, cnil, legal-compliance-auditor, french-law, processing-register]
+---
+
 # Learning: GDPR Article 30 Compliance Audit Pattern
 
 ## Problem

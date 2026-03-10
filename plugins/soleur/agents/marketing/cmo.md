@@ -51,6 +51,7 @@ Spawn specialist agents via the Task tool for execution.
 | programmatic-seo-specialist | Template-driven page generation, comparison/alternatives pages |
 | retention-strategist | Churn prevention, dunning sequences, referral programs |
 | analytics-analyst | Event taxonomies, A/B test plans, attribution models |
+| fact-checker | Citation and claim verification for content drafts |
 
 **Sequential dispatch** when outputs depend on prior work (e.g., strategy before copywriting, brand guide before content).
 

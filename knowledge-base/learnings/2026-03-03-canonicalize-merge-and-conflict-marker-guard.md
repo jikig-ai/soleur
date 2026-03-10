@@ -1,3 +1,10 @@
+---
+title: Canonicalize merge strategy and add conflict marker guard
+date: 2026-03-03
+category: workflow-patterns
+tags: [integration-issues, git-workflow, claude-hooks]
+---
+
 # Learning: Canonicalize merge strategy and add conflict marker guard
 
 ## Problem

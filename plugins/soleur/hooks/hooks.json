@@ -1,6 +1,17 @@
 {
   "description": "Soleur plugin hooks",
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/welcome-hook.sh"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

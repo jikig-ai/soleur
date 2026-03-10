@@ -1,3 +1,10 @@
+---
+title: Pencil Desktop is not required for Pencil MCP
+date: 2026-02-27
+category: infrastructure
+tags: [integration-issues, pencil-setup]
+---
+
 # Learning: Pencil Desktop is not required for Pencil MCP
 
 ## Problem
@@ -21,7 +28,9 @@ Two incorrect assumptions baked into the original script:
 
 ## Key Insight
 
-Always verify dependency claims by dogfooding on a real machine. The original script was written with reasonable-sounding assumptions about what's required, but running it revealed the actual dependency graph: IDE + extension is sufficient, Desktop is a nice-to-have. Check distribution methods before writing platform detection code — don't assume a package manager format exists.
+Always verify dependency claims by dogfooding on a real machine. The original script was written with reasonable-sounding assumptions about what's required, but running it revealed the actual dependency graph: IDE + extension is sufficient, Desktop is a nice-to-have. Check distribution methods before writing platform detection code -- don't assume a package manager format exists.
+
+**Update (2026-03-10):** This learning's hierarchy was inverted by #493. Pencil Desktop is now the *preferred* MCP source (not just optional), and IDE is the fallback. The three-tier cascade (CLI > Desktop binary > IDE extension) reflects that Desktop provides a simpler, IDE-independent path. See `2026-03-10-pencil-desktop-standalone-mcp-three-tier-detection.md`.
 
 ## Session Errors
 

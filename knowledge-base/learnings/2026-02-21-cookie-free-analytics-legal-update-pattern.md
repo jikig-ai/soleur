@@ -1,10 +1,11 @@
 ---
-title: "Cookie-Free Analytics Legal Update Pattern"
+title: Cookie-Free Analytics Legal Update Pattern
+date: 2026-02-21
 category: implementation-patterns
 tags: [plausible, analytics, gdpr, eprivacy, legal-docs, cookie-free]
+symptoms: [Adding analytics to a site with legal docs claiming 'no analytics']
 module: docs-site
-symptom: "Adding analytics to a site with legal docs claiming 'no analytics'"
-root_cause: "Legal documents must be updated in lockstep with technical changes"
+root_cause: Legal documents must be updated in lockstep with technical changes
 ---
 
 # Cookie-Free Analytics Legal Update Pattern

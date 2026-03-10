@@ -1,3 +1,10 @@
+---
+title: Plan review collapses agent architecture to inline instructions
+date: 2026-02-22
+category: agent-design
+tags: [architecture-decisions, plugins/soleur/commands]
+---
+
 # Learning: Plan review collapses agent architecture to inline instructions
 
 ## Problem

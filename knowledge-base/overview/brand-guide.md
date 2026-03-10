@@ -147,6 +147,73 @@ The visual identity follows the **Solar Forge** direction: raw power being shape
 - Example issue response: "Confirmed. The agent resolver doesn't recurse into nested skill directories. Fix in #74."
 - Example PR description: "Add brand-architect agent and discord-content skill. Enables interactive brand workshops and Discord content generation from brand guide."
 
+### X/Twitter
+
+**Handle:** [@soleur_ai](https://x.com/soleur_ai)
+
+- Full brand voice. Declarative, concrete, no hedging. Every tweet should read like a statement, not a question.
+- **Thread format:** Hook tweet (standalone value, no "thread" announcement) > Numbered body tweets (2/ 3/ 4/) > Final tweet with article link and one-line CTA.
+- **280-character limit** is enforced per tweet during generation, not as a post-hoc trim.
+- Hook-first: the first tweet must deliver a complete, compelling idea that works even if nobody clicks "Show more." No "I just wrote about..." openers.
+- Links go in the final tweet only. Mid-thread links break reading flow and reduce impressions.
+- No hashtags in body tweets. One relevant hashtag in the final tweet is acceptable if it adds discoverability (e.g., #solofounder, #buildinpublic). Never more than two.
+- No emojis in hook tweets. Body tweets may use one structural emoji (arrow, checkmark) per tweet if it aids scanning.
+- Metrics and numbers land hardest. Lead with concrete data when available: "420+ merged PRs. 40+ agents. 8 departments. One founder."
+- Never use "excited to announce" or "we're thrilled." State what shipped and why it matters.
+- Example hook: "The other 70% of running a company is still manual. AI solved coding. Nothing solved the rest."
+- Example thread body: "2/ Company-as-a-Service runs every department with AI agents that share a compounding knowledge base. Marketing knows what engineering decided. Legal references the privacy policy. Context flows everywhere."
+- Example final tweet: "Full breakdown of what CaaS means and why it matters for solo founders:\n\nhttps://soleur.ai/blog/what-is-company-as-a-service/\n\n#solofounder"
+
+#### Engagement Guardrails
+
+These guardrails apply in both automatic mode (fetch-mentions) and manual mode (Free tier 403 fallback). The human reviewer is the enforcement mechanism.
+
+**Topics to avoid:**
+- Political, partisan, or religiously divisive topics
+- Competitor criticism or comparisons -- state what Soleur does, never what others lack
+- Unverified claims or speculation about roadmap dates
+- Anything requiring legal review (pricing commitments, data handling details beyond the privacy policy)
+- Trending hashtags or memes with unclear associations -- meanings shift fast
+
+**Exception:** Engaging with #solofounder, #buildinpublic, and AI/developer tooling communities is encouraged even when conversations touch on industry trends. The prohibition targets partisan, religious, and inflammatory topics, not the broader tech ecosystem.
+
+**When to skip a mention:**
+- Abusive, harassing, or spam content
+- Off-topic mentions with no connection to Soleur or solo-founder topics
+- Mentions that are themselves rage-bait or provocative in tone (thread-level context review is a human reviewer responsibility during the approval step)
+- Likely bot accounts (alphanumeric handle pattern, generic or empty display name)
+- Threads where replying would amplify negative sentiment
+- Mentions that are retweets or quote-tweets of Soleur content -- the RT is sufficient engagement
+- Accounts whose mention content creates brand association risk (full account history review is a human reviewer responsibility during the approval step)
+
+**Reply cadence:**
+- Maximum 10 replies per engagement session
+- Minimum 2-minute gap between posting replies. X's algorithm penalizes rapid-fire bursts that look automated.
+- One reply per thread -- do not enter extended back-and-forth. Escalate complex questions to Discord or docs.
+- Default to skipping when unsure -- silence is safer than a misaligned reply
+
+**Tone in replies:**
+- Match the register of the original tweet (technical question gets a technical answer, casual mention gets a concise acknowledgment)
+- Never argue or debate -- state the position once, then disengage
+- Credit insight in feature suggestions ("Solid idea. Filed as #N." not "Thanks for the feedback!")
+- Maintain a human voice -- avoid phrases that sound templated or auto-generated
+
+#### Profile Banner
+
+| Property | Value |
+|----------|-------|
+| Dimensions | 1500x500px (3:1 aspect ratio) |
+| File | `plugins/soleur/docs/images/x-banner-1500x500.png` |
+| Background | `#0A0A0A` with gold gradient edge accents (`#D4B36A` left, `#B8923E` right) |
+| Wordmark | "S O L E U R" -- Inter 500, 52px, gold `#C9A962`, centered horizontally, upper third |
+| Thesis | "Build a Billion-Dollar Company. Alone." -- Cormorant Garamond 500, 82px, white `#FFFFFF`, centered |
+| Metrics | "60+ Agents · 8 Departments · 1 Founder" -- Inter 400, 26px, secondary `#848484`, below thesis |
+| Gold accent line | 1px horizontal, 600px wide centered, 40% opacity, at y=325 |
+| Mobile safe zone | Center 900px (60%) contains all text -- verified |
+| Avatar overlap | Bottom-left clear of critical content |
+| Source file | `knowledge-base/design/brand/brand-x-banner.pen` |
+| Generated with | Pencil MCP (design) + Pillow (PNG export) |
+
 ### Website / Landing Page
 
 - Full brand energy. This is where the ambition lives at maximum volume.

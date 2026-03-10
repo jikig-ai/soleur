@@ -70,6 +70,7 @@ Project principles organized by domain. Add principles as you learn them.
 - When adding a new skill, manually register it in `docs/_data/skills.js` SKILL_CATEGORIES -- skill discovery does not recurse and the docs site will silently omit unregistered skills
 - Component counts (agents, skills, commands) are computed at docs build time by `stats.js` -- do not hardcode counts in committed files
 - Organize agents by domain first (engineering/, etc.), then by function (review/, design/). Cross-domain agents stay at root level (research/, workflow/)
+- When evaluating an external platform or service, verify its actual capabilities via live fetch (WebFetch or browser visit) before launching research agents -- names and third-party descriptions are unreliable; a 30-second page fetch eliminates ambiguity that parallel agents cannot resolve from inference
 - Skills must have a SKILL.md file and may include scripts/, references/, and assets/ subdirectories; directories under `skills/` without SKILL.md must be deleted or converted to proper skills
 - Every SKILL.md interactive prompt (AskUserQuestion) must accept an `$ARGUMENTS` bypass path for programmatic callers -- agents and pipeline skills cannot answer interactive prompts; provide flag-based argument passthrough (e.g., `--name`, `--yes`) that skips the prompt when present
 - **Headless mode convention:** When `$ARGUMENTS` contains `--headless`, all interactive prompts use sensible defaults. Skills must: (1) strip `--headless` from `$ARGUMENTS` before processing remaining args, (2) forward `--headless` to any child Skill tool invocations, (3) abort on unrecoverable errors instead of prompting, (4) never run headless compound on main/master
@@ -84,12 +85,12 @@ Project principles organized by domain. Add principles as you learn them.
 - Skills invoked mid-pipeline must never use stop/return/done language in their handoff -- scope what they skip (e.g., "do not invoke ship"), but never imply end-of-turn; the calling pipeline controls turn boundaries, not the callee skill
 - When reading file content during an active git merge conflict, use stage numbers: `git show :2:<path>` (ours) and `git show :3:<path>` (theirs); `git show HEAD:<path>` only returns one side and discards the incoming changes
 - When resolving merge conflicts in large files (CHANGELOG.md, constitution.md), the Write tool replaces the ENTIRE file -- read the full base from `git show HEAD:<path>` and reconstruct the complete file; there is no "rest of file" to preserve
-- Before staging files after a merge, grep staged content for conflict markers: `git diff --cached | grep -E '^\+(<{7}|={7}|>{7})'` -- conflict markers are invisible in normal review and have been committed undetected (enforced by guardrails.sh Guard 4)
+- Before staging files after a merge, grep staged content for conflict markers: `git diff --cached | grep -E '^\+(<{7}|={7}|>{7})'` -- conflict markers are invisible in normal review and have been committed undetected [hook-enforced: guardrails.sh Guard 4]
 - When modifying agent instructions (adding checks, changing behavior), also update any skill Task prompts that reference the agent with hardcoded check lists -- stale prompts silently ignore new agent capabilities
-- Infrastructure agents that wire external services (DNS, SSL, Pages) must own the full verification loop -- use `gh` CLI, `openssl`, `curl`, and `agent-browser` to verify each step programmatically instead of asking the user to check manually; only stop for genuine decisions, not mechanical verification
-- Pencil MCP edits require three conditions: (1) the .pen file tab must be visible in Cursor so the editor webview connects via WebSocket, (2) after `batch_design` operations, the user must Ctrl+S to flush changes to disk (no programmatic save exists), (3) always `batch_get` current property values before `batch_design` updates -- mockup values diverge from live CSS
+- Infrastructure agents that wire external services (DNS, SSL, Pages) must own the full verification loop -- use Playwright MCP tools (browser_navigate, browser_snapshot, browser_click), `gh` CLI, `openssl`, and `curl` to verify each step programmatically instead of asking the user to check manually; fall back to agent-browser CLI if MCP tools are unavailable; only stop for genuine decisions, not mechanical verification
+- Pencil MCP edits: in **IDE mode** (Cursor/VS Code), three conditions apply: (1) the .pen file tab must be visible in the IDE so the editor webview connects via WebSocket, (2) after `batch_design` operations, the user must Ctrl+S to flush changes to disk (no programmatic save exists), (3) always `batch_get` current property values before `batch_design` updates -- mockup values diverge from live CSS. In **Desktop/CLI mode** (Pencil Desktop running standalone), condition (1) is replaced by: Pencil Desktop must be running with a .pen file open. Conditions (2) and (3) apply to all modes. Additional text node rules: (4) use `fill` for text color (`textColor` is silently ignored), (5) text nodes auto-size to content width and ignore `width` -- center text via two-pass workflow: create at x=0, measure with `snapshot_layout`, then U() to reposition x=(parentWidth-textWidth)/2
 - Network and external service failures must degrade gracefully -- warn (if interactive) and continue rather than abort the workflow
-- All Discord webhook payloads must include explicit `username` and `avatar_url` fields rather than relying on webhook defaults -- webhook messages freeze author identity at post time; only delete+repost changes identity on existing messages
+- All Discord webhook payloads must include explicit `username`, `avatar_url`, and `allowed_mentions: {parse: []}` fields rather than relying on webhook defaults -- webhook messages freeze author identity at post time; only delete+repost changes identity on existing messages; omitting `allowed_mentions` enables mention injection from unsanitized content
 - Plans that create worktrees and invoke Task agents must include explicit `cd ${WORKTREE_PATH}` + `pwd` verification between worktree creation and agent invocation
 - When adding or integrating new agents, verify the cumulative agent description token count stays under 15k tokens -- agent descriptions are injected into the system prompt on every turn and bloated descriptions degrade all conversations
 - Before adding new GitHub Actions workflows, audit existing ones with `gh run list --workflow=<name>.yml` -- remove workflows that are always skipped (condition never matches) or superseded by newer workflows that absorbed their functionality
@@ -107,18 +108,23 @@ Project principles organized by domain. Add principles as you learn them.
 - Use `gh pr merge <number> --squash --auto` instead of `gh pr checks --watch` followed by `gh pr merge` -- `--watch` exits immediately with "no checks reported" when CI hasn't registered yet, causing premature merge attempts; `--auto` queues the merge and GitHub handles waiting for all branch protection requirements
 - Run SpecFlow analysis (spec-flow-analyzer agent) on features that modify CI workflows or GitHub Actions -- it catches repo configuration blockers (auto-merge settings, rulesets, token permissions) before implementation begins
 - Multi-agent cascades (one agent spawning specialists via Task tool) require a pre-flight checklist: (1) `Task` must be in `--allowedTools` for CI workflows, (2) every specialist must have an explicit write target path in the delegation table, (3) every specialist must produce a writable artifact -- read-only analysis tasks need a concrete output file. Cascade failures are silent: missing tools, unspecified write targets, and no-output specialists all fail without error messages
+- Always commit cascade documents immediately after generation -- CI-ephemeral artifacts that aren't committed are effectively lost; treat cascade document generation as a two-step process (generate, then verify committed) and never assume a prior session's cascade output persists
 - Scheduled workflows that select issues by label must cascade through priority levels (p3-low → p2-medium → p1-high) rather than hardcoding a single tier -- a fixed filter produces idle runs when the target tier is empty while higher-priority bugs accumulate
-- Before creating a PR or merging, merge latest origin/main into the feature branch (`git fetch origin main && git merge origin/main`) -- merging ensures a clean PR even when multiple PRs land in sequence
+- Before creating a PR or merging, merge latest origin/main into the feature branch (`git fetch origin main && git merge origin/main`) -- merging ensures a clean PR even when multiple PRs land in sequence [hook-enforced: pre-merge-rebase.sh]
 - Document environment-specific constraints (terminal capabilities, shell limitations) in AGENTS.md Hard Rules when Claude violates them without being told -- these are loaded every turn and prevent dead-end attempts
+- Scheduled workflows that process PRs via claude-code-action must use PR merge state (`gh pr view --json state`) as the success signal in post steps, not the action's exit code -- claude-code-action exits 0 even when the agent aborts or fails to complete the task
+- `gh pr list --head` performs exact ref name matching, not prefix matching -- to find PRs by branch prefix, omit `--head` and filter with jq `select(.headRefName | startswith("prefix/"))`; `--head` is only reliable when the exact full branch name is known
+- All `workflow_dispatch` inputs must be validated against a strict regex before use in shell commands or `$GITHUB_OUTPUT` writes -- inputs are string-typed and accept arbitrary content including newlines; use `exit 1` on validation failure, not just a warning
+- Workflows that perform git operations against specific commits (revert, cherry-pick) must use `fetch-depth: 0` and validate that HEAD matches the expected SHA before acting -- `fetch-depth: 2` creates a race condition when additional commits land between trigger and execution
 
 ### Never
 
 - Never delete or overwrite user data; avoid destructive commands
 - Never state conventions in constitution.md without tooling enforcement (config files, pre-commit hooks, or CI checks)
 - Never commit local config files that may contain secrets (`.claude/settings.local.json`, `.env`, `*.local.*`) -- add them to `.gitignore` at project initialization
-- Never edit files in the main repo root when a worktree is active for the current feature -- verify `pwd` shows `.worktrees/<name>/` before writing; place feature-scoped directories (todos, reports) inside the app directory within the worktree
+- Never edit files in the main repo root when a worktree is active for the current feature [hook-enforced: worktree-write-guard.sh] -- verify `pwd` shows `.worktrees/<name>/` before writing; place feature-scoped directories (todos, reports) inside the app directory within the worktree
 - Never use `git stash` in a worktree to hold significant uncommitted work during merge operations -- commit first (even as WIP), then merge; a stash pop conflict can destroy the worktree and branch, losing all uncommitted changes irrecoverably
-- Never allow agents to work directly on the default branch -- create a worktree (`git worktree add .worktrees/feat-<name> -b feat/<name>`) before the first file edit, even for trivial fixes; bare branches on the main checkout block parallel work
+- Never allow agents to work directly on the default branch [hook-enforced: guardrails.sh Guard 1] -- create a worktree (`git worktree add .worktrees/feat-<name> -b feat/<name>`) before the first file edit, even for trivial fixes; bare branches on the main checkout block parallel work
 - Never persist aggregated security findings (audit reports, posture assessments) to files in an open-source repository -- output inline in conversation only; the aggregation is the risk, not the individual facts
 - Never design skills that invoke other skills programmatically -- skills are user-invoked entry points with no inter-skill API; redirect users to the target skill or route through an agent via Task tool. Note: pipeline orchestration via the Skill tool (e.g., one-shot sequencing plan then work) is the approved pattern; this principle targets tight programmatic imports between skill implementations, not Skill tool invocations from commands or other skills
 - Never put `<example>` blocks or `<commentary>` tags in agent description frontmatter -- these belong in the agent body (after `---`) which is only loaded on invocation; descriptions are loaded into the system prompt on every turn and their cumulative size must stay minimal
@@ -130,6 +136,7 @@ Project principles organized by domain. Add principles as you learn them.
 
 ### Prefer
 
+- When browser interaction is needed, default to Playwright MCP tools (browser_navigate, browser_snapshot, browser_click, browser_fill_form, browser_file_upload) -- fall back to agent-browser CLI only if MCP tools are unavailable; manual instructions are a last resort, not a default
 - Plugin infrastructure (agents, commands, skills) is intentionally static - behavior changes require editing markdown files, not runtime registration
 - Use skills for agent-discoverable capabilities and workflow stages; use commands only for entry-point routing (go), knowledge-base sync (sync), and help -- commands are invisible to agents
 - Verify documentation against implementation reality before trusting it; treat docs about "what exists" as hypotheses to verify
@@ -140,10 +147,14 @@ Project principles organized by domain. Add principles as you learn them.
 - Use convention over configuration for paths: `feat-<name>` maps to `knowledge-base/specs/feat-<name>/` and `.worktrees/feat-<name>/`
 - Include sequence diagrams for complex flows
 - Complex commands should follow a four-phase pattern: Setup, Analyze, Review, Write
+- Scheduled workflows using claude-code-action should defer CI gating to GitHub's built-in required checks (`gh pr checks --required`) rather than reimplementing check status queries in jq -- GitHub already maintains the authoritative definition of "required checks"
+- Scheduled workflows that select one item per run should use label-based deduplication (apply a failure label on error, remove to re-queue) to prevent retrying without human intervention
+- New scheduled workflows should start with `workflow_dispatch` trigger only, adding cron after the pipeline is validated end-to-end -- premature cron on unverified pipelines wastes Actions minutes and generates noise
 - For user approval flows, present items one at a time with Accept, Skip, and Edit options
 - Start with manual workflows; add automation only when users explicitly request it
 - Commands should check for knowledge-base/ existence and fall back gracefully when not present
 - Run `/soleur:plan_review` before implementing plans with new directories, external APIs, or complex algorithms
+- Before designing around an external API, verify its current pricing tier, rate limits, and capabilities via live documentation -- never rely on model training data for API commercial terms; pricing changes outpace training cycles
 - Parallel subagent fan-out requires explicit user consent, bounded agent count (max 5), and lead-coordinated commits (subagents do not commit independently)
 - Multi-tiered parallel execution model: Agent Teams (persistent teammates with peer-to-peer messaging) > Subagent Fan-Out (Task tool with max 5) > Sequential -- select the highest available tier that the task warrants
 - Lead-coordinated commits in all parallel execution modes -- teammates and subagents propose changes, only the lead agent commits
@@ -195,9 +206,13 @@ Project principles organized by domain. Add principles as you learn them.
 - Prefer single-pattern grep guards over ANDing separate greps -- independent substring checks cannot enforce syntactic context (e.g., that `.worktrees/` is an `rm` argument, not comment text); combine into one regex that enforces proximity
 - Prefer `gh api repos/{owner}/{repo}/commits/{sha}/pulls` to map merge commits to PRs -- this is the authoritative source and avoids fragile commit message parsing; commit bodies often contain unrelated `(#N)` references that break regex extraction
 - When multiple fields of the same PR or issue are needed, consolidate into one `gh pr view <number> --json field1,field2,...` call instead of separate `gh pr view` invocations -- reduces API round trips and avoids rate-limit pressure in scripts that loop over many PRs
-- Prefer hook-based enforcement over documentation-only rules for agent discipline -- PreToolUse hooks make violations impossible rather than aspirational; reserve AGENTS.md hard rules for cases where hooks cannot intercept (e.g., reasoning errors, not tool calls)
+- Prefer hook-based enforcement over documentation-only rules for agent discipline -- PreToolUse hooks make violations impossible rather than aspirational; reserve AGENTS.md hard rules for cases where hooks cannot intercept (e.g., reasoning errors, not tool calls); when a rule gains hook enforcement, annotate it with `[hook-enforced: <script> <guard>]` and add a corresponding prose rule comment to the hook script for bidirectional traceability
 - Diagnostic scripts must print positive confirmation on success, not just absence of error -- silent success is indistinguishable from a skipped check; always emit an `[ok]` or equivalent status line for each verified condition
 - When adding a new sequential phase to an existing multi-agent pipeline, verify it does not exceed the pipeline's parallel subagent limit -- add as sequential (Phase N.5) rather than parallel when the limit is already reached
+- Never use bare `pip install` on modern Linux (Ubuntu 24.04+, Fedora 38+) -- PEP 668 blocks system-wide installs; use `python3 -m venv .venv && source .venv/bin/activate && pip install` or `pipx` for CLI tools; document venv requirements in skill SKILL.md Phase 0 when Python dependencies are needed
+- Never use `fonts.google.com/download` for programmatic font acquisition -- the endpoint requires browser JavaScript; use the `google/fonts` GitHub repository (`raw.githubusercontent.com/google/fonts/main/ofl/<font>/`) for direct TTF file access; always validate downloads with `file <path> | grep -q TrueType` before use
+- When generating images with Pillow, size text as a percentage of image height (headlines 12-16%, secondary 8-12%, tertiary 4-6%) rather than guessing absolute pixel values -- absolute guesses consistently undersize by 2x on banner-scale images (1500x500+)
+- Before building a pipeline that depends on AI image generation, verify quota with a minimal test request -- API keys may authenticate for text but lack image generation quota on free tiers; fail fast at Phase 0, not after font downloads and mockup design
 
 ## Testing
 
@@ -245,6 +260,18 @@ Project principles organized by domain. Add principles as you learn them.
 ### Never
 
 ### Prefer
+
+## Content
+
+### Always
+
+- Verify all quantitative claims, attributed quotes, and factual assertions against their cited source URL via WebFetch before presenting content for user approval -- every statistic must have a linked, fetchable source ("no naked numbers"); if the source cannot be verified, flag the claim for user review rather than publishing silently [enforced: fact-checker agent via content-writer Phase 2.5]
+
+### Never
+
+### Prefer
+
+- Prefer softening unverifiable claims (e.g., "thousands" instead of "9,000") over removing them entirely, when the general direction is supported by available evidence
 
 ## Specs
 

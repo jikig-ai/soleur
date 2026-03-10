@@ -1,0 +1,409 @@
+#!/usr/bin/env bash
+
+# Tests for Ralph Loop stuck detection in stop-hook.sh
+# Run: bash plugins/soleur/test/ralph-loop-stuck-detection.test.sh
+
+set -euo pipefail
+
+PASS=0
+FAIL=0
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOOK="$SCRIPT_DIR/../hooks/stop-hook.sh"
+SETUP="$SCRIPT_DIR/../scripts/setup-ralph-loop.sh"
+
+# --- Test Helpers ---
+
+setup_test() {
+  local test_dir
+  test_dir=$(mktemp -d)
+  mkdir -p "$test_dir/.claude"
+  echo "$test_dir"
+}
+
+cleanup_test() {
+  rm -rf "$1"
+}
+
+create_state_file() {
+  local dir="$1"
+  local iteration="${2:-1}"
+  local max="${3:-0}"
+  local promise="${4:-null}"
+  local stuck_count="${5:-0}"
+  local stuck_threshold="${6:-3}"
+
+  cat > "$dir/.claude/ralph-loop.local.md" <<EOF
+---
+active: true
+iteration: $iteration
+max_iterations: $max
+completion_promise: $promise
+stuck_count: $stuck_count
+stuck_threshold: $stuck_threshold
+started_at: "2026-03-05T00:00:00Z"
+---
+
+Test prompt
+EOF
+}
+
+run_hook() {
+  local dir="$1"
+  local message="${2:-}"
+
+  local hook_input
+  hook_input=$(jq -n --arg msg "$message" '{"last_assistant_message": $msg}')
+
+  cd "$dir"
+  echo "$hook_input" | bash "$HOOK" 2>/dev/null || true
+}
+
+run_hook_stderr() {
+  local dir="$1"
+  local message="${2:-}"
+
+  local hook_input
+  hook_input=$(jq -n --arg msg "$message" '{"last_assistant_message": $msg}')
+
+  cd "$dir"
+  echo "$hook_input" | bash "$HOOK" 2>&1 1>/dev/null || true
+}
+
+assert_eq() {
+  local expected="$1"
+  local actual="$2"
+  local msg="$3"
+
+  if [[ "$expected" == "$actual" ]]; then
+    echo "  PASS: $msg"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $msg"
+    echo "    expected: '$expected'"
+    echo "    actual:   '$actual'"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+assert_file_exists() {
+  local path="$1"
+  local msg="$2"
+
+  if [[ -f "$path" ]]; then
+    echo "  PASS: $msg"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $msg (file not found: $path)"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+assert_file_not_exists() {
+  local path="$1"
+  local msg="$2"
+
+  if [[ ! -f "$path" ]]; then
+    echo "  PASS: $msg"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $msg (file still exists: $path)"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+assert_contains() {
+  local haystack="$1"
+  local needle="$2"
+  local msg="$3"
+
+  if [[ "$haystack" == *"$needle"* ]]; then
+    echo "  PASS: $msg"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $msg"
+    echo "    expected to contain: '$needle'"
+    echo "    actual: '$haystack'"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+# --- Tests ---
+
+echo "=== Ralph Loop Stuck Detection Tests ==="
+echo ""
+
+# Test 1: 3 consecutive empty responses triggers termination
+echo "Test 1: 3 consecutive empty responses triggers termination"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 5 0 "null" 2 3
+run_hook "$TEST_DIR" ""
+assert_file_not_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file removed after stuck detection"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 2: Warning message printed to stderr
+echo "Test 2: Warning message printed to stderr on stuck termination"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 5 0 "null" 2 3
+STDERR_OUTPUT=$(run_hook_stderr "$TEST_DIR" "")
+assert_contains "$STDERR_OUTPUT" "terminated after" "stderr contains termination warning"
+assert_contains "$STDERR_OUTPUT" "consecutive empty responses" "stderr mentions empty responses"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 3: Substantive response resets stuck counter
+echo "Test 3: Substantive response resets stuck_count to 0"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 2 0 "null" 2 3
+run_hook "$TEST_DIR" "This is a substantive response with plenty of content to exceed the threshold."
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists (loop continues)"
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
+assert_eq "0" "$STUCK_COUNT" "stuck_count reset to 0"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 4: stuck_threshold=0 disables detection
+echo "Test 4: stuck_threshold=0 disables stuck detection"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 5 0 "null" 10 0
+run_hook "$TEST_DIR" ""
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists (detection disabled)"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 5: Exactly 20 characters counts as substantive
+echo "Test 5: Exactly 20 characters (after stripping) is substantive"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 2 3
+run_hook "$TEST_DIR" "12345678901234567890"
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists"
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
+assert_eq "0" "$STUCK_COUNT" "stuck_count reset (20 chars = substantive)"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 6: 19 characters counts as minimal
+echo "Test 6: 19 characters (after stripping) is minimal"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+run_hook "$TEST_DIR" "1234567890123456789"
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists"
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
+assert_eq "1" "$STUCK_COUNT" "stuck_count incremented to 1"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 7: Pre-existing state file without stuck fields uses defaults
+echo "Test 7: Pre-existing state file without stuck_count/stuck_threshold uses defaults"
+TEST_DIR=$(setup_test)
+# State file without stuck_count or stuck_threshold
+cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<'EOF'
+---
+active: true
+iteration: 1
+max_iterations: 0
+completion_promise: null
+started_at: "2026-03-05T00:00:00Z"
+---
+
+Test prompt
+EOF
+run_hook "$TEST_DIR" "Substantive response with enough content here to pass threshold."
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists (no crash on missing fields)"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 8: Empty message counts as minimal (simulates tool-use-only response)
+echo "Test 8: Empty message counts as minimal"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+run_hook "$TEST_DIR" ""
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists (only 1 empty, threshold is 3)"
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
+assert_eq "1" "$STUCK_COUNT" "stuck_count incremented for empty message"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 9: Completion promise still takes priority over stuck detection
+echo "Test 9: Completion promise check fires before stuck detection"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 5 0 "\"DONE\"" 2 3
+run_hook "$TEST_DIR" "<promise>DONE</promise>"
+assert_file_not_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file removed (promise matched)"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 10: setup-ralph-loop.sh adds stuck_threshold to state file
+echo "Test 10: setup-ralph-loop.sh includes stuck_count and stuck_threshold in state"
+TEST_DIR=$(setup_test)
+cd "$TEST_DIR"
+bash "$SETUP" "test prompt" --stuck-threshold 5 > /dev/null 2>&1
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file created"
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//' || echo "MISSING")
+STUCK_THRESHOLD=$(grep '^stuck_threshold:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_threshold: *//' || echo "MISSING")
+assert_eq "0" "$STUCK_COUNT" "stuck_count initialized to 0"
+assert_eq "5" "$STUCK_THRESHOLD" "stuck_threshold set to 5"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 11: setup-ralph-loop.sh defaults stuck_threshold to 3
+echo "Test 11: setup-ralph-loop.sh defaults stuck_threshold to 3"
+TEST_DIR=$(setup_test)
+cd "$TEST_DIR"
+bash "$SETUP" "test prompt" > /dev/null 2>&1
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file created"
+STUCK_THRESHOLD=$(grep '^stuck_threshold:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_threshold: *//' || echo "MISSING")
+assert_eq "3" "$STUCK_THRESHOLD" "stuck_threshold defaults to 3"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 12: Corrupted stuck_count (non-numeric) defaults to 0
+echo "Test 12: Corrupted stuck_count value defaults to 0"
+TEST_DIR=$(setup_test)
+cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<'EOF'
+---
+active: true
+iteration: 1
+max_iterations: 0
+completion_promise: null
+stuck_count: abc
+stuck_threshold: 3
+started_at: "2026-03-05T00:00:00Z"
+---
+
+Test prompt
+EOF
+run_hook "$TEST_DIR" "Substantive response with enough content here to pass threshold."
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists (no crash on corrupted field)"
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
+assert_eq "0" "$STUCK_COUNT" "corrupted stuck_count reset to 0"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 13: Prompt containing --- does not leak into FRONTMATTER
+echo "Test 13: Prompt body with --- does not leak into frontmatter"
+TEST_DIR=$(setup_test)
+cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<'EOF'
+---
+active: true
+iteration: 1
+max_iterations: 0
+completion_promise: null
+stuck_count: 0
+stuck_threshold: 3
+started_at: "2026-03-05T00:00:00Z"
+---
+
+Build a REST API with proper error handling.
+---
+Use standard HTTP status codes.
+EOF
+run_hook "$TEST_DIR" "This is a substantive response with plenty of content to exceed the threshold."
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists"
+ITERATION=$(grep '^iteration:' "$TEST_DIR/.claude/ralph-loop.local.md" | head -1 | sed 's/iteration: *//')
+assert_eq "2" "$ITERATION" "iteration updated to 2"
+# Verify the raw state file preserves --- and text after it in the prompt body
+# (The awk prompt extractor on line 133 consumes bare --- lines -- that's pre-existing behavior.)
+RAW_FILE=$(cat "$TEST_DIR/.claude/ralph-loop.local.md")
+assert_contains "$RAW_FILE" "Build a REST API with proper error handling." "prompt text before --- preserved in state file"
+assert_contains "$RAW_FILE" "Use standard HTTP status codes." "prompt text after --- preserved in state file"
+# Verify frontmatter was not corrupted by prompt --- leaking into parser
+FRONTMATTER=$(awk '/^---$/{c++; next} c==1' "$TEST_DIR/.claude/ralph-loop.local.md")
+assert_contains "$FRONTMATTER" "iteration: 2" "frontmatter contains updated iteration"
+assert_contains "$FRONTMATTER" "stuck_count: 0" "frontmatter contains correct stuck_count"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 14: Prompt containing iteration: text is preserved after update
+echo "Test 14: Prompt body with iteration: text is preserved verbatim"
+TEST_DIR=$(setup_test)
+cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<'EOF'
+---
+active: true
+iteration: 1
+max_iterations: 0
+completion_promise: null
+stuck_count: 0
+stuck_threshold: 3
+started_at: "2026-03-05T00:00:00Z"
+---
+
+Check iteration: current status of deployment.
+EOF
+run_hook "$TEST_DIR" "This is a substantive response with plenty of content to exceed the threshold."
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists"
+ITERATION=$(grep '^iteration:' "$TEST_DIR/.claude/ralph-loop.local.md" | head -1 | sed 's/iteration: *//')
+assert_eq "2" "$ITERATION" "frontmatter iteration updated to 2"
+PROMPT_BODY=$(awk '/^---$/{i++; next} i>=2' "$TEST_DIR/.claude/ralph-loop.local.md")
+assert_contains "$PROMPT_BODY" "iteration: current status of deployment" "prompt iteration: text preserved"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 15: Prompt containing stuck_count: text is preserved after update
+echo "Test 15: Prompt body with stuck_count: text is preserved verbatim"
+TEST_DIR=$(setup_test)
+cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<'EOF'
+---
+active: true
+iteration: 1
+max_iterations: 0
+completion_promise: null
+stuck_count: 0
+stuck_threshold: 3
+started_at: "2026-03-05T00:00:00Z"
+---
+
+Monitor stuck_count: should be zero.
+EOF
+run_hook "$TEST_DIR" "This is a substantive response with plenty of content to exceed the threshold."
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists"
+STUCK_COUNT_FM=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | head -1 | sed 's/stuck_count: *//')
+assert_eq "0" "$STUCK_COUNT_FM" "frontmatter stuck_count reset to 0"
+PROMPT_BODY=$(awk '/^---$/{i++; next} i>=2' "$TEST_DIR/.claude/ralph-loop.local.md")
+assert_contains "$PROMPT_BODY" "stuck_count: should be zero" "prompt stuck_count: text preserved"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 16: Hook exits 0 from a non-root CWD when state file does not exist
+echo "Test 16: Hook exits 0 from subdirectory when no state file"
+TEST_DIR=$(setup_test)
+# Initialize a git repo so git rev-parse --show-toplevel works
+git -C "$TEST_DIR" init -q
+mkdir -p "$TEST_DIR/sub/deep"
+# No state file created -- hook should exit 0 cleanly
+cd "$TEST_DIR/sub/deep"
+HOOK_OUTPUT=$(echo '{}' | bash "$HOOK" 2>&1) || true
+EXIT_CODE=$?
+assert_eq "0" "$EXIT_CODE" "hook exits 0 when no state file from subdirectory"
+assert_eq "" "$HOOK_OUTPUT" "no output when no state file"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 17: Hook finds state file at project root when CWD is a subdirectory
+echo "Test 17: Hook finds state file from subdirectory via git rev-parse"
+TEST_DIR=$(setup_test)
+git -C "$TEST_DIR" init -q
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+mkdir -p "$TEST_DIR/sub/deep"
+cd "$TEST_DIR/sub/deep"
+run_hook "$TEST_DIR/sub/deep" "This is a substantive response with plenty of content to exceed the threshold."
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file found and updated from subdirectory"
+ITERATION=$(grep '^iteration:' "$TEST_DIR/.claude/ralph-loop.local.md" | head -1 | sed 's/iteration: *//')
+assert_eq "2" "$ITERATION" "iteration updated from subdirectory"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# --- Summary ---
+
+echo "=== Results ==="
+echo "Passed: $PASS"
+echo "Failed: $FAIL"
+echo ""
+
+if [[ $FAIL -gt 0 ]]; then
+  echo "SOME TESTS FAILED"
+  exit 1
+else
+  echo "ALL TESTS PASSED"
+  exit 0
+fi

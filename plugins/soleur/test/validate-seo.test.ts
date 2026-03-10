@@ -124,4 +124,30 @@ describe("validate-seo.sh", () => {
     expect(exitCode).toBe(0);
     expect(stdout).toContain("robots.txt does not block GPTBot");
   });
+
+  test("passes when an instant redirect page is present (meta refresh content=0)", async () => {
+    setupSite();
+    writeFileSync(
+      `${TMP_DIR}/pages/articles.html`,
+      '<!DOCTYPE html>\n<html><head><meta http-equiv="refresh" content="0;url=/blog/"></head></html>'
+    );
+    const proc = Bun.spawn(["bash", SCRIPT, TMP_DIR], { stdout: "pipe", stderr: "pipe" });
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("is a redirect (skipped SEO checks)");
+  });
+
+  test("fails when a delayed redirect page lacks SEO metadata (meta refresh content=5)", async () => {
+    setupSite();
+    writeFileSync(
+      `${TMP_DIR}/pages/slow-redirect.html`,
+      '<!DOCTYPE html>\n<html><head><meta http-equiv="refresh" content="5;url=/blog/"></head><body><p>Redirecting...</p></body></html>'
+    );
+    const proc = Bun.spawn(["bash", SCRIPT, TMP_DIR], { stdout: "pipe", stderr: "pipe" });
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("slow-redirect.html missing canonical URL");
+  });
 });

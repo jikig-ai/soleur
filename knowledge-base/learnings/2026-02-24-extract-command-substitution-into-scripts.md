@@ -1,3 +1,10 @@
+---
+title: Extract command substitution into bash scripts to eliminate permission prompts at the root
+date: 2026-02-24
+category: plugin-architecture
+tags: [integration-issues, plugins/soleur/skills/archive-kb, recurring $() permission prompts across multiple skills]
+---
+
 # Learning: Extract command substitution into bash scripts to eliminate permission prompts at the root
 
 ## Problem

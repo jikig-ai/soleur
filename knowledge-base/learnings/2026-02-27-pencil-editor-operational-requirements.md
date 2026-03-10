@@ -1,3 +1,10 @@
+---
+title: Pencil Editor Operational Requirements for MCP Editing
+date: 2026-02-27
+category: infrastructure
+tags: [integration-issues, pencil-mcp, websocket not connected, .pen file not modified in git after batch-design]
+---
+
 # Learning: Pencil Editor Operational Requirements for MCP Editing
 
 ## Problem

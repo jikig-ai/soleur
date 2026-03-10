@@ -1,3 +1,10 @@
+---
+title: Shell expansion syntax triggers manual approval in Claude Code
+date: 2026-02-22
+category: shell-scripting
+tags: [integration-issues, plugin-instructions]
+---
+
 # Learning: Shell expansion syntax triggers manual approval in Claude Code
 
 ## Problem

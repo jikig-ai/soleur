@@ -1,3 +1,10 @@
+---
+title: Pencil MCP is a Local Binary, Not a Bundleable Service
+date: 2026-02-14
+category: infrastructure
+tags: [integration-issues, plugin-architecture, mcp server cannot be bundled in plugin.json]
+---
+
 # Learning: Pencil MCP is a Local Binary, Not a Bundleable Service
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: Quoted dash strings in agent bash blocks trigger approval prompts
+date: 2026-02-25
+category: agent-design
+tags: [agent-prompt-design, functional-discovery]
+---
+
 # Learning: Quoted dash strings in agent bash blocks trigger approval prompts
 
 ## Problem

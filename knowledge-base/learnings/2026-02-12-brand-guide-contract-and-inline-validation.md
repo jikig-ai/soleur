@@ -1,9 +1,11 @@
 ---
-module: soleur
+title: Brand Guide Contract and Inline Validation Pattern
 date: 2026-02-12
-problem_type: architecture
-component: marketing
+category: marketing
 tags: [brand-guide, contract, inline-validation, agent-design]
+module: soleur
+component: marketing
+problem_type: architecture
 severity: medium
 ---
 

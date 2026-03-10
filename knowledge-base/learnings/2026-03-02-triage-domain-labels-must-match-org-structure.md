@@ -1,3 +1,10 @@
+---
+title: Triage domain labels must match organizational structure
+date: 2026-03-02
+category: engineering
+tags: [integration-issues, ci-workflows]
+---
+
 # Learning: Triage domain labels must match organizational structure
 
 ## Problem

@@ -1,3 +1,10 @@
+---
+title: Landing Page Grid Orphan Regression at Tablet Breakpoint
+date: 2026-02-22
+category: ui-css
+tags: [ui-bugs, plugins/soleur/docs, css-grid, responsive-design, tablet-breakpoint, landing-page, grid-divisibility, process-failure, cmo-delegation, medium]
+---
+
 # Learning: Landing Page Grid Orphan Regression at Tablet Breakpoint
 
 ## Problem

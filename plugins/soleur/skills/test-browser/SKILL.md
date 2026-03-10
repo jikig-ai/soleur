@@ -293,6 +293,27 @@ After all tests complete, present summary:
 
 </test_summary>
 
+### 9. Cleanup
+
+<cleanup>
+
+Playwright MCP writes screenshots to the main repo root when invoked from a worktree, so clean both locations. If any test failures were recorded with `error.png`, upload or review those screenshots before running cleanup.
+
+```bash
+# Remove session screenshots from current working directory
+rm -f *.png
+
+# If in a worktree, also clean the main repo root
+MAIN_REPO=$(git rev-parse --show-superproject-working-tree 2>/dev/null)
+if [[ -n "$MAIN_REPO" ]]; then
+  rm -f "$MAIN_REPO"/*.png
+fi
+```
+
+**Do NOT delete** files under `plugins/soleur/docs/` -- those are legitimate assets.
+
+</cleanup>
+
 ## Quick Usage Examples
 
 ```bash

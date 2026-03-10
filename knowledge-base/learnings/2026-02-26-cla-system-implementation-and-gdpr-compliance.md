@@ -1,3 +1,10 @@
+---
+title: CLA System Implementation and GDPR Compliance
+date: 2026-02-26
+category: legal
+tags: [integration-issues, legal, ci, gdpr]
+---
+
 # Learning: CLA System Implementation and GDPR Compliance
 
 ## Problem

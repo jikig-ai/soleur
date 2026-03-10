@@ -23,14 +23,28 @@ target
 .DS_Store
 *.log
 node_modules/
+__pycache__/
+*.pyc
 .codex/
 .worktrees
 .claude/settings.local.json
+.claude/soleur-welcomed.local
 .playwright-mcp/
 .env
 _site/
 _site_test/
 
+# Local state (since-id, caches -- do not commit)
+.soleur/
+
 # Article 30 register (private -- do not commit)
 article-30-register*.md
 knowledge-base/private/
+
+# Screenshot and video artifacts (browser tests, feature demos, image generation)
+*.png
+tmp/
+
+# Legitimate image assets (negate the blanket *.png rule)
+!plugins/soleur/docs/images/*.png
+!plugins/soleur/docs/screenshots/*.png

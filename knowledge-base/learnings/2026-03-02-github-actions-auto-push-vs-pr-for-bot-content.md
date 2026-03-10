@@ -1,3 +1,10 @@
+---
+title: GitHub Actions auto-push vs PR for bot-generated content
+date: 2026-03-02
+category: ci-cd
+tags: [integration-issues, github-actions, ci]
+---
+
 # Learning: GitHub Actions auto-push vs PR for bot-generated content
 
 ## Problem

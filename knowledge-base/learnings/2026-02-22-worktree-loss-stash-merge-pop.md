@@ -1,3 +1,10 @@
+---
+title: Worktree loss during stash/merge/pop sequence
+date: 2026-02-22
+category: workflow-patterns
+tags: [runtime-errors, git-worktree, worktree deleted, branch lost, stash conflict, uncommitted work destroyed, stash pop failure]
+---
+
 # Learning: Worktree loss during stash/merge/pop sequence
 
 ## Problem

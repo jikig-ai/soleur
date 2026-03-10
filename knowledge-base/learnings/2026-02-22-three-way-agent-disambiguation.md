@@ -1,3 +1,10 @@
+---
+title: Three-way agent disambiguation when adding a third domain agent
+date: 2026-02-22
+category: agent-design
+tags: [integration-issues, agents/operations, routing accuracy degrades, tasks sent to wrong agent]
+---
+
 # Learning: Three-way agent disambiguation when adding a third domain agent
 
 ## Problem

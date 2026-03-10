@@ -20,7 +20,9 @@ from typing import Literal
 
 from PIL import Image
 from google import genai
-from google.genai import types
+from google.genai import errors, types
+
+from _error_handling import handle_api_error, parse_image_response
 
 
 AspectRatio = Literal["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]
@@ -96,22 +98,20 @@ class GeminiImageGenerator:
         """
         output = Path(output)
         config = self._build_config(aspect_ratio, image_size, google_search)
-        
-        response = self.client.models.generate_content(
-            model=model or self.model,
-            contents=[prompt],
-            config=config,
-        )
-        
-        text = None
-        for part in response.parts:
-            if part.text:
-                text = part.text
-            elif part.inline_data:
-                part.as_image().save(output)
-        
+
+        try:
+            response = self.client.models.generate_content(
+                model=model or self.model,
+                contents=[prompt],
+                config=config,
+            )
+        except errors.APIError as e:
+            handle_api_error(e)
+
+        image, text = parse_image_response(response)
+        image.save(output)
         return output, text
-    
+
     def edit(
         self,
         input_image: str | Path | Image.Image,
@@ -136,27 +136,25 @@ class GeminiImageGenerator:
             Tuple of (output path, optional text response)
         """
         output = Path(output)
-        
+
         if isinstance(input_image, (str, Path)):
             input_image = Image.open(input_image)
-        
+
         config = self._build_config(aspect_ratio, image_size)
-        
-        response = self.client.models.generate_content(
-            model=model or self.model,
-            contents=[instruction, input_image],
-            config=config,
-        )
-        
-        text = None
-        for part in response.parts:
-            if part.text:
-                text = part.text
-            elif part.inline_data:
-                part.as_image().save(output)
-        
+
+        try:
+            response = self.client.models.generate_content(
+                model=model or self.model,
+                contents=[instruction, input_image],
+                config=config,
+            )
+        except errors.APIError as e:
+            handle_api_error(e)
+
+        image, text = parse_image_response(response)
+        image.save(output)
         return output, text
-    
+
     def compose(
         self,
         instruction: str,
@@ -181,7 +179,7 @@ class GeminiImageGenerator:
             Tuple of (output path, optional text response)
         """
         output = Path(output)
-        
+
         # Load images
         loaded = []
         for img in images:
@@ -189,23 +187,21 @@ class GeminiImageGenerator:
                 loaded.append(Image.open(img))
             else:
                 loaded.append(img)
-        
+
         config = self._build_config(aspect_ratio, image_size)
         contents = [instruction] + loaded
-        
-        response = self.client.models.generate_content(
-            model=model or self.PRO,  # Pro recommended for composition
-            contents=contents,
-            config=config,
-        )
-        
-        text = None
-        for part in response.parts:
-            if part.text:
-                text = part.text
-            elif part.inline_data:
-                part.as_image().save(output)
-        
+
+        try:
+            response = self.client.models.generate_content(
+                model=model or self.PRO,  # Pro recommended for composition
+                contents=contents,
+                config=config,
+            )
+        except errors.APIError as e:
+            handle_api_error(e)
+
+        image, text = parse_image_response(response)
+        image.save(output)
         return output, text
     
     def chat(self) -> "ImageChat":
@@ -240,18 +236,15 @@ class ImageChat:
             if isinstance(image, (str, Path)):
                 image = Image.open(image)
             contents.append(image)
-        
-        response = self._chat.send_message(contents)
-        
-        text = None
-        img = None
-        for part in response.parts:
-            if part.text:
-                text = part.text
-            elif part.inline_data:
-                img = part.as_image()
-                self.current_image = img
-        
+
+        try:
+            response = self._chat.send_message(contents)
+        except errors.APIError as e:
+            handle_api_error(e)
+
+        img, text = parse_image_response(response)
+        self.current_image = img
+
         return img, text
     
     def reset(self):

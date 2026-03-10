@@ -1,4 +1,8 @@
 ---
+title: Scheduled Bot-Fix Workflow Patterns
+date: 2026-03-03
+category: engineering
+tags: [workflow-patterns, scheduled-bug-fixer]
 synced_to: [schedule]
 ---
 
@@ -36,12 +40,15 @@ The `bot-fix/attempted` label only covers failures. Successful fixes leave no ex
 ```bash
 OPEN_FIXES=$(gh pr list --state open --json headRefName \
   --jq '[.[].headRefName | select(startswith("bot-fix/")) | split("/")[1] | split("-")[0]] | unique | join(",")')
+export OPEN_FIXES
 
-# In the jq filter:
---jq --arg skip "$OPEN_FIXES" '
-  ($skip | split(",") | map(select(length > 0)) | map(tonumber? // empty)) as $skip_nums |
+# In the jq filter — use $ENV.OPEN_FIXES, NOT --arg:
+--jq '
+  ($ENV.OPEN_FIXES | split(",") | map(select(length > 0)) | map(tonumber? // empty)) as $skip_nums |
   [.[] | select(.number | IN($skip_nums[]) | not)] | ...'
 ```
+
+**Important:** `gh --jq` accepts only a single jq expression string. It does NOT support jq flags like `--arg`, `--argjson`, etc. — those get parsed as unknown `gh` arguments. Use `export` + `$ENV.variable_name` to pass shell variables into jq expressions with `gh`.
 
 Note: use `select(length > 0)` not `select(. != "")` — the `!=` operator gets mangled by shell escaping in GitHub Actions `run:` blocks.
 
