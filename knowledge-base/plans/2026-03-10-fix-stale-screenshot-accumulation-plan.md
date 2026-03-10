@@ -191,16 +191,16 @@ echo "Cleaned up tmp/screenshots/ and tmp/videos/"
 
 ## Acceptance Criteria
 
-- [ ] `.gitignore` contains `*.png` rule with negation for `plugins/soleur/docs/images/*.png` and `plugins/soleur/docs/screenshots/*.png`
-- [ ] `.gitignore` contains `tmp/` rule
-- [ ] `test-browser/SKILL.md` includes a cleanup section (Section 9) with concrete bash commands
-- [ ] `reproduce-bug/SKILL.md` includes a cleanup phase (Phase 5) with concrete bash commands
-- [ ] `feature-video/SKILL.md` cleanup step removes `tmp/screenshots/` and `tmp/videos/` unconditionally (not gated on `HAS_FFMPEG`)
-- [ ] All 29 untracked PNGs in repo root are deleted from the main repo working tree
-- [ ] All files in `tmp/` are deleted from the main repo working tree
-- [ ] `git status` from main repo root shows no `*.png` or `tmp/` untracked files after cleanup
-- [ ] Legitimate tracked PNGs in `plugins/soleur/docs/` remain unaffected
-- [ ] (Optional) Stale tracked PNGs outside docs/ are un-tracked via `git rm --cached`
+- [x] `.gitignore` contains `*.png` rule with negation for `plugins/soleur/docs/images/*.png` and `plugins/soleur/docs/screenshots/*.png`
+- [x] `.gitignore` contains `tmp/` rule
+- [x] `test-browser/SKILL.md` includes a cleanup section (Section 9) with concrete bash commands
+- [x] `reproduce-bug/SKILL.md` includes a cleanup phase (Phase 5) with concrete bash commands
+- [x] `feature-video/SKILL.md` cleanup step removes `tmp/screenshots/` and `tmp/videos/` unconditionally (not gated on `HAS_FFMPEG`)
+- [x] All 29 untracked PNGs in repo root are deleted from the main repo working tree
+- [x] All files in `tmp/` are deleted from the main repo working tree
+- [x] `git status` from main repo root shows no `*.png` or `tmp/` untracked files after cleanup
+- [x] Legitimate tracked PNGs in `plugins/soleur/docs/` remain unaffected
+- [x] (Optional) Stale tracked PNGs outside docs/ are un-tracked via `git rm --cached`
 
 ## Test Scenarios
 

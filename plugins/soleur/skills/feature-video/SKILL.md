@@ -307,13 +307,9 @@ gh pr edit [number] --body "[updated body with demo section]"
 <cleanup>
 
 ```bash
-# Only delete screenshots if they were converted to video
-if [ "$HAS_FFMPEG" = "true" ]; then
-  rm -rf tmp/screenshots
-  echo "Screenshots cleaned up (video retained at tmp/videos/)"
-else
-  echo "Screenshots retained at tmp/screenshots/ (no video conversion)"
-fi
+# Always clean up tmp artifacts after PR description is updated
+rm -rf tmp/screenshots tmp/videos
+echo "Cleaned up tmp/screenshots/ and tmp/videos/"
 ```
 
 </cleanup>

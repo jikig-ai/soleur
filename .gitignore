@@ -40,3 +40,11 @@ _site_test/
 # Article 30 register (private -- do not commit)
 article-30-register*.md
 knowledge-base/private/
+
+# Screenshot and video artifacts (browser tests, feature demos, image generation)
+*.png
+tmp/
+
+# Legitimate image assets (negate the blanket *.png rule)
+!plugins/soleur/docs/images/*.png
+!plugins/soleur/docs/screenshots/*.png
