@@ -86,6 +86,10 @@ Assess whether the feature description has implications for specific business do
 
 ### Phase 1: Understand the Idea
 
+#### 1.0 External Platform Verification (if applicable)
+
+If the feature description references an external platform, marketplace, or service, **WebFetch the URL first** before launching any research agents. Classify by: (1) self-service or waitlist? (2) discovery surface or procurement layer? (3) does it accept the product category? This 30-second gate prevents spawning agents that analyze a false premise.
+
 #### 1.1 Research (Context Gathering)
 
 Run these agents **in parallel** to gather context before dialogue:
