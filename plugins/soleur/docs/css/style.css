@@ -1019,6 +1019,76 @@
     color: var(--color-text-secondary);
     font-size: var(--text-sm);
   }
+
+  /* Newsletter signup form */
+  .newsletter-section {
+    background: var(--color-bg-secondary);
+    border-top: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--color-border);
+    padding: var(--space-8) 0;
+    text-align: center;
+  }
+  .newsletter-section h2 {
+    font-family: var(--font-display);
+    font-size: var(--text-xl);
+    color: var(--color-text);
+    margin-bottom: var(--space-2);
+  }
+  .newsletter-section p {
+    color: var(--color-text-secondary);
+    margin-bottom: var(--space-4);
+  }
+  .newsletter-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    justify-content: center;
+    align-items: flex-start;
+    max-width: 480px;
+    margin: 0 auto;
+  }
+  .newsletter-form input[type="email"] {
+    flex: 1 1 220px;
+    padding: var(--space-3) var(--space-4);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    color: var(--color-text);
+    font-size: var(--text-base);
+  }
+  .newsletter-form input[type="email"]:focus {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+    border-color: var(--color-accent);
+  }
+  .newsletter-form input[type="email"]::placeholder {
+    color: var(--color-text-tertiary);
+  }
+  .newsletter-form button[type="submit"] {
+    cursor: pointer;
+    border: none;
+  }
+  .newsletter-form button[type="submit"]:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+  .newsletter-privacy {
+    flex-basis: 100%;
+    font-size: var(--text-xs);
+    color: var(--color-text-tertiary);
+    margin-top: var(--space-1);
+  }
+  .newsletter-privacy a {
+    color: var(--color-accent);
+    text-decoration: underline;
+  }
+  .newsletter-status {
+    flex-basis: 100%;
+    font-size: var(--text-sm);
+    min-height: 1.5em;
+  }
+  .newsletter-success { color: #4ade80; }
+  .newsletter-error { color: #f87171; }
 }
 
 @layer utilities {
@@ -1045,6 +1115,12 @@
     font-weight: 600;
   }
   .skip-link:focus { top: 0; }
+  .honeypot-trap {
+    position: absolute;
+    left: -9999px;
+    height: 0;
+    overflow: hidden;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

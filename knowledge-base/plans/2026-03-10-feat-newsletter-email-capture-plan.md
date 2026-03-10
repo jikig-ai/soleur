@@ -98,14 +98,14 @@ Works without JS (falls back to plain POST to Buttondown). Progressive enhanceme
 
 ## Acceptance Criteria
 
-- [ ] Signup form appears in site footer, homepage CTA section, and end of blog posts
-- [ ] Form submits via JS fetch with inline success/error messages (falls back to plain POST without JS)
-- [ ] Forms styled to match design system (dark bg, gold accent, responsive at mobile/desktop)
-- [ ] Privacy notice with Privacy Policy link at each form
-- [ ] Privacy Policy, GDPR Policy, and Data Protection Disclosure updated (both locations each)
-- [ ] No legal doc contradictions remain (grep verified: "does not collect", "no personal data", negated "email")
-- [ ] Plausible custom event fires on successful signup
-- [ ] Eleventy build passes with no errors
+- [x] Signup form appears in site footer, homepage CTA section, and end of blog posts
+- [x] Form submits via JS fetch with inline success/error messages (falls back to plain POST without JS)
+- [x] Forms styled to match design system (dark bg, gold accent, responsive at mobile/desktop)
+- [x] Privacy notice with Privacy Policy link at each form
+- [x] Privacy Policy, GDPR Policy, and Data Protection Disclosure updated (both locations each)
+- [x] No legal doc contradictions remain (grep verified: "does not collect", "no personal data", negated "email")
+- [x] Plausible custom event fires on successful signup
+- [x] Eleventy build passes with no errors
 
 ## Test Scenarios
 
@@ -120,33 +120,33 @@ Works without JS (falls back to plain POST to Buttondown). Progressive enhanceme
 
 Verify Buttondown offers a DPA with SCCs before proceeding. Email DPO (justin@buttondown.email). If they cannot provide adequate GDPR transfer mechanism, evaluate Loops as backup.
 
-- [ ] Create Buttondown account at buttondown.com
-- [ ] Verify double opt-in is enabled (default)
+- [x] Create Buttondown account at buttondown.com
+- [x] Verify double opt-in is enabled (default)
 - [ ] Request DPA with SCCs from justin@buttondown.email
 - [ ] Confirm EU-US data transfer mechanism
-- [ ] Add `"newsletter"` key to `plugins/soleur/docs/_data/site.json` with Buttondown username
+- [x] Add `"newsletter"` key to `plugins/soleur/docs/_data/site.json` with Buttondown username
 
 ## Legal Updates
 
 Update all legal docs BEFORE the form goes live. Both source (`docs/legal/`) and published (`plugins/soleur/docs/pages/legal/`) copies. Legal updates and form code ship in the same PR.
 
-- [ ] **Privacy Policy** — add new Section 4.6 "Newsletter Subscription Data" (not in 4.3 which is analytics-specific). Add Buttondown to Section 5 (Third-Party Services), consent basis to Section 6, retention to Section 7. Mirror to `docs/legal/privacy-policy.md`.
-- [ ] **GDPR Policy** — add consent lawful basis (Art. 6(1)(a)) as Section 3.6. Remove email from "NOT collected" list in Section 4.1. Add Buttondown row to Section 4.2 table. Add processing activity #6 to Section 10 (Article 30 register). Fix pre-existing Section 3.4/3.5 numbering while editing. Mirror to `docs/legal/gdpr-policy.md`.
-- [ ] **Data Protection Disclosure** — add newsletter to Section 2.3 limited processing list. Add Buttondown row to Section 4.2 table. Mirror to `docs/legal/data-processing-agreement.md` (note: filename differs from published version).
-- [ ] **Cookie Policy** — verify Buttondown form POST does not set cookies. If it does, update Cookie Policy (both locations).
-- [ ] **Grep verification** — search all legal docs for "does not collect", "no personal data", "email addresses" in negation context. Fix any remaining contradictions.
+- [x] **Privacy Policy** — add new Section 4.6 "Newsletter Subscription Data" (not in 4.3 which is analytics-specific). Add Buttondown to Section 5 (Third-Party Services), consent basis to Section 6, retention to Section 7. Mirror to `docs/legal/privacy-policy.md`.
+- [x] **GDPR Policy** — add consent lawful basis (Art. 6(1)(a)) as Section 3.6. Remove email from "NOT collected" list in Section 4.1. Add Buttondown row to Section 4.2 table. Add processing activity #6 to Section 10 (Article 30 register). Fix pre-existing Section 3.4/3.5 numbering while editing. Mirror to `docs/legal/gdpr-policy.md`.
+- [x] **Data Protection Disclosure** — add newsletter to Section 2.3 limited processing list. Add Buttondown row to Section 4.2 table. Mirror to `docs/legal/data-processing-agreement.md` (note: filename differs from published version).
+- [x] **Cookie Policy** — verify Buttondown form POST does not set cookies. If it does, update Cookie Policy (both locations).
+- [x] **Grep verification** — search all legal docs for "does not collect", "no personal data", "email addresses" in negation context. Fix any remaining contradictions.
 
 ## Implementation
 
 All done in a single pass — CSS, HTML partial, template includes, JS.
 
-- [ ] Add `.newsletter-form` component styles and `.honeypot-trap` utility to `plugins/soleur/docs/css/style.css` in `@layer components` / `@layer utilities`, using existing design tokens
-- [ ] Create Nunjucks partial `plugins/soleur/docs/_includes/newsletter-form.njk` with `location` parameter for unique IDs, reading username from `site.newsletter`
-- [ ] Include partial in `plugins/soleur/docs/_includes/base.njk` — insert as a pre-footer section between the `</main>` closing tag and the `<footer>` element, with `location="footer"`
-- [ ] Include partial in `plugins/soleur/docs/index.njk` — insert as a new section before the `<!-- Final CTA -->` comment, with `location="homepage"`
-- [ ] Include partial in `plugins/soleur/docs/_includes/blog-post.njk` — insert after the `.prose` closing `</div>` (not inside `.prose` to avoid typography styles), with `location="blog"`
-- [ ] Add inline `<script>` to `base.njk` with JS fetch handler, button disable during submit, and Plausible event tracking
-- [ ] Run Eleventy build and verify all three form placements render correctly
+- [x] Add `.newsletter-form` component styles and `.honeypot-trap` utility to `plugins/soleur/docs/css/style.css` in `@layer components` / `@layer utilities`, using existing design tokens
+- [x] Create Nunjucks partial `plugins/soleur/docs/_includes/newsletter-form.njk` with `location` parameter for unique IDs, reading username from `site.newsletter`
+- [x] Include partial in `plugins/soleur/docs/_includes/base.njk` — insert as a pre-footer section between the `</main>` closing tag and the `<footer>` element, with `location="footer"`
+- [x] Include partial in `plugins/soleur/docs/index.njk` — insert as a new section before the `<!-- Final CTA -->` comment, with `location="homepage"`
+- [x] Include partial in `plugins/soleur/docs/_includes/blog-post.njk` — insert after the `.prose` closing `</div>` (not inside `.prose` to avoid typography styles), with `location="blog"`
+- [x] Add inline `<script>` to `base.njk` with JS fetch handler, button disable during submit, and Plausible event tracking
+- [x] Run Eleventy build and verify all three form placements render correctly
 
 ## References
 
