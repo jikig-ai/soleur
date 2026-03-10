@@ -3,7 +3,7 @@
 # committed to knowledge-base/community/, and creates a GitHub Issue
 # with the daily report. No autonomous posting -- human approval preserved.
 # Implements #145: Run Community Agent continuously.
-# Start with workflow_dispatch only; add cron after validating end-to-end.
+# Runs daily at 08:00 UTC and on manual dispatch.
 # To test manually: gh workflow run scheduled-community-monitor.yml
 #
 # Security: This workflow does NOT use any untrusted event inputs
@@ -14,9 +14,8 @@ name: "Scheduled: Community Monitor"
 
 on:
   workflow_dispatch:
-  # TODO: Add cron after validating end-to-end with manual dispatch
-  # schedule:
-  #   - cron: '0 8 * * *'
+  schedule:
+    - cron: '0 8 * * *'
 
 concurrency:
   group: schedule-community-monitor
