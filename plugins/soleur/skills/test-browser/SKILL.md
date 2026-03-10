@@ -297,7 +297,7 @@ After all tests complete, present summary:
 
 <cleanup>
 
-After all tests complete, remove screenshot artifacts produced during the session. Playwright MCP writes screenshots to the main repo root when invoked from a worktree, so check both locations.
+Playwright MCP writes screenshots to the main repo root when invoked from a worktree, so clean both locations. If any test failures were recorded with `error.png`, upload or review those screenshots before running cleanup.
 
 ```bash
 # Remove session screenshots from current working directory

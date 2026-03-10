@@ -272,27 +272,29 @@ Use a clickable GIF that links to the video (GitHub cannot embed external MP4s d
 
 **Case B: Video created locally (HAS_FFMPEG=true, RCLONE_CONFIGURED=false)**
 
+Upload the video to the PR as a GitHub comment attachment before cleanup deletes local files:
+
+```bash
+# Upload video as a PR comment (GitHub accepts drag-and-drop or API upload)
+echo "Upload tmp/videos/feature-demo.mp4 to PR #[number] as a comment attachment"
+```
+
+Then add to PR body:
+
 ```markdown
 ## Demo
 
-Video created locally at `tmp/videos/feature-demo.mp4`. Upload manually or configure rclone to embed.
+See video in PR comments below.
 ```
 
 **Case C: Screenshots only (HAS_FFMPEG=false)**
 
-Embed screenshots directly in the PR:
+Upload screenshots to the PR as comment attachments before cleanup deletes local files, then embed in the PR body:
 
 ```markdown
 ## Demo
 
-Screenshots captured (video conversion requires ffmpeg):
-
-| Step | Screenshot |
-|------|-----------|
-| Start | `tmp/screenshots/01-start.png` |
-| Navigate | `tmp/screenshots/02-navigate.png` |
-| Feature | `tmp/screenshots/03-feature.png` |
-| Result | `tmp/screenshots/04-result.png` |
+Screenshots captured (video conversion requires ffmpeg). See PR comments for images.
 ```
 
 **Update the PR:**
