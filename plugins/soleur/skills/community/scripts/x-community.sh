@@ -159,50 +159,23 @@ oauth_sign() {
   echo "$auth_header"
 }
 
-# --- API helper ---
+# --- Response handler ---
 
-# Make an authenticated request to the X API
-# Arguments: method endpoint [json_body]
-# Retries on 429 up to 3 times
-x_request() {
-  local method="$1"
-  local endpoint="$2"
-  local json_body="${3:-}"
-  local depth="${4:-0}"
-
-  if (( depth >= 3 )); then
-    echo "Error: X API rate limit exceeded after 3 retries." >&2
-    exit 2
-  fi
-
-  local url="${X_API}${endpoint}"
-  local auth_header
-  auth_header=$(oauth_sign "$method" "$url")
-
-  local -a curl_args=(
-    -s -w "\n%{http_code}"
-    -H "Authorization: ${auth_header}"
-    -H "Content-Type: application/json"
-  )
-
-  if [[ "$method" == "POST" && -n "$json_body" ]]; then
-    curl_args+=(-X POST -d "$json_body")
-  fi
-
-  local response http_code body
-  # Suppress stderr to prevent credential leakage
-  if ! response=$(curl "${curl_args[@]}" "$url" 2>/dev/null); then
-    echo "Error: Failed to connect to X API." >&2
-    echo "Check your network connection and try again." >&2
-    exit 1
-  fi
-
-  http_code=$(echo "$response" | tail -1)
-  body=$(echo "$response" | sed '$d')
+# Handle HTTP response status codes from X API
+# Arguments: http_code body endpoint depth retry_cmd...
+# On 2xx: validates JSON, echoes body to stdout
+# On 429: sleeps and invokes retry_cmd (caller with incremented depth)
+# On error: prints diagnostic to stderr, exits 1 (or 2 for rate limit exhaustion)
+handle_response() {
+  local http_code="$1"
+  local body="$2"
+  local endpoint="$3"
+  local depth="$4"
+  shift 4
+  local -a retry_cmd=("$@")
 
   case "$http_code" in
     2[0-9][0-9])
-      # Validate JSON
       if ! echo "$body" | jq . >/dev/null 2>&1; then
         echo "Error: X API returned malformed JSON for ${endpoint}" >&2
         exit 1
@@ -210,7 +183,7 @@ x_request() {
       echo "$body"
       ;;
     401)
-      echo "Error: X API returned 401 Unauthorized." >&2
+      echo "Error: X API returned 401 Unauthorized for ${endpoint}." >&2
       echo "Your credentials may be expired or invalid." >&2
       echo "" >&2
       echo "To fix:" >&2
@@ -220,8 +193,19 @@ x_request() {
       exit 1
       ;;
     403)
-      echo "Error: X API returned 403 Forbidden." >&2
-      echo "Your app may lack the required permissions or your account may be suspended." >&2
+      local reason
+      reason=$(echo "$body" | jq -r '.reason // "unknown"' 2>/dev/null || echo "unknown")
+      echo "Error: X API returned 403 Forbidden for ${endpoint}." >&2
+      if [[ "$reason" == "client-not-enrolled" ]]; then
+        # CONTRACT: community-manager agent matches on this string for 403 fallback detection.
+        # Changing this message requires updating agents/support/community-manager.md Capability 4 Step 1b.
+        echo "This endpoint requires paid API access." >&2
+        echo "Visit https://developer.x.com to purchase credits." >&2
+      elif [[ "$reason" == "official-client-forbidden" ]]; then
+        echo "Your app may lack the required permissions." >&2
+      else
+        echo "Your app may lack the required permissions or your account may be suspended." >&2
+      fi
       exit 1
       ;;
     429)
@@ -239,15 +223,59 @@ x_request() {
       fi
       echo "Rate limited. Retrying after ${retry_after}s (attempt $((depth + 1))/3)..." >&2
       sleep "$retry_after"
-      x_request "$method" "$endpoint" "$json_body" "$((depth + 1))"
+      "${retry_cmd[@]}"
       ;;
     *)
       local message
       message=$(echo "$body" | jq -r '.detail // .title // "Unknown error"' 2>/dev/null || echo "Unknown error")
-      echo "Error: X API returned HTTP ${http_code}: ${message}" >&2
+      echo "Error: X API returned HTTP ${http_code} for ${endpoint}: ${message}" >&2
       exit 1
       ;;
   esac
+}
+
+# --- POST request helper ---
+
+# Make an authenticated POST request to the X API
+# Arguments: endpoint [json_body] [depth]
+# Retries on 429 up to 3 times
+post_request() {
+  local endpoint="$1"
+  local json_body="${2:-}"
+  local depth="${3:-0}"
+
+  if (( depth >= 3 )); then
+    echo "Error: X API rate limit exceeded after 3 retries for ${endpoint}." >&2
+    exit 2
+  fi
+
+  local url="${X_API}${endpoint}"
+  local auth_header
+  auth_header=$(oauth_sign "POST" "$url")
+
+  local -a curl_args=(
+    -s -w "\n%{http_code}"
+    -H "Authorization: ${auth_header}"
+    -H "Content-Type: application/json"
+  )
+
+  if [[ -n "$json_body" ]]; then
+    curl_args+=(-X POST -d "$json_body")
+  fi
+
+  local response http_code body
+  # Suppress stderr to prevent credential leakage
+  if ! response=$(curl "${curl_args[@]}" "$url" 2>/dev/null); then
+    echo "Error: Failed to connect to X API." >&2
+    echo "Check your network connection and try again." >&2
+    exit 1
+  fi
+
+  http_code=$(echo "$response" | tail -1)
+  body=$(echo "$response" | sed '$d')
+
+  handle_response "$http_code" "$body" "$endpoint" "$depth" \
+    post_request "$endpoint" "$json_body" "$((depth + 1))"
 }
 
 # --- GET request helper ---
@@ -293,68 +321,15 @@ get_request() {
     -H "Authorization: ${auth_header}" \
     "$request_url" 2>/dev/null); then
     echo "Error: Failed to connect to X API." >&2
+    echo "Check your network connection and try again." >&2
     exit 1
   fi
 
   http_code=$(echo "$response" | tail -1)
   body=$(echo "$response" | sed '$d')
 
-  case "$http_code" in
-    2[0-9][0-9])
-      # Validate JSON
-      if ! echo "$body" | jq . >/dev/null 2>&1; then
-        echo "Error: X API returned malformed JSON for ${endpoint}" >&2
-        exit 1
-      fi
-      echo "$body"
-      ;;
-    401)
-      echo "Error: X API returned 401 Unauthorized for ${endpoint}." >&2
-      echo "Your credentials may be expired or invalid." >&2
-      echo "" >&2
-      echo "To fix:" >&2
-      echo "  1. Go to https://developer.x.com/en/portal/dashboard" >&2
-      echo "  2. Regenerate your Access Token and Secret" >&2
-      echo "  3. Update environment variables" >&2
-      exit 1
-      ;;
-    403)
-      local reason
-      reason=$(echo "$body" | jq -r '.reason // "unknown"' 2>/dev/null || echo "unknown")
-      echo "Error: X API returned 403 Forbidden for ${endpoint}." >&2
-      if [[ "$reason" == "client-not-enrolled" ]]; then
-        # CONTRACT: community-manager agent matches on this string for 403 fallback detection.
-        # Changing this message requires updating agents/support/community-manager.md Capability 4 Step 1b.
-        echo "This endpoint requires paid API access." >&2
-        echo "Visit https://developer.x.com to purchase credits." >&2
-      elif [[ "$reason" == "official-client-forbidden" ]]; then
-        echo "Your app may lack the required permissions." >&2
-      else
-        echo "Your app may lack the required permissions or your account may be suspended." >&2
-      fi
-      exit 1
-      ;;
-    429)
-      local retry_after
-      retry_after=$(echo "$body" | jq -r '.retry_after // 5' 2>/dev/null || echo "5")
-      local retry_int
-      retry_int=$(printf '%.0f' "$retry_after" 2>/dev/null || echo "5")
-      if (( retry_int > 60 )); then
-        retry_after=60
-      elif (( retry_int < 1 )); then
-        retry_after=1
-      fi
-      echo "Rate limited. Retrying after ${retry_after}s (attempt $((depth + 1))/3)..." >&2
-      sleep "$retry_after"
-      get_request "$endpoint" "$query_params" "$((depth + 1))"
-      ;;
-    *)
-      local message
-      message=$(echo "$body" | jq -r '.detail // .title // "Unknown error"' 2>/dev/null || echo "Unknown error")
-      echo "Error: X API returned HTTP ${http_code} for ${endpoint}: ${message}" >&2
-      exit 1
-      ;;
-  esac
+  handle_response "$http_code" "$body" "$endpoint" "$depth" \
+    get_request "$endpoint" "$query_params" "$((depth + 1))"
 }
 
 # Resolve the authenticated user's numeric ID
@@ -551,7 +526,7 @@ cmd_post_tweet() {
   fi
 
   local result
-  result=$(x_request "POST" "/2/tweets" "$json_body")
+  result=$(post_request "/2/tweets" "$json_body")
 
   # Output the created tweet
   echo "$result" | jq '{
@@ -596,4 +571,7 @@ main() {
   esac
 }
 
-main "$@"
+# Guard: allow sourcing without executing main (for test harness)
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

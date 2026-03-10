@@ -12,6 +12,12 @@ const SCRIPT_PATH = join(
   "x-community.sh"
 );
 
+const HANDLE_RESPONSE_HELPER = join(
+  import.meta.dirname,
+  "helpers",
+  "test-handle-response.sh"
+);
+
 /**
  * Minimal env with no X API credentials.
  * Includes PATH so bash, jq, and openssl can be found.
@@ -234,5 +240,137 @@ describe("x-community.sh fetch-mentions -- jq transform", () => {
     const output = JSON.parse(decode(result.stdout));
     expect(output.mentions).toHaveLength(1);
     expect(output.mentions[0].author_username).toBe("unknown");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handle_response -- unified response handler
+// ---------------------------------------------------------------------------
+
+describe("x-community.sh handle_response -- 2xx", () => {
+  test("2xx with valid JSON echoes body to stdout", () => {
+    const body = JSON.stringify({ data: { id: "1" } });
+    const result = Bun.spawnSync(
+      ["bash", HANDLE_RESPONSE_HELPER, "200", body, "/2/tweets", "0", "echo", "noop"],
+      { env: NO_CREDS_ENV }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(decode(result.stderr)).toBe("");
+    const output = JSON.parse(decode(result.stdout));
+    expect(output.data.id).toBe("1");
+  });
+
+  test("2xx with malformed JSON exits 1 with error", () => {
+    const result = Bun.spawnSync(
+      ["bash", HANDLE_RESPONSE_HELPER, "200", "not-json{", "/2/tweets", "0", "echo", "noop"],
+      { env: NO_CREDS_ENV }
+    );
+
+    expect(result.exitCode).toBe(1);
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("malformed JSON");
+    expect(stderr).toContain("/2/tweets");
+  });
+});
+
+describe("x-community.sh handle_response -- 401", () => {
+  test("401 exits 1 with credential instructions", () => {
+    const result = Bun.spawnSync(
+      ["bash", HANDLE_RESPONSE_HELPER, "401", "{}", "/2/users/me", "0", "echo", "noop"],
+      { env: NO_CREDS_ENV }
+    );
+
+    expect(result.exitCode).toBe(1);
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("401 Unauthorized");
+    expect(stderr).toContain("/2/users/me");
+    expect(stderr).toContain("Regenerate your Access Token");
+  });
+});
+
+describe("x-community.sh handle_response -- 403", () => {
+  test("403 with reason client-not-enrolled gives paid API guidance", () => {
+    const body = JSON.stringify({ reason: "client-not-enrolled" });
+    const result = Bun.spawnSync(
+      ["bash", HANDLE_RESPONSE_HELPER, "403", body, "/2/tweets/search", "0", "echo", "noop"],
+      { env: NO_CREDS_ENV }
+    );
+
+    expect(result.exitCode).toBe(1);
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("403 Forbidden");
+    expect(stderr).toContain("paid API access");
+    expect(stderr).toContain("purchase credits");
+  });
+
+  test("403 with reason official-client-forbidden gives permissions guidance", () => {
+    const body = JSON.stringify({ reason: "official-client-forbidden" });
+    const result = Bun.spawnSync(
+      ["bash", HANDLE_RESPONSE_HELPER, "403", body, "/2/tweets", "0", "echo", "noop"],
+      { env: NO_CREDS_ENV }
+    );
+
+    expect(result.exitCode).toBe(1);
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("403 Forbidden");
+    expect(stderr).toContain("lack the required permissions");
+    expect(stderr).not.toContain("suspended");
+  });
+
+  test("403 with no reason gives generic message", () => {
+    const result = Bun.spawnSync(
+      ["bash", HANDLE_RESPONSE_HELPER, "403", "{}", "/2/tweets", "0", "echo", "noop"],
+      { env: NO_CREDS_ENV }
+    );
+
+    expect(result.exitCode).toBe(1);
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("403 Forbidden");
+    expect(stderr).toContain("permissions or your account may be suspended");
+  });
+});
+
+describe("x-community.sh handle_response -- default error", () => {
+  test("500 exits 1 with parsed detail", () => {
+    const body = JSON.stringify({ detail: "Internal server error" });
+    const result = Bun.spawnSync(
+      ["bash", HANDLE_RESPONSE_HELPER, "500", body, "/2/tweets", "0", "echo", "noop"],
+      { env: NO_CREDS_ENV }
+    );
+
+    expect(result.exitCode).toBe(1);
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("HTTP 500");
+    expect(stderr).toContain("Internal server error");
+    expect(stderr).toContain("/2/tweets");
+  });
+
+  test("500 with title instead of detail uses title", () => {
+    const body = JSON.stringify({ title: "Service Unavailable" });
+    const result = Bun.spawnSync(
+      ["bash", HANDLE_RESPONSE_HELPER, "500", body, "/2/tweets", "0", "echo", "noop"],
+      { env: NO_CREDS_ENV }
+    );
+
+    expect(result.exitCode).toBe(1);
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("Service Unavailable");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Rename verification -- x_request must not exist
+// ---------------------------------------------------------------------------
+
+describe("x-community.sh -- rename verification", () => {
+  test("x_request is fully renamed to post_request", () => {
+    const result = Bun.spawnSync(
+      ["grep", "-c", "x_request", SCRIPT_PATH],
+      { env: NO_CREDS_ENV }
+    );
+
+    // grep -c returns the count; 0 matches means exit code 1
+    expect(result.exitCode).toBe(1);
   });
 });
