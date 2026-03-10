@@ -94,10 +94,10 @@ If any reference is missing, warn the user:
 
 ```text
 This tool has public-facing presence but the docs site does not reference it yet.
-Missing from: <list of files>. Consider filing an issue to update the website.
+Missing from: <list-of-files>. Consider filing an issue to update the website.
 ```
 
-If the tool has no public-facing presence (e.g., internal monitoring, CI tooling), skip this check.
+If the tool has no public-facing presence (e.g., internal monitoring, CI tooling), skip this check. The community skill has a platform-specific version of this check for social platforms.
 
 ## Safety Rules
 
