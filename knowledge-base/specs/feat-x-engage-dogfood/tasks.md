@@ -27,27 +27,10 @@
 - [ ] Add contract comment above "This endpoint requires paid API access." in `get_request` 403 handler (~line 326)
 - [ ] Comment references community-manager.md Capability 4 Step 1b
 
-## Phase 2: Brand Guide
+## Phase 2: Verification
 
-### 2.1 Add X engagement guardrails to brand guide
-- [ ] Read `knowledge-base/overview/brand-guide.md`
-- [ ] Add `#### Engagement Guardrails` subsection under `### X/Twitter`
-- [ ] Include: topics to avoid, when to skip, reply cadence, tone guidance
-- [ ] Preserve existing heading contract (`## Voice`, `## Channel Notes`)
-
-## Phase 3: Testing
-
-### 3.1 Add URL parsing pattern tests
-- [ ] Read `test/x-community.test.ts`
-- [ ] Add test cases for URL → tweet ID extraction patterns
-- [ ] Cover: x.com, twitter.com, query params, bare IDs, rejected formats
-- [ ] Run tests to verify
-
-## Phase 4: Verification
-
-### 4.1 Verify integration
+### 2.1 Verify integration
 - [ ] Run existing test suite to confirm no regressions
 - [ ] Verify SKILL.md engage section references the fallback correctly
 - [ ] Verify community-manager.md Capability 4 flows logically (paid path unchanged, free path degrades)
-- [ ] Verify brand guide heading contract preserved
 - [ ] Verify contract comment in x-community.sh is accurate

@@ -10,7 +10,9 @@
 
 Add graceful degradation to the X engage workflow so it works on the Free API tier. When `fetch-mentions` fails with a 403 `client-not-enrolled` error, the community-manager agent falls back to prompting the user for mention URLs manually. The rest of the pipeline (brand-voice draft, approval, post-tweet --reply-to) runs unchanged.
 
-Also: add X engagement guardrails to the brand guide and mark the `get_request` 403 error message as an agent contract.
+Also: mark the `get_request` 403 error message as an agent contract.
+
+**[Updated 2026-03-10]** Plan review removed Tasks 3 (brand guide guardrails — orthogonal, filed as separate issue) and 5 (URL parsing tests — cargo-cult testing of LLM-interpreted instructions).
 
 ## Spec Clarifications (from SpecFlow Analysis)
 
@@ -32,9 +34,7 @@ Also: add X engagement guardrails to the brand guide and mark the `get_request` 
 |------|--------|-------|
 | `plugins/soleur/agents/support/community-manager.md` | Add 403 fallback in Capability 4 after Step 1 | ~252-271 |
 | `plugins/soleur/skills/community/SKILL.md` | Add note about 403 graceful degradation in engage section | ~85-95 |
-| `knowledge-base/overview/brand-guide.md` | Add X engagement guardrails under Channel Notes > X/Twitter | ~150-165 |
 | `plugins/soleur/skills/community/scripts/x-community.sh` | Add contract comment above 403 error message in `get_request` | ~326 |
-| `test/x-community.test.ts` | Add test for manual URL parsing patterns | new tests |
 
 ## Implementation
 
@@ -80,39 +80,11 @@ Insert after the since-id state file paragraph (around line 94), before the agen
 **Free tier degradation:** If `fetch-mentions` returns 403 (client-not-enrolled), the community-manager agent switches to manual mode — prompting for tweet URLs instead of fetching mentions automatically. The rest of the pipeline (brand-voice draft, approval, post-tweet) runs unchanged. See Capability 4 Step 1b. When the paid tier activates, this fallback is never triggered.
 ```
 
-### Task 3: Add X Engagement Guardrails to Brand Guide
+### ~~Task 3: Brand Guide Guardrails~~ [REMOVED — separate issue]
 
-**File:** `knowledge-base/overview/brand-guide.md`
+Moved to a separate PR. Brand guide engagement guardrails are orthogonal to 403 degradation and apply regardless of API tier.
 
-Add a new `#### Engagement Guardrails` subsection under `### X/Twitter` (after the existing formatting rules around line 162):
-
-```markdown
-#### Engagement Guardrails
-
-**Topics to avoid:**
-- Politics, partisan issues, or social commentary unrelated to technology
-- Direct competitor criticism or comparisons (let the work speak)
-- Speculation about other companies' strategies or internal decisions
-- Anything requiring legal review (pricing commitments, partnership claims)
-
-**When to skip a mention/thread:**
-- Abusive, harassing, or clearly spam content
-- Off-topic mentions with no connection to dev tools, AI, or building
-- Rage-bait or controversy-farming threads
-- Mentions from accounts with <10 followers and no bio (likely bots)
-
-**Reply cadence:**
-- Maximum 10 replies per engage session
-- Space replies at least 2 minutes apart to avoid appearing automated
-- If unsure whether to reply, skip — silence is always safe
-
-**Tone in replies:**
-- Match the register of the original tweet (casual thread = casual reply)
-- Never argue or defend — if challenged, share a link and disengage
-- One reply per thread unless directly asked a follow-up question
-```
-
-### Task 4: Add Contract Comment in x-community.sh
+### Task 3: Add Contract Comment in x-community.sh
 
 **File:** `plugins/soleur/skills/community/scripts/x-community.sh`
 
@@ -125,31 +97,15 @@ Add a comment above the `client-not-enrolled` error message in `get_request` (ar
         echo "This endpoint requires paid API access." >&2
 ```
 
-### Task 5: Add Tests for URL Parsing Patterns
+### ~~Task 4: URL Parsing Tests~~ [REMOVED — cargo-cult testing]
 
-**File:** `test/x-community.test.ts`
-
-Add test cases validating the URL patterns the agent will use:
-
-```
-URL parsing patterns (for agent reference, not script logic):
-- https://x.com/user/status/1234567890 → 1234567890
-- https://twitter.com/user/status/1234567890 → 1234567890
-- https://x.com/user/status/1234567890?s=20&t=abc → 1234567890
-- https://twitter.com/user/status/1234567890/photo/1 → 1234567890
-- 1234567890 (bare ID) → 1234567890
-- https://vxtwitter.com/user/status/123 → rejected
-- random text without ID → rejected
-```
-
-Note: Since the URL parsing happens in LLM instructions (not script code), these tests serve as a specification/contract for the expected behavior. They verify the regex pattern extracts the correct tweet ID from various URL formats. Implementation as a bash function in a test helper or as documentation assertions.
+URL parsing lives in LLM instructions, not executable code. No test runner can verify what the agent interprets from prose. The URL patterns in Task 1's Step 1b are the contract.
 
 ## Acceptance Criteria
 
 - [ ] `community engage` on Free tier catches 403, prompts for manual URL, drafts reply, posts successfully
 - [ ] `community engage` on paid tier works unchanged (FR4 — fallback never triggered)
 - [ ] Headless mode + 403 = clean error message, no hanging
-- [ ] Brand guide has engagement guardrails section under X/Twitter
 - [ ] Contract comment exists in x-community.sh get_request 403 handler
 - [ ] URL parsing handles both domains, query params, bare IDs
 - [ ] Since-id not updated in manual mode
@@ -170,4 +126,3 @@ Note: Since the URL parsing happens in LLM instructions (not script code), these
 | Future edits to x-community.sh 403 message break agent fallback | Contract comment marks the string as a dependency |
 | Agent misparses stderr (network error vs. 403) | Agent checks for specific "requires paid API access" string, not just exit code |
 | 50 tweets/month cap hit mid-session | Known limitation — user manages manually. Post-tweet 429 retry logic may mask this. |
-| Brand guide guardrails are too restrictive/loose | Human-in-the-loop on every reply is the real safety net; guardrails are guidance for the drafting agent |
