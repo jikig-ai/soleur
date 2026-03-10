@@ -142,14 +142,14 @@ The only caller of `x_request` is `cmd_post_tweet` (line 552). Renaming to `post
 
 ## Acceptance Criteria
 
-- [ ] A single `handle_response` function in `x-community.sh` handles HTTP status dispatch for both GET and POST requests (`plugins/soleur/skills/community/scripts/x-community.sh`)
-- [ ] `x_request` is renamed to `post_request` with no callers using the old name (`plugins/soleur/skills/community/scripts/x-community.sh`)
-- [ ] 403 errors from POST requests now parse the `reason` field and give paid-access-specific guidance (same behavior as current GET 403) (`plugins/soleur/skills/community/scripts/x-community.sh`)
-- [ ] All existing tests pass without modification (`test/x-community.test.ts`)
-- [ ] New tests verify the unified response handling behavior for error status codes (`test/x-community.test.ts`)
-- [ ] No behavioral change for any command (fetch-metrics, fetch-mentions, fetch-timeline, post-tweet)
-- [ ] 429 retry log message preserves `(attempt N/3)` format using depth param (`plugins/soleur/skills/community/scripts/x-community.sh`)
-- [ ] `grep -rn 'x_request' plugins/soleur/skills/community/scripts/x-community.sh` returns zero matches after refactor
+- [x] A single `handle_response` function in `x-community.sh` handles HTTP status dispatch for both GET and POST requests (`plugins/soleur/skills/community/scripts/x-community.sh`)
+- [x] `x_request` is renamed to `post_request` with no callers using the old name (`plugins/soleur/skills/community/scripts/x-community.sh`)
+- [x] 403 errors from POST requests now parse the `reason` field and give paid-access-specific guidance (same behavior as current GET 403) (`plugins/soleur/skills/community/scripts/x-community.sh`)
+- [x] All existing tests pass without modification (`test/x-community.test.ts`)
+- [x] New tests verify the unified response handling behavior for error status codes (`test/x-community.test.ts`)
+- [x] No behavioral change for any command (fetch-metrics, fetch-mentions, fetch-timeline, post-tweet)
+- [x] 429 retry log message preserves `(attempt N/3)` format using depth param (`plugins/soleur/skills/community/scripts/x-community.sh`)
+- [x] `grep -rn 'x_request' plugins/soleur/skills/community/scripts/x-community.sh` returns zero matches after refactor
 
 ## Test Scenarios
 
