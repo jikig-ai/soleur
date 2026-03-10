@@ -88,13 +88,13 @@ Single-file feature. Existing community skill and community-manager agent invoke
 
 ## Acceptance Criteria
 
-- [ ] `scheduled-community-monitor.yml` exists with `workflow_dispatch` trigger (cron added after validation)
+- [x] `scheduled-community-monitor.yml` exists with `workflow_dispatch` trigger (cron added after validation)
 - [ ] Manual dispatch produces a GitHub Issue labeled `scheduled-community-monitor` with platform metrics
 - [ ] Digest committed to `knowledge-base/community/YYYY-MM-DD-digest.md` on main
-- [ ] `timeout-minutes: 30` and `--max-turns 30` set
-- [ ] Failed runs notify via Discord webhook with `allowed_mentions: {parse: []}`
-- [ ] All GitHub Actions pinned to commit SHAs
-- [ ] Works with Discord-only, X-only, or both platforms configured
+- [x] `timeout-minutes: 30` and `--max-turns 30` set
+- [x] Failed runs notify via Discord webhook with `allowed_mentions: {parse: []}`
+- [x] All GitHub Actions pinned to commit SHAs
+- [x] Works with Discord-only, X-only, or both platforms configured
 
 ## Test Scenarios
 
