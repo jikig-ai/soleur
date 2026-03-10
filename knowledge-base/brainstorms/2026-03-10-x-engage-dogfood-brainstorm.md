@@ -4,6 +4,8 @@
 **Status:** Decided
 **Branch:** feat-x-engage-dogfood
 **PR:** #495
+**Issue:** #496
+**Deferred Expense:** #497
 
 ## What We're Building
 
