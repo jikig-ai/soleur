@@ -246,13 +246,13 @@ No additional hardening is needed for this execution task.
 
 ## Acceptance Criteria
 
-- [ ] X API credentials are loaded and verified (fetch-metrics returns account info)
-- [ ] Discord webhook URL is loaded and verified
-- [ ] social-distribute skill generates all 5 variants from the blog post
-- [ ] Discord announcement posted successfully (HTTP 2xx from webhook)
-- [ ] X/Twitter thread posted as connected replies (not isolated tweets)
-- [ ] Each tweet in the thread is verified before posting the next
-- [ ] Distribution summary confirms Discord and X posted
+- [x] X API credentials are loaded and verified (fetch-metrics returns account info)
+- [x] Discord webhook URL is loaded and verified
+- [x] social-distribute skill generates all 5 variants from the blog post
+- [x] Discord announcement posted successfully (HTTP 2xx from webhook)
+- [x] X/Twitter thread posted as connected replies (not isolated tweets)
+- [x] Each tweet in the thread is verified before posting the next
+- [x] Distribution summary confirms Discord and X posted
 
 ## Test Scenarios
 
