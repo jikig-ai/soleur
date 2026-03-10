@@ -19,6 +19,16 @@ set -euo pipefail
 
 DISCORD_API="https://discord.com/api/v10"
 
+# --- Dependency checks ---
+
+require_jq() {
+  if ! command -v jq &>/dev/null; then
+    echo "Error: jq is required but not installed." >&2
+    echo "Install it: https://jqlang.github.io/jq/download/" >&2
+    exit 1
+  fi
+}
+
 # --- Validation ---
 
 validate_env() {
@@ -244,6 +254,7 @@ main() {
     exit 1
   fi
 
+  require_jq
   validate_env
 
   case "$command" in
