@@ -40,14 +40,16 @@ PR #498 replaced generic "check your prompt" errors with specific error categori
 
 ## Environment State
 
-Current environment:
-- `GEMINI_API_KEY`: **not set** -- must be set for live quota verification
+Pre-dogfood environment (as surveyed by the plan subagent):
+- `GEMINI_API_KEY`: set with image quota (plan subagent reported "not set" but it was available at runtime)
 - `google-genai` SDK: installed system-wide (confirmed: `google.genai.errors` module has `APIError`, `ClientError`, `ServerError`, `UnknownApiResponseError`, `FunctionInvocationError`)
-- Pencil Desktop: **not installed**
+- Pencil Desktop: **extracted AppImage found** at `~/Applications/squashfs-root/` with executable MCP binary (plan subagent incorrectly reported "not installed" -- the extracted AppImage was not detected during environment probing)
 - Pencil CLI: **not in PATH**
 - Cursor: available at `/usr/bin/cursor` with Pencil extension at `~/.cursor/extensions/highagency.pencildev-0.6.28-universal/`
 - VS Code: available at `/snap/bin/code`
 - Pencil MCP: **not registered** with Claude Code
+
+> **Note:** The plan body below was written before execution, assuming no Desktop and IDE-tier activation. Actual results differed -- Desktop binary (Tier 2) won. Acceptance criteria and the Deviations section at the end reflect reality.
 
 ## Part 1: Gemini Imagegen Quota Error Verification
 
@@ -212,7 +214,7 @@ Test the interactive flow:
 bash plugins/soleur/skills/pencil-setup/scripts/check_deps.sh
 ```
 
-**Expected output** (given environment: no CLI, no Desktop, Cursor with extension):
+**Pre-execution expectation** (assumed no CLI, no Desktop, Cursor with extension):
 
 ```
 === Pencil Setup Dependency Check ===
@@ -227,13 +229,29 @@ PREFERRED_BINARY=/home/jean/.cursor/extensions/highagency.pencildev-0.6.28-unive
 PREFERRED_APP=cursor
 ```
 
+**Actual output** (extracted AppImage was present -- Desktop binary won at Tier 2):
+
+```
+=== Pencil Setup Dependency Check ===
+
+  [ok] Pencil Desktop (MCP binary available)
+    MCP binary: /home/jean/Applications/squashfs-root/resources/app.asar.unpacked/out/mcp-server-linux-x64
+  [info] Pencil Desktop is not running -- use --auto to launch automatically
+
+=== Check Complete ===
+
+PREFERRED_MODE=desktop_binary
+PREFERRED_BINARY=/home/jean/Applications/squashfs-root/resources/app.asar.unpacked/out/mcp-server-linux-x64
+PREFERRED_APP=pencil
+```
+
 **Key verifications:**
-- [ ] Tier 1 (CLI) is skipped silently (no `pencil` in PATH)
-- [ ] Tier 2 (Desktop) is skipped silently (no Desktop installed)
-- [ ] Tier 3 (IDE) succeeds with Cursor and extension
-- [ ] `PREFERRED_APP` is `cursor` (not `code`)
-- [ ] MCP binary path points to the actual extension binary
-- [ ] MCP binary at the reported path is actually executable (`test -x <path>`)
+- [x] Tier 1 (CLI) is skipped silently (no `pencil` in PATH)
+- [x] Tier 2 (Desktop binary) succeeds -- extracted AppImage found at `~/Applications/squashfs-root/`
+- [N/A] Tier 3 (IDE) not reached -- Tier 2 won first
+- [x] `PREFERRED_APP` is `pencil` (Desktop tier, not IDE's `cursor`)
+- [x] MCP binary path points to the Desktop extracted binary
+- [x] MCP binary at the reported path is executable (ELF 64-bit LSB, x86-64)
 
 #### Research Insights
 
@@ -254,14 +272,14 @@ Test the automated/pipeline flow:
 bash plugins/soleur/skills/pencil-setup/scripts/check_deps.sh --auto
 ```
 
-**Expected:** Same as 2.1 (no Desktop to auto-launch, extension already installed).
+**Actual result:** Same tier detected (Desktop binary), but `--auto` additionally attempted to launch Pencil Desktop via AppImage. The AppImage crashed with `Trace/breakpoint trap (core dumped)` because the terminal is headless (no display server). Despite the launch failure, the output correctly reported `PREFERRED_MODE=desktop_binary` with the MCP binary path — the detection and the launch are independent steps.
 
 #### Research Insights
 
 **`--auto` flag scope (from learning: check-deps-pattern-for-gui-apps.md):**
 > `--auto` flag scope is narrower: Only applies to IDE extension install (`cursor --install-extension`), not to the Desktop app itself.
 
-In the three-tier cascade, `--auto` additionally gates `auto_launch_desktop()`. Since no Desktop is installed, this code path is not exercised. The only observable difference from non-auto mode is that the extension install prompt would be auto-accepted (but the extension is already installed, so no difference).
+In the three-tier cascade, `--auto` additionally gates `auto_launch_desktop()`. With the Desktop binary detected, `--auto` attempted to launch the AppImage but it crashed in the headless environment (Electron apps require a display server). The crash is non-fatal — `check_deps.sh` prints `[FAILED] Pencil Desktop did not start within 6 seconds` and continues.
 
 ### 2.3 Verify VS Code `--app` Flag Value
 
@@ -285,15 +303,24 @@ This was a bug in the original script. Verify the fix is in place by checking th
 If an unrelated `pencil` binary exists in PATH:
 
 ```bash
-# Simulate: create a fake pencil binary
-mkdir -p /tmp/fake-pencil && printf '#!/bin/bash\necho "Evolus Pencil 3.0"\n' > /tmp/fake-pencil/pencil && chmod +x /tmp/fake-pencil/pencil
+# Simulate: create a REALISTIC fake pencil binary that rejects unknown subcommands
+mkdir -p /tmp/fake-pencil && cat > /tmp/fake-pencil/pencil << 'SCRIPT'
+#!/bin/bash
+case "$1" in
+  --version) echo "Evolus Pencil 3.0" ;;
+  *)         echo "Unknown command: $1" >&2; exit 1 ;;
+esac
+SCRIPT
+chmod +x /tmp/fake-pencil/pencil
 PATH="/tmp/fake-pencil:$PATH" bash plugins/soleur/skills/pencil-setup/scripts/check_deps.sh
 rm -rf /tmp/fake-pencil
 ```
 
 **Expected:**
 - `[info] pencil CLI found but is not pencil.dev (possible evolus/pencil)` message appears
-- Tier 1 (CLI) is skipped, falls through to Tier 3 (IDE)
+- Tier 1 (CLI) is skipped, falls through to next available tier
+
+> **Important:** The fake binary must reject unknown subcommands (exit 1). A naive fake that exits 0 on all inputs bypasses the collision guard because `pencil mcp-server --help` succeeds. See learning: `2026-03-10-dogfood-collision-guard-requires-realistic-fakes.md`.
 
 #### Research Insights
 
@@ -302,10 +329,9 @@ rm -rf /tmp/fake-pencil
 1. `pencil --version 2>&1 | grep -qi "pencil\.dev\|pencil v"` -- version string
 2. `pencil mcp-server --help` -- subcommand existence
 
-Both must fail for the collision guard to trigger. The fake binary outputs "Evolus Pencil 3.0" which does not match "pencil.dev" or "pencil v", and the `mcp-server` subcommand will fail. The main flow then prints the collision warning because `! detect_pencil_cli && command -v pencil` is true.
+Both must fail for the collision guard to trigger. A realistic fake outputs "Evolus Pencil 3.0" (doesn't match "pencil.dev" or "pencil v") and exits 1 on `mcp-server --help` (unknown subcommand). The main flow then prints the collision warning because `! detect_pencil_cli && command -v pencil` is true.
 
-**Cleanup safety:**
-The `rm -rf /tmp/fake-pencil` cleanup should run even if the test command fails. Consider using a subshell or trap to ensure cleanup. The plan step as written runs cleanup unconditionally after the test (sequential with no error gating), which is correct.
+**Dogfood discovery:** The original plan used a naive `echo` script that exits 0 on all args. This bypassed the guard because `pencil mcp-server --help` returned exit 0. A real evolus/pencil would reject `mcp-server` since that subcommand doesn't exist in their product.
 
 ### 2.5 Run Full `pencil-setup` Skill Flow
 
@@ -317,7 +343,7 @@ Execute the full SKILL.md flow:
 4. Register with: `claude mcp add -s user pencil -- <PREFERRED_BINARY> --app <PREFERRED_APP>`
 5. Verify registration: `claude mcp list -s user 2>&1 | grep pencil`
 
-**Expected:** Pencil MCP registered in IDE mode with the Cursor extension binary.
+**Actual result:** Pencil MCP registered in Desktop binary mode (not IDE mode as originally expected). Binary: `~/Applications/squashfs-root/.../mcp-server-linux-x64`, app: `pencil`.
 
 #### Research Insights
 
@@ -334,11 +360,13 @@ Verify the registration uses `-s user`, not `-s local` or no scope flag.
 **Post-dogfood cleanup:**
 After verifying registration, clean up with `claude mcp remove pencil -s user` to avoid leaving dogfood state in the user's global MCP config. This is especially important because the extension binary path may change on extension updates.
 
-### 2.6 Verify Desktop Binary Detection (Negative)
+### 2.6 Verify Desktop Binary Detection
 
-With no Desktop installed, the `detect_desktop_binary` function should return empty:
+**Pre-execution expectation:** With no Desktop installed, `detect_desktop_binary` should return empty.
 
-The script does not support sourcing (it runs main flow on source), so verify via code inspection that:
+**Actual result:** Desktop binary WAS found. An extracted AppImage at `~/Applications/squashfs-root/` contained the MCP binary. The `find_extracted_mcp_binary()` function correctly detected it at `$HOME/Applications/squashfs-root/resources/app.asar.unpacked/out/mcp-server-linux-x64`.
+
+The script does not support sourcing (it runs main flow on source), so platform paths verified via code inspection:
 - macOS checks `/Applications/Pencil.app/Contents/Resources/app.asar.unpacked/out/mcp-server-darwin-*`
 - Linux checks `/usr/lib/pencil/resources/app.asar.unpacked/out/mcp-server-linux-*` (deb) and extracted AppImage paths via `find_extracted_mcp_binary`
 
@@ -347,10 +375,10 @@ The script does not support sourcing (it runs main flow on source), so verify vi
 **AppImage MCP binary accessibility (from learning: pencil-desktop-ships-mcp-binary.md):**
 > Linux AppImage: Binary is trapped inside the AppImage; only accessible if the user runs `--appimage-extract` to create `squashfs-root/`.
 
-The `find_extracted_mcp_binary()` function checks for extracted AppImage in `$HOME/Applications`, `$HOME/.local/bin`, and `/opt`. This is correct -- the binary is at `<dir>/squashfs-root/resources/app.asar.unpacked/out/mcp-server-linux-${MCP_SUFFIX}`. Since no Desktop or extracted AppImage exists in this environment, this function returns 1 and the tier falls through.
+The `find_extracted_mcp_binary()` function checks for extracted AppImage in `$HOME/Applications`, `$HOME/.local/bin`, and `/opt`. In this environment, an extracted AppImage existed at `$HOME/Applications/squashfs-root/` -- the binary was found and verified executable.
 
 **`APPIMAGE_DIRS` single source of truth:**
-Both `find_appimage()` and `find_extracted_mcp_binary()` use the shared `APPIMAGE_DIRS` array. Verify these are consistent by code inspection (they are -- both iterate the same array).
+Both `find_appimage()` and `find_extracted_mcp_binary()` use the shared `APPIMAGE_DIRS` array. Verified consistent by code inspection.
 
 ### 2.7 Verify MCP Binary Executability (New)
 
@@ -374,9 +402,9 @@ This catches a failure mode where the extension is installed but the binary has 
 - [x] `--check-quota` flag works and prints actionable message for each error category (key has quota, returned `[ok]`)
 - [N/A] `--check-quota` exits with code 1 on failure (key has quota -- cannot test failure path without a quota-less key)
 - [x] All 5 gemini-imagegen scripts import from `_error_handling`
-- [x] No script accesses `response.candidates[N].finish_reason` or `.candidates` (only a comment in `_error_handling.py`)
+- [x] No script accesses `response.candidates[N].finish_reason` or `.candidates` in code (grep found only a documentation comment in `_error_handling.py` line 72 — no executable reference)
 - [x] `multi_turn_chat.py` correctly catches `NoImageError` for text-only responses
-- [N/A] `check_deps.sh` detects Cursor + extension as IDE tier correctly (Desktop binary found first -- Tier 2 wins over Tier 3)
+- [ ] `check_deps.sh` detects Cursor + extension as IDE tier correctly — **not tested**: Desktop binary found first (Tier 2 won before Tier 3 was reached)
 - [x] `check_deps.sh` outputs correct `PREFERRED_MODE=desktop_binary`, `PREFERRED_BINARY=.../mcp-server-linux-x64`, `PREFERRED_APP=pencil` (Desktop tier, not IDE as originally expected)
 - [x] Detected MCP binary path is executable and is an ELF binary (ELF 64-bit LSB executable, x86-64)
 - [x] Detected binary path contains `linux-x64` platform suffix (not darwin/windows)
@@ -391,19 +419,34 @@ This catches a failure mode where the extension is installed but the binary has 
 - Given a valid key with no image quota, when running `--check-quota`, then print QUOTA EXHAUSTED with the original API error and exit code 1
 - Given a valid key with quota, when running `--check-quota`, then print `[ok] Image generation quota available` and exit code 0
 - Given a valid key and a prompt that triggers safety filter, when running `generate_image.py`, then print SAFETY FILTER with rephrase suggestion
-- Given no Pencil CLI or Desktop, when running `check_deps.sh`, then detect IDE tier (Cursor + extension)
-- Given a fake evolus/pencil in PATH, when running `check_deps.sh`, then print collision warning and fall through to IDE
-- Given `--auto` flag, when running `check_deps.sh` with no Desktop installed, then skip auto-launch gracefully
+- Given no Pencil CLI but extracted Desktop AppImage exists, when running `check_deps.sh`, then detect Desktop binary tier (not IDE tier)
+- Given a realistic fake evolus/pencil in PATH (rejects unknown subcommands), when running `check_deps.sh`, then print collision warning and fall through to next tier
+- Given `--auto` flag and Desktop binary detected in headless terminal, when running `check_deps.sh`, then attempt AppImage launch (crashes with SIGTRAP), report failure, but still output correct PREFERRED_MODE/BINARY
 - Given a stale pencil MCP registration, when running the full skill flow, then remove-then-add succeeds
 - Given both Cursor and VS Code are available, when running `check_deps.sh`, then Cursor wins (checked first)
 
 ## Non-Goals
 
 - Writing new code or modifying existing implementations
-- Testing on macOS (not available in this environment). Note: Pencil Desktop WAS available as an extracted AppImage
+- Testing on macOS (not available in this environment)
+- Testing IDE tier (Tier 3) in isolation — Desktop binary (Tier 2) was unexpectedly present and won before IDE tier was reached
 - Testing the Gemini Pro model (quota may not cover it)
 - Registering Pencil MCP permanently (this is verification only -- clean up after)
 - Adding unit tests for `UnknownApiResponseError` and `FunctionInvocationError` (noted for future work)
+
+## Deviations from Plan
+
+These findings emerged during dogfood execution and differ from the plan's assumptions:
+
+1. **Environment State was inaccurate.** The plan subagent reported `Pencil Desktop: not installed` and `GEMINI_API_KEY: not set`, but at runtime both were available. The extracted AppImage at `~/Applications/squashfs-root/` was not detected during environment probing, and the API key was present in the shell environment. This caused the entire Part 2 pencil-setup section to exercise a different code path (Desktop binary, Tier 2) than expected (IDE extension, Tier 3).
+
+2. **Collision guard test required a more realistic fake binary.** The plan's naive `echo` script (exits 0 on all args) bypassed the collision guard because `pencil mcp-server --help` returned exit 0. A real evolus/pencil would reject unknown subcommands. The fake was revised to exit 1 on unrecognized args, which correctly triggered the collision warning.
+
+3. **`--auto` mode crashed the AppImage in headless terminal.** Electron apps require a display server (`$DISPLAY` or `$WAYLAND_DISPLAY`). The `check_deps.sh` script checks for display availability before launching but the AppImage itself crashed with `SIGTRAP` before the check could prevent it. The crash is non-fatal — detection output is still correct.
+
+4. **`claude mcp list` does not support `-s` scope flag.** The plan referenced `claude mcp list -s user` but only `add` and `remove` accept `-s`. Using `claude mcp list` without scope works and shows all registered servers.
+
+5. **`pytest` was not installed.** Fell back to `unittest` runner, which worked identically. All 16 tests passed.
 
 ## References
 
