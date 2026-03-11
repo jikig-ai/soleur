@@ -83,7 +83,7 @@ X/Twitter (if enabled): fetch account metrics and monitoring data:
 
 ```bash
 plugins/soleur/skills/community/scripts/x-community.sh fetch-metrics
-plugins/soleur/skills/community/scripts/x-community.sh fetch-mentions --since 2026-03-01T00:00:00Z
+plugins/soleur/skills/community/scripts/x-community.sh fetch-mentions --max-results 100
 plugins/soleur/skills/community/scripts/x-community.sh fetch-timeline --max 20
 ```
 
