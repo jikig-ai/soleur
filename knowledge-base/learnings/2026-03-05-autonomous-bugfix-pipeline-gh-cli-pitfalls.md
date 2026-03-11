@@ -20,7 +20,7 @@ related_issues:
 
 ## Problem
 
-Building an end-to-end autonomous bug-fix pipeline (scheduled issue selection, agent fix, auto-merge gate, post-merge monitor with auto-revert) surfaced eight distinct pitfalls across gh CLI behavior, GitHub Actions `workflow_run` semantics, and git race conditions.
+Building an end-to-end autonomous bug-fix pipeline (scheduled issue selection, agent fix, auto-merge gate, post-merge monitor with auto-revert) surfaced nine distinct pitfalls across gh CLI behavior, GitHub Actions `workflow_run` semantics, bot identity formats, and git race conditions.
 
 ## Solution
 
@@ -65,14 +65,21 @@ fi
 
 ### 5. Verify PR author identity before auto-merge
 
-The auto-merge gate must confirm the PR was created by the expected bot identity, not by a human who happened to use the `bot-fix/` branch prefix:
+The auto-merge gate must confirm the PR was created by a recognized bot identity, not by a human who happened to use the `bot-fix/` branch prefix. GitHub Apps use `app/<slug>` as their author login (e.g., `app/claude` for claude-code-action), NOT the `<name>[bot]` suffix convention used by GitHub Actions bots. Match all known formats explicitly:
 
 ```bash
 PR_AUTHOR=$(gh pr view "$PR_NUM" --json author --jq '.author.login // empty')
-if [[ "$PR_AUTHOR" != "github-actions[bot]" && "$PR_AUTHOR" != *"[bot]"* ]]; then
-  exit 0  # skip auto-merge
+ALLOWED=false
+case "$PR_AUTHOR" in
+  github-actions\[bot\]|*\[bot\]*|app/claude) ALLOWED=true ;;
+esac
+if [[ "$ALLOWED" != "true" ]]; then
+  echo "::warning::PR #$PR_NUM author is '$PR_AUTHOR', not a recognized bot. Skipping auto-merge."
+  exit 0
 fi
 ```
+
+When onboarding a new GitHub App, add its identity to the `case` pattern and to the CLA allowlist in `cla.yml`.
 
 ### 6. Mechanical priority check prevents privilege escalation
 
@@ -112,6 +119,15 @@ if [[ "$HTTP_CODE" =~ ^2 ]]; then
 else
   echo "::warning::Discord notification failed (HTTP $HTTP_CODE)"
 fi
+```
+
+### 9. Every workflow step using `gh` CLI needs GH_TOKEN
+
+The `gh` CLI requires `GH_TOKEN` or `GITHUB_TOKEN` in the environment to authenticate. A step that calls `gh pr view` without the token exits with code 4 (auth failure). If the step is not marked `continue-on-error: true`, this fails the entire workflow -- even for non-critical steps like Discord notifications. Always set `GH_TOKEN` in the `env:` block of every `run:` step that uses `gh`:
+
+```yaml
+env:
+  GH_TOKEN: ${{ github.token }}
 ```
 
 ## Key Insight
