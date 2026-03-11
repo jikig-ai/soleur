@@ -158,12 +158,18 @@ jobs:
           PR_NUM: ${{ steps.detect_pr.outputs.pr_number }}
           ISSUE_NUM: ${{ steps.select.outputs.issue }}
         run: |
-          # Verify PR was created by the expected bot identity
+          # Verify PR was created by a known bot identity.
+          # claude-code-action creates PRs as "app/claude" (GitHub App slug,
+          # not the [bot] suffix convention). Match both patterns.
           PR_AUTHOR=$(gh pr view "$PR_NUM" \
             --json author \
             --jq '.author.login // empty')
-          if [[ "$PR_AUTHOR" != "github-actions[bot]" && "$PR_AUTHOR" != *"[bot]"* ]]; then
-            echo "::warning::PR #$PR_NUM author is '$PR_AUTHOR', not a bot. Skipping auto-merge."
+          ALLOWED=false
+          case "$PR_AUTHOR" in
+            github-actions\[bot\]|*\[bot\]*|app/claude) ALLOWED=true ;;
+          esac
+          if [[ "$ALLOWED" != "true" ]]; then
+            echo "::warning::PR #$PR_NUM author is '$PR_AUTHOR', not a recognized bot. Skipping auto-merge."
             exit 0
           fi
 
@@ -205,6 +211,7 @@ jobs:
       - name: Discord notification (auto-merge queued)
         if: steps.detect_pr.outputs.pr_number
         env:
+          GH_TOKEN: ${{ github.token }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           PR_NUM: ${{ steps.detect_pr.outputs.pr_number }}
         run: |
