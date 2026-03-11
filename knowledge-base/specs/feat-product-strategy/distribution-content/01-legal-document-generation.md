@@ -2,7 +2,7 @@
 
 **Blog post:** https://soleur.ai/blog/case-study-legal-document-generation/
 **Title:** "How We Generated 9 Legal Documents in Days, Not Months"
-**Publish date:** Wed 2026-03-12
+**Publish date:** Thu 2026-03-12
 
 ---
 

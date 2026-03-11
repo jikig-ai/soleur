@@ -2,7 +2,7 @@
 
 **Blog post:** https://soleur.ai/blog/case-study-brand-guide-creation/
 **Title:** "From Scattered Positioning to a Full Brand Guide in Two Sessions"
-**Publish date:** Fri 2026-03-21
+**Publish date:** Tue 2026-03-24
 
 ---
 

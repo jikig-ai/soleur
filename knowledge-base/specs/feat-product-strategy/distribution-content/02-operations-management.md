@@ -2,7 +2,7 @@
 
 **Blog post:** https://soleur.ai/blog/case-study-operations-management/
 **Title:** "Building an Operations Department for a One-Person Company"
-**Publish date:** Fri 2026-03-14
+**Publish date:** Tue 2026-03-17
 
 ---
 

@@ -2,7 +2,7 @@
 
 **Blog post:** https://soleur.ai/blog/case-study-business-validation/
 **Title:** "Running a Business Validation Workshop With AI Gates"
-**Publish date:** Wed 2026-03-26
+**Publish date:** Thu 2026-03-26
 
 ---
 

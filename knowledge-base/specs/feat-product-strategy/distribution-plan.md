@@ -2,18 +2,18 @@
 
 **Goal:** 5+ expressions of interest from solo technical founders for the product validation plan (#430).
 **Signal types:** Discord message, GitHub star from non-creator, social reply asking to try it, DM requesting access.
-**Campaign duration:** 3 weeks (2026-03-12 to 2026-04-01)
-**Cadence:** 2 posts per week (Wednesday + Friday), staggered across platforms
+**Campaign duration:** 3 weeks (2026-03-12 to 2026-03-30)
+**Cadence:** 2 posts per week (Tuesday + Thursday), staggered across platforms
 
 ## Publishing Calendar
 
-| # | Date (Wed/Fri) | Case Study | Slug | Rationale |
+| # | Date (Tue/Thu) | Case Study | Slug | Rationale |
 |---|---------------|------------|------|-----------|
-| 1 | Wed 2026-03-12 | Legal Document Generation | `case-study-legal-document-generation` | Lead with highest cost comparison (EUR 9k-25k saved). Concrete, measurable, universally needed by founders. |
-| 2 | Fri 2026-03-14 | Operations Management | `case-study-operations-management` | Relatable pain -- every founder tracks expenses in spreadsheets. Low barrier to "I need this." |
-| 3 | Wed 2026-03-19 | Competitive Intelligence | `case-study-competitive-intelligence` | Highest complexity demo. 17 competitors + battlecards in one session lands hard with technical founders. |
-| 4 | Fri 2026-03-21 | Brand Guide Creation | `case-study-brand-guide-creation` | Shows breadth beyond engineering. Marketing capability surprises technical founders who assume "AI = code." |
-| 5 | Wed 2026-03-26 | Business Validation | `case-study-business-validation` | Anchor piece. The PIVOT verdict is the most compelling meta-story -- AI telling the founder to change direction. Save for last so the audience has context from the prior 4 studies. |
+| 1 | Thu 2026-03-12 | Legal Document Generation | `case-study-legal-document-generation` | Lead with highest cost comparison (EUR 9k-25k saved). Concrete, measurable, universally needed by founders. |
+| 2 | Tue 2026-03-17 | Operations Management | `case-study-operations-management` | Relatable pain -- every founder tracks expenses in spreadsheets. Low barrier to "I need this." |
+| 3 | Thu 2026-03-19 | Competitive Intelligence | `case-study-competitive-intelligence` | Highest complexity demo. 17 competitors + battlecards in one session lands hard with technical founders. |
+| 4 | Tue 2026-03-24 | Brand Guide Creation | `case-study-brand-guide-creation` | Shows breadth beyond engineering. Marketing capability surprises technical founders who assume "AI = code." |
+| 5 | Thu 2026-03-26 | Business Validation | `case-study-business-validation` | Anchor piece. The PIVOT verdict is the most compelling meta-story -- AI telling the founder to change direction. Save for last so the audience has context from the prior 4 studies. |
 
 ### Sequencing Rationale
 
@@ -47,7 +47,7 @@
 - **Format:** 500-800 word building-in-public update. Founder narrative, cost comparisons front-and-center.
 - **Tone:** Candid, first-person, lean into "I built this for myself and here's what happened."
 - **Automation:** Manual. Copy from pre-generated content file.
-- **Timing:** Post Thursday mornings (day after X thread, gives IH audience fresh content on their peak day).
+- **Timing:** Post Friday mornings (day after Discord/X thread, gives IH audience fresh content on their peak day).
 - **CTA:** "Has anyone else tried [domain] with AI? What worked?"
 
 ### Reddit (r/solopreneur, r/Entrepreneur)
@@ -55,7 +55,7 @@
 - **Format:** Value-first text post. No self-promotion in title. Frame as experience/lesson, not product announcement.
 - **Tone:** Helpful, specific, non-promotional. Lead with the problem and numbers, mention Soleur only in context.
 - **Automation:** Manual. Copy from pre-generated content file.
-- **Timing:** Post Friday afternoons UTC (US morning, weekend reading mode).
+- **Timing:** Post Monday afternoons UTC (US morning, start-of-week reading mode).
 - **Subreddits:** r/solopreneur (primary), r/Entrepreneur (secondary). One post per study, alternate subreddits.
 - **CTA:** None explicit. Let comments drive. Reply to questions with specifics.
 
@@ -64,18 +64,18 @@
 - **Format:** Title + URL submission only. No "Show HN" unless it's a direct demo.
 - **Tone:** N/A -- title must be factual and non-clickbait. HN penalizes marketing language.
 - **Automation:** Manual submission.
-- **Timing:** Post Tuesday/Wednesday 14:00-16:00 UTC (HN peak).
+- **Timing:** Post Thursday 14:00-16:00 UTC (HN peak, same day as Discord/X).
 - **Strategy:** Submit Legal and Business Validation studies only -- these have the strongest HN appeal (concrete numbers, meta-narrative). Don't burn goodwill by submitting all 5.
 
 ## Platform-by-Study Matrix
 
 | Case Study | Discord | X/Twitter | IndieHackers | Reddit | HN |
 |-----------|---------|-----------|-------------|--------|-----|
-| 1. Legal | Wed 3/12 | Wed 3/12 | Thu 3/13 | Fri 3/14 (r/solopreneur) | Wed 3/12 |
-| 2. Operations | Fri 3/14 | Fri 3/14 | -- | -- | -- |
-| 3. Competitive Intel | Wed 3/19 | Wed 3/19 | Thu 3/20 | Fri 3/21 (r/Entrepreneur) | -- |
-| 4. Brand Guide | Fri 3/21 | Fri 3/21 | -- | -- | -- |
-| 5. Business Validation | Wed 3/26 | Wed 3/26 | Thu 3/27 | Fri 3/28 (r/solopreneur) | Wed 3/26 |
+| 1. Legal | Thu 3/12 | Thu 3/12 | Fri 3/13 | Mon 3/16 (r/solopreneur) | Thu 3/12 |
+| 2. Operations | Tue 3/17 | Tue 3/17 | -- | -- | -- |
+| 3. Competitive Intel | Thu 3/19 | Thu 3/19 | Fri 3/20 | Mon 3/23 (r/Entrepreneur) | -- |
+| 4. Brand Guide | Tue 3/24 | Tue 3/24 | -- | -- | -- |
+| 5. Business Validation | Thu 3/26 | Thu 3/26 | Fri 3/27 | Mon 3/30 (r/solopreneur) | Thu 3/26 |
 
 **Rationale for selective posting:** IndieHackers, Reddit, and HN audiences overlap. Posting all 5 on each looks spammy. Legal, Competitive Intel, and Business Validation have the strongest standalone value for those platforms. Operations and Brand Guide are best suited for Discord + X where we own the audience relationship.
 
@@ -222,4 +222,4 @@ skill: soleur:social-distribute
 - **Reddit self-promotion rules:** All Reddit content is written value-first. Soleur is mentioned as context, not as a pitch. If a post gets flagged, do not repost -- move to the next study.
 - **HN flag risk:** Only submit 2 of 5 studies. If the first gets flagged or sinks, skip the second. HN audience is allergic to marketing.
 - **X engagement bait:** Every hook tweet delivers standalone value. No "thread" announcements, no engagement farming questions.
-- **Content fatigue:** Wednesday/Friday cadence with platform staggering ensures no audience sees the same story twice in one day.
+- **Content fatigue:** Tuesday/Thursday cadence with platform staggering ensures no audience sees the same story twice in one day.

@@ -2,7 +2,7 @@
 
 **Blog post:** https://soleur.ai/blog/case-study-competitive-intelligence/
 **Title:** "Tracking 17 Competitors in One Session -- With Battlecards"
-**Publish date:** Wed 2026-03-19
+**Publish date:** Thu 2026-03-19
 
 ---
 
