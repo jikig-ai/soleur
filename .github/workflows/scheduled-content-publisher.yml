@@ -1,0 +1,95 @@
+# Scheduled content publisher for the 3-week case study distribution campaign.
+# Posts pre-generated content to Discord (webhook), X/Twitter (API), and
+# creates GitHub issues for manual platforms (IndieHackers, Reddit, HN).
+# Implements #530: scheduled content publisher workflow.
+#
+# Phase 1: workflow_dispatch only (validate end-to-end).
+# Phase 2: add cron triggers after validation.
+#
+# Security: This workflow does NOT use untrusted event inputs in run: commands.
+# The CASE_STUDY env var originates from a constrained choice input (1-5) and
+# is validated by the content-publisher.sh case statement before use.
+
+name: "Scheduled: Content Publisher"
+
+on:
+  workflow_dispatch:
+    inputs:
+      case_study:
+        description: 'Case study number (1-5)'
+        required: true
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '3'
+          - '4'
+          - '5'
+
+concurrency:
+  group: scheduled-content-publisher
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Ensure labels exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create "action-required" \
+            --description "Manual action needed from the CEO" \
+            --color "D93F0B" 2>/dev/null || true
+          gh label create "content-publisher" \
+            --description "Scheduled content publisher workflow" \
+            --color "0E8A16" 2>/dev/null || true
+
+      - name: Publish content
+        env:
+          CASE_STUDY: ${{ inputs.case_study }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/content-publisher.sh "$CASE_STUDY"
+
+      - name: Discord notification (failure)
+        if: failure()
+        env:
+          CASE_STUDY: ${{ inputs.case_study }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if [[ -z "${DISCORD_WEBHOOK_URL:-}" ]]; then
+            echo "DISCORD_WEBHOOK_URL not set, skipping failure notification"
+            exit 0
+          fi
+          RUN_URL="${REPO_URL}/actions/runs/${RUN_ID}"
+          MESSAGE=$(printf '**Content Publisher failed**\n\nCase study: %s\nWorkflow run: %s\n\nCheck logs for details.' \
+            "$CASE_STUDY" "$RUN_URL")
+          PAYLOAD=$(jq -n \
+            --arg content "$MESSAGE" \
+            --arg username "Sol" \
+            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
+            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL")
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Discord failure notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Discord failure notification failed (HTTP $HTTP_CODE)"
+          fi

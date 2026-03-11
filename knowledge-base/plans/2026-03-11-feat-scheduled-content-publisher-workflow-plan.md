@@ -453,20 +453,20 @@ Per learning `2026-02-21-github-actions-workflow-security-patterns.md`: use `--j
 
 ## Acceptance Criteria
 
-- [ ] `workflow_dispatch` trigger with `case_study` choice input (1-5) works end-to-end
-- [ ] Discord posts fire automatically via webhook with correct content, `username: Sol`, `avatar_url`, and `allowed_mentions: {parse: []}`
-- [ ] X/Twitter threads post via `x-community.sh post-tweet` with `--reply-to` chaining (hook + body + final)
-- [ ] GitHub issue created on publish days for manual platforms (IndieHackers, Reddit, HN) with pre-written content and `action-required` label
-- [ ] On X API 402 error, workflow creates a fallback issue with tweet text instead of failing
-- [ ] On Discord webhook failure, workflow logs the error and continues with other platforms
-- [ ] Workflow logs confirm successful posting or surface errors clearly with `[ok]` prefix on success
-- [ ] Content file not found produces a clear error message, not a silent failure
-- [ ] `timeout-minutes: 10` set on the job
-- [ ] Concurrency group prevents overlapping runs
-- [ ] Labels pre-created before issue creation
-- [ ] Action SHAs pinned (not tag references)
-- [ ] Re-runs do not create duplicate manual-platform issues
-- [ ] Partial X thread failure creates a resume issue with the last successful tweet ID
+- [x] `workflow_dispatch` trigger with `case_study` choice input (1-5) works end-to-end
+- [x] Discord posts fire automatically via webhook with correct content, `username: Sol`, `avatar_url`, and `allowed_mentions: {parse: []}`
+- [x] X/Twitter threads post via `x-community.sh post-tweet` with `--reply-to` chaining (hook + body + final)
+- [x] GitHub issue created on publish days for manual platforms (IndieHackers, Reddit, HN) with pre-written content and `action-required` label
+- [x] On X API 402 error, workflow creates a fallback issue with tweet text instead of failing
+- [x] On Discord webhook failure, workflow logs the error and continues with other platforms
+- [x] Workflow logs confirm successful posting or surface errors clearly with `[ok]` prefix on success
+- [x] Content file not found produces a clear error message, not a silent failure
+- [x] `timeout-minutes: 10` set on the job
+- [x] Concurrency group prevents overlapping runs
+- [x] Labels pre-created before issue creation
+- [x] Action SHAs pinned (not tag references)
+- [x] Re-runs do not create duplicate manual-platform issues
+- [x] Partial X thread failure creates a resume issue with the last successful tweet ID
 
 ## Test Scenarios
 
