@@ -261,6 +261,16 @@ Project principles organized by domain. Add principles as you learn them.
 
 ### Prefer
 
+## Legal
+
+### Always
+
+- Always verify a processor's DPA and transfer mechanism (SCCs, DPF, adequacy decision) before asserting compliance posture in published legal documents — unsupported claims create regulatory exposure that is harder to fix than to prevent
+
+### Never
+
+### Prefer
+
 ## Content
 
 ### Always
