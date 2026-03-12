@@ -320,14 +320,14 @@ Name all three webhooks "Sol" at creation time for audit log consistency. (Sourc
 
 ## Acceptance Criteria
 
-- [ ] `version-bump-and-release.yml` posts release announcements to `DISCORD_RELEASES_WEBHOOK_URL` when set, falls back to `DISCORD_WEBHOOK_URL` when not set
-- [ ] `content-publisher.sh` posts blog/case-study content to `DISCORD_BLOG_WEBHOOK_URL` when set, falls back to `DISCORD_WEBHOOK_URL` when not set
-- [ ] `scheduled-content-publisher.yml` passes the new `DISCORD_BLOG_WEBHOOK_URL` secret to the publish step
-- [ ] `social-distribute` skill documentation references `DISCORD_BLOG_WEBHOOK_URL`
-- [ ] All existing CI workflows that use `DISCORD_WEBHOOK_URL` for failure notifications continue to work unchanged
-- [ ] All webhook payloads continue to include `username`, `avatar_url`, and `allowed_mentions: {parse: []}` fields
-- [ ] `discord-setup.sh write-env` supports the new optional webhook variables
-- [ ] The fallback pattern is tested: workflows work correctly when only `DISCORD_WEBHOOK_URL` is set
+- [x] `version-bump-and-release.yml` posts release announcements to `DISCORD_RELEASES_WEBHOOK_URL` when set, falls back to `DISCORD_WEBHOOK_URL` when not set
+- [x] `content-publisher.sh` posts blog/case-study content to `DISCORD_BLOG_WEBHOOK_URL` when set, falls back to `DISCORD_WEBHOOK_URL` when not set
+- [x] `scheduled-content-publisher.yml` passes the new `DISCORD_BLOG_WEBHOOK_URL` secret to the publish step
+- [x] `social-distribute` skill documentation references `DISCORD_BLOG_WEBHOOK_URL`
+- [x] All existing CI workflows that use `DISCORD_WEBHOOK_URL` for failure notifications continue to work unchanged
+- [x] All webhook payloads continue to include `username`, `avatar_url`, and `allowed_mentions: {parse: []}` fields
+- [x] `discord-setup.sh write-env` supports the new optional webhook variables
+- [x] The fallback pattern is tested: workflows work correctly when only `DISCORD_WEBHOOK_URL` is set
 
 ## Test Scenarios
 
