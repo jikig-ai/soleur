@@ -2,13 +2,23 @@
 title: Restructure knowledge-base by domain taxonomy
 type: refactor
 date: 2026-03-12
+updated: 2026-03-12
 ---
 
 # Restructure knowledge-base by Domain Taxonomy
 
+[Updated 2026-03-12] Simplified after plan review — cut `features/` grouping (#568) and `overview/` → `project/` rename (#569) to separate PRs.
+
 ## Overview
 
-Reorganize `knowledge-base/` to align with Soleur's canonical 8-department taxonomy. Domain-specific content moves into domain folders, shared feature artifacts group under `features/`, and `overview/` becomes `project/`. ~60 files outside knowledge-base/ contain ~200+ hardcoded path references that must update atomically.
+Move domain-specific content from `knowledge-base/overview/` and scattered directories into canonical domain folders. ~12 git mv operations, ~37 file updates.
+
+## Non-Goals
+
+- Moving specs/, plans/, brainstorms/, learnings/ (tracked in #568)
+- Renaming overview/ to project/ (tracked in #569)
+- Updating archived file contents (prose, not executable)
+- Creating empty domain dirs with .gitkeep (create on demand)
 
 ## Problem Statement
 
@@ -16,23 +26,17 @@ Reorganize `knowledge-base/` to align with Soleur's canonical 8-department taxon
 
 ## Proposed Solution
 
-Three structural changes in a single atomic commit:
-
-1. **Domain directories** — move domain content into 8 canonical department folders
-2. **Features grouping** — move specs/, plans/, brainstorms/, learnings/ under `features/`
-3. **Project directory** — rename `overview/` to `project/` (project-level docs only)
+Move domain content into canonical department folders in a single atomic commit. `overview/` stays but loses its domain docs. specs/, plans/, brainstorms/, learnings/ stay at root.
 
 ## Technical Approach
 
-### Complete Move Manifest
-
-#### Pre-move fixes (resolve conflicts first)
+### Pre-move fix
 
 | Action | Source | Destination | Reason |
 |--------|--------|-------------|--------|
 | Rename | `knowledge-base/marketing/content-strategy.md` | `knowledge-base/marketing/case-study-distribution-plan.md` | Name collision — this is a distribution plan, not the content strategy |
 
-#### Domain moves
+### Move Manifest
 
 | Source | Destination |
 |--------|-------------|
@@ -49,43 +53,31 @@ Three structural changes in a single atomic commit:
 | `knowledge-base/community/` | `knowledge-base/support/community/` |
 | `knowledge-base/audits/2026-03-05-pr438-security-audit.md` | `knowledge-base/engineering/audits/2026-03-05-pr438-security-audit.md` |
 
-#### Project rename (overview/ → project/)
+### Unchanged directories
 
-| Source | Destination |
-|--------|-------------|
-| `knowledge-base/overview/constitution.md` | `knowledge-base/project/constitution.md` |
-| `knowledge-base/overview/README.md` | `knowledge-base/project/README.md` |
-| `knowledge-base/overview/components/` | `knowledge-base/project/components/` |
+- `knowledge-base/overview/` — stays with constitution.md, README.md, components/
+- `knowledge-base/specs/` — stays at root (deferred to #568)
+- `knowledge-base/plans/` — stays at root (deferred to #568)
+- `knowledge-base/brainstorms/` — stays at root (deferred to #568)
+- `knowledge-base/learnings/` — stays at root (deferred to #568)
+- `knowledge-base/sales/` — already conforms to domain taxonomy
 
-#### Features grouping
+### Implementation Steps
 
-| Source | Destination |
-|--------|-------------|
-| `knowledge-base/specs/` | `knowledge-base/features/specs/` |
-| `knowledge-base/plans/` | `knowledge-base/features/plans/` |
-| `knowledge-base/brainstorms/` | `knowledge-base/features/brainstorms/` |
-| `knowledge-base/learnings/` | `knowledge-base/features/learnings/` |
-
-#### Empty domain dirs (with .gitkeep)
-
-- `knowledge-base/finance/.gitkeep`
-- `knowledge-base/legal/.gitkeep`
-
-(engineering/ and support/ get content from moves; marketing/, product/, operations/, sales/ already exist or get content)
-
-### Implementation Phases
-
-#### Phase 1: Pre-move conflict resolution
-
-1. Rename `knowledge-base/marketing/content-strategy.md` → `knowledge-base/marketing/case-study-distribution-plan.md`
-2. Create target directories: `mkdir -p knowledge-base/{project,features,product,operations,support,engineering/audits,marketing/audits,finance,legal}`
-
-#### Phase 2: Execute git mv operations
-
-Order matters — move files before directories to avoid conflicts:
+#### Step 1: Prep
 
 ```bash
-# 1. Individual files from overview/ to domain folders
+# Rename conflicting file
+git mv knowledge-base/marketing/content-strategy.md knowledge-base/marketing/case-study-distribution-plan.md
+
+# Create target directories
+mkdir -p knowledge-base/{product,operations,support,engineering/audits,marketing/audits}
+```
+
+#### Step 2: Execute git mv
+
+```bash
+# Strategy docs from overview/ to domain folders
 git mv knowledge-base/overview/brand-guide.md knowledge-base/marketing/
 git mv knowledge-base/overview/content-strategy.md knowledge-base/marketing/
 git mv knowledge-base/overview/marketing-strategy.md knowledge-base/marketing/
@@ -93,165 +85,99 @@ git mv knowledge-base/overview/business-validation.md knowledge-base/product/
 git mv knowledge-base/overview/competitive-intelligence.md knowledge-base/product/
 git mv knowledge-base/overview/pricing-strategy.md knowledge-base/product/
 
-# 2. overview/ project-level files → project/
-git mv knowledge-base/overview/constitution.md knowledge-base/project/
-git mv knowledge-base/overview/README.md knowledge-base/project/
-git mv knowledge-base/overview/components knowledge-base/project/
-
-# 3. Directory moves
+# Directory moves
 git mv knowledge-base/audits/soleur-ai knowledge-base/marketing/audits/
 git mv knowledge-base/audits/2026-03-05-pr438-security-audit.md knowledge-base/engineering/audits/
 git mv knowledge-base/design knowledge-base/product/
 git mv knowledge-base/ops/expenses.md knowledge-base/operations/
 git mv knowledge-base/ops/domains.md knowledge-base/operations/
 git mv knowledge-base/community knowledge-base/support/
-
-# 4. Features grouping
-git mv knowledge-base/specs knowledge-base/features/
-git mv knowledge-base/plans knowledge-base/features/
-git mv knowledge-base/brainstorms knowledge-base/features/
-git mv knowledge-base/learnings knowledge-base/features/
-
-# 5. Cleanup empty dirs (git doesn't track them, but remove if still present)
-# 6. Create .gitkeep for empty domain dirs
-touch knowledge-base/finance/.gitkeep
-touch knowledge-base/legal/.gitkeep
 ```
 
-#### Phase 3: Update path references (Tier 1 — executable code)
+#### Step 3: Update path references
 
-These cause runtime failures if missed:
+All old→new replacements across plugins/, scripts/, .github/:
 
-| File | Old Pattern | New Pattern |
-|------|------------|-------------|
-| `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` | `knowledge-base/specs/` | `knowledge-base/features/specs/` |
-| `plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` | `knowledge-base/{brainstorms,plans,specs}/` | `knowledge-base/features/{brainstorms,plans,specs}/` |
-| `scripts/generate-article-30-register.sh` | `knowledge-base/specs/archive/` | `knowledge-base/features/specs/archive/` |
-| `scripts/content-publisher.sh` | (verify — may already be correct at `knowledge-base/marketing/`) | no change if already correct |
-| `.github/workflows/scheduled-competitive-analysis.yml` | `knowledge-base/overview/competitive-intelligence.md` | `knowledge-base/product/competitive-intelligence.md` |
-| `.github/workflows/scheduled-community-monitor.yml` | `knowledge-base/community/`, `knowledge-base/overview/brand-guide.md` | `knowledge-base/support/community/`, `knowledge-base/marketing/brand-guide.md` |
+| Old Pattern | New Pattern | Files |
+|-------------|------------|-------|
+| `knowledge-base/overview/brand-guide.md` | `knowledge-base/marketing/brand-guide.md` | ~15 agents, ~10 skills, 1 workflow |
+| `knowledge-base/overview/business-validation.md` | `knowledge-base/product/business-validation.md` | 3 agents, 2 skills |
+| `knowledge-base/overview/competitive-intelligence.md` | `knowledge-base/product/competitive-intelligence.md` | 1 agent, 1 skill, 1 workflow |
+| `knowledge-base/overview/content-strategy.md` | `knowledge-base/marketing/content-strategy.md` | 1 agent |
+| `knowledge-base/overview/pricing-strategy.md` | `knowledge-base/product/pricing-strategy.md` | 1 agent |
+| `knowledge-base/ops/` | `knowledge-base/operations/` | 5 agents |
+| `knowledge-base/community/` | `knowledge-base/support/community/` | 2 agents, 1 skill, 1 workflow |
+| `knowledge-base/design/` | `knowledge-base/product/design/` | 1 agent |
 
-#### Phase 4: Update path references (Tier 2 — agent instructions)
+**Specific files to update:**
 
-~25 agent files. Use `replace_all` for common patterns:
+Agents:
+- `plugins/soleur/agents/marketing/brand-architect.md` — brand-guide
+- `plugins/soleur/agents/marketing/{cmo,growth-strategist,programmatic-seo-specialist,paid-media-strategist,pricing-strategist,analytics-analyst,conversion-optimizer,copywriter,retention-strategist}.md` — brand-guide
+- `plugins/soleur/agents/product/{business-validator,competitive-intelligence,cpo}.md` — business-validation, competitive-intelligence, brand-guide
+- `plugins/soleur/agents/product/design/ux-design-lead.md` — brand-guide, design/
+- `plugins/soleur/agents/operations/{ops-advisor,ops-research,ops-provisioner,coo}.md` — ops/
+- `plugins/soleur/agents/finance/cfo.md` — ops/, brand-guide
+- `plugins/soleur/agents/sales/cro.md` — brand-guide
+- `plugins/soleur/agents/support/{community-manager,cco}.md` — community/, brand-guide
 
-| Old Pattern | New Pattern | Files Affected |
-|-------------|------------|----------------|
-| `knowledge-base/overview/brand-guide.md` | `knowledge-base/marketing/brand-guide.md` | ~15 agents (brand-architect, all marketing agents, cpo, cfo, cro, community-manager, ux-design-lead, ops-provisioner) |
-| `knowledge-base/overview/business-validation.md` | `knowledge-base/product/business-validation.md` | business-validator, cpo, competitive-intelligence |
-| `knowledge-base/overview/competitive-intelligence.md` | `knowledge-base/product/competitive-intelligence.md` | competitive-intelligence |
-| `knowledge-base/overview/content-strategy.md` | `knowledge-base/marketing/content-strategy.md` | competitive-intelligence |
-| `knowledge-base/overview/pricing-strategy.md` | `knowledge-base/product/pricing-strategy.md` | competitive-intelligence |
-| `knowledge-base/ops/` | `knowledge-base/operations/` | ops-advisor, ops-research, ops-provisioner, coo, cfo |
-| `knowledge-base/community/` | `knowledge-base/support/community/` | community-manager, cco |
-| `knowledge-base/design/` | `knowledge-base/product/design/` | ux-design-lead |
-| `knowledge-base/learnings/` | `knowledge-base/features/learnings/` | learnings-researcher (13 category paths), infra-security |
+Skills:
+- `plugins/soleur/skills/brainstorm/references/brainstorm-brand-workshop.md` — brand-guide
+- `plugins/soleur/skills/brainstorm/references/brainstorm-validation-workshop.md` — business-validation
+- `plugins/soleur/skills/competitive-analysis/SKILL.md` — competitive-intelligence
+- `plugins/soleur/skills/community/SKILL.md` — brand-guide, community/
+- `plugins/soleur/skills/{discord-content,content-writer,social-distribute,growth,release-docs,ship}/SKILL.md` — brand-guide
 
-#### Phase 5: Update path references (Tier 3 — skill instructions)
+Workflows:
+- `.github/workflows/scheduled-competitive-analysis.yml` — competitive-intelligence
+- `.github/workflows/scheduled-community-monitor.yml` — community/, brand-guide
 
-~20 skill files. Biggest changes:
+Scripts:
+- `scripts/content-publisher.sh` — already correct (`knowledge-base/marketing/distribution-content`), verify only
 
-| File | Scope |
-|------|-------|
-| `plugins/soleur/skills/compound/SKILL.md` | constitution, learnings, specs, brainstorms, plans |
-| `plugins/soleur/skills/compound-capture/SKILL.md` | learnings (30+ refs), constitution, components, README |
-| `plugins/soleur/skills/compound-capture/references/yaml-schema.md` | 13 category-to-directory learnings paths |
-| `plugins/soleur/skills/compound-capture/assets/resolution-template.md` | learnings cross-ref |
-| `plugins/soleur/skills/compound-capture/assets/critical-pattern-template.md` | learnings paths |
-| `plugins/soleur/skills/plan/SKILL.md` | constitution, specs, plans, brainstorms, learnings |
-| `plugins/soleur/skills/brainstorm/SKILL.md` | brainstorms, specs, learnings |
-| `plugins/soleur/skills/brainstorm/references/brainstorm-brand-workshop.md` | brand-guide |
-| `plugins/soleur/skills/brainstorm/references/brainstorm-validation-workshop.md` | business-validation |
-| `plugins/soleur/skills/work/SKILL.md` | constitution, specs |
-| `plugins/soleur/skills/work/references/work-lifecycle-parallel.md` | specs |
-| `plugins/soleur/skills/ship/SKILL.md` | brainstorms, plans, specs, learnings, brand-guide |
-| `plugins/soleur/skills/archive-kb/SKILL.md` | brainstorms, plans, specs |
-| `plugins/soleur/skills/merge-pr/SKILL.md` | brainstorms, plans, specs |
-| `plugins/soleur/skills/one-shot/SKILL.md` | specs |
-| `plugins/soleur/skills/spec-templates/SKILL.md` | specs, components |
-| `plugins/soleur/skills/deepen-plan/SKILL.md` | plans, learnings |
-| `plugins/soleur/skills/competitive-analysis/SKILL.md` | competitive-intelligence |
-| `plugins/soleur/skills/discord-content/SKILL.md` | brand-guide |
-| `plugins/soleur/skills/content-writer/SKILL.md` | brand-guide |
-| `plugins/soleur/skills/social-distribute/SKILL.md` | brand-guide |
-| `plugins/soleur/skills/growth/SKILL.md` | brand-guide |
-| `plugins/soleur/skills/community/SKILL.md` | brand-guide, community |
-| `plugins/soleur/skills/release-docs/SKILL.md` | brand-guide |
-| `plugins/soleur/skills/brainstorm-techniques/SKILL.md` | brainstorms |
+Todos (informational, not runtime):
+- `todos/013-complete-p1-star-count-inconsistency.md` — business-validation
+- `todos/016-complete-p2-stale-polsia-business-validation.md` — business-validation
 
-#### Phase 6: Update path references (Tier 4 — commands and AGENTS.md)
-
-| File | Old Pattern | New Pattern |
-|------|------------|-------------|
-| `AGENTS.md` | `knowledge-base/overview/constitution.md` | `knowledge-base/project/constitution.md` |
-| `plugins/soleur/commands/sync.md` | `knowledge-base/{learnings,brainstorms,specs,plans,overview/components}` | `knowledge-base/features/{learnings,brainstorms,specs,plans}`, `knowledge-base/project/components` |
-
-#### Phase 7: Update internal knowledge-base cross-references
-
-Files within knowledge-base/ that reference other knowledge-base/ files by path (e.g., brand-guide referencing constitution). Grep for old paths within the new knowledge-base/ structure and update.
-
-Skip archived files (`features/specs/archive/`, `features/plans/archive/`, `features/brainstorms/archive/`) — these are historical and updating them adds risk with no functional benefit.
-
-#### Phase 8: Update documentation
-
-- Update `knowledge-base/project/components/knowledge-base.md` directory tree diagram
-- Update `knowledge-base/project/README.md` directory structure
-- Verify README.md component counts still accurate
-
-#### Phase 9: Verification
+#### Step 4: Verify
 
 ```bash
 # Must all return zero results
-grep -r 'knowledge-base/overview/' plugins/ scripts/ .github/ AGENTS.md
+grep -r 'knowledge-base/overview/brand-guide' plugins/ scripts/ .github/ AGENTS.md todos/
+grep -r 'knowledge-base/overview/business-validation' plugins/ scripts/ .github/ todos/
+grep -r 'knowledge-base/overview/competitive-intelligence' plugins/ scripts/ .github/
+grep -r 'knowledge-base/overview/content-strategy' plugins/ scripts/ .github/
+grep -r 'knowledge-base/overview/pricing-strategy' plugins/ scripts/ .github/
+grep -r 'knowledge-base/overview/marketing-strategy' plugins/ scripts/ .github/
 grep -r 'knowledge-base/ops/' plugins/ scripts/ .github/
 grep -r 'knowledge-base/community/' plugins/ scripts/ .github/
 grep -r 'knowledge-base/design/' plugins/ scripts/ .github/
 grep -r 'knowledge-base/audits/' plugins/ scripts/ .github/
-grep -rP 'knowledge-base/(specs|plans|brainstorms|learnings)/' plugins/ scripts/ .github/ --include='*.md' --include='*.yml' --include='*.sh' | grep -v 'knowledge-base/features/'
 ```
 
 ## Acceptance Criteria
 
-- [ ] All 8 canonical domain directories exist under knowledge-base/
-- [ ] `overview/` no longer exists — renamed to `project/`
-- [ ] specs, plans, brainstorms, learnings under `features/`
+- [ ] Domain content moved to canonical domain folders (marketing, product, operations, support, engineering)
+- [ ] `overview/` retains only project-level docs (constitution, README, components)
 - [ ] All hardcoded path references updated (grep verification returns zero stale refs)
-- [ ] `worktree-manager.sh` creates spec dirs under `features/specs/`
-- [ ] `archive-kb.sh` discovers artifacts under `features/`
-- [ ] CI workflows (`scheduled-competitive-analysis`, `scheduled-community-monitor`) reference new paths
-- [ ] `sync.md` bootstraps new directory structure
+- [ ] CI workflows reference new paths
 - [ ] Security audit lives under `engineering/`, not `marketing/`
+- [ ] `sales/` unchanged
 
 ## Test Scenarios
 
-- Given a new worktree `feat-test`, when `worktree-manager.sh feature test` runs, then spec dir is created at `knowledge-base/features/specs/feat-test/`
-- Given artifacts exist for a merged branch, when `cleanup-merged` runs, then artifacts are archived from `knowledge-base/features/` paths
 - Given `scheduled-competitive-analysis.yml` runs, when the agent writes, then the report lands at `knowledge-base/product/competitive-intelligence.md`
+- Given `scheduled-community-monitor.yml` runs, when the agent writes, then the digest lands at `knowledge-base/support/community/`
 - Given a brand workshop runs, when brand-architect writes, then the guide lands at `knowledge-base/marketing/brand-guide.md`
-
-## Risks & Mitigations
-
-| Risk | Mitigation |
-|------|-----------|
-| Silent archiving breakage (92 artifacts missed in prior restructure) | Verify archive-kb.sh and compound-capture paths work before committing |
-| CI workflow silent failure | Update workflow paths before merge; monitor first scheduled run after merge |
-| Open PRs/worktrees have stale paths | This branch's brainstorm/spec/plan are already written to old paths — they'll be part of the migration itself |
-| Grep misses a reference | Post-move verification (Phase 9) catches stale refs; `git revert HEAD` is clean rollback |
+- Given ops-advisor runs, when it reads expenses, then it reads from `knowledge-base/operations/expenses.md`
 
 ## Rollback Plan
 
-If CI workflows fail after merge: `git revert HEAD` on main and push. This cleanly undoes all `git mv` operations and reference updates in a single revert commit.
-
-## Dependencies
-
-- Resolve `content-strategy.md` name collision before any moves
-- No other active PRs should be modifying knowledge-base/ structure simultaneously
+`git revert HEAD` on main cleanly undoes all `git mv` operations and reference updates.
 
 ## References
 
 - Brainstorm: `knowledge-base/brainstorms/2026-03-12-kb-domain-structure-brainstorm.md`
 - Spec: `knowledge-base/specs/feat-kb-domain-structure/spec.md`
 - Issue: #567
-- Prior migration learning: `knowledge-base/learnings/2026-02-06-docs-consolidation-migration.md`
-- Archiving breakage learning: `knowledge-base/learnings/2026-02-22-archiving-slug-extraction-must-match-branch-conventions.md`
-- Overview staleness learning: `knowledge-base/learnings/technical-debt/2026-02-12-overview-docs-stale-after-restructure.md`
+- Deferred: #568 (features/ grouping), #569 (overview/ rename)
