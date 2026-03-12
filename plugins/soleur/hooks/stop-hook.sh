@@ -23,14 +23,14 @@ fi
 # When a session crashes or context is exhausted, the state file persists and
 # traps all subsequent sessions in an infinite loop. The started_at timestamp
 # lets us detect orphaned state files and clean them up automatically.
-TTL_HOURS=4
+TTL_HOURS=1
 STARTED_AT=$(awk '/^---$/{c++; next} c==1' "$RALPH_STATE_FILE" | grep '^started_at:' | sed 's/started_at: *//' | sed 's/^"\(.*\)"$/\1/' || true)
 if [[ -n "$STARTED_AT" ]]; then
   STARTED_EPOCH=$(date -d "$STARTED_AT" +%s 2>/dev/null || true)
   NOW_EPOCH=$(date +%s)
   if [[ -n "$STARTED_EPOCH" ]] && [[ $((NOW_EPOCH - STARTED_EPOCH)) -gt $((TTL_HOURS * 3600)) ]]; then
-    AGE_HOURS=$(( (NOW_EPOCH - STARTED_EPOCH) / 3600 ))
-    echo "Ralph loop: stale state file detected (started ${AGE_HOURS}h ago, TTL=${TTL_HOURS}h). Auto-removing." >&2
+    AGE_MINS=$(( (NOW_EPOCH - STARTED_EPOCH) / 60 ))
+    echo "Ralph loop: stale state file detected (started ${AGE_MINS}m ago, TTL=${TTL_HOURS}h). Auto-removing." >&2
     rm "$RALPH_STATE_FILE"
     exit 0
   fi
@@ -77,6 +77,16 @@ fi
 # Check if max iterations reached
 if [[ $MAX_ITERATIONS -gt 0 ]] && [[ $ITERATION -ge $MAX_ITERATIONS ]]; then
   echo "Ralph loop: Max iterations ($MAX_ITERATIONS) reached." >&2
+  rm "$RALPH_STATE_FILE"
+  exit 0
+fi
+
+# --- Hard Safety Valve ---
+# Even with max_iterations=0 (unlimited), cap at 50 to prevent runaway loops
+# from trapping sessions indefinitely (e.g., after context compaction).
+HARD_CAP=50
+if [[ $ITERATION -ge $HARD_CAP ]]; then
+  echo "Ralph loop: Hard safety cap ($HARD_CAP iterations) reached. Auto-removing." >&2
   rm "$RALPH_STATE_FILE"
   exit 0
 fi
