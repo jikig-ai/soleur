@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-09
-last_reviewed: 2026-03-09
+last_updated: 2026-03-12
+last_reviewed: 2026-03-12
 review_cadence: quarterly
 depends_on:
   - knowledge-base/overview/brand-guide.md
@@ -25,23 +25,26 @@ depends_on:
 |------------|---------|-------|-------------|-------------|----------------------|-------|
 | **Anthropic Cowork** | Included with Claude Pro ($20/mo) / Team ($25/seat/mo) / Enterprise (custom) | Bundled | Yes (as of Feb 2026) | Yes (11+ plugins across 6+ domains) | No (stateless per session) | Cowork plugins are free with subscription. Enterprise has private marketplace. |
 | **Claude Code** | Included with Claude Pro ($20/mo) / Max ($100-200/mo) | Bundled | Yes (native + 9,000+ plugins) | Limited (plugins are siloed) | Limited (auto-memory, project memory) | Claude Code itself is a bundled feature. Plugins are mostly free. |
-| **Cursor** | $20/mo Pro, $40/mo Business | Subscription | Yes (deep) | No | Yes (project rules, .cursorrules) | $1B ARR, $29.3B valuation. Engineering-only. |
-| **GitHub Copilot** | $10/mo Individual, $19/mo Business, $39/mo Enterprise | Subscription | Yes (deep) | No | Yes (CLI memory, Spaces) | Bundled with GitHub. Coding agent GA for all paid tiers. |
-| **Windsurf** | $15/mo | Subscription | Yes (deep) | No | Yes (Memories system) | Cheapest IDE-native option. Acquired by Cognition (Devin). |
-| **Google Gemini Code Assist** | Free (6,000 req/day), $299/year Premium | Freemium | Yes | No | No | Enterprise/GCP focused. Aggressive free tier. |
+| **Microsoft Copilot Cowork** | Part of M365 E7 Frontier Suite (pricing TBD, Research Preview) | Bundled | No | Yes (Outlook, Teams, Excel workflow automation) | No (session-scoped) | NEW (Mar 9, 2026). Anthropic Claude-powered. Enterprise-targeted. Background task execution across M365. |
+| **Cursor** | $20/mo Pro, $40/mo Business | Subscription | Yes (deep) | Partial (30+ marketplace plugins from Atlassian, Datadog, GitLab, etc.) | Yes (project rules, .cursorrules, automation memory) | $1B ARR, $29.3B valuation. Now an agent platform: Automations (event-driven), cloud agents, marketplace. |
+| **GitHub Copilot** | $10/mo Individual, $19/mo Business, $39/mo Enterprise | Subscription | Yes (deep) | No | Yes (CLI memory, Spaces) | Bundled with GitHub. Coding agent + agentic capabilities GA in JetBrains (Mar 11). CLI code review. |
+| **OpenAI Codex** | Included with ChatGPT Pro ($200/mo), Plus ($20/mo limited), Business/Enterprise | Bundled | Yes (deep, GPT-5.4) | Partial (Codex Security agent) | Limited (session context) | GPT-5.4 with native computer-use, 1M context (experimental). Codex Security = first domain expansion beyond coding. Windows app (Mar 4). |
+| **Windsurf** | $15/mo | Subscription | Yes (deep) | No | Yes (Memories system) | Cheapest IDE-native option. Cognition/Devin merger. SWE-1.6 preview. Codemaps launched. |
+| **Google Gemini Code Assist** | Free (6,000 req/day), $299/year Premium | Freemium | Yes | No | No | Gemini 3 support. Finish Changes + Outlines GA. Enterprise/GCP focused. |
 
 ### Tier 3: CaaS / Business Platforms
 
 | Competitor | Pricing | Model | Engineering | Multi-Domain | Knowledge Persistence | Notes |
 |------------|---------|-------|-------------|-------------|----------------------|-------|
 | **Devin 2.0** | $20/mo Core, custom Enterprise | Usage-based (ACU credits) | Yes (autonomous) | No | Limited (session context) | Dropped from $500 to $20/mo. Engineering-only. |
-| **Lovable.dev** | $0 Free, $25/mo Pro, $50/mo Teams | Freemium | Yes (web apps) | No | No | $200M ARR, $6.6B valuation. Web apps only. |
-| **Bolt.new** | $0 Free, $25/mo Pro, $109/mo Enterprise | Freemium | Yes (web apps) | No | No | Browser-based. Open-source bolt.diy option. |
-| **v0.dev** | $0 Free, $20/mo Premium, $30/mo Team | Freemium | Yes (frontend) | No | No | Vercel ecosystem. Next.js focused. |
-| **Replit Agent** | $20/mo Core, $95/mo Pro | Usage-based (effort) | Yes (cloud) | No | Limited | Pricing backlash from effort-based model. |
-| **Notion AI** | $10/mo add-on per user | Add-on | No | Yes (workspace agents) | Yes (workspace context) | 35M+ users. Custom Agents launched Feb 2026. |
-| **Polsia** | $50/mo + 20% revenue share + 20% ad spend share | Hybrid (subscription + revenue share) | Yes (autonomous) | Yes (engineering, marketing, ops, sales outreach, social media) | No (no structured cross-domain knowledge base) | Most direct CaaS competitor. $1M ARR in 1 month. 1,100+ managed companies. $50 "roughly breaks even on AI costs" -- real revenue is the 20% cuts. |
-| **Tanka** | $0/user/mo (<50 users), $299/mo (50+ users) | Freemium | No | Partial (communication-centric) | Yes (EverMemOS memory graphs) | Closest memory architecture to Soleur. Free for solo founders. |
+| **Lovable.dev** | $0 Free, $25/mo Pro, $50/mo Teams | Freemium | Yes (web apps) | No | No | $300M+ ARR, $6.6B valuation. Claude Opus 4.5 upgrade (20% fewer errors). |
+| **Bolt.new** | $0 Free, $25/mo Pro, $109/mo Enterprise | Freemium | Yes (web apps) | No | No | Browser-based. $40M+ ARR. Open-source bolt.diy option. |
+| **v0.app** | $0 Free, $20/mo Premium, $30/mo Team | Freemium | Yes (frontend) | No | No | Rebranded from v0.dev. Agentic architecture, custom MCP server support (Mar 6). |
+| **Replit Agent** | $20/mo Core, $100/mo Pro | Usage-based (effort) | Yes (cloud) | No | Limited | Agent 4 launched. $400M Series D at $9B valuation. ChatGPT integration. |
+| **Notion AI** | $10/mo add-on per user; Custom Agents: free beta through May 3, then $10/1,000 credits | Add-on + credits | No | Yes (workspace agents, 21,000+ built) | Yes (workspace context) | 35M+ users. MiniMax M2.5 support (10x cheaper for basic tasks). Business/Enterprise plans only. |
+| **Polsia** | $29-59/mo tiers + potential revenue share | Hybrid (subscription + revenue share) | Yes (autonomous) | Yes (engineering, marketing, ops, sales outreach, social media) | No (no structured cross-domain knowledge base) | Most direct CaaS competitor. $1.5M ARR (up from $1M). 2,000+ managed companies. Pricing shifted from flat $50 to tiered $29-59. |
+| **Paperclip** | Free (MIT, self-hosted) | Open source | No (agent-agnostic orchestration) | Yes (org charts, budgets, governance for any domain) | No (no knowledge layer) | 14.6k GitHub stars. v0.3.0. Orchestration infrastructure, not domain intelligence. Complementary to Soleur. |
+| **Tanka** | $0/user/mo (<50 users), $299/mo (50+ users) | Freemium | No | Partial (communication-centric) | Yes (EverMemOS memory graphs) | Closest memory architecture to Soleur. Free for solo founders. SOC 2 + ISO 27001. |
 | **SoloCEO** | Unknown (previously $2,000 diagnostic) | Unknown | No | Yes (advisory) | No | Advisory-only. Limited public information. |
 | **Systeme.io** | $0 Free, $17/mo Startup, $97/mo Unlimited | Freemium | No | Marketing/sales only | No | Traditional SaaS. No AI agents. Startup plan dropped from $27 to $17. |
 
@@ -56,13 +59,15 @@ The competitive landscape establishes clear price anchors:
 | Category | Price Range | What Founders Expect |
 |----------|------------|---------------------|
 | AI coding tool (IDE) | $15-40/month | Per-seat subscription, engineering-only |
-| AI coding agent (autonomous) | $20-95/month | Usage-based credits, engineering-only |
+| AI coding agent (autonomous) | $20-100/month | Usage-based credits, engineering-only |
 | AI web app builder | $0-50/month | Freemium, engineering-only |
-| AI workspace agent | $10/month add-on | Bundled with existing workspace tool |
-| Autonomous AI company operator | $50/month + 20% revenue share | Polsia: subscription breaks even on AI costs, revenue share is profit |
+| AI workspace agent | $10/month + credits | Bundled with existing workspace tool. Notion: $10/1,000 credits post-May 2026. |
+| AI agent platform (engineering) | $20-40/month + marketplace plugins | Cursor: subscription + free/paid plugins. Event-driven automations included. |
+| Autonomous AI company operator | $29-59/month + potential revenue share | Polsia: tiered subscription (shifted from flat $50) + revenue share. |
+| AI company orchestration (OSS) | Free (self-hosted) | Paperclip: MIT-licensed, no recurring cost. Infrastructure-only. |
 | Multi-domain AI platform (human-in-loop) | No established anchor | Soleur would be first in this segment |
 
-**Key insight:** Polsia has established the first CaaS price anchor at $50/month + 20% revenue share. This validates that solo founders will pay $50/month for autonomous company operation. However, Polsia's real revenue comes from the 20% cuts (revenue + ad spend), not the subscription. Soleur's $49/month flat-rate model avoids revenue share friction -- founders keep 100% of what they earn. The risk shifts from "being anchored against $15-40 engineering tools" to "being compared against Polsia's $50 + 20% model." The framing must emphasize: Soleur costs the same monthly but takes no cut of your revenue.
+**Key insight (updated 2026-03-12):** Polsia has shifted from a flat $50/month to tiered $29-59/month, establishing a lower entry point for CaaS. At the $29/month tier, Polsia undercuts Soleur's hypothesized $49/month by 40%. The revenue share model may still apply at higher tiers. Meanwhile, Cursor's $20/month now includes an agent platform with automations and a marketplace, making the "engineering-only" anchor more capable than before. Paperclip at $0 (MIT, self-hosted) provides orchestration infrastructure for free. The framing challenge intensifies: Soleur's $49/month must justify value beyond what $29 Polsia + $0 Paperclip + $20 Cursor provides. The justification centers on three things competitors lack: (1) cross-domain compounding knowledge, (2) legal, finance, and product strategy domains, (3) founder-as-decision-maker workflow orchestration. The "you keep 100% of revenue" argument against Polsia's revenue share remains Soleur's strongest pricing differentiator.
 
 ### Replacement Stack Cost Analysis
 
@@ -171,7 +176,9 @@ When pricing launches, the page must frame the value correctly. Draft messaging:
 | Cowork plugins commoditize domain breadth for free | High | High | Differentiate on compounding knowledge and workflow orchestration. Price the persistence, not the breadth. |
 | Open-source version provides 80%+ of value | Medium | High | Ensure Pro tier has clear infrastructure value (cloud sync, hosted execution) that cannot be self-hosted easily. |
 | Price compression forces below $49/month | Medium | Medium | $29/month floor still works at scale. The value metric (knowledge compounding) creates retention regardless of price point. |
-| Polsia's $50 + 20% share anchors CaaS pricing expectations | Medium | Medium | Founders may expect CaaS platforms to cost ~$50/month. Soleur's $49 flat rate is competitive and avoids the 20% revenue share. Position as "same price, you keep 100%." The revenue share is a vulnerability for Polsia at scale -- a founder earning $50k/month pays $10k to Polsia. |
+| Polsia's $29-59 tiered pricing undercuts Soleur's $49/month | High | Medium | Polsia shifted from flat $50 to tiered $29-59/month. At $29, Polsia is 40% cheaper than Soleur's hypothesized $49. Revenue share may still apply at higher tiers. Position Soleur's flat $49 as "premium, you keep 100%" and emphasize domains Polsia lacks (legal, finance, product strategy) plus cross-domain knowledge compounding. The revenue share remains Polsia's vulnerability at scale. |
+| Cursor's $20/month agent platform makes engineering-only pricing look cheap | Medium | Medium | Cursor at $20/month now includes automations, marketplace, cloud agents, and built-in memory. Solo founders may feel $49 for Soleur is expensive when Cursor handles engineering + some automation for less. Soleur must justify the $29 delta with non-engineering domain value. |
+| Paperclip at $0 sets orchestration floor to free | Medium | Low | Paperclip provides free, self-hosted company orchestration. If Clipmart ships pre-built company templates, founders may assemble a "Soleur-like" experience from Paperclip + free agents. Soleur's moat is curated domain intelligence and compounding knowledge, not orchestration infrastructure. |
 | Enterprise demand emerges before solo-founder validation | Low | Low | Good problem to have. Enterprise tier at custom pricing. Do not pivot to enterprise until solo-founder thesis is validated. |
 
 ---
@@ -198,4 +205,4 @@ When pricing launches, the page must frame the value correctly. Draft messaging:
 
 ---
 
-_Updated: 2026-03-09. Sources: competitive-intelligence.md (2026-03-09), business-validation.md (2026-03-09), brand-guide.md (2026-02-21)._
+_Updated: 2026-03-12. Sources: competitive-intelligence.md (2026-03-12), business-validation.md (2026-03-12), brand-guide.md (2026-02-21)._
