@@ -82,3 +82,4 @@ Format:
 - Overlap levels: High / Medium / Low / None
 - Include source URLs for every claim -- downstream agents treat this as ground truth
 - Flag when source documents (brand-guide.md, business-validation.md) are older than 30 days
+- business-validation.md is read as pre-research context but NOT updated by the cascade. Downstream documents (CI report, battlecards, pricing) may contain fresher data than the upstream source. When the cascade discovers updated metrics (pricing, ARR, company counts), note them in the Cascade Results section so operators can manually update business-validation.md. See learning: 2026-03-12-competitive-analysis-cascade-data-reconciliation.md

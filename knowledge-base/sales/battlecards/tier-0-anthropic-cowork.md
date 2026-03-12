@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-03
-last_reviewed: 2026-03-03
+last_updated: 2026-03-12
+last_reviewed: 2026-03-12
 review_cadence: monthly
 competitor: Anthropic Cowork Plugins
 tier: 0
@@ -13,13 +13,13 @@ convergence_risk: Critical
 
 | Field | Value |
 |-------|-------|
-| **Product** | Cowork -- Anthropic's AI work product (web/desktop), with 11+ first-party plugins |
-| **Pricing** | Included with Claude Pro ($20/mo), Team ($25/seat/mo), Enterprise (custom) |
-| **Domain Coverage** | Productivity, sales, support, product, marketing, legal, finance, data, enterprise-search, bio-research, engineering (added Feb 2026) |
-| **Distribution** | Bundled with every Claude subscription. Private marketplace for Enterprise. |
-| **Key Feature** | Plugin Create -- custom agent building for enterprise. Enterprise connectors (Google Workspace, DocuSign, Apollo, Clay, FactSet, LegalZoom). |
+| **Product** | Cowork -- Anthropic's AI work product (web/desktop), with 10 department-specific plugin categories. **NEW (March 9, 2026):** Cowork technology now powers Microsoft Copilot Cowork in M365. |
+| **Pricing** | Included with Claude Pro ($20/mo), Team ($25/seat/mo), Enterprise (custom). Microsoft Copilot Cowork: part of M365 E7 Frontier Suite (pricing TBD). |
+| **Domain Coverage** | HR, Design, Engineering, Operations, Financial Analysis, Investment Banking, Equity Research, Private Equity, Wealth Management, Brand Voice. 15+ enterprise connectors. |
+| **Distribution** | Bundled with every Claude subscription. Private marketplace for Enterprise. **NEW:** Dual distribution via Anthropic direct + Microsoft 365 (400M+ users). |
+| **Key Feature** | Plugin Create for custom agents. Enterprise connectors (Google Workspace, DocuSign, Apollo, Clay, FactSet, LegalZoom, Harvey, S&P Global, LSEG, Common Room, Slack). Microsoft Copilot Cowork: background task execution across Outlook, Teams, Excel. |
 | **Knowledge Persistence** | None. Stateless per session. No compounding memory across conversations. |
-| **Architecture** | Individual plugins execute isolated tasks. No cross-plugin orchestration or shared context. |
+| **Architecture** | Individual plugins execute isolated tasks. No cross-plugin orchestration or shared context. Microsoft Copilot Cowork adds multi-step plan execution but still no persistent cross-domain memory. |
 
 ## When You Will Encounter This
 
@@ -72,14 +72,16 @@ convergence_risk: Critical
 
 Review monthly. If any of these triggers fire, escalate to marketing strategy review.
 
-| Trigger | Current Status (2026-03-03) | Action if Triggered |
+| Trigger | Current Status (2026-03-12) | Action if Triggered |
 |---------|---------------------------|-------------------|
 | Anthropic adds persistent memory to Cowork | No signal | Update battlecard. Publish comparison article. Shift positioning to workflow orchestration + open source. |
 | Anthropic uses "Company-as-a-Service" framing | No signal | Accelerate CaaS category content. Establish Soleur as the originator of the term. |
 | Cowork plugins gain cross-plugin orchestration | No signal | Update battlecard. Evaluate whether Soleur's orchestration depth still differentiates. |
-| Anthropic launches private plugin marketplace widely | Available for Enterprise tier | Monitor adoption. If Cowork marketplace threatens plugin distribution, evaluate riding Cowork distribution (list Soleur as a Cowork plugin). |
-| Claude Code native features absorb Soleur engineering agents | Partial -- auto-memory, Plan subagent | Track feature parity. Differentiate on non-engineering domains and cross-domain coherence. |
+| Anthropic launches private plugin marketplace widely | Available for Enterprise tier | Monitor adoption. If Cowork marketplace threatens plugin distribution, evaluate riding Cowork distribution. |
+| Claude Code native features absorb Soleur engineering agents | Partial -- auto-memory, Plan subagent, MCP deduplication | Track feature parity. Differentiate on non-engineering domains and cross-domain coherence. |
+| Microsoft Copilot Cowork expands beyond M365 workflow tasks | Research Preview (Mar 2026). Broader rollout late March. Enterprise-targeted. | Monitor scope expansion. If Copilot Cowork adds engineering or solo-founder features, the dual distribution surface (Anthropic + Microsoft) becomes a direct threat. |
+| Copilot Cowork adds persistent memory | No signal. Session-scoped task execution. | Would represent Anthropic enabling memory through a partner surface before their own. Major escalation. |
 
 ---
 
-_Generated: 2026-03-03. Source: competitive-intelligence.md (2026-03-02)._
+_Updated: 2026-03-12. Source: competitive-intelligence.md (2026-03-12)._
