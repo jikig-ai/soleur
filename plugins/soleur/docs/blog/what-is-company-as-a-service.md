@@ -12,6 +12,8 @@ Company-as-a-Service (CaaS) is a new category of platform where a single AI orga
 
 [Soleur]({{ site.url }}) is built on this model. Soleur deploys {{ stats.agents }} AI agents across {{ stats.departments }} departments, all sharing a compounding knowledge base that makes every project faster and more informed than the last.
 
+CaaS represents the third era of AI-assisted development. The first era — [vibe coding](https://x.com/karpathy/status/1886192184808149383) — gave developers conversational AI that generated code on demand but remembered nothing between sessions. The second era — [agentic engineering](https://x.com/karpathy/status/2016477319972909061) — introduced structured workflows and specifications that compound engineering knowledge. The third era extends that compounding principle across every business function, not just code. For a deep look at how compound knowledge works within engineering, read [Why Most Agentic Tools Plateau]({{ site.url }}blog/why-most-agentic-tools-plateau/).
+
 This article defines what company-as-a-service means, how it differs from existing models, the technology that makes it possible, and why 2026 is the year the category emerges.
 
 ## The Problem CaaS Solves
@@ -89,7 +91,7 @@ Consider the alternative. A solo founder using [Notion Custom Agents](https://ww
 
 [Anthropic launched Cowork Plugins](https://techcrunch.com/2026/02/24/anthropic-launches-new-push-for-enterprise-agents-with-plugins-for-finance-engineering-and-design/) covering multiple business domains with first-party integrations. [Notion shipped Custom Agents](https://www.notion.com/releases/2026-02-24) that operate within workspaces. Both persist data within their respective environments, but neither compounds cross-domain institutional knowledge that accumulates across sessions and informs future decisions.
 
-The compounding model works differently. Every problem solved produces a learning. Every learning informs the next solution. Over hundreds of sessions, the knowledge base accumulates patterns, gotchas, architectural decisions, and proven approaches. The system does not start from zero each time -- it starts from everything it has learned.
+The compounding model works differently. Every problem solved produces a learning. Every learning informs the next solution. Over hundreds of sessions, the knowledge base accumulates patterns, gotchas, architectural decisions, and proven approaches. The system does not start from zero each time -- it starts from everything it has learned. In the most mature implementations, learnings are not just documented -- they are [mechanically enforced through code guardrails]({{ site.url }}blog/why-most-agentic-tools-plateau/) that make known failure modes structurally impossible.
 
 ### Lifecycle Orchestration
 
