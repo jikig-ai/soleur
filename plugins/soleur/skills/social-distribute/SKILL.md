@@ -7,6 +7,15 @@ description: "This skill should be used when distributing a blog article across 
 
 Generate platform-specific content variants from a blog article and distribute across social channels. Discord is posted via webhook after approval. All other platforms output formatted text for manual posting.
 
+## Distribution Pipeline Gate
+
+Before generating content or posting manually, check if a content file already exists for this blog post in `knowledge-base/specs/feat-product-strategy/distribution-content/`. If `content-publisher.sh` and the `scheduled-content-publisher.yml` workflow can handle this content, route through the automated pipeline instead of posting ad-hoc. Ad-hoc posting bypasses thread recovery, fallback issue creation, and deduplication.
+
+**Check:** `ls knowledge-base/specs/feat-product-strategy/distribution-content/*<slug>* 2>/dev/null` where `<slug>` is derived from the blog post filename.
+
+- **If content file exists:** Inform the user and suggest triggering the workflow: `gh workflow run "Scheduled: Content Publisher" -f case_study=<number>`. Do not post manually.
+- **If no content file exists:** Continue with ad-hoc generation, but recommend creating a content file and extending `content-publisher.sh` for future use. Output a warning: "No distribution content file found. Consider creating one in `distribution-content/` for automated distribution."
+
 ## Prerequisites
 
 Before generating content, verify all prerequisites. If a hard prerequisite fails, display the error message and stop. Soft prerequisites display a warning and continue.

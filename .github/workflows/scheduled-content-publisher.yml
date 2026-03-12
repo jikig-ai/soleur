@@ -1,4 +1,4 @@
-# Scheduled content publisher for the 3-week case study distribution campaign.
+# Scheduled content publisher for blog and case study distribution.
 # Posts pre-generated content to Discord (webhook), X/Twitter (API), and
 # creates GitHub issues for manual platforms (IndieHackers, Reddit, HN).
 # Implements #530: scheduled content publisher workflow.
@@ -7,7 +7,7 @@
 # Phase 2: add cron triggers after validation.
 #
 # Security: This workflow does NOT use untrusted event inputs in run: commands.
-# The CASE_STUDY env var originates from a constrained choice input (1-5) and
+# The CASE_STUDY env var originates from a constrained choice input (1-6) and
 # is validated by the content-publisher.sh case statement before use.
 
 name: "Scheduled: Content Publisher"
@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       case_study:
-        description: 'Case study number (1-5)'
+        description: 'Content number (1-5: case studies, 6: agentic tools plateau)'
         required: true
         type: choice
         options:
@@ -25,6 +25,7 @@ on:
           - '3'
           - '4'
           - '5'
+          - '6'
 
 concurrency:
   group: scheduled-content-publisher
