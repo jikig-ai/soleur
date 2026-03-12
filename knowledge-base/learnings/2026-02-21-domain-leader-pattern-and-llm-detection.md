@@ -29,7 +29,7 @@ Backward compatibility preserved: brand workshop is a special case within market
 
 ## Key Insight
 
-When extending a command that runs inside an LLM, prefer semantic assessment over keyword matching. LLMs are worse at substring matching than they are at understanding intent. The detection is non-deterministic but acceptable because the user always confirms before any domain leader participates -- declining continues the standard flow unchanged.
+When extending a command that runs inside an LLM, prefer semantic assessment over keyword matching. LLMs are worse at substring matching than they are at understanding intent. The detection is non-deterministic but acceptable because domain assessments are brief and non-destructive. [Updated 2026-03-12] The confirmation gate was later removed — domain leaders now auto-fire without AskUserQuestion, both in brainstorm Phase 0.5 and via passive domain routing in AGENTS.md. Workshops remain explicitly user-invoked.
 
 ## Tags
 

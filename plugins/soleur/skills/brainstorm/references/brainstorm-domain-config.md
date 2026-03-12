@@ -1,6 +1,6 @@
 # Domain Config Table
 
-Read the feature description and assess relevance against each domain in the table below. For each relevant domain, use **AskUserQuestion tool** with the routing prompt and options from the table.
+Read the user's message or feature description and assess relevance against each domain in the table below. For each relevant domain, spawn the domain leader as a Task agent using the Task Prompt column, substituting `{desc}` with context. The Routing Prompt and Options columns are retained for workshop reference only -- they are not used during standard routing.
 
 | Domain | Assessment Question | Leader | Routing Prompt | Options | Task Prompt |
 |--------|-------------------|--------|----------------|---------|-------------|
