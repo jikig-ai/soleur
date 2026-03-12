@@ -239,12 +239,15 @@ jobs:
       - name: Post to Discord
         if: steps.check_plugin.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
         env:
+          DISCORD_RELEASES_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           TAG: ${{ steps.version.outputs.tag }}
           RELEASE_NOTES_FILE: ${{ steps.tmpfiles.outputs.release_notes }}
         run: |
-          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
-            echo "DISCORD_WEBHOOK_URL secret not set, skipping Discord notification"
+          # Prefer releases channel, fall back to general
+          WEBHOOK="${DISCORD_RELEASES_WEBHOOK_URL:-${DISCORD_WEBHOOK_URL:-}}"
+          if [ -z "$WEBHOOK" ]; then
+            echo "No Discord webhook URL configured, skipping Discord notification"
             exit 0
           fi
 
@@ -269,7 +272,7 @@ jobs:
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
-            "$DISCORD_WEBHOOK_URL")
+            "$WEBHOOK")
 
           if [[ "$HTTP_CODE" =~ ^2 ]]; then
             echo "Discord notification sent (HTTP $HTTP_CODE)"
