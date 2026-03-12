@@ -20,7 +20,7 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 
 ## Workflow Gates
 
-- Zero agents until user confirms direction. Present a concise summary first, ask if they want to go deeper, only then launch research.
+- Zero agents until user confirms direction. Present a concise summary first, ask if they want to go deeper, only then launch research. Exception: passive domain routing (see below).
 - Before every commit, run compound (`skill: soleur:compound`). Do not ask whether to run it -- just run it.
 - Never bump version files in feature branches. Version is derived from git tags — CI creates GitHub Releases with `vX.Y.Z` tags at merge time via semver labels. Set labels with `/ship`. Do NOT edit `plugin.json` version (frozen sentinel) or `marketplace.json` version.
 - Use `/ship` to automate the full commit/push/PR workflow. It enforces review and compound gates.
@@ -28,6 +28,11 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 - At session start, from the repo root: run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged && git worktree list`.
 - When an audit identifies pre-existing issues, create GitHub issues to track them before fixing. Don't just note them in conversation -- file them.
 - When creating PRs that resolve a GitHub issue, include `Closes #N` in the PR **body** (not just the title). Parenthetical `(#N)` in titles creates a link but does NOT trigger auto-close.
+
+## Passive Domain Routing
+
+- When a user message contains a clear, actionable domain signal unrelated to the current task (expenses, legal commitments, marketing mentions, sales leads, etc.), read `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md` and spawn the relevant domain leader as a background agent (`run_in_background: true`) using the Assessment Question to detect relevance and the Task Prompt to delegate. Continue the primary task without waiting.
+- Do not route on trivial messages ("yes", "continue", "looks good") or when the domain signal IS the current task's topic (e.g., do not route to CTO during an engineering brainstorm about architecture).
 
 ## Communication
 

@@ -69,18 +69,16 @@ Assess whether the feature description has implications for specific business do
 
 #### Processing Instructions
 
-1. Read the feature description and assess relevance against each domain in the table above.
-2. For each relevant domain, use **AskUserQuestion tool** with the routing prompt and options from the table.
-3. Workshop options ("Start brand workshop" in Marketing, "Start validation workshop" in Product): follow the named workshop section below (Brand Workshop, Validation Workshop).
-4. Standard participation: for each accepted leader, spawn a Task using the Task Prompt from the table, substituting `{desc}` with the feature description. Weave each leader's assessment into the brainstorm dialogue alongside repo research findings.
-5. If multiple domains are relevant, ask about each separately.
-6. If no domains are relevant or the user declines all domain leaders, continue to Phase 1.
+1. Read the feature description and assess relevance against each domain in the table above using the Assessment Question column.
+2. For each relevant domain, spawn a Task using the Task Prompt from the table, substituting `{desc}` with the feature description. If multiple domains are relevant, spawn them in parallel. Weave each leader's assessment into the brainstorm dialogue alongside repo research findings.
+3. If the user explicitly requests a brand workshop or validation workshop (e.g., "start brand workshop", "run validation workshop"), follow the named workshop section below instead of spawning an assessment.
+4. If no domains are relevant, continue to Phase 1.
 
-#### Brand Workshop (if selected)
+#### Brand Workshop (if explicitly requested)
 
 **Read `plugins/soleur/skills/brainstorm/references/brainstorm-brand-workshop.md` now** for the full Brand Workshop procedure (worktree creation, issue handling, brand-architect handoff, completion message). Follow all steps in the reference file, then STOP -- do not proceed to Phase 1.
 
-#### Validation Workshop (if selected)
+#### Validation Workshop (if explicitly requested)
 
 **Read `plugins/soleur/skills/brainstorm/references/brainstorm-validation-workshop.md` now** for the full Validation Workshop procedure (worktree creation, issue handling, business-validator handoff, completion message). Follow all steps in the reference file, then STOP -- do not proceed to Phase 1.
 
