@@ -4,6 +4,7 @@ import { join } from "path";
 const SCRIPT_PATH = join(import.meta.dirname, "..", "scripts", "content-publisher.sh");
 const SAMPLE_CONTENT = join(import.meta.dirname, "helpers", "sample-content.md");
 const SAMPLE_NO_MANUAL = join(import.meta.dirname, "helpers", "sample-content-no-manual.md");
+const SAMPLE_FRONTMATTER = join(import.meta.dirname, "helpers", "sample-frontmatter.md");
 
 const BASE_ENV: Record<string, string> = {
   PATH: process.env.PATH ?? "/usr/bin:/bin:/usr/local/bin",
@@ -206,113 +207,113 @@ describe("extract_tweets", () => {
 });
 
 // ---------------------------------------------------------------------------
-// resolve_content -- uses CONTENT_DIR override for testing
+// parse_frontmatter / get_frontmatter_field
 // ---------------------------------------------------------------------------
 
-describe("resolve_content", () => {
-  test("maps study 1 to legal-document-generation with 3 manual platforms", () => {
+describe("parse_frontmatter", () => {
+  test("extracts YAML block between --- delimiters", () => {
+    const result = runFunction(
+      `parse_frontmatter "${SAMPLE_FRONTMATTER}"`
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('title: "Test Case Study"');
+    expect(result.stdout).toContain("type: case-study");
+    expect(result.stdout).toContain("status: scheduled");
+  });
+
+  test("does not include content after second ---", () => {
+    const result = runFunction(
+      `parse_frontmatter "${SAMPLE_FRONTMATTER}"`
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).not.toContain("## Discord");
+    expect(result.stdout).not.toContain("Discord content");
+  });
+
+  test("returns empty for file without frontmatter", () => {
     const result = runFunction(`
-      tmpdir=$(mktemp -d)
-      CONTENT_DIR="$tmpdir"
-      touch "$tmpdir/01-legal-document-generation.md"
-      resolve_content 1
-      echo "FILE=$CONTENT_FILE"
-      echo "NAME=$CASE_NAME"
-      echo "PLATFORMS=$MANUAL_PLATFORMS"
-      rm -r "$tmpdir"
+      tmpfile=$(mktemp)
+      echo "# No frontmatter here" > "$tmpfile"
+      echo "Just content" >> "$tmpfile"
+      parse_frontmatter "$tmpfile"
+      rm "$tmpfile"
     `);
-    expect(result.stdout).toContain("NAME=Legal Document Generation");
-    expect(result.stdout).toContain("PLATFORMS=indiehackers,reddit,hackernews");
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("");
+  });
+});
+
+describe("get_frontmatter_field", () => {
+  test("extracts title with quotes stripped", () => {
+    const result = runFunction(
+      `get_frontmatter_field "${SAMPLE_FRONTMATTER}" "title"`
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("Test Case Study");
   });
 
-  test("maps study 2 to operations-management with no manual platforms", () => {
-    const result = runFunction(`
-      tmpdir=$(mktemp -d)
-      CONTENT_DIR="$tmpdir"
-      touch "$tmpdir/02-operations-management.md"
-      resolve_content 2
-      echo "NAME=$CASE_NAME"
-      echo "PLATFORMS=$MANUAL_PLATFORMS"
-      rm -r "$tmpdir"
-    `);
-    expect(result.stdout).toContain("NAME=Operations Management");
-    expect(result.stdout).toContain("PLATFORMS=");
+  test("extracts unquoted field (type)", () => {
+    const result = runFunction(
+      `get_frontmatter_field "${SAMPLE_FRONTMATTER}" "type"`
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("case-study");
   });
 
-  test("maps study 3 to competitive-intelligence with 2 manual platforms", () => {
-    const result = runFunction(`
-      tmpdir=$(mktemp -d)
-      CONTENT_DIR="$tmpdir"
-      touch "$tmpdir/03-competitive-intelligence.md"
-      resolve_content 3
-      echo "NAME=$CASE_NAME"
-      echo "PLATFORMS=$MANUAL_PLATFORMS"
-      rm -r "$tmpdir"
-    `);
-    expect(result.stdout).toContain("NAME=Competitive Intelligence");
-    expect(result.stdout).toContain("PLATFORMS=indiehackers,reddit");
+  test("extracts publish_date", () => {
+    const result = runFunction(
+      `get_frontmatter_field "${SAMPLE_FRONTMATTER}" "publish_date"`
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("2026-03-12");
   });
 
-  test("maps study 4 to brand-guide-creation with no manual platforms", () => {
-    const result = runFunction(`
-      tmpdir=$(mktemp -d)
-      CONTENT_DIR="$tmpdir"
-      touch "$tmpdir/04-brand-guide-creation.md"
-      resolve_content 4
-      echo "NAME=$CASE_NAME"
-      echo "PLATFORMS=$MANUAL_PLATFORMS"
-      rm -r "$tmpdir"
-    `);
-    expect(result.stdout).toContain("NAME=Brand Guide Creation");
-    expect(result.stdout).toContain("PLATFORMS=");
+  test("extracts comma-separated channels", () => {
+    const result = runFunction(
+      `get_frontmatter_field "${SAMPLE_FRONTMATTER}" "channels"`
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("discord, x");
   });
 
-  test("maps study 5 to business-validation with 3 manual platforms", () => {
-    const result = runFunction(`
-      tmpdir=$(mktemp -d)
-      CONTENT_DIR="$tmpdir"
-      touch "$tmpdir/05-business-validation.md"
-      resolve_content 5
-      echo "NAME=$CASE_NAME"
-      echo "PLATFORMS=$MANUAL_PLATFORMS"
-      rm -r "$tmpdir"
-    `);
-    expect(result.stdout).toContain("NAME=Business Validation");
-    expect(result.stdout).toContain("PLATFORMS=indiehackers,reddit,hackernews");
+  test("extracts status field", () => {
+    const result = runFunction(
+      `get_frontmatter_field "${SAMPLE_FRONTMATTER}" "status"`
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("scheduled");
   });
 
-  test("exits non-zero for invalid input 0", () => {
-    // resolve_content calls exit 1 which terminates the bash process
-    const result = Bun.spawnSync(["bash", "-c", `
-      set -euo pipefail
-      source '${SCRIPT_PATH}'
-      CONTENT_DIR="/tmp/nonexistent"
-      resolve_content 0
-    `], { env: BASE_ENV });
-    expect(result.exitCode).toBe(1);
-    expect(decode(result.stderr)).toContain("Invalid case study number");
+  test("returns empty for nonexistent field", () => {
+    const result = runFunction(
+      `get_frontmatter_field "${SAMPLE_FRONTMATTER}" "nonexistent"`
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// channel_to_section
+// ---------------------------------------------------------------------------
+
+describe("channel_to_section", () => {
+  test("maps discord to Discord", () => {
+    const result = runFunction(`channel_to_section "discord"`);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("Discord");
   });
 
-  test("exits non-zero for invalid input 6", () => {
-    const result = Bun.spawnSync(["bash", "-c", `
-      set -euo pipefail
-      source '${SCRIPT_PATH}'
-      CONTENT_DIR="/tmp/nonexistent"
-      resolve_content 6
-    `], { env: BASE_ENV });
-    expect(result.exitCode).toBe(1);
-    expect(decode(result.stderr)).toContain("Invalid case study number");
+  test("maps x to X/Twitter Thread", () => {
+    const result = runFunction(`channel_to_section "x"`);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("X/Twitter Thread");
   });
 
-  test("exits non-zero for non-numeric input", () => {
-    const result = Bun.spawnSync(["bash", "-c", `
-      set -euo pipefail
-      source '${SCRIPT_PATH}'
-      CONTENT_DIR="/tmp/nonexistent"
-      resolve_content abc
-    `], { env: BASE_ENV });
-    expect(result.exitCode).toBe(1);
-    expect(decode(result.stderr)).toContain("Invalid case study number");
+  test("returns empty for unknown channel", () => {
+    const result = runFunction(`channel_to_section "linkedin"`);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("");
   });
 });
 
@@ -364,22 +365,45 @@ describe("post_discord webhook URL resolution", () => {
 });
 
 // ---------------------------------------------------------------------------
-// CLI invocation (integration)
+// CLI invocation (integration) -- scan-based, no arguments
 // ---------------------------------------------------------------------------
 
 describe("content-publisher.sh CLI", () => {
-  test("exits 1 with no arguments", () => {
-    const result = Bun.spawnSync(["bash", SCRIPT_PATH], {
-      env: BASE_ENV,
-    });
-    expect(result.exitCode).not.toBe(0);
+  test("exits 1 when content directory does not exist", () => {
+    // Override CONTENT_DIR via sourcing, then call main()
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      CONTENT_DIR="/tmp/nonexistent-content-dir-$$"
+      main
+    `], { env: BASE_ENV });
+    expect(result.exitCode).toBe(1);
+    expect(decode(result.stderr)).toContain("Content directory not found");
   });
 
-  test("exits 1 for invalid case study number", () => {
-    const result = Bun.spawnSync(["bash", SCRIPT_PATH, "99"], {
-      env: BASE_ENV,
-    });
-    expect(result.exitCode).toBe(1);
-    expect(decode(result.stderr)).toContain("Invalid case study number");
+  test("scans directory and completes with exit 0 when no content matches today", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpdir=$(mktemp -d)
+      CONTENT_DIR="$tmpdir"
+      cat > "$tmpdir/test.md" << 'FRONTMATTER'
+---
+title: "Future Post"
+type: case-study
+publish_date: 2099-12-31
+channels: discord
+status: scheduled
+---
+
+## Discord
+
+Future content.
+FRONTMATTER
+      main
+      rm -r "$tmpdir"
+    `], { env: BASE_ENV });
+    expect(result.exitCode).toBe(0);
+    expect(decode(result.stdout)).toContain("Published: 0");
   });
 });
