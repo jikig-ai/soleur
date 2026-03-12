@@ -16,6 +16,7 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 - PreToolUse hooks block: commits on main, rm -rf on worktrees, --delete-branch with active worktrees, writes to main repo when worktrees exist, commits with conflict markers in staged content. Work with these guards, not around them.
 - The host terminal is Warp. Do not attempt automated terminal manipulation via escape sequences (cursor position queries, TUI rendering, and similar sequences are intercepted by Warp's tmux control mode and silently fail).
 - The Bash tool runs in a non-interactive shell without `sudo` access. Do not attempt commands requiring elevated privileges -- provide manual instructions instead.
+- Exhaust all automated options before suggesting manual steps to the user. The founder is a solo operator -- every manual step is a context switch. If credentials, APIs, or CLI tools exist to complete a task programmatically (Discord API, `gh` CLI, `curl`, etc.), use them. Only fall back to manual instructions when automation is genuinely impossible (e.g., no API exists, requires browser-only OAuth consent).
 
 ## Workflow Gates
 
