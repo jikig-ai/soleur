@@ -27,7 +27,7 @@ rm .claude/ralph-loop.local.md
 
 ## Prevention
 
-The stop hook should detect stale state files using the existing `started_at` timestamp. A loop older than 4 hours is almost certainly a crash orphan. Implementation belongs in the `feat-fix-ralph-loop-stop-hook` worktree alongside the other stop hook fixes (PR #465).
+Implemented: the stop hook now checks `started_at` against a 4-hour TTL before reading stdin. State files older than 4 hours are auto-removed with a diagnostic message to stderr. See `plugins/soleur/hooks/stop-hook.sh` lines 22-37.
 
 ## Key Insight
 

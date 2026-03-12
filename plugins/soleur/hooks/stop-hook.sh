@@ -19,6 +19,23 @@ if [[ ! -f "$RALPH_STATE_FILE" ]]; then
   exit 0
 fi
 
+# --- TTL Check: Auto-remove stale state files from crashed sessions ---
+# When a session crashes or context is exhausted, the state file persists and
+# traps all subsequent sessions in an infinite loop. The started_at timestamp
+# lets us detect orphaned state files and clean them up automatically.
+TTL_HOURS=4
+STARTED_AT=$(awk '/^---$/{c++; next} c==1' "$RALPH_STATE_FILE" | grep '^started_at:' | sed 's/started_at: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+if [[ -n "$STARTED_AT" ]]; then
+  STARTED_EPOCH=$(date -d "$STARTED_AT" +%s 2>/dev/null || true)
+  NOW_EPOCH=$(date +%s)
+  if [[ -n "$STARTED_EPOCH" ]] && [[ $((NOW_EPOCH - STARTED_EPOCH)) -gt $((TTL_HOURS * 3600)) ]]; then
+    AGE_HOURS=$(( (NOW_EPOCH - STARTED_EPOCH) / 3600 ))
+    echo "Ralph loop: stale state file detected (started ${AGE_HOURS}h ago, TTL=${TTL_HOURS}h). Auto-removing." >&2
+    rm "$RALPH_STATE_FILE"
+    exit 0
+  fi
+fi
+
 # Read hook input from stdin (advanced stop hook API)
 HOOK_INPUT=$(cat)
 
