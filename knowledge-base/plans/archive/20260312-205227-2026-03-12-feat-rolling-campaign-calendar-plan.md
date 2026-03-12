@@ -90,22 +90,22 @@ This plan implements `feat-unified-marketing-campaign/spec.md` FR4 ("CMO-maintai
 
 ## Acceptance Criteria
 
-- [ ] `plugins/soleur/skills/campaign-calendar/SKILL.md` exists with correct frontmatter (third-person description)
-- [ ] Agent reads distribution-content/*.md files and parses frontmatter (title, type, publish_date, channels, status)
-- [ ] Calendar groups content into 4 statuses: overdue, upcoming, draft, published
-- [ ] Handles edge cases: zero files (empty state message), malformed frontmatter (skip with warning)
-- [ ] `knowledge-base/marketing/campaign-calendar.md` generated with `last_updated` frontmatter
-- [ ] `.github/workflows/scheduled-campaign-calendar.yml` triggers Monday 16:00 UTC via cron + `workflow_dispatch`
-- [ ] Workflow uses `claude-code-action` with `plugin_marketplaces` and `plugins` inputs
-- [ ] Workflow prompt includes AGENTS.md main-commit override
-- [ ] Push happens inside agent prompt with rebase-retry, not post-step
-- [ ] Commit message includes `[skip ci]`
-- [ ] Empty commits guarded with `git diff --cached --quiet`
-- [ ] Concurrency group prevents parallel runs
-- [ ] Discord failure notification on workflow error
-- [ ] Manual invocation writes file but does not commit
-- [ ] Skill counts updated in 5 locations
-- [ ] Skill registered in `docs/_data/skills.js`
+- [x] `plugins/soleur/skills/campaign-calendar/SKILL.md` exists with correct frontmatter (third-person description)
+- [x] Agent reads distribution-content/*.md files and parses frontmatter (title, type, publish_date, channels, status)
+- [x] Calendar groups content into 4 statuses: overdue, upcoming, draft, published
+- [x] Handles edge cases: zero files (empty state message), malformed frontmatter (skip with warning)
+- [x] `knowledge-base/marketing/campaign-calendar.md` generated with `last_updated` frontmatter
+- [x] `.github/workflows/scheduled-campaign-calendar.yml` triggers Monday 16:00 UTC via cron + `workflow_dispatch`
+- [x] Workflow uses `claude-code-action` with `plugin_marketplaces` and `plugins` inputs
+- [x] Workflow prompt includes AGENTS.md main-commit override
+- [x] Push happens inside agent prompt with rebase-retry, not post-step
+- [x] Commit message includes `[skip ci]`
+- [x] Empty commits guarded with `git diff --cached --quiet`
+- [x] Concurrency group prevents parallel runs
+- [x] Discord failure notification on workflow error
+- [x] Manual invocation writes file but does not commit
+- [x] Skill counts updated in 5 locations
+- [x] Skill registered in `docs/_data/skills.js`
 
 ## Test Scenarios
 

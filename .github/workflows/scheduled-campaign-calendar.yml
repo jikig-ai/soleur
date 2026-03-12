@@ -1,0 +1,92 @@
+# Weekly campaign calendar refresh using the soleur:campaign-calendar skill.
+# Scans distribution-content/ frontmatter and generates a rolling calendar view.
+# Persists the calendar to knowledge-base/marketing/campaign-calendar.md on main.
+# Runs Monday 16:00 UTC (after content-publisher's 14:00 UTC window).
+# To test manually: gh workflow run scheduled-campaign-calendar.yml
+#
+# Security: This workflow does NOT use untrusted event inputs in run: commands.
+# All inputs come from schedule/workflow_dispatch triggers (no user-controlled strings).
+
+name: "Scheduled: Campaign Calendar"
+
+on:
+  schedule:
+    - cron: '0 16 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: schedule-campaign-calendar
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  id-token: write
+
+jobs:
+  refresh-calendar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Ensure label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create "scheduled-campaign-calendar" \
+            --description "Weekly campaign calendar refresh" \
+            --color "0E8A16" 2>/dev/null || true
+
+      - name: Refresh campaign calendar
+        uses: anthropics/claude-code-action@1dd74842e568f373608605d9e45c9e854f65f543 # v1.0.63
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
+          plugins: 'soleur@soleur'
+          claude_args: '--model claude-sonnet-4-6 --max-turns 20 --allowedTools Bash,Read,Write,Edit,Glob,Grep'
+          prompt: |
+            IMPORTANT: This is an automated CI workflow. The AGENTS.md rule
+            "Never commit directly to main" does NOT apply here. You are
+            explicitly authorized to commit and push to main in this context.
+
+            Run /soleur:campaign-calendar on this repository.
+
+            MANDATORY FINAL STEP — persist the calendar to main:
+            Run these bash commands (do not skip, do not create a branch):
+            ```
+            git add knowledge-base/marketing/campaign-calendar.md
+            git diff --cached --quiet && echo "Calendar unchanged, skipping commit." && exit 0
+            git commit -m "ci: update campaign calendar [skip ci]"
+            git push origin main || { git pull --rebase origin main && git push origin main; }
+            ```
+
+      - name: Discord notification (failure)
+        if: failure()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if [[ -z "${DISCORD_WEBHOOK_URL:-}" ]]; then
+            echo "DISCORD_WEBHOOK_URL not set, skipping failure notification"
+            exit 0
+          fi
+          RUN_URL="${REPO_URL}/actions/runs/${RUN_ID}"
+          MESSAGE=$(printf '**Campaign Calendar refresh failed**\n\nWorkflow run: %s\n\nCheck logs for details.' \
+            "$RUN_URL")
+          PAYLOAD=$(jq -n \
+            --arg content "$MESSAGE" \
+            --arg username "Sol" \
+            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
+            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL")
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Discord failure notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Discord failure notification failed (HTTP $HTTP_CODE)"
+          fi
