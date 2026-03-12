@@ -1,11 +1,21 @@
 ---
 name: social-distribute
-description: "This skill should be used when distributing a blog article across social platforms. It reads a blog post, generates platform-specific content variants for Discord, X/Twitter, IndieHackers, Reddit, and Hacker News, optionally posts to Discord via webhook after approval, and writes a persistent content file to distribution-content/ with YAML frontmatter for the automated publishing pipeline. Triggers on \"distribute blog\", \"social distribute\", \"share article\", \"post to social\", \"distribute content\"."
+description: "This skill should be used when distributing a blog article across social platforms. It generates platform-specific content variants for Discord, X/Twitter, IndieHackers, Reddit, and Hacker News, and writes a persistent content file for the automated publishing pipeline. Triggers on \"distribute blog\", \"social distribute\", \"share article\", \"post to social\", \"distribute content\"."
 ---
 
 # Social Distribute
 
 Generate platform-specific content variants from a blog article and write them to a persistent content file for the automated publishing pipeline. Discord can optionally be posted immediately via webhook after approval. The content file feeds into the directory-driven cron pipeline (`content-publisher.sh`) for scheduled publishing.
+
+## Headless Mode Detection
+
+If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true` and strip `--headless` from `$ARGUMENTS`. The remainder is the blog post path.
+
+**Argument format:** `<blog-post-path> [--headless]`
+
+**Headless defaults for interactive gates:**
+- Phase 7 (Discord Approval): auto-selects **Skip** (never auto-post to external platforms without human approval). `channels` is always `discord, x`.
+- Phase 9 Step 2 (Overwrite Check): auto-selects **Overwrite** (content is regenerated from the same blog post, so overwriting is idempotent).
 
 ## Prerequisites
 
@@ -170,6 +180,8 @@ Suggested subreddits: r/SaaS, r/startups
 
 ### Phase 7: Discord Approval
 
+**If `HEADLESS_MODE=true`:** auto-select **Skip**. Discord is deferred to the content file for cron publishing.
+
 **If `DISCORD_BLOG_WEBHOOK_URL` or `DISCORD_WEBHOOK_URL` is set:**
 
 Use the **AskUserQuestion tool** with three options:
@@ -238,12 +250,20 @@ Output path: `knowledge-base/marketing/distribution-content/<slug>.md`
 
 **Step 2: Check for existing file**
 
-If a file already exists at the output path, use the **AskUserQuestion tool**:
+Check for an existing content file matching this slug. The check must account for both slug-only filenames and legacy numeric-prefixed filenames:
+
+```bash
+ls knowledge-base/marketing/distribution-content/*<slug>.md 2>/dev/null
+```
+
+If a match is found (either `<slug>.md` or `NN-<slug>.md`), use the matched filename as the output path (preserving the existing naming convention).
+
+**If `HEADLESS_MODE=true`:** auto-select **Overwrite** and continue.
+
+**If interactive and a file exists**, use the **AskUserQuestion tool**:
 
 - **Overwrite** -- Replace the existing file with new content
-- **Cancel** -- Abort file writing, print content to conversation instead
-
-If cancelled, fall back to printing all variants to the conversation (legacy behavior) and skip to Phase 11.
+- **Cancel** -- Abort file writing and stop. The user can rename or delete the existing file, then re-run.
 
 **Step 3: Determine channels field**
 
@@ -281,7 +301,11 @@ status: draft
 
 ## IndieHackers
 
-<ih content>
+**Title:** <ih title>
+
+**Body:**
+
+<ih body content>
 
 ---
 
@@ -289,6 +313,8 @@ status: draft
 
 **Subreddit:** <suggested subreddits>
 **Title:** <title>
+
+**Body:**
 
 <body>
 
@@ -300,14 +326,19 @@ status: draft
 **URL:** <article url>
 ```
 
-### Phase 10: Confirmation & Next Steps
+### Phase 10: Summary & Next Steps
 
-Output the file path and instructions:
+Output the file path, channel status, and instructions:
 
 ```
 Content file written: knowledge-base/marketing/distribution-content/<slug>.md
 
-Status: draft
+Distribution summary:
+- Discord: [Posted now via webhook / Will publish via cron when scheduled]
+- X/Twitter: Will publish via cron when scheduled
+- IndieHackers: Manual (content in file)
+- Reddit: Manual (content in file)
+- Hacker News: Manual (content in file)
 
 Next steps:
 1. Review the content file
@@ -315,23 +346,6 @@ Next steps:
 3. Change status from "draft" to "scheduled"
 4. The daily cron will publish to Discord and X on the scheduled date
 5. Reddit, IndieHackers, and Hacker News sections are for manual posting
-```
-
-## Distribution Summary
-
-### Phase 11: Summary
-
-Display a summary of the distribution:
-
-```
-Distribution summary:
-- Content file: knowledge-base/marketing/distribution-content/<slug>.md
-- Status: draft (review and schedule when ready)
-- Discord: [Posted now via webhook / Will publish via cron when scheduled]
-- X/Twitter: Will publish via cron when scheduled
-- IndieHackers: Manual (content in file)
-- Reddit: Manual (content in file)
-- Hacker News: Manual (content in file)
 ```
 
 ## Important Guidelines
@@ -346,6 +360,4 @@ Distribution summary:
 - Template variables in blog source (`{{ stats.agents }}` etc.) are resolved by passing current stats as LLM context -- the LLM substitutes actual values during generation
 - Markup artifacts (JSON-LD scripts, HTML details/summary tags, Nunjucks tags) in the blog source are ignored during generation -- they are meaningless in social posts
 - Missing `DISCORD_BLOG_WEBHOOK_URL` and `DISCORD_WEBHOOK_URL` does not block execution -- Discord is included in the content file's `channels` field for cron publishing
-- The content file is always written (unless the user cancels on overwrite). Discord webhook posting is optional and independent of the file write
-- The `channels` field in the content file reflects what the cron still needs to publish -- if Discord was posted via webhook, it is excluded from `channels`
-- Content files use the blog post slug directly as filename (no numeric prefix). The content-publisher scans all `*.md` files in the directory
+- New content files use the blog post slug as filename. If an existing file with a numeric prefix matches the slug (e.g., `06-<slug>.md`), the existing filename is preserved
