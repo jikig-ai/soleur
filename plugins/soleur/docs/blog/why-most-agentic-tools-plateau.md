@@ -71,6 +71,8 @@ This leads to a contrarian insight about AI-assisted development: **documentatio
 
 Every enforcement hook in Soleur exists because a written rule was insufficient. Agents rationalize skipping prose instructions the way developers rationalize skipping code review at 5 PM on a Friday. The escalation path — prose rule fails, incident documented, code guardrail added — has repeated across dozens of failure classes. The result is a system with four mechanical guards that block known failure modes before they happen: direct commits to the main branch, destructive operations on isolated workspaces, merges without upstream synchronization, and commits containing unresolved conflicts.
 
+These same guards enable multiple agents to work on separate features in parallel — each in its own isolated workspace, mechanically prevented from interfering with the others. Parallel execution is not a configuration option. It is a byproduct of the compounding arc: the guardrails that make it safe were themselves discovered through failures and enforced through hooks.
+
 This is not a theoretical position. It is an empirical finding from hundreds of sessions.
 
 ### The System Validates Its Own Workflow
