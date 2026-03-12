@@ -1,9 +1,9 @@
-# Operations Management -- Distribution Content
-
-**Blog post:** https://soleur.ai/blog/case-study-operations-management/
-**Title:** "Building an Operations Department for a One-Person Company"
-**Publish date:** Tue 2026-03-17
-
+---
+title: "Building an Operations Department for a One-Person Company"
+type: case-study
+publish_date: 2026-03-17
+channels: discord, x
+status: published
 ---
 
 ## Discord

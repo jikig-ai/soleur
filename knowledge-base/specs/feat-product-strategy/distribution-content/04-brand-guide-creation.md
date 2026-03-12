@@ -1,9 +1,9 @@
-# Brand Guide Creation -- Distribution Content
-
-**Blog post:** https://soleur.ai/blog/case-study-brand-guide-creation/
-**Title:** "From Scattered Positioning to a Full Brand Guide in Two Sessions"
-**Publish date:** Tue 2026-03-24
-
+---
+title: "From Scattered Positioning to a Full Brand Guide in Two Sessions"
+type: case-study
+publish_date: 2026-03-24
+channels: discord, x
+status: published
 ---
 
 ## Discord
