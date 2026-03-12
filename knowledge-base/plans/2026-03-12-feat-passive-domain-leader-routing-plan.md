@@ -35,12 +35,12 @@ Four file edits, no new files:
 
 ## Acceptance Criteria
 
-- [ ] AGENTS.md has a `## Passive Domain Routing` section (2 concise bullets)
-- [ ] The "zero agents until user confirms" rule is scoped to exclude passive domain routing
-- [ ] Brainstorm Phase 0.5 auto-fires domain leaders without AskUserQuestion
-- [ ] Domain config file header updated to reflect auto-fire behavior
-- [ ] Workshop paths reachable via explicit user request (not dead code)
-- [ ] `plugins/soleur/AGENTS.md` Domain Leaders table reflects new entry points
+- [x] AGENTS.md has a `## Passive Domain Routing` section (2 concise bullets)
+- [x] The "zero agents until user confirms" rule is scoped to exclude passive domain routing
+- [x] Brainstorm Phase 0.5 auto-fires domain leaders without AskUserQuestion
+- [x] Domain config file header updated to reflect auto-fire behavior
+- [x] Workshop paths reachable via explicit user request (not dead code)
+- [x] `plugins/soleur/AGENTS.md` Domain Leaders table reflects new entry points
 
 ## Test Scenarios
 
