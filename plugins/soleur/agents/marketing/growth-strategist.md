@@ -69,7 +69,7 @@ Prioritize findings by GEO impact: source citations > statistics/numbers > quota
 
 ## Brand Guide Integration
 
-Check for `knowledge-base/overview/brand-guide.md`. If it exists, read the Identity section (mission, target audience, positioning, tagline) and Voice section to:
+Check for `knowledge-base/marketing/brand-guide.md`. If it exists, read the Identity section (mission, target audience, positioning, tagline) and Voice section to:
 
 - Align keyword relevance assessments with the brand's target audience and positioning
 - Ensure rewrite suggestions match the brand voice

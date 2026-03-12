@@ -34,12 +34,12 @@
    2. Relay the question to the user via **AskUserQuestion**
    3. Invoke `Task business-validator(prior_gate_results + user_answer)` -- agent returns next gate question
    4. Repeat until all 6 gates complete and the vision alignment check runs
-   5. Final invocation writes the validation report to `knowledge-base/overview/business-validation.md` inside the worktree
+   5. Final invocation writes the validation report to `knowledge-base/product/business-validation.md` inside the worktree
 
 5. **Commit and push workshop artifacts:**
 
    ```bash
-   git add knowledge-base/overview/business-validation.md
+   git add knowledge-base/product/business-validation.md
    git commit -m "docs: capture validation report"
    git push
    ```
@@ -52,7 +52,7 @@
    Validation workshop complete!
 
    Document: none (validation workshop)
-   Validation report: knowledge-base/overview/business-validation.md
+   Validation report: knowledge-base/product/business-validation.md
    Issue: #N (using existing) | #N (created)
    Branch: feat-<name> (if worktree created)
    Working directory: .worktrees/feat-<name>/ (if worktree created)

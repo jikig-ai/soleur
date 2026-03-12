@@ -12,8 +12,8 @@ Read existing operations data before starting:
 
 | File | Purpose |
 |------|---------|
-| `knowledge-base/ops/expenses.md` | Check for existing entries to prevent duplicate setup |
-| `knowledge-base/ops/domains.md` | Reference if the tool involves domain configuration |
+| `knowledge-base/operations/expenses.md` | Check for existing entries to prevent duplicate setup |
+| `knowledge-base/operations/domains.md` | Reference if the tool involves domain configuration |
 
 If files do not exist, proceed without baseline context.
 
@@ -21,7 +21,7 @@ If files do not exist, proceed without baseline context.
 
 **Branch check:** Before making any file changes, check the current branch with `git branch --show-current`. If on `main` or `master`, warn the user: "You are on the main branch. File changes should happen in a worktree. Create one with `git worktree add .worktrees/feat-<name> -b feat/<name>` first, or confirm you want to proceed on main." Wait for confirmation before continuing.
 
-Accept the tool name, purpose, and signup URL from the user. Check `knowledge-base/ops/expenses.md` for existing entries matching this tool. If an entry exists, warn the user and ask whether to proceed (upgrade/reconfigure) or stop.
+Accept the tool name, purpose, and signup URL from the user. Check `knowledge-base/operations/expenses.md` for existing entries matching this tool. If an entry exists, warn the user and ask whether to proceed (upgrade/reconfigure) or stop.
 
 Use Playwright MCP tools to automate the signup flow. Fill non-sensitive fields; when reaching payment or credential fields, stop and move to the pause step.
 
@@ -52,7 +52,7 @@ After verification, gather the expense details:
 
 1. Ask for the actual amount paid and billing cycle (monthly/annual)
 2. Ask for the category (suggest `saas` as default)
-3. Update `knowledge-base/ops/expenses.md` following ops-advisor conventions:
+3. Update `knowledge-base/operations/expenses.md` following ops-advisor conventions:
    - Amounts: plain numbers in USD, no currency symbol
    - Dates: ISO 8601 (YYYY-MM-DD)
    - Categories: hosting, domain, dev-tools, saas, api
@@ -70,7 +70,7 @@ If the tool has user-visible presence:
 
 1. Read `plugins/soleur/docs/_data/site.json` and check if the tool's URL is listed
 2. Search `plugins/soleur/docs/pages/` for references to the tool
-3. Check `knowledge-base/overview/brand-guide.md` for the tool's handle or name
+3. Check `knowledge-base/marketing/brand-guide.md` for the tool's handle or name
 
 If any reference is missing, warn the user:
 

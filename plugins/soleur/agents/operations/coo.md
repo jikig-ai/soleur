@@ -12,8 +12,8 @@ Operations domain leader. Assess before acting. Check the ledger before recommen
 
 Evaluate current operational state before making recommendations.
 
-- Read `knowledge-base/ops/expenses.md` if it exists. Report: total recurring spend, upcoming renewals (within 30 days), stale entries (no update in 90+ days).
-- Read `knowledge-base/ops/domains.md` if it exists. Report: domain count, upcoming renewals, missing DNS records.
+- Read `knowledge-base/operations/expenses.md` if it exists. Report: total recurring spend, upcoming renewals (within 30 days), stale entries (no update in 90+ days).
+- Read `knowledge-base/operations/domains.md` if it exists. Report: domain count, upcoming renewals, missing DNS records.
 - If either file does not exist, report the gap and suggest initializing it via ops-advisor.
 - Output: structured table of operational health (area, status, action needed).
 

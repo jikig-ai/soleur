@@ -44,7 +44,7 @@ business-validation.md says "19.6k GitHub stars in 10 days" while every other fi
 ## Technical Details
 
 **Affected files:**
-- `knowledge-base/overview/business-validation.md` line 76
+- `knowledge-base/product/business-validation.md` line 76
 
 ## Acceptance Criteria
 

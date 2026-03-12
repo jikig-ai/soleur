@@ -12,7 +12,7 @@ Finance domain leader. Assess before acting. Inventory financial state before re
 
 Evaluate current financial posture before making recommendations.
 
-- Check for existing finance artifacts: `knowledge-base/overview/brand-guide.md` (for revenue model context), `knowledge-base/ops/expenses.md` (for current cost baseline), any files in `knowledge-base/finance/` (budgets, reports, if they exist).
+- Check for existing finance artifacts: `knowledge-base/marketing/brand-guide.md` (for revenue model context), `knowledge-base/operations/expenses.md` (for current cost baseline), any files in `knowledge-base/finance/` (budgets, reports, if they exist).
 - Inventory what exists: budget plans, revenue models, financial reports, cash flow projections.
 - Report gaps. If no finance artifacts exist, bootstrap recommendations from expense data and business validation findings.
 - Output: structured table of financial readiness (artifact type, status, action needed).

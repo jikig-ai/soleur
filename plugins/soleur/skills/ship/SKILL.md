@@ -122,7 +122,7 @@ Replace `HASH` with the actual commit hash from Step 1. Do NOT use `$()` to comb
 1. Verify `plugins/soleur/README.md` component counts are accurate
 2. Verify new entries appear in the correct tables
 3. If counts are wrong, fix them
-4. If `knowledge-base/overview/brand-guide.md` exists, check for stale agent/skill counts and update them
+4. If `knowledge-base/marketing/brand-guide.md` exists, check for stale agent/skill counts and update them
 
 **If no new components:** Skip this step.
 
