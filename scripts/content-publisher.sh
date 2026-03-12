@@ -25,7 +25,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-CONTENT_DIR="$REPO_ROOT/knowledge-base/specs/feat-product-strategy/distribution-content"
+CONTENT_DIR="$REPO_ROOT/knowledge-base/marketing/distribution-content"
 X_SCRIPT="$REPO_ROOT/plugins/soleur/skills/community/scripts/x-community.sh"
 AVATAR_URL="https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png"
 
