@@ -1,34 +1,32 @@
 # Tasks: feat-agentic-engineering-blog
 
-## Phase 1: Fact-Checking & Research Validation
+[Updated 2026-03-12] Simplified after plan review.
 
-- [ ] 1.1 Verify Every Compound Plugin latest agent/skill/command counts against their GitHub README
-- [ ] 1.2 Verify Karpathy dates: "vibe coding" (Feb 2025) and "agentic engineering" (Feb 2026)
-- [ ] 1.3 Verify Spec Kit, OpenSpec, Kiro, Tessl current feature claims from their docs
-- [ ] 1.4 Verify Soleur's own counts are current (agents, skills, domains, learnings, brainstorms, plans, specs)
-- [ ] 1.5 Check Martin Fowler's SDD comparison article for framing alignment
+## Phase 1: Fact-Check Gate (P0 — blocks writing)
 
-## Phase 2: Article Writing
+- [ ] 1.1 Verify Karpathy "agentic engineering" attribution with specific source URL
+- [ ] 1.2 Verify all competitor claims against primary sources (Spec Kit, OpenSpec, Kiro, Tessl, Every)
+- [ ] 1.3 Verify Soleur's current agent/skill counts, cite with date
 
-- [ ] 2.1 Write Section 1: The Hook (plateau problem, ~300 words)
-- [ ] 2.2 Write Section 2: Era 1 — Vibe Coding (~400 words)
-- [ ] 2.3 Write Section 3: Era 2 — Agentic Engineering (~800 words, competitor comparison table)
-- [ ] 2.4 Write Section 4: Engineering Depth (self-improving rules, worktree safety, lifecycle, plan review, ~600 words)
-- [ ] 2.5 Write Section 5: Era 3 — Company-as-a-Service (~600 words, link to CaaS article)
-- [ ] 2.6 Write Section 6: The Compound Advantage (~300 words, flywheel argument)
-- [ ] 2.7 Write Section 7: CTA (~100 words)
-- [ ] 2.8 Write SEO frontmatter (title, date, description, tags)
+## Phase 2: Write Post 1 (Engineering Depth)
 
-## Phase 3: Quality & Compliance
+- [ ] 2.1 Write the article (~2,500 words, 5 sections + FAQ)
+  - [ ] Section 1: Hook — plateau problem, "what compounds" framing
+  - [ ] Section 2: Landscape — vibe coding + agentic engineering in one section
+  - [ ] Section 3: Compound knowledge proof points (4 stories + comparison table)
+  - [ ] Section 4: Beyond Engineering bridge (link to CaaS article)
+  - [ ] Section 5: CTA
+  - [ ] FAQ: 3 questions for AEO
+- [ ] 2.2 Add SEO frontmatter (meta title under 60 chars, description, tags)
+- [ ] 2.3 Verify Eleventy build
 
-- [ ] 3.1 Brand compliance review (no "plugin," "tool," "AI-powered," hedging)
-- [ ] 3.2 Fact-check all competitor claims against Phase 1 findings
-- [ ] 3.3 Verify internal links (CaaS article, case studies)
-- [ ] 3.4 Verify word count target (3,000-3,500 words)
-- [ ] 3.5 Build and verify with Eleventy (`npx @11ty/eleventy`)
+## Phase 3: Review Post 2 (CaaS Article Updates)
 
-## Phase 4: Social Distribution
+- [ ] 3.1 Read existing CaaS article
+- [ ] 3.2 Add Three Eras framework reference
+- [ ] 3.3 Add cross-link to Post 1
+- [ ] 3.4 Verify statistics are current
 
-- [ ] 4.1 Generate X/Twitter thread (hook tweet + 3-4 body tweets + final with link)
-- [ ] 4.2 Generate Discord announcement
-- [ ] 4.3 Update content strategy doc with publication date
+## Phase 4: Publish
+
+- [ ] 4.1 Social distribution (X thread + Discord announcement)

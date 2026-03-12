@@ -1,185 +1,168 @@
 ---
-title: "feat: Pillar blog post — From Vibe Coding to Company-as-a-Service"
+title: "feat: Pillar blog post — Why Most Agentic Tools Plateau"
 type: feat
 date: 2026-03-12
+updated: 2026-03-12
 ---
 
-# Pillar Blog Post: The Three Eras of AI-Assisted Development
+# Post 1: Why Most Agentic Tools Plateau (and What Compound Knowledge Changes)
+
+[Updated 2026-03-12] Revised after plan review. Split from a single overloaded post into a two-post strategy. This plan covers Post 1 (engineering depth). Post 2 (CaaS) already exists and will be reviewed for updates.
 
 ## Overview
 
-Write and publish a thought leadership blog post tracing the evolution of AI-assisted development through three eras, positioning Soleur as the exemplar of Era 3 (Company-as-a-Service). The post demonstrates Soleur's engineering depth against direct competitors AND its unique cross-domain breadth.
+Write a focused blog post that demonstrates Soleur's engineering depth against direct competitors in the compound/agentic engineering space. The post argues that most agentic engineering tools plateau because they lack compound knowledge — and shows, with concrete proof, how Soleur's self-improving system breaks through that ceiling.
 
-**Target audience:** Engineering leaders / CTOs evaluating AI strategy + senior devs who've hit the ceiling with current tools.
+**Target audience:** Engineering leaders / CTOs evaluating AI strategy + senior devs who've outgrown Copilot/Cursor.
 
-**Content strategy alignment:** P1.3 pillar article. Target keywords: compound engineering, knowledge compounding, agentic engineering workflow.
+**Target length:** ~2,500 words.
+
+**Content strategy alignment:** P1.3 pillar article. Primary keywords: "compound engineering," "agentic engineering." Secondary: "knowledge compounding," "AI coding workflow."
+
+## Two-Post Strategy
+
+| Post | Focus | Audience | Status |
+|------|-------|----------|--------|
+| **Post 1** (this plan) | Engineering depth + compound engineering comparison | Senior devs, CTOs | NEW |
+| **Post 2** (existing) | Company-as-a-Service — the full-company vision | Solo founders, broader audience | REVIEW for updates |
+
+Post 1 links to Post 2 as: "and this extends beyond engineering — read how." Post 2 gets updated to reference the Three Eras framework and link back to Post 1.
 
 ## Problem Statement
 
-The "agentic engineering" content space is crowded with definitions (IBM, Addy Osmani, Glide, Taskade), but no one has articulated the full evolution from spec-driven development to compound engineering to Company-as-a-Service. Soleur needs a pillar article that:
+The "agentic engineering" content space is crowded with definitions but thin on evidence. No one has demonstrated, with concrete compounding examples, why some systems get better with use while others plateau. Soleur needs a post that:
 
-1. Earns SEO on underserved keywords ("compound engineering", "knowledge compounding")
+1. Earns SEO on "compound engineering" and "agentic engineering"
 2. Positions honestly against named competitors (Spec Kit, OpenSpec, Kiro, Tessl, Every)
-3. Provides concrete proof from the knowledge base — not just claims
+3. Provides concrete proof from the knowledge base — stories, not just claims
 
 ## Proposed Solution
 
-### Article Structure (Approach C: Three Eras)
+### Article Structure (5 sections)
 
-**Title:** "From Vibe Coding to Company-as-a-Service: The Three Eras of AI-Assisted Development"
+**Meta title (under 60 chars):** "Why Most Agentic Engineering Tools Plateau"
 
-**Estimated length:** 3,000-3,500 words (manifesto + practitioner hybrid)
+**On-page H1:** "Why Most Agentic Tools Plateau — and What Compound Knowledge Changes"
 
-#### Section 1: The Hook (~300 words)
+#### Section 1: The Hook (~250 words)
 
-Open with the plateau problem: engineering teams adopt AI tools that stop getting better after week two. The autocompletion era solved the easy part. The hard part — institutional memory, cross-domain coordination, self-improvement — remains unsolved.
+The plateau problem: engineering teams adopt AI tools that stop getting better after week two. Session 100 starts from the same blank slate as session 1. The tools solved autocomplete. They did not solve institutional memory.
+
+Frame the eras by **what compounds** (SpecFlow insight):
+- Era 1 (vibe coding): Nothing compounds. Every session starts from zero.
+- Era 2 (agentic engineering): Specs and engineering knowledge compound.
+- Era 3 (compound engineering done right): Everything compounds — rules, agents, workflows, and cross-domain knowledge.
 
 Do NOT reference the WhatsApp conversation. Keep it abstract.
 
-#### Section 2: Era 1 — Vibe Coding (2024-2025) (~400 words)
+#### Section 2: The Landscape — Where Most Tools Stop (~600 words)
 
-- Karpathy coined the term Feb 2025
-- Characteristics: ad-hoc prompting, autocomplete, conversation-as-IDE
-- What it solved: prototyping speed, boilerplate elimination
-- Where it breaks: no memory between sessions, no specs, no quality gates, no compounding
-- Tools: GitHub Copilot, Cursor, Windsurf (category references, not a hit piece)
+Combine Eras 1 and 2 into a single landscape section. Brief, not a history lesson.
 
-#### Section 3: Era 2 — Agentic Engineering (2025-2026) (~800 words)
+**Vibe coding (2024-2025):** Karpathy coined the term Feb 2025. Ad-hoc prompting, autocomplete, conversation-as-IDE. Works for prototypes. Breaks at scale — no memory, no specs, no quality gates.
 
-- Karpathy coined this Feb 2026 (one year after vibe coding)
-- Characteristics: specs, structured workflows, compound knowledge, agent orchestration
-- Sub-categories within Era 2:
-  - **Spec-driven:** Spec Kit (GitHub, MIT-licensed), OpenSpec (YC, brownfield-first), Kiro (AWS, enterprise/GovCloud), Tessl (spec registry, VC-funded)
-  - **Compound engineering:** Every's Compound Engineering (plan/work/assess/compound, 29 agents, learning capture)
-- "Acknowledge then transcend" tone for each competitor
-- **The ceiling of Era 2:** All tools focus exclusively on engineering. None cross into legal, marketing, sales, finance, operations, support, or product strategy
+**Agentic engineering (2025-2026):** Specs, structured workflows, agent orchestration. The market split into two approaches:
+- **Spec-driven:** Spec Kit (GitHub), OpenSpec, Kiro (AWS), Tessl — capture intent before coding
+- **Compound engineering:** Every's Compound Engineering — plan/work/assess/compound, captures learnings
 
-#### Section 4: Even Within Engineering, Depth Matters (~600 words)
+**The ceiling:** These are real advances. But none solve the deeper problem: does your system actually get better with use? Can you prove it?
 
-Before introducing Era 3, demonstrate Soleur's engineering superiority:
+Use magnitude comparisons for competitor numbers ("roughly 2x the agent count") rather than exact counts that go stale (Kieran's recommendation).
 
-1. **Self-improving rules:** AGENTS.md and constitution.md updated from learnings. Concrete example: worktree-write-guard arc (mistake → learning → constitution rule → PreToolUse hook). Four stages of permanent improvement.
+"Acknowledge then transcend" tone — but framed around the user's problem, not Soleur's perspective.
 
-2. **Branch safety / mechanical prevention:** PreToolUse hooks enforce never committing to main, worktree isolation, conflict marker detection. "Hooks beat documentation" — every hook exists because a prose rule failed first.
+#### Section 3: What Compound Knowledge Actually Looks Like (~900 words)
 
-3. **Full lifecycle depth:** Brainstorm → plan → deepen → work → review (multi-agent) → compound → ship. 7+ stages with research agents at each. Every has 4 stages.
+**The heart of the article.** This is where the post earns credibility.
 
-4. **Plan review scope reduction:** Three confirmed cases where parallel specialized reviewers (DHH-style, technical accuracy, simplicity) reduced complexity 30-70%. 65 tasks became 4.
+Four proof points, each told as a brief story translated into universal engineering concepts (SpecFlow: avoid Soleur-internal jargon):
 
-Include the comparison table from the brainstorm (Tool / Era / Strength / Gap Soleur Fills).
+1. **The safety net arc** (~250 words): An AI agent edited files outside its sandbox. Two hours of work lost. The team documented the failure. A rule was added to the governance file. Then a code guardrail made the mistake mechanically impossible. Four stages: failure → documentation → rule → enforcement. The system can never make that mistake again. (Translation of the worktree-write-guard arc.)
 
-#### Section 5: Era 3 — Company-as-a-Service (2026+) (~600 words)
+2. **Hooks beat documentation** (~150 words): Prose rules fail because agents rationalize skipping them. Every enforcement hook in the system exists because a written rule was insufficient. This is a contrarian insight: AI doesn't follow instructions the way humans do.
 
-- The other 70% of running a company is still manual
-- Link to and build on the existing CaaS article (`/blog/what-is-company-as-a-service/`)
-- 8 domain leaders (CTO, CMO, CLO, COO, CPO, CFO, CRO, CCO) — not just engineering
-- Cross-domain knowledge flow: brand guide → marketing content → competitive positioning → pricing strategy
-- The compound effect: 421 commits, 210 learnings, 78 brainstorms, 111 plans, 197 specs
-- "You decide. Agents execute. Knowledge compounds." (brand guide phrase)
+3. **Plan review scope reduction** (~250 words): Use the 8-feature data table (Case Study 3 from learnings research). Across 8 features, parallel specialized reviewers reduced complexity by 30-96%. 65 tasks became 4. The system generated its own evidence that plan review should be mandatory. Frame as: "the compound system validated its own workflow gate."
 
-#### Section 6: The Compound Advantage (~300 words)
+4. **Self-improving instructions** (~250 words): The compound step doesn't just capture learnings — it routes insights back to the specific agent or skill that was active. Instructions literally get better with use. The governance document grew from 26 lines to 208 rules, each triggered by a real failure. Include one short config snippet (5-10 lines) as proof.
 
-The key insight: compound knowledge isn't a feature — it's a flywheel. Each of the three layers (full lifecycle, living KB, self-improving system) reinforces the others. The longer you use the system, the wider the gap between Soleur and tools without compounding.
+**Comparison table** (reframed around user needs, not Soleur's perspective):
 
-Tie back to brand thesis: "The first billion-dollar company run by one person isn't science fiction. It's an engineering problem."
+| What you need | Spec-driven tools | Compound engineering | Soleur |
+|---------------|------------------|---------------------|--------|
+| Capture intent before coding | Yes | Partial | Yes |
+| Remember learnings across sessions | No | Yes | Yes |
+| Self-improving rules and guardrails | No | No | Yes |
+| Mechanical prevention of known failures | No | No | Yes |
+| Full lifecycle (brainstorm → ship) | No | Partial (4 stages) | Yes (7+ stages) |
 
-#### Section 7: CTA (~100 words)
+#### Section 4: Beyond Engineering (~300 words)
 
-Direct, brand-voice CTA. No hedging. Point to the Soleur landing page and Claude Code marketplace.
+Brief bridge to the CaaS vision. Do NOT re-explain CaaS — link to the existing article.
 
-### Brand Compliance Checklist
+"If compound knowledge transforms engineering, what happens when you apply the same principle to every department?" Brief mention of 8 domain leaders, cross-domain knowledge flow. Then: "Read the full case for Company-as-a-Service →"
 
-- [ ] Never say "plugin," "tool," or "AI-powered"
-- [ ] Never hedge with "might," "could," "potentially"
-- [ ] Lead with what becomes possible, not what the tool does
-- [ ] Use declarative statements
-- [ ] Keep sentences short and punchy in marketing-adjacent sections
-- [ ] Frame the founder as decision-maker, system as executor
+This section exists to connect the two posts and give the engineering-focused reader a glimpse of the bigger picture.
 
-## Technical Considerations
+#### Section 5: CTA (~100 words)
 
-### Blog Infrastructure (Already Exists)
+Direct, brand-voice CTA. One clear action. Link to the Soleur landing page.
 
-- `plugins/soleur/docs/blog/blog.json` — Eleventy data file (tags, layout, permalink, ogType)
-- `plugins/soleur/docs/blog/` — Contains 6 existing articles (CaaS pillar + 5 case studies)
-- Layout: `blog-post.njk`
-- Permalink pattern: `blog/{{ page.fileSlug }}/index.html`
-- No new infrastructure needed — just add a new `.md` file
+### FAQ Section (3 questions, for AEO/Schema markup)
 
-### SEO Requirements
+1. "What is compound engineering?" — Brief definition + how it differs from agentic engineering
+2. "How does knowledge compounding work in AI-assisted development?" — The compound loop: work → capture → route → enforce
+3. "What is the difference between vibe coding and agentic engineering?" — Quick comparison
 
-- Frontmatter: title, date, description, tags
-- Target keywords in title, description, H2s, and first paragraph
-- Internal links to CaaS article and case studies
-- Open Graph tags (handled by `blog.json` ogType: article)
+## P0: Fact-Check Gate (Must Complete Before Writing)
 
-### Fact-Checking Requirements
+Verify with primary sources. Any claim that cannot be sourced gets softened or removed.
 
-Before publishing, verify:
-- [ ] Every Compound Plugin agent/skill counts (claimed 29 agents — verify against their latest README)
-- [ ] Karpathy dates for "vibe coding" (Feb 2025) and "agentic engineering" (Feb 2026)
-- [ ] Spec Kit, OpenSpec, Kiro, Tessl feature claims match their current public documentation
-- [ ] Soleur's own numbers are current (62 agents, 57 skills, 8 domains, 210 learnings, etc.)
-- [ ] All competitor descriptions are fair and accurate
+- [ ] Karpathy "agentic engineering" attribution — find the specific tweet/post URL (Feb 2026). If unverifiable, restructure to "the term gained traction in early 2026" without attributing to one person.
+- [ ] Karpathy "vibe coding" — verify Feb 2025 tweet
+- [ ] Spec Kit: verify it is a GitHub org project (not just hosted on GitHub)
+- [ ] OpenSpec: verify YC batch and current status
+- [ ] Kiro: verify relationship to AWS (product vs funded startup vs built on AWS)
+- [ ] Tessl: verify funding status and current availability (closed beta?)
+- [ ] Every Compound Plugin: verify current component counts from their README
+- [ ] Soleur's own counts: run `find` on agents/skills at time of writing, cite as "as of [date]"
+- [ ] All competitor descriptions fair and verifiable against their public docs
+
+**Rule:** No naked numbers. Every quantitative claim gets a linked source or a date qualifier.
+
+## Post 2: CaaS Article Review
+
+Review the existing article at `plugins/soleur/docs/blog/what-is-company-as-a-service.md` for:
+
+- [ ] Add reference to the Three Eras framework ("this is Era 3")
+- [ ] Add internal link to Post 1 ("for how compound knowledge works in engineering, read...")
+- [ ] Check if any content duplicated in Post 1 should be removed or refactored
+- [ ] Verify all statistics are current
 
 ## Acceptance Criteria
 
-- [ ] Article follows Three Eras framework (Vibe Coding → Agentic Engineering → CaaS)
-- [ ] Names competitors directly with honest, verifiable assessment
-- [ ] Includes 3+ concrete proof points from the knowledge base
-- [ ] Passes brand compliance checklist (no "plugin," "tool," "AI-powered," hedging)
-- [ ] SEO frontmatter complete (title, date, description, tags)
-- [ ] Internal links to CaaS article and relevant case studies
-- [ ] 3,000-3,500 words
-- [ ] Fact-checked competitor claims
-- [ ] Builds successfully in Eleventy (`npx @11ty/eleventy --serve`)
+- [ ] 5-section structure, ~2,500 words
+- [ ] All competitor claims fact-checked with primary sources (P0 gate passed)
+- [ ] 3+ concrete proof points from the knowledge base, told as stories
+- [ ] Comparison table framed around user needs
+- [ ] FAQ section with 3 questions (for AEO)
+- [ ] SEO frontmatter: meta title under 60 chars, description, tags
+- [ ] Internal links to CaaS article and at least 1 case study
+- [ ] Builds in Eleventy
+- [ ] Brand guide compliance (reference `knowledge-base/overview/brand-guide.md`)
 
-## Test Scenarios
+## References
 
-- Given the blog post markdown, when built with Eleventy, then it renders at `/blog/three-eras-agentic-engineering/`
-- Given a reader unfamiliar with Soleur, when reading Section 4, then they understand Soleur's engineering advantages with concrete examples
-- Given a CTO evaluating AI strategy, when reading the comparison table, then they can assess each tool's coverage without feeling it's a biased hit piece
-- Given the SEO targets, when searching "compound engineering" or "knowledge compounding," then this article appears in results within 30 days
-
-## Success Metrics
-
-- Ranks page 1 for "compound engineering" within 60 days
-- Drives 500+ unique visitors in first month
-- At least 10 social shares (X/Twitter, LinkedIn, HN)
-- Internal link click-through to CaaS article > 15%
-
-## Dependencies & Risks
-
-**Dependencies:**
-- Eleventy docs site must build and deploy (existing CI/CD handles this)
-- Social distribution requires X/Twitter and Discord access (both configured)
-
-**Risks:**
-- Competitor response — naming tools directly may draw pushback. Mitigation: ensure every claim is factually verifiable and fair
-- Outdated competitor data — tool features change fast. Mitigation: fact-check all claims within 48 hours of publishing
-- "Three Eras" framing may feel presumptuous. Mitigation: ground each era in named, dated events (Karpathy's coinages) not our own declarations
-
-## References & Research
-
-### Internal References
 - Brainstorm: `knowledge-base/brainstorms/2026-03-12-agentic-engineering-blog-brainstorm.md`
 - Spec: `knowledge-base/specs/feat-agentic-engineering-blog/spec.md`
-- User research: `knowledge-base/community/user-conversations/2026-03-12-ex-colleague-bss-ai.md`
 - Brand guide: `knowledge-base/overview/brand-guide.md`
-- Content strategy: `knowledge-base/overview/content-strategy.md`
 - Existing CaaS article: `plugins/soleur/docs/blog/what-is-company-as-a-service.md`
 - Blog data: `plugins/soleur/docs/blog/blog.json`
+- Issue: #548 | Draft PR: #547
 
-### External References
-- Karpathy on agentic engineering: search "Andrej Karpathy agentic engineering February 2026"
-- Addy Osmani's 5 principles: `addyosmani.com/blog/agentic-engineering/`
-- GitHub Spec Kit: `github.com/github/spec-kit`
+### External Sources (for fact-checking)
+- Spec Kit: `github.com/github/spec-kit`
 - OpenSpec: `github.com/Fission-AI/OpenSpec`
 - Kiro: `kiro.dev`
 - Tessl: `tessl.io`
 - Every Compound Plugin: `github.com/EveryInc/compound-engineering-plugin`
 - Martin Fowler SDD comparison: `martinfowler.com/articles/exploring-gen-ai/sdd-3-tools.html`
-
-### Related Work
-- Issue: #548
-- Draft PR: #547
