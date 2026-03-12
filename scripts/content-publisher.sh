@@ -111,7 +111,10 @@ resolve_content() {
     5) CONTENT_FILE="$CONTENT_DIR/05-business-validation.md"
        CASE_NAME="Business Validation"
        MANUAL_PLATFORMS="indiehackers,reddit,hackernews" ;;
-    *) echo "Error: Invalid case study number: $num (expected 1-5)" >&2
+    6) CONTENT_FILE="$CONTENT_DIR/06-why-most-agentic-tools-plateau.md"
+       CASE_NAME="Why Most Agentic Tools Plateau"
+       MANUAL_PLATFORMS="indiehackers,reddit,hackernews" ;;
+    *) echo "Error: Invalid content number: $num (expected 1-6)" >&2
        exit 1 ;;
   esac
 
