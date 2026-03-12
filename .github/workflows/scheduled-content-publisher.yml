@@ -54,6 +54,7 @@ jobs:
             --color "0E8A16" 2>/dev/null || true
 
       - name: Publish content
+        id: publish
         env:
           CASE_STUDY: ${{ inputs.case_study }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
@@ -62,10 +63,18 @@ jobs:
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
           GH_TOKEN: ${{ github.token }}
-        run: bash scripts/content-publisher.sh "$CASE_STUDY"
+        run: |
+          exit_code=0
+          bash scripts/content-publisher.sh "$CASE_STUDY" || exit_code=$?
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          if [[ "$exit_code" -eq 2 ]]; then
+            echo "::warning::Partial failure -- some platforms failed but fallback issues were created."
+            exit 0
+          fi
+          exit "$exit_code"
 
       - name: Discord notification (failure)
-        if: failure()
+        if: failure() && steps.publish.outputs.exit_code != '2'
         env:
           CASE_STUDY: ${{ inputs.case_study }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
