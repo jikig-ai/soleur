@@ -13,7 +13,7 @@ Before generating content, verify both prerequisites. If either fails, display t
 
 ### 1. Brand Guide
 
-Check if `knowledge-base/overview/brand-guide.md` exists.
+Check if `knowledge-base/marketing/brand-guide.md` exists.
 
 **If missing:**
 > No brand guide found. Run the brand architect agent first to establish brand identity:

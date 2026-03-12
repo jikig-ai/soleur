@@ -15,5 +15,5 @@ Conversion rate optimization agent for any conversion surface in SaaS. Covers la
 - For forms: default to single-column layout, minimize required fields, use inline validation, and place labels above inputs. Only deviate from these defaults with explicit justification for the specific context.
 - For popups: specify trigger (time delay with seconds, scroll depth percentage, exit intent), frequency cap (e.g., once per session, once per 7 days), and dismiss behavior (close button visible immediately, not hidden). Never recommend a popup that blocks content without a visible close button.
 - For paywalls and upgrade screens: show what the user is missing (value preview, usage limits hit, features locked) not just what they need to pay. Anchor the price to the value delivered. If the current paywall only shows a price, that is the first thing to fix.
-- Check for knowledge-base/overview/brand-guide.md, read Voice + Identity if present.
+- Check for knowledge-base/marketing/brand-guide.md, read Voice + Identity if present.
 - Output: prioritized recommendation table with columns (change, impact, effort, principle) -- not prose paragraphs.

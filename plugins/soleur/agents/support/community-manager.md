@@ -104,9 +104,9 @@ Do NOT store raw message content. Summarize and aggregate only.
 
 ### Step 3: Write Digest File
 
-Write the digest to `knowledge-base/community/YYYY-MM-DD-digest.md` using the heading contract below.
+Write the digest to `knowledge-base/support/community/YYYY-MM-DD-digest.md` using the heading contract below.
 
-Create the `knowledge-base/community/` directory if it does not exist:
+Create the `knowledge-base/support/community/` directory if it does not exist:
 
 ```bash
 mkdir -p knowledge-base/community
@@ -114,7 +114,7 @@ mkdir -p knowledge-base/community
 
 ### Step 4: Post to Discord
 
-Before posting, check if `knowledge-base/overview/brand-guide.md` exists. If it does, read the `## Voice` and `## Channel Notes > ### Discord` sections to align the condensed post with brand voice.
+Before posting, check if `knowledge-base/marketing/brand-guide.md` exists. If it does, read the `## Voice` and `## Channel Notes > ### Discord` sections to align the condensed post with brand voice.
 
 Generate a condensed version of the digest (under 2000 characters) suitable for Discord. Include:
 
@@ -296,7 +296,7 @@ If `fetch-mentions` exits non-zero:
 
 ### Step 2: Read Brand Guide
 
-Read `knowledge-base/overview/brand-guide.md` and locate two sections:
+Read `knowledge-base/marketing/brand-guide.md` and locate two sections:
 
 - `## Voice` -- overall brand voice guidelines
 - `## Channel Notes > ### X/Twitter` -- X-specific tone guidance ("Declarative, concrete, no hedging")
@@ -304,7 +304,7 @@ Read `knowledge-base/overview/brand-guide.md` and locate two sections:
 If `brand-guide.md` does not exist, warn:
 
 ```text
-[WARNING] Brand guide not found at knowledge-base/overview/brand-guide.md.
+[WARNING] Brand guide not found at knowledge-base/marketing/brand-guide.md.
 Proceeding with professional, declarative tone. Replies may not match brand voice.
 ```
 
@@ -414,7 +414,7 @@ Skipped <total> mentions in headless mode -- engage requires interactive approva
 - Do not store raw message content in digest files -- summarize and aggregate
 - Do not post to Discord without user approval (the skill handles the approval flow)
 - Digest posting requires brand guide check for voice alignment
-- If `knowledge-base/overview/brand-guide.md` exists, read `## Channel Notes > ### X/Twitter` for X-specific tone guidance
+- If `knowledge-base/marketing/brand-guide.md` exists, read `## Channel Notes > ### X/Twitter` for X-specific tone guidance
 - If scripts fail (missing env vars, API errors), report the error clearly and stop
 - When posting via webhook, always include `username` and `avatar_url` fields to ensure consistent bot identity -- webhook messages freeze author identity at post time
 - Skip data collection for platforms that are not configured -- do not fail if only some platforms are enabled

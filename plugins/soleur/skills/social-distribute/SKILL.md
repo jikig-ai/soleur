@@ -23,7 +23,7 @@ Before generating content, verify all prerequisites. If a hard prerequisite fail
 
 ### 1. Brand Guide (hard)
 
-Check if `knowledge-base/overview/brand-guide.md` exists.
+Check if `knowledge-base/marketing/brand-guide.md` exists.
 
 **If missing:**
 > No brand guide found. Run the brand architect agent first to establish brand identity:

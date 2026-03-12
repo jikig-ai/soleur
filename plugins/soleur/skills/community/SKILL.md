@@ -50,7 +50,7 @@ Generate a multi-platform community digest. Spawns the `community-manager` agent
 
 1. Run platform detection
 2. Spawn agent: `community-manager` with prompt: "Generate a community digest covering the last 7 days. Enabled platforms: [list]. Collect data from each enabled platform and produce a unified digest."
-3. The agent writes the digest to `knowledge-base/community/YYYY-MM-DD-digest.md`
+3. The agent writes the digest to `knowledge-base/support/community/YYYY-MM-DD-digest.md`
 
 If `--headless` is set, skip the Discord posting approval gate (the agent handles this).
 
@@ -94,7 +94,7 @@ X/Twitter must be enabled (all 4 credential variables set). If X is not configur
 2. Read the since-id state file (`.soleur/x-engage-since-id`, resolved via `git rev-parse --show-toplevel`). If the file exists and contains a valid numeric ID, pass it as `--since-id` to the fetch command. If missing or non-numeric, skip (fetches last N mentions).
 3. Spawn agent: `community-manager` with prompt: "Engage with recent X/Twitter mentions. Use Capability 4: Mention Engagement. Max results: [N]. Since ID: [ID or none]."
 4. The agent fetches mentions via `x-community.sh fetch-mentions`
-5. For each mention, the agent drafts a reply following brand guide voice (`knowledge-base/overview/brand-guide.md` sections `## Voice` and `## Channel Notes > ### X/Twitter`). If the brand guide is missing, the agent warns but proceeds with a professional, declarative tone.
+5. For each mention, the agent drafts a reply following brand guide voice (`knowledge-base/marketing/brand-guide.md` sections `## Voice` and `## Channel Notes > ### X/Twitter`). If the brand guide is missing, the agent warns but proceeds with a professional, declarative tone.
 6. Each draft is presented via AskUserQuestion with options:
    - **Accept** -- post this reply via `x-community.sh post-tweet --reply-to <mention_id>`
    - **Edit** -- modify the reply text (validate 280-character limit; re-prompt if over)
@@ -143,7 +143,7 @@ After a new platform is set up and verified via its setup script (confirmed by t
 |------|------------------|
 | `plugins/soleur/docs/_data/site.json` | URL entry for the platform |
 | `plugins/soleur/docs/pages/community.njk` | Card in the Connect section |
-| `knowledge-base/overview/brand-guide.md` | Platform handle mention |
+| `knowledge-base/marketing/brand-guide.md` | Platform handle mention |
 
 If any surface is missing, output a warning:
 

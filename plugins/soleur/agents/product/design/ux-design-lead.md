@@ -14,7 +14,7 @@ This agent requires the Pencil MCP server registered with Claude Code. If Pencil
 
 ### Step 1: Design Brief
 
-Check if `knowledge-base/overview/brand-guide.md` exists. If found, read the `## Visual Direction` section and extract color palette, typography, and style as primary design constraints.
+Check if `knowledge-base/marketing/brand-guide.md` exists. If found, read the `## Visual Direction` section and extract color palette, typography, and style as primary design constraints.
 
 Use the **AskUserQuestion tool** to clarify the design scope:
 
@@ -46,7 +46,7 @@ Use the **AskUserQuestion tool** to clarify the design scope:
 ### Step 3: Deliver
 
 1. Present final `get_screenshot` to the user for approval.
-2. Save the .pen file to `knowledge-base/design/{domain}/{descriptive-name}.pen` (e.g., `design/brand/landing-page.pen`, `design/onboarding/signup-flow.pen`).
+2. Save the .pen file to `knowledge-base/product/design/{domain}/{descriptive-name}.pen` (e.g., `design/brand/landing-page.pen`, `design/onboarding/signup-flow.pen`).
 3. Announce the file location.
 
 ## UX Audit (Existing HTML Pages)
@@ -61,10 +61,10 @@ When reviewing existing HTML pages (not creating new .pen designs), audit inform
 
 ## Design-Implementation Sync
 
-After HTML/CSS changes to pages that have corresponding .pen design files in `knowledge-base/design/`, update the .pen files to reflect the new structure. This keeps the design source of truth consistent with the live implementation. Check for matching .pen files by searching `knowledge-base/design/` for filenames related to the changed pages.
+After HTML/CSS changes to pages that have corresponding .pen design files in `knowledge-base/product/design/`, update the .pen files to reflect the new structure. This keeps the design source of truth consistent with the live implementation. Check for matching .pen files by searching `knowledge-base/product/design/` for filenames related to the changed pages.
 
 ## Important Guidelines
 
 - Only use Pencil MCP tools for .pen file operations -- do not read .pen files with the Read tool
 - When brand-guide.md exists, the `## Visual Direction` section is the source of truth for colors, fonts, and style
-- Save all .pen files under `knowledge-base/design/{domain}/` organized by domain
+- Save all .pen files under `knowledge-base/product/design/{domain}/` organized by domain

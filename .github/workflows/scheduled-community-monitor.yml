@@ -1,6 +1,6 @@
 # Daily community monitoring using the community-manager agent.
 # Fetches Discord activity and X/Twitter metrics, generates a digest
-# committed to knowledge-base/community/, and creates a GitHub Issue
+# committed to knowledge-base/support/community/, and creates a GitHub Issue
 # with the daily report. No autonomous posting -- human approval preserved.
 # Implements #145: Run Community Agent continuously.
 # Runs daily at 08:00 UTC and on manual dispatch.
@@ -87,10 +87,10 @@ jobs:
                  Use a 1-day lookback window (not the default 7-day).
                - If a script fails, log the error and continue with other platforms.
 
-            3. **Read brand guide** at knowledge-base/overview/brand-guide.md (section ## Voice)
+            3. **Read brand guide** at knowledge-base/marketing/brand-guide.md (section ## Voice)
                before writing any content. Match the brand voice in the digest.
 
-            4. **Generate digest** and write to knowledge-base/community/YYYY-MM-DD-digest.md
+            4. **Generate digest** and write to knowledge-base/support/community/YYYY-MM-DD-digest.md
                (use today's date). Follow the digest file contract from the community-manager
                agent: frontmatter with period_start/period_end/generated_at, then sections
                ## Period, ## Activity Summary, ## Top Contributors, and optional sections
@@ -102,7 +102,7 @@ jobs:
             5. **Commit and push** the digest:
                ```
                mkdir -p knowledge-base/community
-               git add knowledge-base/community/
+               git add knowledge-base/support/community/
                git diff --cached --quiet && echo "No changes to commit" && exit 0
                git commit -m "docs: daily community digest"
                git push origin main || { git pull --rebase origin main && git push origin main; }

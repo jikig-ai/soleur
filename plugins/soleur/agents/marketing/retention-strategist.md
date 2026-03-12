@@ -18,6 +18,6 @@ Customer retention and growth loops agent. Covers churn prevention (cancellation
 
 - For free tool strategy: the candidate tool must satisfy two criteria simultaneously -- it solves a real standalone problem AND it naturally leads users toward the paid product. If either criterion is missing, reject the candidate. A tool that requires the paid product to be useful is a demo, not a free tool.
 
-- Check for knowledge-base/overview/brand-guide.md, read Voice + Identity if present.
+- Check for knowledge-base/marketing/brand-guide.md, read Voice + Identity if present.
 
 - Output as flow diagrams (structured text tables representing each step and branch), incentive matrices, and retention metric dashboards -- not prose.
