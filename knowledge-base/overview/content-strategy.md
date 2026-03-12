@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-09
-last_reviewed: 2026-03-09
+last_updated: 2026-03-12
+last_reviewed: 2026-03-12
 review_cadence: quarterly
 depends_on:
   - knowledge-base/overview/brand-guide.md
@@ -14,7 +14,7 @@ depends_on:
 
 ## Purpose
 
-This document defines what content Soleur needs, why, in what order, and how it connects to the marketing strategy. It synthesizes findings from the content audit (2026-02-19), keyword research (2026-02-19), and competitive intelligence (2026-03-09).
+This document defines what content Soleur needs, why, in what order, and how it connects to the marketing strategy. It synthesizes findings from the content audit (2026-02-19), keyword research (2026-02-19), and competitive intelligence (2026-03-12).
 
 ---
 
@@ -66,18 +66,49 @@ Five content gaps block Soleur's organic discovery and category authority. Ranke
 - Connection to Every.to's compound engineering methodology
 - Comparison table: vibe coding vs. agentic engineering vs. compound engineering
 
-### Gap 5: Autopilot vs. Decision-Maker Positioning Against Polsia (Critical) [NEW 2026-03-09]
+### Gap 5: Autopilot vs. Decision-Maker Positioning Against Polsia (Critical) [NEW 2026-03-09, UPDATED 2026-03-12]
 
-**What is missing:** Polsia has emerged as the most direct CaaS competitor, crossing $1M ARR in one month with 1,100+ autonomously managed companies. Polsia runs a fully autonomous model (CEO agent decides everything, founder receives morning summary). No content anywhere articulates why Soleur's founder-in-the-loop philosophy produces better outcomes than full autonomy. This is the most urgent new content gap.
+**What is missing:** Polsia has accelerated to $1.5M ARR with 2,000+ autonomously managed companies (up from $1M ARR and 1,100+ companies at prior scan). Pricing shifted from flat $50/month to tiered $29-59/month. Polsia's founder Ben Broca's "80% AI, 20% taste" philosophy is gaining media presence (Solo Founders Podcast). No content anywhere articulates why Soleur's founder-in-the-loop philosophy produces better outcomes than full autonomy. This remains the most urgent content gap.
 
-**Why it matters:** Polsia validates the CaaS market thesis but proposes a fundamentally different answer: remove the human entirely. Solo founders evaluating both platforms need content that frames the trade-off clearly. Without it, Polsia's "AI runs your company while you sleep" narrative goes unchallenged. The philosophical split (autopilot vs. decision-maker) is Soleur's single clearest differentiator against Polsia and should be established before Polsia defines the narrative.
+**Why it matters:** Polsia's growth trajectory ($1M to $1.5M ARR in ~2 weeks) validates the CaaS market thesis aggressively. The tiered pricing ($29-59/month) now undercuts Soleur's hypothesized $49-99/month range at the low end. Solo founders evaluating both platforms need content that frames the trade-off clearly. Without it, Polsia's "AI runs your company while you sleep" narrative goes unchallenged and its pricing anchors expectations.
 
 **Content needed:**
 - Pillar article: "Autopilot vs. Decision-Maker: Two Models for AI Company Operation"
 - Comparison page: "Soleur vs. Polsia" (honest positioning on philosophy, domain coverage, knowledge persistence)
 - Blog post: "Why Human Judgment Compounds Better Than Full Autonomy" (data-driven argument using Soleur's 420+ PR history as evidence)
 
-### Gap 6: Price Justification Framework (Medium)
+### Gap 6: Cursor Agent Platform Positioning (Critical) [NEW 2026-03-12]
+
+**What is missing:** Cursor shipped Automations (March 5, 2026) -- always-on agents triggered by GitHub, Slack, Linear, PagerDuty, and cron schedules -- plus 30+ new marketplace plugins from Atlassian, Datadog, GitLab, and others. Cursor is no longer just an IDE; it is becoming an agent platform with its own plugin ecosystem and built-in memory that learns across runs. No content anywhere addresses this shift or explains why Soleur's approach is fundamentally different.
+
+**Why it matters:** The "I already use Cursor" objection just got harder to answer. Previously, the response was "Cursor is engineering-only." Now Cursor has a plugin marketplace, event-driven automations, and team marketplaces for private plugins. Third-party developers could build business-domain plugins for Cursor's marketplace, partially replicating Soleur's multi-domain coverage. The "and" positioning (Soleur works with Cursor, not instead of it) needs to be articulated with awareness of Cursor's expanded surface.
+
+**Content needed:**
+- Updated comparison page: "Soleur vs. Cursor" (addressing Automations, marketplace, and the engineering-platform vs. company-platform distinction)
+- Blog post: "Why an Agent Platform Is Not an AI Organization" (distinction between event-driven automation and lifecycle orchestration with cross-domain knowledge compounding)
+- Update to the IDE Positioning gap (Gap 3) to reflect Cursor's March 2026 evolution
+
+### Gap 7: Microsoft Copilot Cowork + Anthropic Partnership Narrative (High) [NEW 2026-03-12]
+
+**What is missing:** Microsoft launched Copilot Cowork (March 9, 2026) powered by Anthropic Claude, bringing agentic task execution into Outlook, Teams, and Excel as part of a new E7 Frontier Suite. This extends Anthropic's technology into the 400M+ Microsoft 365 user base. No content addresses this development or frames Soleur's positioning relative to the enterprise-targeted normalization of agentic business automation.
+
+**Why it matters:** Even though Copilot Cowork targets enterprises (not solo founders), it validates and commoditizes the "agentic business automation" category at massive scale. Founders will increasingly expect AI to handle business tasks autonomously. The content opportunity is framing Soleur as the founder-controlled, local-first, open-source alternative to enterprise-locked cloud automation.
+
+**Content needed:**
+- Blog post: "Enterprise Agentic Automation vs. Founder-Controlled AI Organizations" (Microsoft/Anthropic partnership as validation, Soleur as the solo-founder answer)
+- Update to Cowork comparison page to note the Microsoft partnership and dual distribution surface
+
+### Gap 8: Paperclip Orchestration Layer Differentiation (Medium) [NEW 2026-03-12]
+
+**What is missing:** Paperclip (14.6k GitHub stars, MIT-licensed) provides open-source orchestration for zero-human companies: org charts, budgets, governance, heartbeat scheduling, multi-company support. It is infrastructure-layer and agent-runtime-agnostic (supports Claude, Cursor, Codex, etc.). The upcoming Clipmart feature (pre-built company templates) could lower the barrier to "zero-human company" creation. No content explains Soleur's relationship to Paperclip (complementary layers: orchestration vs. domain intelligence).
+
+**Why it matters:** Developers discovering Paperclip will ask whether it replaces Soleur. The answer is no -- Paperclip provides the organizational scaffolding, Soleur provides the domain-specific agents, skills, and compounding knowledge. Articulating this complementary positioning could turn Paperclip's distribution into a channel for Soleur.
+
+**Content needed:**
+- Blog post: "Orchestration vs. Intelligence: How Paperclip and Soleur Complement Each Other"
+- Potential integration documentation: using Soleur agents within Paperclip's org chart framework
+
+### Gap 9: Price Justification Framework (Medium)
 
 **What is missing:** When pricing launches, founders will compare the price to individual tools ($15-25/month for Cursor, Devin, Windsurf). No content frames the cost against the replacement stack: brand agency ($5-15k), lawyer ($300-500/hour), marketing tools ($50-200/month), product management tools ($10-30/month), combined. Without this framing, the price appears to compete with coding tools rather than replacing an entire team.
 
@@ -132,6 +163,9 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 | Piece | Type | Words | Priority | Timeline |
 |-------|------|-------|----------|----------|
 | Soleur vs. Polsia | Comparison page | 1,500-2,000 | P1 | Week 2-3 |
+| Soleur vs. Cursor (updated for Automations + Marketplace) | Comparison page | 1,500-2,000 | P1 | Week 2-3 |
+| Agent Platform vs. AI Organization | Position paper | 1,500-2,000 | P1 | Week 3-4 |
+| Orchestration vs. Intelligence: Paperclip and Soleur | Blog post | 1,200-1,500 | P2 | Week 5-6 |
 | Soleur vs. Alternatives | Comparison page | 1,500-2,000 | P2 | Week 5-6 |
 | The Solopreneur AI Stack: Engineering Layer | Guide | 1,500-2,000 | P2 | Week 5-6 |
 | AI Agent Consumability Guide | Technical guide | 1,500 | P3 | Week 9+ |
@@ -272,4 +306,4 @@ Each pillar article generates derivative content for multiple channels. This max
 
 ---
 
-_Updated: 2026-03-09. Sources: content-plan.md (2026-02-19), content-audit.md (2026-02-19), competitive-intelligence.md (2026-03-09), brand-guide.md (2026-02-21)._
+_Updated: 2026-03-12. Sources: content-plan.md (2026-02-19), content-audit.md (2026-02-19), competitive-intelligence.md (2026-03-12), brand-guide.md (2026-02-21)._

@@ -36,8 +36,8 @@ Paperclip is an open-source (MIT-licensed), self-hosted orchestration platform f
 - [x] Paperclip row added to the Tier 3 table in `knowledge-base/overview/business-validation.md` (line ~69-83 area)
 - [x] Row follows the existing column format: Competitor | Approach | Differentiation from Soleur
 - [x] Paperclip entry accurately reflects verified facts: MIT license, self-hosted, Node.js/React, agent-runtime-agnostic orchestration, budget controls, heartbeat scheduling, governance, audit logs
-- [ ] `/soleur:competitive-analysis --tiers 0,3` runs successfully and produces an updated `knowledge-base/overview/competitive-intelligence.md`
-- [ ] Competitive intelligence report includes Paperclip in the Tier 3 overlap matrix and New Entrants section
+- [x] `/soleur:competitive-analysis --tiers 0,3` runs successfully and produces an updated `knowledge-base/overview/competitive-intelligence.md`
+- [x] Competitive intelligence report includes Paperclip in the Tier 3 overlap matrix and New Entrants section
 
 ## Test Scenarios
 

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-03
-last_reviewed: 2026-03-03
+last_updated: 2026-03-12
+last_reviewed: 2026-03-12
 review_cadence: monthly
 competitor: Tanka
 tier: 3
@@ -14,7 +14,7 @@ convergence_risk: Medium
 | Field | Value |
 |-------|-------|
 | **Product** | Tanka -- memory-native AI co-founder platform |
-| **Pricing** | Free beta. Pricing TBD. |
+| **Pricing** | $0/user/month for teams under 50; $299/month for teams 50+. |
 | **Domain Coverage** | Communication-centric: messaging (Slack, WhatsApp, Gmail, Telegram), calendar, content, sales, product, data. Fundraising agent launched. |
 | **Key Features** | EverMemOS (persistent knowledge graphs). Multi-agent collaboration. Agent Store (planned). SOC 2 Type II and ISO 27001 certified. |
 | **Knowledge Persistence** | Core differentiator. EverMemOS creates persistent knowledge graphs from conversations and interactions. Memory compounding is their explicit moat claim. |
@@ -81,4 +81,4 @@ Review monthly. Tanka is the closest analog to Soleur's compounding knowledge th
 
 ---
 
-_Generated: 2026-03-03. Source: competitive-intelligence.md (2026-03-02)._
+_Updated: 2026-03-12. Source: competitive-intelligence.md (2026-03-12)._
