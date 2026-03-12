@@ -57,6 +57,7 @@ jobs:
         id: publish
         env:
           CASE_STUDY: ${{ inputs.case_study }}
+          DISCORD_BLOG_WEBHOOK_URL: ${{ secrets.DISCORD_BLOG_WEBHOOK_URL }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           X_API_KEY: ${{ secrets.X_API_KEY }}
           X_API_SECRET: ${{ secrets.X_API_SECRET }}
@@ -73,6 +74,7 @@ jobs:
           fi
           exit "$exit_code"
 
+      # Failure alerts use general webhook, not blog-specific
       - name: Discord notification (failure)
         if: failure() && steps.publish.outputs.exit_code != '2'
         env:

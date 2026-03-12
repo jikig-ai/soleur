@@ -33,11 +33,11 @@ Stop execution.
 
 ### 3. Discord Webhook URL (soft)
 
-Check if the `DISCORD_WEBHOOK_URL` environment variable is set.
+Check if `DISCORD_BLOG_WEBHOOK_URL` or `DISCORD_WEBHOOK_URL` environment variable is set.
 
-**If missing:**
-> `DISCORD_WEBHOOK_URL` is not set. Discord posting will be skipped (manual output only).
-> To configure: Server Settings > Integrations > Webhooks > Copy URL > `export DISCORD_WEBHOOK_URL="..."`
+**If both missing:**
+> Neither `DISCORD_BLOG_WEBHOOK_URL` nor `DISCORD_WEBHOOK_URL` is set. Discord posting will be skipped (manual output only).
+> To configure: Server Settings > Integrations > Webhooks > Copy URL from the #blog channel > `export DISCORD_BLOG_WEBHOOK_URL="..."`
 
 Continue execution -- Discord becomes manual output like the other platforms.
 
@@ -170,7 +170,7 @@ Suggested subreddits: r/SaaS, r/startups
 
 ### Phase 7: Discord Approval
 
-**If `DISCORD_WEBHOOK_URL` is set:**
+**If `DISCORD_BLOG_WEBHOOK_URL` or `DISCORD_WEBHOOK_URL` is set:**
 
 Use the **AskUserQuestion tool** with three options:
 
@@ -178,7 +178,7 @@ Use the **AskUserQuestion tool** with three options:
 - **Edit** -- Provide feedback to revise the Discord variant (regenerate with feedback, re-present)
 - **Skip** -- Skip Discord posting, continue to manual output
 
-**If `DISCORD_WEBHOOK_URL` is not set:**
+**If neither is set:**
 
 Skip this phase. Discord content is included in the manual output.
 
@@ -188,7 +188,7 @@ Skip this phase. Discord content is included in the manual output.
 
 On acceptance, post the content via webhook.
 
-First get the webhook URL with `printenv DISCORD_WEBHOOK_URL`, then use the literal URL:
+First get the webhook URL with `printenv DISCORD_BLOG_WEBHOOK_URL || printenv DISCORD_WEBHOOK_URL`, then use the literal URL:
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}" \
@@ -282,4 +282,4 @@ Distribution complete:
 - If the user selects "Edit" for Discord, incorporate their feedback and regenerate -- do not present the same draft
 - Template variables in blog source (`{{ stats.agents }}` etc.) are resolved by passing current stats as LLM context -- the LLM substitutes actual values during generation
 - Markup artifacts (JSON-LD scripts, HTML details/summary tags, Nunjucks tags) in the blog source are ignored during generation -- they are meaningless in social posts
-- Missing `DISCORD_WEBHOOK_URL` does not block execution -- Discord becomes manual output alongside the other platforms
+- Missing `DISCORD_BLOG_WEBHOOK_URL` and `DISCORD_WEBHOOK_URL` does not block execution -- Discord becomes manual output alongside the other platforms

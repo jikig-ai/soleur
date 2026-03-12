@@ -5,7 +5,8 @@
 # Usage: content-publisher.sh <case-study-number>
 #
 # Environment variables:
-#   DISCORD_WEBHOOK_URL    - Discord webhook URL (optional; skips if unset)
+#   DISCORD_BLOG_WEBHOOK_URL - Discord webhook for #blog channel (preferred; optional)
+#   DISCORD_WEBHOOK_URL      - Discord webhook fallback (optional; skips if neither set)
 #   X_API_KEY              - X API key (optional; skips if unset)
 #   X_API_SECRET           - X API secret
 #   X_ACCESS_TOKEN         - X access token
@@ -126,8 +127,11 @@ resolve_content() {
 post_discord() {
   local content="$1"
 
-  if [[ -z "${DISCORD_WEBHOOK_URL:-}" ]]; then
-    echo "Warning: DISCORD_WEBHOOK_URL not set. Skipping Discord posting." >&2
+  # Prefer blog channel, fall back to general
+  local webhook_url="${DISCORD_BLOG_WEBHOOK_URL:-${DISCORD_WEBHOOK_URL:-}}"
+
+  if [[ -z "$webhook_url" ]]; then
+    echo "Warning: No Discord webhook URL set (checked DISCORD_BLOG_WEBHOOK_URL, DISCORD_WEBHOOK_URL). Skipping Discord posting." >&2
     return 0
   fi
 
@@ -142,7 +146,7 @@ post_discord() {
   http_code=$(curl -s -o /dev/null -w "%{http_code}" \
     -H "Content-Type: application/json" \
     -d "$payload" \
-    "$DISCORD_WEBHOOK_URL")
+    "$webhook_url")
 
   if [[ "$http_code" =~ ^2 ]]; then
     echo "[ok] Discord message posted (HTTP $http_code)."

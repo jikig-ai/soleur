@@ -317,6 +317,53 @@ describe("resolve_content", () => {
 });
 
 // ---------------------------------------------------------------------------
+// post_discord webhook URL resolution
+// ---------------------------------------------------------------------------
+
+describe("post_discord webhook URL resolution", () => {
+  test("uses DISCORD_BLOG_WEBHOOK_URL when set", () => {
+    // Override curl to capture the last argument (webhook URL) to stderr
+    // and return a 2xx HTTP code on stdout
+    const result = runFunction(
+      `
+      curl() { echo "CALLED_URL=\${@: -1}" >&2; printf "204"; }
+      export -f curl
+      post_discord "test content"
+    `,
+      {
+        DISCORD_BLOG_WEBHOOK_URL: "https://blog-webhook",
+        DISCORD_WEBHOOK_URL: "https://general-webhook",
+      }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("CALLED_URL=https://blog-webhook");
+    expect(result.stdout).toContain("[ok] Discord message posted");
+  });
+
+  test("falls back to DISCORD_WEBHOOK_URL when blog URL not set", () => {
+    const result = runFunction(
+      `
+      curl() { echo "CALLED_URL=\${@: -1}" >&2; printf "204"; }
+      export -f curl
+      post_discord "test content"
+    `,
+      {
+        DISCORD_WEBHOOK_URL: "https://general-webhook",
+      }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("CALLED_URL=https://general-webhook");
+    expect(result.stdout).toContain("[ok] Discord message posted");
+  });
+
+  test("skips posting when no webhook URLs set", () => {
+    const result = runFunction(`post_discord "test content"`);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("No Discord webhook URL set");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // CLI invocation (integration)
 // ---------------------------------------------------------------------------
 

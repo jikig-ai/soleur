@@ -64,6 +64,18 @@ Then PATCH each with the same name and avatar.
 
 Discord treats bot users and webhooks as independent identity systems. Webhook messages snapshot the author identity at post time. The only way to fix stale identity on existing messages is delete + repost. All webhook payloads should include explicit `username` and `avatar_url` fields rather than relying on webhook defaults.
 
+## Multi-Webhook Channel Architecture
+
+The project uses one webhook per Discord channel, with a naming convention of `DISCORD_<PURPOSE>_WEBHOOK_URL`:
+
+| Secret | Target Channel | Content Type |
+|--------|---------------|--------------|
+| `DISCORD_WEBHOOK_URL` | #general / default | CI failure notifications, community digests, general content |
+| `DISCORD_RELEASES_WEBHOOK_URL` | #releases | Version release announcements |
+| `DISCORD_BLOG_WEBHOOK_URL` | #blog | Blog post and case study distribution |
+
+All code uses a fallback pattern `${DISCORD_<PURPOSE>_WEBHOOK_URL:-$DISCORD_WEBHOOK_URL}` so environments with only the general webhook continue to work unchanged.
+
 ## Related
 
 - `knowledge-base/learnings/2026-02-18-token-env-var-not-cli-arg.md` -- token security
