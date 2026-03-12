@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# content-publisher.sh -- Post pre-written case study content to Discord,
-# X/Twitter, and create GitHub issues for manual platforms.
+# content-publisher.sh -- Scan distribution-content/ for scheduled content and
+# publish to declared channels (Discord webhook, X/Twitter API).
 #
-# Usage: content-publisher.sh <case-study-number>
+# Usage: content-publisher.sh
+#   No arguments. Scans all .md files in distribution-content/, finds files
+#   with publish_date == today and status: scheduled, publishes to channels
+#   declared in frontmatter, and updates status to published via sed -i.
 #
 # Environment variables:
 #   DISCORD_BLOG_WEBHOOK_URL - Discord webhook for #blog channel (preferred; optional)
@@ -15,7 +18,7 @@
 #
 # Exit codes:
 #   0 - All platforms posted (or gracefully skipped)
-#   1 - Fatal error (missing content file, invalid input)
+#   1 - Fatal error (no content directory, invalid setup)
 #   2 - Partial failure (some platforms failed but fallback issues were created)
 
 set -euo pipefail
@@ -26,10 +29,35 @@ CONTENT_DIR="$REPO_ROOT/knowledge-base/specs/feat-product-strategy/distribution-
 X_SCRIPT="$REPO_ROOT/plugins/soleur/skills/community/scripts/x-community.sh"
 AVATAR_URL="https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png"
 
-# Globals set by resolve_content()
-CONTENT_FILE=""
+# Global set per-file in the scan loop, used by fallback issue creators
 CASE_NAME=""
-MANUAL_PLATFORMS=""
+
+# --- Frontmatter Parsing ---
+
+parse_frontmatter() {
+  local file="$1"
+  awk '/^---$/{c++; next} c==1' "$file"
+}
+
+get_frontmatter_field() {
+  local file="$1"
+  local field="$2"
+  # || true: grep returns exit 1 on no match, which pipefail propagates
+  parse_frontmatter "$file" | grep "^${field}:" | sed "s/^${field}: *//" | sed 's/^"\(.*\)"$/\1/' || true
+}
+
+# --- Channel Mapping ---
+
+# Maps channel name from frontmatter to section heading in content file.
+# Returns empty string for unknown channels (caller handles warning).
+channel_to_section() {
+  local channel="$1"
+  case "$channel" in
+    discord) echo "Discord" ;;
+    x)       echo "X/Twitter Thread" ;;
+    *)       echo "" ;;
+  esac
+}
 
 # --- Content Extraction ---
 
@@ -56,7 +84,7 @@ extract_section() {
   # Trim leading blank lines
   content=$(echo "$content" | sed '/./,$!d')
 
-  # Handle "Not scheduled" placeholder sections (studies 2, 4)
+  # Handle "Not scheduled" placeholder sections
   if echo "$content" | grep -q "Not scheduled for"; then
     echo ""
     return 0
@@ -88,41 +116,6 @@ extract_tweets() {
     }
     END { if (buf != "") printf "%s\x1e", buf }
   '
-}
-
-# --- Content Mapping ---
-
-resolve_content() {
-  local num="$1"
-
-  case "$num" in
-    1) CONTENT_FILE="$CONTENT_DIR/01-legal-document-generation.md"
-       CASE_NAME="Legal Document Generation"
-       MANUAL_PLATFORMS="indiehackers,reddit,hackernews" ;;
-    2) CONTENT_FILE="$CONTENT_DIR/02-operations-management.md"
-       CASE_NAME="Operations Management"
-       MANUAL_PLATFORMS="" ;;
-    3) CONTENT_FILE="$CONTENT_DIR/03-competitive-intelligence.md"
-       CASE_NAME="Competitive Intelligence"
-       MANUAL_PLATFORMS="indiehackers,reddit" ;;
-    4) CONTENT_FILE="$CONTENT_DIR/04-brand-guide-creation.md"
-       CASE_NAME="Brand Guide Creation"
-       MANUAL_PLATFORMS="" ;;
-    5) CONTENT_FILE="$CONTENT_DIR/05-business-validation.md"
-       CASE_NAME="Business Validation"
-       MANUAL_PLATFORMS="indiehackers,reddit,hackernews" ;;
-    6) CONTENT_FILE="$CONTENT_DIR/06-why-most-agentic-tools-plateau.md"
-       CASE_NAME="Why Most Agentic Tools Plateau"
-       MANUAL_PLATFORMS="indiehackers,reddit,hackernews" ;;
-    *) echo "Error: Invalid content number: $num (expected 1-6)" >&2
-       exit 1 ;;
-  esac
-
-  if [[ ! -f "$CONTENT_FILE" ]]; then
-    echo "Error: Content file not found: $CONTENT_FILE" >&2
-    echo "Ensure distribution-content/ has been merged from feat-product-strategy." >&2
-    exit 1
-  fi
 }
 
 # --- Discord Posting ---
@@ -157,6 +150,30 @@ post_discord() {
     echo "Error: Discord webhook returned HTTP $http_code." >&2
     return 1
   fi
+}
+
+post_discord_warning() {
+  local message="$1"
+
+  # Use general webhook for warnings, not blog channel
+  local webhook_url="${DISCORD_WEBHOOK_URL:-}"
+
+  if [[ -z "$webhook_url" ]]; then
+    echo "Warning: No Discord webhook URL set. Cannot send stale content warning." >&2
+    return 0
+  fi
+
+  local payload
+  payload=$(jq -n \
+    --arg content "$message" \
+    --arg username "Sol" \
+    --arg avatar_url "$AVATAR_URL" \
+    '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
+
+  curl -s -o /dev/null -w "" \
+    -H "Content-Type: application/json" \
+    -d "$payload" \
+    "$webhook_url" || true
 }
 
 # --- X/Twitter Posting ---
@@ -309,83 +326,119 @@ create_dedup_issue() {
   fi
 }
 
-create_manual_issues() {
-  local file="$1"
-  local platforms="$2"
-  local section_name body_content title body
-
-  [[ -z "$platforms" ]] && return 0
-
-  local IFS=','
-  for platform in $platforms; do
-    case "$platform" in
-      indiehackers) section_name="IndieHackers" ;;
-      reddit)       section_name="Reddit" ;;
-      hackernews)   section_name="Hacker News" ;;
-      *) echo "Warning: Unknown platform: $platform" >&2; continue ;;
-    esac
-
-    body_content=$(extract_section "$file" "$section_name")
-    if [[ -z "$body_content" ]]; then
-      echo "Warning: No $section_name content found. Skipping." >&2
-      continue
-    fi
-
-    title="[Content Publisher] Post to $section_name: $CASE_NAME"
-    body=$(printf '## Manual Posting Required: %s\n\n**Case study:** %s\n**Platform:** %s\n\nCopy-paste the content below:\n\n---\n\n%s' \
-      "$section_name" "$CASE_NAME" "$section_name" "$body_content")
-
-    create_dedup_issue "$title" "$body" "action-required,content-publisher"
-  done
-}
-
 # --- Main ---
 
 main() {
-  local case_study_num="${1:?Usage: content-publisher.sh <case-study-number>}"
-
-  resolve_content "$case_study_num"
-
-  echo "Publishing case study $case_study_num: $CASE_NAME"
-  echo "Content file: $CONTENT_FILE"
-  echo "Manual platforms: ${MANUAL_PLATFORMS:-none}"
+  if [[ ! -d "$CONTENT_DIR" ]]; then
+    echo "Error: Content directory not found: $CONTENT_DIR" >&2
+    exit 1
+  fi
 
   # Validate x-community.sh exists if X credentials are configured
   if [[ -n "${X_API_KEY:-}" && ! -f "$X_SCRIPT" ]]; then
     echo "Error: x-community.sh not found at $X_SCRIPT" >&2
-    echo "Ensure the community skill is available at the expected path." >&2
     exit 1
   fi
 
+  local today
+  today=$(date +%Y-%m-%d)
+  local failures=0
+  local published=0
+
+  echo "Scanning $CONTENT_DIR for content scheduled on $today..."
+
+  for file in "$CONTENT_DIR"/*.md; do
+    [[ -f "$file" ]] || continue
+
+    local status publish_date channels title
+    status=$(get_frontmatter_field "$file" "status")
+    publish_date=$(get_frontmatter_field "$file" "publish_date")
+    channels=$(get_frontmatter_field "$file" "channels")
+    title=$(get_frontmatter_field "$file" "title")
+
+    # Skip files without valid frontmatter
+    if [[ -z "$status" || -z "$publish_date" ]]; then
+      echo "Warning: Missing frontmatter (status/publish_date) in $(basename "$file"). Skipping." >&2
+      continue
+    fi
+
+    # Skip non-scheduled content
+    [[ "$status" == "scheduled" ]] || continue
+
+    # Stale content: scheduled but publish_date in the past
+    if [[ "$publish_date" < "$today" ]]; then
+      echo "WARNING: Stale scheduled content: $(basename "$file") (publish_date: $publish_date)" >&2
+      post_discord_warning "**Stale scheduled content detected**\n\nFile: $(basename "$file")\nPublish date: $publish_date\nStatus: scheduled\n\nThis content was scheduled for a past date and was not published. Update the publish_date or set status to draft."
+      continue
+    fi
+
+    # Skip future content
+    [[ "$publish_date" == "$today" ]] || continue
+
+    # Skip files with no channels declared
+    if [[ -z "$channels" ]]; then
+      echo "Warning: No channels declared in $(basename "$file"). Skipping." >&2
+      continue
+    fi
+
+    # Set CASE_NAME for fallback issue creators
+    CASE_NAME="${title:-$(basename "$file" .md)}"
+
+    echo "---"
+    echo "Publishing: $CASE_NAME ($(basename "$file"))"
+
+    local file_failures=0
+
+    # Publish to each declared channel
+    local channel section
+    while IFS= read -r channel; do
+      channel=$(echo "$channel" | xargs)
+      [[ -z "$channel" ]] && continue
+
+      section=$(channel_to_section "$channel")
+      if [[ -z "$section" ]]; then
+        echo "Warning: Unknown channel '$channel' in $(basename "$file"). Skipping." >&2
+        continue
+      fi
+
+      case "$channel" in
+        discord)
+          local discord_content
+          discord_content=$(extract_section "$file" "$section")
+          if [[ -n "$discord_content" ]]; then
+            post_discord "$discord_content" || {
+              echo "Warning: Discord posting failed. Creating fallback issue." >&2
+              create_discord_fallback_issue "$discord_content" || file_failures=1
+              file_failures=1
+            }
+          else
+            echo "Warning: No $section content found in $(basename "$file"). Skipping Discord." >&2
+          fi
+          ;;
+        x)
+          post_x_thread "$file" || file_failures=1
+          ;;
+      esac
+    done < <(echo "$channels" | tr ',' '\n')
+
+    if [[ "$file_failures" -eq 0 ]]; then
+      # Update status in-place
+      sed -i 's/^status: scheduled/status: published/' "$file"
+      echo "[ok] Published and status updated: $(basename "$file")"
+      published=$((published + 1))
+    else
+      failures=$((failures + 1))
+    fi
+
+    sleep 5  # Rate limit buffer between files
+  done
+
   echo "---"
+  echo "Scan complete. Published: $published. Failures: $failures."
 
-  local had_failures=0
-
-  # Discord -- failure does not abort subsequent platforms
-  local discord_content
-  discord_content=$(extract_section "$CONTENT_FILE" "Discord")
-  if [[ -n "$discord_content" ]]; then
-    post_discord "$discord_content" || {
-      echo "Warning: Discord posting failed. Creating fallback issue." >&2
-      create_discord_fallback_issue "$discord_content" || had_failures=1
-      had_failures=1
-    }
-  else
-    echo "Warning: No Discord content found. Skipping." >&2
-  fi
-
-  # X/Twitter -- failure does not abort subsequent platforms
-  post_x_thread "$CONTENT_FILE" || had_failures=1
-
-  # Manual platform issues (IH, Reddit, HN) -- only for studies with manual platforms
-  create_manual_issues "$CONTENT_FILE" "$MANUAL_PLATFORMS"
-
-  echo "---"
-  if [[ "$had_failures" -eq 1 ]]; then
-    echo "[partial] Content publisher completed with failures for: $CASE_NAME" >&2
+  if [[ "$failures" -gt 0 ]]; then
     exit 2
   fi
-  echo "[ok] Content publisher completed for: $CASE_NAME"
 }
 
 # Guard: only run main when executed directly (not when sourced for testing)

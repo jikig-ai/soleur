@@ -1,9 +1,9 @@
-# Business Validation -- Distribution Content
-
-**Blog post:** https://soleur.ai/blog/case-study-business-validation/
-**Title:** "Running a Business Validation Workshop With AI Gates"
-**Publish date:** Thu 2026-03-26
-
+---
+title: "Running a Business Validation Workshop With AI Gates"
+type: case-study
+publish_date: 2026-03-26
+channels: discord, x
+status: published
 ---
 
 ## Discord

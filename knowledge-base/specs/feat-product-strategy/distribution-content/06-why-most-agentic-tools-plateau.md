@@ -1,9 +1,9 @@
-# Why Most Agentic Tools Plateau -- Distribution Content
-
-**Blog post:** https://soleur.ai/blog/why-most-agentic-tools-plateau/
-**Title:** "Why Most Agentic Engineering Tools Plateau"
-**Publish date:** Fri 2026-03-14
-
+---
+title: "Why Most Agentic Engineering Tools Plateau"
+type: pillar
+publish_date: 2026-03-14
+channels: discord, x
+status: published
 ---
 
 ## Discord

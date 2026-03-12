@@ -1,38 +1,27 @@
 # Scheduled content publisher for blog and case study distribution.
-# Posts pre-generated content to Discord (webhook), X/Twitter (API), and
-# creates GitHub issues for manual platforms (IndieHackers, Reddit, HN).
-# Implements #530: scheduled content publisher workflow.
+# Scans distribution-content/ for files with publish_date == today and
+# status: scheduled, then posts to declared channels (Discord, X/Twitter).
+# Implements #530, #549: directory-driven content publisher.
 #
-# Phase 1: workflow_dispatch only (validate end-to-end).
-# Phase 2: add cron triggers after validation.
+# Triggers: daily cron at 14:00 UTC + manual workflow_dispatch.
+# Status updates are committed back to main after publishing.
 #
 # Security: This workflow does NOT use untrusted event inputs in run: commands.
-# The CASE_STUDY env var originates from a constrained choice input (1-6) and
-# is validated by the content-publisher.sh case statement before use.
+# All inputs come from schedule/workflow_dispatch triggers (no user-controlled strings).
 
 name: "Scheduled: Content Publisher"
 
 on:
+  schedule:
+    - cron: '0 14 * * *'
   workflow_dispatch:
-    inputs:
-      case_study:
-        description: 'Content number (1-5: case studies, 6: agentic tools plateau)'
-        required: true
-        type: choice
-        options:
-          - '1'
-          - '2'
-          - '3'
-          - '4'
-          - '5'
-          - '6'
 
 concurrency:
   group: scheduled-content-publisher
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
   issues: write
 
 jobs:
@@ -57,7 +46,6 @@ jobs:
       - name: Publish content
         id: publish
         env:
-          CASE_STUDY: ${{ inputs.case_study }}
           DISCORD_BLOG_WEBHOOK_URL: ${{ secrets.DISCORD_BLOG_WEBHOOK_URL }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           X_API_KEY: ${{ secrets.X_API_KEY }}
@@ -67,7 +55,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           exit_code=0
-          bash scripts/content-publisher.sh "$CASE_STUDY" || exit_code=$?
+          bash scripts/content-publisher.sh || exit_code=$?
           echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
           if [[ "$exit_code" -eq 2 ]]; then
             echo "::warning::Partial failure -- some platforms failed but fallback issues were created."
@@ -75,11 +63,20 @@ jobs:
           fi
           exit "$exit_code"
 
+      - name: Commit status updates
+        if: success() || steps.publish.outputs.exit_code == '0'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add knowledge-base/specs/feat-product-strategy/distribution-content/
+          git diff --cached --quiet && exit 0
+          git commit -m "ci: update content distribution status [skip ci]"
+          git push
+
       # Failure alerts use general webhook, not blog-specific
       - name: Discord notification (failure)
         if: failure() && steps.publish.outputs.exit_code != '2'
         env:
-          CASE_STUDY: ${{ inputs.case_study }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
@@ -89,8 +86,8 @@ jobs:
             exit 0
           fi
           RUN_URL="${REPO_URL}/actions/runs/${RUN_ID}"
-          MESSAGE=$(printf '**Content Publisher failed**\n\nCase study: %s\nWorkflow run: %s\n\nCheck logs for details.' \
-            "$CASE_STUDY" "$RUN_URL")
+          MESSAGE=$(printf '**Content Publisher failed**\n\nWorkflow run: %s\n\nCheck logs for details.' \
+            "$RUN_URL")
           PAYLOAD=$(jq -n \
             --arg content "$MESSAGE" \
             --arg username "Sol" \

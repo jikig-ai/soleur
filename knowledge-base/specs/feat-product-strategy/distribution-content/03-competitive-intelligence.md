@@ -1,9 +1,9 @@
-# Competitive Intelligence -- Distribution Content
-
-**Blog post:** https://soleur.ai/blog/case-study-competitive-intelligence/
-**Title:** "Tracking 17 Competitors in One Session -- With Battlecards"
-**Publish date:** Thu 2026-03-19
-
+---
+title: "Tracking 17 Competitors in One Session -- With Battlecards"
+type: case-study
+publish_date: 2026-03-19
+channels: discord, x
+status: published
 ---
 
 ## Discord

@@ -1,9 +1,9 @@
-# Legal Document Generation -- Distribution Content
-
-**Blog post:** https://soleur.ai/blog/case-study-legal-document-generation/
-**Title:** "How We Generated 9 Legal Documents in Days, Not Months"
-**Publish date:** Thu 2026-03-12
-
+---
+title: "How We Generated 9 Legal Documents in Days, Not Months"
+type: case-study
+publish_date: 2026-03-12
+channels: discord, x
+status: published
 ---
 
 ## Discord
