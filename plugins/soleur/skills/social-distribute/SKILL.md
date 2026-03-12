@@ -1,20 +1,21 @@
 ---
 name: social-distribute
-description: "This skill should be used when distributing a blog article across social platforms. It reads a blog post, generates platform-specific content variants for Discord, X/Twitter, IndieHackers, Reddit, and Hacker News, posts to Discord via webhook after approval, and outputs formatted text for all other platforms. Triggers on \"distribute blog\", \"social distribute\", \"share article\", \"post to social\", \"distribute content\"."
+description: "This skill should be used when distributing a blog article across social platforms. It generates platform-specific content variants for Discord, X/Twitter, IndieHackers, Reddit, and Hacker News, and writes a persistent content file for the automated publishing pipeline. Triggers on \"distribute blog\", \"social distribute\", \"share article\", \"post to social\", \"distribute content\"."
 ---
 
 # Social Distribute
 
-Generate platform-specific content variants from a blog article and distribute across social channels. Discord is posted via webhook after approval. All other platforms output formatted text for manual posting.
+Generate platform-specific content variants from a blog article and write them to a persistent content file for the automated publishing pipeline. Discord can optionally be posted immediately via webhook after approval. The content file feeds into the directory-driven cron pipeline (`content-publisher.sh`) for scheduled publishing.
 
-## Distribution Pipeline Gate
+## Headless Mode Detection
 
-Before generating content or posting manually, check if a content file already exists for this blog post in `knowledge-base/specs/feat-product-strategy/distribution-content/`. If `content-publisher.sh` and the `scheduled-content-publisher.yml` workflow can handle this content, route through the automated pipeline instead of posting ad-hoc. Ad-hoc posting bypasses thread recovery, fallback issue creation, and deduplication.
+If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true` and strip `--headless` from `$ARGUMENTS`. The remainder is the blog post path.
 
-**Check:** `ls knowledge-base/specs/feat-product-strategy/distribution-content/*<slug>* 2>/dev/null` where `<slug>` is derived from the blog post filename.
+**Argument format:** `<blog-post-path> [--headless]`
 
-- **If content file exists:** Inform the user and suggest triggering the workflow: `gh workflow run "Scheduled: Content Publisher" -f case_study=<number>`. Do not post manually.
-- **If no content file exists:** Continue with ad-hoc generation, but recommend creating a content file and extending `content-publisher.sh` for future use. Output a warning: "No distribution content file found. Consider creating one in `distribution-content/` for automated distribution."
+**Headless defaults for interactive gates:**
+- Phase 7 (Discord Approval): auto-selects **Skip** (never auto-post to external platforms without human approval). `channels` is always `discord, x`.
+- Phase 9 Step 2 (Overwrite Check): auto-selects **Overwrite** (content is regenerated from the same blog post, so overwriting is idempotent).
 
 ## Prerequisites
 
@@ -48,7 +49,7 @@ Check if `DISCORD_BLOG_WEBHOOK_URL` or `DISCORD_WEBHOOK_URL` environment variabl
 > Neither `DISCORD_BLOG_WEBHOOK_URL` nor `DISCORD_WEBHOOK_URL` is set. Discord posting will be skipped (manual output only).
 > To configure: Server Settings > Integrations > Webhooks > Copy URL from the #blog channel > `export DISCORD_BLOG_WEBHOOK_URL="..."`
 
-Continue execution -- Discord becomes manual output like the other platforms.
+Continue execution -- Discord will be included in the content file's `channels` field for cron publishing instead of immediate webhook posting.
 
 ## Content Input
 
@@ -179,23 +180,27 @@ Suggested subreddits: r/SaaS, r/startups
 
 ### Phase 7: Discord Approval
 
+**If `HEADLESS_MODE=true`:** auto-select **Skip**. Discord is deferred to the content file for cron publishing.
+
 **If `DISCORD_BLOG_WEBHOOK_URL` or `DISCORD_WEBHOOK_URL` is set:**
 
 Use the **AskUserQuestion tool** with three options:
 
 - **Accept** -- Post this content to Discord
 - **Edit** -- Provide feedback to revise the Discord variant (regenerate with feedback, re-present)
-- **Skip** -- Skip Discord posting, continue to manual output
+- **Skip** -- Skip Discord posting, include Discord in content file's `channels` field for cron publishing
 
 **If neither is set:**
 
-Skip this phase. Discord content is included in the manual output.
+Skip this phase. Discord will be included in the content file's `channels` field for cron publishing.
 
 ## Posting
 
-### Phase 8: Post to Discord
+### Phase 8: Post to Discord (conditional)
 
-On acceptance, post the content via webhook.
+**This phase only runs if the user accepted Discord posting in Phase 7.** If the user skipped Discord or no webhook URL is set, skip to Phase 9.
+
+On acceptance, post the Discord content via webhook.
 
 First get the webhook URL with `printenv DISCORD_BLOG_WEBHOOK_URL || printenv DISCORD_WEBHOOK_URL`, then use the literal URL:
 
@@ -217,6 +222,8 @@ Set `avatar_url` to the hosted logo URL (e.g., the GitHub-hosted `logo-mark-512.
 **On success (HTTP 2xx):**
 > Posted to Discord successfully.
 
+Track that Discord was posted successfully -- this affects the `channels` field in Phase 9.
+
 **On failure (HTTP 4xx/5xx):**
 > Failed to post to Discord (HTTP [status_code]).
 >
@@ -225,59 +232,120 @@ Set `avatar_url` to the hosted logo URL (e.g., the GitHub-hosted `logo-mark-512.
 > [full draft content]
 > ```
 
-Display the draft so the user can post it manually. Do not retry automatically.
+Display the draft so the user can post it manually. Do not retry automatically. Treat a failed post as "Discord not posted" for Phase 9's `channels` field.
 
-## Manual Platform Output
+## Content File Output
 
-### Phase 9: Output Remaining Platforms
+### Phase 9: Write Content File
 
-Print all non-Discord variants to the terminal with clear headers for easy copy-paste:
+After content generation and approval, write a persistent content file for the directory-driven publishing pipeline.
 
+**Step 1: Derive slug and output path**
+
+Derive the slug from the blog post filename: strip path, strip `.md`, keep kebab-case.
+
+Example: `plugins/soleur/docs/blog/why-most-agentic-tools-plateau.md` → `why-most-agentic-tools-plateau`
+
+Output path: `knowledge-base/marketing/distribution-content/<slug>.md`
+
+**Step 2: Check for existing file**
+
+Check for an existing content file matching this slug. The check must account for both slug-only filenames and legacy numeric-prefixed filenames:
+
+```bash
+ls knowledge-base/marketing/distribution-content/*<slug>.md 2>/dev/null
 ```
+
+If a match is found (either `<slug>.md` or `NN-<slug>.md`), use the matched filename as the output path (preserving the existing naming convention).
+
+**If `HEADLESS_MODE=true`:** auto-select **Overwrite** and continue.
+
+**If interactive and a file exists**, use the **AskUserQuestion tool**:
+
+- **Overwrite** -- Replace the existing file with new content
+- **Cancel** -- Abort file writing and stop. The user can rename or delete the existing file, then re-run.
+
+**Step 3: Determine channels field**
+
+- If Discord was posted successfully in Phase 8: set `channels: x` (Discord already done)
+- If Discord was skipped, failed, or no webhook configured: set `channels: discord, x`
+
+**Step 4: Write the content file**
+
+Write the file with YAML frontmatter and a section per platform. Use the blog post's frontmatter `title` for the content file title. If the blog post has no frontmatter title, fall back to the first H1 heading or the filename.
+
+```markdown
 ---
+title: "<blog post title>"
+type: pillar
+publish_date: ""
+channels: <channels from step 3>
+status: draft
+---
+
+## Discord
+
+<discord content>
+
+---
+
 ## X/Twitter Thread
-Copy and paste each tweet in order:
 
-1/ [hook tweet]
+<tweet 1 with label>
 
-2/ [body tweet]
+<tweet 2 with label>
 
-3/ [body tweet]
-
-4/ [final tweet with link]
+...
 
 ---
+
 ## IndieHackers
-[full post content]
+
+**Title:** <ih title>
+
+**Body:**
+
+<ih body content>
 
 ---
+
 ## Reddit
-Suggested subreddits: r/SaaS, r/startups, r/solopreneur, r/artificial
-Title: [title]
 
-[body]
+**Subreddit:** <suggested subreddits>
+**Title:** <title>
+
+**Body:**
+
+<body>
 
 ---
+
 ## Hacker News
-Title: [title]
-URL: [article URL]
+
+**Title:** <title>
+**URL:** <article url>
 ```
 
-If Discord was skipped or failed, include the Discord content in this output too.
+### Phase 10: Summary & Next Steps
 
-## Distribution Summary
-
-### Phase 10: Summary
-
-Display a summary of what was distributed:
+Output the file path, channel status, and instructions:
 
 ```
-Distribution complete:
-- Discord: [Posted / Skipped / Failed (manual output provided)]
-- X/Twitter: Manual output
-- IndieHackers: Manual output
-- Reddit: Manual output
-- Hacker News: Manual output
+Content file written: knowledge-base/marketing/distribution-content/<slug>.md
+
+Distribution summary:
+- Discord: [Posted now via webhook / Will publish via cron when scheduled]
+- X/Twitter: Will publish via cron when scheduled
+- IndieHackers: Manual (content in file)
+- Reddit: Manual (content in file)
+- Hacker News: Manual (content in file)
+
+Next steps:
+1. Review the content file
+2. Set publish_date to the target date (YYYY-MM-DD format)
+3. Change status from "draft" to "scheduled"
+4. The daily cron will publish to Discord and X on the scheduled date
+5. Reddit, IndieHackers, and Hacker News sections are for manual posting
 ```
 
 ## Important Guidelines
@@ -291,4 +359,5 @@ Distribution complete:
 - If the user selects "Edit" for Discord, incorporate their feedback and regenerate -- do not present the same draft
 - Template variables in blog source (`{{ stats.agents }}` etc.) are resolved by passing current stats as LLM context -- the LLM substitutes actual values during generation
 - Markup artifacts (JSON-LD scripts, HTML details/summary tags, Nunjucks tags) in the blog source are ignored during generation -- they are meaningless in social posts
-- Missing `DISCORD_BLOG_WEBHOOK_URL` and `DISCORD_WEBHOOK_URL` does not block execution -- Discord becomes manual output alongside the other platforms
+- Missing `DISCORD_BLOG_WEBHOOK_URL` and `DISCORD_WEBHOOK_URL` does not block execution -- Discord is included in the content file's `channels` field for cron publishing
+- New content files use the blog post slug as filename. If an existing file with a numeric prefix matches the slug (e.g., `06-<slug>.md`), the existing filename is preserved
