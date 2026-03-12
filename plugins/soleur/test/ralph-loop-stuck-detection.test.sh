@@ -5,6 +5,11 @@
 
 set -euo pipefail
 
+# Clear git env vars that leak when this test runs inside a git hook (e.g., pre-push).
+# Without this, git rev-parse --show-toplevel in test subprocesses resolves to the
+# outer repo instead of the test's temp git repos.
+unset GIT_DIR GIT_WORK_TREE 2>/dev/null || true
+
 PASS=0
 FAIL=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,6 +36,8 @@ create_state_file() {
   local promise="${4:-null}"
   local stuck_count="${5:-0}"
   local stuck_threshold="${6:-3}"
+  local now
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
   cat > "$dir/.claude/ralph-loop.local.md" <<EOF
 ---
@@ -40,7 +47,7 @@ max_iterations: $max
 completion_promise: $promise
 stuck_count: $stuck_count
 stuck_threshold: $stuck_threshold
-started_at: "2026-03-05T00:00:00Z"
+started_at: "$now"
 ---
 
 Test prompt
@@ -54,8 +61,8 @@ run_hook() {
   local hook_input
   hook_input=$(jq -n --arg msg "$message" '{"last_assistant_message": $msg}')
 
-  cd "$dir"
-  echo "$hook_input" | bash "$HOOK" 2>/dev/null || true
+  # Subshell isolates CWD changes so they don't leak between tests
+  (cd "$dir" && echo "$hook_input" | bash "$HOOK" 2>/dev/null) || true
 }
 
 run_hook_stderr() {
@@ -65,8 +72,8 @@ run_hook_stderr() {
   local hook_input
   hook_input=$(jq -n --arg msg "$message" '{"last_assistant_message": $msg}')
 
-  cd "$dir"
-  echo "$hook_input" | bash "$HOOK" 2>&1 1>/dev/null || true
+  # Subshell isolates CWD changes so they don't leak between tests
+  (cd "$dir" && echo "$hook_input" | bash "$HOOK" 2>&1 1>/dev/null) || true
 }
 
 assert_eq() {
@@ -128,6 +135,10 @@ assert_contains() {
 }
 
 # --- Tests ---
+
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# Stale timestamp for TTL tests (guaranteed older than TTL_HOURS)
+STALE_TS="2020-01-01T00:00:00Z"
 
 echo "=== Ralph Loop Stuck Detection Tests ==="
 echo ""
@@ -197,13 +208,13 @@ echo ""
 echo "Test 7: Pre-existing state file without stuck_count/stuck_threshold uses defaults"
 TEST_DIR=$(setup_test)
 # State file without stuck_count or stuck_threshold
-cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<'EOF'
+cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<EOF
 ---
 active: true
 iteration: 1
 max_iterations: 0
 completion_promise: null
-started_at: "2026-03-05T00:00:00Z"
+started_at: "$NOW"
 ---
 
 Test prompt
@@ -236,8 +247,7 @@ echo ""
 # Test 10: setup-ralph-loop.sh adds stuck_threshold to state file
 echo "Test 10: setup-ralph-loop.sh includes stuck_count and stuck_threshold in state"
 TEST_DIR=$(setup_test)
-cd "$TEST_DIR"
-bash "$SETUP" "test prompt" --stuck-threshold 5 > /dev/null 2>&1
+(cd "$TEST_DIR" && bash "$SETUP" "test prompt" --stuck-threshold 5 > /dev/null 2>&1)
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file created"
 STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//' || echo "MISSING")
 STUCK_THRESHOLD=$(grep '^stuck_threshold:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_threshold: *//' || echo "MISSING")
@@ -249,8 +259,7 @@ echo ""
 # Test 11: setup-ralph-loop.sh defaults stuck_threshold to 3
 echo "Test 11: setup-ralph-loop.sh defaults stuck_threshold to 3"
 TEST_DIR=$(setup_test)
-cd "$TEST_DIR"
-bash "$SETUP" "test prompt" > /dev/null 2>&1
+(cd "$TEST_DIR" && bash "$SETUP" "test prompt" > /dev/null 2>&1)
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file created"
 STUCK_THRESHOLD=$(grep '^stuck_threshold:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_threshold: *//' || echo "MISSING")
 assert_eq "3" "$STUCK_THRESHOLD" "stuck_threshold defaults to 3"
@@ -260,7 +269,7 @@ echo ""
 # Test 12: Corrupted stuck_count (non-numeric) defaults to 0
 echo "Test 12: Corrupted stuck_count value defaults to 0"
 TEST_DIR=$(setup_test)
-cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<'EOF'
+cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<EOF
 ---
 active: true
 iteration: 1
@@ -268,7 +277,7 @@ max_iterations: 0
 completion_promise: null
 stuck_count: abc
 stuck_threshold: 3
-started_at: "2026-03-05T00:00:00Z"
+started_at: "$NOW"
 ---
 
 Test prompt
@@ -283,7 +292,7 @@ echo ""
 # Test 13: Prompt containing --- does not leak into FRONTMATTER
 echo "Test 13: Prompt body with --- does not leak into frontmatter"
 TEST_DIR=$(setup_test)
-cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<'EOF'
+cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<EOF
 ---
 active: true
 iteration: 1
@@ -291,7 +300,7 @@ max_iterations: 0
 completion_promise: null
 stuck_count: 0
 stuck_threshold: 3
-started_at: "2026-03-05T00:00:00Z"
+started_at: "$NOW"
 ---
 
 Build a REST API with proper error handling.
@@ -317,7 +326,7 @@ echo ""
 # Test 14: Prompt containing iteration: text is preserved after update
 echo "Test 14: Prompt body with iteration: text is preserved verbatim"
 TEST_DIR=$(setup_test)
-cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<'EOF'
+cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<EOF
 ---
 active: true
 iteration: 1
@@ -325,7 +334,7 @@ max_iterations: 0
 completion_promise: null
 stuck_count: 0
 stuck_threshold: 3
-started_at: "2026-03-05T00:00:00Z"
+started_at: "$NOW"
 ---
 
 Check iteration: current status of deployment.
@@ -342,7 +351,7 @@ echo ""
 # Test 15: Prompt containing stuck_count: text is preserved after update
 echo "Test 15: Prompt body with stuck_count: text is preserved verbatim"
 TEST_DIR=$(setup_test)
-cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<'EOF'
+cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<EOF
 ---
 active: true
 iteration: 1
@@ -350,7 +359,7 @@ max_iterations: 0
 completion_promise: null
 stuck_count: 0
 stuck_threshold: 3
-started_at: "2026-03-05T00:00:00Z"
+started_at: "$NOW"
 ---
 
 Monitor stuck_count: should be zero.
@@ -371,8 +380,7 @@ TEST_DIR=$(setup_test)
 git -C "$TEST_DIR" init -q
 mkdir -p "$TEST_DIR/sub/deep"
 # No state file created -- hook should exit 0 cleanly
-cd "$TEST_DIR/sub/deep"
-HOOK_OUTPUT=$(echo '{}' | bash "$HOOK" 2>&1) || true
+HOOK_OUTPUT=$(cd "$TEST_DIR/sub/deep" && echo '{}' | bash "$HOOK" 2>&1) || true
 EXIT_CODE=$?
 assert_eq "0" "$EXIT_CODE" "hook exits 0 when no state file from subdirectory"
 assert_eq "" "$HOOK_OUTPUT" "no output when no state file"
@@ -385,11 +393,63 @@ TEST_DIR=$(setup_test)
 git -C "$TEST_DIR" init -q
 create_state_file "$TEST_DIR" 1 0 "null" 0 3
 mkdir -p "$TEST_DIR/sub/deep"
-cd "$TEST_DIR/sub/deep"
+# run_hook uses a subshell, so CWD isolation is automatic
 run_hook "$TEST_DIR/sub/deep" "This is a substantive response with plenty of content to exceed the threshold."
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file found and updated from subdirectory"
 ITERATION=$(grep '^iteration:' "$TEST_DIR/.claude/ralph-loop.local.md" | head -1 | sed 's/iteration: *//')
 assert_eq "2" "$ITERATION" "iteration updated from subdirectory"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 18: Hard safety cap at 50 iterations terminates even with max_iterations=0
+echo "Test 18: Hard safety cap terminates at 50 iterations"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 50 0 "null" 0 3
+STDERR_OUTPUT=$(run_hook_stderr "$TEST_DIR" "Substantive response with enough content here to pass threshold.")
+assert_file_not_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file removed after hard cap"
+assert_contains "$STDERR_OUTPUT" "Hard safety cap" "stderr mentions hard safety cap"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 19: Iteration 49 does NOT trigger hard cap
+echo "Test 19: Iteration 49 continues (under hard cap)"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 49 0 "null" 0 3
+run_hook "$TEST_DIR" "Substantive response with enough content here to pass threshold."
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists (under hard cap)"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 20: TTL auto-removes stale state file (started_at older than TTL)
+echo "Test 20: TTL auto-removes stale state file"
+TEST_DIR=$(setup_test)
+git -C "$TEST_DIR" init -q
+cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<EOF
+---
+active: true
+iteration: 1
+max_iterations: 0
+completion_promise: null
+stuck_count: 0
+stuck_threshold: 3
+started_at: "$STALE_TS"
+---
+
+Stale prompt
+EOF
+STDERR_OUTPUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>&1 1>/dev/null) || true
+assert_file_not_exists "$TEST_DIR/.claude/ralph-loop.local.md" "stale state file removed by TTL"
+assert_contains "$STDERR_OUTPUT" "stale state file detected" "stderr mentions stale detection"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 21: setup-ralph-loop.sh defaults max_iterations to 25
+echo "Test 21: setup-ralph-loop.sh defaults max_iterations to 25"
+TEST_DIR=$(setup_test)
+(cd "$TEST_DIR" && bash "$SETUP" "test prompt" > /dev/null 2>&1)
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file created"
+MAX_ITER=$(grep '^max_iterations:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/max_iterations: *//' || echo "MISSING")
+assert_eq "25" "$MAX_ITER" "max_iterations defaults to 25"
 cleanup_test "$TEST_DIR"
 echo ""
 

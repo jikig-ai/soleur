@@ -13,7 +13,7 @@ PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || PROJECT_ROOT="."
 
 # Parse arguments
 PROMPT_PARTS=()
-MAX_ITERATIONS=0
+MAX_ITERATIONS=25
 COMPLETION_PROMISE="null"
 STUCK_THRESHOLD=3
 
@@ -30,7 +30,7 @@ ARGUMENTS:
   PROMPT...    Initial prompt to start the loop (can be multiple words without quotes)
 
 OPTIONS:
-  --max-iterations <n>           Maximum iterations before auto-stop (default: unlimited)
+  --max-iterations <n>           Maximum iterations before auto-stop (default: 25, 0 for unlimited)
   --completion-promise '<text>'  Promise phrase (USE QUOTES for multi-word)
   --stuck-threshold <n>          Consecutive empty responses before auto-stop (default: 3, 0 to disable)
   -h, --help                     Show this help message
@@ -49,7 +49,7 @@ DESCRIPTION:
 EXAMPLES:
   /soleur:ralph-loop Build a todo API --completion-promise 'DONE' --max-iterations 20
   /soleur:ralph-loop --max-iterations 10 Fix the auth bug
-  /soleur:ralph-loop Refactor cache layer  (runs forever)
+  /soleur:ralph-loop Refactor cache layer  (default: 25 iterations)
   /soleur:ralph-loop --completion-promise 'TASK COMPLETE' Create a REST API
 
 STOPPING:
@@ -158,8 +158,8 @@ self-referential loop where you iteratively improve on the same task.
 To monitor: head -10 .claude/ralph-loop.local.md
 To cancel: rm .claude/ralph-loop.local.md
 
-WARNING: This loop cannot be stopped manually! It will run infinitely
-unless you set --max-iterations or --completion-promise.
+NOTE: Default cap is 25 iterations. Pass --max-iterations 0 to run
+without a cap (not recommended -- stale state files trap future sessions).
 EOF
 
 # Output the initial prompt

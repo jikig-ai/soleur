@@ -74,7 +74,32 @@ for tf in "${test_files[@]}"; do
 done
 echo ""
 
-if ! bun test "${test_files[@]}"; then
+# Split by runner: .test.sh -> bash, .test.ts/.test.js -> bun
+bun_tests=()
+bash_tests=()
+for tf in "${test_files[@]}"; do
+  if [[ "$tf" == *.test.sh ]]; then
+    bash_tests+=("$tf")
+  else
+    bun_tests+=("$tf")
+  fi
+done
+
+failed=0
+
+if [[ ${#bun_tests[@]} -gt 0 ]]; then
+  if ! bun test "${bun_tests[@]}"; then
+    failed=1
+  fi
+fi
+
+for bt in "${bash_tests[@]}"; do
+  if ! bash "$bt"; then
+    failed=1
+  fi
+done
+
+if [[ $failed -ne 0 ]]; then
   echo ""
   echo "pre-push: BLOCKED — tests failed. Fix them before pushing."
   exit 1
