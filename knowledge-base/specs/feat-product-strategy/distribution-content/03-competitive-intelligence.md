@@ -3,7 +3,7 @@ title: "Tracking 17 Competitors in One Session -- With Battlecards"
 type: case-study
 publish_date: 2026-03-19
 channels: discord, x
-status: published
+status: scheduled
 ---
 
 ## Discord

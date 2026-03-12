@@ -3,7 +3,7 @@ title: "Building an Operations Department for a One-Person Company"
 type: case-study
 publish_date: 2026-03-17
 channels: discord, x
-status: published
+status: scheduled
 ---
 
 ## Discord
