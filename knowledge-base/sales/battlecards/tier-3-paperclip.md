@@ -81,4 +81,4 @@ Review monthly. Paperclip is complementary today but could converge.
 
 ---
 
-_Generated: 2026-03-12. Source: competitive-intelligence.md (2026-03-12)._
+_Updated: 2026-03-12. Source: competitive-intelligence.md (2026-03-12)._

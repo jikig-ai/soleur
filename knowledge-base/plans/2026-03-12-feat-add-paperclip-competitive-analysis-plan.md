@@ -21,7 +21,7 @@ semver: patch
 ### New Considerations Discovered
 - Paperclip's explosive GitHub traction (19.6k stars in 10 days) signals strong developer interest in zero-human company infrastructure
 - Paperclip is explicitly "not an agent framework" and "not for single-agent deployments" -- it is the org chart layer above agent runtimes, which positions it as complementary infrastructure rather than a direct CaaS competitor
-- "Cliphub" (company template marketplace) is announced but not yet live -- monitor for CaaS convergence
+- "Clipmart" (company template marketplace) is announced but not yet live -- monitor for CaaS convergence
 
 ---
 
@@ -73,7 +73,7 @@ Paperclip is an open-source (MIT-licensed), self-hosted orchestration platform f
 - **Governance:** Board-level control (approve hires, override strategy, pause/terminate agents), immutable append-only audit logs, full ticket tracing with every tool call logged
 - **Ticket system:** Structured tickets with ownership, status, conversation threading, complete API request logging
 - **Agent compatibility:** Runtime-agnostic -- works with Claude, OpenClaw, Cursor, Codex, Bash, HTTP webhooks ("if it can receive a heartbeat, it's hired")
-- **Portable company templates:** Revisioned configs with rollback, secret scrubbing, "Cliphub" template marketplace coming soon
+- **Portable company templates:** Revisioned configs with rollback, secret scrubbing, "Clipmart" template marketplace coming soon
 
 **What Paperclip is NOT (from their own positioning):**
 - Not a chatbot interface
@@ -101,7 +101,7 @@ Paperclip occupies a distinct niche within Tier 3. It is infrastructure-layer or
 
 **Convergence Risk Assessment:**
 - **Low immediate threat.** Paperclip does not compete directly with Soleur -- it lacks domain-specific agents, compounding knowledge, and workflow orchestration (brainstorm > plan > work > review > compound).
-- **Medium-term watch.** If Cliphub launches pre-built company templates with domain-specific agents, convergence risk increases. Monitor monthly.
+- **Medium-term watch.** If Clipmart launches pre-built company templates with domain-specific agents, convergence risk increases. Monitor monthly.
 - **Complementary potential.** Paperclip could become the orchestration layer beneath Soleur's agents, especially for multi-model deployments.
 
 **Relevant Institutional Learnings:**

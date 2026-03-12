@@ -54,7 +54,7 @@ convergence_risk: High
 
 ### "Polsia is cheaper at $29/month."
 
-**Response:** "At the entry tier, yes. But look at the full cost. Polsia's revenue share model takes 20% of your business revenue and 20% of your managed ad spend. A founder earning $10k/month pays Polsia $2,000/month in revenue share alone. Soleur's planned $49/month flat rate means you keep 100% of what you earn. At any meaningful revenue, Soleur is dramatically cheaper. The $29 entry price is subsidized by the revenue share."
+**Response:** "At the entry tier, yes. But look at the full cost. Polsia's revenue share model may still apply (previously 20% of business revenue and managed ad spend). A founder earning $10k/month would pay $2,000/month in revenue share alone under that model. Soleur's planned $49/month flat rate means you keep 100% of what you earn. At any meaningful revenue, Soleur is dramatically cheaper. The $29 entry price may be subsidized by the revenue share."
 
 ### "Polsia has 2,000+ companies. That's real traction."
 
@@ -86,4 +86,4 @@ Review monthly. Polsia is the most direct CaaS competitor.
 
 ---
 
-_Generated: 2026-03-12. Source: competitive-intelligence.md (2026-03-12)._
+_Updated: 2026-03-12. Source: competitive-intelligence.md (2026-03-12)._
