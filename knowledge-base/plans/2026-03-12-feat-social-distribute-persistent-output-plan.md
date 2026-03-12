@@ -202,15 +202,15 @@ This is forward-compatible. The content-publisher scans all `*.md` files in the 
 
 ## Acceptance Criteria
 
-- [ ] `social-distribute` writes a `.md` file to `knowledge-base/marketing/distribution-content/` after content generation and approval
-- [ ] Written file has YAML frontmatter with `title`, `type`, `publish_date`, `channels`, `status: draft`
-- [ ] Written file has sections for all 5 platforms: Discord, X/Twitter Thread, IndieHackers, Reddit, Hacker News
-- [ ] Written file format matches existing content files (section headings, `---` separators, tweet label format)
-- [ ] Distribution Pipeline Gate section removed from SKILL.md
-- [ ] If Discord posted via webhook during approval, `channels` field excludes `discord`
-- [ ] If content file already exists for the slug, user is prompted before overwrite
-- [ ] Skill outputs file path and next-step instructions after writing
-- [ ] Existing Phases 1-7 (content input, generation, approval) remain functionally unchanged
+- [x] `social-distribute` writes a `.md` file to `knowledge-base/marketing/distribution-content/` after content generation and approval
+- [x] Written file has YAML frontmatter with `title`, `type`, `publish_date`, `channels`, `status: draft`
+- [x] Written file has sections for all 5 platforms: Discord, X/Twitter Thread, IndieHackers, Reddit, Hacker News
+- [x] Written file format matches existing content files (section headings, `---` separators, tweet label format)
+- [x] Distribution Pipeline Gate section removed from SKILL.md
+- [x] If Discord posted via webhook during approval, `channels` field excludes `discord`
+- [x] If content file already exists for the slug, user is prompted before overwrite
+- [x] Skill outputs file path and next-step instructions after writing
+- [x] Existing Phases 1-7 (content input, generation, approval) remain functionally unchanged
 
 ## Test Scenarios
 
