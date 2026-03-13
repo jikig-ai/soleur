@@ -6,60 +6,54 @@ Soleur has no presence on Bluesky, which has the highest engagement among emergi
 
 ## Goals
 
-- Add Bluesky as the 4th supported platform in the community agent with full X/Twitter parity
-- Enable digest generation, health metrics, content suggestions, and mention engagement for Bluesky
-- Add Bluesky as a publishing target in social-distribute and content-publisher
-- Generate platform-native content (not cross-posted from X)
+- Add Bluesky as the 4th supported platform in the community agent with monitoring and engagement parity to X/Twitter
+- Enable digest generation, health metrics, and mention engagement for Bluesky
 - Claim `@soleur.bsky.social` handle and bootstrap profile
+- Add brand guide channel notes for Bluesky-native voice
 
 ## Non-Goals
 
 - Custom domain handle (`@soleur.ai`) — deferred to follow-up
-- Platform adapter interface refactor — handled separately in #470 (prerequisite)
+- Platform adapter interface refactor (#470) — follow-up refactor once all 4 scripts exist
+- Social distribution integration (social-distribute + content-publisher) — deferred until audience exists
+- Rich text facets (byte-position link/mention rendering) — URLs auto-link without facets
 - Changing brainstorm routing (CCO → community-manager delegation stays as-is)
 - Instagram, TikTok, LinkedIn, Product Hunt, or Hacker News integrations
 - Bluesky-specific features beyond X parity (e.g., custom feeds, labelers)
+- Docs site updates (`site.json`, `community.njk`) — deferred until profile is live
 
 ## Functional Requirements
 
 ### FR1: Bluesky Account Setup
 
-`bsky-setup.sh` validates and stores credentials (`BSKY_HANDLE`, `BSKY_APP_PASSWORD`) in `.env`. Verifies session creation via AT Protocol. Follows `x-setup.sh` conventions: `git rev-parse --show-toplevel` for `.env` path, `chmod 600`, no CLI arg secrets.
+`bsky-setup.sh` stores credentials (`BSKY_HANDLE`, `BSKY_APP_PASSWORD`) in `.env` and verifies session creation via AT Protocol. Two commands: `write-env` and `verify`. Follows `x-setup.sh` conventions: `git rev-parse --show-toplevel` for `.env` path, `chmod 600`, no CLI arg secrets.
 
 ### FR2: Bluesky Community Script
 
-`bsky-community.sh` provides AT Protocol API wrapper with commands: `post`, `get-feed`, `get-metrics`, `get-mentions`, `reply`. Implements 5-layer defense (input validation, curl stderr suppression, JSON validation, jq fallback chains, float-safe retry). Depth-limited retry (max 3).
+`bsky-community.sh` provides AT Protocol API wrapper with commands: `create-session`, `post`, `get-metrics`, `get-notifications`. Single `post` command handles both new posts and replies via optional `--reply-to-uri/cid --root-uri/cid` flags. Plain text posts only (no facets). Codepoint-based length validation via `wc -m` as grapheme approximation. Fresh session per invocation (no token caching). Depth-limited retry (max 3) reading `ratelimit-reset` header.
 
 ### FR3: Community Agent Bluesky Support
 
-community-manager agent includes Bluesky in all 4 capabilities: digest generation, health metrics, content suggestions, and mention engagement. Platform detected via env var presence (`BSKY_HANDLE` + `BSKY_APP_PASSWORD`).
+community-manager agent includes Bluesky in 3 capabilities: digest generation, health metrics, and mention engagement. Content Suggestions deferred (no Bluesky data on new account). Platform detected via env var presence (`BSKY_HANDLE` + `BSKY_APP_PASSWORD`). Mentions fetched via `listNotifications` filtered by `reason: "mention"`. Cursor-based pagination with `.soleur/bsky-engage-cursor` state file.
 
 ### FR4: Community Skill Update
 
-SKILL.md Platform Detection table includes Bluesky. `platforms` sub-command reports Bluesky status. `engage` sub-command supports Bluesky mentions alongside X/Twitter.
+SKILL.md Platform Detection table includes Bluesky. `platforms` sub-command reports Bluesky status. `engage` sub-command adds `--platform` flag — prompts user to choose platform if flag not specified.
 
-### FR5: Social Distribution
+### FR5: Brand Guide
 
-social-distribute skill generates a Bluesky-native content variant (300-char grapheme limit, reply-chain thread format, byte-position facets). content-publisher.sh `channel_to_section()` maps `bluesky` channel.
-
-### FR6: Brand Guide and Docs Site
-
-Brand guide includes `### Bluesky` Channel Notes (developer audience, thread culture, AT Protocol tone). `site.json` includes `bluesky` URL. `community.njk` includes Bluesky card.
+Brand guide includes `### Bluesky` Channel Notes (developer audience, thread culture, AT Protocol tone, anti-bot engagement guardrails).
 
 ## Technical Requirements
 
 ### TR1: AT Protocol Authentication
 
-Session management via `com.atproto.server.createSession`. Access tokens expire in minutes; refresh before expiry. Store only app password in `.env`, not tokens.
+Fresh session per script invocation via `com.atproto.server.createSession`. No token caching or refresh logic — sessions last minutes, scripts run seconds. Store only app password in `.env`, not tokens. Dependencies: `curl` and `jq` only (no `openssl`).
 
-### TR2: Error Propagation
+### TR2: Error Handling
 
-Multi-platform publisher returns 0 for credential-missing skips, 1 for real failures, exit 2 for partial failure. Fallback issue creation path for Bluesky failures.
+AT Protocol errors use `{"error": "ErrorName", "message": "..."}` format. Rate limits use `ratelimit-reset` header (Unix timestamp), not body JSON. Exit codes: 0=success, 1=error, 2=rate-limit-exhausted.
 
 ### TR3: Content Format
 
-Bluesky posts use rich text with byte-position facets for links and mentions. Threads created via reply references (root + parent strong references with uri + cid). 300 grapheme limit per post.
-
-### TR4: Prerequisite
-
-Platform adapter interface (#470) must be merged before this work begins. Bluesky scripts implement the adapter interface rather than the ad-hoc pattern.
+Plain text posts only (no facets). 300 grapheme limit validated via `wc -m` (codepoint approximation). Threads created via reply references using `--reply-to-uri/cid` and `--root-uri/cid` flags. Root references stay constant throughout a thread; parent references update per post.
