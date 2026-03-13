@@ -37,6 +37,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Learning files must include YAML frontmatter with `title`, `date`, `category`, and `tags` fields; optional fields include `symptoms`, `module`, and `synced_to`
 - Plan files must include YAML frontmatter with `title` (conventional commit prefix), `type` (fix/feat), and `date` fields
 - Linting configuration overrides (`.markdownlint.json`, `.eslintrc`, etc.) must include inline comments or a companion doc explaining the rationale for each disabled rule
+- Always use markdown link syntax for external URLs in prose -- bare URLs trigger markdownlint MD034; bare URLs inside code fences are acceptable
 
 ### Never
 
@@ -118,6 +119,8 @@ Project principles organized by domain. Add principles as you learn them.
 - `gh pr list --head` performs exact ref name matching, not prefix matching -- to find PRs by branch prefix, omit `--head` and filter with jq `select(.headRefName | startswith("prefix/"))`; `--head` is only reliable when the exact full branch name is known
 - All `workflow_dispatch` inputs must be validated against a strict regex before use in shell commands or `$GITHUB_OUTPUT` writes -- inputs are string-typed and accept arbitrary content including newlines; use `exit 1` on validation failure, not just a warning
 - Workflows that perform git operations against specific commits (revert, cherry-pick) must use `fetch-depth: 0` and validate that HEAD matches the expected SHA before acting -- `fetch-depth: 2` creates a race condition when additional commits land between trigger and execution
+- Always use absolute paths or verify CWD is repo root before `git worktree add` -- relative `.worktrees/` paths resolve from CWD, creating nested worktrees when run from inside an existing worktree
+- Run `worktree-manager.sh cleanup-merged` from inside any active worktree, not from the bare repo root -- bare checkouts lack a work tree and git commands fail with `fatal: this operation must be run in a work tree`
 
 ### Never
 
@@ -138,6 +141,7 @@ Project principles organized by domain. Add principles as you learn them.
 
 ### Prefer
 
+- Prefer a security comment header in GitHub Actions workflow YAML files documenting input trust boundaries (e.g., `# Security: All inputs from repository secrets (not user-controlled)`) -- the PreToolUse security hook fires on all workflow writes; a pre-audit header speeds review and documents the threat model
 - When browser interaction is needed, default to Playwright MCP tools (browser_navigate, browser_snapshot, browser_click, browser_fill_form, browser_file_upload) -- fall back to agent-browser CLI only if MCP tools are unavailable; manual instructions are a last resort, not a default
 - Plugin infrastructure (agents, commands, skills) is intentionally static - behavior changes require editing markdown files, not runtime registration
 - Use skills for agent-discoverable capabilities and workflow stages; use commands only for entry-point routing (go), knowledge-base sync (sync), and help -- commands are invisible to agents
@@ -146,7 +150,7 @@ Project principles organized by domain. Add principles as you learn them.
 - `project/` documents what the project does; `project/constitution.md` documents how to work on it
 - Component documentation in `project/components/` should follow the component template from spec-templates skill
 
-- Use convention over configuration for paths: `feat-<name>` maps to `knowledge-base/features/specs/feat-<name>/` and `.worktrees/feat-<name>/`
+- Use convention over configuration for paths: `feat-<name>` maps to `knowledge-base/project/specs/feat-<name>/` and `.worktrees/feat-<name>/`
 - Include sequence diagrams for complex flows
 - Complex commands should follow a four-phase pattern: Setup, Analyze, Review, Write
 - Scheduled workflows using claude-code-action should defer CI gating to GitHub's built-in required checks (`gh pr checks --required`) rather than reimplementing check status queries in jq -- GitHub already maintains the authoritative definition of "required checks"
