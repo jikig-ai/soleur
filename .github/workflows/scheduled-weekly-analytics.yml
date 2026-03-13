@@ -28,6 +28,7 @@ concurrency:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   snapshot:
@@ -42,14 +43,24 @@ jobs:
           PLAUSIBLE_SITE_ID: ${{ secrets.PLAUSIBLE_SITE_ID }}
         run: bash scripts/weekly-analytics.sh
 
-      - name: Commit and push
+      - name: Create PR with snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add knowledge-base/marketing/analytics/
           git diff --cached --quiet && echo "No changes to commit" && exit 0
+          BRANCH="ci/weekly-analytics-$(date -u +%Y-%m-%d)"
+          git checkout -b "$BRANCH"
           git commit -m "ci: weekly analytics snapshot [skip ci]"
-          git push origin main || { git pull --rebase origin main && git push origin main; }
+          git push -u origin "$BRANCH"
+          gh pr create \
+            --title "ci: weekly analytics snapshot $(date -u +%Y-%m-%d)" \
+            --body "Automated weekly analytics snapshot from Plausible API." \
+            --base main \
+            --head "$BRANCH"
+          gh pr merge "$BRANCH" --squash --auto
 
       - name: Discord notification (failure)
         if: failure()
