@@ -29,9 +29,9 @@ The script discovers artifacts matching the feature slug in three locations:
 
 | Directory | Match Pattern | Type |
 |-----------|--------------|------|
-| `knowledge-base/features/brainstorms/` | Filename contains slug | File glob |
-| `knowledge-base/features/plans/` | Filename contains slug | File glob |
-| `knowledge-base/features/specs/feat-<slug>/` | Exact directory name | Directory match |
+| `knowledge-base/project/brainstorms/` | Filename contains slug | File glob |
+| `knowledge-base/project/plans/` | Filename contains slug | File glob |
+| `knowledge-base/project/specs/feat-<slug>/` | Exact directory name | Directory match |
 
 All `archive/` subdirectories are excluded from discovery.
 

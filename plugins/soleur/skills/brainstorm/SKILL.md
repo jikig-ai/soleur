@@ -97,7 +97,7 @@ Run these agents **in parallel** to gather context before dialogue:
 
 **What to look for:**
 - **Repo research:** existing patterns, similar features, CLAUDE.md guidance
-- **Learnings:** documented solutions in `knowledge-base/features/learnings/` -- past gotchas, patterns, lessons learned that might inform WHAT to build
+- **Learnings:** documented solutions in `knowledge-base/project/learnings/` -- past gotchas, patterns, lessons learned that might inform WHAT to build
 
 If either agent fails or returns empty, proceed with whatever results are available. Weave findings naturally into your first question rather than presenting a formal summary.
 
@@ -154,7 +154,7 @@ fi
 
    This creates:
    - `.worktrees/feat-<name>/` (worktree)
-   - `knowledge-base/features/specs/feat-<name>/` (spec directory in worktree)
+   - `knowledge-base/project/specs/feat-<name>/` (spec directory in worktree)
 
 3. **Set worktree path for subsequent file operations:**
 
@@ -181,8 +181,8 @@ Write the brainstorm document. **Use worktree path if created.**
 
 **File path:**
 
-- If worktree exists: `<worktree-path>/knowledge-base/features/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md` (replace `<worktree-path>` with the actual worktree path, e.g., `.worktrees/feat-<name>`)
-- If no worktree: `knowledge-base/features/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`
+- If worktree exists: `<worktree-path>/knowledge-base/project/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md` (replace `<worktree-path>` with the actual worktree path, e.g., `.worktrees/feat-<name>`)
+- If no worktree: `knowledge-base/project/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`
 
 **Document structure:** See the `brainstorm-techniques` skill for the template format. Key sections: What We're Building, Why This Approach, Key Decisions, Open Questions.
 
@@ -229,14 +229,14 @@ Ensure the brainstorms directory exists before writing.
    - Add Functional Requirements (FR1, FR2...) from key features
    - Add Technical Requirements (TR1, TR2...) from constraints
 
-5. **Save spec.md** to the worktree: `<worktree-path>/knowledge-base/features/specs/feat-<name>/spec.md` (replace `<worktree-path>` with the actual worktree path)
+5. **Save spec.md** to the worktree: `<worktree-path>/knowledge-base/project/specs/feat-<name>/spec.md` (replace `<worktree-path>` with the actual worktree path)
 
 6. **Commit and push all brainstorm artifacts:**
 
    After the brainstorm document (Phase 3.5) and spec are both written, commit and push everything:
 
    ```bash
-   git add knowledge-base/features/brainstorms/ knowledge-base/features/specs/feat-<name>/
+   git add knowledge-base/project/brainstorms/ knowledge-base/project/specs/feat-<name>/
    git commit -m "docs: capture brainstorm and spec for feat-<name>"
    git push
    ```
@@ -257,7 +257,7 @@ Ensure the brainstorms directory exists before writing.
 
 **If knowledge-base/ does NOT exist:**
 
-- Brainstorm saved to `knowledge-base/features/brainstorms/` only (no worktree)
+- Brainstorm saved to `knowledge-base/project/brainstorms/` only (no worktree)
 - No spec or issue created
 
 ### Phase 4: Handoff
@@ -282,8 +282,8 @@ When complete, display:
 ```text
 Brainstorm complete!
 
-Document: knowledge-base/features/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md
-Spec: knowledge-base/features/specs/feat-<name>/spec.md
+Document: knowledge-base/project/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md
+Spec: knowledge-base/project/specs/feat-<name>/spec.md
 Issue: #N (using existing) | #N (created) | none
 Branch: feat-<name> (if worktree created)
 Working directory: .worktrees/feat-<name>/ (if worktree created)
@@ -307,7 +307,7 @@ Next: Use `skill: soleur:plan` when ready to implement.
 If re-running brainstorm on the same topic, read the existing document first. Update in place rather than creating a duplicate. Preserve prior decisions and mark any changes with `[Updated YYYY-MM-DD]`.
 
 **Archive old brainstorms:**
-Run `bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` from the repository root. This moves matching artifacts to `knowledge-base/features/brainstorms/archive/` with timestamp prefixes, preserving git history. Commit with `git commit -m "brainstorm: archive <topic>"`.
+Run `bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` from the repository root. This moves matching artifacts to `knowledge-base/project/brainstorms/archive/` with timestamp prefixes, preserving git history. Commit with `git commit -m "brainstorm: archive <topic>"`.
 
 ## Important Guidelines
 

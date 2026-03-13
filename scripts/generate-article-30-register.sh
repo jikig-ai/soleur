@@ -4,7 +4,7 @@ set -euo pipefail
 # Navigate to repo root so the script works from any directory
 cd "$(git rev-parse --show-toplevel)"
 
-TEMPLATE="knowledge-base/features/specs/archive/20260221-044654-feat-cnil-article-30/article-30-register-template.md"
+TEMPLATE="knowledge-base/project/specs/archive/20260221-044654-feat-cnil-article-30/article-30-register-template.md"
 OUTPUT="article-30-register.md"
 TODAY=$(date +%Y-%m-%d)
 
