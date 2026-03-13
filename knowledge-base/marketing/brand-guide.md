@@ -227,6 +227,32 @@ These guardrails apply in both automatic mode (fetch-mentions) and manual mode (
 | Source file | `knowledge-base/design/brand/brand-x-banner.pen` |
 | Generated with | Pencil MCP (design) + Pillow (PNG export) |
 
+### Bluesky
+
+**Handle:** @soleur.bsky.social
+
+- Developer-first audience, technical and builder-oriented tone. Bluesky's early adopter base skews heavily toward developers and open-source contributors.
+- Full brand voice applies. Declarative, concrete, no hedging -- same energy as X/Twitter but adapted to Bluesky's thread culture.
+- **Thread format:** Reply chains for multi-part content. Each post in a thread must stand alone as a complete thought.
+- **300-character limit** (graphemes) per post -- enforced during generation, not as a post-hoc trim. More generous than X's 280 but still demands concision.
+- AT Protocol / open-source credibility angle. Bluesky's community values decentralization and protocol-level thinking. Reference open-source, composability, and protocol design when relevant.
+- No hashtags. Bluesky does not support hashtags as a native discovery feature. Do not use them.
+- No emojis in standalone posts. Thread body posts may use one structural emoji (arrow, checkmark) if it aids scanning.
+- Engagement guardrails: Bluesky's community is small and tightly knit with strong anti-bot sentiment. Start with organic, high-quality engagement. Avoid aggressive automated posting patterns that could trigger community backlash.
+- Example post: "Company-as-a-Service: 61 agents running every department from strategy to shipping. One founder makes decisions. The system executes."
+- Example reply: "AT Protocol makes this possible -- open, composable, no API gatekeeping. Exactly the kind of infrastructure solo founders need."
+- Example thread start: "The first billion-dollar solo company isn't science fiction. It's an engineering problem. Here's how we're solving it."
+
+#### Engagement Guardrails
+
+Same guardrails as X/Twitter apply (see above), with these Bluesky-specific additions:
+
+**Bluesky-specific:**
+- Maximum 5 replies per engagement session (smaller community, higher visibility per reply)
+- No rapid-fire posting. Space posts at least 3 minutes apart. The small community notices automated patterns quickly.
+- Engage authentically in AT Protocol and decentralization discussions -- this is native territory for Soleur's builder audience.
+- Do not cross-post identical content from X/Twitter. Adapt the message for Bluesky's audience and tone.
+
 ### Website / Landing Page
 
 - Full brand energy. This is where the ambition lives at maximum volume.

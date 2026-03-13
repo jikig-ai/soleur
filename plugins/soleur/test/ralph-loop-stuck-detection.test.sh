@@ -36,6 +36,8 @@ create_state_file() {
   local promise="${4:-null}"
   local stuck_count="${5:-0}"
   local stuck_threshold="${6:-3}"
+  local last_response_hash="${7:-}"
+  local repeat_count="${8:-0}"
   local now
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -47,6 +49,8 @@ max_iterations: $max
 completion_promise: $promise
 stuck_count: $stuck_count
 stuck_threshold: $stuck_threshold
+last_response_hash: $last_response_hash
+repeat_count: $repeat_count
 started_at: "$now"
 ---
 
@@ -158,7 +162,7 @@ TEST_DIR=$(setup_test)
 create_state_file "$TEST_DIR" 5 0 "null" 2 3
 STDERR_OUTPUT=$(run_hook_stderr "$TEST_DIR" "")
 assert_contains "$STDERR_OUTPUT" "terminated after" "stderr contains termination warning"
-assert_contains "$STDERR_OUTPUT" "consecutive empty responses" "stderr mentions empty responses"
+assert_contains "$STDERR_OUTPUT" "consecutive empty/idle responses" "stderr mentions empty/idle responses"
 cleanup_test "$TEST_DIR"
 echo ""
 
@@ -450,6 +454,203 @@ TEST_DIR=$(setup_test)
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file created"
 MAX_ITER=$(grep '^max_iterations:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/max_iterations: *//' || echo "MISSING")
 assert_eq "25" "$MAX_ITER" "max_iterations defaults to 25"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# === Idle Pattern Detection Tests ===
+echo "=== Idle Pattern Detection Tests ==="
+echo ""
+
+# Test 22: Idle pattern "All slash commands are finished" increments stuck counter
+echo "Test 22: Idle pattern 'All slash commands are finished' increments stuck counter"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+run_hook "$TEST_DIR" "All slash commands are finished"
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists (only 1 idle, threshold 3)"
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
+assert_eq "1" "$STUCK_COUNT" "stuck_count incremented for idle pattern"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 23: Idle pattern "Nothing left to do" increments stuck counter
+echo "Test 23: Idle pattern 'Nothing left to do' increments stuck counter"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+run_hook "$TEST_DIR" "Nothing left to do"
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists"
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
+assert_eq "1" "$STUCK_COUNT" "stuck_count incremented for idle pattern"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 24: Idle pattern "Session already complete" increments stuck counter
+echo "Test 24: Idle pattern 'Session already complete' increments stuck counter"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+run_hook "$TEST_DIR" "Session already complete"
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists"
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
+assert_eq "1" "$STUCK_COUNT" "stuck_count incremented for idle pattern"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 25: 3 consecutive idle-pattern responses trigger termination
+echo "Test 25: 3 consecutive idle-pattern responses trigger termination"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 5 0 "null" 2 3
+run_hook "$TEST_DIR" "All slash commands are finished"
+assert_file_not_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file removed after 3 idle responses"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 26: Non-idle substantive response resets stuck counter (existing behavior)
+echo "Test 26: Non-idle substantive response resets stuck_count to 0"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 2 0 "null" 2 3
+run_hook "$TEST_DIR" "I've refactored the authentication layer, added rate limiting to the API endpoints, and improved the error handling across twelve different modules."
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists"
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
+assert_eq "0" "$STUCK_COUNT" "stuck_count reset to 0 for substantive response"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 27: Long response (>= 200 chars) containing idle substring is NOT treated as idle
+echo "Test 27: Long response (>= 200 chars) with idle substring is NOT idle (length gate)"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 2 3
+# Build a 200+ char response containing "all done"
+LONG_RESPONSE="I've updated all 5 files. The module is all done and tested. Here is a detailed summary of the changes: refactored the authentication layer, added rate limiting, improved error handling, updated the documentation, and added comprehensive integration tests."
+run_hook "$TEST_DIR" "$LONG_RESPONSE"
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists (long response = substantive)"
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
+assert_eq "0" "$STUCK_COUNT" "stuck_count reset (length gate prevents idle detection)"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 28: Short response with idle pattern IS treated as idle (under 200 char gate)
+echo "Test 28: Short response with idle pattern IS idle (under length gate)"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+run_hook "$TEST_DIR" "All done. No active commands to run."
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists (only 1 idle)"
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
+assert_eq "1" "$STUCK_COUNT" "stuck_count incremented for short idle response"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# === Repetition Detection Tests ===
+echo "=== Repetition Detection Tests ==="
+echo ""
+
+# Test 29: 3 identical responses trigger repetition detection termination
+echo "Test 29: 3 identical responses trigger repetition detection termination"
+TEST_DIR=$(setup_test)
+REPEATED_MSG="I've reviewed the codebase and everything looks good"
+# Match hook hash computation: STRIPPED=$(echo ... | tr -d), then echo "$STRIPPED" | tr lower | md5sum
+REPEATED_STRIPPED=$(echo "$REPEATED_MSG" | tr -d '[:space:]')
+REPEATED_HASH=$(echo "$REPEATED_STRIPPED" | tr '[:upper:]' '[:lower:]' | md5sum | cut -d' ' -f1)
+create_state_file "$TEST_DIR" 5 0 "null" 0 3 "$REPEATED_HASH" 2
+STDERR_OUTPUT=$(run_hook_stderr "$TEST_DIR" "$REPEATED_MSG")
+assert_file_not_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file removed after 3 identical responses"
+assert_contains "$STDERR_OUTPUT" "repetition detection" "stderr mentions repetition detection"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 30: 2 identical responses followed by different response resets repeat counter
+echo "Test 30: Different response resets repeat counter"
+TEST_DIR=$(setup_test)
+REPEATED_MSG="I've reviewed the codebase and everything looks good"
+REPEATED_STRIPPED=$(echo "$REPEATED_MSG" | tr -d '[:space:]')
+REPEATED_HASH=$(echo "$REPEATED_STRIPPED" | tr '[:upper:]' '[:lower:]' | md5sum | cut -d' ' -f1)
+create_state_file "$TEST_DIR" 5 0 "null" 0 3 "$REPEATED_HASH" 1
+run_hook "$TEST_DIR" "This is a completely different substantive response with new content"
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists"
+REPEAT_COUNT=$(grep '^repeat_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/repeat_count: *//')
+assert_eq "0" "$REPEAT_COUNT" "repeat_count reset to 0 after different response"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 31: Pre-existing state file without last_response_hash/repeat_count works
+echo "Test 31: Pre-existing state file without hash/repeat fields works (backward compat)"
+TEST_DIR=$(setup_test)
+NOW_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<EOF
+---
+active: true
+iteration: 1
+max_iterations: 0
+completion_promise: null
+stuck_count: 0
+stuck_threshold: 3
+started_at: "$NOW_TS"
+---
+
+Test prompt
+EOF
+run_hook "$TEST_DIR" "Substantive response with enough content here to pass threshold easily."
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists (no crash on missing fields)"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 32: Exactly 200 stripped chars with idle substring is NOT idle (boundary test)
+echo "Test 32: Exactly 200 stripped chars with idle phrase is NOT idle (boundary)"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 2 3
+# Build a response that is exactly 200 stripped chars and contains "all done"
+# Verified: echo "..." | tr -d '[:space:]' | wc -m == 200
+BOUNDARY_RESPONSE="All done with the feature implementation. Here are the changes I made to the authentication system, the rate limiter, the error handlers, the logging framework, and the monitoring dashboards updated successfully with the new metrics.."
+run_hook "$TEST_DIR" "$BOUNDARY_RESPONSE"
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists (200 chars = substantive)"
+STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/stuck_count: *//')
+assert_eq "0" "$STUCK_COUNT" "stuck_count reset (200 chars hits length gate)"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 33: setup-ralph-loop.sh includes last_response_hash and repeat_count
+echo "Test 33: setup-ralph-loop.sh includes last_response_hash and repeat_count"
+TEST_DIR=$(setup_test)
+(cd "$TEST_DIR" && bash "$SETUP" "test prompt" > /dev/null 2>&1)
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file created"
+LAST_HASH=$(grep '^last_response_hash:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/last_response_hash: *//' || echo "MISSING")
+REPEAT_CT=$(grep '^repeat_count:' "$TEST_DIR/.claude/ralph-loop.local.md" | sed 's/repeat_count: *//' || echo "MISSING")
+assert_eq "" "$LAST_HASH" "last_response_hash initialized to empty"
+assert_eq "0" "$REPEAT_CT" "repeat_count initialized to 0"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 34: Idle pattern termination message in stderr
+echo "Test 34: Idle pattern termination message in stderr"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 5 0 "null" 2 3
+STDERR_OUTPUT=$(run_hook_stderr "$TEST_DIR" "Nothing left to do")
+assert_contains "$STDERR_OUTPUT" "terminated after" "stderr contains termination warning"
+assert_contains "$STDERR_OUTPUT" "empty/idle responses" "stderr mentions idle responses"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 35: Prompt body containing last_response_hash: text is preserved
+echo "Test 35: Prompt body with last_response_hash: text is preserved verbatim"
+TEST_DIR=$(setup_test)
+NOW_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<EOF
+---
+active: true
+iteration: 1
+max_iterations: 0
+completion_promise: null
+stuck_count: 0
+stuck_threshold: 3
+last_response_hash:
+repeat_count: 0
+started_at: "$NOW_TS"
+---
+
+Check last_response_hash: should be empty initially.
+EOF
+run_hook "$TEST_DIR" "This is a substantive response with plenty of content to exceed the threshold."
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.local.md" "state file still exists"
+PROMPT_BODY=$(awk '/^---$/{i++; next} i>=2' "$TEST_DIR/.claude/ralph-loop.local.md")
+assert_contains "$PROMPT_BODY" "last_response_hash: should be empty initially" "prompt last_response_hash: text preserved"
 cleanup_test "$TEST_DIR"
 echo ""
 

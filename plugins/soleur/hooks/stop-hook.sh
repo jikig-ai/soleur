@@ -52,6 +52,8 @@ COMPLETION_PROMISE=$(echo "$FRONTMATTER" | grep '^completion_promise:' | sed 's/
 # when fields are missing (pre-existing state files without stuck_count/stuck_threshold)
 STUCK_COUNT=$(echo "$FRONTMATTER" | grep '^stuck_count:' | sed 's/stuck_count: *//' || true)
 STUCK_THRESHOLD=$(echo "$FRONTMATTER" | grep '^stuck_threshold:' | sed 's/stuck_threshold: *//' || true)
+LAST_RESPONSE_HASH=$(echo "$FRONTMATTER" | grep '^last_response_hash:' | sed 's/last_response_hash: *//' || true)
+REPEAT_COUNT=$(echo "$FRONTMATTER" | grep '^repeat_count:' | sed 's/repeat_count: *//' || true)
 
 # Default values for backward compatibility with pre-existing state files
 if [[ ! "$STUCK_COUNT" =~ ^[0-9]+$ ]]; then
@@ -59,6 +61,9 @@ if [[ ! "$STUCK_COUNT" =~ ^[0-9]+$ ]]; then
 fi
 if [[ ! "$STUCK_THRESHOLD" =~ ^[0-9]+$ ]]; then
   STUCK_THRESHOLD=3
+fi
+if [[ ! "$REPEAT_COUNT" =~ ^[0-9]+$ ]]; then
+  REPEAT_COUNT=0
 fi
 
 # Validate numeric fields before arithmetic operations
@@ -118,8 +123,38 @@ fi
 STRIPPED_OUTPUT=$(echo "$LAST_OUTPUT" | tr -d '[:space:]')
 RESPONSE_LENGTH=${#STRIPPED_OUTPUT}
 
-# Update stuck counter
-if [[ $RESPONSE_LENGTH -lt 20 ]]; then
+# --- Idle Pattern Detection ---
+# Responses that say "nothing to do" in >20 chars fool the length check.
+# Only apply to short-ish responses (< 200 chars stripped) to avoid false positives
+# on substantive responses that contain idle phrases as substrings.
+# Verified: the `if` statement absorbs grep exit 1 under set -euo pipefail.
+IS_IDLE=false
+if [[ $RESPONSE_LENGTH -lt 200 ]]; then
+  NORMALIZED_OUTPUT=$(echo "$LAST_OUTPUT" | tr '[:upper:]' '[:lower:]' | tr -s '[:space:]' ' ' | sed 's/^ *//;s/ *$//')
+  if echo "$NORMALIZED_OUTPUT" | grep -iqE '(all (done|complete|finished)|all (slash )?commands? (are |have been )?(done|complete|finished|already)|nothing (left|pending|remaining|to do|to complete|to run)|no (active|running|pending) (commands?|tasks?|slash commands?)|session (complete|finished|done|already)|already (done|complete|finished))'; then
+    IS_IDLE=true
+  fi
+fi
+
+# --- Repetition Detection ---
+CURRENT_HASH=""
+if [[ -n "$STRIPPED_OUTPUT" ]]; then
+  CURRENT_HASH=$(echo "$STRIPPED_OUTPUT" | tr '[:upper:]' '[:lower:]' | md5sum | cut -d' ' -f1)
+fi
+
+if [[ -n "$CURRENT_HASH" ]] && [[ "$CURRENT_HASH" == "$LAST_RESPONSE_HASH" ]]; then
+  REPEAT_COUNT=$((REPEAT_COUNT + 1))
+else
+  REPEAT_COUNT=0
+fi
+LAST_RESPONSE_HASH="$CURRENT_HASH"
+
+# Update stuck counter: idle patterns OR short responses increment, substantive resets
+# Three tiers:
+#   < 20 chars: definitely minimal (existing behavior)
+#   20-199 chars + idle pattern: semantically idle (new)
+#   >= 200 chars: always substantive (long enough to contain real work)
+if [[ "$IS_IDLE" == "true" ]] || [[ $RESPONSE_LENGTH -lt 20 ]]; then
   STUCK_COUNT=$((STUCK_COUNT + 1))
 else
   STUCK_COUNT=0
@@ -127,7 +162,15 @@ fi
 
 # Check stuck threshold (0 = disabled)
 if [[ $STUCK_THRESHOLD -gt 0 ]] && [[ $STUCK_COUNT -ge $STUCK_THRESHOLD ]]; then
-  echo "Ralph loop: terminated after $STUCK_COUNT consecutive empty responses (stuck detection)" >&2
+  echo "Ralph loop: terminated after $STUCK_COUNT consecutive empty/idle responses (stuck detection)" >&2
+  rm "$RALPH_STATE_FILE"
+  exit 0
+fi
+
+# Check repetition threshold (3 identical consecutive responses)
+REPEAT_THRESHOLD=3
+if [[ $REPEAT_COUNT -ge $REPEAT_THRESHOLD ]]; then
+  echo "Ralph loop: terminated after $((REPEAT_COUNT + 1)) consecutive identical responses (repetition detection)" >&2
   rm "$RALPH_STATE_FILE"
   exit 0
 fi
@@ -149,10 +192,12 @@ fi
 # The counter will not persist across iterations. Acceptable because legacy files are only
 # created by pre-stuck-detection versions of setup-ralph-loop.sh; all new loops include the field.
 TEMP_FILE="${RALPH_STATE_FILE}.tmp.$$"
-awk -v iter="$NEXT_ITERATION" -v sc="$STUCK_COUNT" '
+awk -v iter="$NEXT_ITERATION" -v sc="$STUCK_COUNT" -v lrh="$LAST_RESPONSE_HASH" -v rc="$REPEAT_COUNT" '
   /^---$/ { c++; print; next }
   c==1 && /^iteration:/ { print "iteration: " iter; next }
   c==1 && /^stuck_count:/ { print "stuck_count: " sc; next }
+  c==1 && /^last_response_hash:/ { print "last_response_hash: " lrh; next }
+  c==1 && /^repeat_count:/ { print "repeat_count: " rc; next }
   { print }
 ' "$RALPH_STATE_FILE" > "$TEMP_FILE"
 mv "$TEMP_FILE" "$RALPH_STATE_FILE"

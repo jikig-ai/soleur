@@ -129,13 +129,12 @@ soleur/
   docs/                     # Documentation and legal content
     legal/                  # Legal documents (ToS, privacy, GDPR, CLA)
   knowledge-base/           # Project documentation
-    features/               # Feature-lifecycle artifacts
-      learnings/            # Documented solutions
-      specs/                # Feature specifications
-      brainstorms/          # Design explorations
-      plans/                # Implementation plans
-    project/                # This documentation
+    project/                # Project meta + feature lifecycle
       constitution.md       # Coding conventions
+      brainstorms/          # Design explorations
+      learnings/            # Documented solutions
+      plans/                # Implementation plans
+      specs/                # Feature specifications
   scripts/                  # Repo-level utility scripts
 ```
 
@@ -166,7 +165,7 @@ Knowledge artifacts follow a lifecycle: **create** during brainstorm/plan, **use
 
 Paths follow predictable patterns:
 - Feature branches: `feat-<name>`
-- Specs: `knowledge-base/features/specs/feat-<name>/`
+- Specs: `knowledge-base/project/specs/feat-<name>/`
 - Worktrees: `.worktrees/feat-<name>/`
 
 ## Quick Start
