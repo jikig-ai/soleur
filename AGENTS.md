@@ -17,6 +17,7 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 - The host terminal is Warp. Do not attempt automated terminal manipulation via escape sequences (cursor position queries, TUI rendering, and similar sequences are intercepted by Warp's tmux control mode and silently fail).
 - The Bash tool runs in a non-interactive shell without `sudo` access. Do not attempt commands requiring elevated privileges -- provide manual instructions instead.
 - Exhaust all automated options before suggesting manual steps to the user. The founder is a solo operator -- every manual step is a context switch. If credentials, APIs, or CLI tools exist to complete a task programmatically (Discord API, `gh` CLI, `curl`, etc.), use them. Only fall back to manual instructions when automation is genuinely impossible (e.g., no API exists, requires browser-only OAuth consent).
+- Never label a browser task as "manual" without first attempting Playwright MCP. Account signups, credential generation, settings configuration, and form submissions are all automatable via Playwright. The only genuinely manual browser steps are CAPTCHA solving and interactive OAuth consent screens — and even those should be driven to the CAPTCHA/consent step via Playwright, then handed to the user for that single interaction. Plans and task lists that say "manual — browser" are a code smell.
 
 ## Workflow Gates
 
@@ -25,7 +26,7 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 - Never bump version files in feature branches. Version is derived from git tags — CI creates GitHub Releases with `vX.Y.Z` tags at merge time via semver labels. Set labels with `/ship`. Do NOT edit `plugin.json` version (frozen sentinel) or `marketplace.json` version.
 - Use `/ship` to automate the full commit/push/PR workflow. It enforces review and compound gates.
 - After marking a PR ready, run `gh pr merge <number> --squash --auto` to queue auto-merge, then poll `gh pr view <number> --json state --jq .state` until MERGED, then `cleanup-merged`. Never stop at "waiting for CI" -- actively poll and merge in the same session.
-- At session start, from the repo root: run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged && git worktree list`.
+- At session start, from any active worktree (not the bare repo root): run `bash ../../plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged && git worktree list`. If no worktree exists, run `git worktree list` from the bare root to verify.
 - When an audit identifies pre-existing issues, create GitHub issues to track them before fixing. Don't just note them in conversation -- file them.
 - When creating PRs that resolve a GitHub issue, include `Closes #N` in the PR **body** (not just the title). Parenthetical `(#N)` in titles creates a link but does NOT trigger auto-close.
 

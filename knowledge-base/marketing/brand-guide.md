@@ -177,6 +177,19 @@ These guardrails apply in both automatic mode (fetch-mentions) and manual mode (
 
 **Exception:** Engaging with #solofounder, #buildinpublic, and AI/developer tooling communities is encouraged even when conversations touch on industry trends. The prohibition targets partisan, religious, and inflammatory topics, not the broader tech ecosystem.
 
+### LinkedIn
+
+- Thought leadership is the primary format. Case studies, reflections on building with AI agents, lessons learned, and honest assessments of what worked and what didn't.
+- First-person founder voice. Write as the person behind the company, not as a faceless brand. "I built..." not "We launched..."
+- Professional but not corporate. The tone sits between X's punchy brevity and a conference keynote -- substantive, measured, and direct. No buzzwords, no jargon for jargon's sake.
+- Aim for ~1,300 characters for optimal organic visibility. Maximum 3,000 characters. Longer posts get truncated behind "see more" -- front-load the hook.
+- Hook-first: the opening line must deliver a complete, compelling idea that works in the feed preview. No "Excited to share..." openers.
+- Include the article URL naturally in context, not as a standalone CTA at the end.
+- One or two relevant hashtags maximum. Prefer #solofounder, #buildinpublic, #AIagents. Never more than two. No hashtag walls.
+- Tuesday-Thursday mornings perform best for B2B developer tools content.
+- No promotional framing. "Here's what I learned building X" outperforms "Check out our new feature Y" by an order of magnitude on LinkedIn.
+- Example post: "Most AI coding tools solve 30% of running a company. The other 70% -- marketing, legal, finance, ops -- is still manual.\n\nI spent the last 6 months building an AI organization that handles all of it. 40+ agents across 8 departments, sharing a compounding knowledge base.\n\nThe surprising part: the hardest problem wasn't the AI. It was getting agents to share context across departments.\n\n[link to article]\n\n#solofounder #buildinpublic"
+
 **When to skip a mention:**
 - Abusive, harassing, or spam content
 - Off-topic mentions with no connection to Soleur or solo-founder topics
@@ -213,6 +226,32 @@ These guardrails apply in both automatic mode (fetch-mentions) and manual mode (
 | Avatar overlap | Bottom-left clear of critical content |
 | Source file | `knowledge-base/design/brand/brand-x-banner.pen` |
 | Generated with | Pencil MCP (design) + Pillow (PNG export) |
+
+### Bluesky
+
+**Handle:** @soleur.bsky.social
+
+- Developer-first audience, technical and builder-oriented tone. Bluesky's early adopter base skews heavily toward developers and open-source contributors.
+- Full brand voice applies. Declarative, concrete, no hedging -- same energy as X/Twitter but adapted to Bluesky's thread culture.
+- **Thread format:** Reply chains for multi-part content. Each post in a thread must stand alone as a complete thought.
+- **300-character limit** (graphemes) per post -- enforced during generation, not as a post-hoc trim. More generous than X's 280 but still demands concision.
+- AT Protocol / open-source credibility angle. Bluesky's community values decentralization and protocol-level thinking. Reference open-source, composability, and protocol design when relevant.
+- No hashtags. Bluesky does not support hashtags as a native discovery feature. Do not use them.
+- No emojis in standalone posts. Thread body posts may use one structural emoji (arrow, checkmark) if it aids scanning.
+- Engagement guardrails: Bluesky's community is small and tightly knit with strong anti-bot sentiment. Start with organic, high-quality engagement. Avoid aggressive automated posting patterns that could trigger community backlash.
+- Example post: "Company-as-a-Service: 61 agents running every department from strategy to shipping. One founder makes decisions. The system executes."
+- Example reply: "AT Protocol makes this possible -- open, composable, no API gatekeeping. Exactly the kind of infrastructure solo founders need."
+- Example thread start: "The first billion-dollar solo company isn't science fiction. It's an engineering problem. Here's how we're solving it."
+
+#### Engagement Guardrails
+
+Same guardrails as X/Twitter apply (see above), with these Bluesky-specific additions:
+
+**Bluesky-specific:**
+- Maximum 5 replies per engagement session (smaller community, higher visibility per reply)
+- No rapid-fire posting. Space posts at least 3 minutes apart. The small community notices automated patterns quickly.
+- Engage authentically in AT Protocol and decentralization discussions -- this is native territory for Soleur's builder audience.
+- Do not cross-post identical content from X/Twitter. Adapt the message for Bluesky's audience and tone.
 
 ### Hacker News
 

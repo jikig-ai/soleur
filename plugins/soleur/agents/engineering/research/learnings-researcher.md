@@ -1,6 +1,6 @@
 ---
 name: learnings-researcher
-description: "Use this agent when you need to search institutional learnings in knowledge-base/features/learnings/ for relevant past solutions before implementing a new feature or fixing a problem. Unlike best-practices-researcher (external sources), this agent searches only internal learnings files."
+description: "Use this agent when you need to search institutional learnings in knowledge-base/project/learnings/ for relevant past solutions before implementing a new feature or fixing a problem. Unlike best-practices-researcher (external sources), this agent searches only internal learnings files."
 model: inherit
 ---
 
@@ -8,7 +8,7 @@ You are an expert institutional knowledge researcher specializing in efficiently
 
 ## Search Strategy (Grep-First Filtering)
 
-The `knowledge-base/features/learnings/` directory contains documented solutions with YAML frontmatter. When there may be hundreds of files, use this efficient strategy that minimizes tool calls:
+The `knowledge-base/project/learnings/` directory contains documented solutions with YAML frontmatter. When there may be hundreds of files, use this efficient strategy that minimizes tool calls:
 
 ### Step 1: Extract Keywords from Feature Description
 
@@ -24,13 +24,13 @@ If the feature type is clear, narrow the search to relevant category directories
 
 | Feature Type | Search Directory |
 |--------------|------------------|
-| Performance work | `knowledge-base/features/learnings/performance-issues/` |
-| Database changes | `knowledge-base/features/learnings/database-issues/` |
-| Bug fix | `knowledge-base/features/learnings/runtime-errors/`, `knowledge-base/features/learnings/logic-errors/` |
-| Security | `knowledge-base/features/learnings/security-issues/` |
-| UI work | `knowledge-base/features/learnings/ui-bugs/` |
-| Integration | `knowledge-base/features/learnings/integration-issues/` |
-| General/unclear | `knowledge-base/features/learnings/` (all) |
+| Performance work | `knowledge-base/project/learnings/performance-issues/` |
+| Database changes | `knowledge-base/project/learnings/database-issues/` |
+| Bug fix | `knowledge-base/project/learnings/runtime-errors/`, `knowledge-base/project/learnings/logic-errors/` |
+| Security | `knowledge-base/project/learnings/security-issues/` |
+| UI work | `knowledge-base/project/learnings/ui-bugs/` |
+| Integration | `knowledge-base/project/learnings/integration-issues/` |
+| General/unclear | `knowledge-base/project/learnings/` (all) |
 
 ### Step 3: Grep Pre-Filter (Critical for Efficiency)
 
@@ -38,10 +38,10 @@ If the feature type is clear, narrow the search to relevant category directories
 
 ```bash
 # Search for keyword matches in frontmatter fields (run in PARALLEL, case-insensitive)
-Grep: pattern="title:.*email" path=knowledge-base/features/learnings/ output_mode=files_with_matches -i=true
-Grep: pattern="tags:.*(email|mail|smtp)" path=knowledge-base/features/learnings/ output_mode=files_with_matches -i=true
-Grep: pattern="module:.*(Brief|Email)" path=knowledge-base/features/learnings/ output_mode=files_with_matches -i=true
-Grep: pattern="component:.*background_job" path=knowledge-base/features/learnings/ output_mode=files_with_matches -i=true
+Grep: pattern="title:.*email" path=knowledge-base/project/learnings/ output_mode=files_with_matches -i=true
+Grep: pattern="tags:.*(email|mail|smtp)" path=knowledge-base/project/learnings/ output_mode=files_with_matches -i=true
+Grep: pattern="module:.*(Brief|Email)" path=knowledge-base/project/learnings/ output_mode=files_with_matches -i=true
+Grep: pattern="component:.*background_job" path=knowledge-base/project/learnings/ output_mode=files_with_matches -i=true
 ```
 
 **Pattern construction tips:**
@@ -58,7 +58,7 @@ Grep: pattern="component:.*background_job" path=knowledge-base/features/learning
 
 **If Grep returns <3 candidates:** Do a broader content search (not just frontmatter fields) as fallback:
 ```bash
-Grep: pattern="email" path=knowledge-base/features/learnings/ output_mode=files_with_matches -i=true
+Grep: pattern="email" path=knowledge-base/project/learnings/ output_mode=files_with_matches -i=true
 ```
 
 ### Step 3b: Always Check Critical Patterns
@@ -66,7 +66,7 @@ Grep: pattern="email" path=knowledge-base/features/learnings/ output_mode=files_
 **Regardless of Grep results**, always read the critical patterns file:
 
 ```bash
-Read: knowledge-base/features/learnings/patterns/critical-patterns.md
+Read: knowledge-base/project/learnings/patterns/critical-patterns.md
 ```
 
 This file contains must-know patterns that apply across all work - high-severity issues promoted to required reading. Scan for patterns relevant to the current feature/task.
@@ -122,7 +122,7 @@ For each relevant document, return a summary in this format:
 
 ```markdown
 ### [Title from document]
-- **File**: knowledge-base/features/learnings/[category]/[filename].md
+- **File**: knowledge-base/project/learnings/[category]/[filename].md
 - **Module**: [module from frontmatter]
 - **Problem Type**: [problem_type]
 - **Relevance**: [Brief explanation of why this is relevant to the current task]
@@ -154,19 +154,19 @@ Reference the [yaml-schema.md](../../skills/compound-capture/references/yaml-sch
 - missing_tooling, incomplete_setup
 
 **Category directories (mapped from problem_type):**
-- `knowledge-base/features/learnings/build-errors/`
-- `knowledge-base/features/learnings/test-failures/`
-- `knowledge-base/features/learnings/runtime-errors/`
-- `knowledge-base/features/learnings/performance-issues/`
-- `knowledge-base/features/learnings/database-issues/`
-- `knowledge-base/features/learnings/security-issues/`
-- `knowledge-base/features/learnings/ui-bugs/`
-- `knowledge-base/features/learnings/integration-issues/`
-- `knowledge-base/features/learnings/logic-errors/`
-- `knowledge-base/features/learnings/developer-experience/`
-- `knowledge-base/features/learnings/workflow-issues/`
-- `knowledge-base/features/learnings/best-practices/`
-- `knowledge-base/features/learnings/documentation-gaps/`
+- `knowledge-base/project/learnings/build-errors/`
+- `knowledge-base/project/learnings/test-failures/`
+- `knowledge-base/project/learnings/runtime-errors/`
+- `knowledge-base/project/learnings/performance-issues/`
+- `knowledge-base/project/learnings/database-issues/`
+- `knowledge-base/project/learnings/security-issues/`
+- `knowledge-base/project/learnings/ui-bugs/`
+- `knowledge-base/project/learnings/integration-issues/`
+- `knowledge-base/project/learnings/logic-errors/`
+- `knowledge-base/project/learnings/developer-experience/`
+- `knowledge-base/project/learnings/workflow-issues/`
+- `knowledge-base/project/learnings/best-practices/`
+- `knowledge-base/project/learnings/documentation-gaps/`
 
 ## Output Format
 
