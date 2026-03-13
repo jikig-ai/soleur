@@ -169,7 +169,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 
 6. **Feed into Constitution Promotion.** Present each deviation to the user via the existing Accept/Skip/Edit gate in the Constitution Promotion section below. Accepted hook proposals should be manually copied to `.claude/hooks/` after testing — never auto-install.
 
-7. **Rule budget count.** After deviation analysis, count always-loaded rules: `grep -c '^- ' knowledge-base/overview/constitution.md` + `grep -c '^- ' AGENTS.md`. Output: `"Rule budget: N always-loaded rules (constitution: X, AGENTS.md: Y)"`. If N > 250, append: `"[WARNING] Rule budget exceeded (N/250). Consider retiring hook-enforced rules or migrating advisory rules to skill/agent instructions."`
+7. **Rule budget count.** After deviation analysis, count always-loaded rules: `grep -c '^- ' knowledge-base/project/constitution.md` + `grep -c '^- ' AGENTS.md`. Output: `"Rule budget: N always-loaded rules (constitution: X, AGENTS.md: Y)"`. If N > 250, append: `"[WARNING] Rule budget exceeded (N/250). Consider retiring hook-enforced rules or migrating advisory rules to skill/agent instructions."`
 
 ### Empty Case
 
@@ -223,7 +223,7 @@ HARD RULE: This phase MUST run even when compound is invoked inside an automated
 3. Ask: "Which domain? (Code Style / Architecture / Testing)"
 4. Ask: "Which category? (Always / Never / Prefer)"
 5. User writes the principle (one line, actionable)
-6. Append to `knowledge-base/overview/constitution.md` under the correct section
+6. Append to `knowledge-base/project/constitution.md` under the correct section
 7. Commit: `git commit -m "constitution: add <domain> <category> principle"`
 
 **If user says no:** Continue to next step
@@ -256,9 +256,9 @@ Only with user confirmation. `git rm knowledge-base/learnings/<category>/<file>.
 
 ### Managing Constitution Rules (Edit/Remove)
 
-**Edit a rule:** Read `knowledge-base/overview/constitution.md`, find the rule, modify it, commit with `git commit -m "constitution: update <domain> <category> rule"`.
+**Edit a rule:** Read `knowledge-base/project/constitution.md`, find the rule, modify it, commit with `git commit -m "constitution: update <domain> <category> rule"`.
 
-**Remove a rule:** Read `knowledge-base/overview/constitution.md`, remove the bullet point, commit with `git commit -m "constitution: remove <domain> <category> rule"`.
+**Remove a rule:** Read `knowledge-base/project/constitution.md`, remove the bullet point, commit with `git commit -m "constitution: remove <domain> <category> rule"`.
 
 ### Automatic Consolidation & Archival (feature branches)
 
@@ -267,10 +267,10 @@ On feature branches (`feat-*`, `feat/*`, `fix-*`, or `fix/*`), consolidation run
 The automatic consolidation:
 
 1. **Discovers artifacts** -- extracts the feature slug by stripping `feat/`, `feat-`, `fix/`, or `fix-` prefix from the branch name, then globs `knowledge-base/{brainstorms,plans}/*<slug>*` and `knowledge-base/specs/feat-<slug>/` (excluding `*/archive/`)
-2. **Extracts knowledge** -- a single agent reads all artifacts and proposes updates to `constitution.md`, component docs, and overview `README.md`
+2. **Extracts knowledge** -- a single agent reads all artifacts and proposes updates to `constitution.md`, component docs, and project `README.md`
 3. **Approval flow** -- **Headless mode:** auto-accept all proposals (idempotency still checked via substring match). **Interactive mode:** proposals presented one at a time with Accept/Skip/Edit; idempotency checked via substring match
 4. **Archives sources** -- runs `bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` to move all discovered artifacts to `archive/` subdirectories via `git mv` with `YYYYMMDD-HHMMSS` timestamp prefix. **Headless mode:** auto-confirm archival without prompting
-5. **Single commit** -- overview edits and archival moves committed together for clean `git revert`
+5. **Single commit** -- project edits and archival moves committed together for clean `git revert`
 
 If no artifacts are found for the feature slug, consolidation is skipped silently. See the `compound-capture` skill for full implementation details.
 
