@@ -155,18 +155,18 @@ No new secrets are needed if the weekly analytics secrets from #575 are already 
 
 ## Acceptance Criteria
 
-- [ ] Shell script `scripts/provision-plausible-goals.sh` creates 4 goals via Plausible Goals API
-- [ ] Script is idempotent (PUT find-or-create; safe to run multiple times)
-- [ ] Script exits 0 with warning when API key is missing
-- [ ] Script exits 1 on API errors (401, 429, 5xx)
-- [ ] Script prints `[ok]` confirmation for each goal created/found
-- [ ] Script prints verification summary after all goals are provisioned
-- [ ] Script includes `require_jq` startup check
-- [ ] Script suppresses curl stderr to prevent token leakage
-- [ ] Script validates JSON on 2xx responses before consuming
-- [ ] Script follows shell conventions: `set -euo pipefail`, `# --- Section ---` headers, `jq // empty`
-- [ ] Outbound link tracking steps documented (dashboard toggle + script URL update)
-- [ ] No new GitHub secrets required (reuses `PLAUSIBLE_API_KEY` and `PLAUSIBLE_SITE_ID` from #575)
+- [x] Shell script `scripts/provision-plausible-goals.sh` creates 4 goals via Plausible Goals API
+- [x] Script is idempotent (PUT find-or-create; safe to run multiple times)
+- [x] Script exits 0 with warning when API key is missing
+- [x] Script exits 1 on API errors (401, 429, 5xx)
+- [x] Script prints `[ok]` confirmation for each goal created/found
+- [x] Script prints verification summary after all goals are provisioned
+- [x] Script includes `require_jq` startup check
+- [x] Script suppresses curl stderr to prevent token leakage
+- [x] Script validates JSON on 2xx responses before consuming
+- [x] Script follows shell conventions: `set -euo pipefail`, `# --- Section ---` headers, `jq // empty`
+- [x] Outbound link tracking steps documented (dashboard toggle + script URL update)
+- [x] No new GitHub secrets required (reuses `PLAUSIBLE_API_KEY` and `PLAUSIBLE_SITE_ID` from #575)
 
 ## Test Scenarios
 
