@@ -96,7 +96,7 @@ knowledge-base/specs/feat-<name>/
 
 ## component.md Template
 
-Use this template for project overview component documentation in `knowledge-base/overview/components/`:
+Use this template for project overview component documentation in `knowledge-base/project/components/`:
 
 ```markdown
 ---
@@ -160,7 +160,7 @@ related_locations:
 ### Creating a component doc
 
 1. Identify the logical component (not just directory structure)
-2. Create `knowledge-base/overview/components/<name>.md`
+2. Create `knowledge-base/project/components/<name>.md`
 3. Fill in frontmatter with accurate paths
 4. Document purpose, responsibilities, and interfaces
 5. Add data flow diagram if the component has complex interactions

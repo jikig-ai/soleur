@@ -46,7 +46,7 @@ Check if `knowledge-base/` directory exists. If it does:
 **If knowledge-base/ exists:**
 
 1. Read `CLAUDE.md` if it exists - apply project conventions during implementation
-2. If `# Project Constitution` heading is NOT already in context, read `knowledge-base/overview/constitution.md` - apply principles during implementation. Skip if already loaded (e.g., from a preceding `/soleur:plan`).
+2. If `# Project Constitution` heading is NOT already in context, read `knowledge-base/project/constitution.md` - apply principles during implementation. Skip if already loaded (e.g., from a preceding `/soleur:plan`).
 3. Detect feature from current branch (`feat-<name>` pattern)
 4. Read `knowledge-base/specs/feat-<name>/tasks.md` if it exists - use as work checklist alongside TodoWrite
 5. Announce: "Loaded constitution and tasks for `feat-<name>`"

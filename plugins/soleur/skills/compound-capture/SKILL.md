@@ -374,13 +374,13 @@ If user selects "add more," prompt for additional file paths and append to the l
 
 A single agent reads ALL discovered artifacts and proposes updates to:
 
-- `knowledge-base/overview/constitution.md` -- new Always/Never/Prefer rules under the appropriate domain
-- `knowledge-base/overview/components/*.md` -- new component documentation entries
-- `knowledge-base/overview/README.md` -- architectural insights or pattern notes
+- `knowledge-base/project/constitution.md` -- new Always/Never/Prefer rules under the appropriate domain
+- `knowledge-base/project/components/*.md` -- new component documentation entries
+- `knowledge-base/project/README.md` -- architectural insights or pattern notes
 
 The agent produces proposals as structured markdown blocks. Each proposal specifies:
 
-- **Target file**: Which overview file to update
+- **Target file**: Which project file to update
 - **Section**: Where in the file to insert (e.g., "Architecture > Always")
 - **Content**: The exact text to add
 
@@ -391,7 +391,7 @@ Present proposals one at a time:
 ```text
 Proposal 1 of N:
 
-Target: knowledge-base/overview/constitution.md
+Target: knowledge-base/project/constitution.md
 Section: Architecture > Always
 Content:
 - Archive completed feature artifacts after consolidation to prevent knowledge-base bloat
@@ -447,12 +447,12 @@ Overview files updated. Archive the source artifacts? (Y/n)
 If all proposals were skipped:
 
 ```text
-No overview updates applied. Still archive the source artifacts? (Y/n)
+No project updates applied. Still archive the source artifacts? (Y/n)
 ```
 
 ### Auto-Consolidation Step F: Commit
 
-All changes (overview edits + archival moves) go into a single commit:
+All changes (project edits + archival moves) go into a single commit:
 
 ```bash
 git add -A knowledge-base/

@@ -1,6 +1,6 @@
 # Agent Instructions
 
-This repository contains the Soleur Claude Code plugin. Detailed conventions live in `knowledge-base/overview/constitution.md` -- read it when needed. This file contains only rules the agent will violate without being told on every turn.
+This repository contains the Soleur Claude Code plugin. Detailed conventions live in `knowledge-base/project/constitution.md` -- read it when needed. This file contains only rules the agent will violate without being told on every turn.
 
 ## Hard Rules
 
