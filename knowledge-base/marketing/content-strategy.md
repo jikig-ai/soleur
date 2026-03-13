@@ -287,6 +287,31 @@ Each pillar article generates derivative content for multiple channels. This max
 
 ---
 
+## UTM Conventions
+
+All article URLs distributed via social-distribute use platform-specific UTM parameters. Plausible reads these natively from URL query strings — no analytics configuration needed. UTM-tagged traffic appears in the Sources > Campaigns report.
+
+### Parameter Table
+
+| Platform | `utm_source` | `utm_medium` | `utm_campaign` |
+|----------|-------------|-------------|----------------|
+| Discord | `discord` | `community` | `<article-slug>` |
+| X/Twitter | `x` | `social` | `<article-slug>` |
+| IndieHackers | `indiehackers` | `community` | `<article-slug>` |
+| Hacker News | `hackernews` | `community` | `<article-slug>` |
+| LinkedIn | `linkedin` | `social` | `<article-slug>` |
+| Bluesky | `bluesky` | `social` | `<article-slug>` |
+| Reddit | `reddit` | — | — |
+
+### Rules
+
+- **Slug derivation:** Strip `/blog/` prefix and trailing `/` from the article URL path. Example: `/blog/caas-pillar/` → `caas-pillar`.
+- **Reddit exception:** Minimal UTMs (`utm_source=reddit` only). Long marketing-looking URLs risk irreversible domain reputation damage on Reddit's spam filters.
+- **Sanitization:** UTM values must contain only `a-z`, `0-9`, hyphens, and underscores.
+- **Injection point:** UTM parameters are appended at generation time by the social-distribute skill, not at publish time by content-publisher.sh. This ensures all platforms (including manual channels) get tracked URLs.
+
+---
+
 ## Measurement
 
 ### Per-Article Metrics (tracked in Plausible)
