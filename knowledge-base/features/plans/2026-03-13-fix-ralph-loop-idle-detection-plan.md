@@ -3,7 +3,20 @@ title: "fix: ralph loop stuck detection fails on substantive-but-idle responses"
 type: fix
 date: 2026-03-13
 semver: patch
+deepened: 2026-03-13
 ---
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-13
+**Sections enhanced:** 4 (Proposed Solution, Technical Approach, Test Scenarios, Acceptance Criteria)
+**Research sources:** stop-hook.sh source analysis, set-euo-pipefail-upgrade-pitfalls learning, awk-scoping-yaml-frontmatter learning, shell-api-wrapper-hardening learning, live regex validation against 12 test phrases
+
+### Key Improvements
+1. **Fixed false positive risk in idle pattern regex**: Substring matching on `grep -iqE` catches "all done" embedded in substantive responses like "The authentication module is all done and tested." Added response length gate: only apply idle detection when response is under 200 chars (truly idle responses are short; substantive responses containing idle substrings are long)
+2. **Identified `set -euo pipefail` safety requirement**: The `if echo ... | grep -iqE` wrapping is confirmed safe (the `if` statement absorbs grep's exit 1 on no match), but `md5sum` in a command substitution needs `|| true` guard for edge cases where input pipe fails
+3. **Added macOS portability note**: `md5sum` is Linux-only; macOS uses `md5 -r`. Added cross-platform hash function using `cksum` as fallback
+4. **Clarified backward-compatibility gap**: Pre-existing state files without `last_response_hash`/`repeat_count` fields will not persist these counters across iterations (awk substitution is a no-op for missing lines). Repetition detection is inert for the first iteration after upgrade but functional from iteration 2+ when setup-ralph-loop.sh creates new state files
 
 # fix: ralph loop stuck detection fails on substantive-but-idle responses
 
@@ -11,7 +24,7 @@ semver: patch
 
 The ralph loop's stuck detection uses a naive character-length threshold (`< 20 chars = minimal`). When a crashed session leaves an orphan state file, the stop hook re-injects "finish all slash commands" on every turn. The agent responds with substantive-but-idle text like "All slash commands are finished" (>20 chars), which resets the stuck counter every time. This creates an infinite loop that only terminates when the 1-hour TTL expires -- observed at 15+ consecutive idle turns.
 
-This fix adds content-based idle detection, repetition detection, and worktree-scoped state files to close three related gaps.
+This fix adds content-based idle detection (with a response-length gate to prevent false positives) and repetition detection to close the gap. State file path changes were evaluated and found unnecessary -- the path is already worktree-scoped.
 
 Closes #580
 
@@ -43,9 +56,31 @@ session (complete|finished|done|already complete)
 already (done|complete|finished)
 ```
 
-**Threshold**: 2 consecutive idle-pattern matches triggers termination (lower than the 3-response threshold for truly empty responses, because idle patterns are a stronger signal).
+**Threshold**: Uses the same stuck_threshold (default 3) as empty response detection. Idle patterns count toward the same counter.
 
 **Implementation**: After extracting `LAST_OUTPUT`, normalize whitespace and check against patterns using `grep -iE`. If any pattern matches, increment `STUCK_COUNT` (same counter as empty detection). If no pattern matches AND response is >= 20 chars, reset to 0.
+
+### Research Insights: Idle Pattern False Positives
+
+**Validated via live testing against 12 phrases.** The regex correctly identifies all target idle phrases. However, substring matching creates false positives on substantive responses that happen to contain idle phrases:
+
+| Input | Expected | Actual |
+|-------|----------|--------|
+| "All slash commands are finished" | IDLE | IDLE |
+| "Nothing left to do" | IDLE | IDLE |
+| "Session already complete" | IDLE | IDLE |
+| "I've updated all 5 files. The module is all done and tested." | WORK | **IDLE** (false positive) |
+| "All done with the refactoring. Here's what changed: [list]" | WORK | **IDLE** (false positive) |
+| "Not all done yet, still working on the tests" | WORK | **IDLE** (false positive) |
+
+**Mitigation**: Add a response length gate. Truly idle responses are short (under ~100 chars). Substantive responses containing idle substrings are long. Apply idle pattern detection only when `RESPONSE_LENGTH < 200`. This eliminates false positives from long substantive responses while catching all observed failure-mode responses (which are all under 50 chars of stripped content).
+
+This is a two-tier approach:
+1. `RESPONSE_LENGTH < 20` -> definitely minimal (existing behavior)
+2. `20 <= RESPONSE_LENGTH < 200` AND idle pattern match -> semantically idle (new)
+3. `RESPONSE_LENGTH >= 200` -> always treated as substantive (too long to be idle)
+
+The 200-char threshold is conservative. The longest observed idle response in the production incident was "All slash commands are finished. No active commands to complete." (65 chars stripped). A 200-char response with an idle substring embedded in real work is almost certainly not stuck.
 
 ### 2. Repetition detection
 
@@ -60,6 +95,28 @@ Track the last response hash in the state file frontmatter. If 3 consecutive res
 - If `repeat_count >= 3`: terminate (same as stuck detection)
 
 **Why md5sum, not exact match?** The frontmatter field would need to store the full response text, which complicates YAML parsing and could contain characters that break the frontmatter format. A hash is fixed-width and safe for YAML.
+
+### Research Insights: Hash Function Portability
+
+**md5sum is Linux-only.** macOS ships `md5` (with `-r` flag for compatible output format), not `md5sum`. While this project currently runs on Linux (confirmed in environment), a portable hash function prevents future breakage:
+
+```bash
+# Cross-platform hash (works on both Linux and macOS)
+compute_hash() {
+  if command -v md5sum >/dev/null 2>&1; then
+    md5sum | cut -d' ' -f1
+  elif command -v md5 >/dev/null 2>&1; then
+    md5 -r | cut -d' ' -f1
+  else
+    # Fallback: cksum is POSIX and always available
+    cksum | cut -d' ' -f1
+  fi
+}
+```
+
+**Recommendation**: Use `md5sum` directly (simpler, this is a Linux-only plugin). Add a comment noting the macOS alternative for future portability if needed. The hash is only used for same-session equality comparison, not for security or cross-system consistency.
+
+**Verified**: md5 hash values are hex-only (`[0-9a-f]{32}`), safe for awk `-v` variable passing and YAML frontmatter storage. No quoting or escaping needed.
 
 ### 3. State file path (NO CHANGE NEEDED)
 
@@ -78,13 +135,19 @@ After code analysis, both scripts already use `git rev-parse --show-toplevel` wh
 ```bash
 # --- Idle Pattern Detection ---
 # Responses that say "nothing to do" in >20 chars fool the length check.
-# Normalize and check against known idle patterns.
-NORMALIZED_OUTPUT=$(echo "$LAST_OUTPUT" | tr '[:upper:]' '[:lower:]' | tr -s '[:space:]' ' ' | sed 's/^ *//;s/ *$//')
+# Only apply to short-ish responses (< 200 chars stripped) to avoid false positives
+# on substantive responses that contain idle phrases as substrings.
+# Verified: the `if` statement absorbs grep exit 1 under set -euo pipefail.
 IS_IDLE=false
-if echo "$NORMALIZED_OUTPUT" | grep -iqE '(all (done|complete|finished)|all (slash )?commands? (are |have been )?(done|complete|finished|already)|nothing (left|pending|remaining|to do|to complete|to run)|no (active|running|pending) (commands?|tasks?|slash commands?)|session (complete|finished|done|already)|already (done|complete|finished))'; then
-  IS_IDLE=true
+if [[ $RESPONSE_LENGTH -lt 200 ]]; then
+  NORMALIZED_OUTPUT=$(echo "$LAST_OUTPUT" | tr '[:upper:]' '[:lower:]' | tr -s '[:space:]' ' ' | sed 's/^ *//;s/ *$//')
+  if echo "$NORMALIZED_OUTPUT" | grep -iqE '(all (done|complete|finished)|all (slash )?commands? (are |have been )?(done|complete|finished|already)|nothing (left|pending|remaining|to do|to complete|to run)|no (active|running|pending) (commands?|tasks?|slash commands?)|session (complete|finished|done|already)|already (done|complete|finished))'; then
+    IS_IDLE=true
+  fi
 fi
 ```
+
+**Shell safety note**: The `if echo ... | grep -iqE` pattern is safe under `set -euo pipefail` because the `if` statement absorbs grep's exit 1 on no match (verified via live testing). This is the correct pattern -- do NOT use `grep ... || true` here as it would make the `if` condition always true. See learning: `2026-03-03-set-euo-pipefail-upgrade-pitfalls.md`.
 
 2. **Add repetition detection fields** (after parsing `STUCK_THRESHOLD`, around line 54):
 
@@ -117,6 +180,10 @@ LAST_RESPONSE_HASH="$CURRENT_HASH"
 
 ```bash
 # Update stuck counter: idle patterns OR short responses increment, substantive resets
+# Three tiers:
+#   < 20 chars: definitely minimal (existing behavior)
+#   20-199 chars + idle pattern: semantically idle (new)
+#   >= 200 chars: always substantive (long enough to contain real work)
 if [[ "$IS_IDLE" == "true" ]] || [[ $RESPONSE_LENGTH -lt 20 ]]; then
   STUCK_COUNT=$((STUCK_COUNT + 1))
 else
@@ -151,6 +218,39 @@ awk -v iter="$NEXT_ITERATION" -v sc="$STUCK_COUNT" -v lrh="$LAST_RESPONSE_HASH" 
 
 **Edge case**: Pre-existing state files without `last_response_hash` / `repeat_count` -- the grep `|| true` handles missing fields, and the awk substitution is a no-op for missing lines. The counter will not persist but won't crash either (same pattern as stuck_count backward compatibility).
 
+### Research Insights: Backward Compatibility Gap with Pre-existing State Files
+
+**Important behavioral difference from stuck_count backward compat**: When `stuck_count` was added (PR #454), pre-existing state files lacking the field defaulted to 0 on every iteration. This was acceptable because the counter still _accumulated_ within a single hook invocation -- it just reset to 0 on the next invocation because the awk update was a no-op.
+
+The same gap applies to `last_response_hash` and `repeat_count`. For pre-existing state files (created before this fix), repetition detection is **completely inert** -- the hash and count are never persisted, so every iteration starts fresh. This is acceptable because:
+
+1. Pre-existing state files come from `setup-ralph-loop.sh` runs before the fix
+2. New `setup-ralph-loop.sh` runs will create state files WITH the new fields
+3. The stuck-detection (idle pattern + length check) still works on pre-existing files
+4. Only repetition detection is degraded, and only until the current loop ends
+
+**No migration needed.** The worst case is a pre-existing orphan state file that doesn't benefit from repetition detection -- but idle pattern detection (which doesn't need frontmatter persistence) still catches it.
+
+### Research Insights: awk Frontmatter Scoping
+
+Per learning `2026-03-05-awk-scoping-yaml-frontmatter-shell.md`, the `c==1 &&` guard in the awk block is critical for preventing prompt body mutations. The new `last_response_hash:` and `repeat_count:` substitutions MUST include the `c==1` guard to avoid corrupting prompt body text that happens to contain these strings. The code examples above already include this guard correctly.
+
+### Research Insights: set -euo pipefail Safety Audit
+
+Per learning `2026-03-03-set-euo-pipefail-upgrade-pitfalls.md`, all new code must be audited against three failure modes:
+
+| New Code | `-e` risk | `-u` risk | `-o pipefail` risk |
+|----------|-----------|-----------|-------------------|
+| `grep '^last_response_hash:' \|\| true` | Handled by `\|\| true` | N/A | Handled by `\|\| true` |
+| `grep '^repeat_count:' \|\| true` | Handled by `\|\| true` | N/A | Handled by `\|\| true` |
+| `echo ... \| grep -iqE ...` (in `if`) | `if` absorbs exit 1 | N/A | `if` absorbs |
+| `echo ... \| md5sum \| cut` | Always succeeds on valid input | N/A | Always succeeds |
+| `NORMALIZED_OUTPUT=$(echo ...)` | Always succeeds | N/A | N/A |
+| `$REPEAT_COUNT` | N/A | Safe: initialized to 0 if unset | N/A |
+| `$LAST_RESPONSE_HASH` | N/A | Safe: grep `\|\| true` returns empty string | N/A |
+
+All new code paths are safe under `set -euo pipefail`. No additional guards needed.
+
 #### `plugins/soleur/scripts/setup-ralph-loop.sh`
 
 **Changes:**
@@ -169,15 +269,17 @@ repeat_count: 0
 
 **New tests:**
 
-- Test: Idle pattern "All slash commands are finished" (>20 chars) increments stuck counter
+- Test: Idle pattern "All slash commands are finished" (>20 chars, <200 chars) increments stuck counter
 - Test: Idle pattern "Nothing left to do" increments stuck counter
 - Test: Idle pattern "Session already complete" increments stuck counter
 - Test: Non-idle substantive response resets stuck counter (existing behavior preserved)
-- Test: 2 consecutive idle-pattern responses trigger termination (stuck_threshold=2 default still 3, but idle patterns count toward it)
+- Test: 3 consecutive idle-pattern responses trigger termination (stuck_threshold=3)
 - Test: 3 identical responses trigger repetition detection termination
 - Test: 2 identical responses followed by different response resets repeat counter
 - Test: Pre-existing state file without `last_response_hash` / `repeat_count` works (backward compatibility)
 - Test: Empty response still counts as minimal (existing behavior preserved)
+- Test: Long response (>= 200 chars stripped) containing idle substring is NOT treated as idle (length gate)
+- Test: Response of 199 chars stripped with idle pattern IS treated as idle (under length gate)
 
 **Update `create_state_file` helper** to include `last_response_hash` and `repeat_count` fields.
 
@@ -213,9 +315,12 @@ repeat_count: 0
 
 ### Edge Cases
 
-- Given a response that matches an idle pattern but also contains substantive content (e.g., "All done. Here's the summary: [500 chars of real work]"), when the stop hook runs, then it should still match the idle pattern and increment -- false positives are acceptable here because the stuck_threshold requires 3 consecutive matches
+- Given a response that matches an idle pattern but is over 200 chars stripped (e.g., "All done. Here's the summary: [500 chars of real work]"), when the stop hook runs, then idle pattern detection is skipped (response length gate) and it counts as substantive -- the 200-char gate prevents false positives on long responses
+- Given a short response (< 200 chars) that matches an idle pattern AND contains some useful content (e.g., "All done, moving to next task"), when the stop hook runs, then it counts as idle -- this is a tolerable false positive because 3 consecutive matches are required
 - Given an empty response, when the stop hook runs, then it counts as minimal (existing behavior) AND the hash is empty (repeat counter resets since empty hash does not match prior hash)
 - Given a pre-existing state file without `last_response_hash` or `repeat_count`, when the stop hook runs, then defaults apply and no errors occur
+- Given a response of exactly 200 chars stripped that matches an idle pattern, when the stop hook runs, then idle detection is skipped (>= 200 is treated as substantive)
+- Given a response of 199 chars stripped that matches an idle pattern, when the stop hook runs, then idle detection fires (< 200 qualifies for pattern check)
 
 ### Regression Tests
 
