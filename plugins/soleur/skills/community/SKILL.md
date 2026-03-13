@@ -22,23 +22,19 @@ If `--headless` is present, skip all interactive prompts and approval gates.
 
 ## Platform Detection
 
-Detect enabled platforms by checking environment variables. A platform is enabled only when **all** its required variables are set.
+Platform detection is centralized in [community-router.sh](./scripts/community-router.sh). Run at the start of every sub-command:
 
-| Platform | Required Variables | Detection |
-|----------|-------------------|-----------|
-| Discord | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` | `printenv DISCORD_BOT_TOKEN && printenv DISCORD_GUILD_ID` |
-| GitHub | (none -- always enabled) | `gh auth status` exits 0 |
-| X/Twitter | `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET` | All 4 set and non-empty |
-| Bluesky | `BSKY_HANDLE`, `BSKY_APP_PASSWORD` | Both set and non-empty |
-| LinkedIn | `LINKEDIN_ACCESS_TOKEN` | Set and non-empty |
-| Hacker News | (none -- always enabled) | `curl -sf --max-time 10 "https://hn.algolia.com/api/v1/items/1" > /dev/null` |
+```bash
+bash plugins/soleur/skills/community/scripts/community-router.sh platforms
+```
 
-Run detection at the start of every sub-command. Report which platforms are active before proceeding.
+This prints each platform's name, enabled/disabled status, and script filename. The router's `PLATFORMS` array is the single source of truth for platform names, required env vars, and auth checks. To add a new platform, add one entry to the array and create the script.
 
 ## Scripts
 
 Platform scripts are located at `plugins/soleur/skills/community/scripts/`:
 
+- [community-router.sh](./scripts/community-router.sh) -- Platform dispatch router (single source of truth for platform detection)
 - [discord-community.sh](./scripts/discord-community.sh) -- Discord Bot API wrapper (messages, members, guild-info, channels)
 - [discord-setup.sh](./scripts/discord-setup.sh) -- Discord credential setup and validation
 - [github-community.sh](./scripts/github-community.sh) -- GitHub API wrapper (activity, contributors, discussions)
@@ -72,26 +68,11 @@ Display community health metrics across all enabled platforms. Spawns the `commu
 
 List all platforms with their configuration status. Does NOT spawn an agent -- runs directly.
 
-1. Run platform detection
-2. For each platform, display:
-
-```text
-Platform Status
-===============
-
-Discord:      [enabled] | [not configured -- missing DISCORD_BOT_TOKEN, DISCORD_GUILD_ID]
-GitHub:       [enabled] | [not configured -- gh CLI not authenticated]
-X/Twitter:    [enabled] | [not configured -- missing X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET]
-Bluesky:      [enabled] | [not configured -- missing BSKY_HANDLE, BSKY_APP_PASSWORD]
-LinkedIn:     [enabled] | [not configured -- missing LINKEDIN_ACCESS_TOKEN]
-Hacker News:  [enabled] | [not available -- HN Algolia API unreachable]
-```
-
-3. For unconfigured platforms, show setup instructions:
+1. Run `bash plugins/soleur/skills/community/scripts/community-router.sh platforms`
+2. For disabled platforms, show setup instructions:
    - Discord: "Run `plugins/soleur/skills/community/scripts/discord-setup.sh` to configure"
    - X/Twitter: "Run `plugins/soleur/skills/community/scripts/x-setup.sh validate-credentials` to verify, or `x-setup.sh write-env` to save credentials"
    - Bluesky: "Run `plugins/soleur/skills/community/scripts/bsky-setup.sh write-env` to save credentials, or `bsky-setup.sh verify` to test"
-   - LinkedIn: "Set `LINKEDIN_ACCESS_TOKEN` environment variable. LinkedIn API access requires an approved LinkedIn App with OAuth 2.0."
 
 ### `engage`
 
@@ -106,10 +87,10 @@ The selected platform must be enabled. If not configured, report the missing cre
 1. Run platform detection -- verify X/Twitter is enabled
 2. Read the since-id state file (`.soleur/x-engage-since-id`, resolved via `git rev-parse --show-toplevel`). If the file exists and contains a valid numeric ID, pass it as `--since-id` to the fetch command. If missing or non-numeric, skip (fetches last N mentions).
 3. Spawn agent: `community-manager` with prompt: "Engage with recent X/Twitter mentions. Use Capability 4: Mention Engagement. Max results: [N]. Since ID: [ID or none]."
-4. The agent fetches mentions via `x-community.sh fetch-mentions`
+4. The agent fetches mentions via `community-router.sh x fetch-mentions`
 5. For each mention, the agent drafts a reply following brand guide voice (`knowledge-base/marketing/brand-guide.md` sections `## Voice` and `## Channel Notes > ### X/Twitter`). If the brand guide is missing, the agent warns but proceeds with a professional, declarative tone.
 6. Each draft is presented via AskUserQuestion with options:
-   - **Accept** -- post this reply via `x-community.sh post-tweet --reply-to <mention_id>`
+   - **Accept** -- post this reply via `community-router.sh x post-tweet --reply-to <mention_id>`
    - **Edit** -- modify the reply text (validate 280-character limit; re-prompt if over)
    - **Skip** -- move to the next mention
    - **Skip all remaining** -- end the session (available after the first mention)
@@ -129,10 +110,10 @@ The selected platform must be enabled. If not configured, report the missing cre
 1. Run platform detection -- verify Bluesky is enabled (`BSKY_HANDLE` + `BSKY_APP_PASSWORD`)
 2. Read the cursor state file (`.soleur/bsky-engage-cursor`, resolved via `git rev-parse --show-toplevel`). If the file exists and contains a non-empty value, pass it as `--cursor` to the fetch command.
 3. Spawn agent: `community-manager` with prompt: "Engage with recent Bluesky mentions. Use Capability 4: Bluesky Mention Engagement. Limit: [N]. Cursor: [cursor or none]."
-4. The agent fetches mentions via `bsky-community.sh get-notifications`
+4. The agent fetches mentions via `community-router.sh bsky get-notifications`
 5. For each mention, the agent drafts a reply following brand guide voice (`knowledge-base/marketing/brand-guide.md` sections `## Voice` and `## Channel Notes > ### Bluesky`). 300-character limit.
 6. Same approval flow as X/Twitter (Accept, Edit, Skip, Skip all remaining) but with 300-character validation.
-7. Accepted replies posted via `bsky-community.sh post "<text>" --reply-to-uri <uri> --reply-to-cid <cid>`
+7. Accepted replies posted via `community-router.sh bsky post "<text>" --reply-to-uri <uri> --reply-to-cid <cid>`
 8. After processing, the agent updates the cursor state file (`.soleur/bsky-engage-cursor`) and displays a session summary.
 
 **Bluesky cursor state file:**
@@ -158,12 +139,8 @@ If no sub-command is provided, present options using the AskUserQuestion tool:
 
 ## Important Guidelines
 
-- Platform detection runs at the start of every sub-command -- never assume a platform is enabled
-- All Discord API calls go through `discord-community.sh` -- do not call the API directly
-- All GitHub API calls go through `github-community.sh` -- do not call `gh` directly
-- All X/Twitter API calls go through `x-community.sh` -- do not call the API directly
-- All Bluesky API calls go through `bsky-community.sh` -- do not call the API directly
-- All Hacker News API calls go through `hn-community.sh` -- do not call the Algolia API directly
+- Platform detection runs at the start of every sub-command -- use `community-router.sh platforms` instead of checking env vars directly
+- All platform API calls go through `community-router.sh <platform> <command>` -- do not call platform scripts or APIs directly
 - The `community-manager` agent handles data collection, analysis, and output formatting
 - This skill is the entry point; the agent does the work
 - Ownership boundary: community = monitoring + engagement. Broadcasting/distribution is handled by the `social-distribute` skill.
