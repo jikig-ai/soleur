@@ -350,6 +350,19 @@ resolve_user_id() {
   echo "$user_id"
 }
 
+# --- Shared helpers ---
+
+# Fetch tweets for a given user ID and return the data array.
+# Arguments: user_id max_results
+_fetch_tweets_for_user() {
+  local user_id="$1"
+  local max_results="$2"
+  local query_params="tweet.fields=created_at,public_metrics,text&max_results=${max_results}"
+  local body
+  body=$(get_request "/2/users/${user_id}/tweets" "$query_params")
+  echo "$body" | jq '.data // []'
+}
+
 # --- Commands ---
 
 cmd_fetch_metrics() {
@@ -448,7 +461,7 @@ cmd_fetch_mentions() {
           author_username: ($user.username // "unknown"),
           author_name: ($user.name // "unknown"),
           author_profile_image_url: ($user.profile_image_url // null),
-          author_followers_count: (($user.public_metrics.followers_count) // 0),
+          author_followers_count: ($user.public_metrics.followers_count // 0),
           created_at: .created_at,
           conversation_id: .conversation_id,
           referenced_tweets: (.referenced_tweets // null)
@@ -495,12 +508,7 @@ cmd_fetch_timeline() {
   local user_id
   user_id=$(resolve_user_id)
 
-  local query_params="tweet.fields=created_at,public_metrics,text&max_results=${max_results}"
-
-  local body
-  body=$(get_request "/2/users/${user_id}/tweets" "$query_params")
-
-  echo "$body" | jq '.data // []'
+  _fetch_tweets_for_user "$user_id" "$max_results"
 }
 
 cmd_fetch_user_timeline() {
@@ -549,12 +557,7 @@ cmd_fetch_user_timeline() {
     max_results=100
   fi
 
-  local query_params="tweet.fields=created_at,public_metrics,text&max_results=${max_results}"
-
-  local body
-  body=$(get_request "/2/users/${user_id}/tweets" "$query_params")
-
-  echo "$body" | jq '.data // []'
+  _fetch_tweets_for_user "$user_id" "$max_results"
 }
 
 cmd_post_tweet() {

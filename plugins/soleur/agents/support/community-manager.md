@@ -314,11 +314,11 @@ Continue with engagement even if the brand guide is missing. Default to a profes
 
 **Skip this step entirely in headless mode** -- no replies will be posted, so evaluating skip criteria wastes API credits.
 
-For each mention, apply the skip criteria from `#### Engagement Guardrails` in the brand guide's `### X/Twitter` section. Skip mentions that match any criterion:
+For each mention, apply the skip criteria from `#### Engagement Guardrails` in the brand guide's `### X/Twitter` section. If the `#### Engagement Guardrails` subsection is absent from the brand guide, skip this step and proceed to Step 3. Skip mentions that match any criterion:
 
 - **Retweet detection:** If `referenced_tweets` contains an entry with `type: "retweeted"`, auto-skip with reason "RT is sufficient engagement". Do not present to the reviewer.
 - **Bot signals:** If `author_followers_count` is 0 AND `author_profile_image_url` is null, flag as likely bot. Recommend skipping in the approval prompt (Step 4) but do not auto-skip -- the reviewer decides.
-- **Brand association risk:** For mentions that pass the automated checks above and have ambiguous brand association risk (mention text or author handle does not provide enough signal), call `fetch-user-timeline` with the mention's `author_id` to check the author's recent content:
+- **Brand association risk:** For mentions that pass the automated checks above and where `author_followers_count` is below 100, call `fetch-user-timeline` with the mention's `author_id` to check the author's recent content. Skip the timeline check for accounts with 100+ followers -- the public follower count provides sufficient signal.
 
   ```bash
   plugins/soleur/skills/community/scripts/x-community.sh fetch-user-timeline <author_id> --max 5
@@ -330,7 +330,7 @@ Mentions that pass all skip criteria proceed to Step 3 for drafting.
 
 ### Step 3: Draft Replies
 
-Before drafting individual replies, group mentions by `conversation_id`. When multiple mentions share the same `conversation_id`, select the most recent mention in the thread and skip the rest. Draft only one reply per conversation thread. Treat null `conversation_id` as unique -- each null-conversation mention is its own group.
+Before drafting individual replies, group mentions by `conversation_id`. When multiple mentions share the same `conversation_id`, select the most recent mention in the thread and skip the rest. Sort mentions within each group by `created_at` descending to determine the most recent. Draft only one reply per conversation thread. Treat null `conversation_id` as unique -- each null-conversation mention is its own group.
 
 For each mention, draft a reply that:
 

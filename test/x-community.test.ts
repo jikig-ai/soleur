@@ -172,7 +172,7 @@ describe("x-community.sh fetch-mentions -- jq transform", () => {
           author_username: ($user.username // "unknown"),
           author_name: ($user.name // "unknown"),
           author_profile_image_url: ($user.profile_image_url // null),
-          author_followers_count: (($user.public_metrics.followers_count) // 0),
+          author_followers_count: ($user.public_metrics.followers_count // 0),
           created_at: .created_at,
           conversation_id: .conversation_id,
           referenced_tweets: (.referenced_tweets // null)
@@ -307,6 +307,31 @@ describe("x-community.sh fetch-mentions -- jq transform", () => {
     const output = JSON.parse(decode(result.stdout));
     expect(output.mentions[0].referenced_tweets).toHaveLength(1);
     expect(output.mentions[0].referenced_tweets[0].type).toBe("quoted");
+  });
+
+  test("outputs referenced_tweets with replied_to type", () => {
+    const input = JSON.stringify({
+      data: [
+        {
+          id: "9", text: "replying to @soleur thread", author_id: "900",
+          created_at: "2026-03-10T00:00:00Z", conversation_id: "9",
+          referenced_tweets: [{ type: "replied_to", id: "777" }],
+        },
+      ],
+      includes: { users: [{ id: "900", username: "grace", name: "Grace" }] },
+      meta: { newest_id: "9", result_count: 1 },
+    });
+
+    const result = Bun.spawnSync(["jq", JQ_TRANSFORM], {
+      stdin: new Response(input),
+      env: NO_CREDS_ENV,
+    });
+
+    expect(result.exitCode).toBe(0);
+    const output = JSON.parse(decode(result.stdout));
+    expect(output.mentions[0].referenced_tweets).toHaveLength(1);
+    expect(output.mentions[0].referenced_tweets[0].type).toBe("replied_to");
+    expect(output.mentions[0].referenced_tweets[0].id).toBe("777");
   });
 
   test("outputs null referenced_tweets when absent from API response", () => {
@@ -528,6 +553,24 @@ describe("x-community.sh fetch-user-timeline -- argument validation", () => {
     expect(result.exitCode).toBe(1);
     const stderr = decode(result.stderr);
     expect(stderr).toContain("must be a positive integer");
+  });
+
+  test("unknown flag exits 1 with error", () => {
+    const result = Bun.spawnSync(
+      ["bash", SCRIPT_PATH, "fetch-user-timeline", "12345", "--unknown"],
+      { env: FAKE_CREDS_ENV }
+    );
+    expect(result.exitCode).toBe(1);
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("Unknown option");
+  });
+
+  test("--max without value exits 1", () => {
+    const result = Bun.spawnSync(
+      ["bash", SCRIPT_PATH, "fetch-user-timeline", "12345", "--max"],
+      { env: FAKE_CREDS_ENV }
+    );
+    expect(result.exitCode).not.toBe(0);
   });
 });
 

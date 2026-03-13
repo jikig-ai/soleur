@@ -39,7 +39,7 @@ Platform scripts are located at `plugins/soleur/skills/community/scripts/`:
 - [discord-community.sh](./scripts/discord-community.sh) -- Discord Bot API wrapper (messages, members, guild-info, channels)
 - [discord-setup.sh](./scripts/discord-setup.sh) -- Discord credential setup and validation
 - [github-community.sh](./scripts/github-community.sh) -- GitHub API wrapper (activity, contributors, discussions)
-- [x-community.sh](./scripts/x-community.sh) -- X/Twitter API v2 wrapper (fetch-metrics, fetch-mentions, fetch-timeline, post-tweet)
+- [x-community.sh](./scripts/x-community.sh) -- X/Twitter API v2 wrapper (fetch-metrics, fetch-mentions, fetch-timeline, fetch-user-timeline, post-tweet)
 - [x-setup.sh](./scripts/x-setup.sh) -- X/Twitter credential setup and validation
 
 ## Sub-Commands
