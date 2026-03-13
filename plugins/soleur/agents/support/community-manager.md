@@ -40,7 +40,7 @@ Data collection scripts are located at `plugins/soleur/skills/community/scripts/
 - `discord-community.sh` -- Discord Bot API wrapper (messages, members, guild-info, channels)
 - `discord-setup.sh` -- Discord credential setup and validation
 - `github-community.sh` -- GitHub API wrapper (activity, contributors, discussions)
-- `x-community.sh` -- X/Twitter API v2 wrapper (fetch-metrics, fetch-mentions, fetch-timeline, post-tweet)
+- `x-community.sh` -- X/Twitter API v2 wrapper (fetch-metrics, fetch-mentions, fetch-timeline, fetch-user-timeline, post-tweet)
 - `x-setup.sh` -- X/Twitter credential setup and validation
 
 ## Capability 1: Digest Generation
@@ -266,7 +266,7 @@ plugins/soleur/skills/community/scripts/x-community.sh fetch-mentions --max-resu
 
 Replace `<max_results>` with the requested count (default 10) and `<since_id>` with the stored tweet ID.
 
-Parse the JSON output. The `mentions` array contains objects with `id`, `text`, `author_username`, `author_name`, `created_at`, and `conversation_id`. The `meta` object contains `newest_id` and `result_count`.
+Parse the JSON output. The `mentions` array contains objects with `id`, `text`, `author_id`, `author_username`, `author_name`, `author_profile_image_url`, `author_followers_count`, `created_at`, `conversation_id`, and `referenced_tweets`. The `meta` object contains `newest_id` and `result_count`.
 
 If `result_count` is 0 or the `mentions` array is empty, report "No recent mentions found" and end the session.
 
@@ -310,7 +310,27 @@ Proceeding with professional, declarative tone. Replies may not match brand voic
 
 Continue with engagement even if the brand guide is missing. Default to a professional, declarative tone without hedging.
 
+### Step 2b: Guardrails Screening
+
+**Skip this step entirely in headless mode** -- no replies will be posted, so evaluating skip criteria wastes API credits.
+
+For each mention, apply the skip criteria from `#### Engagement Guardrails` in the brand guide's `### X/Twitter` section. If the `#### Engagement Guardrails` subsection is absent from the brand guide, skip this step and proceed to Step 3. Skip mentions that match any criterion:
+
+- **Retweet detection:** If `referenced_tweets` contains an entry with `type: "retweeted"`, auto-skip with reason "RT is sufficient engagement". Do not present to the reviewer.
+- **Bot signals:** If `author_followers_count` is 0 AND `author_profile_image_url` is null, flag as likely bot. Recommend skipping in the approval prompt (Step 4) but do not auto-skip -- the reviewer decides.
+- **Brand association risk:** For mentions that pass the automated checks above and where `author_followers_count` is below 100, call `fetch-user-timeline` with the mention's `author_id` to check the author's recent content. Skip the timeline check for accounts with 100+ followers -- the public follower count provides sufficient signal.
+
+  ```bash
+  plugins/soleur/skills/community/scripts/x-community.sh fetch-user-timeline <author_id> --max 5
+  ```
+
+  If `fetch-user-timeline` fails (403, network error), note "Unable to check author timeline (API access required)" in the approval prompt and delegate the brand association risk check to the human reviewer.
+
+Mentions that pass all skip criteria proceed to Step 3 for drafting.
+
 ### Step 3: Draft Replies
+
+Before drafting individual replies, group mentions by `conversation_id`. When multiple mentions share the same `conversation_id`, select the most recent mention in the thread and skip the rest. Sort mentions within each group by `created_at` descending to determine the most recent. Draft only one reply per conversation thread. Treat null `conversation_id` as unique -- each null-conversation mention is its own group.
 
 For each mention, draft a reply that:
 
@@ -330,11 +350,17 @@ Format:
 
 ```text
 Mention from @<author_username> (<created_at>):
+  Followers: <author_followers_count> | Profile image: <yes/no>
+  Type: <original/reply/retweet/quote_tweet>
 "<mention_text>"
 
 Draft reply (<char_count>/280 chars):
 "<draft_reply>"
 ```
+
+Derive the mention type from `referenced_tweets`: null → "original", contains `replied_to` → "reply", contains `retweeted` → "retweet", contains `quoted` → "quote_tweet". If multiple types, prefer quoted > replied_to > retweeted. Display "Profile image: yes" when `author_profile_image_url` is non-null, "no" otherwise.
+
+In manual mode (Free tier 403 fallback), display "Followers: N/A | Profile image: N/A" and "Type: N/A (manual mode)" since author metadata is unavailable.
 
 Options for the first mention:
 

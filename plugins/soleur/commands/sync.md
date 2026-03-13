@@ -38,7 +38,7 @@ Read `CLAUDE.md` if it exists - apply project conventions during sync analysis.
 
 ```bash
 if [[ ! -d "knowledge-base" ]]; then
-  mkdir -p knowledge-base/features/{learnings,brainstorms,specs,plans} knowledge-base/project/components
+  mkdir -p knowledge-base/project/{learnings,brainstorms,specs,plans} knowledge-base/project/components
   echo "Created knowledge-base/ directory structure"
 fi
 ```
@@ -158,7 +158,7 @@ Present only the top 20 findings by confidence. If more exist, inform user: "Fou
 Before reviewing findings, load existing knowledge-base content for deduplication:
 
 - **Constitution rules:** Parse `knowledge-base/project/constitution.md` and extract all bullet points under Always/Never/Prefer sections
-- **Learnings:** List files in `knowledge-base/features/learnings/` and extract titles from YAML frontmatter or first heading
+- **Learnings:** List files in `knowledge-base/project/learnings/` and extract titles from YAML frontmatter or first heading
 
 Store as a list of existing entry texts for comparison.
 
@@ -324,12 +324,12 @@ Scan accumulated learnings against skill, agent, and command definitions. Propos
 Skip Phase 4 with an info message if any of these conditions are true:
 
 - Area is a specific scope (`conventions`, `architecture`, `testing`, `debt`, `project`) -- Phase 4 only runs when area is `all` or unspecified
-- `knowledge-base/features/learnings/` directory does not exist
+- `knowledge-base/project/learnings/` directory does not exist
 - `plugins/soleur/` directory does not exist
 
 **4.2 Load**
 
-List all learning files from `knowledge-base/features/learnings/` recursively, excluding `archive/` and `patterns/` directories. For each learning, extract:
+List all learning files from `knowledge-base/project/learnings/` recursively, excluding `archive/` and `patterns/` directories. For each learning, extract:
 
 - Title (from first `#` heading)
 - Tags or metadata (from YAML frontmatter, ad-hoc tags sections, or title keywords -- any format)
@@ -389,9 +389,9 @@ If zero proposals were generated: "Phase 4: All learnings already synced to rele
 | Finding Type | Destination |
 | ------------ | ----------- |
 | Coding conventions | `knowledge-base/project/constitution.md` |
-| Architecture decisions | `knowledge-base/features/learnings/architecture/` |
+| Architecture decisions | `knowledge-base/project/learnings/architecture/` |
 | Testing practices | `knowledge-base/project/constitution.md` (Testing section) |
-| Technical debt | `knowledge-base/features/learnings/technical-debt/` |
+| Technical debt | `knowledge-base/project/learnings/technical-debt/` |
 | Project docs | `knowledge-base/project/README.md` |
 | Component docs | `knowledge-base/project/components/` |
 | Definition sync bullets | `plugins/soleur/{skills,agents,commands}/*.md` |
