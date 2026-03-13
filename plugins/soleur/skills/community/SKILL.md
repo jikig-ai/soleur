@@ -1,11 +1,11 @@
 ---
 name: community
-description: "This skill should be used when managing community presence across platforms (Discord, GitHub, X/Twitter). It provides sub-commands for generating digests, checking health metrics, and listing enabled platforms. Triggers on \"community digest\", \"community health\", \"community platforms\", \"community report\"."
+description: "This skill should be used when managing community presence across platforms (Discord, GitHub, X/Twitter, LinkedIn). It provides sub-commands for generating digests, checking health metrics, and listing enabled platforms. Triggers on \"community digest\", \"community health\", \"community platforms\", \"community report\"."
 ---
 
 # Community Management
 
-Manage community presence across Discord, GitHub, and X/Twitter. Detects enabled platforms from environment variables and delegates data collection to platform-specific scripts.
+Manage community presence across Discord, GitHub, X/Twitter, and LinkedIn. Detects enabled platforms from environment variables and delegates data collection to platform-specific scripts.
 
 ## Arguments
 
@@ -29,6 +29,7 @@ Detect enabled platforms by checking environment variables. A platform is enable
 | Discord | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` | `printenv DISCORD_BOT_TOKEN && printenv DISCORD_GUILD_ID` |
 | GitHub | (none -- always enabled) | `gh auth status` exits 0 |
 | X/Twitter | `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET` | All 4 set and non-empty |
+| LinkedIn | `LINKEDIN_ACCESS_TOKEN` | Set and non-empty |
 
 Run detection at the start of every sub-command. Report which platforms are active before proceeding.
 
@@ -73,14 +74,16 @@ List all platforms with their configuration status. Does NOT spawn an agent -- r
 Platform Status
 ===============
 
-Discord:  [enabled] | [not configured -- missing DISCORD_BOT_TOKEN, DISCORD_GUILD_ID]
-GitHub:   [enabled] | [not configured -- gh CLI not authenticated]
+Discord:   [enabled] | [not configured -- missing DISCORD_BOT_TOKEN, DISCORD_GUILD_ID]
+GitHub:    [enabled] | [not configured -- gh CLI not authenticated]
 X/Twitter: [enabled] | [not configured -- missing X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET]
+LinkedIn:  [enabled] | [not configured -- missing LINKEDIN_ACCESS_TOKEN]
 ```
 
 3. For unconfigured platforms, show setup instructions:
    - Discord: "Run `plugins/soleur/skills/community/scripts/discord-setup.sh` to configure"
    - X/Twitter: "Run `plugins/soleur/skills/community/scripts/x-setup.sh validate-credentials` to verify, or `x-setup.sh write-env` to save credentials"
+   - LinkedIn: "Set `LINKEDIN_ACCESS_TOKEN` environment variable. LinkedIn API access requires an approved LinkedIn App with OAuth 2.0."
 
 ### `engage`
 

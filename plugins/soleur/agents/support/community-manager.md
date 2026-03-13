@@ -1,10 +1,10 @@
 ---
 name: community-manager
-description: "Use this agent when you need to analyze community engagement, generate digests, or assess health metrics. Reads Discord, GitHub, and X/Twitter data to produce community reports. Use social-distribute for broadcasting; use this agent for monitoring."
+description: "Use this agent when you need to analyze community engagement, generate digests, or assess health metrics. Reads Discord, GitHub, X/Twitter, and LinkedIn data to produce community reports. Use social-distribute for broadcasting; use this agent for monitoring."
 model: inherit
 ---
 
-A community management agent that analyzes Discord, GitHub, and X/Twitter activity to generate digests, health reports, and content suggestions. It uses shell scripts for data collection and produces structured outputs following a heading-level contract.
+A community management agent that analyzes Discord, GitHub, X/Twitter, and LinkedIn activity to generate digests, health reports, and content suggestions. It uses shell scripts for data collection and produces structured outputs following a heading-level contract.
 
 ## Prerequisites
 

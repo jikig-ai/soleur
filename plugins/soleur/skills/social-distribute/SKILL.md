@@ -1,6 +1,6 @@
 ---
 name: social-distribute
-description: "This skill should be used when distributing a blog article across social platforms. It generates platform-specific content variants for Discord, X/Twitter, IndieHackers, Reddit, and Hacker News, and writes a persistent content file for the automated publishing pipeline. Triggers on \"distribute blog\", \"social distribute\", \"share article\", \"post to social\", \"distribute content\"."
+description: "This skill should be used when distributing a blog article across social platforms. It generates platform-specific content variants for Discord, X/Twitter, IndieHackers, Reddit, Hacker News, and LinkedIn, and writes a persistent content file for the automated publishing pipeline. Triggers on \"distribute blog\", \"social distribute\", \"share article\", \"post to social\", \"distribute content\"."
 ---
 
 # Social Distribute
@@ -99,12 +99,13 @@ Read the brand guide sections that inform content generation:
 1. Read `## Voice` -- apply brand voice, tone, do's and don'ts
 2. Read `## Channel Notes > ### Discord` -- apply Discord-specific guidelines
 3. Read `## Channel Notes > ### X/Twitter` -- apply X/Twitter-specific guidelines
+4. Read `## Channel Notes > ### LinkedIn` -- apply LinkedIn-specific guidelines
 
 If a channel notes section is missing for a platform, generate content using only the `## Voice` section.
 
 ### Phase 5: Generate All Variants
 
-Using the blog post content, stats values, article URL, and brand guide as context, generate all 5 variants. The LLM handles template variable substitution (replace `{{ stats.agents }}` with actual counts), markup stripping (ignore JSON-LD, HTML tags, FAQ accordions), and content adaptation per platform.
+Using the blog post content, stats values, article URL, and brand guide as context, generate all 6 variants. The LLM handles template variable substitution (replace `{{ stats.agents }}` with actual counts), markup stripping (ignore JSON-LD, HTML tags, FAQ accordions), and content adaptation per platform.
 
 **Important:** Every variant must contain resolved numbers, not template syntax like `{{ stats.agents }}`. Use the stats gathered in Phase 2.
 
@@ -150,11 +151,24 @@ Using the blog post content, stats values, article URL, and brand guide as conte
 - Format: `Title | URL`
 - HN titles that work: questions, counterintuitive claims, concrete results
 
+#### 5.6 LinkedIn Post
+
+- Thought-leadership framing: case studies, reflections, lessons learned
+- First-person, authentic founder voice ("I built..." not "We launched...")
+- Aim for ~1,300 characters (optimal organic visibility), max 3,000
+- Professional but not corporate -- substantive, measured, and direct
+- Match brand voice from `## Voice` and `## Channel Notes > ### LinkedIn`
+- Hook-first: opening line must deliver a complete, compelling idea that works in the feed preview
+- Include article URL naturally in context, not as a standalone CTA
+- One or two relevant hashtags maximum (#solofounder, #buildinpublic, #AIagents)
+- No promotional framing -- "Here's what I learned building X" outperforms "Check out our new feature Y"
+- Tuesday-Thursday mornings perform best (note in content, not enforced)
+
 ## Approval Flow
 
 ### Phase 6: Present All Variants
 
-Display all 5 variants in a summary view with clear headers and character counts:
+Display all 6 variants in a summary view with clear headers and character counts:
 
 ```
 ## Discord (1847/2000 chars)
@@ -176,6 +190,9 @@ Suggested subreddits: r/SaaS, r/startups
 ## Hacker News
 [title] (72/80 chars)
 [url]
+
+## LinkedIn (1247/1300 optimal, 1247/3000 max)
+[content]
 ```
 
 ### Phase 7: Discord Approval
@@ -324,6 +341,12 @@ status: draft
 
 **Title:** <title>
 **URL:** <article url>
+
+---
+
+## LinkedIn
+
+<linkedin content>
 ```
 
 ### Phase 10: Summary & Next Steps
@@ -339,19 +362,20 @@ Distribution summary:
 - IndieHackers: Manual (content in file)
 - Reddit: Manual (content in file)
 - Hacker News: Manual (content in file)
+- LinkedIn: Manual (content in file)
 
 Next steps:
 1. Review the content file
 2. Set publish_date to the target date (YYYY-MM-DD format)
 3. Change status from "draft" to "scheduled"
 4. The daily cron will publish to Discord and X on the scheduled date
-5. Reddit, IndieHackers, and Hacker News sections are for manual posting
+5. Reddit, IndieHackers, Hacker News, and LinkedIn sections are for manual posting
 ```
 
 ## Important Guidelines
 
 - All Discord posting requires explicit user approval before sending -- no auto-send
-- Character limits are enforced during generation, not as a post-hoc check (2000 for Discord, 280 per tweet for X/Twitter, 80 for HN title)
+- Character limits are enforced during generation, not as a post-hoc check (2000 for Discord, 280 per tweet for X/Twitter, 80 for HN title, 1300 optimal / 3000 max for LinkedIn)
 - Discord uses the plain `content` field, not rich embeds
 - JSON-escape all Discord content before inserting into the webhook payload
 - When posting via webhook, always include `username`, `avatar_url`, and `allowed_mentions: {parse: []}` fields

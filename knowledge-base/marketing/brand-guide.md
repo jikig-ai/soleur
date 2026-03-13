@@ -177,6 +177,19 @@ These guardrails apply in both automatic mode (fetch-mentions) and manual mode (
 
 **Exception:** Engaging with #solofounder, #buildinpublic, and AI/developer tooling communities is encouraged even when conversations touch on industry trends. The prohibition targets partisan, religious, and inflammatory topics, not the broader tech ecosystem.
 
+### LinkedIn
+
+- Thought leadership is the primary format. Case studies, reflections on building with AI agents, lessons learned, and honest assessments of what worked and what didn't.
+- First-person founder voice. Write as the person behind the company, not as a faceless brand. "I built..." not "We launched..."
+- Professional but not corporate. The tone sits between X's punchy brevity and a conference keynote -- substantive, measured, and direct. No buzzwords, no jargon for jargon's sake.
+- Aim for ~1,300 characters for optimal organic visibility. Maximum 3,000 characters. Longer posts get truncated behind "see more" -- front-load the hook.
+- Hook-first: the opening line must deliver a complete, compelling idea that works in the feed preview. No "Excited to share..." openers.
+- Include the article URL naturally in context, not as a standalone CTA at the end.
+- One or two relevant hashtags maximum. Prefer #solofounder, #buildinpublic, #AIagents. Never more than two. No hashtag walls.
+- Tuesday-Thursday mornings perform best for B2B developer tools content.
+- No promotional framing. "Here's what I learned building X" outperforms "Check out our new feature Y" by an order of magnitude on LinkedIn.
+- Example post: "Most AI coding tools solve 30% of running a company. The other 70% -- marketing, legal, finance, ops -- is still manual.\n\nI spent the last 6 months building an AI organization that handles all of it. 40+ agents across 8 departments, sharing a compounding knowledge base.\n\nThe surprising part: the hardest problem wasn't the AI. It was getting agents to share context across departments.\n\n[link to article]\n\n#solofounder #buildinpublic"
+
 **When to skip a mention:**
 - Abusive, harassing, or spam content
 - Off-topic mentions with no connection to Soleur or solo-founder topics
