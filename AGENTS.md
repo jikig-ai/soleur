@@ -17,6 +17,7 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 - The host terminal is Warp. Do not attempt automated terminal manipulation via escape sequences (cursor position queries, TUI rendering, and similar sequences are intercepted by Warp's tmux control mode and silently fail).
 - The Bash tool runs in a non-interactive shell without `sudo` access. Do not attempt commands requiring elevated privileges -- provide manual instructions instead.
 - Exhaust all automated options before suggesting manual steps to the user. The founder is a solo operator -- every manual step is a context switch. If credentials, APIs, or CLI tools exist to complete a task programmatically (Discord API, `gh` CLI, `curl`, etc.), use them. Only fall back to manual instructions when automation is genuinely impossible (e.g., no API exists, requires browser-only OAuth consent).
+- Never label a browser task as "manual" without first attempting Playwright MCP. Account signups, credential generation, settings configuration, and form submissions are all automatable via Playwright. The only genuinely manual browser steps are CAPTCHA solving and interactive OAuth consent screens — and even those should be driven to the CAPTCHA/consent step via Playwright, then handed to the user for that single interaction. Plans and task lists that say "manual — browser" are a code smell.
 
 ## Workflow Gates
 
