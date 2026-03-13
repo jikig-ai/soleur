@@ -1,0 +1,92 @@
+# Scheduled weekly analytics snapshot.
+# Pulls metrics from Plausible Analytics API v1 and commits a markdown
+# snapshot to knowledge-base/marketing/analytics/.
+#
+# Schedule: Every Monday at 06:00 UTC.
+# Manual trigger: workflow_dispatch (no inputs).
+#
+# Required secrets:
+#   PLAUSIBLE_API_KEY  - Plausible API key
+#   PLAUSIBLE_SITE_ID  - Site ID (typically the domain, e.g. soleur.ai)
+#   DISCORD_WEBHOOK_URL - (optional) Discord webhook for failure notifications
+#
+# Security: No external code execution. Shell script + curl + jq only.
+#   No untrusted input is used in run: commands -- all inputs come from
+#   repository secrets (not event payloads). server_url and repository are
+#   safe GitHub context values (not user-controlled).
+
+name: "Scheduled: Weekly Analytics"
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Every Monday at 06:00 UTC
+  workflow_dispatch: {}
+
+concurrency:
+  group: weekly-analytics
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Generate analytics snapshot
+        env:
+          PLAUSIBLE_API_KEY: ${{ secrets.PLAUSIBLE_API_KEY }}
+          PLAUSIBLE_SITE_ID: ${{ secrets.PLAUSIBLE_SITE_ID }}
+        run: bash scripts/weekly-analytics.sh
+
+      - name: Create PR with snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add knowledge-base/marketing/analytics/
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
+          BRANCH="ci/weekly-analytics-$(date -u +%Y-%m-%d)"
+          git checkout -b "$BRANCH"
+          git commit -m "ci: weekly analytics snapshot [skip ci]"
+          git push -u origin "$BRANCH"
+          gh pr create \
+            --title "ci: weekly analytics snapshot $(date -u +%Y-%m-%d)" \
+            --body "Automated weekly analytics snapshot from Plausible API." \
+            --base main \
+            --head "$BRANCH"
+          gh pr merge "$BRANCH" --squash --auto
+
+      - name: Discord notification (failure)
+        if: failure()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if [[ -z "${DISCORD_WEBHOOK_URL:-}" ]]; then
+            echo "DISCORD_WEBHOOK_URL not set, skipping failure notification"
+            exit 0
+          fi
+          RUN_URL="${REPO_URL}/actions/runs/${RUN_ID}"
+          MESSAGE=$(printf '**Weekly Analytics snapshot failed**\n\nWorkflow run: %s\n\nCheck logs for details.' \
+            "$RUN_URL")
+          PAYLOAD=$(jq -n \
+            --arg content "$MESSAGE" \
+            --arg username "Sol" \
+            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
+            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL")
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Discord failure notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Discord failure notification failed (HTTP $HTTP_CODE)"
+          fi
