@@ -1,7 +1,8 @@
 # Daily community monitoring using the community-manager agent.
-# Fetches Discord activity and X/Twitter metrics, generates a digest
-# committed to knowledge-base/support/community/, and creates a GitHub Issue
-# with the daily report. No autonomous posting -- human approval preserved.
+# Fetches Discord activity, X/Twitter metrics, and Hacker News mentions,
+# generates a digest committed to knowledge-base/support/community/, and
+# creates a GitHub Issue with the daily report. No autonomous posting --
+# human approval preserved.
 # Implements #145: Run Community Agent continuously.
 # Runs daily at 08:00 UTC and on manual dispatch.
 # To test manually: gh workflow run scheduled-community-monitor.yml
@@ -85,6 +86,10 @@ jobs:
                - GitHub: run `plugins/soleur/skills/community/scripts/github-community.sh`
                  with subcommands: activity 1, contributors 1, discussions 1.
                  Use a 1-day lookback window (not the default 7-day).
+               - Hacker News: run `plugins/soleur/skills/community/scripts/hn-community.sh`
+                 with subcommands: mentions --query soleur --limit 20, trending --limit 30.
+                 No secrets needed (public Algolia API). The agent filters trending stories
+                 for domain relevance.
                - If a script fails, log the error and continue with other platforms.
 
             3. **Read brand guide** at knowledge-base/marketing/brand-guide.md (section ## Voice)
@@ -94,7 +99,8 @@ jobs:
                (use today's date). Follow the digest file contract from the community-manager
                agent: frontmatter with period_start/period_end/generated_at, then sections
                ## Period, ## Activity Summary, ## Top Contributors, and optional sections
-               ## Trending Topics, ## GitHub Activity, ## X/Twitter Metrics.
+               ## Trending Topics, ## GitHub Activity, ## X/Twitter Metrics,
+               ## Hacker News Activity.
                Summarize and aggregate -- do not store raw message transcripts. Brief
                contextual quotes (under 100 chars) with attribution are acceptable.
                If the file already exists for today, overwrite it.
