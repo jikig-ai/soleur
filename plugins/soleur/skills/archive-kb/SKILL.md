@@ -25,13 +25,17 @@ To archive a specific slug (override branch detection):
 
 ## What It Archives
 
-The script discovers artifacts matching the feature slug in three locations:
+The script discovers artifacts matching the feature slug across current and legacy paths:
 
 | Directory | Match Pattern | Type |
 |-----------|--------------|------|
-| `knowledge-base/project/brainstorms/` | Filename contains slug | File glob |
-| `knowledge-base/project/plans/` | Filename contains slug | File glob |
-| `knowledge-base/project/specs/feat-<slug>/` | Exact directory name | Directory match |
+| `knowledge-base/brainstorms/` | Filename contains slug | File glob |
+| `knowledge-base/project/brainstorms/` | Filename contains slug | File glob (legacy) |
+| `knowledge-base/plans/` | Filename contains slug | File glob |
+| `knowledge-base/project/plans/` | Filename contains slug | File glob (legacy) |
+| `knowledge-base/specs/feat-<slug>/` | Exact directory name | Directory match |
+| `knowledge-base/features/specs/feat-<slug>/` | Exact directory name | Directory match |
+| `knowledge-base/project/specs/feat-<slug>/` | Exact directory name | Directory match (legacy) |
 
 All `archive/` subdirectories are excluded from discovery.
 

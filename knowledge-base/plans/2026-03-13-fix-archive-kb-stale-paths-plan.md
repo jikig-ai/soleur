@@ -186,23 +186,23 @@ Update the "What It Archives" table in `plugins/soleur/skills/archive-kb/SKILL.m
 ## Acceptance Criteria
 
 ### archive-kb.sh
-- [ ] `archive-kb.sh` discovers artifacts in `knowledge-base/brainstorms/` (current path)
-- [ ] `archive-kb.sh` discovers artifacts in `knowledge-base/plans/` (current path)
-- [ ] `archive-kb.sh` discovers artifacts in `knowledge-base/specs/feat-<slug>/` (current path)
-- [ ] `archive-kb.sh` discovers artifacts in `knowledge-base/features/specs/feat-<slug>/` (alternate current path)
-- [ ] `archive-kb.sh` still discovers artifacts in `knowledge-base/project/brainstorms/` (legacy path)
-- [ ] `archive-kb.sh` still discovers artifacts in `knowledge-base/project/plans/` (legacy path)
-- [ ] `archive-kb.sh` still discovers artifacts in `knowledge-base/project/specs/feat-<slug>/` (legacy path)
-- [ ] `archive/` subdirectories are excluded from all paths
-- [ ] `--dry-run` flag works correctly with new paths
-- [ ] `SKILL.md` documentation reflects the updated search paths
+- [x] `archive-kb.sh` discovers artifacts in `knowledge-base/brainstorms/` (current path)
+- [x] `archive-kb.sh` discovers artifacts in `knowledge-base/plans/` (current path)
+- [x] `archive-kb.sh` discovers artifacts in `knowledge-base/specs/feat-<slug>/` (current path)
+- [x] `archive-kb.sh` discovers artifacts in `knowledge-base/features/specs/feat-<slug>/` (alternate current path)
+- [x] `archive-kb.sh` still discovers artifacts in `knowledge-base/project/brainstorms/` (legacy path)
+- [x] `archive-kb.sh` still discovers artifacts in `knowledge-base/project/plans/` (legacy path)
+- [x] `archive-kb.sh` still discovers artifacts in `knowledge-base/project/specs/feat-<slug>/` (legacy path)
+- [x] `archive/` subdirectories are excluded from all paths
+- [x] `--dry-run` flag works correctly with new paths
+- [x] `SKILL.md` documentation reflects the updated search paths
 
 ### worktree-manager.sh
-- [ ] `create_for_feature()` creates spec dirs at `knowledge-base/specs/` (not `knowledge-base/project/specs/`)
-- [ ] `cleanup_merged_worktrees()` archives specs from all three spec locations
-- [ ] `cleanup_merged_worktrees()` archives brainstorms from both current and legacy paths
-- [ ] `cleanup_merged_worktrees()` archives plans from both current and legacy paths
-- [ ] Display message in `create_for_feature()` shows correct current path
+- [x] `create_for_feature()` creates spec dirs at `knowledge-base/specs/` (not `knowledge-base/project/specs/`)
+- [x] `cleanup_merged_worktrees()` archives specs from all three spec locations
+- [x] `cleanup_merged_worktrees()` archives brainstorms from both current and legacy paths
+- [x] `cleanup_merged_worktrees()` archives plans from both current and legacy paths
+- [x] Display message in `create_for_feature()` shows correct current path
 
 ## Test Scenarios
 
