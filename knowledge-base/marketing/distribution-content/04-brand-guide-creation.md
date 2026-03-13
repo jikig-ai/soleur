@@ -21,7 +21,7 @@ Four visual concepts were explored and evaluated against positioning before sele
 
 A brand strategy agency charges $5,000-15,000 for this scope. The guide is now the single most referenced document in the knowledge base. Legal docs use its voice. The site implements its palette. Discord announcements are reviewed against its tone spectrum. The 100th piece of content is as on-brand as the 1st.
 
-Full case study: https://soleur.ai/blog/case-study-brand-guide-creation/
+Full case study: https://soleur.ai/blog/case-study-brand-guide-creation/?utm_source=discord&utm_medium=community&utm_campaign=case-study-brand-guide-creation
 
 ---
 
@@ -41,7 +41,7 @@ Two sessions with an AI brand architect produced a complete brand guide. Here's 
 **Tweet 4 (Final) -- 220 chars:**
 Full case study on building a brand guide with AI in two sessions:
 
-https://soleur.ai/blog/case-study-brand-guide-creation/
+https://soleur.ai/blog/case-study-brand-guide-creation/?utm_source=x&utm_medium=social&utm_campaign=case-study-brand-guide-creation
 
 #solofounder
 

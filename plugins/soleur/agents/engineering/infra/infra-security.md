@@ -78,7 +78,7 @@ Wire a domain to GitHub Pages. This recipe handles the Cloudflare side via MCP a
 9. Enable HSTS (max-age=31536000, includeSubDomains, preload)
 10. Verify end-to-end: `curl -sI https://<domain>` for HTTP 200 and security headers
 
-**Detailed workflow:** For the complete autonomous sequence including common blockers, see `knowledge-base/project/learnings/integration-issues/2026-02-16-github-pages-cloudflare-wiring-workflow.md`.
+**Detailed workflow:** For the complete autonomous sequence including common blockers, see `knowledge-base/learnings/integration-issues/2026-02-16-github-pages-cloudflare-wiring-workflow.md`.
 
 ## Scope
 

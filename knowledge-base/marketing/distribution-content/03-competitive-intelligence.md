@@ -24,7 +24,7 @@ A competitive intelligence consultant prices this at $8,000-22,000 and 4-8 weeks
 
 The report directly changed the business validation verdict from PASS to CONDITIONAL PASS based on Tier 0 threat materialization. The analysis compounds -- the next quarterly scan starts from the existing framework, not from scratch.
 
-Full case study: https://soleur.ai/blog/case-study-competitive-intelligence/
+Full case study: https://soleur.ai/blog/case-study-competitive-intelligence/?utm_source=discord&utm_medium=community&utm_campaign=case-study-competitive-intelligence
 
 ---
 
@@ -46,7 +46,7 @@ We built a competitive intelligence department with AI agents. One session.
 **Tweet 4 (Final) -- 219 chars:**
 Full case study -- how 17 competitors were analyzed with battlecards in a single session:
 
-https://soleur.ai/blog/case-study-competitive-intelligence/
+https://soleur.ai/blog/case-study-competitive-intelligence/?utm_source=x&utm_medium=social&utm_campaign=case-study-competitive-intelligence
 
 #solofounder
 
@@ -84,7 +84,7 @@ That's the difference between a report and a function. A consultant gives you a 
 
 The next quarterly scan starts from the existing framework. The analysis compounds.
 
-Full case study: https://soleur.ai/blog/case-study-competitive-intelligence/
+Full case study: https://soleur.ai/blog/case-study-competitive-intelligence/?utm_source=indiehackers&utm_medium=community&utm_campaign=case-study-competitive-intelligence
 
 How do other solo founders keep up with competitive intelligence? I'm curious what approaches work at the one-person scale.
 

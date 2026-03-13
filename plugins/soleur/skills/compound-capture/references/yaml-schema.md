@@ -50,16 +50,16 @@ tags: [n-plus-one, eager-loading, performance]
 
 Based on `problem_type`, documentation is filed in:
 
-- **build_error** → `knowledge-base/project/learnings/build-errors/`
-- **test_failure** → `knowledge-base/project/learnings/test-failures/`
-- **runtime_error** → `knowledge-base/project/learnings/runtime-errors/`
-- **performance_issue** → `knowledge-base/project/learnings/performance-issues/`
-- **database_issue** → `knowledge-base/project/learnings/database-issues/`
-- **security_issue** → `knowledge-base/project/learnings/security-issues/`
-- **ui_bug** → `knowledge-base/project/learnings/ui-bugs/`
-- **integration_issue** → `knowledge-base/project/learnings/integration-issues/`
-- **logic_error** → `knowledge-base/project/learnings/logic-errors/`
-- **developer_experience** → `knowledge-base/project/learnings/developer-experience/`
-- **workflow_issue** → `knowledge-base/project/learnings/workflow-issues/`
-- **best_practice** → `knowledge-base/project/learnings/best-practices/`
-- **documentation_gap** → `knowledge-base/project/learnings/documentation-gaps/`
+- **build_error** → `knowledge-base/learnings/build-errors/`
+- **test_failure** → `knowledge-base/learnings/test-failures/`
+- **runtime_error** → `knowledge-base/learnings/runtime-errors/`
+- **performance_issue** → `knowledge-base/learnings/performance-issues/`
+- **database_issue** → `knowledge-base/learnings/database-issues/`
+- **security_issue** → `knowledge-base/learnings/security-issues/`
+- **ui_bug** → `knowledge-base/learnings/ui-bugs/`
+- **integration_issue** → `knowledge-base/learnings/integration-issues/`
+- **logic_error** → `knowledge-base/learnings/logic-errors/`
+- **developer_experience** → `knowledge-base/learnings/developer-experience/`
+- **workflow_issue** → `knowledge-base/learnings/workflow-issues/`
+- **best_practice** → `knowledge-base/learnings/best-practices/`
+- **documentation_gap** → `knowledge-base/learnings/documentation-gaps/`

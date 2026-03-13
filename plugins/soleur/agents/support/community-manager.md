@@ -1,10 +1,10 @@
 ---
 name: community-manager
-description: "Use this agent when you need to analyze community engagement, generate digests, or assess health metrics. Reads Discord, GitHub, X/Twitter, Bluesky, and LinkedIn data to produce community reports. Use social-distribute for broadcasting; use this agent for monitoring."
+description: "Use this agent when you need to analyze community engagement, generate digests, or assess health metrics. Reads Discord, GitHub, X/Twitter, Bluesky, LinkedIn, and Hacker News data to produce community reports. Use social-distribute for broadcasting; use this agent for monitoring."
 model: inherit
 ---
 
-A community management agent that analyzes Discord, GitHub, X/Twitter, Bluesky, and LinkedIn activity to generate digests, health reports, and content suggestions. It uses shell scripts for data collection and produces structured outputs following a heading-level contract.
+A community management agent that analyzes Discord, GitHub, X/Twitter, Bluesky, LinkedIn, and Hacker News activity to generate digests, health reports, and content suggestions. It uses shell scripts for data collection and produces structured outputs following a heading-level contract.
 
 ## Prerequisites
 
@@ -38,6 +38,10 @@ If Bluesky variables are missing, report: "Bluesky not configured. Run `plugins/
 
 GitHub is always available via `gh` CLI. Verify with `gh auth status`.
 
+### Hacker News (always enabled)
+
+Hacker News is always available via the public Algolia API. No credentials required. Verify with `curl -sf --max-time 10 "https://hn.algolia.com/api/v1/items/1" > /dev/null`.
+
 At least one platform (Discord or X) must be configured in addition to GitHub. If neither is configured, stop and direct the user to set up at least one platform.
 
 ## Scripts
@@ -51,10 +55,11 @@ Data collection scripts are located at `plugins/soleur/skills/community/scripts/
 - `x-setup.sh` -- X/Twitter credential setup and validation
 - `bsky-community.sh` -- Bluesky AT Protocol wrapper (create-session, post, get-metrics, get-notifications)
 - `bsky-setup.sh` -- Bluesky credential setup and validation
+- `hn-community.sh` -- Hacker News Algolia API wrapper (mentions, trending, thread)
 
 ## Capability 1: Digest Generation
 
-Generate a weekly community digest from Discord and GitHub data.
+Generate a weekly community digest from Discord, GitHub, and Hacker News data.
 
 ### Step 1: Collect Data
 
@@ -104,6 +109,16 @@ Bluesky (if enabled): fetch profile metrics:
 plugins/soleur/skills/community/scripts/bsky-community.sh get-metrics
 ```
 
+Hacker News (always enabled): fetch mentions and trending stories:
+
+```bash
+plugins/soleur/skills/community/scripts/hn-community.sh mentions --query soleur --limit 20
+plugins/soleur/skills/community/scripts/hn-community.sh trending --limit 30
+```
+
+If `hn-community.sh` fails, log the error and continue with other platforms.
+
+
 ### Step 2: Analyze Data
 
 Analyze the collected data to identify:
@@ -115,6 +130,7 @@ Analyze the collected data to identify:
 - **GitHub activity:** New issues, merged PRs, active discussions
 - **X/Twitter metrics:** Follower count, following count, tweet count (if X is enabled)
 - **Bluesky metrics:** Follower count, following count, post count (if Bluesky is enabled)
+- **Hacker News activity:** Mentions of the project, notable trending discussions relevant to the domain
 
 Do NOT store raw message content. Summarize and aggregate only.
 
@@ -170,6 +186,7 @@ Digest markdown files follow this heading contract. Downstream tools depend on t
 | `## GitHub Activity` | No | Issues, PRs, discussions during period |
 | `## X/Twitter Metrics` | No | Follower count, engagement stats (if X enabled) |
 | `## Bluesky Metrics` | No | Follower count, post count, engagement stats (if Bluesky enabled) |
+| `## Hacker News Activity` | No | Mention count, notable threads, trending topics |
 
 **File naming:** `YYYY-MM-DD-digest.md`
 
@@ -204,6 +221,10 @@ plugins/soleur/skills/community/scripts/x-community.sh fetch-metrics
 
 # Bluesky (if enabled)
 plugins/soleur/skills/community/scripts/bsky-community.sh get-metrics
+
+# Hacker News (always enabled)
+plugins/soleur/skills/community/scripts/hn-community.sh mentions --query soleur --limit 20
+plugins/soleur/skills/community/scripts/hn-community.sh trending --limit 30
 ```
 
 ### Step 2: Display Metrics
@@ -235,6 +256,11 @@ Bluesky (if enabled)
   Following: N
   Posts: N
 
+Hacker News
+  Mentions (7d): N
+  Notable threads: N
+  Trending relevance: N stories matching domain keywords
+
 Top Contributors (30d)
   1. @user -- N commits, N messages
   2. @user -- N commits, N messages
@@ -249,7 +275,7 @@ Analyze recent community activity and suggest content topics.
 
 ### Step 1: Collect Data
 
-Same data collection as digest (Discord messages + GitHub activity + X/Twitter metrics if enabled).
+Same data collection as digest (Discord messages + GitHub activity + X/Twitter metrics if enabled + Hacker News mentions and trending).
 
 ### Step 2: Identify Opportunities
 
@@ -260,6 +286,7 @@ Look for:
 - **Recent releases or PRs** that could be highlighted in a community post
 - **Quiet periods** where engagement could be boosted with content
 - **X/Twitter growth signals** -- follower milestones, engagement patterns (if X enabled)
+- **Hacker News signals** -- trending discussions relevant to the product domain, competitor mentions, community questions
 
 ### Step 3: Present Suggestions
 
@@ -549,6 +576,7 @@ Same format as X/Twitter but with "Mentions" labels (no "Tweets" terminology).
 - All GitHub API calls go through `github-community.sh` -- do not call `gh` directly
 - All X/Twitter API calls go through `x-community.sh` -- do not call the API directly
 - All Bluesky API calls go through `bsky-community.sh` -- do not call the API directly
+- All Hacker News API calls go through `hn-community.sh` -- do not call the Algolia API directly
 - Do not store raw message content in digest files -- summarize and aggregate
 - Do not post to Discord without user approval (the skill handles the approval flow)
 - Digest posting requires brand guide check for voice alignment

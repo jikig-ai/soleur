@@ -25,7 +25,7 @@ The kill criterion at Gate 4 is the most important finding in the entire knowled
 
 A startup strategy consultant charges $4,000-16,000 for this scope. An accelerator values equivalent advisory at $10,000-25,000.
 
-Full case study: https://soleur.ai/blog/case-study-business-validation/
+Full case study: https://soleur.ai/blog/case-study-business-validation/?utm_source=discord&utm_medium=community&utm_campaign=case-study-business-validation
 
 ---
 
@@ -47,7 +47,7 @@ A technical founder building a product they use daily cannot tell the difference
 **Tweet 4 (Final) -- 244 chars:**
 Full case study -- the 6-gate framework, the kill criterion, and the pivot that changed the project's direction:
 
-https://soleur.ai/blog/case-study-business-validation/
+https://soleur.ai/blog/case-study-business-validation/?utm_source=x&utm_medium=social&utm_campaign=case-study-business-validation
 
 #solofounder
 
@@ -93,7 +93,7 @@ A startup strategy consultant charges $4,000-16,000 for this kind of structured 
 
 The system is honest in a way that founders, including me, are not always honest with themselves.
 
-Full case study: https://soleur.ai/blog/case-study-business-validation/
+Full case study: https://soleur.ai/blog/case-study-business-validation/?utm_source=indiehackers&utm_medium=community&utm_campaign=case-study-business-validation
 
 Has anyone else used a structured framework to validate (or kill) their own product idea? I'd genuinely love to hear what frameworks worked.
 
@@ -131,4 +131,4 @@ Anyone else used a structured validation approach to test their own assumptions?
 ## Hacker News
 
 **Title:** Running a Business Validation Workshop With AI Gates
-**URL:** https://soleur.ai/blog/case-study-business-validation/
+**URL:** https://soleur.ai/blog/case-study-business-validation/?utm_source=hackernews&utm_medium=community&utm_campaign=case-study-business-validation
