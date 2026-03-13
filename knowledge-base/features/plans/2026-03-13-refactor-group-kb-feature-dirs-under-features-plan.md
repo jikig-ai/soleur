@@ -245,13 +245,13 @@ All must update to `knowledge-base/features/specs/feat-<name>/`.
 
 ## Acceptance Criteria
 
-- [ ] All 4 dirs moved under `knowledge-base/features/`
-- [ ] `grep -r` for old root-level paths returns zero in executable code (plugins/, scripts/, .github/, AGENTS.md)
-- [ ] `archive-kb.sh --dry-run` discovers artifacts under new paths
-- [ ] `worktree-manager.sh` `create_for_feature()` creates spec dirs under `features/specs/`
-- [ ] `worktree-manager.sh` `cleanup_merged_worktrees()` archives to `features/specs/archive/`, `features/brainstorms/archive/`, `features/plans/archive/`
-- [ ] learnings-researcher routing table has all 13 categories updated
-- [ ] constitution.md convention path updated to `knowledge-base/features/specs/feat-<name>/`
+- [x] All 4 dirs moved under `knowledge-base/features/`
+- [x] `grep -r` for old root-level paths returns zero in executable code (plugins/, scripts/, .github/, AGENTS.md)
+- [x] `archive-kb.sh --dry-run` discovers artifacts under new paths
+- [x] `worktree-manager.sh` `create_for_feature()` creates spec dirs under `features/specs/`
+- [x] `worktree-manager.sh` `cleanup_merged_worktrees()` archives to `features/specs/archive/`, `features/brainstorms/archive/`, `features/plans/archive/`
+- [x] learnings-researcher routing table has all 13 categories updated
+- [x] constitution.md convention path updated to `knowledge-base/features/specs/feat-<name>/`
 
 ## Test Scenarios
 
