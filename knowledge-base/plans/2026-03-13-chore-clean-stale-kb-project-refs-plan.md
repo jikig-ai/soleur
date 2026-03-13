@@ -4,9 +4,28 @@ type: chore
 date: 2026-03-13
 issue: "#604"
 semver: patch
+deepened: 2026-03-13
 ---
 
 # chore: clean up stale knowledge-base/project/ references in SKILL.md files
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-13
+**Sections enhanced:** 3 (Scope, Replacement Rules, Test Scenarios)
+
+### Key Improvements
+
+1. Discovered 5 additional files outside `plugins/soleur/` with stale references that the original plan missed -- total scope increases from 20 to 25 files
+2. Added edge case for `knowledge-base/project/constitution.md` line 153 (specs convention path) -- this reference IS inside `knowledge-base/project/` but refers to the now-moved specs directory
+3. Applied learning from `readme-self-references-missed-in-rename`: files INSIDE the directory being restructured also contain self-references that don't match simple grep scopes
+
+### New Considerations Discovered
+
+- `knowledge-base/project/components/knowledge-base.md` has 7 stale references including executable `grep` and `ls` commands with legacy paths -- same high-priority category as the plugin SKILL.md files
+- `knowledge-base/project/constitution.md` line 153 has a convention path `knowledge-base/project/specs/feat-<name>/` that should become `knowledge-base/specs/feat-<name>/`
+- `knowledge-base/product/business-validation.md` references a brainstorm at the legacy path
+- The grep verification commands in acceptance criteria must search the ENTIRE repo (not just `plugins/soleur/`), excluding `knowledge-base/project/` subdirectories that contain actual legacy content files (plans, brainstorms, specs, learnings still stored there)
 
 ## Overview
 
@@ -25,7 +44,7 @@ Three paths under `knowledge-base/project/` remain correct and must NOT be chang
 - `knowledge-base/project/components/` (stays)
 - `knowledge-base/project/README.md` (stays)
 
-PR #602 fixed the two shell scripts (`archive-kb.sh`, `worktree-manager.sh`) that silently failed. This issue tracks the broader documentation cleanup: 154 stale references across 20 plugin `.md` files plus 1 in `AGENTS.md`.
+PR #602 fixed the two shell scripts (`archive-kb.sh`, `worktree-manager.sh`) that silently failed. This issue tracks the broader documentation cleanup: 154 stale references across 20 plugin `.md` files, plus 11 more across 5 knowledge-base documentation files.
 
 ## Scope
 
@@ -64,6 +83,22 @@ PR #602 fixed the two shell scripts (`archive-kb.sh`, `worktree-manager.sh`) tha
 
 **AGENTS.md note:** The single reference in AGENTS.md (`knowledge-base/project/constitution.md`) is correct because constitution.md remains at that path. No change needed.
 
+**Knowledge-base documentation files (discovered during deepening):**
+
+| File | Count | Notes |
+|---|---|---|
+| `knowledge-base/project/components/knowledge-base.md` | 7 | `grep`, `ls` commands and directory listing with legacy paths |
+| `knowledge-base/project/constitution.md` | 1 | Convention path `knowledge-base/project/specs/feat-<name>/` on line 153 |
+| `knowledge-base/project/README.md` | 1 | Specs path in directory description |
+| `knowledge-base/project/components/agents.md` | 1 | Learnings-researcher path in agent table |
+| `knowledge-base/product/business-validation.md` | 1 | Brainstorm cross-reference |
+
+### Research Insights
+
+**Learning applied -- `readme-self-references-missed-in-rename`:** When planning a directory restructure cleanup, enumerate ALL files in the affected directory as potential self-reference holders. The original plan scoped only `plugins/soleur/` files but the `knowledge-base/project/` directory itself contains documentation files with executable code snippets referencing the old structure.
+
+**Learning applied -- `sed-insertion-fails-silently`:** After batch replacements, verify changes landed with `grep -rL` (list files NOT matching expected pattern) or `grep -c` (count remaining stale references). Silent failures in batch operations are the primary risk for this task.
+
 ### Files NOT to Update
 
 - `plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` -- legacy paths are intentional fallback candidates (#602)
@@ -71,6 +106,13 @@ PR #602 fixed the two shell scripts (`archive-kb.sh`, `worktree-manager.sh`) tha
 - Any reference to `knowledge-base/project/constitution.md` -- file remains at this path
 - Any reference to `knowledge-base/project/components/` -- directory remains at this path
 - Any reference to `knowledge-base/project/README.md` -- file remains at this path
+- `knowledge-base/project/plans/` content files -- these are actual plan documents stored at the legacy path, not stale references
+- `knowledge-base/project/brainstorms/` content files -- same, actual content at legacy path
+- `knowledge-base/project/learnings/` content files -- same, actual content at legacy path
+- `knowledge-base/project/specs/` content files -- same, actual content at legacy path
+- `knowledge-base/specs/feat-fix-archive-kb-paths/` -- historical records describing what was done in #602
+- `knowledge-base/plans/2026-03-13-fix-archive-kb-stale-paths-plan.md` -- references legacy paths in context section (historical)
+- `knowledge-base/learnings/2026-03-13-archive-kb-stale-path-resolution.md` -- documents the problem (historical)
 
 ## Replacement Rules
 
@@ -85,6 +127,25 @@ Apply these four substitutions across all in-scope files:
 
 **Edge case -- archive-kb SKILL.md table:** The legacy paths in the "What It Archives" table should be relabeled, not removed, since the shell scripts intentionally still search them as fallbacks.
 
+**Edge case -- constitution.md line 153:** The convention rule `feat-<name>` maps to `knowledge-base/project/specs/feat-<name>/` contains a specs path reference. This is a special case: the file itself lives at `knowledge-base/project/constitution.md` (correct), but the convention path it describes points to the legacy specs location. Update the specs path portion only: `knowledge-base/specs/feat-<name>/`.
+
+**Edge case -- business-validation.md line 54:** Contains a `See knowledge-base/project/brainstorms/...` cross-reference. The actual brainstorm may still be at the legacy path. Verify the file exists at the new path before updating; if not, leave as-is (the reference points to real content that hasn't been migrated).
+
+### Verification Strategy
+
+After all replacements, run these commands to confirm completeness:
+
+```bash
+# Count remaining stale refs in plugin files (expect 0)
+grep -rn 'knowledge-base/project/\(learnings\|brainstorms\|plans\|specs\)' plugins/soleur/ --include='*.md' | wc -l
+
+# Count remaining stale refs in KB documentation files (expect 0)
+grep -rn 'knowledge-base/project/\(learnings\|brainstorms\|plans\|specs\)' knowledge-base/project/constitution.md knowledge-base/project/README.md knowledge-base/project/components/ knowledge-base/product/ --include='*.md' | wc -l
+
+# Confirm preserved references are intact
+grep -c 'knowledge-base/project/constitution.md' plugins/soleur/skills/compound/SKILL.md plugins/soleur/skills/work/SKILL.md plugins/soleur/skills/plan/SKILL.md plugins/soleur/commands/sync.md
+```
+
 ## Non-goals
 
 - Migrating actual files from `knowledge-base/project/{brainstorms,plans,specs,learnings}/` to top-level (tracked by #568 if ever needed)
@@ -94,20 +155,24 @@ Apply these four substitutions across all in-scope files:
 
 ## Acceptance Criteria
 
-- [ ] `grep -r 'knowledge-base/project/learnings/' plugins/soleur/ AGENTS.md` returns zero matches
-- [ ] `grep -r 'knowledge-base/project/brainstorms/' plugins/soleur/ AGENTS.md` returns zero matches (excluding archive-kb.sh, worktree-manager.sh)
-- [ ] `grep -r 'knowledge-base/project/plans/' plugins/soleur/ AGENTS.md` returns zero matches (excluding archive-kb.sh, worktree-manager.sh)
-- [ ] `grep -r 'knowledge-base/project/specs/' plugins/soleur/ AGENTS.md` returns zero matches (excluding archive-kb.sh, worktree-manager.sh)
-- [ ] References to `knowledge-base/project/constitution.md` remain unchanged
-- [ ] References to `knowledge-base/project/components/` remain unchanged
-- [ ] All 20 plugin `.md` files updated consistently
+- [ ] `grep -rn 'knowledge-base/project/\(learnings\|brainstorms\|plans\|specs\)' plugins/soleur/ --include='*.md'` returns zero matches
+- [ ] `grep -rn 'knowledge-base/project/\(learnings\|brainstorms\|plans\|specs\)' knowledge-base/project/constitution.md knowledge-base/project/README.md knowledge-base/project/components/ knowledge-base/product/ --include='*.md'` returns zero matches
+- [ ] Shell scripts `archive-kb.sh` and `worktree-manager.sh` are NOT modified (legacy paths are intentional fallbacks)
+- [ ] References to `knowledge-base/project/constitution.md` remain unchanged across all files
+- [ ] References to `knowledge-base/project/components/` remain unchanged across all files
+- [ ] All 25 files (20 plugin + 5 KB docs) updated consistently
+- [ ] Total stale reference count drops from ~165 to 0
 
 ## Test Scenarios
 
 - Given all replacements are applied, when running `grep -rn 'knowledge-base/project/(learnings|brainstorms|plans|specs)' plugins/soleur/ --include='*.md'`, then zero matches are returned
+- Given all replacements are applied, when running the same grep against `knowledge-base/project/constitution.md`, `knowledge-base/project/README.md`, `knowledge-base/project/components/`, and `knowledge-base/product/`, then zero matches are returned
 - Given the `sync.md` mkdir command is updated, when the sync command creates KB directories, then directories are created at `knowledge-base/{learnings,brainstorms,specs,plans}` (not under `project/`)
 - Given `compound-capture/SKILL.md` executable code blocks are updated, when an agent copy-pastes the `find` or `grep -r` commands, then they search the correct current paths
 - Given `learnings-researcher.md` category paths are updated, when the agent searches for learnings, then it searches `knowledge-base/learnings/` subdirectories (not `knowledge-base/project/learnings/`)
+- Given `knowledge-base/project/components/knowledge-base.md` is updated, when an agent reads the component documentation, then directory listings and grep commands point to current paths
+- Given constitution.md convention path is updated, when the convention-over-configuration rule is applied, then `feat-<name>` maps to `knowledge-base/specs/feat-<name>/` (not the legacy path)
+- Given references to `knowledge-base/project/constitution.md` are preserved, when counted with `grep -c`, then the count matches the pre-change baseline
 
 ## Context
 
