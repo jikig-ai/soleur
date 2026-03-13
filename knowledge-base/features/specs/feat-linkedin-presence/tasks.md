@@ -30,11 +30,11 @@
 
 ## Phase 4: Follow-Up Issues
 
-- [ ] 4.1 File GitHub issue: LinkedIn API scripts (`linkedin-community.sh`, `linkedin-setup.sh`) — gated on API approval
-- [ ] 4.2 File GitHub issue: Content-publisher LinkedIn automation — gated on API approval
-- [ ] 4.3 File GitHub issue: Docs site LinkedIn card (`site.json`, `community.njk`) — gated on company page URL
-- [ ] 4.4 File GitHub issue: Scheduled workflow LinkedIn secrets — gated on API approval
-- [ ] 4.5 File GitHub issue: Second LinkedIn variant (company page) — gated on company page + data
+- [x] 4.1 File GitHub issue: LinkedIn API scripts — #589
+- [x] 4.2 File GitHub issue: Content-publisher LinkedIn automation — #590
+- [x] 4.3 File GitHub issue: Docs site LinkedIn card — #591
+- [x] 4.4 File GitHub issue: Scheduled workflow LinkedIn secrets — #592
+- [x] 4.5 File GitHub issue: Second LinkedIn variant (company page) — #593
 
 ## Phase 5: Verification
 
