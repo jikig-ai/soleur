@@ -80,10 +80,10 @@ Total edits: 3 (one for pricing-strategy.md, two for competitive-intelligence.md
 
 ## Acceptance Criteria
 
-- [ ] All `knowledge-base/overview/` references in `knowledge-base/product/pricing-strategy.md` updated to correct current paths
-- [ ] All `knowledge-base/overview/` references in `knowledge-base/product/competitive-intelligence.md` updated to correct current paths
-- [ ] `grep -r 'knowledge-base/overview/' knowledge-base/product/` returns zero matches
-- [ ] Each updated path points to a file that exists on disk
+- [x] All `knowledge-base/overview/` references in `knowledge-base/product/pricing-strategy.md` updated to correct current paths
+- [x] All `knowledge-base/overview/` references in `knowledge-base/product/competitive-intelligence.md` updated to correct current paths
+- [x] `grep -r 'knowledge-base/overview/' knowledge-base/product/` returns zero matches
+- [x] Each updated path points to a file that exists on disk
 
 ## Test Scenarios
 

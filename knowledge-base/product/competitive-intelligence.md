@@ -151,8 +151,8 @@ Notion's free beta ends May 3, 2026. Credit-based pricing ($10/1,000 credits) wi
 _Generated: 2026-03-12_
 
 **Source documents:**
-- `knowledge-base/overview/brand-guide.md` (last updated: 2026-02-21) -- **WARNING: 19 days since last update, approaching 30-day staleness threshold**
-- `knowledge-base/overview/business-validation.md` (last updated: 2026-03-12)
+- `knowledge-base/marketing/brand-guide.md` (last updated: 2026-02-21) -- **WARNING: 19 days since last update, approaching 30-day staleness threshold**
+- `knowledge-base/product/business-validation.md` (last updated: 2026-03-12)
 
 **Research sources:**
 - [Microsoft Copilot Cowork Launch (Microsoft 365 Blog, Mar 9 2026)](https://www.microsoft.com/en-us/microsoft-365/blog/2026/03/09/copilot-cowork-a-new-way-of-getting-work-done/)
@@ -210,7 +210,7 @@ _Generated: 2026-03-12_
 
 | Specialist | Status | Files Modified | Summary |
 |---|---|---|---|
-| growth-strategist | Completed | knowledge-base/overview/content-strategy.md | Added 3 new content gaps (Cursor agent platform, Microsoft Copilot Cowork, Paperclip orchestration layer), updated Polsia gap with $1.5M ARR metrics, added comparison page entries to Competitive Positioning pillar. |
-| pricing-strategist | Completed | knowledge-base/overview/pricing-strategy.md | Refreshed Tier 0 and Tier 3 competitive pricing matrices with March 2026 data (Microsoft Copilot Cowork, Cursor Automations, OpenAI Codex, Polsia tiered pricing, Paperclip, Replit Agent 4), updated market price anchors and key insight, added 3 new pricing risks. |
+| growth-strategist | Completed | knowledge-base/marketing/content-strategy.md | Added 3 new content gaps (Cursor agent platform, Microsoft Copilot Cowork, Paperclip orchestration layer), updated Polsia gap with $1.5M ARR metrics, added comparison page entries to Competitive Positioning pillar. |
+| pricing-strategist | Completed | knowledge-base/product/pricing-strategy.md | Refreshed Tier 0 and Tier 3 competitive pricing matrices with March 2026 data (Microsoft Copilot Cowork, Cursor Automations, OpenAI Codex, Polsia tiered pricing, Paperclip, Replit Agent 4), updated market price anchors and key insight, added 3 new pricing risks. |
 | deal-architect | Completed | knowledge-base/sales/battlecards/tier-0-cursor.md, knowledge-base/sales/battlecards/tier-0-anthropic-cowork.md, knowledge-base/sales/battlecards/tier-3-notion-ai.md, knowledge-base/sales/battlecards/tier-3-tanka.md, knowledge-base/sales/battlecards/tier-3-polsia.md, knowledge-base/sales/battlecards/tier-3-paperclip.md | Updated 4 existing battlecards with March 2026 data (Cursor Automations/Marketplace, Cowork Microsoft partnership, Notion MiniMax M2.5, Tanka pricing). Created 2 new battlecards (Polsia, Paperclip). Cursor convergence risk upgraded to High. |
 | programmatic-seo-specialist | Completed | knowledge-base/marketing/seo-refresh-queue.md | Updated competitor content monitoring table with 3 new entrants (Polsia, Paperclip, OpenAI Codex). Upgraded Cursor comparison page to P1. Added Polsia and Paperclip comparison pages. Flagged 7 stale/new comparison pages for regeneration. Added 5 new keywords to ranking monitor. |
