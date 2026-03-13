@@ -292,16 +292,16 @@ repeat_count: 0
 
 ## Acceptance Criteria
 
-- [ ] Stop hook detects idle-pattern responses (e.g., "All slash commands are finished") and increments stuck counter regardless of length
-- [ ] 3 consecutive idle-pattern or short responses trigger termination (existing stuck_threshold behavior, now applied to idle patterns too)
-- [ ] Stop hook detects 3 consecutive identical responses and terminates (repetition detection)
-- [ ] Repetition detection is independent of stuck detection (either can trigger termination)
-- [ ] Pre-existing state files without `last_response_hash` / `repeat_count` fields work without errors
-- [ ] Normal loops with substantive, varied output are unaffected
-- [ ] State file frontmatter includes `last_response_hash` and `repeat_count` fields
-- [ ] Help text updated to document idle pattern and repetition detection
-- [ ] All existing tests pass (backward compatibility)
-- [ ] New tests cover idle patterns, repetition detection, and backward compatibility
+- [x] Stop hook detects idle-pattern responses (e.g., "All slash commands are finished") and increments stuck counter regardless of length
+- [x] 3 consecutive idle-pattern or short responses trigger termination (existing stuck_threshold behavior, now applied to idle patterns too)
+- [x] Stop hook detects 3 consecutive identical responses and terminates (repetition detection)
+- [x] Repetition detection is independent of stuck detection (either can trigger termination)
+- [x] Pre-existing state files without `last_response_hash` / `repeat_count` fields work without errors
+- [x] Normal loops with substantive, varied output are unaffected
+- [x] State file frontmatter includes `last_response_hash` and `repeat_count` fields
+- [x] Help text updated to document idle pattern and repetition detection
+- [x] All existing tests pass (backward compatibility)
+- [x] New tests cover idle patterns, repetition detection, and backward compatibility
 
 ## Test Scenarios
 

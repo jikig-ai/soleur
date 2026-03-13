@@ -41,10 +41,13 @@ DESCRIPTION:
 
   To signal completion, output: <promise>YOUR_PHRASE</promise>
 
-  Stuck detection: If the assistant produces N consecutive responses with
-  fewer than 20 characters of text content, the loop auto-terminates.
-  This prevents infinite cycling after crash recovery. Set --stuck-threshold 0
-  to disable.
+  Stuck detection: The loop auto-terminates when responses are idle:
+  - Short responses (< 20 chars): counted as minimal (original behavior)
+  - Idle patterns (< 200 chars): responses matching "all done", "nothing
+    left to do", etc. are counted as semantically idle
+  - Repetition: 3 consecutive identical responses trigger termination
+  Set --stuck-threshold 0 to disable length/idle detection (repetition
+  detection remains active).
 
 EXAMPLES:
   /soleur:ralph-loop Build a todo API --completion-promise 'DONE' --max-iterations 20
@@ -53,9 +56,10 @@ EXAMPLES:
   /soleur:ralph-loop --completion-promise 'TASK COMPLETE' Create a REST API
 
 STOPPING:
-  By reaching --max-iterations, detecting --completion-promise, or
-  stuck detection (N consecutive empty responses). Or manually remove
-  the state file: rm .claude/ralph-loop.local.md
+  By reaching --max-iterations, detecting --completion-promise,
+  stuck detection (N consecutive empty/idle responses), or repetition
+  detection (3 identical responses). Or manually remove the state file:
+  rm .claude/ralph-loop.local.md
 
 MONITORING:
   # View current iteration:
@@ -137,6 +141,8 @@ max_iterations: $MAX_ITERATIONS
 completion_promise: $COMPLETION_PROMISE_YAML
 stuck_count: 0
 stuck_threshold: $STUCK_THRESHOLD
+last_response_hash:
+repeat_count: 0
 started_at: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ---
 
