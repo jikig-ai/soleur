@@ -95,18 +95,18 @@ discover_artifacts() {
   shopt -s nullglob
 
   # Brainstorms: files matching *slug* excluding archive/
-  for f in knowledge-base/brainstorms/*"${slug}"*; do
+  for f in knowledge-base/features/brainstorms/*"${slug}"*; do
     [[ -f "$f" && "$f" != */archive/* ]] && artifacts+=("$f")
   done
 
   # Plans: files matching *slug* excluding archive/
-  for f in knowledge-base/plans/*"${slug}"*; do
+  for f in knowledge-base/features/plans/*"${slug}"*; do
     [[ -f "$f" && "$f" != */archive/* ]] && artifacts+=("$f")
   done
 
   # Specs: exact directory match feat-<slug>
-  if [[ -d "knowledge-base/specs/feat-${slug}" ]]; then
-    artifacts+=("knowledge-base/specs/feat-${slug}")
+  if [[ -d "knowledge-base/features/specs/feat-${slug}" ]]; then
+    artifacts+=("knowledge-base/features/specs/feat-${slug}")
   fi
 
   shopt -u nullglob

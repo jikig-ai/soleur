@@ -37,14 +37,14 @@ fi
 Check if `knowledge-base/` directory exists. If it does:
 
 1. Run `git branch --show-current` to get the current branch name
-2. If the branch starts with `feat-`, read `knowledge-base/specs/<branch-name>/spec.md` if it exists
+2. If the branch starts with `feat-`, read `knowledge-base/features/specs/<branch-name>/spec.md` if it exists
 
 **If knowledge-base/ exists:**
 
 1. Read `CLAUDE.md` if it exists - apply project conventions during planning
 2. If `# Project Constitution` heading is NOT already in context, read `knowledge-base/project/constitution.md` - use principles to guide planning decisions. Skip if already loaded (e.g., from a preceding `/soleur:brainstorm`).
 3. Detect feature from current branch (`feat-<name>` pattern)
-4. Read `knowledge-base/specs/feat-<name>/spec.md` if it exists - use as planning input
+4. Read `knowledge-base/features/specs/feat-<name>/spec.md` if it exists - use as planning input
 5. Announce: "Loaded constitution and spec for `feat-<name>`"
 
 **If knowledge-base/ does NOT exist:**
@@ -55,10 +55,10 @@ Check if `knowledge-base/` directory exists. If it does:
 
 **Check for brainstorm output first:**
 
-Before asking questions, look for recent brainstorm documents in `knowledge-base/brainstorms/` that match this feature:
+Before asking questions, look for recent brainstorm documents in `knowledge-base/features/brainstorms/` that match this feature:
 
 ```bash
-ls -la knowledge-base/brainstorms/*.md 2>/dev/null | head -10
+ls -la knowledge-base/features/brainstorms/*.md 2>/dev/null | head -10
 ```
 
 **Relevance criteria:** A brainstorm is relevant if:
@@ -113,7 +113,7 @@ Run these agents **in parallel** to gather local context:
 **What to look for:**
 
 - **Repo research:** existing patterns, CLAUDE.md guidance, technology familiarity, pattern consistency
-- **Learnings:** documented solutions in `knowledge-base/learnings/` that might apply (gotchas, patterns, lessons learned)
+- **Learnings:** documented solutions in `knowledge-base/features/learnings/` that might apply (gotchas, patterns, lessons learned)
 
 These findings inform the next step.
 
@@ -156,7 +156,7 @@ Run these agents in parallel:
 After all research steps complete, consolidate findings:
 
 - Document relevant file paths from repo research (e.g., `app/services/example_service.rb:42`)
-- **Include relevant institutional learnings** from `knowledge-base/learnings/` (key insights, gotchas to avoid)
+- **Include relevant institutional learnings** from `knowledge-base/features/learnings/` (key insights, gotchas to avoid)
 - Note external documentation URLs and best practices (if external research was done)
 - List related issues or PRs discovered
 - Capture CLAUDE.md conventions
@@ -279,24 +279,24 @@ end
 **Filename:** Use the date and kebab-case filename from Step 2 Title & Categorization.
 
 ```text
-knowledge-base/plans/YYYY-MM-DD-<type>-<descriptive-name>-plan.md
+knowledge-base/features/plans/YYYY-MM-DD-<type>-<descriptive-name>-plan.md
 ```
 
 Examples:
 
-- ✅ `knowledge-base/plans/2026-01-15-feat-user-authentication-flow-plan.md`
-- ✅ `knowledge-base/plans/2026-02-03-fix-checkout-race-condition-plan.md`
-- ✅ `knowledge-base/plans/2026-03-10-refactor-api-client-extraction-plan.md`
-- ❌ `knowledge-base/plans/2026-01-15-feat-thing-plan.md` (not descriptive - what "thing"?)
-- ❌ `knowledge-base/plans/2026-01-15-feat-new-feature-plan.md` (too vague - what feature?)
-- ❌ `knowledge-base/plans/2026-01-15-feat: user auth-plan.md` (invalid characters - colon and space)
-- ❌ `knowledge-base/plans/feat-user-auth-plan.md` (missing date prefix)
+- ✅ `knowledge-base/features/plans/2026-01-15-feat-user-authentication-flow-plan.md`
+- ✅ `knowledge-base/features/plans/2026-02-03-fix-checkout-race-condition-plan.md`
+- ✅ `knowledge-base/features/plans/2026-03-10-refactor-api-client-extraction-plan.md`
+- ❌ `knowledge-base/features/plans/2026-01-15-feat-thing-plan.md` (not descriptive - what "thing"?)
+- ❌ `knowledge-base/features/plans/2026-01-15-feat-new-feature-plan.md` (too vague - what feature?)
+- ❌ `knowledge-base/features/plans/2026-01-15-feat: user auth-plan.md` (invalid characters - colon and space)
+- ❌ `knowledge-base/features/plans/feat-user-auth-plan.md` (missing date prefix)
 
 ## Save Tasks to Knowledge Base (if exists)
 
-**After writing the plan to `knowledge-base/plans/`, also create tasks.md if knowledge-base/ exists:**
+**After writing the plan to `knowledge-base/features/plans/`, also create tasks.md if knowledge-base/ exists:**
 
-Check if `knowledge-base/` exists. If so, run `git branch --show-current` to get the current branch. If on a `feat-*` branch, create the spec directory with `mkdir -p knowledge-base/specs/<branch-name>`.
+Check if `knowledge-base/` exists. If so, run `git branch --show-current` to get the current branch. If on a `feat-*` branch, create the spec directory with `mkdir -p knowledge-base/features/specs/<branch-name>`.
 
 **If knowledge-base/ exists and on a feature branch:**
 
@@ -305,16 +305,16 @@ Check if `knowledge-base/` exists. If so, run `git branch --show-current` to get
    - Organize into phases (Setup, Core Implementation, Testing)
    - Use hierarchical numbering (1.1, 2.1, 2.1.1, etc.)
 
-2. **Save tasks.md** to `knowledge-base/specs/feat-<name>/tasks.md`
+2. **Save tasks.md** to `knowledge-base/features/specs/feat-<name>/tasks.md`
 
-3. **Announce:** "Tasks saved to `knowledge-base/specs/feat-<name>/tasks.md`. Use `skill: soleur:work` to implement."
+3. **Announce:** "Tasks saved to `knowledge-base/features/specs/feat-<name>/tasks.md`. Use `skill: soleur:work` to implement."
 
 4. **Commit and push plan artifacts:**
 
    After both the plan file and tasks.md are written, commit and push everything:
 
    ```bash
-   git add knowledge-base/plans/ knowledge-base/specs/feat-<name>/tasks.md
+   git add knowledge-base/features/plans/ knowledge-base/features/specs/feat-<name>/tasks.md
    git commit -m "docs: create plan and tasks for feat-<name>"
    git push
    ```
@@ -323,7 +323,7 @@ Check if `knowledge-base/` exists. If so, run `git branch --show-current` to get
 
 **If knowledge-base/ does NOT exist or not on feature branch:**
 
-- Plan saved to `knowledge-base/plans/` only (current behavior)
+- Plan saved to `knowledge-base/features/plans/` only (current behavior)
 
 ## Plan Review (Always Runs)
 
@@ -345,7 +345,7 @@ After writing the plan file, automatically run `/plan_review <plan_file_path>` t
 
 After plan review, use the **AskUserQuestion tool** to present these options:
 
-**Question:** "Plan reviewed and ready at `knowledge-base/plans/YYYY-MM-DD-<type>-<name>-plan.md`. What would you like to do next?"
+**Question:** "Plan reviewed and ready at `knowledge-base/features/plans/YYYY-MM-DD-<type>-<name>-plan.md`. What would you like to do next?"
 
 **Options:**
 
@@ -358,10 +358,10 @@ After plan review, use the **AskUserQuestion tool** to present these options:
 
 Based on selection:
 
-- **Open plan in editor** → Run `open knowledge-base/plans/<plan_filename>.md` to open the file in the user's default editor
+- **Open plan in editor** → Run `open knowledge-base/features/plans/<plan_filename>.md` to open the file in the user's default editor
 - **`/deepen-plan`** → Call the /deepen-plan command with the plan file path to enhance with research
 - **`soleur:work`** → Use `skill: soleur:work` with the plan file path
-- **`soleur:work` on remote** → Use `skill: soleur:work` with `knowledge-base/plans/<plan_filename>.md` to start work in background for Claude Code web
+- **`soleur:work` on remote** → Use `skill: soleur:work` with `knowledge-base/features/plans/<plan_filename>.md` to start work in background for Claude Code web
 - **Create Issue** → See "Issue Creation" section below
 - **Simplify** → Ask "What should I simplify?" then regenerate simpler version
 - **Other** (automatically provided) → Accept free text for rework or specific changes
@@ -404,6 +404,6 @@ When user selects "Create Issue", detect their project tracker from CLAUDE.md:
 If re-running `soleur:plan` for the same feature, read the existing plan first. Update in place rather than creating a duplicate. Preserve prior content and mark changes with `[Updated YYYY-MM-DD]`.
 
 **Archive completed plans:**
-Run `bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` from the repository root. This moves matching artifacts to `knowledge-base/plans/archive/` with timestamp prefixes, preserving git history. Commit with `git commit -m "plan: archive <topic>"`.
+Run `bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` from the repository root. This moves matching artifacts to `knowledge-base/features/plans/archive/` with timestamp prefixes, preserving git history. Commit with `git commit -m "plan: archive <topic>"`.
 
 NEVER CODE! Just research and write the plan.
