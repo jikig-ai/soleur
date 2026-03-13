@@ -9,7 +9,7 @@ semver: patch
 
 ## Overview
 
-Turn Plausible from a passive tracking tool into an active growth feedback loop by updating the marketing strategy with WoW growth targets, creating a weekly snapshot template, building CI automation for Plausible API data extraction, and documenting Plausible dashboard configuration.
+Turn Plausible from a passive tracking tool into an active growth feedback loop by updating the marketing strategy with WoW growth targets, building a shell script to pull Plausible API data into weekly markdown snapshots, and automating it via CI.
 
 ## Problem Statement / Motivation
 
@@ -17,97 +17,29 @@ Plausible is deployed on soleur.ai but not operationalized. The marketing strate
 
 ## Proposed Solution
 
-Four deliverables, each building on the last:
+Three deliverables:
 
 ### Deliverable 1: Update marketing-strategy.md
 
-Edit `knowledge-base/marketing/marketing-strategy.md` with these changes:
+Edit `knowledge-base/marketing/marketing-strategy.md`:
 
 **1a. Upgrade analytics priority (line 56)**
 
-Change the "Analytics insights" row in "What Is Broken or Missing" table from `Low` to `Medium`:
-
-```markdown
-| Analytics insights | Plausible tracks visits but no documented insights, funnels, or conversion metrics. Weekly snapshots automated via CI. | Medium |
-```
+Change the "Analytics insights" row in "What Is Broken or Missing" table from `Low` to `Medium` and update the description to note weekly snapshots are automated via CI.
 
 **1b. Add WoW growth targets to KPIs section (after line 330)**
 
-Insert a new subsection `### Week-over-Week Growth Targets` after the Scale Phase table. Growth targets apply to **unique visitors only** -- other Tier 1 metrics are monitored directionally.
+Insert a new subsection `### Week-over-Week Growth Targets` after the Scale Phase table. Growth targets apply to **unique visitors only** -- other metrics are monitored directionally.
 
-| Phase | Period | WoW Target | Absolute Target | Transition Trigger |
-|-------|--------|-----------|----------------|-------------------|
-| Phase 1: Content Traction | Weeks 1-4 (Mar 13 - Apr 10) | +15% WoW | 100/week by week 4 | Time-based |
-| Phase 2: Content Velocity | Weeks 5-8 (Apr 11 - May 9) | +10% WoW | 250/week by week 8 | Time-based |
-| Phase 3: Organic Growth | Weeks 9-16 (May 10 - Jul 4) | +7% WoW | 500/week by week 16 | Time-based |
+| Phase | Period | WoW Target | Absolute Target |
+|-------|--------|-----------|----------------|
+| Phase 1: Content Traction | Weeks 1-4 (Mar 13 - Apr 10) | +15% WoW | 100/week by week 4 |
+| Phase 2: Content Velocity | Weeks 5-8 (Apr 11 - May 9) | +10% WoW | 250/week by week 8 |
+| Phase 3: Organic Growth | Weeks 9-16 (May 10 - Jul 4) | +7% WoW | 500/week by week 16 |
 
-Phase transitions are time-based (not threshold-based) to keep evaluation simple. The founder assesses target adherence during weekly review.
+Phase transitions are time-based. The founder assesses target adherence during weekly review. After Phase 3 ends, review targets quarterly based on accumulated data.
 
-**1c. Add UTM Conventions section (before Review Cadence, ~line 376)**
-
-Insert a new `## UTM Conventions` section. No UTM parameters exist anywhere in the codebase today -- distribution content uses bare URLs. Define:
-
-| Parameter | Convention | Examples |
-|-----------|-----------|----------|
-| `utm_source` | Platform name (lowercase) | `discord`, `x`, `indiehackers`, `hackernews`, `github`, `email` |
-| `utm_medium` | Channel type | `social`, `community`, `referral`, `newsletter` |
-| `utm_campaign` | Article slug or campaign name | `caas-pillar`, `billion-dollar-solo`, `weekly-digest` |
-
-Plausible reads UTM parameters natively from URL query strings -- no JavaScript changes needed. These conventions apply to all URLs in `distribution-content/*.md` files and social-distribute output.
-
-**1d. Add Plausible Goal Configuration Checklist (in UTM Conventions or as subsection)**
-
-Documented tasks for the founder to complete in the Plausible dashboard:
-
-- [ ] Configure Newsletter Signup as a Plausible Goal (custom event -- already instrumented in `base.njk:134`)
-- [ ] Create pageview goal for Getting Started (`/pages/getting-started.html`)
-- [ ] Create pageview goal for blog articles (`/blog/*`)
-- [ ] Enable outbound link tracking (built-in Plausible extension -- tracks clicks to GitHub, Discord)
-
-### Deliverable 2: Weekly Analytics Snapshot Template
-
-Create `knowledge-base/marketing/analytics/YYYY-MM-DD-weekly-analytics.md` as a template. The CI workflow generates files matching this pattern.
-
-**Template structure:**
-
-```markdown
-# Weekly Analytics Snapshot: YYYY-MM-DD
-
-**Period:** YYYY-MM-DD to YYYY-MM-DD
-**Generated:** YYYY-MM-DD (automated)
-
-## Tier 1 Metrics
-
-| Metric | This Week | Previous Week | Change |
-|--------|-----------|--------------|--------|
-| Unique visitors | N | N | +N% |
-| Total pageviews | N | N | +N% |
-| Bounce rate | N% | N% | +N pp |
-| Visit duration | Nm Ns | Nm Ns | +N% |
-
-## Top Pages (by visitors)
-
-| Page | Visitors |
-|------|----------|
-| /path | N |
-
-## Top Referral Sources
-
-| Source | Visitors |
-|--------|----------|
-| source | N |
-
-## Growth Target Check
-
-- **Current phase:** Phase N (description)
-- **WoW target:** +N%
-- **Actual WoW change:** +N%
-- **Status:** On track / Behind / Ahead
-```
-
-**Naming convention:** `YYYY-MM-DD-weekly-analytics.md` where the date is the Monday of the snapshot week. Matches the `YYYY-MM-DD-digest.md` pattern from community-monitor. Files accumulate (no pruning -- 52 small files/year is negligible).
-
-### Deliverable 3: CI Workflow and Shell Script
+### Deliverable 2: Shell Script + CI Workflow
 
 **Shell script:** `scripts/weekly-analytics.sh`
 
@@ -115,8 +47,9 @@ Uses the Plausible Stats API v1 (`GET /api/v1/stats/...`). v1 is simpler for she
 
 **API calls (3 total):**
 
-1. `GET /api/v1/stats/aggregate?site_id=<id>&period=7d&metrics=visitors,pageviews,bounce_rate,visit_duration&compare=previous_period`
-   - Returns `{"visitors": {"value": N, "change": P}, ...}` with WoW percent change
+1. `GET /api/v1/stats/aggregate?site_id=<id>&period=7d&metrics=visitors,pageviews&compare=previous_period`
+   - Returns aggregate metrics with WoW percent change
+   - **Note:** The exact response shape when `compare=previous_period` is used must be verified with a test request before implementation. The script must validate response shape with `jq` before formatting.
 2. `GET /api/v1/stats/breakdown?site_id=<id>&period=7d&property=event:page&limit=10`
    - Returns top 10 pages by visitors
 3. `GET /api/v1/stats/breakdown?site_id=<id>&period=7d&property=visit:source&limit=10`
@@ -125,20 +58,54 @@ Uses the Plausible Stats API v1 (`GET /api/v1/stats/...`). v1 is simpler for she
 **Script requirements:**
 
 - `#!/usr/bin/env bash` with `set -euo pipefail`
+- `# --- Section Name ---` comment headers per constitution.md convention
+- `SCRIPT_DIR` / `REPO_ROOT` resolution for output path (matches content-publisher.sh pattern)
 - Environment variables: `PLAUSIBLE_API_KEY`, `PLAUSIBLE_SITE_ID`, optional `PLAUSIBLE_BASE_URL` (defaults to `https://plausible.io`)
-- Early exit with warning if either required env var is empty
+- `PLAUSIBLE_SITE_ID` is typically the domain (e.g., `soleur.ai`)
+- Early `exit 0` with warning to stdout if either required env var is empty (graceful skip, not failure)
 - HTTP status code checks on all API calls (401 = bad key, 429 = rate limited, 5xx = server error)
-- On API error: print diagnostic, exit 1 (triggers Discord failure notification)
-- Format visit_duration as "Nm Ns" (e.g., "1m 26s")
-- Format bounce_rate change as percentage points, not percent change
-- Growth target phase determined by date math (weeks since March 13, 2026)
-- Output file: `knowledge-base/marketing/analytics/YYYY-MM-DD-weekly-analytics.md`
+- On API error: print diagnostic to stderr, exit 1 (triggers Discord failure notification)
+- Use `jq` with `// empty` convention for null handling (constitution.md line 28)
+- Handle empty breakdown results (zero-traffic weeks): show "No data" instead of empty table
+- Current growth phase hardcoded as a variable at script top (e.g., `CURRENT_PHASE="Phase 1"`, `CURRENT_TARGET="+15%"`). Update manually when phases change -- avoids fragile bash date arithmetic.
+- Output file: `knowledge-base/marketing/analytics/YYYY-MM-DD-weekly-analytics.md` (date = Monday of snapshot week)
 - Uses `jq` for JSON parsing (available on `ubuntu-latest`)
+- **Local testing note:** GNU `date -d` is used for date formatting. macOS requires `gdate` from coreutils.
+
+**Snapshot template (simplified):**
+
+```markdown
+# Weekly Analytics: YYYY-MM-DD
+
+**Period:** YYYY-MM-DD to YYYY-MM-DD
+**Generated:** automated
+
+## Traffic
+
+| Metric | This Week | Change |
+|--------|-----------|--------|
+| Unique visitors | N | +N% |
+| Total pageviews | N | +N% |
+
+**Growth target:** PHASE_NAME -- target PHASE_TARGET WoW, actual +N%.
+
+## Top Pages
+
+| Page | Visitors |
+|------|----------|
+| /path | N |
+
+## Top Sources
+
+| Source | Visitors |
+|--------|----------|
+| source | N |
+```
 
 **GitHub Actions workflow:** `.github/workflows/scheduled-weekly-analytics.yml`
 
 ```yaml
-name: Weekly Analytics Snapshot
+name: "Scheduled: Weekly Analytics"
 on:
   schedule:
     - cron: '0 6 * * 1'  # Every Monday at 06:00 UTC
@@ -175,80 +142,65 @@ jobs:
 
       - name: Notify on failure
         if: failure()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          # Standard Discord failure notification pattern
-          # (implementation matches content-publisher.sh pattern)
+          [[ -z "${DISCORD_WEBHOOK_URL:-}" ]] && echo "No Discord webhook, skipping notification" && exit 0
+          jq -n --arg content "Weekly analytics snapshot failed. Check: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{username: "Sol", avatar_url: "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/img/logo-mark-512.png", content: $content, allowed_mentions: {parse: []}}' \
+            | curl -sf -X POST -H "Content-Type: application/json" -d @- "${DISCORD_WEBHOOK_URL}" -o /dev/null -w "%{http_code}" || true
 ```
 
-**Follows established patterns:**
-- `workflow_dispatch` alongside `schedule` for manual testing
-- SHA-pinned checkout action
-- `[skip ci]` commit message
-- `git diff --cached --quiet` empty commit guard
-- Push with rebase retry
-- Discord failure notification step
-- `permissions: contents: write`
-- 10-minute timeout
+### Deliverable 3: GitHub Issues for Follow-up Work
 
-### Deliverable 4: Plausible Setup Documentation
+File two GitHub issues (not part of this PR, but tracked):
 
-Included in Deliverable 1d (checklist in marketing-strategy.md). No separate document needed.
+1. **Plausible dashboard goal configuration** -- checklist for founder: Newsletter Signup goal, Getting Started pageview goal, blog pageview goals, outbound link tracking
+2. **UTM conventions + social-distribute integration** -- define UTM parameter conventions and integrate into social-distribute skill and content-publisher.sh
 
 ## Technical Considerations
 
-- **Plausible API v1 vs v2:** Using v1. Simpler GET requests for shell scripting. `compare=previous_period` handles WoW deltas natively. v1 is still supported with no deprecation timeline. If Plausible deprecates v1, the fix is straightforward (rewrite curl calls to POST).
-- **No claude-code-action needed:** This is a deterministic API-call-and-format workflow. Shell script is simpler, cheaper, and faster than an LLM agent. Follows content-publisher.sh pattern (Pattern A), not competitive-analysis pattern (Pattern B).
-- **Secret setup required (founder action):** Create Plausible API key in dashboard, add `PLAUSIBLE_API_KEY` and `PLAUSIBLE_SITE_ID` as GitHub repository secrets. Workflow gracefully skips if secrets are missing.
+- **Plausible API v1 vs v2:** Using v1. Simpler GET requests for shell scripting. v1 is still supported with no deprecation timeline. If Plausible deprecates v1, the fix is a straightforward curl rewrite to v2 POST.
+- **No claude-code-action needed:** This is a deterministic API-call-and-format workflow. Shell script is simpler, cheaper, and faster than an LLM agent.
+- **Secret setup required (founder action):** Create Plausible API key in dashboard, add `PLAUSIBLE_API_KEY` (API key) and `PLAUSIBLE_SITE_ID` (domain, e.g., `soleur.ai`) as GitHub repository secrets. Workflow gracefully skips if secrets are missing.
 - **No legal document updates needed:** Plausible is already disclosed in all four legal documents. Reading data via API does not change what is tracked.
-- **UTM integration with social-distribute:** The UTM conventions defined here should eventually be integrated into the social-distribute skill and content-publisher.sh. That is a follow-up task, not in scope for this PR.
 
 ## Acceptance Criteria
 
 - [ ] marketing-strategy.md analytics priority upgraded from Low to Medium
-- [ ] marketing-strategy.md contains WoW growth targets for all 3 phases with transition criteria
-- [ ] marketing-strategy.md contains UTM Conventions section with parameter table
-- [ ] marketing-strategy.md contains Plausible Goal Configuration Checklist
-- [ ] Weekly snapshot template exists in `knowledge-base/marketing/analytics/`
+- [ ] marketing-strategy.md contains WoW growth targets for all 3 phases
 - [ ] Shell script `scripts/weekly-analytics.sh` makes 3 API calls, formats markdown, handles errors
+- [ ] Shell script exits 0 with warning when API key secrets are missing
+- [ ] Shell script exits 1 on API errors (401, 429, 5xx)
 - [ ] CI workflow `scheduled-weekly-analytics.yml` runs weekly, commits snapshots, notifies on failure
-- [ ] CI workflow exits 0 (not failure) when API key secrets are missing
-- [ ] Shell script uses `set -euo pipefail` and follows constitution.md shell conventions
+- [ ] Shell script uses `set -euo pipefail`, `# --- Section ---` headers, `jq // empty` convention
+- [ ] GitHub issues filed for Plausible goal config and UTM conventions
 
 ## Test Scenarios
 
 - Given PLAUSIBLE_API_KEY and PLAUSIBLE_SITE_ID are set, when the workflow runs, then a snapshot markdown file is committed to `knowledge-base/marketing/analytics/`
-- Given PLAUSIBLE_API_KEY is empty, when the workflow runs, then it prints a warning and exits 0 (no failure notification)
-- Given the Plausible API returns HTTP 401, when the script runs, then it prints a diagnostic and exits 1 (triggers Discord notification)
-- Given the Plausible API returns HTTP 429, when the script runs, then it prints a rate-limit warning and exits 1
-- Given the previous week had 0 visitors and this week has 50, when `compare=previous_period` is used, then Plausible returns the correct percent change (no division by zero in script)
+- Given PLAUSIBLE_API_KEY is empty, when the script runs, then it prints a warning and exits 0
+- Given the Plausible API returns HTTP 401, when the script runs, then it prints a diagnostic to stderr and exits 1
+- Given the site had zero visitors this week, when breakdown endpoints return empty arrays, then the snapshot shows "No data" for top pages and sources
 - Given a snapshot was already committed this week, when the workflow runs again, then `git diff --cached --quiet` skips the commit
-- Given the growth target phase is Phase 1 (week 2 of 4), when the snapshot is generated, then the Growth Target Check section shows Phase 1 with +15% WoW target
 
 ## Dependencies and Risks
 
 | Risk | Mitigation |
 |------|-----------|
 | Plausible v1 API deprecated | v1 has no deprecation timeline. Fix is straightforward curl rewrite to v2 POST. |
-| API key not configured for weeks | Workflow exits cleanly. Template supports manual capture until automation is live. |
-| `compare=previous_period` returns unexpected format | Script validates response shape with jq before formatting. |
-| Plausible rate limit (600 req/hr) | 3 calls per weekly run is negligible. Manual reruns via workflow_dispatch are the only risk -- mitigated by concurrency group. |
+| API key not configured for weeks | Workflow exits cleanly with exit 0. |
+| `compare=previous_period` returns unexpected format | Script validates response shape with jq before formatting. Verify with test request during implementation. |
+| Plausible rate limit (600 req/hr) | 3 calls per weekly run is negligible. |
 
-## References and Research
-
-### Internal References
+## References
 
 - Brainstorm: `knowledge-base/brainstorms/2026-03-13-plausible-growth-targets-brainstorm.md`
 - Spec: `knowledge-base/specs/feat-plausible-growth-targets/spec.md`
 - Marketing strategy: `knowledge-base/marketing/marketing-strategy.md` (lines 56, 297-330, 377-382)
-- Plausible script: `plugins/soleur/docs/_includes/base.njk:68-70`
 - Shell script pattern: `scripts/content-publisher.sh`
 - CI workflow pattern: `.github/workflows/scheduled-content-publisher.yml`
 - Learning: `knowledge-base/learnings/2026-03-02-github-actions-auto-push-vs-pr-for-bot-content.md`
 - Learning: `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
-- Learning: `knowledge-base/learnings/2026-02-27-github-actions-sha-pinning-workflow.md`
-
-### External References
-
 - Plausible Stats API v1: https://plausible.io/docs/stats-api
-- GitHub issue: #575
-- Draft PR: #574
+- GitHub issue: #575 / Draft PR: #574
