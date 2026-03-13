@@ -8,54 +8,33 @@ A community management agent that analyzes Discord, GitHub, X/Twitter, Bluesky, 
 
 ## Prerequisites
 
-Before executing any workflow, detect which platforms are enabled by checking environment variables. A platform is enabled only when **all** its required variables are set.
+Before executing any workflow, detect which platforms are enabled by running:
 
-### Discord (optional)
+```bash
+bash plugins/soleur/skills/community/scripts/community-router.sh platforms
+```
 
-- **DISCORD_BOT_TOKEN** -- Required for Discord API access
-- **DISCORD_GUILD_ID** -- Required for Discord API access
-- **DISCORD_WEBHOOK_URL** -- Required for posting digests to Discord
+This prints each platform's name, status (enabled/disabled/missing), and script filename. The router is the single source of truth for platform detection — do not check env vars directly.
 
-If Discord variables are missing, report: "Discord not configured. Run `plugins/soleur/skills/community/scripts/discord-setup.sh` to set up."
+**DISCORD_WEBHOOK_URL** is additionally required for posting digests to Discord (not checked by the router since it is a write-only credential, not used for data collection).
 
-### X/Twitter (optional)
-
-- **X_API_KEY** -- API key (consumer key)
-- **X_API_SECRET** -- API secret (consumer secret)
-- **X_ACCESS_TOKEN** -- Access token
-- **X_ACCESS_TOKEN_SECRET** -- Access token secret
-
-If X variables are missing, report: "X/Twitter not configured. Run `plugins/soleur/skills/community/scripts/x-setup.sh validate-credentials` to verify credentials."
-
-### Bluesky (optional)
-
-- **BSKY_HANDLE** -- Bluesky handle (e.g., soleur.bsky.social)
-- **BSKY_APP_PASSWORD** -- App password (generate at bsky.app/settings/app-passwords)
-
-If Bluesky variables are missing, report: "Bluesky not configured. Run `plugins/soleur/skills/community/scripts/bsky-setup.sh` to set up."
-
-### GitHub (always enabled)
-
-GitHub is always available via `gh` CLI. Verify with `gh auth status`.
-
-### Hacker News (always enabled)
-
-Hacker News is always available via the public Algolia API. No credentials required. Verify with `curl -sf --max-time 10 "https://hn.algolia.com/api/v1/items/1" > /dev/null`.
-
-At least one platform (Discord or X) must be configured in addition to GitHub. If neither is configured, stop and direct the user to set up at least one platform.
+At least one platform must be enabled in addition to GitHub. If only GitHub and HN are enabled, stop and direct the user to set up at least one additional platform.
 
 ## Scripts
 
-Data collection scripts are located at `plugins/soleur/skills/community/scripts/`:
+All platform commands are dispatched through the router. Set this variable at the start of every workflow:
 
-- `discord-community.sh` -- Discord Bot API wrapper (messages, members, guild-info, channels)
-- `discord-setup.sh` -- Discord credential setup and validation
-- `github-community.sh` -- GitHub API wrapper (activity, contributors, discussions)
-- `x-community.sh` -- X/Twitter API v2 wrapper (fetch-metrics, fetch-mentions, fetch-timeline, fetch-user-timeline, post-tweet)
-- `x-setup.sh` -- X/Twitter credential setup and validation
-- `bsky-community.sh` -- Bluesky AT Protocol wrapper (create-session, post, get-metrics, get-notifications)
-- `bsky-setup.sh` -- Bluesky credential setup and validation
-- `hn-community.sh` -- Hacker News Algolia API wrapper (mentions, trending, thread)
+```bash
+ROUTER="plugins/soleur/skills/community/scripts/community-router.sh"
+```
+
+Then dispatch commands as:
+
+```bash
+$ROUTER <platform> <command> [args...]
+```
+
+Available platforms: `discord`, `github`, `x`, `bsky`, `hn`.
 
 ## Capability 1: Digest Generation
 
@@ -63,42 +42,38 @@ Generate a weekly community digest from Discord, GitHub, and Hacker News data.
 
 ### Step 1: Collect Data
 
-Run scripts to gather raw data:
-
-```bash
-SCRIPT_DIR="plugins/soleur/skills/community/scripts"
-```
+Run scripts to gather raw data. Use the `$ROUTER` variable defined in the Scripts section above.
 
 Discord: fetch messages from monitored channels. If DISCORD_CHANNEL_IDS is set, split it by comma and use those channel IDs. Otherwise, list all text channels first:
 
 ```bash
-plugins/soleur/skills/community/scripts/discord-community.sh channels | jq -r '.[].id'
+$ROUTER discord channels | jq -r '.[].id'
 ```
 
 Then for each channel ID from the output, fetch the last 100 messages:
 
 ```bash
-plugins/soleur/skills/community/scripts/discord-community.sh messages "<channel_id>" 100
+$ROUTER discord messages "<channel_id>" 100
 ```
 
 Run this for each channel.
 
 # Discord: fetch guild info and members
-plugins/soleur/skills/community/scripts/discord-community.sh guild-info
-plugins/soleur/skills/community/scripts/discord-community.sh members
+$ROUTER discord guild-info
+$ROUTER discord members
 
 # GitHub: fetch last 7 days of activity
-plugins/soleur/skills/community/scripts/github-community.sh activity 7
-plugins/soleur/skills/community/scripts/github-community.sh contributors 7
-plugins/soleur/skills/community/scripts/github-community.sh discussions 7
+$ROUTER github activity 7
+$ROUTER github contributors 7
+$ROUTER github discussions 7
 ```
 
 X/Twitter (if enabled): fetch account metrics and monitoring data:
 
 ```bash
-plugins/soleur/skills/community/scripts/x-community.sh fetch-metrics
-plugins/soleur/skills/community/scripts/x-community.sh fetch-mentions --max-results 100
-plugins/soleur/skills/community/scripts/x-community.sh fetch-timeline --max 20
+$ROUTER x fetch-metrics
+$ROUTER x fetch-mentions --max-results 100
+$ROUTER x fetch-timeline --max 20
 ```
 
 The `fetch-mentions` and `fetch-timeline` commands require X API paid access (credit purchase). If these return 403, continue with `fetch-metrics` only.
@@ -106,17 +81,17 @@ The `fetch-mentions` and `fetch-timeline` commands require X API paid access (cr
 Bluesky (if enabled): fetch profile metrics:
 
 ```bash
-plugins/soleur/skills/community/scripts/bsky-community.sh get-metrics
+$ROUTER bsky get-metrics
 ```
 
 Hacker News (always enabled): fetch mentions and trending stories:
 
 ```bash
-plugins/soleur/skills/community/scripts/hn-community.sh mentions --query soleur --limit 20
-plugins/soleur/skills/community/scripts/hn-community.sh trending --limit 30
+$ROUTER hn mentions --query soleur --limit 20
+$ROUTER hn trending --limit 30
 ```
 
-If `hn-community.sh` fails, log the error and continue with other platforms.
+If `$ROUTER hn` fails, log the error and continue with other platforms.
 
 
 ### Step 2: Analyze Data
@@ -209,22 +184,22 @@ Display community health metrics inline (no file output).
 
 ```bash
 # Discord (if enabled)
-plugins/soleur/skills/community/scripts/discord-community.sh guild-info
-plugins/soleur/skills/community/scripts/discord-community.sh members
+$ROUTER discord guild-info
+$ROUTER discord members
 
 # GitHub
-plugins/soleur/skills/community/scripts/github-community.sh activity 30
-plugins/soleur/skills/community/scripts/github-community.sh contributors 30
+$ROUTER github activity 30
+$ROUTER github contributors 30
 
 # X/Twitter (if enabled)
-plugins/soleur/skills/community/scripts/x-community.sh fetch-metrics
+$ROUTER x fetch-metrics
 
 # Bluesky (if enabled)
-plugins/soleur/skills/community/scripts/bsky-community.sh get-metrics
+$ROUTER bsky get-metrics
 
 # Hacker News (always enabled)
-plugins/soleur/skills/community/scripts/hn-community.sh mentions --query soleur --limit 20
-plugins/soleur/skills/community/scripts/hn-community.sh trending --limit 30
+$ROUTER hn mentions --query soleur --limit 20
+$ROUTER hn trending --limit 30
 ```
 
 ### Step 2: Display Metrics
@@ -307,13 +282,13 @@ Fetch recent mentions using the `fetch-mentions` command. If a since-id was prov
 Without a since-id:
 
 ```bash
-plugins/soleur/skills/community/scripts/x-community.sh fetch-mentions --max-results <max_results>
+$ROUTER x fetch-mentions --max-results <max_results>
 ```
 
 With a since-id:
 
 ```bash
-plugins/soleur/skills/community/scripts/x-community.sh fetch-mentions --max-results <max_results> --since-id <since_id>
+$ROUTER x fetch-mentions --max-results <max_results> --since-id <since_id>
 ```
 
 Replace `<max_results>` with the requested count (default 10) and `<since_id>` with the stored tweet ID.
@@ -337,7 +312,7 @@ If `fetch-mentions` exits non-zero:
         - Otherwise — report "Unrecognized format. Expected a tweet URL (x.com or twitter.com) or numeric tweet ID." and re-prompt
      c. Draft a brand-voice reply for this tweet (follow Step 3 constraints)
      d. Present for approval (follow Step 4 flow, without "Skip all remaining" since there is no remaining list)
-     e. If accepted, post via `x-community.sh post-tweet "<reply_text>" --reply-to <tweet_id>`
+     e. If accepted, post via `$ROUTER x post-tweet "<reply_text>" --reply-to <tweet_id>`
      f. After processing, return to (a) — loop until user types "done"
    - Do NOT update since-id state file in manual mode
    - Display session summary with "Tweets replied to" (not "Mentions processed")
@@ -373,7 +348,7 @@ For each mention, apply the skip criteria from `#### Engagement Guardrails` in t
 - **Brand association risk:** For mentions that pass the automated checks above and where `author_followers_count` is below 100, call `fetch-user-timeline` with the mention's `author_id` to check the author's recent content. Skip the timeline check for accounts with 100+ followers -- the public follower count provides sufficient signal.
 
   ```bash
-  plugins/soleur/skills/community/scripts/x-community.sh fetch-user-timeline <author_id> --max 5
+  $ROUTER x fetch-user-timeline <author_id> --max 5
   ```
 
   If `fetch-user-timeline` fails (403, network error), note "Unable to check author timeline (API access required)" in the approval prompt and delegate the brand association risk check to the human reviewer.
@@ -433,7 +408,7 @@ After the first mention, add a fourth option:
 For each accepted reply, post it as a reply to the original mention:
 
 ```bash
-plugins/soleur/skills/community/scripts/x-community.sh post-tweet "<reply_text>" --reply-to <mention_id>
+$ROUTER x post-tweet "<reply_text>" --reply-to <mention_id>
 ```
 
 Replace `<reply_text>` with the approved reply text and `<mention_id>` with the mention's tweet ID.
@@ -493,13 +468,13 @@ Fetch recent Bluesky mentions using `get-notifications`. If a cursor was stored 
 Without a cursor:
 
 ```bash
-plugins/soleur/skills/community/scripts/bsky-community.sh get-notifications --limit <limit>
+$ROUTER bsky get-notifications --limit <limit>
 ```
 
 With a cursor:
 
 ```bash
-plugins/soleur/skills/community/scripts/bsky-community.sh get-notifications --limit <limit> --cursor <cursor>
+$ROUTER bsky get-notifications --limit <limit> --cursor <cursor>
 ```
 
 Replace `<limit>` with the requested count (default 50).
@@ -537,7 +512,7 @@ Same flow as X/Twitter (Accept, Edit, Skip, Skip all remaining) but with 300-cha
 For each accepted reply, post as a reply to the original mention:
 
 ```bash
-plugins/soleur/skills/community/scripts/bsky-community.sh post "<reply_text>" \
+$ROUTER bsky post "<reply_text>" \
   --reply-to-uri <mention_uri> --reply-to-cid <mention_cid>
 ```
 
@@ -569,14 +544,8 @@ Same format as X/Twitter but with "Mentions" labels (no "Tweets" terminology).
 
 ## Important Guidelines
 
-- For Discord setup, direct users to `plugins/soleur/skills/community/scripts/discord-setup.sh`
-- For X/Twitter setup, direct users to `plugins/soleur/skills/community/scripts/x-setup.sh`
-- For Bluesky setup, direct users to `plugins/soleur/skills/community/scripts/bsky-setup.sh`
-- All Discord API calls go through `discord-community.sh` -- do not call the API directly
-- All GitHub API calls go through `github-community.sh` -- do not call `gh` directly
-- All X/Twitter API calls go through `x-community.sh` -- do not call the API directly
-- All Bluesky API calls go through `bsky-community.sh` -- do not call the API directly
-- All Hacker News API calls go through `hn-community.sh` -- do not call the Algolia API directly
+- All platform API calls go through `$ROUTER <platform> <command>` -- do not call platform scripts or APIs directly
+- For setup, direct users to the platform's setup script (e.g., `discord-setup.sh`, `x-setup.sh`, `bsky-setup.sh`)
 - Do not store raw message content in digest files -- summarize and aggregate
 - Do not post to Discord without user approval (the skill handles the approval flow)
 - Digest posting requires brand guide check for voice alignment
