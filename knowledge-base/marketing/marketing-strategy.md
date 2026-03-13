@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-03-03
+last_updated: 2026-03-13
 last_reviewed: 2026-03-03
 review_cadence: quarterly
 depends_on:
@@ -53,7 +53,7 @@ Soleur is the Company-as-a-Service platform -- 61 agents, 56 skills, 3 commands 
 | Pricing | Undecided. Vision page mentions "success tax" but no committed model. | Medium |
 | Email / newsletter | Does not exist. No way to capture or nurture leads. | Medium |
 | Comparison content | No "Soleur vs X" pages. Invisible to commercial-intent searches. | Medium |
-| Analytics insights | Plausible tracks visits but no documented insights, funnels, or conversion metrics. | Low |
+| Analytics insights | Plausible tracks visits. Weekly snapshots automated via CI. No funnels or conversion metrics yet. | Medium |
 
 ---
 
@@ -327,6 +327,18 @@ The Eleventy site has no blog/articles section. This must be built before any co
 | Revenue | Any | Payment processor |
 | Content pieces published | 2+ per month | soleur.ai |
 | Community members (Discord) | 100+ | Discord metrics |
+
+### Week-over-Week Growth Targets
+
+Growth targets apply to **unique visitors only** -- other metrics are monitored directionally. Phase transitions are time-based. The founder assesses target adherence during weekly review. After Phase 3 ends, review targets quarterly based on accumulated data.
+
+| Phase | Period | WoW Target | Absolute Target |
+|-------|--------|-----------|----------------|
+| Phase 1: Content Traction | Weeks 1-4 (Mar 13 - Apr 10) | +15% WoW | 100/week by week 4 |
+| Phase 2: Content Velocity | Weeks 5-8 (Apr 11 - May 9) | +10% WoW | 250/week by week 8 |
+| Phase 3: Organic Growth | Weeks 9-16 (May 10 - Jul 4) | +7% WoW | 500/week by week 16 |
+
+Weekly snapshots are generated automatically by CI (`scheduled-weekly-analytics.yml`) and committed to `knowledge-base/marketing/analytics/`. Each snapshot includes the current growth target phase and actual WoW change for comparison.
 
 ---
 

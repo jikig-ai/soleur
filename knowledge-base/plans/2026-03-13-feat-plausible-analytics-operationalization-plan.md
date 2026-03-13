@@ -202,5 +202,5 @@ File two GitHub issues (not part of this PR, but tracked):
 - CI workflow pattern: `.github/workflows/scheduled-content-publisher.yml`
 - Learning: `knowledge-base/learnings/2026-03-02-github-actions-auto-push-vs-pr-for-bot-content.md`
 - Learning: `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
-- Plausible Stats API v1: https://plausible.io/docs/stats-api
+- [Plausible Stats API v1](https://plausible.io/docs/stats-api)
 - GitHub issue: #575 / Draft PR: #574

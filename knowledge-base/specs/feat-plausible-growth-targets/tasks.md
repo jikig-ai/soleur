@@ -2,14 +2,14 @@
 
 ## Phase 1: Marketing Strategy Updates
 
-- [ ] 1.1 Edit `knowledge-base/marketing/marketing-strategy.md`:
+- [x] 1.1 Edit `knowledge-base/marketing/marketing-strategy.md`:
   - Upgrade analytics priority row (line 56) from `Low` to `Medium`, update description
   - Add `### Week-over-Week Growth Targets` subsection after Scale Phase table (after line 330)
   - Update `last_updated` frontmatter to `2026-03-13`
 
 ## Phase 2: Shell Script
 
-- [ ] 2.1 Create `scripts/weekly-analytics.sh`
+- [x] 2.1 Create `scripts/weekly-analytics.sh`
   - Shebang + `set -euo pipefail` + `SCRIPT_DIR`/`REPO_ROOT` resolution + `# --- Section ---` headers
   - Early `exit 0` with warning if `PLAUSIBLE_API_KEY` or `PLAUSIBLE_SITE_ID` is empty
   - 3 Plausible API v1 calls (aggregate with `compare=previous_period`, page breakdown, source breakdown)
@@ -18,11 +18,11 @@
   - Empty breakdown handling ("No data" for zero-traffic weeks)
   - Hardcoded `CURRENT_PHASE` and `CURRENT_TARGET` variables (no date math)
   - Assemble and write snapshot markdown to `knowledge-base/marketing/analytics/YYYY-MM-DD-weekly-analytics.md`
-- [ ] 2.2 `chmod +x scripts/weekly-analytics.sh`
+- [x] 2.2 `chmod +x scripts/weekly-analytics.sh`
 
 ## Phase 3: CI Workflow
 
-- [ ] 3.1 Create `.github/workflows/scheduled-weekly-analytics.yml`
+- [x] 3.1 Create `.github/workflows/scheduled-weekly-analytics.yml`
   - `"Scheduled: Weekly Analytics"` name (repo convention)
   - Triggers: schedule (cron Monday 06:00 UTC) + workflow_dispatch
   - Concurrency, permissions (contents: write), timeout (10 min)
@@ -31,10 +31,10 @@
 
 ## Phase 4: Follow-up Issues
 
-- [ ] 4.1 File GitHub issue: Plausible dashboard goal configuration (Newsletter Signup, Getting Started, blog, outbound links)
-- [ ] 4.2 File GitHub issue: UTM conventions + social-distribute integration
+- [x] 4.1 File GitHub issue: Plausible dashboard goal configuration (#578)
+- [x] 4.2 File GitHub issue: UTM conventions + social-distribute integration (#579)
 
 ## Phase 5: Verification
 
-- [ ] 5.1 Run `weekly-analytics.sh` with empty env vars, verify exit 0 with warning
-- [ ] 5.2 Run markdownlint on all modified/created files
+- [x] 5.1 Run `weekly-analytics.sh` with empty env vars, verify exit 0 with warning
+- [x] 5.2 Run markdownlint on all modified/created files
