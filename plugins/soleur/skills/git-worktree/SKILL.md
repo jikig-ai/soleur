@@ -143,6 +143,22 @@ bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup
 3. Removes selected worktrees
 4. Cleans up empty directories
 
+### `sync-bare-files` or `sync`
+
+Syncs stale on-disk files from git HEAD in a bare repo. Only needed when the repo uses `core.bare=true` — on-disk files at the bare root become stale after merges since git never updates them. Auto-called after `cleanup-merged` cleans branches in bare repo context.
+
+**Example:**
+```bash
+bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh sync-bare-files
+```
+
+**What it syncs:**
+- `AGENTS.md`, `CLAUDE.md` (session-start instructions)
+- `plugins/soleur/AGENTS.md`, `plugins/soleur/CLAUDE.md`
+- `.claude/settings.json` (permission rules)
+- `.claude/hooks/*.sh` (PreToolUse hooks)
+- The `worktree-manager.sh` script itself
+
 ## Workflow Examples
 
 ### Code Review with Worktree
