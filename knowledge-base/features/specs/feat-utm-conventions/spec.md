@@ -23,7 +23,7 @@ Content distribution uses bare URLs with no attribution tracking. There is no wa
 
 ### FR1: UTM Parameter Generation
 
-social-distribute skill appends UTM query parameters to article URLs during Phase 3 content generation. Each platform section gets a URL with platform-specific parameters.
+social-distribute skill defines a UTM mapping table in Phase 3 (after base URL construction) and applies platform-specific UTM parameters in Phase 5 (per-platform content generation). Each platform section gets a URL with its own `utm_source` and `utm_medium`. Regeneration is idempotent — UTMs are derived from the source blog path, never from existing content file URLs.
 
 ### FR2: Platform-Specific UTM Rules
 
@@ -34,8 +34,8 @@ social-distribute skill appends UTM query parameters to article URLs during Phas
 | IndieHackers | `indiehackers` | `community` | `<article-slug>` |
 | Hacker News | `hackernews` | `community` | `<article-slug>` |
 | LinkedIn | `linkedin` | `social` | `<article-slug>` |
+| Bluesky | `bluesky` | `social` | `<article-slug>` |
 | Reddit | `reddit` | (none) | (none) |
-| Email | `email` | `newsletter` | `<article-slug>` |
 
 Reddit gets `utm_source=reddit` only to avoid spam filter risk.
 
@@ -59,7 +59,7 @@ UTM parameter values must be validated with strict character allowlist: alphanum
 
 ### TR2: URL Construction
 
-UTM parameters appended as standard query string: `?utm_source=x&utm_medium=social&utm_campaign=slug`. If the URL already contains a query string, use `&` separator.
+UTM parameters appended as standard query string: `?utm_source=x&utm_medium=social&utm_campaign=slug`.
 
 ### TR3: Article Slug Derivation
 
