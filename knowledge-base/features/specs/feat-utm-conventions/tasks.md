@@ -9,10 +9,10 @@
 
 ## Phase 2: SKILL.md + Documentation
 
-- [ ] 2.1 Update `plugins/soleur/skills/social-distribute/SKILL.md`
-  - [ ] 2.1.1 Phase 3: Add UTM mapping table with slug derivation and sanitization note
-  - [ ] 2.1.2 Phase 5: Update each platform variant to use platform-specific tracked URL
-- [ ] 2.2 Add UTM Conventions section to `knowledge-base/marketing/content-strategy.md`
+- [x] 2.1 Update `plugins/soleur/skills/social-distribute/SKILL.md`
+  - [x] 2.1.1 Phase 3: Add UTM mapping table with slug derivation and sanitization note
+  - [x] 2.1.2 Phase 5: Update each platform variant to use platform-specific tracked URL
+- [x] 2.2 Add UTM Conventions section to `knowledge-base/marketing/content-strategy.md`
 
 ## Phase 3: Verification
 

@@ -90,6 +90,24 @@ Construct the article URL from `site.url` and the blog post path:
 
 Example: `plugins/soleur/docs/blog/what-is-company-as-a-service.md` becomes `https://soleur.ai/blog/what-is-company-as-a-service/`
 
+**UTM Tracking:** Derive the campaign slug from the article URL path — strip `/blog/` prefix and trailing `/`. Example: `/blog/caas-pillar/` → `caas-pillar`. If the slug contains characters other than `a-z`, `0-9`, hyphens, or underscores, replace them with hyphens.
+
+Construct platform-specific tracked URLs using this mapping:
+
+| Platform | Tracked URL |
+|----------|------------|
+| Discord | `<base-url>?utm_source=discord&utm_medium=community&utm_campaign=<slug>` |
+| X/Twitter | `<base-url>?utm_source=x&utm_medium=social&utm_campaign=<slug>` |
+| IndieHackers | `<base-url>?utm_source=indiehackers&utm_medium=community&utm_campaign=<slug>` |
+| Reddit | `<base-url>?utm_source=reddit` |
+| Hacker News | `<base-url>?utm_source=hackernews&utm_medium=community&utm_campaign=<slug>` |
+| LinkedIn | `<base-url>?utm_source=linkedin&utm_medium=social&utm_campaign=<slug>` |
+| Bluesky | `<base-url>?utm_source=bluesky&utm_medium=social&utm_campaign=<slug>` |
+
+Reddit gets minimal UTM parameters (`utm_source` only) to reduce spam filter risk — long marketing-looking URLs can trigger irreversible domain reputation damage on Reddit.
+
+Use each platform's tracked URL in the corresponding Phase 5 variant section instead of the bare base URL.
+
 ## Content Generation
 
 ### Phase 4: Read Brand Guide
@@ -111,8 +129,8 @@ Using the blog post content, stats values, article URL, and brand guide as conte
 
 #### 5.1 Discord Announcement
 
-- Maximum 2000 characters
-- Include article URL
+- Maximum 2000 characters (UTM-tagged URLs are ~60-80 chars longer than bare URLs — account for this in the character budget)
+- Include Discord tracked URL
 - Match brand voice from `## Voice` and `## Channel Notes > ### Discord`
 - Plain text only (no rich embeds)
 - Declarative, concrete, builder-to-builder tone
@@ -121,7 +139,7 @@ Using the blog post content, stats values, article URL, and brand guide as conte
 
 - Hook tweet (standalone value, no "thread" announcement)
 - Numbered body tweets (2/ 3/ 4/)
-- Final tweet with article link and up to one hashtag
+- Final tweet with X/Twitter tracked URL and up to one hashtag
 - Each tweet maximum 280 characters
 - Match brand voice from `## Voice` and `## Channel Notes > ### X/Twitter`
 - Links only in final tweet
@@ -132,7 +150,7 @@ Using the blog post content, stats values, article URL, and brand guide as conte
 - Markdown format
 - Transparent metrics and numbers
 - Building-in-public framing
-- Include article URL
+- Include IndieHackers tracked URL
 - Honest, first-person builder voice
 
 #### 5.4 Reddit Post
@@ -140,7 +158,7 @@ Using the blog post content, stats values, article URL, and brand guide as conte
 - Subreddit-appropriate framing (suggest target subreddits: r/SaaS, r/startups, r/solopreneur, r/artificial)
 - Non-promotional title and body
 - Value-first: lead with the insight, not the product
-- Include article URL naturally in context, not as a CTA
+- Include Reddit tracked URL naturally in context, not as a CTA (minimal UTM: `?utm_source=reddit` only)
 - Reddit detects and punishes self-promotion -- frame as sharing knowledge
 
 #### 5.5 Hacker News Submission
@@ -148,7 +166,7 @@ Using the blog post content, stats values, article URL, and brand guide as conte
 - Title maximum 80 characters
 - No marketing language, no ALL CAPS, no exclamation marks
 - Factual, understated, curiosity-driven
-- Format: `Title | URL`
+- Format: `Title | Hacker News tracked URL`
 - HN titles that work: questions, counterintuitive claims, concrete results
 
 #### 5.6 LinkedIn Post
@@ -159,7 +177,7 @@ Using the blog post content, stats values, article URL, and brand guide as conte
 - Professional but not corporate -- substantive, measured, and direct
 - Match brand voice from `## Voice` and `## Channel Notes > ### LinkedIn`
 - Hook-first: opening line must deliver a complete, compelling idea that works in the feed preview
-- Include article URL naturally in context, not as a standalone CTA
+- Include LinkedIn tracked URL naturally in context, not as a standalone CTA
 - One or two relevant hashtags maximum (#solofounder, #buildinpublic, #AIagents)
 - No promotional framing -- "Here's what I learned building X" outperforms "Check out our new feature Y"
 - Tuesday-Thursday mornings perform best (note in content, not enforced)
@@ -340,7 +358,7 @@ status: draft
 ## Hacker News
 
 **Title:** <title>
-**URL:** <article url>
+**URL:** <Hacker News tracked url>
 
 ---
 
