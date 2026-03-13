@@ -172,14 +172,14 @@ test -f knowledge-base/project/constitution.md && test -f knowledge-base/project
 
 ## Acceptance Criteria
 
-- [ ] `knowledge-base/overview/` directory no longer exists
-- [ ] `knowledge-base/project/` directory exists with identical contents (constitution.md, README.md, components/)
-- [ ] `grep -r 'knowledge-base/overview/' plugins/ scripts/ .github/ AGENTS.md` returns zero matches
-- [ ] Constitution.md self-references updated (`overview/` -> `project/`)
-- [ ] `knowledge-base/project/components/knowledge-base.md` references updated
-- [ ] sync.md area name updated from `overview` to `project` (lines 4, 20, 326, 441, 444)
-- [ ] sync.md `mkdir -p` brace expansion updated (line 41)
-- [ ] compound-capture.md prose references updated (lines 383, 450, 455)
+- [x] `knowledge-base/overview/` directory no longer exists
+- [x] `knowledge-base/project/` directory exists with identical contents (constitution.md, README.md, components/)
+- [x] `grep -r 'knowledge-base/overview/' plugins/ scripts/ .github/ AGENTS.md` returns zero matches
+- [x] Constitution.md self-references updated (`overview/` -> `project/`)
+- [x] `knowledge-base/project/components/knowledge-base.md` references updated
+- [x] sync.md area name updated from `overview` to `project` (lines 4, 20, 326, 441, 444)
+- [x] sync.md `mkdir -p` brace expansion updated (line 41)
+- [x] compound-capture.md prose references updated (lines 383, 450, 455)
 - [ ] All changes in a single atomic commit using `git mv`
 
 ## Test Scenarios

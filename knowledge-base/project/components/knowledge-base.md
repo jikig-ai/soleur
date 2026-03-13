@@ -26,7 +26,7 @@ Compound engineering knowledge over time. Every solved problem, design decision,
 
 ```
 knowledge-base/
-  overview/               # Project overview documentation
+  project/                # Project documentation
     constitution.md       # Project conventions (Always/Never/Prefer)
   learnings/              # Documented solutions and patterns
     implementation-patterns/
@@ -68,7 +68,7 @@ graph TB
         LN
         CON
         SP[specs/]
-        OV[overview/]
+        OV[project/]
     end
 
     subgraph "Output"
@@ -140,7 +140,7 @@ Design explorations before implementation. Captures:
 
 Implementation plans with detailed tasks. Created by `/plan`, executed by `/work`.
 
-### overview/
+### project/
 
 This documentation. Describes what the project does and its component architecture.
 
@@ -167,7 +167,7 @@ ls knowledge-base/specs/feat-*/
 **Read conventions:**
 
 ```bash
-cat knowledge-base/overview/constitution.md
+cat knowledge-base/project/constitution.md
 ```
 
 ## Conventions
@@ -181,7 +181,7 @@ From `constitution.md`:
 
 ## Related Files
 
-- `knowledge-base/overview/constitution.md` - Project conventions
+- `knowledge-base/project/constitution.md` - Project conventions
 - `knowledge-base/learnings/` - Documented solutions
 - `knowledge-base/specs/` - Feature specifications
 - `knowledge-base/brainstorms/` - Design explorations

@@ -143,8 +143,8 @@ Project principles organized by domain. Add principles as you learn them.
 - Use skills for agent-discoverable capabilities and workflow stages; use commands only for entry-point routing (go), knowledge-base sync (sync), and help -- commands are invisible to agents
 - Verify documentation against implementation reality before trusting it; treat docs about "what exists" as hypotheses to verify
 
-- `overview/` documents what the project does; `overview/constitution.md` documents how to work on it
-- Component documentation in `overview/components/` should follow the component template from spec-templates skill
+- `project/` documents what the project does; `project/constitution.md` documents how to work on it
+- Component documentation in `project/components/` should follow the component template from spec-templates skill
 
 - Use convention over configuration for paths: `feat-<name>` maps to `knowledge-base/specs/feat-<name>/` and `.worktrees/feat-<name>/`
 - Include sequence diagrams for complex flows

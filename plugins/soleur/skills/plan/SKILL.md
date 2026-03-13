@@ -42,7 +42,7 @@ Check if `knowledge-base/` directory exists. If it does:
 **If knowledge-base/ exists:**
 
 1. Read `CLAUDE.md` if it exists - apply project conventions during planning
-2. If `# Project Constitution` heading is NOT already in context, read `knowledge-base/overview/constitution.md` - use principles to guide planning decisions. Skip if already loaded (e.g., from a preceding `/soleur:brainstorm`).
+2. If `# Project Constitution` heading is NOT already in context, read `knowledge-base/project/constitution.md` - use principles to guide planning decisions. Skip if already loaded (e.g., from a preceding `/soleur:brainstorm`).
 3. Detect feature from current branch (`feat-<name>` pattern)
 4. Read `knowledge-base/specs/feat-<name>/spec.md` if it exists - use as planning input
 5. Announce: "Loaded constitution and spec for `feat-<name>`"
@@ -188,6 +188,7 @@ Think like a product manager - what would make this issue clear and actionable? 
 - [ ] List all necessary sections for the chosen template
 - [ ] Gather supporting materials (error logs, screenshots, design mockups)
 - [ ] Prepare code examples or reproduction steps if applicable, name the mock filenames in the lists
+- [ ] When planning a directory rename, enumerate ALL files in the target directory as potential self-reference holders -- directory trees and conceptual prose derived from the directory name don't match path-pattern greps
 
 ### 3. SpecFlow Analysis
 
