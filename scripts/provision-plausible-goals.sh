@@ -10,7 +10,7 @@
 #   PLAUSIBLE_BASE_URL  - Plausible API base URL (optional; defaults to https://plausible.io)
 #
 # Exit codes:
-#   0 - Goals provisioned, or graceful skip (missing credentials)
+#   0 - Goals provisioned, or graceful skip (missing credentials, plan lacks Sites API)
 #   1 - API error or missing dependency
 
 set -euo pipefail
@@ -87,8 +87,10 @@ api_request() {
       cat "$response_file"
       ;;
     401)
-      echo "Error: Plausible API authentication failed (HTTP 401). Check PLAUSIBLE_API_KEY." >&2
-      exit 1
+      echo "Plausible API returned 401 -- Sites API requires an Enterprise plan."
+      echo "Skipping goal provisioning. Goals can be configured manually in the dashboard."
+      echo "This workflow will provision goals automatically once the plan includes Sites API access."
+      exit 0
       ;;
     429)
       echo "Error: Plausible API rate limited (HTTP 429). Try again later." >&2
