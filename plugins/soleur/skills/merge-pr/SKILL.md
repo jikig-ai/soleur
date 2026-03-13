@@ -89,9 +89,9 @@ STOPPED: Uncommitted changes detected. Commit changes before running merge-pr.
 
 Extract the feature name from the branch (strip `feat-`, `feature/`, `fix-`, `fix/` prefix). Search for unarchived KB artifacts matching the feature name in:
 
-- `knowledge-base/project/brainstorms/` (excluding `archive/` paths)
-- `knowledge-base/project/plans/` (excluding `archive/` paths)
-- `knowledge-base/project/specs/feat-<feature>/`
+- `knowledge-base/brainstorms/` (excluding `archive/` paths)
+- `knowledge-base/plans/` (excluding `archive/` paths)
+- `knowledge-base/specs/feat-<feature>/`
 
 If any unarchived artifacts are found, stop:
 

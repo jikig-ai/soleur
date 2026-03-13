@@ -154,7 +154,7 @@ topic: <kebab-case-topic>
 → Use `skill: soleur:plan` for implementation details
 ```
 
-**Output Location:** `knowledge-base/project/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`
+**Output Location:** `knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`
 
 ### Phase 4: Handoff
 
