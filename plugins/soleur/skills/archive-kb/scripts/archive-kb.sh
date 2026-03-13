@@ -94,20 +94,30 @@ discover_artifacts() {
   # Enable nullglob so empty globs expand to nothing
   shopt -s nullglob
 
-  # Brainstorms: files matching *slug* excluding archive/
-  for f in knowledge-base/project/brainstorms/*"${slug}"*; do
-    [[ -f "$f" && "$f" != */archive/* ]] && artifacts+=("$f")
+  # Brainstorms and plans: current paths first, legacy paths second
+  local file_dirs=(
+    "knowledge-base/brainstorms"
+    "knowledge-base/project/brainstorms"
+    "knowledge-base/plans"
+    "knowledge-base/project/plans"
+  )
+  for dir in "${file_dirs[@]}"; do
+    for f in "$dir"/*"${slug}"*; do
+      [[ -f "$f" && "$f" != */archive/* ]] && artifacts+=("$f")
+    done
   done
 
-  # Plans: files matching *slug* excluding archive/
-  for f in knowledge-base/project/plans/*"${slug}"*; do
-    [[ -f "$f" && "$f" != */archive/* ]] && artifacts+=("$f")
+  # Specs: current paths first, legacy paths second
+  local spec_dirs=(
+    "knowledge-base/specs"
+    "knowledge-base/features/specs"
+    "knowledge-base/project/specs"
+  )
+  for dir in "${spec_dirs[@]}"; do
+    if [[ -d "$dir/feat-${slug}" ]]; then
+      artifacts+=("$dir/feat-${slug}")
+    fi
   done
-
-  # Specs: exact directory match feat-<slug>
-  if [[ -d "knowledge-base/project/specs/feat-${slug}" ]]; then
-    artifacts+=("knowledge-base/project/specs/feat-${slug}")
-  fi
 
   shopt -u nullglob
 
