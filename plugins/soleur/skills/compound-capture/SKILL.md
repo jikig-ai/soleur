@@ -23,7 +23,7 @@ If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headle
 
 This skill captures problem solutions immediately after confirmation, creating structured documentation that serves as a searchable knowledge base for future sessions.
 
-**Organization:** Single-file architecture - each problem documented as one markdown file in its symptom category directory (e.g., `knowledge-base/project/learnings/performance-issues/n-plus-one-briefs.md`). Files use YAML frontmatter for metadata and searchability.
+**Organization:** Single-file architecture - each problem documented as one markdown file in its symptom category directory (e.g., `knowledge-base/learnings/performance-issues/n-plus-one-briefs.md`). Files use YAML frontmatter for metadata and searchability.
 
 ---
 
@@ -63,7 +63,7 @@ This skill captures problem solutions immediately after confirmation, creating s
 
 Extract from conversation history:
 
-**Check for session-state.md:** Run `git branch --show-current`. If on a `feat-*` branch, check if `knowledge-base/project/specs/feat-<name>/session-state.md` exists. If it does, read it and incorporate forwarded errors from `### Errors` and decisions from `### Decisions` into the context below. These came from preceding pipeline phases whose context was compacted.
+**Check for session-state.md:** Run `git branch --show-current`. If on a `feat-*` branch, check if `knowledge-base/specs/feat-<name>/session-state.md` exists. If it does, read it and incorporate forwarded errors from `### Errors` and decisions from `### Decisions` into the context below. These came from preceding pipeline phases whose context was compacted.
 
 **Required information:**
 
@@ -112,14 +112,14 @@ I need a few details to document this properly:
 <step number="3" required="false" depends_on="2">
 ### Step 3: Check Existing Docs
 
-Search knowledge-base/project/learnings/ for similar issues:
+Search knowledge-base/learnings/ for similar issues:
 
 ```bash
 # Search by error message keywords
-grep -r "exact error phrase" knowledge-base/project/learnings/
+grep -r "exact error phrase" knowledge-base/learnings/
 
 # Search by symptom category
-ls knowledge-base/project/learnings/[category]/
+ls knowledge-base/learnings/[category]/
 ```
 
 **IF similar issue found:**
@@ -129,7 +129,7 @@ ls knowledge-base/project/learnings/[category]/
 **Interactive mode:** Present decision options:
 
 ```
-Found similar issue: knowledge-base/project/learnings/[path]
+Found similar issue: knowledge-base/learnings/[path]
 
 What's next?
 1. Create new doc with cross-reference (recommended)
@@ -204,8 +204,8 @@ Please provide corrected values.
 
 Determine the category from the validated YAML `problem_type` field and generate a filename. Then:
 
-1. Create the category directory: `mkdir -p knowledge-base/project/learnings/<category>`
-2. Write the documentation file to `knowledge-base/project/learnings/<category>/<filename>.md` using the template from [resolution-template.md](./assets/resolution-template.md)
+1. Create the category directory: `mkdir -p knowledge-base/learnings/<category>`
+2. Write the documentation file to `knowledge-base/learnings/<category>/<filename>.md` using the template from [resolution-template.md](./assets/resolution-template.md)
 
 Replace `<category>` with the mapped category and `<filename>` with the generated filename.
 
@@ -233,8 +233,8 @@ Already includes cross-reference from Step 6.
 If this represents a common pattern (3+ similar issues):
 
 ```bash
-# Add to knowledge-base/project/learnings/patterns/common-solutions.md
-cat >> knowledge-base/project/learnings/patterns/common-solutions.md << 'EOF'
+# Add to knowledge-base/learnings/patterns/common-solutions.md
+cat >> knowledge-base/learnings/patterns/common-solutions.md << 'EOF'
 
 ## [Pattern Name]
 
@@ -265,7 +265,7 @@ But **NEVER auto-promote**. User decides via decision menu (Option 2).
 
 **Template for critical pattern addition:**
 
-When user selects Option 3 (Add to Required Reading), use the template from [critical-pattern-template.md](./assets/critical-pattern-template.md) to structure the pattern entry. Number it sequentially based on existing patterns in `knowledge-base/project/learnings/patterns/critical-patterns.md`.
+When user selects Option 3 (Add to Required Reading), use the template from [critical-pattern-template.md](./assets/critical-pattern-template.md) to structure the pattern entry. Number it sequentially based on existing patterns in `knowledge-base/learnings/patterns/critical-patterns.md`.
 </step>
 
 <step number="8" required="false" depends_on="6">
@@ -308,7 +308,7 @@ If the target file does not exist at the expected path, warn and skip.
 
 Use **AskUserQuestion** with options:
 - **Accept** -- Apply the edit to the definition file
-- **Skip** -- Do not modify the definition; the learning is still captured in knowledge-base/project/learnings/
+- **Skip** -- Do not modify the definition; the learning is still captured in knowledge-base/learnings/
 - **Edit** -- Modify the bullet text, then re-display for confirmation
 
 If accepted, write the edit to the definition file. Then update the learning file's `synced_to` frontmatter to prevent `/soleur:sync` from re-proposing this pair:
@@ -347,9 +347,9 @@ Glob for related artifacts:
 Search for artifacts matching the feature slug. Replace `<slug>` with the actual feature slug derived from the branch name:
 
 ```bash
-find knowledge-base/project/brainstorms/ -name "*<slug>*" -not -path "*/archive/*" 2>/dev/null
-find knowledge-base/project/plans/ -name "*<slug>*" -not -path "*/archive/*" 2>/dev/null
-test -d "knowledge-base/project/specs/feat-<slug>" && echo "knowledge-base/project/specs/feat-<slug>/"
+find knowledge-base/brainstorms/ -name "*<slug>*" -not -path "*/archive/*" 2>/dev/null
+find knowledge-base/plans/ -name "*<slug>*" -not -path "*/archive/*" 2>/dev/null
+test -d "knowledge-base/specs/feat-<slug>" && echo "knowledge-base/specs/feat-<slug>/"
 ```
 
 **If no artifacts found:** Skip consolidation silently and proceed to the decision menu.
@@ -359,9 +359,9 @@ test -d "knowledge-base/project/specs/feat-<slug>" && echo "knowledge-base/proje
 ```text
 Found artifacts for feat-<slug>:
 
-1. knowledge-base/project/brainstorms/2026-02-09-<slug>-brainstorm.md
-2. knowledge-base/project/plans/2026-02-09-feat-<slug>-plan.md
-3. knowledge-base/project/specs/feat-<slug>/
+1. knowledge-base/brainstorms/2026-02-09-<slug>-brainstorm.md
+2. knowledge-base/plans/2026-02-09-feat-<slug>-plan.md
+3. knowledge-base/specs/feat-<slug>/
 
 Proceed with consolidation? (Y/n/add more)
 ```
@@ -409,7 +409,7 @@ Accept / Skip / Edit? _
 
 ```text
 Similar content found in constitution.md:
-  "Archive outdated learnings to knowledge-base/project/learnings/archive/"
+  "Archive outdated learnings to knowledge-base/learnings/archive/"
 
 Still apply this proposal? (Y/n)
 ```
@@ -479,7 +479,7 @@ After commit, proceed to the decision menu.
 ✓ Solution documented
 
 File created:
-- knowledge-base/project/learnings/[category]/[filename].md
+- knowledge-base/learnings/[category]/[filename].md
 
 What's next?
 1. Continue workflow (recommended)
@@ -510,14 +510,14 @@ User selects this when:
 Action:
 1. Extract pattern from the documentation
 2. Format as ❌ WRONG vs ✅ CORRECT with code examples
-3. Add to `knowledge-base/project/learnings/patterns/critical-patterns.md`
+3. Add to `knowledge-base/learnings/patterns/critical-patterns.md`
 4. Add cross-reference back to this doc
 5. Confirm: "✓ Added to Required Reading. All subagents will see this pattern before code generation."
 
 **Option 3: Link related issues**
 
 - Prompt: "Which doc to link? (provide filename or describe)"
-- Search knowledge-base/project/learnings/ for the doc
+- Search knowledge-base/learnings/ for the doc
 - Add cross-reference to both docs
 - Confirm: "✓ Cross-reference added"
 
@@ -584,7 +584,7 @@ All context needed for documentation should be present in conversation history b
 Documentation is successful when ALL of the following are true:
 
 - ✅ YAML frontmatter validated (all required fields, correct formats)
-- ✅ File created in knowledge-base/project/learnings/[category]/[filename].md
+- ✅ File created in knowledge-base/learnings/[category]/[filename].md
 - ✅ Enum values match schema.yaml exactly
 - ✅ Code examples included in solution section
 - ✅ Cross-references added if related issues found
@@ -690,7 +690,7 @@ Documentation is successful when ALL of the following are true:
    ```
    ✅ Valid
 6. **Create documentation:**
-   - `knowledge-base/project/learnings/performance-issues/n-plus-one-brief-generation-BriefSystem-20251110.md`
+   - `knowledge-base/learnings/performance-issues/n-plus-one-brief-generation-BriefSystem-20251110.md`
 7. **Cross-reference:** None needed (no similar issues)
 
 **Output:**
@@ -699,7 +699,7 @@ Documentation is successful when ALL of the following are true:
 ✓ Solution documented
 
 File created:
-- knowledge-base/project/learnings/performance-issues/n-plus-one-brief-generation-BriefSystem-20251110.md
+- knowledge-base/learnings/performance-issues/n-plus-one-brief-generation-BriefSystem-20251110.md
 
 What's next?
 1. Continue workflow (recommended)
