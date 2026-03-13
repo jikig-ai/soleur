@@ -22,8 +22,11 @@ NC='\033[0m' # No Color
 # Auto-confirm flag (--yes skips all interactive prompts)
 YES_FLAG=false
 
-# Get repo root (handles bare repos used with worktrees)
+# Get repo root and detect bare repo (single subprocess for both)
+# IS_BARE guards all working-tree-dependent operations (git diff, checkout, pull, status)
+IS_BARE=false
 if [[ "$(git rev-parse --is-bare-repository 2>/dev/null)" == "true" ]]; then
+  IS_BARE=true
   _git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null)
   if [[ "$_git_dir" == */.git ]]; then
     GIT_ROOT="${_git_dir%/.git}"
@@ -35,10 +38,14 @@ else
 fi
 WORKTREE_DIR="$GIT_ROOT/.worktrees"
 
-# Bare repo flag -- computed once, reused across functions to guard
-# working-tree-dependent operations (git diff, checkout, pull, status)
-IS_BARE=false
-[[ "$(git rev-parse --is-bare-repository 2>/dev/null)" == "true" ]] && IS_BARE=true
+# Exit with error if running in a bare repo (git checkout/pull require a working tree)
+require_working_tree() {
+  if [[ "$IS_BARE" == "true" ]]; then
+    echo -e "${RED}Error: Cannot create worktrees from bare repo root (git checkout requires a working tree).${NC}"
+    echo -e "${YELLOW}Run from an existing worktree, or use: git worktree add .worktrees/<name> -b <branch> main${NC}"
+    exit 1
+  fi
+}
 
 # Ensure .worktrees is in .gitignore
 ensure_gitignore() {
@@ -93,11 +100,7 @@ create_worktree() {
   local branch_name="$1"
   local from_branch="${2:-main}"
 
-  if [[ "$IS_BARE" == "true" ]]; then
-    echo -e "${RED}Error: Cannot create worktrees from bare repo root (git checkout requires a working tree).${NC}"
-    echo -e "${YELLOW}Run from an existing worktree, or use: git worktree add .worktrees/<name> -b <branch> main${NC}"
-    exit 1
-  fi
+  require_working_tree
 
   if [[ -z "$branch_name" ]]; then
     echo -e "${RED}Error: Branch name required${NC}"
@@ -167,11 +170,7 @@ create_for_feature() {
   local name="$1"
   local from_branch="${2:-main}"
 
-  if [[ "$IS_BARE" == "true" ]]; then
-    echo -e "${RED}Error: Cannot create worktrees from bare repo root (git checkout requires a working tree).${NC}"
-    echo -e "${YELLOW}Run from an existing worktree, or use: git worktree add .worktrees/feat-<name> -b feat-<name> main${NC}"
-    exit 1
-  fi
+  require_working_tree
 
   if [[ -z "$name" ]]; then
     echo -e "${RED}Error: Feature name required${NC}"
@@ -663,6 +662,8 @@ sync_bare_files() {
   if [[ -n "$hook_files" ]]; then
     mkdir -p "$GIT_ROOT/.claude/hooks"
     while IFS= read -r hook_file; do
+      # Validate path prefix to prevent unexpected writes
+      [[ "$hook_file" == .claude/hooks/* ]] || continue
       if git show "HEAD:$hook_file" > "$GIT_ROOT/$hook_file" 2>/dev/null; then
         chmod +x "$GIT_ROOT/$hook_file" 2>/dev/null || true
         synced=$((synced + 1))
