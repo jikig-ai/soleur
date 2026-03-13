@@ -1,11 +1,11 @@
 ---
 name: community
-description: "This skill should be used when managing community presence across platforms (Discord, GitHub, X/Twitter). It provides sub-commands for generating digests, checking health metrics, and listing enabled platforms. Triggers on \"community digest\", \"community health\", \"community platforms\", \"community report\"."
+description: "This skill should be used when managing community presence across platforms (Discord, GitHub, X/Twitter, Hacker News). It provides sub-commands for generating digests, checking health metrics, and listing enabled platforms. Triggers on \"community digest\", \"community health\", \"community platforms\", \"community report\"."
 ---
 
 # Community Management
 
-Manage community presence across Discord, GitHub, and X/Twitter. Detects enabled platforms from environment variables and delegates data collection to platform-specific scripts.
+Manage community presence across Discord, GitHub, X/Twitter, and Hacker News. Detects enabled platforms from environment variables (or always-on for GitHub and HN) and delegates data collection to platform-specific scripts.
 
 ## Arguments
 
@@ -29,6 +29,7 @@ Detect enabled platforms by checking environment variables. A platform is enable
 | Discord | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` | `printenv DISCORD_BOT_TOKEN && printenv DISCORD_GUILD_ID` |
 | GitHub | (none -- always enabled) | `gh auth status` exits 0 |
 | X/Twitter | `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET` | All 4 set and non-empty |
+| Hacker News | (none -- always enabled) | `curl -sf --max-time 10 "https://hn.algolia.com/api/v1/items/1" > /dev/null` |
 
 Run detection at the start of every sub-command. Report which platforms are active before proceeding.
 
@@ -41,6 +42,7 @@ Platform scripts are located at `plugins/soleur/skills/community/scripts/`:
 - [github-community.sh](./scripts/github-community.sh) -- GitHub API wrapper (activity, contributors, discussions)
 - [x-community.sh](./scripts/x-community.sh) -- X/Twitter API v2 wrapper (fetch-metrics, fetch-mentions, fetch-timeline, post-tweet)
 - [x-setup.sh](./scripts/x-setup.sh) -- X/Twitter credential setup and validation
+- [hn-community.sh](./scripts/hn-community.sh) -- Hacker News Algolia API wrapper (mentions, trending, thread)
 
 ## Sub-Commands
 
@@ -73,9 +75,10 @@ List all platforms with their configuration status. Does NOT spawn an agent -- r
 Platform Status
 ===============
 
-Discord:  [enabled] | [not configured -- missing DISCORD_BOT_TOKEN, DISCORD_GUILD_ID]
-GitHub:   [enabled] | [not configured -- gh CLI not authenticated]
-X/Twitter: [enabled] | [not configured -- missing X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET]
+Discord:      [enabled] | [not configured -- missing DISCORD_BOT_TOKEN, DISCORD_GUILD_ID]
+GitHub:       [enabled] | [not configured -- gh CLI not authenticated]
+X/Twitter:    [enabled] | [not configured -- missing X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET]
+Hacker News:  [enabled] | [not available -- HN Algolia API unreachable]
 ```
 
 3. For unconfigured platforms, show setup instructions:
@@ -131,6 +134,7 @@ If no sub-command is provided, present options using the AskUserQuestion tool:
 - All Discord API calls go through `discord-community.sh` -- do not call the API directly
 - All GitHub API calls go through `github-community.sh` -- do not call `gh` directly
 - All X/Twitter API calls go through `x-community.sh` -- do not call the API directly
+- All Hacker News API calls go through `hn-community.sh` -- do not call the Algolia API directly
 - The `community-manager` agent handles data collection, analysis, and output formatting
 - This skill is the entry point; the agent does the work
 - Ownership boundary: community = monitoring + engagement. Broadcasting/distribution is handled by the `social-distribute` skill.

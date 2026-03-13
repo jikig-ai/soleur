@@ -214,6 +214,18 @@ These guardrails apply in both automatic mode (fetch-mentions) and manual mode (
 | Source file | `knowledge-base/design/brand/brand-x-banner.pen` |
 | Generated with | Pencil MCP (design) + Pillow (PNG export) |
 
+### Hacker News
+
+- Understated, technical tone. HN readers detect and punish marketing language instantly. Write like an engineer explaining to peers, not a brand talking to prospects.
+- Show, don't tell. Lead with what the thing does and how it works. Never lead with why it's great.
+- No superlatives ("revolutionary", "game-changing", "best-in-class"). No exclamation marks. No emojis.
+- No marketing speak ("excited to share", "we're thrilled", "check it out"). State facts.
+- Comments should add technical substance to the conversation. If the comment doesn't teach something or clarify a misconception, don't post it.
+- Respect HN culture: be direct, cite sources, admit limitations, engage with criticism honestly.
+- When discussing Soleur, focus on the technical architecture and specific capabilities, not positioning or branding.
+- Example story title: "Soleur -- AI agents that run the non-engineering 70% of a solo founder's company"
+- Example comment reply: "The knowledge base is a git-tracked directory of markdown files. Agents read and write to it like a shared filesystem. No vector DB, no embeddings -- just files the founder can read and edit directly."
+
 ### Website / Landing Page
 
 - Full brand energy. This is where the ambition lives at maximum volume.
