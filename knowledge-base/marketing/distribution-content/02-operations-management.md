@@ -21,7 +21,7 @@ What it produced:
 
 The compound effect: the analytics decision simplified the Cookie Policy, GDPR Policy, and Privacy Policy. The expense tracker informed the business model evaluation. The COO auto-joins brainstorm sessions when operational decisions arise. No context reconstruction required when returning to ops after weeks of engineering.
 
-Full case study: https://soleur.ai/blog/case-study-operations-management/
+Full case study: https://soleur.ai/blog/case-study-operations-management/?utm_source=discord&utm_medium=community&utm_campaign=case-study-operations-management
 
 ---
 
@@ -43,7 +43,7 @@ We built a full operations department -- COO, advisor, researcher, provisioner -
 **Tweet 4 (Final) -- 196 chars:**
 Full case study on building an operations department for a one-person company:
 
-https://soleur.ai/blog/case-study-operations-management/
+https://soleur.ai/blog/case-study-operations-management/?utm_source=x&utm_medium=social&utm_campaign=case-study-operations-management
 
 #solofounder
 
