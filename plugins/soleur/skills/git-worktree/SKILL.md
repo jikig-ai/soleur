@@ -26,6 +26,7 @@ The script handles critical setup that raw git commands don't:
 1. Copies `.env`, `.env.local`, `.env.test`, etc. from main repo
 2. Ensures `.worktrees` is in `.gitignore`
 3. Creates consistent directory structure
+4. Detects bare repos (`core.bare = true`) and derives `GIT_ROOT` via `--absolute-git-dir` instead of `--show-toplevel`
 
 **After creating a worktree**, run `npm install` if the project has a `package.json` — worktrees do not share `node_modules/` with the main working tree, and build commands (`npx @11ty/eleventy`, etc.) will silently hang instead of erroring.
 

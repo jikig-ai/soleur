@@ -16,8 +16,17 @@ NC='\033[0m' # No Color
 # Auto-confirm flag (--yes skips all interactive prompts)
 YES_FLAG=false
 
-# Get repo root
-GIT_ROOT=$(git rev-parse --show-toplevel)
+# Get repo root (handles bare repos used with worktrees)
+if [[ "$(git rev-parse --is-bare-repository 2>/dev/null)" == "true" ]]; then
+  _git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null)
+  if [[ "$_git_dir" == */.git ]]; then
+    GIT_ROOT="${_git_dir%/.git}"
+  else
+    GIT_ROOT="$_git_dir"
+  fi
+else
+  GIT_ROOT=$(git rev-parse --show-toplevel)
+fi
 WORKTREE_DIR="$GIT_ROOT/.worktrees"
 
 # Ensure .worktrees is in .gitignore
