@@ -95,7 +95,7 @@ tags: [keyword1, keyword2, keyword3]
 
 ## Related Issues
 
-[If any similar problems exist in knowledge-base/learnings/, link to them:]
+[If any similar problems exist in knowledge-base/features/learnings/, link to them:]
 - See also: [another-related-issue.md](../category/another-related-issue.md)
 - Similar to: [related-problem.md](../category/related-problem.md)
 

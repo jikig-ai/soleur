@@ -3,10 +3,10 @@ last_updated: 2026-03-12
 last_reviewed: 2026-03-12
 review_cadence: quarterly
 depends_on:
-  - knowledge-base/overview/brand-guide.md
-  - knowledge-base/overview/marketing-strategy.md
-  - knowledge-base/overview/competitive-intelligence.md
-  - knowledge-base/overview/business-validation.md
+  - knowledge-base/marketing/brand-guide.md
+  - knowledge-base/marketing/marketing-strategy.md
+  - knowledge-base/product/competitive-intelligence.md
+  - knowledge-base/product/business-validation.md
 ---
 
 # Soleur Pricing Strategy

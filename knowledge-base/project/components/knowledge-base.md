@@ -26,20 +26,21 @@ Compound engineering knowledge over time. Every solved problem, design decision,
 
 ```
 knowledge-base/
-  overview/               # Project overview documentation
+  project/                # Project documentation
     constitution.md       # Project conventions (Always/Never/Prefer)
-  learnings/              # Documented solutions and patterns
-    implementation-patterns/
-    architecture/
-    technical-debt/
-  specs/
-    feat-<name>/          # Feature specifications
-      spec.md
-      tasks.md
-    archive/              # Completed specs
-    external/             # External platform specs
-  brainstorms/            # Design explorations
-  plans/                  # Implementation plans
+  features/               # Feature-lifecycle artifacts
+    learnings/            # Documented solutions and patterns
+      implementation-patterns/
+      architecture/
+      technical-debt/
+    specs/
+      feat-<name>/        # Feature specifications
+        spec.md
+        tasks.md
+      archive/            # Completed specs
+      external/           # External platform specs
+    brainstorms/          # Design explorations
+    plans/                # Implementation plans
 ```
 
 **File naming conventions:**
@@ -68,7 +69,7 @@ graph TB
         LN
         CON
         SP[specs/]
-        OV[overview/]
+        OV[project/]
     end
 
     subgraph "Output"
@@ -140,7 +141,7 @@ Design explorations before implementation. Captures:
 
 Implementation plans with detailed tasks. Created by `/plan`, executed by `/work`.
 
-### overview/
+### project/
 
 This documentation. Describes what the project does and its component architecture.
 
@@ -155,37 +156,37 @@ This documentation. Describes what the project does and its component architectu
 
 ```bash
 # Search for authentication patterns
-grep -r "auth" knowledge-base/learnings/
+grep -r "auth" knowledge-base/features/learnings/
 ```
 
 **Check active specs:**
 
 ```bash
-ls knowledge-base/specs/feat-*/
+ls knowledge-base/features/specs/feat-*/
 ```
 
 **Read conventions:**
 
 ```bash
-cat knowledge-base/overview/constitution.md
+cat knowledge-base/project/constitution.md
 ```
 
 ## Conventions
 
 From `constitution.md`:
 
-- Use convention over configuration for paths: `feat-<name>` maps to `knowledge-base/specs/feat-<name>/`
+- Use convention over configuration for paths: `feat-<name>` maps to `knowledge-base/features/specs/feat-<name>/`
 - Use Given/When/Then format for scenarios in specs
 - Break tasks into chunks of max 2 hours
 - Commands should check for `knowledge-base/` existence and fall back gracefully
 
 ## Related Files
 
-- `knowledge-base/overview/constitution.md` - Project conventions
-- `knowledge-base/learnings/` - Documented solutions
-- `knowledge-base/specs/` - Feature specifications
-- `knowledge-base/brainstorms/` - Design explorations
-- `knowledge-base/plans/` - Implementation plans
+- `knowledge-base/project/constitution.md` - Project conventions
+- `knowledge-base/features/learnings/` - Documented solutions
+- `knowledge-base/features/specs/` - Feature specifications
+- `knowledge-base/features/brainstorms/` - Design explorations
+- `knowledge-base/features/plans/` - Implementation plans
 
 ## See Also
 

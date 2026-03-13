@@ -11,7 +11,7 @@ Provides templates for structured feature specifications.
 
 - At the end of `soleur:brainstorm` to create spec.md
 - At the end of `soleur:plan` to create tasks.md
-- When starting any new feature in `knowledge-base/specs/`
+- When starting any new feature in `knowledge-base/features/specs/`
 
 ## spec.md Template
 
@@ -71,7 +71,7 @@ Use this template for task tracking:
 Each feature gets its own directory:
 
 ```
-knowledge-base/specs/feat-<name>/
+knowledge-base/features/specs/feat-<name>/
   spec.md      # Requirements (FR/TR)
   tasks.md     # Phased task checklist
 ```
@@ -80,7 +80,7 @@ knowledge-base/specs/feat-<name>/
 
 ### Creating a spec for "user-auth" feature
 
-1. Create directory: `knowledge-base/specs/feat-user-auth/`
+1. Create directory: `knowledge-base/features/specs/feat-user-auth/`
 2. Create `spec.md` using the template above
 3. Fill in Problem Statement, Goals, Non-Goals
 4. Add Functional Requirements (FR1, FR2, ...)
@@ -96,7 +96,7 @@ knowledge-base/specs/feat-<name>/
 
 ## component.md Template
 
-Use this template for project overview component documentation in `knowledge-base/overview/components/`:
+Use this template for project overview component documentation in `knowledge-base/project/components/`:
 
 ```markdown
 ---
@@ -160,7 +160,7 @@ related_locations:
 ### Creating a component doc
 
 1. Identify the logical component (not just directory structure)
-2. Create `knowledge-base/overview/components/<name>.md`
+2. Create `knowledge-base/project/components/<name>.md`
 3. Fill in frontmatter with accurate paths
 4. Document purpose, responsibilities, and interfaces
 5. Add data flow diagram if the component has complex interactions

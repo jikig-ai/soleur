@@ -129,11 +129,12 @@ soleur/
   docs/                     # Documentation and legal content
     legal/                  # Legal documents (ToS, privacy, GDPR, CLA)
   knowledge-base/           # Project documentation
-    learnings/              # Documented solutions
-    specs/                  # Feature specifications
-    brainstorms/            # Design explorations
-    plans/                  # Implementation plans
-    overview/               # This documentation
+    features/               # Feature-lifecycle artifacts
+      learnings/            # Documented solutions
+      specs/                # Feature specifications
+      brainstorms/          # Design explorations
+      plans/                # Implementation plans
+    project/                # This documentation
       constitution.md       # Coding conventions
   scripts/                  # Repo-level utility scripts
 ```
@@ -159,13 +160,13 @@ Agents are organized by domain first, then by function. Each business domain has
 
 ### Knowledge-Base Lifecycle
 
-Knowledge artifacts follow a lifecycle: **create** during brainstorm/plan, **use** during work/review, **consolidate** into overview during compound, and **archive** to `*/archive/` directories after the feature ships. The overview (constitution.md, component docs, README.md) serves as the single source of truth -- individual brainstorms, plans, and specs are working documents that get archived once their insights are distilled.
+Knowledge artifacts follow a lifecycle: **create** during brainstorm/plan, **use** during work/review, **consolidate** into project docs during compound, and **archive** to `*/archive/` directories after the feature ships. The project documentation (constitution.md, component docs, README.md) serves as the single source of truth -- individual brainstorms, plans, and specs are working documents that get archived once their insights are distilled.
 
 ### Convention Over Configuration
 
 Paths follow predictable patterns:
 - Feature branches: `feat-<name>`
-- Specs: `knowledge-base/specs/feat-<name>/`
+- Specs: `knowledge-base/features/specs/feat-<name>/`
 - Worktrees: `.worktrees/feat-<name>/`
 
 ## Quick Start
