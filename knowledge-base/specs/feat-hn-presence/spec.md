@@ -6,7 +6,7 @@
 
 ## Problem Statement
 
-The community agent monitors Discord, GitHub, X/Twitter, Bluesky, and LinkedIn but has no Hacker News visibility. HN is the primary developer community hub for dev tool credibility and adoption. Without HN monitoring, Soleur misses mentions, competitive signals, and trending discussions relevant to the ICP (technical solo founders).
+The community agent monitors Discord, GitHub, and X/Twitter but has no Hacker News visibility. HN is the primary developer community hub for dev tool credibility and adoption. Without HN monitoring, Soleur misses mentions, competitive signals, and trending discussions relevant to the ICP (technical solo founders).
 
 ## Goals
 
@@ -27,7 +27,7 @@ The community agent monitors Discord, GitHub, X/Twitter, Bluesky, and LinkedIn b
 
 - **FR1:** `hn-community.sh` shell script with subcommands:
   - `mentions [--query TERM]` -- Search HN Algolia API for mentions of a term (default: "soleur"). Return JSON with item ID, title, URL, points, comments, author, date.
-  - `trending [--tags TAGS]` -- Fetch front-page stories matching domain keywords. Return JSON with top N items.
+  - `trending` -- Fetch current front-page stories. Return JSON array. The consuming LLM agent filters for domain relevance.
   - `thread ITEM_ID` -- Fetch a specific HN item and its comment tree. Return JSON with item details and nested comments.
 - **FR2:** HN row in SKILL.md platform detection table. Always-enabled (no env vars). Detection: `curl -sf "https://hn.algolia.com/api/v1/items/1" > /dev/null`.
 - **FR3:** HN data collection section in community-manager agent (Capability 1: Digest Generation). Calls `hn-community.sh mentions` and `hn-community.sh trending`.
