@@ -149,7 +149,7 @@ create_for_feature() {
 
   local branch_name="feat-$name"
   local worktree_path="$WORKTREE_DIR/$branch_name"
-  local spec_dir="$GIT_ROOT/knowledge-base/specs/$branch_name"
+  local spec_dir="$GIT_ROOT/knowledge-base/features/specs/$branch_name"
 
   # Check if worktree already exists
   if [[ -d "$worktree_path" ]]; then
@@ -191,7 +191,7 @@ create_for_feature() {
   echo ""
   echo "Next steps:"
   echo -e "  1. ${BLUE}cd $worktree_path${NC}"
-  echo -e "  2. Create spec: ${BLUE}knowledge-base/specs/$branch_name/spec.md${NC}"
+  echo -e "  2. Create spec: ${BLUE}knowledge-base/features/specs/$branch_name/spec.md${NC}"
   echo ""
 }
 
@@ -423,8 +423,8 @@ cleanup_merged_worktrees() {
     local worktree_path="${branch_to_worktree[$branch]:-}"
     local safe_branch
     safe_branch=$(echo "$branch" | tr '/' '-')
-    local spec_dir="$GIT_ROOT/knowledge-base/specs/$safe_branch"
-    local archive_dir="$GIT_ROOT/knowledge-base/specs/archive"
+    local spec_dir="$GIT_ROOT/knowledge-base/features/specs/$safe_branch"
+    local archive_dir="$GIT_ROOT/knowledge-base/features/specs/archive"
 
     # Skip if active worktree
     if [[ -n "$worktree_path" && "$PWD" == "$worktree_path"* ]]; then
@@ -462,8 +462,8 @@ cleanup_merged_worktrees() {
     feature_slug="${feature_slug#feature-}"
 
     # Archive brainstorms and plans matching the feature slug
-    archive_kb_files "$GIT_ROOT/knowledge-base/brainstorms" "$feature_slug" "brainstorm" "$verbose"
-    archive_kb_files "$GIT_ROOT/knowledge-base/plans" "$feature_slug" "plan" "$verbose"
+    archive_kb_files "$GIT_ROOT/knowledge-base/features/brainstorms" "$feature_slug" "brainstorm" "$verbose"
+    archive_kb_files "$GIT_ROOT/knowledge-base/features/plans" "$feature_slug" "plan" "$verbose"
 
     # Remove worktree if exists (use actual path from git, not constructed path)
     if [[ -n "$worktree_path" && -d "$worktree_path" ]]; then
@@ -614,7 +614,7 @@ Commands:
   create <branch-name> [from-branch]  Create new worktree (copies .env files automatically)
                                       (from-branch defaults to main)
   feature | feat <name> [from-branch] Create worktree for feature with spec directory
-                                      (creates feat-<name> branch + knowledge-base/specs/feat-<name>/)
+                                      (creates feat-<name> branch + knowledge-base/features/specs/feat-<name>/)
   list | ls                           List all worktrees
   switch | go [name]                  Switch to worktree
   copy-env | env [name]               Copy .env files from main repo to worktree

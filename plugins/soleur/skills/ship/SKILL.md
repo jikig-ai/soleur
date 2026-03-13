@@ -59,9 +59,9 @@ git rev-parse --abbrev-ref HEAD
 
 Extract the feature name from the result by stripping the `feat-`, `feature/`, `fix-`, or `fix/` prefix. Then search for related artifacts using the Glob and Bash tools:
 
-- Brainstorms: glob `knowledge-base/brainstorms/*FEATURE*`
-- Specs: check `knowledge-base/specs/feat-FEATURE/spec.md`
-- Plans: glob `knowledge-base/plans/*FEATURE*`
+- Brainstorms: glob `knowledge-base/features/brainstorms/*FEATURE*`
+- Specs: check `knowledge-base/features/specs/feat-FEATURE/spec.md`
+- Plans: glob `knowledge-base/features/plans/*FEATURE*`
 - Uncommitted files: `git status --porcelain knowledge-base/`
 
 **If artifacts exist but are not committed:** Stage and commit them.
@@ -73,18 +73,18 @@ Extract the feature name from the result by stripping the `feat-`, `feature/`, `
 Check if /compound was run for this feature. Use the feature name extracted in Phase 1:
 
 ```bash
-git log --oneline --since="1 week ago" -- knowledge-base/learnings/
+git log --oneline --since="1 week ago" -- knowledge-base/features/learnings/
 ```
 
-Also use the Glob tool to search `knowledge-base/learnings/**/*FEATURE*` (replacing FEATURE with the actual name).
+Also use the Glob tool to search `knowledge-base/features/learnings/**/*FEATURE*` (replacing FEATURE with the actual name).
 
 **If no recent learning exists:** Check for unarchived KB artifacts before offering a choice.
 
 Search for unarchived artifacts matching the feature name (excluding `archive/` paths) using the Glob tool:
 
-- Brainstorms: `knowledge-base/brainstorms/*FEATURE*`
-- Plans: `knowledge-base/plans/*FEATURE*`
-- Spec directory: `knowledge-base/specs/feat-FEATURE/`
+- Brainstorms: `knowledge-base/features/brainstorms/*FEATURE*`
+- Plans: `knowledge-base/features/plans/*FEATURE*`
+- Spec directory: `knowledge-base/features/specs/feat-FEATURE/`
 
 **If unarchived artifacts exist:** Do NOT offer Skip. List the found artifacts and explain that compound must run to consolidate and archive them before shipping. Then use `skill: soleur:compound` (or `skill: soleur:compound --headless` if `HEADLESS_MODE=true`). The compound flow will automatically consolidate and archive the artifacts on `feat-*` branches.
 

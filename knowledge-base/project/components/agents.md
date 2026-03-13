@@ -109,7 +109,7 @@ Code review specialists that catch issues before PR:
 | `best-practices-researcher` | External documentation and examples |
 | `framework-docs-researcher` | Framework-specific documentation |
 | `git-history-analyzer` | Code evolution and commit patterns |
-| `learnings-researcher` | Search knowledge-base/learnings/ for relevant solutions |
+| `learnings-researcher` | Search knowledge-base/features/learnings/ for relevant solutions |
 | `repo-research-analyst` | Repository structure and conventions |
 
 #### Workflow (1)
