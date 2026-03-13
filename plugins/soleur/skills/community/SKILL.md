@@ -1,11 +1,11 @@
 ---
 name: community
-description: "This skill should be used when managing community presence across platforms (Discord, GitHub, X/Twitter). It provides sub-commands for generating digests, checking health metrics, and listing enabled platforms. Triggers on \"community digest\", \"community health\", \"community platforms\", \"community report\"."
+description: "This skill should be used when managing community presence across platforms (Discord, GitHub, X/Twitter, Bluesky). It provides sub-commands for generating digests, checking health metrics, and listing enabled platforms. Triggers on \"community digest\", \"community health\", \"community platforms\", \"community report\"."
 ---
 
 # Community Management
 
-Manage community presence across Discord, GitHub, and X/Twitter. Detects enabled platforms from environment variables and delegates data collection to platform-specific scripts.
+Manage community presence across Discord, GitHub, X/Twitter, and Bluesky. Detects enabled platforms from environment variables and delegates data collection to platform-specific scripts.
 
 ## Arguments
 
@@ -29,6 +29,7 @@ Detect enabled platforms by checking environment variables. A platform is enable
 | Discord | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` | `printenv DISCORD_BOT_TOKEN && printenv DISCORD_GUILD_ID` |
 | GitHub | (none -- always enabled) | `gh auth status` exits 0 |
 | X/Twitter | `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET` | All 4 set and non-empty |
+| Bluesky | `BSKY_HANDLE`, `BSKY_APP_PASSWORD` | Both set and non-empty |
 
 Run detection at the start of every sub-command. Report which platforms are active before proceeding.
 
@@ -41,6 +42,8 @@ Platform scripts are located at `plugins/soleur/skills/community/scripts/`:
 - [github-community.sh](./scripts/github-community.sh) -- GitHub API wrapper (activity, contributors, discussions)
 - [x-community.sh](./scripts/x-community.sh) -- X/Twitter API v2 wrapper (fetch-metrics, fetch-mentions, fetch-timeline, post-tweet)
 - [x-setup.sh](./scripts/x-setup.sh) -- X/Twitter credential setup and validation
+- [bsky-community.sh](./scripts/bsky-community.sh) -- Bluesky AT Protocol wrapper (create-session, post, get-metrics, get-notifications)
+- [bsky-setup.sh](./scripts/bsky-setup.sh) -- Bluesky credential setup and validation
 
 ## Sub-Commands
 
@@ -76,19 +79,23 @@ Platform Status
 Discord:  [enabled] | [not configured -- missing DISCORD_BOT_TOKEN, DISCORD_GUILD_ID]
 GitHub:   [enabled] | [not configured -- gh CLI not authenticated]
 X/Twitter: [enabled] | [not configured -- missing X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET]
+Bluesky:   [enabled] | [not configured -- missing BSKY_HANDLE, BSKY_APP_PASSWORD]
 ```
 
 3. For unconfigured platforms, show setup instructions:
    - Discord: "Run `plugins/soleur/skills/community/scripts/discord-setup.sh` to configure"
    - X/Twitter: "Run `plugins/soleur/skills/community/scripts/x-setup.sh validate-credentials` to verify, or `x-setup.sh write-env` to save credentials"
+   - Bluesky: "Run `plugins/soleur/skills/community/scripts/bsky-setup.sh write-env` to save credentials, or `bsky-setup.sh verify` to test"
 
 ### `engage`
 
-Reply to recent X/Twitter mentions using brand-voice drafts with human approval. Spawns the `community-manager` agent with engagement instructions.
+Reply to recent mentions on X/Twitter or Bluesky using brand-voice drafts with human approval. Spawns the `community-manager` agent with engagement instructions.
 
-X/Twitter must be enabled (all 4 credential variables set). If X is not configured, report "X/Twitter not configured" and stop.
+**Platform selection:** The `--platform` flag specifies which platform to engage on. If `--platform` is not provided, use AskUserQuestion to prompt the user to choose from enabled platforms that support engagement (X/Twitter, Bluesky).
 
-**Flow:**
+The selected platform must be enabled. If not configured, report the missing credentials and stop.
+
+**Flow (X/Twitter):**
 
 1. Run platform detection -- verify X/Twitter is enabled
 2. Read the since-id state file (`.soleur/x-engage-since-id`, resolved via `git rev-parse --show-toplevel`). If the file exists and contains a valid numeric ID, pass it as `--since-id` to the fetch command. If missing or non-numeric, skip (fetches last N mentions).
@@ -111,6 +118,24 @@ X/Twitter must be enabled (all 4 credential variables set). If X is not configur
 
 **Free tier degradation:** If `fetch-mentions` returns 403 (client-not-enrolled), the community-manager agent switches to manual mode — prompting for tweet URLs instead of fetching mentions automatically. The rest of the pipeline (brand-voice draft, approval, post-tweet) runs unchanged. See Capability 4 Step 1b. When the paid tier activates, this fallback is never triggered.
 
+**Flow (Bluesky):**
+
+1. Run platform detection -- verify Bluesky is enabled (`BSKY_HANDLE` + `BSKY_APP_PASSWORD`)
+2. Read the cursor state file (`.soleur/bsky-engage-cursor`, resolved via `git rev-parse --show-toplevel`). If the file exists and contains a non-empty value, pass it as `--cursor` to the fetch command.
+3. Spawn agent: `community-manager` with prompt: "Engage with recent Bluesky mentions. Use Capability 4: Bluesky Mention Engagement. Limit: [N]. Cursor: [cursor or none]."
+4. The agent fetches mentions via `bsky-community.sh get-notifications`
+5. For each mention, the agent drafts a reply following brand guide voice (`knowledge-base/marketing/brand-guide.md` sections `## Voice` and `## Channel Notes > ### Bluesky`). 300-character limit.
+6. Same approval flow as X/Twitter (Accept, Edit, Skip, Skip all remaining) but with 300-character validation.
+7. Accepted replies posted via `bsky-community.sh post "<text>" --reply-to-uri <uri> --reply-to-cid <cid>`
+8. After processing, the agent updates the cursor state file (`.soleur/bsky-engage-cursor`) and displays a session summary.
+
+**Bluesky cursor state file:**
+
+- Path: `.soleur/bsky-engage-cursor` (relative to repo root)
+- Format: plain text, single line containing the cursor string
+- Created on first run with `mkdir -p .soleur && chmod 600` before writing
+- Updated only after all mentions are processed (not per-reply)
+
 If `--headless` is set, skip all mentions with a summary message ("Skipped N mentions in headless mode -- engage requires interactive approval"). No replies are posted in headless mode.
 
 ## Sub-Command Menu
@@ -123,7 +148,7 @@ If no sub-command is provided, present options using the AskUserQuestion tool:
 1. **digest** -- Generate a multi-platform community digest
 2. **health** -- Display community health metrics
 3. **platforms** -- List platform configuration status
-4. **engage** -- Reply to recent X/Twitter mentions
+4. **engage** -- Reply to recent X/Twitter or Bluesky mentions
 
 ## Important Guidelines
 
@@ -131,6 +156,7 @@ If no sub-command is provided, present options using the AskUserQuestion tool:
 - All Discord API calls go through `discord-community.sh` -- do not call the API directly
 - All GitHub API calls go through `github-community.sh` -- do not call `gh` directly
 - All X/Twitter API calls go through `x-community.sh` -- do not call the API directly
+- All Bluesky API calls go through `bsky-community.sh` -- do not call the API directly
 - The `community-manager` agent handles data collection, analysis, and output formatting
 - This skill is the entry point; the agent does the work
 - Ownership boundary: community = monitoring + engagement. Broadcasting/distribution is handled by the `social-distribute` skill.
