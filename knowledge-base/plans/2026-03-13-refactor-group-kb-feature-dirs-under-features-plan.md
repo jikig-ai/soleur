@@ -2,7 +2,21 @@
 title: refactor: group specs/plans/brainstorms/learnings under features/
 type: refactor
 date: 2026-03-13
+deepened: 2026-03-13
 ---
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-13
+**Sections enhanced:** 5 (file inventory, risks, edge cases, verification, test scenarios)
+**Research method:** Exhaustive grep of all plugin/script/agent/command files against old path patterns
+
+### Key Improvements
+1. **Fixed incomplete file inventory** -- compound/SKILL.md was listed with 2 patterns but actually has 4 (added brainstorms/, plans/); merge-pr/SKILL.md was listed with 2 but has 3 (added brainstorms/); sync.md has category paths not just root learnings/
+2. **Discovered missed line references** -- worktree-manager.sh help text (line 617) references `knowledge-base/specs/feat-<name>/` and was not in the original plan
+3. **Added edge case: self-referential plan paths** -- this plan file itself and the tasks.md reference old paths; after the git mv, they will be under features/plans/ and features/specs/ respectively, which is correct (no update needed since the content describes old->new mapping)
+4. **Added reference count verification** -- exact grep line counts per file to enable post-update validation
+5. **Added edge case: deepen-plan SKILL.md** -- references `knowledge-base/learnings/` and `knowledge-base/plans/` but was already listed; confirmed exact occurrences
 
 # Group specs/plans/brainstorms/learnings under features/
 
@@ -60,7 +74,7 @@ git mv knowledge-base/learnings knowledge-base/features/
 | File | Old Pattern | New Pattern | Context |
 |------|-------------|-------------|---------|
 | `plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` | `knowledge-base/brainstorms/`, `knowledge-base/plans/`, `knowledge-base/specs/` | `knowledge-base/features/brainstorms/`, `knowledge-base/features/plans/`, `knowledge-base/features/specs/` | Discovery globs and archive paths (lines 98-110) |
-| `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` | `knowledge-base/specs/` (lines 152, 182, 194, 426-427, 464-466) | `knowledge-base/features/specs/` | `create_for_feature()` spec dir creation and `cleanup_merged_worktrees()` archival; also `knowledge-base/brainstorms/` and `knowledge-base/plans/` in `archive_kb_files` calls |
+| `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` | `knowledge-base/specs/` (lines 152, 182, 194, 426-427, 617) | `knowledge-base/features/specs/` | `create_for_feature()` spec dir creation, `cleanup_merged_worktrees()` archival, help text; also `knowledge-base/brainstorms/` and `knowledge-base/plans/` in `archive_kb_files` calls (lines 465-466) |
 | `scripts/generate-article-30-register.sh` | `knowledge-base/specs/` | `knowledge-base/features/specs/` | Spec directory reference |
 
 #### 2.2 Skill SKILL.md Files (agent-executed -- runtime failure)
@@ -70,7 +84,7 @@ git mv knowledge-base/learnings knowledge-base/features/
 | `plugins/soleur/skills/plan/SKILL.md` | `knowledge-base/specs/`, `knowledge-base/plans/`, `knowledge-base/brainstorms/`, `knowledge-base/learnings/` |
 | `plugins/soleur/skills/brainstorm/SKILL.md` | `knowledge-base/brainstorms/`, `knowledge-base/learnings/`, `knowledge-base/specs/` |
 | `plugins/soleur/skills/brainstorm-techniques/SKILL.md` | `knowledge-base/brainstorms/` |
-| `plugins/soleur/skills/compound/SKILL.md` | `knowledge-base/specs/`, `knowledge-base/learnings/` |
+| `plugins/soleur/skills/compound/SKILL.md` | `knowledge-base/specs/`, `knowledge-base/learnings/`, `knowledge-base/brainstorms/`, `knowledge-base/plans/` (artifact discovery on line 269) |
 | `plugins/soleur/skills/compound-capture/SKILL.md` | `knowledge-base/specs/`, `knowledge-base/brainstorms/`, `knowledge-base/plans/`, `knowledge-base/learnings/` |
 | `plugins/soleur/skills/compound-capture/assets/critical-pattern-template.md` | `knowledge-base/learnings/` |
 | `plugins/soleur/skills/compound-capture/assets/resolution-template.md` | `knowledge-base/learnings/` |
@@ -78,8 +92,8 @@ git mv knowledge-base/learnings knowledge-base/features/
 | `plugins/soleur/skills/deepen-plan/SKILL.md` | `knowledge-base/plans/`, `knowledge-base/learnings/` |
 | `plugins/soleur/skills/work/SKILL.md` | `knowledge-base/specs/`, `knowledge-base/plans/` |
 | `plugins/soleur/skills/work/references/work-lifecycle-parallel.md` | `knowledge-base/specs/` |
-| `plugins/soleur/skills/ship/SKILL.md` | `knowledge-base/specs/`, `knowledge-base/plans/`, `knowledge-base/brainstorms/` |
-| `plugins/soleur/skills/merge-pr/SKILL.md` | `knowledge-base/specs/`, `knowledge-base/plans/` |
+| `plugins/soleur/skills/ship/SKILL.md` | `knowledge-base/specs/`, `knowledge-base/plans/`, `knowledge-base/brainstorms/`, `knowledge-base/learnings/` |
+| `plugins/soleur/skills/merge-pr/SKILL.md` | `knowledge-base/specs/`, `knowledge-base/plans/`, `knowledge-base/brainstorms/` |
 | `plugins/soleur/skills/one-shot/SKILL.md` | `knowledge-base/specs/` |
 | `plugins/soleur/skills/spec-templates/SKILL.md` | `knowledge-base/specs/` |
 | `plugins/soleur/skills/archive-kb/SKILL.md` | `knowledge-base/specs/`, `knowledge-base/brainstorms/`, `knowledge-base/plans/` |
@@ -96,7 +110,7 @@ git mv knowledge-base/learnings knowledge-base/features/
 
 | File | Patterns to Update |
 |------|-------------------|
-| `plugins/soleur/commands/sync.md` | `knowledge-base/learnings/` |
+| `plugins/soleur/commands/sync.md` | `knowledge-base/learnings/` (root path + category paths: `architecture/`, `technical-debt/`) |
 
 #### 2.5 Project Documentation
 
@@ -131,6 +145,78 @@ Run `archive-kb.sh --dry-run` from the worktree to verify the archiving script d
 ```bash
 bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh --dry-run
 ```
+
+## Reference Count Summary (from exhaustive grep)
+
+Exact old-path reference counts per file in executable code (plugins/, scripts/, commands/, agents/):
+
+| File | specs/ | plans/ | brainstorms/ | learnings/ | Total |
+|------|--------|--------|--------------|------------|-------|
+| `plan/SKILL.md` | 8 | 10 | 3 | 3 | 24 |
+| `compound-capture/SKILL.md` | 5 | 3 | 3 | 15 | 26 |
+| `compound/SKILL.md` | 4 | 1 | 1 | 14 | 20 |
+| `ship/SKILL.md` | 2 | 2 | 2 | 2 | 8 |
+| `brainstorm/SKILL.md` | 2 | 0 | 5 | 1 | 8 |
+| `learnings-researcher.md` | 0 | 0 | 0 | 20 | 20 |
+| `worktree-manager.sh` | 4 | 1 | 1 | 0 | 6 |
+| `archive-kb.sh` | 2 | 1 | 1 | 0 | 4 |
+| `sync.md` | 0 | 0 | 0 | 5 | 5 |
+| `work/SKILL.md` | 2 | 0 | 0 | 0 | 2 |
+| `work-lifecycle-parallel.md` | 2 | 0 | 0 | 0 | 2 |
+| `merge-pr/SKILL.md` | 1 | 1 | 1 | 0 | 3 |
+| `yaml-schema.md` | 0 | 0 | 0 | 13 | 13 |
+| `one-shot/SKILL.md` | 1 | 0 | 0 | 0 | 1 |
+| `spec-templates/SKILL.md` | 3 | 0 | 0 | 0 | 3 |
+| `archive-kb/SKILL.md` | 1 | 1 | 1 | 0 | 3 |
+| `deepen-plan/SKILL.md` | 0 | 1 | 0 | 1 | 2 |
+| `brainstorm-techniques/SKILL.md` | 0 | 0 | 1 | 0 | 1 |
+| `critical-pattern-template.md` | 0 | 0 | 0 | 2 | 2 |
+| `resolution-template.md` | 0 | 0 | 0 | 1 | 1 |
+| `cpo.md` | 1 | 0 | 0 | 0 | 1 |
+| `infra-security.md` | 0 | 0 | 0 | 1 | 1 |
+| `generate-article-30-register.sh` | 1 | 0 | 0 | 0 | 1 |
+| **Executable total** | **39** | **21** | **18** | **78** | **156** |
+
+Project documentation (knowledge-base/project/):
+
+| File | Total refs |
+|------|-----------|
+| `constitution.md` | 1 |
+| `components/knowledge-base.md` | ~12 |
+| `components/agents.md` | 1 |
+| `project/README.md` | 2 |
+
+Use these counts for post-update verification: re-run grep and confirm zero old-path matches in executable code.
+
+## Edge Cases and Implementation Guidance
+
+### Edge Case 1: Self-Referential Paths After Move
+
+This plan file and its tasks.md will themselves be moved from `knowledge-base/plans/` to `knowledge-base/features/plans/` during Phase 1. The content describes old-to-new mappings, so the old paths appearing in the plan text are intentional documentation, not stale references. Do NOT update paths inside this plan file or any file under `knowledge-base/features/` after the move.
+
+### Edge Case 2: Bash Brace Expansion in compound/SKILL.md
+
+Line 269 of `compound/SKILL.md` uses the pattern `knowledge-base/{brainstorms,plans}/*<slug>*`. This is a prose instruction (not a shell script), but the agent interprets it as a glob. Update to `knowledge-base/features/{brainstorms,plans}/*<slug>*`.
+
+### Edge Case 3: find Commands in compound-capture/SKILL.md
+
+Lines 350-352 use `find knowledge-base/brainstorms/` and `find knowledge-base/plans/`. These are prose instructions in code fences that agents execute. They need updating to `knowledge-base/features/brainstorms/` and `knowledge-base/features/plans/`.
+
+### Edge Case 4: Grep Tool Paths in learnings-researcher.md
+
+Lines 41-44 and 61 contain `path=knowledge-base/learnings/` as Grep tool parameters (not bash grep). These must update to `path=knowledge-base/features/learnings/` or the agent will search a nonexistent directory and return zero results silently.
+
+### Edge Case 5: sed/replace Strategy
+
+Use `replace_all` with the Edit tool for files with many occurrences (e.g., compound-capture/SKILL.md has 26 references). For files with mixed contexts (some paths in prose descriptions vs. code), verify each replacement individually. The string `knowledge-base/learnings/` in `compound-capture/SKILL.md` appears in code fences, prose text, and example output -- all need updating.
+
+### Edge Case 6: Concurrent Worktree Conflict
+
+Other active worktrees (`feat-fix-stale-kb-refs`, `feat-plausible-growth-targets`) may have files referencing old paths. This is acceptable -- those branches will need to merge origin/main after this PR lands, and the pre-merge-rebase hook enforces that. No coordination needed.
+
+### Edge Case 7: archive-kb.sh Environment Check
+
+Line 57 of `archive-kb.sh` checks `[[ ! -d "knowledge-base" ]]` -- this stays correct since `knowledge-base/` still exists as the parent. No change needed here. But the `discover_artifacts()` function (lines 90-115) uses relative paths that must all update.
 
 ## Critical Dependencies and Risks
 
