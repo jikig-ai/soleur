@@ -354,44 +354,44 @@ In manual mode (Free tier 403 fallback), the enriched fields are not available b
 
 ### x-community.sh Changes
 
-- [ ] `cmd_fetch_mentions` query params include `user.fields=username,name,profile_image_url,public_metrics`
-- [ ] `cmd_fetch_mentions` query params include `tweet.fields=author_id,created_at,conversation_id,referenced_tweets`
-- [ ] jq transform outputs `author_id` (string) per mention
-- [ ] jq transform outputs `author_profile_image_url` (string or null) per mention
-- [ ] jq transform outputs `author_followers_count` (number or 0) per mention
-- [ ] jq transform outputs `referenced_tweets` (array or null) per mention
-- [ ] New fields follow INDEX + `// fallback` pattern (not generator-style joins)
-- [ ] New `fetch-user-timeline <user_id> [--max N]` command exists
-- [ ] `fetch-user-timeline` validates `<user_id>` as a positive integer (`^[0-9]+$`)
-- [ ] `fetch-user-timeline` validates `--max` with same clamping as `fetch-timeline` (5-100)
-- [ ] `fetch-user-timeline` defaults to `--max 5` (not 10) to conserve API credits
-- [ ] Script header comment updated with new command
-- [ ] `main()` dispatch case updated for `fetch-user-timeline`
+- [x]`cmd_fetch_mentions` query params include `user.fields=username,name,profile_image_url,public_metrics`
+- [x]`cmd_fetch_mentions` query params include `tweet.fields=author_id,created_at,conversation_id,referenced_tweets`
+- [x]jq transform outputs `author_id` (string) per mention
+- [x]jq transform outputs `author_profile_image_url` (string or null) per mention
+- [x]jq transform outputs `author_followers_count` (number or 0) per mention
+- [x]jq transform outputs `referenced_tweets` (array or null) per mention
+- [x]New fields follow INDEX + `// fallback` pattern (not generator-style joins)
+- [x]New `fetch-user-timeline <user_id> [--max N]` command exists
+- [x]`fetch-user-timeline` validates `<user_id>` as a positive integer (`^[0-9]+$`)
+- [x]`fetch-user-timeline` validates `--max` with same clamping as `fetch-timeline` (5-100)
+- [x]`fetch-user-timeline` defaults to `--max 5` (not 10) to conserve API credits
+- [x]Script header comment updated with new command
+- [x]`main()` dispatch case updated for `fetch-user-timeline`
 
 ### community-manager.md Changes
 
-- [ ] Step 2b added: explicit guardrails screening with skip criteria application before drafting
-- [ ] Step 2b instructs selective `fetch-user-timeline` calls for brand association risk
-- [ ] Step 2b skipped in headless mode (no API credit consumption for zero benefit)
-- [ ] Step 3 includes conversation dedup guidance (group by `conversation_id`, one reply per thread)
-- [ ] Step 3 auto-skips retweets (`referenced_tweets` type "retweeted")
-- [ ] Step 4 approval prompt format includes follower count, profile image presence, mention type
-- [ ] Absent metadata handled gracefully (display "N/A" when data unavailable, e.g., manual mode)
-- [ ] Step numbering preserved (2b, not renumbered 3-7)
+- [x]Step 2b added: explicit guardrails screening with skip criteria application before drafting
+- [x]Step 2b instructs selective `fetch-user-timeline` calls for brand association risk
+- [x]Step 2b skipped in headless mode (no API credit consumption for zero benefit)
+- [x]Step 3 includes conversation dedup guidance (group by `conversation_id`, one reply per thread)
+- [x]Step 3 auto-skips retweets (`referenced_tweets` type "retweeted")
+- [x]Step 4 approval prompt format includes follower count, profile image presence, mention type
+- [x]Absent metadata handled gracefully (display "N/A" when data unavailable, e.g., manual mode)
+- [x]Step numbering preserved (2b, not renumbered 3-7)
 
 ### Tests (test/x-community.test.ts)
 
-- [ ] jq transform test JQ_TRANSFORM constant updated with new fields
-- [ ] jq transform test updated to verify `author_id` field
-- [ ] jq transform test updated to verify `author_profile_image_url` field
-- [ ] jq transform test updated to verify `author_followers_count` field
-- [ ] jq transform test updated to verify `referenced_tweets` field
-- [ ] jq transform test covers missing `public_metrics` (fallback to 0)
-- [ ] jq transform test covers missing `profile_image_url` (fallback to null)
-- [ ] jq transform test covers missing `referenced_tweets` (fallback to null)
-- [ ] jq transform test covers `referenced_tweets` with retweet type
-- [ ] `fetch-user-timeline` argument validation tests (missing user_id, non-numeric user_id)
-- [ ] `fetch-user-timeline --max` validation tests (non-numeric, out of range clamping)
+- [x]jq transform test JQ_TRANSFORM constant updated with new fields
+- [x]jq transform test updated to verify `author_id` field
+- [x]jq transform test updated to verify `author_profile_image_url` field
+- [x]jq transform test updated to verify `author_followers_count` field
+- [x]jq transform test updated to verify `referenced_tweets` field
+- [x]jq transform test covers missing `public_metrics` (fallback to 0)
+- [x]jq transform test covers missing `profile_image_url` (fallback to null)
+- [x]jq transform test covers missing `referenced_tweets` (fallback to null)
+- [x]jq transform test covers `referenced_tweets` with retweet type
+- [x]`fetch-user-timeline` argument validation tests (missing user_id, non-numeric user_id)
+- [x]`fetch-user-timeline --max` validation tests (non-numeric, out of range clamping)
 
 ## Test Scenarios
 

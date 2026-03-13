@@ -168,10 +168,14 @@ describe("x-community.sh fetch-mentions -- jq transform", () => {
         {
           id: .id,
           text: .text,
+          author_id: .author_id,
           author_username: ($user.username // "unknown"),
           author_name: ($user.name // "unknown"),
+          author_profile_image_url: ($user.profile_image_url // null),
+          author_followers_count: (($user.public_metrics.followers_count) // 0),
           created_at: .created_at,
-          conversation_id: .conversation_id
+          conversation_id: .conversation_id,
+          referenced_tweets: (.referenced_tweets // null)
         }
       ],
       meta: {
@@ -180,12 +184,18 @@ describe("x-community.sh fetch-mentions -- jq transform", () => {
       }
     }`;
 
-  test("joins includes.users to data by author_id", () => {
+  test("joins includes.users to data by author_id with enriched fields", () => {
     const input = JSON.stringify({
       data: [
         { id: "1", text: "hello @soleur", author_id: "100", created_at: "2026-03-10T00:00:00Z", conversation_id: "1" },
       ],
-      includes: { users: [{ id: "100", username: "alice", name: "Alice" }] },
+      includes: {
+        users: [{
+          id: "100", username: "alice", name: "Alice",
+          profile_image_url: "https://pbs.twimg.com/profile_images/alice.jpg",
+          public_metrics: { followers_count: 1234, following_count: 100, tweet_count: 500, listed_count: 10 },
+        }],
+      },
       meta: { newest_id: "1", result_count: 1 },
     });
 
@@ -197,12 +207,16 @@ describe("x-community.sh fetch-mentions -- jq transform", () => {
     expect(result.exitCode).toBe(0);
     const output = JSON.parse(decode(result.stdout));
     expect(output.mentions).toHaveLength(1);
+    expect(output.mentions[0].author_id).toBe("100");
     expect(output.mentions[0].author_username).toBe("alice");
     expect(output.mentions[0].author_name).toBe("Alice");
+    expect(output.mentions[0].author_profile_image_url).toBe("https://pbs.twimg.com/profile_images/alice.jpg");
+    expect(output.mentions[0].author_followers_count).toBe(1234);
+    expect(output.mentions[0].referenced_tweets).toBeNull();
     expect(output.meta.newest_id).toBe("1");
   });
 
-  test("preserves tweets when includes.users is missing", () => {
+  test("preserves tweets when includes.users is missing (fallback to defaults)", () => {
     const input = JSON.stringify({
       data: [
         { id: "2", text: "hey @soleur", author_id: "200", created_at: "2026-03-10T00:00:00Z", conversation_id: "2" },
@@ -220,6 +234,8 @@ describe("x-community.sh fetch-mentions -- jq transform", () => {
     expect(output.mentions).toHaveLength(1);
     expect(output.mentions[0].author_username).toBe("unknown");
     expect(output.mentions[0].author_name).toBe("unknown");
+    expect(output.mentions[0].author_profile_image_url).toBeNull();
+    expect(output.mentions[0].author_followers_count).toBe(0);
   });
 
   test("preserves tweets when author_id has no match in includes.users", () => {
@@ -240,6 +256,123 @@ describe("x-community.sh fetch-mentions -- jq transform", () => {
     const output = JSON.parse(decode(result.stdout));
     expect(output.mentions).toHaveLength(1);
     expect(output.mentions[0].author_username).toBe("unknown");
+    expect(output.mentions[0].author_profile_image_url).toBeNull();
+    expect(output.mentions[0].author_followers_count).toBe(0);
+  });
+
+  test("outputs referenced_tweets with retweet type", () => {
+    const input = JSON.stringify({
+      data: [
+        {
+          id: "4", text: "RT @soleur: great post", author_id: "400",
+          created_at: "2026-03-10T00:00:00Z", conversation_id: "4",
+          referenced_tweets: [{ type: "retweeted", id: "999" }],
+        },
+      ],
+      includes: { users: [{ id: "400", username: "bob", name: "Bob" }] },
+      meta: { newest_id: "4", result_count: 1 },
+    });
+
+    const result = Bun.spawnSync(["jq", JQ_TRANSFORM], {
+      stdin: new Response(input),
+      env: NO_CREDS_ENV,
+    });
+
+    expect(result.exitCode).toBe(0);
+    const output = JSON.parse(decode(result.stdout));
+    expect(output.mentions[0].referenced_tweets).toHaveLength(1);
+    expect(output.mentions[0].referenced_tweets[0].type).toBe("retweeted");
+    expect(output.mentions[0].referenced_tweets[0].id).toBe("999");
+  });
+
+  test("outputs referenced_tweets with quoted type", () => {
+    const input = JSON.stringify({
+      data: [
+        {
+          id: "5", text: "Check this out @soleur", author_id: "500",
+          created_at: "2026-03-10T00:00:00Z", conversation_id: "5",
+          referenced_tweets: [{ type: "quoted", id: "888" }],
+        },
+      ],
+      includes: { users: [{ id: "500", username: "carol", name: "Carol" }] },
+      meta: { newest_id: "5", result_count: 1 },
+    });
+
+    const result = Bun.spawnSync(["jq", JQ_TRANSFORM], {
+      stdin: new Response(input),
+      env: NO_CREDS_ENV,
+    });
+
+    expect(result.exitCode).toBe(0);
+    const output = JSON.parse(decode(result.stdout));
+    expect(output.mentions[0].referenced_tweets).toHaveLength(1);
+    expect(output.mentions[0].referenced_tweets[0].type).toBe("quoted");
+  });
+
+  test("outputs null referenced_tweets when absent from API response", () => {
+    const input = JSON.stringify({
+      data: [
+        { id: "6", text: "hey @soleur", author_id: "600", created_at: "2026-03-10T00:00:00Z", conversation_id: "6" },
+      ],
+      includes: { users: [{ id: "600", username: "dave", name: "Dave" }] },
+      meta: { newest_id: "6", result_count: 1 },
+    });
+
+    const result = Bun.spawnSync(["jq", JQ_TRANSFORM], {
+      stdin: new Response(input),
+      env: NO_CREDS_ENV,
+    });
+
+    expect(result.exitCode).toBe(0);
+    const output = JSON.parse(decode(result.stdout));
+    expect(output.mentions[0].referenced_tweets).toBeNull();
+  });
+
+  test("missing public_metrics falls back to 0 followers", () => {
+    const input = JSON.stringify({
+      data: [
+        { id: "7", text: "hello @soleur", author_id: "700", created_at: "2026-03-10T00:00:00Z", conversation_id: "7" },
+      ],
+      includes: {
+        users: [{ id: "700", username: "eve", name: "Eve", profile_image_url: "https://pbs.twimg.com/eve.jpg" }],
+      },
+      meta: { newest_id: "7", result_count: 1 },
+    });
+
+    const result = Bun.spawnSync(["jq", JQ_TRANSFORM], {
+      stdin: new Response(input),
+      env: NO_CREDS_ENV,
+    });
+
+    expect(result.exitCode).toBe(0);
+    const output = JSON.parse(decode(result.stdout));
+    expect(output.mentions[0].author_followers_count).toBe(0);
+    expect(output.mentions[0].author_profile_image_url).toBe("https://pbs.twimg.com/eve.jpg");
+  });
+
+  test("missing profile_image_url falls back to null", () => {
+    const input = JSON.stringify({
+      data: [
+        { id: "8", text: "hi @soleur", author_id: "800", created_at: "2026-03-10T00:00:00Z", conversation_id: "8" },
+      ],
+      includes: {
+        users: [{
+          id: "800", username: "frank", name: "Frank",
+          public_metrics: { followers_count: 50, following_count: 10, tweet_count: 100, listed_count: 1 },
+        }],
+      },
+      meta: { newest_id: "8", result_count: 1 },
+    });
+
+    const result = Bun.spawnSync(["jq", JQ_TRANSFORM], {
+      stdin: new Response(input),
+      env: NO_CREDS_ENV,
+    });
+
+    expect(result.exitCode).toBe(0);
+    const output = JSON.parse(decode(result.stdout));
+    expect(output.mentions[0].author_profile_image_url).toBeNull();
+    expect(output.mentions[0].author_followers_count).toBe(50);
   });
 });
 
@@ -356,6 +489,45 @@ describe("x-community.sh handle_response -- default error", () => {
     expect(result.exitCode).toBe(1);
     const stderr = decode(result.stderr);
     expect(stderr).toContain("Service Unavailable");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetch-user-timeline -- argument validation
+// ---------------------------------------------------------------------------
+
+describe("x-community.sh fetch-user-timeline -- argument validation", () => {
+  test("missing user_id exits 1 with usage error", () => {
+    const result = Bun.spawnSync(
+      ["bash", SCRIPT_PATH, "fetch-user-timeline"],
+      { env: FAKE_CREDS_ENV }
+    );
+
+    expect(result.exitCode).toBe(1);
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("requires a user_id argument");
+  });
+
+  test("non-numeric user_id exits 1 with error", () => {
+    const result = Bun.spawnSync(
+      ["bash", SCRIPT_PATH, "fetch-user-timeline", "abc"],
+      { env: FAKE_CREDS_ENV }
+    );
+
+    expect(result.exitCode).toBe(1);
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("must be a positive integer");
+  });
+
+  test("non-numeric --max exits 1 with error", () => {
+    const result = Bun.spawnSync(
+      ["bash", SCRIPT_PATH, "fetch-user-timeline", "12345", "--max", "abc"],
+      { env: FAKE_CREDS_ENV }
+    );
+
+    expect(result.exitCode).toBe(1);
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("must be a positive integer");
   });
 });
 
