@@ -39,10 +39,42 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Generate analytics snapshot
+        id: analytics
         env:
           PLAUSIBLE_API_KEY: ${{ secrets.PLAUSIBLE_API_KEY }}
           PLAUSIBLE_SITE_ID: ${{ secrets.PLAUSIBLE_SITE_ID }}
         run: bash scripts/weekly-analytics.sh
+
+      - name: Discord notification (KPI miss)
+        if: steps.analytics.outputs.kpi_miss == 'true'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          KPI_PHASE: ${{ steps.analytics.outputs.kpi_phase }}
+          KPI_TARGET: ${{ steps.analytics.outputs.kpi_target }}
+          KPI_ACTUAL: ${{ steps.analytics.outputs.kpi_actual }}
+          KPI_VISITORS: ${{ steps.analytics.outputs.kpi_visitors }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          if [[ -z "${DISCORD_WEBHOOK_URL:-}" ]]; then
+            echo "DISCORD_WEBHOOK_URL not set, skipping KPI miss notification"
+            exit 0
+          fi
+          MESSAGE=$(printf '**Weekly Analytics: KPI Miss**\n\nPhase: %s\nTarget: %s WoW\nActual: %s WoW\nVisitors: %s\n\nDashboard: %s/tree/main/knowledge-base/marketing/analytics' \
+            "$KPI_PHASE" "$KPI_TARGET" "$KPI_ACTUAL" "$KPI_VISITORS" "$REPO_URL")
+          PAYLOAD=$(jq -n \
+            --arg content "$MESSAGE" \
+            --arg username "Sol" \
+            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
+            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL")
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Discord KPI miss notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Discord KPI miss notification failed (HTTP $HTTP_CODE)"
+          fi
 
       - name: Create PR with snapshot
         env:

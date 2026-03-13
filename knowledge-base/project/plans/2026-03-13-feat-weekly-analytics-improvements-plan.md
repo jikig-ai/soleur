@@ -323,20 +323,20 @@ In the workflow, add the step with an `id` on the script step and a conditional 
 
 ## Acceptance Criteria
 
-- [ ] `detect_phase()` function in `scripts/weekly-analytics.sh` returns correct phase and target for dates in each phase range, pre-Phase 1, and post-Phase 3
-- [ ] `CURRENT_PHASE` and `CURRENT_TARGET` are no longer hardcoded string literals
-- [ ] `trend-summary.md` is created on first run with header and first data row
-- [ ] `trend-summary.md` appends a row on subsequent runs without duplicating existing rows
-- [ ] Trend summary row contains: Week number, Date, Visitors, WoW %, Target %, Status (on-track/below-target/N/A)
-- [ ] KPI miss status written to `GITHUB_OUTPUT` when actual WoW % < phase target %
-- [ ] KPI miss output is `false` when WoW % >= target, when change data is N/A, or when pre/post-phase
-- [ ] Discord KPI miss alert fires via workflow step conditional on `steps.analytics.outputs.kpi_miss == 'true'`
-- [ ] KPI miss alert is distinct from the existing failure notification (different message, same webhook)
-- [ ] Existing snapshot markdown format is unchanged
-- [ ] Script exits 0 on KPI miss (miss is informational, not a failure)
-- [ ] `set -euo pipefail` compliance maintained (no unguarded variables, no bare greps in pipelines)
-- [ ] All new functions use `local` variable declarations per constitution shell conventions
-- [ ] Week number calculation uses epoch seconds divided by `(7 * 86_400)`, not bare `7`
+- [x] `detect_phase()` function in `scripts/weekly-analytics.sh` returns correct phase and target for dates in each phase range, pre-Phase 1, and post-Phase 3
+- [x] `CURRENT_PHASE` and `CURRENT_TARGET` are no longer hardcoded string literals
+- [x] `trend-summary.md` is created on first run with header and first data row
+- [x] `trend-summary.md` appends a row on subsequent runs without duplicating existing rows
+- [x] Trend summary row contains: Week number, Date, Visitors, WoW %, Target %, Status (on-track/below-target/N/A)
+- [x] KPI miss status written to `GITHUB_OUTPUT` when actual WoW % < phase target %
+- [x] KPI miss output is `false` when WoW % >= target, when change data is N/A, or when pre/post-phase
+- [x] Discord KPI miss alert fires via workflow step conditional on `steps.analytics.outputs.kpi_miss == 'true'`
+- [x] KPI miss alert is distinct from the existing failure notification (different message, same webhook)
+- [x] Existing snapshot markdown format is unchanged
+- [x] Script exits 0 on KPI miss (miss is informational, not a failure)
+- [x] `set -euo pipefail` compliance maintained (no unguarded variables, no bare greps in pipelines)
+- [x] All new functions use `local` variable declarations per constitution shell conventions
+- [x] Week number calculation uses epoch seconds divided by `(7 * 86400)`, not bare `7`
 
 ## Test Scenarios
 
