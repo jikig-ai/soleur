@@ -193,13 +193,13 @@ fi
 
 ## Acceptance Criteria
 
-- [ ] `worktree-manager.sh cleanup-merged` succeeds when invoked from the bare repo root (exit 0, no fatal errors)
-- [ ] `worktree-manager.sh cleanup-merged` succeeds when invoked from a worktree (existing behavior preserved)
-- [ ] The "update main checkout" section is skipped (with informational message) when `core.bare=true`
-- [ ] On-disk files at bare repo root match git HEAD after fix is applied
-- [ ] AGENTS.md session-start instruction works regardless of which copy (disk or git) Claude Code reads
-- [ ] `IS_BARE` is computed once at init, not re-evaluated per function call
-- [ ] `create_worktree` and `create_for_feature` exit early with clear message when invoked from bare repo
+- [x] `worktree-manager.sh cleanup-merged` succeeds when invoked from the bare repo root (exit 0, no fatal errors)
+- [x] `worktree-manager.sh cleanup-merged` succeeds when invoked from a worktree (existing behavior preserved)
+- [x] The "update main checkout" section is skipped (with informational message) when `core.bare=true`
+- [x] On-disk files at bare repo root match git HEAD after fix is applied
+- [x] AGENTS.md session-start instruction works regardless of which copy (disk or git) Claude Code reads
+- [x] `IS_BARE` is computed once at init, not re-evaluated per function call
+- [x] `create_worktree` and `create_for_feature` exit early with clear message when invoked from bare repo
 
 ## Test Scenarios
 
