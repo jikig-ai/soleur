@@ -10,6 +10,7 @@
 # Environment variables (required):
 #   LINKEDIN_ACCESS_TOKEN  - OAuth 2.0 Bearer token (60-day TTL)
 #   LINKEDIN_PERSON_URN    - Person URN for posting (urn:li:person:{id})
+#   LINKEDIN_ALLOW_POST    - Set to "true" to enable posting (safety guard, default: disabled)
 #
 # Exit codes:
 #   0 - Success
@@ -221,6 +222,13 @@ post_request() {
 # --- Commands ---
 
 cmd_post_content() {
+  # Guard: require explicit opt-in to post.
+  if [[ "${LINKEDIN_ALLOW_POST:-}" != "true" ]]; then
+    echo "Error: LINKEDIN_ALLOW_POST is not set to 'true'." >&2
+    echo "Set LINKEDIN_ALLOW_POST=true to enable posting." >&2
+    return 1
+  fi
+
   local text=""
 
   while [[ $# -gt 0 ]]; do
