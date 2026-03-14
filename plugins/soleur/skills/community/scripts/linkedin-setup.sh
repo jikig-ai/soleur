@@ -95,9 +95,9 @@ cmd_validate_credentials() {
   # Token introspection uses client credentials as POST body params (not Bearer)
   if ! response=$(curl -s -w "\n%{http_code}" \
     -X POST \
-    -d "client_id=${LINKEDIN_CLIENT_ID}" \
-    -d "client_secret=${LINKEDIN_CLIENT_SECRET}" \
-    -d "token=${LINKEDIN_ACCESS_TOKEN}" \
+    --data-urlencode "client_id=${LINKEDIN_CLIENT_ID}" \
+    --data-urlencode "client_secret=${LINKEDIN_CLIENT_SECRET}" \
+    --data-urlencode "token=${LINKEDIN_ACCESS_TOKEN}" \
     "${LINKEDIN_OAUTH}/introspectToken" 2>/dev/null); then
     echo "Error: Failed to connect to LinkedIn OAuth API." >&2
     echo "Check your network connection and try again." >&2
@@ -209,11 +209,11 @@ cmd_generate_token() {
   local response http_code body
   if ! response=$(curl -s -w "\n%{http_code}" \
     -X POST \
-    -d "grant_type=authorization_code" \
-    -d "code=${auth_code}" \
-    -d "client_id=${LINKEDIN_CLIENT_ID}" \
-    -d "client_secret=${LINKEDIN_CLIENT_SECRET}" \
-    -d "redirect_uri=${redirect_uri}" \
+    --data-urlencode "grant_type=authorization_code" \
+    --data-urlencode "code=${auth_code}" \
+    --data-urlencode "client_id=${LINKEDIN_CLIENT_ID}" \
+    --data-urlencode "client_secret=${LINKEDIN_CLIENT_SECRET}" \
+    --data-urlencode "redirect_uri=${redirect_uri}" \
     "${LINKEDIN_OAUTH}/accessToken" 2>/dev/null); then
     echo "Error: Failed to connect to LinkedIn OAuth API." >&2
     exit 1
