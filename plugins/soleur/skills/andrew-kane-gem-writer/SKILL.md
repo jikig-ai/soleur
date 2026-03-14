@@ -1,6 +1,6 @@
 ---
 name: andrew-kane-gem-writer
-description: This skill should be used when writing Ruby gems following Andrew Kane's proven patterns and philosophy. It applies when creating new Ruby gems, refactoring existing gems, designing gem APIs, or when clean, minimal, production-ready Ruby library code is needed. Triggers on requests like "create a gem", "write a Ruby library", "design a gem API", or mentions of Andrew Kane's style.
+description: "This skill should be used when writing Ruby gems following Andrew Kane's patterns. It applies when creating new gems, refactoring existing gems, or designing gem APIs with clean, minimal, production-ready code."
 ---
 
 # Andrew Kane Gem Writer

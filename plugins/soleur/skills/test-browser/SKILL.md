@@ -1,6 +1,6 @@
 ---
 name: test-browser
-description: This skill should be used when running end-to-end browser tests on pages affected by a PR or branch changes. It uses the agent-browser CLI to map changed files to routes, test pages, and capture screenshots. Triggers on "browser test", "test browser", "e2e test", "test affected pages", "run browser tests".
+description: "This skill should be used when running end-to-end browser tests on pages affected by a PR or branch changes. It uses agent-browser CLI to map changed files to routes, test pages, and capture screenshots."
 ---
 
 # Browser Test

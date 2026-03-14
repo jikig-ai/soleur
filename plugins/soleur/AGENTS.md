@@ -132,6 +132,12 @@ When adding or modifying skills, verify compliance with skill-creator spec:
 - [ ] `name:` present and matches directory name (lowercase-with-hyphens)
 - [ ] `description:` present and uses **third person** ("This skill should be used when..." NOT "Use this skill when...")
 
+### Token Budget Check (Required when adding skills)
+
+- [ ] Run: `bun test plugins/soleur/test/components.test.ts` -- cumulative description word count must stay under 1,800 words (see #618)
+- [ ] Descriptions are for **routing**, not instruction. Remove trigger phrases (`Triggers on "..."`) and verbose restatements. Target ~30 words per skill.
+- [ ] No single description exceeds 1,024 characters
+
 ### Reference Links (Required if references/ exists)
 
 - [ ] All files in `references/` are linked as `[filename.md](./references/filename.md)`

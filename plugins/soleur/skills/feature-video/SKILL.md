@@ -1,6 +1,6 @@
 ---
 name: feature-video
-description: "This skill should be used when recording video walkthroughs of features and adding them to PR descriptions. It captures browser interactions using agent-browser CLI, optionally creates GIF/MP4 demos (requires ffmpeg), and optionally uploads via rclone. Gracefully degrades when optional tools are missing. Triggers on \"record video\", \"feature demo\", \"PR walkthrough\", \"video for PR\", \"screen recording\"."
+description: "This skill should be used when recording video walkthroughs of features for PR descriptions. It captures browser interactions using agent-browser CLI, optionally creates GIF/MP4 demos (requires ffmpeg), and optionally uploads via rclone. Gracefully degrades when optional tools are missing."
 ---
 
 # Feature Video Walkthrough

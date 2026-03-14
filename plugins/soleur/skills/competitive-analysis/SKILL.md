@@ -1,6 +1,6 @@
 ---
 name: competitive-analysis
-description: "This skill should be used when running competitive intelligence scans and market research reports against tracked competitors. It invokes the competitive-intelligence agent to produce a structured knowledge-base report. Triggers on \"competitive analysis\", \"competitor scan\", \"market research\"."
+description: "This skill should be used when running competitive intelligence scans and market research reports against tracked competitors. It produces a structured knowledge-base report."
 ---
 
 # Competitive Analysis

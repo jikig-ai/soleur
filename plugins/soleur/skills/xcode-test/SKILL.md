@@ -1,6 +1,6 @@
 ---
 name: xcode-test
-description: This skill should be used when building and testing iOS apps on the simulator using XcodeBuildMCP. It handles building, installing, launching, screenshot capture, and log analysis for iOS/macOS apps. Triggers on "xcode test", "test iOS app", "simulator test", "build and test iOS", "run on simulator".
+description: "This skill should be used when building and testing iOS apps on the simulator using XcodeBuildMCP. It handles building, installing, launching, screenshot capture, and log analysis for iOS/macOS apps."
 ---
 
 # Xcode Test

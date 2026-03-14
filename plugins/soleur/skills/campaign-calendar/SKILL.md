@@ -1,6 +1,6 @@
 ---
 name: campaign-calendar
-description: "This skill should be used when generating or refreshing the rolling campaign calendar from distribution content files. It scans knowledge-base/marketing/distribution-content/ for markdown files with YAML frontmatter, groups them by status (overdue, upcoming, draft, published), and writes a calendar view to knowledge-base/marketing/campaign-calendar.md. Triggers on 'campaign calendar', 'refresh calendar', 'content calendar', 'distribution calendar'."
+description: "This skill should be used when generating or refreshing the rolling campaign calendar. It scans knowledge-base/marketing/distribution-content/ for markdown files with YAML frontmatter, groups by status (overdue, upcoming, draft, published), and writes a calendar view."
 ---
 
 # Campaign Calendar
