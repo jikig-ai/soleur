@@ -119,6 +119,24 @@ describe("extract_section", () => {
     expect(result.stdout).toBe("");
   });
 
+  test("extracts LinkedIn Personal without bleeding into LinkedIn Company Page", () => {
+    const result = runFunction(
+      `extract_section "${SAMPLE_CONTENT}" "LinkedIn Personal"`
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("thought leadership");
+    expect(result.stdout).not.toContain("official announcement");
+  });
+
+  test("extracts LinkedIn Company Page without bleeding into LinkedIn Personal", () => {
+    const result = runFunction(
+      `extract_section "${SAMPLE_CONTENT}" "LinkedIn Company Page"`
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("official announcement");
+    expect(result.stdout).not.toContain("thought leadership");
+  });
+
   test("returns empty for nonexistent section", () => {
     const result = runFunction(
       `extract_section "${SAMPLE_CONTENT}" "Nonexistent"`
@@ -310,8 +328,20 @@ describe("channel_to_section", () => {
     expect(result.stdout).toBe("X/Twitter Thread");
   });
 
+  test("maps linkedin-personal to LinkedIn Personal", () => {
+    const result = runFunction(`channel_to_section "linkedin-personal"`);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("LinkedIn Personal");
+  });
+
+  test("maps linkedin-company to LinkedIn Company Page", () => {
+    const result = runFunction(`channel_to_section "linkedin-company"`);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("LinkedIn Company Page");
+  });
+
   test("returns empty for unknown channel", () => {
-    const result = runFunction(`channel_to_section "linkedin"`);
+    const result = runFunction(`channel_to_section "unknown"`);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("");
   });
