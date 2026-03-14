@@ -61,17 +61,23 @@ End result: testing works.
 
 ---
 
-## LinkedIn
-
-Testing the LinkedIn content publisher integration.
-
-This post validates that extract_section correctly handles LinkedIn content with multiple paragraphs and a link.
-
-Read more: https://example.com/blog/test-case-study/
-
----
-
 ## Hacker News
 
 **Title:** Test Case Study
 **URL:** https://example.com/blog/test-case-study/
+
+---
+
+## LinkedIn Personal
+
+I've been thinking about how AI agents change the way we ship software...
+
+This is a test LinkedIn personal post with thought leadership framing.
+
+---
+
+## LinkedIn Company Page
+
+Soleur now supports automated competitive intelligence scanning.
+
+This is a test LinkedIn company page post with official announcement framing.

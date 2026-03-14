@@ -65,6 +65,25 @@ This list feeds directly into the Session Errors section of the learning documen
 
 FAILURE MODE THIS PREVENTS: Compound runs in pipeline mode, the model judges the session as "clean," and silently drops errors that happened earlier in the conversation (e.g., a skill-not-found error from one-shot Step 1 gets omitted because compound focuses only on the main implementation task).
 
+### Post-Documentation Verification Gate (MANDATORY)
+
+After the learning file is written (by compound-capture Step 6), read it back and verify:
+
+1. If Phase 0.5 produced a non-empty error inventory, the learning file MUST contain a `## Session Errors` section with at least as many items as the inventory.
+2. For each session error, the learning MUST include a `**Prevention:**` line proposing how to avoid it in future sessions.
+3. If the verification fails (section missing or item count mismatch), append the missing errors to the learning file immediately. Do not proceed to Constitution Promotion until the learning is complete.
+
+This gate closes the gap where errors were enumerated in conversation but never made it into the persisted document.
+
+### Error-to-Workflow Feedback (MANDATORY)
+
+After verifying session errors are in the learning, determine if any error warrants a workflow change. For each session error, ask: "Could a rule, hook, or skill instruction have prevented this?"
+
+- If yes, produce a proposal in the same format as Phase 1.5 Deviation Analyst (rule text + enforcement tier) and feed it into Constitution Promotion alongside any deviation proposals.
+- If no (the error was a one-off or already covered by existing rules), skip.
+
+This ensures session errors don't just get documented — they feed back into the rules and definitions that govern future sessions. The goal is a closed loop: error happens → gets documented → workflow changes → error cannot recur.
+
 ## Execution Strategy: Parallel Subagents
 
 This command launches multiple specialized subagents IN PARALLEL to maximize efficiency:
@@ -168,13 +187,15 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    # jq -n '{ hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: "BLOCKED: [reason]" } }'
    ```
 
-6. **Feed into Constitution Promotion.** Present each deviation to the user via the existing Accept/Skip/Edit gate in the Constitution Promotion section below. Accepted hook proposals should be manually copied to `.claude/hooks/` after testing — never auto-install.
+6. **Feed into learning document.** For each detected deviation, add it to the learning file's `## Session Errors` section (if not already present from Phase 0.5). Format: `**[description]** — Recovery: [what fixed it] — Prevention: [proposed enforcement]`. This ensures workflow violations are documented in the learning, not just proposed as hooks.
 
-7. **Rule budget count.** After deviation analysis, count always-loaded rules: `grep -c '^- ' knowledge-base/project/constitution.md` + `grep -c '^- ' AGENTS.md`. Output: `"Rule budget: N always-loaded rules (constitution: X, AGENTS.md: Y)"`. If N > 250, append: `"[WARNING] Rule budget exceeded (N/250). Consider retiring hook-enforced rules or migrating advisory rules to skill/agent instructions."`
+7. **Feed into Constitution Promotion.** Present each deviation to the user via the existing Accept/Skip/Edit gate in the Constitution Promotion section below. Accepted hook proposals should be manually copied to `.claude/hooks/` after testing — never auto-install.
+
+8. **Rule budget count.** After deviation analysis, count always-loaded rules: `grep -c '^- ' knowledge-base/project/constitution.md` + `grep -c '^- ' AGENTS.md`. Output: `"Rule budget: N always-loaded rules (constitution: X, AGENTS.md: Y)"`. If N > 250, append: `"[WARNING] Rule budget exceeded (N/250). Consider retiring hook-enforced rules or migrating advisory rules to skill/agent instructions."`
 
 ### Empty Case
 
-If no deviations are detected, output: "Deviation Analyst: no violations found." followed by the rule budget count from step 7, then proceed to Knowledge Base Integration.
+If no deviations are detected, output: "Deviation Analyst: no violations found." followed by the rule budget count from step 8, then proceed to Knowledge Base Integration.
 
 ## Knowledge Base Integration
 
@@ -236,7 +257,9 @@ HARD RULE: This phase MUST run even in automated pipelines. See constitution pro
 After constitution promotion, compound routes the captured learning to the skill, agent, or command definition that was active in the session. This feeds insights back into the instructions that directly govern behavior, preventing repeated mistakes.
 
 1. Detect which skills, agents, or commands were invoked in this conversation. Also check session-state.md `### Components Invoked` for components from preceding pipeline phases.
-2. Propose a one-line bullet edit to the most relevant section of the target definition file
+2. Route **two categories** of insights:
+   - **Solution insight:** The main learning (what was solved and how). Propose a one-line bullet edit to the most relevant section of the target definition file.
+   - **Error prevention:** For each session error that could have been prevented by a skill instruction, propose a one-line bullet to the skill that was active when the error occurred. Example: if a plan skill prescribed wrong paths, add a bullet to the plan skill's Sharp Edges saying "Verify relative paths by tracing each `../` step before prescribing them."
 3. **Headless mode:** If `HEADLESS_MODE=true`, auto-accept the LLM-proposed edit without prompting.
 4. **Interactive mode:** User confirms with Accept/Skip/Edit
 

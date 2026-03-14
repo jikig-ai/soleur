@@ -119,13 +119,22 @@ describe("extract_section", () => {
     expect(result.stdout).toBe("");
   });
 
-  test("extracts LinkedIn section", () => {
+  test("extracts LinkedIn Personal without bleeding into LinkedIn Company Page", () => {
     const result = runFunction(
-      `extract_section "${SAMPLE_CONTENT}" "LinkedIn"`
+      `extract_section "${SAMPLE_CONTENT}" "LinkedIn Personal"`
     );
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("Testing the LinkedIn content publisher integration.");
-    expect(result.stdout).toContain("https://example.com/blog/test-case-study/");
+    expect(result.stdout).toContain("thought leadership");
+    expect(result.stdout).not.toContain("official announcement");
+  });
+
+  test("extracts LinkedIn Company Page without bleeding into LinkedIn Personal", () => {
+    const result = runFunction(
+      `extract_section "${SAMPLE_CONTENT}" "LinkedIn Company Page"`
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("official announcement");
+    expect(result.stdout).not.toContain("thought leadership");
   });
 
   test("returns empty for nonexistent section", () => {
@@ -319,10 +328,16 @@ describe("channel_to_section", () => {
     expect(result.stdout).toBe("X/Twitter Thread");
   });
 
-  test("maps linkedin to LinkedIn", () => {
-    const result = runFunction(`channel_to_section "linkedin"`);
+  test("maps linkedin-personal to LinkedIn Personal", () => {
+    const result = runFunction(`channel_to_section "linkedin-personal"`);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe("LinkedIn");
+    expect(result.stdout).toBe("LinkedIn Personal");
+  });
+
+  test("maps linkedin-company to LinkedIn Company Page", () => {
+    const result = runFunction(`channel_to_section "linkedin-company"`);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("LinkedIn Company Page");
   });
 
   test("returns empty for unknown channel", () => {
@@ -443,13 +458,13 @@ describe("post_linkedin", () => {
       tmpfile=$(mktemp)
       echo "## Discord" > "$tmpfile"
       echo "Some content" >> "$tmpfile"
-      post_linkedin "$tmpfile"
+      post_linkedin "$tmpfile" "LinkedIn Personal"
       rm "$tmpfile"
     `,
       { LINKEDIN_ACCESS_TOKEN: "test-token" }
     );
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toContain("No LinkedIn content found");
+    expect(result.stderr).toContain("No LinkedIn Personal content found");
   });
 
   test("posts successfully when credentials set and script succeeds", () => {
@@ -467,7 +482,7 @@ MOCK
       chmod +x "$mock_dir/linkedin-community.sh"
       LINKEDIN_SCRIPT="$mock_dir/linkedin-community.sh"
 
-      post_linkedin "${SAMPLE_CONTENT}"
+      post_linkedin "${SAMPLE_CONTENT}" "LinkedIn Personal"
       exit_code=$?
       rm -r "$mock_dir"
       exit $exit_code
@@ -478,7 +493,7 @@ MOCK
       },
     });
     expect(result.exitCode).toBe(0);
-    expect(decode(result.stdout)).toContain("[ok] LinkedIn post published.");
+    expect(decode(result.stdout)).toContain("[ok] LinkedIn post published (LinkedIn Personal).");
   });
 
   test("returns error when linkedin-community.sh fails", () => {
@@ -502,7 +517,7 @@ MOCK
       export -f create_dedup_issue
       CASE_NAME="test-case"
 
-      post_linkedin "${SAMPLE_CONTENT}"
+      post_linkedin "${SAMPLE_CONTENT}" "LinkedIn Personal"
       exit_code=$?
       rm -r "$mock_dir"
       exit $exit_code

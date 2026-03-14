@@ -56,10 +56,11 @@ get_frontmatter_field() {
 channel_to_section() {
   local channel="$1"
   case "$channel" in
-    discord)  echo "Discord" ;;
-    x)        echo "X/Twitter Thread" ;;
-    linkedin) echo "LinkedIn" ;;
-    *)        echo "" ;;
+    discord)           echo "Discord" ;;
+    x)                 echo "X/Twitter Thread" ;;
+    linkedin-personal) echo "LinkedIn Personal" ;;
+    linkedin-company)  echo "LinkedIn Company Page" ;;
+    *)                 echo "" ;;
   esac
 }
 
@@ -309,12 +310,13 @@ post_x_thread() {
 
 create_linkedin_fallback_issue() {
   local file="$1"
+  local section="${2:-LinkedIn Personal}"
   local linkedin_content
-  linkedin_content=$(extract_section "$file" "LinkedIn")
+  linkedin_content=$(extract_section "$file" "$section")
 
-  local title="[Content Publisher] LinkedIn API failed -- manual posting required for $CASE_NAME"
+  local title="[Content Publisher] LinkedIn API failed -- manual posting required for $CASE_NAME ($section)"
   local body
-  body=$(printf '## Manual LinkedIn Posting Required\n\nThe scheduled content publisher could not post to LinkedIn for **%s**.\n\nPost this content manually at https://www.linkedin.com/feed/:\n\n---\n\n%s' "$CASE_NAME" "$linkedin_content")
+  body=$(printf '## Manual LinkedIn Posting Required\n\nThe scheduled content publisher could not post to LinkedIn for **%s** (%s).\n\nPost this content manually at https://www.linkedin.com/feed/:\n\n---\n\n%s' "$CASE_NAME" "$section" "$linkedin_content")
 
   create_dedup_issue "$title" "$body" "action-required,content-publisher" || {
     echo "FATAL: LinkedIn posting failed AND fallback issue creation failed." >&2
@@ -324,6 +326,7 @@ create_linkedin_fallback_issue() {
 
 post_linkedin() {
   local file="$1"
+  local section="${2:-LinkedIn Personal}"
 
   if [[ -z "${LINKEDIN_ACCESS_TOKEN:-}" ]]; then
     echo "Warning: LINKEDIN_ACCESS_TOKEN not set. Skipping LinkedIn posting." >&2
@@ -331,18 +334,18 @@ post_linkedin() {
   fi
 
   local content
-  content=$(extract_section "$file" "LinkedIn")
+  content=$(extract_section "$file" "$section")
   if [[ -z "$content" ]]; then
-    echo "Warning: No LinkedIn content found in $(basename "$file"). Skipping." >&2
+    echo "Warning: No $section content found in $(basename "$file"). Skipping." >&2
     return 0
   fi
 
   bash "$LINKEDIN_SCRIPT" post-content --text "$content" || {
-    echo "Error: LinkedIn posting failed. Creating fallback issue." >&2
-    create_linkedin_fallback_issue "$file"
+    echo "Error: LinkedIn posting failed ($section). Creating fallback issue." >&2
+    create_linkedin_fallback_issue "$file" "$section"
     return 1
   }
-  echo "[ok] LinkedIn post published."
+  echo "[ok] LinkedIn post published ($section)."
 }
 
 # --- Issue Management ---
@@ -468,8 +471,11 @@ main() {
         x)
           post_x_thread "$file" || file_failures=1
           ;;
-        linkedin)
-          post_linkedin "$file" || file_failures=1
+        linkedin-personal)
+          post_linkedin "$file" "LinkedIn Personal" || file_failures=1
+          ;;
+        linkedin-company)
+          post_linkedin "$file" "LinkedIn Company Page" || file_failures=1
           ;;
       esac
     done < <(echo "$channels" | tr ',' '\n')
