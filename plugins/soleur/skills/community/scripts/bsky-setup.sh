@@ -23,7 +23,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/../../../../scripts/resolve-git-root.sh"
+source "$SCRIPT_DIR/../../../scripts/resolve-git-root.sh"
 
 BSKY_API="https://bsky.social/xrpc"
 

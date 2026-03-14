@@ -653,7 +653,8 @@ sync_bare_files() {
     mkdir -p "$dir"
 
     # Atomic write: extract to temp file, then mv into place
-    local tmpfile="$tmpdir/$(basename "$file").$$"
+    local safe_name="${file//\//_}"
+    local tmpfile="$tmpdir/${safe_name}"
     if git show "HEAD:$file" > "$tmpfile" 2>/dev/null; then
       mv "$tmpfile" "$GIT_ROOT/$file"
       synced=$((synced + 1))
@@ -698,8 +699,6 @@ sync_bare_files() {
     done
   fi
 
-  # Clean up temp directory (trap also handles this)
-  rm -rf "$tmpdir"
 
   echo -e "${GREEN}Synced $synced file(s) from git HEAD${NC}"
 }

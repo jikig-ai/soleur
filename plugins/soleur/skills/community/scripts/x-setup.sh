@@ -26,7 +26,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/../../../../scripts/resolve-git-root.sh"
+source "$SCRIPT_DIR/../../../scripts/resolve-git-root.sh"
 
 X_API="https://api.x.com"
 
