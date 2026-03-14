@@ -13,6 +13,7 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 - When a command exits non-zero or prints a warning, investigate before proceeding. Never treat a failed step as success.
 - Before merging any PR, merge origin/main into the feature branch [hook-enforced: pre-merge-rebase.sh] (`git fetch origin main && git merge origin/main`).
 - Always read a file before editing it. The Edit tool rejects unread files, but context compaction erases prior reads -- re-read after any compaction event.
+- When a plan specifies relative paths (e.g., `source "$SCRIPT_DIR/../../..."`), trace each `../` step to verify the final target before implementing. Plans have prescribed wrong paths that were implemented verbatim and only caught by review agents.
 - PreToolUse hooks block: commits on main, rm -rf on worktrees, --delete-branch with active worktrees, writes to main repo when worktrees exist, commits with conflict markers in staged content. Work with these guards, not around them.
 - The host terminal is Warp. Do not attempt automated terminal manipulation via escape sequences (cursor position queries, TUI rendering, and similar sequences are intercepted by Warp's tmux control mode and silently fail).
 - The Bash tool runs in a non-interactive shell without `sudo` access. Do not attempt commands requiring elevated privileges -- provide manual instructions instead.

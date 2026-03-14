@@ -65,3 +65,19 @@ End result: testing works.
 
 **Title:** Test Case Study
 **URL:** https://example.com/blog/test-case-study/
+
+---
+
+## LinkedIn Personal
+
+I've been thinking about how AI agents change the way we ship software...
+
+This is a test LinkedIn personal post with thought leadership framing.
+
+---
+
+## LinkedIn Company Page
+
+Soleur now supports automated competitive intelligence scanning.
+
+This is a test LinkedIn company page post with official announcement framing.

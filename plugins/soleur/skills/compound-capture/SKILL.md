@@ -83,7 +83,7 @@ Extract for each error found:
 - Note what was done to recover
 - Suggest how to prevent it in future sessions (1 sentence)
 
-If no session errors are found, skip this extraction silently.
+If no session errors are found, output "Session errors: none detected" (do not skip silently — the explicit acknowledgment prevents the model from accidentally dropping errors by judging the session as clean).
 
 **Environment details:**
 
@@ -298,11 +298,22 @@ If the target file does not exist at the expected path, warn and skip.
 
 #### 8.3 Propose Edit
 
+Route **two categories** of insights to each target:
+
+**A. Solution insight** (the main learning):
 1. Read the target definition file
 2. Find the most relevant existing section for a new bullet -- do not create new sections
 3. If no section with bullets exists in the target file, warn and skip this target
 4. Draft a one-line bullet capturing the sharp edge -- non-obvious gotcha only, skip if the insight is general knowledge the model already knows
 5. Display the proposed edit showing the section name, existing bullets, and the new bullet
+
+**B. Error prevention** (from session errors):
+1. Check the learning file's `## Session Errors` section. For each error with a `**Prevention:**` line, determine if the error could have been prevented by a skill instruction in the target definition.
+2. If yes, draft a one-line bullet for the target's Sharp Edges or equivalent section (e.g., "Verify relative paths by tracing each `../` step before prescribing them in plans.").
+3. If the target has no section suitable for preventive bullets, skip.
+4. Display the proposed edit alongside the solution edit.
+
+This dual-routing ensures session errors feed back into the definitions that caused them, not just the learning archive.
 
 #### 8.4 Confirm
 

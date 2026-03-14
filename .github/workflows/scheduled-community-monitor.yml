@@ -1,6 +1,7 @@
 # Daily community monitoring using the community-manager agent.
-# Fetches Discord activity, X/Twitter metrics, and Hacker News mentions,
-# generates a digest committed to knowledge-base/support/community/, and
+# Fetches Discord activity, X/Twitter metrics, LinkedIn status, GitHub
+# activity, and Hacker News mentions. Generates a digest committed to
+# knowledge-base/support/community/ and
 # creates a GitHub Issue with the daily report. No autonomous posting --
 # human approval preserved.
 # Implements #145: Run Community Agent continuously.
@@ -53,6 +54,8 @@ jobs:
           X_API_SECRET: ${{ secrets.X_API_SECRET }}
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          LINKEDIN_ACCESS_TOKEN: ${{ secrets.LINKEDIN_ACCESS_TOKEN }}
+          LINKEDIN_PERSON_URN: ${{ secrets.LINKEDIN_PERSON_URN }}
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
@@ -84,6 +87,8 @@ jobs:
                - X/Twitter (if enabled): $ROUTER x fetch-metrics ONLY.
                  Do NOT call fetch-mentions or fetch-timeline (they return 403 on
                  Free tier and waste turns). TODO: re-enable when paid API tier is activated.
+               - LinkedIn (if enabled): Do NOT post or fetch data -- log as
+                 "enabled (posting only)" and skip.
                - GitHub: $ROUTER github activity 1, $ROUTER github contributors 1,
                  $ROUTER github discussions 1. Use a 1-day lookback window.
                - Hacker News: $ROUTER hn mentions --query soleur --limit 20,
@@ -98,7 +103,7 @@ jobs:
                agent: frontmatter with period_start/period_end/generated_at, then sections
                ## Period, ## Activity Summary, ## Top Contributors, and optional sections
                ## Trending Topics, ## GitHub Activity, ## X/Twitter Metrics,
-               ## Hacker News Activity.
+               ## LinkedIn Activity, ## Hacker News Activity.
                Summarize and aggregate -- do not store raw message transcripts. Brief
                contextual quotes (under 100 chars) with attribution are acceptable.
                If the file already exists for today, overwrite it.
