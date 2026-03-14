@@ -333,22 +333,22 @@ fi
 
 ## Acceptance Criteria
 
-- [ ] A shared `resolve-git-root.sh` helper exists at `plugins/soleur/scripts/resolve-git-root.sh`
-- [ ] The helper uses `return` (not `exit`) for error paths and does not call `set`
-- [ ] All 7 scripts listed in Category 1 source the helper instead of inline fallback patterns
-- [ ] `generate-article-30-register.sh` uses the helper and exits cleanly in bare repo context with an informative error message
-- [ ] `create_draft_pr()` has IS_BARE guard (calls `require_working_tree`)
-- [ ] `list_worktrees()` shows "Bare root (no working tree)" instead of "Main repository" when bare
-- [ ] `.claude-plugin` is in the `sync_bare_files` file list
-- [ ] `resolve-git-root.sh` is in the `sync_bare_files` file list
-- [ ] `sync_bare_files` uses atomic writes (mktemp on same filesystem + mv)
-- [ ] Temp files from atomic writes are cleaned up via `trap EXIT`
-- [ ] `.claude/settings.json` is consolidated into the `files=()` array
-- [ ] `sync-bare` is the documented alias (with `sync` kept for backward compat)
-- [ ] Stale hook files are cleaned up during sync
-- [ ] worktree-manager.sh keeps inline IS_BARE detection (runs before sync, cannot depend on helper)
-- [ ] All scripts pass `set -euo pipefail` (no regressions)
-- [ ] Test file `ralph-loop-stuck-detection.test.sh` still works (it creates its own git repos via `git init`)
+- [x] A shared `resolve-git-root.sh` helper exists at `plugins/soleur/scripts/resolve-git-root.sh`
+- [x] The helper uses `return` (not `exit`) for error paths and does not call `set`
+- [x] All 7 scripts listed in Category 1 source the helper instead of inline fallback patterns
+- [x] `generate-article-30-register.sh` uses the helper and exits cleanly in bare repo context with an informative error message
+- [x] `create_draft_pr()` has IS_BARE guard (calls `require_working_tree`)
+- [x] `list_worktrees()` shows "Bare root (no working tree)" instead of "Main repository" when bare
+- [x] `.claude-plugin` is in the `sync_bare_files` file list
+- [x] `resolve-git-root.sh` is in the `sync_bare_files` file list
+- [x] `sync_bare_files` uses atomic writes (mktemp on same filesystem + mv)
+- [x] Temp files from atomic writes are cleaned up via `trap EXIT`
+- [x] `.claude/settings.json` is consolidated into the `files=()` array
+- [x] `sync-bare` is the documented alias (with `sync` kept for backward compat)
+- [x] Stale hook files are cleaned up during sync
+- [x] worktree-manager.sh keeps inline IS_BARE detection (runs before sync, cannot depend on helper)
+- [x] All scripts pass `set -euo pipefail` (no regressions)
+- [x] Test file `ralph-loop-stuck-detection.test.sh` still works (it creates its own git repos via `git init`)
 
 ## Test Scenarios
 
