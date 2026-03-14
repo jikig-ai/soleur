@@ -341,7 +341,7 @@ describe("channel_to_section", () => {
   });
 
   test("returns empty for unknown channel", () => {
-    const result = runFunction(`channel_to_section "unknown"`);
+    const result = runFunction(`channel_to_section "mastodon"`);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("");
   });
@@ -435,5 +435,99 @@ FRONTMATTER
     `], { env: BASE_ENV });
     expect(result.exitCode).toBe(0);
     expect(decode(result.stdout)).toContain("Published: 0");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// post_linkedin
+// ---------------------------------------------------------------------------
+
+describe("post_linkedin", () => {
+  test("skips gracefully when LINKEDIN_ACCESS_TOKEN is unset", () => {
+    const result = runFunction(
+      `post_linkedin "${SAMPLE_CONTENT}"`
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("LINKEDIN_ACCESS_TOKEN not set");
+    expect(result.stderr).toContain("Skipping LinkedIn posting");
+  });
+
+  test("skips gracefully when content file has no LinkedIn section", () => {
+    const result = runFunction(
+      `
+      tmpfile=$(mktemp)
+      echo "## Discord" > "$tmpfile"
+      echo "Some content" >> "$tmpfile"
+      post_linkedin "$tmpfile" "LinkedIn Personal"
+      rm "$tmpfile"
+    `,
+      { LINKEDIN_ACCESS_TOKEN: "test-token" }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("No LinkedIn Personal content found");
+  });
+
+  test("posts successfully when credentials set and script succeeds", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+
+      # Create mock script that succeeds
+      mock_dir=$(mktemp -d)
+      cat > "$mock_dir/linkedin-community.sh" << 'MOCK'
+#!/usr/bin/env bash
+echo '{"id":"urn:li:share:123456"}'
+exit 0
+MOCK
+      chmod +x "$mock_dir/linkedin-community.sh"
+      LINKEDIN_SCRIPT="$mock_dir/linkedin-community.sh"
+
+      post_linkedin "${SAMPLE_CONTENT}" "LinkedIn Personal"
+      exit_code=$?
+      rm -r "$mock_dir"
+      exit $exit_code
+    `], {
+      env: {
+        ...BASE_ENV,
+        LINKEDIN_ACCESS_TOKEN: "test-token",
+      },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(decode(result.stdout)).toContain("[ok] LinkedIn post published (LinkedIn Personal).");
+  });
+
+  test("returns error when linkedin-community.sh fails", () => {
+    // Create a mock linkedin-community.sh that always fails
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+
+      # Create mock script that fails
+      mock_dir=$(mktemp -d)
+      cat > "$mock_dir/linkedin-community.sh" << 'MOCK'
+#!/usr/bin/env bash
+echo "Error: API returned 401" >&2
+exit 1
+MOCK
+      chmod +x "$mock_dir/linkedin-community.sh"
+      LINKEDIN_SCRIPT="$mock_dir/linkedin-community.sh"
+
+      # Stub create_dedup_issue to avoid gh CLI dependency
+      create_dedup_issue() { echo "[stub] Issue created: $1"; return 0; }
+      export -f create_dedup_issue
+      CASE_NAME="test-case"
+
+      post_linkedin "${SAMPLE_CONTENT}" "LinkedIn Personal"
+      exit_code=$?
+      rm -r "$mock_dir"
+      exit $exit_code
+    `], {
+      env: {
+        ...BASE_ENV,
+        LINKEDIN_ACCESS_TOKEN: "test-token",
+      },
+    });
+    expect(result.exitCode).toBe(1);
+    expect(decode(result.stderr)).toContain("LinkedIn posting failed");
   });
 });

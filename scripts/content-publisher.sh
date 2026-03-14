@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # content-publisher.sh -- Scan distribution-content/ for scheduled content and
-# publish to declared channels (Discord webhook, X/Twitter API).
+# publish to declared channels (Discord webhook, X/Twitter API, LinkedIn API).
 #
 # Usage: content-publisher.sh
 #   No arguments. Scans all .md files in distribution-content/, finds files
@@ -14,6 +14,8 @@
 #   X_API_SECRET           - X API secret
 #   X_ACCESS_TOKEN         - X access token
 #   X_ACCESS_TOKEN_SECRET  - X access token secret
+#   LINKEDIN_ACCESS_TOKEN   - LinkedIn OAuth 2.0 token (optional; skips if unset)
+#   LINKEDIN_PERSON_URN    - LinkedIn person URN for posting
 #   GH_TOKEN               - GitHub token for issue creation
 #
 # Exit codes:
@@ -27,6 +29,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONTENT_DIR="$REPO_ROOT/knowledge-base/marketing/distribution-content"
 X_SCRIPT="$REPO_ROOT/plugins/soleur/skills/community/scripts/x-community.sh"
+LINKEDIN_SCRIPT="$REPO_ROOT/plugins/soleur/skills/community/scripts/linkedin-community.sh"
 AVATAR_URL="https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png"
 
 # Global set per-file in the scan loop, used by fallback issue creators
@@ -303,6 +306,48 @@ post_x_thread() {
   echo "[ok] X thread posted successfully (${#tweets[@]} tweets)."
 }
 
+# --- LinkedIn Posting ---
+
+create_linkedin_fallback_issue() {
+  local file="$1"
+  local section="${2:-LinkedIn Personal}"
+  local linkedin_content
+  linkedin_content=$(extract_section "$file" "$section")
+
+  local title="[Content Publisher] LinkedIn API failed -- manual posting required for $CASE_NAME ($section)"
+  local body
+  body=$(printf '## Manual LinkedIn Posting Required\n\nThe scheduled content publisher could not post to LinkedIn for **%s** (%s).\n\nPost this content manually at https://www.linkedin.com/feed/:\n\n---\n\n%s' "$CASE_NAME" "$section" "$linkedin_content")
+
+  create_dedup_issue "$title" "$body" "action-required,content-publisher" || {
+    echo "FATAL: LinkedIn posting failed AND fallback issue creation failed." >&2
+    return 1
+  }
+}
+
+post_linkedin() {
+  local file="$1"
+  local section="${2:-LinkedIn Personal}"
+
+  if [[ -z "${LINKEDIN_ACCESS_TOKEN:-}" ]]; then
+    echo "Warning: LINKEDIN_ACCESS_TOKEN not set. Skipping LinkedIn posting." >&2
+    return 0
+  fi
+
+  local content
+  content=$(extract_section "$file" "$section")
+  if [[ -z "$content" ]]; then
+    echo "Warning: No $section content found in $(basename "$file"). Skipping." >&2
+    return 0
+  fi
+
+  bash "$LINKEDIN_SCRIPT" post-content --text "$content" || {
+    echo "Error: LinkedIn posting failed ($section). Creating fallback issue." >&2
+    create_linkedin_fallback_issue "$file" "$section"
+    return 1
+  }
+  echo "[ok] LinkedIn post published ($section)."
+}
+
 # --- Issue Management ---
 
 create_dedup_issue() {
@@ -339,6 +384,12 @@ main() {
   # Validate x-community.sh exists if X credentials are configured
   if [[ -n "${X_API_KEY:-}" && ! -f "$X_SCRIPT" ]]; then
     echo "Error: x-community.sh not found at $X_SCRIPT" >&2
+    exit 1
+  fi
+
+  # Validate linkedin-community.sh exists if LinkedIn credentials are configured
+  if [[ -n "${LINKEDIN_ACCESS_TOKEN:-}" && ! -f "$LINKEDIN_SCRIPT" ]]; then
+    echo "Error: linkedin-community.sh not found at $LINKEDIN_SCRIPT" >&2
     exit 1
   fi
 
@@ -419,6 +470,12 @@ main() {
           ;;
         x)
           post_x_thread "$file" || file_failures=1
+          ;;
+        linkedin-personal)
+          post_linkedin "$file" "LinkedIn Personal" || file_failures=1
+          ;;
+        linkedin-company)
+          post_linkedin "$file" "LinkedIn Company Page" || file_failures=1
           ;;
       esac
     done < <(echo "$channels" | tr ',' '\n')
