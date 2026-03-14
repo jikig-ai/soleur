@@ -104,13 +104,13 @@ Same pattern as Discord and X/Twitter: secrets are stored in GitHub repository s
 
 ## Acceptance Criteria
 
-- [ ] `LINKEDIN_ACCESS_TOKEN` secret is passed to the "Run community monitor" step env block (`.github/workflows/scheduled-community-monitor.yml`)
-- [ ] `LINKEDIN_PERSON_URN` secret is passed to the "Run community monitor" step env block
-- [ ] Agent prompt Step 2 includes LinkedIn data collection instructions with no-post guard
-- [ ] Agent prompt LinkedIn instructions handle fetch-metrics/fetch-activity stubs gracefully (skip, don't call)
-- [ ] When LinkedIn secrets are not configured, the workflow still succeeds (LinkedIn reported as disabled)
-- [ ] LinkedIn env vars are placed after the X/Twitter block and before the `with:` block, maintaining alphabetical platform grouping (Discord, X, LinkedIn)
-- [ ] No `LINKEDIN_ORGANIZATION_ID` reference exists in the workflow file (issue #592 text is outdated; scripts use `LINKEDIN_PERSON_URN`)
+- [x] `LINKEDIN_ACCESS_TOKEN` secret is passed to the "Run community monitor" step env block (`.github/workflows/scheduled-community-monitor.yml`)
+- [x] `LINKEDIN_PERSON_URN` secret is passed to the "Run community monitor" step env block
+- [x] Agent prompt Step 2 includes LinkedIn data collection instructions with no-post guard
+- [x] Agent prompt LinkedIn instructions handle fetch-metrics/fetch-activity stubs gracefully (skip, don't call)
+- [x] When LinkedIn secrets are not configured, the workflow still succeeds (LinkedIn reported as disabled)
+- [x] LinkedIn env vars are placed after the X/Twitter block and before the `with:` block, maintaining alphabetical platform grouping (Discord, X, LinkedIn)
+- [x] No `LINKEDIN_ORGANIZATION_ID` reference exists in the workflow file (issue #592 text is outdated; scripts use `LINKEDIN_PERSON_URN`)
 
 ## Test Scenarios
 
