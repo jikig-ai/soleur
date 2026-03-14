@@ -53,9 +53,11 @@ get_frontmatter_field() {
 channel_to_section() {
   local channel="$1"
   case "$channel" in
-    discord) echo "Discord" ;;
-    x)       echo "X/Twitter Thread" ;;
-    *)       echo "" ;;
+    discord)           echo "Discord" ;;
+    x)                 echo "X/Twitter Thread" ;;
+    linkedin-personal) echo "LinkedIn Personal" ;;
+    linkedin-company)  echo "LinkedIn Company Page" ;;
+    *)                 echo "" ;;
   esac
 }
 
