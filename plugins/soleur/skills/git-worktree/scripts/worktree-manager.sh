@@ -8,7 +8,7 @@
 # are never updated by git -- they become stale after every merge. The IS_BARE
 # flag (computed at init) guards all working-tree-dependent operations. If this
 # script crashes with "must be run in a work tree", the on-disk copy is stale.
-# Run from a worktree instead, or use: worktree-manager.sh sync-bare-files
+# Run from a worktree instead, or use: worktree-manager.sh sync-bare
 
 set -euo pipefail
 
@@ -259,10 +259,15 @@ list_worktrees() {
   fi
 
   echo ""
-  echo -e "${BLUE}Main repository:${NC}"
-  local main_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-  echo "  Branch: $main_branch"
-  echo "  Path: $GIT_ROOT"
+  if [[ "$IS_BARE" == "true" ]]; then
+    echo -e "${YELLOW}Bare root (no working tree):${NC}"
+    echo "  Path: $GIT_ROOT"
+  else
+    echo -e "${BLUE}Main repository:${NC}"
+    local main_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    echo "  Branch: $main_branch"
+    echo "  Path: $GIT_ROOT"
+  fi
 }
 
 # Switch to a worktree
@@ -561,6 +566,8 @@ cleanup_merged_worktrees() {
 # Idempotent: skips if a PR already exists
 # All push/PR failures warn but do not block (returns 0)
 create_draft_pr() {
+  require_working_tree
+
   local branch
   branch=$(git rev-parse --abbrev-ref HEAD)
 
@@ -616,12 +623,20 @@ sync_bare_files() {
 
   echo -e "${BLUE}Syncing critical on-disk files from git HEAD...${NC}"
 
+  # Create a temp directory on the same filesystem for atomic writes
+  local tmpdir
+  tmpdir=$(mktemp -d "${GIT_ROOT}/.sync-tmp.XXXXXX")
+  trap 'rm -rf "$tmpdir"' EXIT
+
   # Files that Claude Code reads from the bare repo root
   local files=(
     "AGENTS.md"
     "CLAUDE.md"
+    ".claude-plugin"
+    ".claude/settings.json"
     "plugins/soleur/AGENTS.md"
     "plugins/soleur/CLAUDE.md"
+    "plugins/soleur/scripts/resolve-git-root.sh"
     "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
   )
 
@@ -637,24 +652,20 @@ sync_bare_files() {
     dir=$(dirname "$GIT_ROOT/$file")
     mkdir -p "$dir"
 
-    # Extract from git and overwrite on-disk copy
-    if git show "HEAD:$file" > "$GIT_ROOT/$file" 2>/dev/null; then
+    # Atomic write: extract to temp file, then mv into place
+    local safe_name="${file//\//_}"
+    local tmpfile="$tmpdir/${safe_name}"
+    if git show "HEAD:$file" > "$tmpfile" 2>/dev/null; then
+      mv "$tmpfile" "$GIT_ROOT/$file"
       synced=$((synced + 1))
     else
+      rm -f "$tmpfile"
       echo -e "${YELLOW}Warning: Could not sync $file${NC}"
     fi
   done
 
   # Restore execute permissions on scripts
   chmod +x "$GIT_ROOT/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh" 2>/dev/null || true
-
-  # Sync .claude/settings.json if it exists in git
-  if git cat-file -e "HEAD:.claude/settings.json" 2>/dev/null; then
-    mkdir -p "$GIT_ROOT/.claude"
-    if git show "HEAD:.claude/settings.json" > "$GIT_ROOT/.claude/settings.json" 2>/dev/null; then
-      synced=$((synced + 1))
-    fi
-  fi
 
   # Sync hook scripts and restore execute permissions
   local hook_files
@@ -664,12 +675,30 @@ sync_bare_files() {
     while IFS= read -r hook_file; do
       # Validate path prefix to prevent unexpected writes
       [[ "$hook_file" == .claude/hooks/* ]] || continue
-      if git show "HEAD:$hook_file" > "$GIT_ROOT/$hook_file" 2>/dev/null; then
+      local tmpfile="$tmpdir/$(basename "$hook_file").$$"
+      if git show "HEAD:$hook_file" > "$tmpfile" 2>/dev/null; then
+        mv "$tmpfile" "$GIT_ROOT/$hook_file"
         chmod +x "$GIT_ROOT/$hook_file" 2>/dev/null || true
         synced=$((synced + 1))
+      else
+        rm -f "$tmpfile"
       fi
     done <<< "$hook_files"
   fi
+
+  # Remove stale hook files that no longer exist in git HEAD
+  if [[ -d "$GIT_ROOT/.claude/hooks" ]]; then
+    for on_disk_hook in "$GIT_ROOT/.claude/hooks"/*; do
+      [[ -f "$on_disk_hook" ]] || continue
+      local hook_name
+      hook_name=$(basename "$on_disk_hook")
+      if ! git cat-file -e "HEAD:.claude/hooks/$hook_name" 2>/dev/null; then
+        rm "$on_disk_hook"
+        echo -e "${YELLOW}Removed stale hook: $hook_name${NC}"
+      fi
+    done
+  fi
+
 
   echo -e "${GREEN}Synced $synced file(s) from git HEAD${NC}"
 }
@@ -703,7 +732,7 @@ main() {
     draft-pr)
       create_draft_pr
       ;;
-    sync-bare-files|sync)
+    sync-bare-files|sync-bare|sync)
       sync_bare_files
       ;;
     help)
@@ -741,9 +770,10 @@ Commands:
                                       (detects [gone] branches, archives specs)
   draft-pr                            Create empty commit, push, and open draft PR
                                       (idempotent: skips if PR already exists)
-  sync-bare-files | sync              Sync stale on-disk files from git HEAD
+  sync-bare | sync-bare-files | sync  Sync stale on-disk files from git HEAD
                                       (bare repos only -- overwrites AGENTS.md,
-                                      CLAUDE.md, hooks, settings, and this script)
+                                      CLAUDE.md, hooks, settings, plugin manifest,
+                                      and this script. Removes stale hooks.)
   help                                Show this help message
 
 Environment Files:
