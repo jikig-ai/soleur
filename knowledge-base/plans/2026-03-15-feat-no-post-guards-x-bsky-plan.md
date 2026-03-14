@@ -3,9 +3,28 @@ title: "feat: Add programmatic no-post guards to x-community.sh and bsky-communi
 type: feat
 date: 2026-03-15
 semver: patch
+deepened: 2026-03-15
 ---
 
 # feat: Add programmatic no-post guards to x-community.sh and bsky-community.sh
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-15
+**Sections enhanced:** 4 (Technical Considerations, Edge Cases, Test Scenarios, Proposed Solution)
+
+### Key Improvements
+
+1. Identified engage flow impact -- interactive `community engage` sub-command routes through `community-router.sh` to posting functions, requiring `*_ALLOW_POST=true` for legitimate local use
+2. Verified content-publisher.sh call sites (lines 252 and 281) that would break without `X_ALLOW_POST=true` in the workflow
+3. Discovered monitoring workflow does not pass Bluesky credentials at all -- `BSKY_ALLOW_POST` guard is purely preventive for future credential addition
+4. Confirmed existing test infrastructure: `test/x-community.test.ts` exists (no post tests yet), no bsky test file exists
+
+### Relevant Learnings Applied
+
+- `2026-03-15-env-var-post-guard-defense-in-depth.md` -- Exact pattern to replicate (strict equality, `return 1`, guard placement before args)
+- `2026-03-14-content-publisher-channel-extension-pattern.md` -- Content publisher touchpoints and channel dispatch pattern
+- `2026-03-13-bash-arithmetic-and-test-sourcing-patterns.md` -- `BASH_SOURCE` guard pattern for test harness sourcing
 
 ## Overview
 
@@ -73,6 +92,16 @@ Note: `bsky-community.sh` currently lacks a `BASH_SOURCE` guard (line 412 uses b
 - **`return 1` vs `exit 1`** -- `return 1` is preferred because it works correctly both when the script is executed directly (propagates exit code) and when sourced for testing (does not kill the test shell).
 - **Guard placement** -- The check goes before argument parsing. No point validating arguments if posting is not allowed.
 
+### Research Insights
+
+**Engage flow impact:** The `community engage` sub-command in SKILL.md routes replies through `community-router.sh x post-tweet --reply-to <id>` (line 96) and `community-router.sh bsky post "<text>" --reply-to-uri ...` (line 119). The router dispatches to the underlying scripts, so the guard applies. Users running `engage` locally must set `X_ALLOW_POST=true` or `BSKY_ALLOW_POST=true` in their environment. This is intentional -- the guard creates a two-key system even for interactive flows, preventing accidental posting from misconfigured terminals.
+
+**Monitoring workflow credential inventory:** `scheduled-community-monitor.yml` (lines 50-58) passes X credentials (`X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET`) and LinkedIn credentials, but does NOT pass Bluesky credentials (`BSKY_HANDLE`, `BSKY_APP_PASSWORD`). The `BSKY_ALLOW_POST` guard is preventive -- it protects against future credential addition without a corresponding audit of the monitoring workflow's capabilities.
+
+**Content-publisher caller analysis:** `scripts/content-publisher.sh` calls `x-community.sh post-tweet` at two locations: line 252 (hook tweet) and line 281 (reply thread tweets). Both call sites pass the result through `post_request` error handling. The `X_ALLOW_POST` guard fires before any of this, so `return 1` propagates cleanly as exit code 1, which content-publisher.sh already handles via its `|| { ... }` error pattern.
+
+**Test infrastructure:** `test/x-community.test.ts` exists with `FAKE_CREDS_ENV` fixture but has no post-tweet tests. No `test/bsky-community.test.ts` exists. Post guard tests can be added as simple exec-and-check-exit-code tests without network access.
+
 ## Acceptance Criteria
 
 - [ ] `cmd_post_tweet()` in `x-community.sh` checks `X_ALLOW_POST` before any posting logic
@@ -104,6 +133,8 @@ Note: `bsky-community.sh` currently lacks a `BASH_SOURCE` guard (line 412 uses b
 | Content-publisher.sh lacks `X_ALLOW_POST=true` | X posting silently fails in content publisher | Add `X_ALLOW_POST=true` to `scheduled-content-publisher.yml` env block |
 | Bluesky added to content-publisher later | Posting would fail without `BSKY_ALLOW_POST=true` | Document with `TODO(#nnn)` for future content-publisher Bluesky support |
 | `BASH_SOURCE` guard breaks existing bsky-community.sh callers | No breakage -- `main "$@"` still runs on direct execution | The guard is strictly additive; `if [[ BASH_SOURCE == $0 ]]; then main "$@"; fi` is equivalent to bare `main "$@"` when not sourced |
+| User runs `community engage` without `*_ALLOW_POST=true` | Engage flow blocks at the post step after user approves a reply | Guard error message tells user exactly which variable to set; engage session can resume |
+| `scheduled-campaign-calendar.yml` uses X posting | Not affected -- verified no post commands | Confirmed: workflow does not reference `x-community.sh` or `bsky-community.sh` |
 
 ## Non-goals
 

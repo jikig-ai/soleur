@@ -34,3 +34,4 @@ Source plan: `knowledge-base/plans/2026-03-15-feat-no-post-guards-x-bsky-plan.md
 - [ ] 3.8 Verify `scheduled-community-monitor.yml` has no `*_ALLOW_POST` in env block
 - [ ] 3.9 Verify `scheduled-content-publisher.yml` has `X_ALLOW_POST: "true"` in env block
 - [ ] 3.10 Run `bun test` to ensure no regressions
+- [ ] 3.11 Verify `scheduled-campaign-calendar.yml` does not call post commands (confirmed: no references)
