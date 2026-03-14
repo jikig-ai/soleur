@@ -28,6 +28,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../../../scripts/resolve-git-root.sh"
+
 DISCORD_API="https://discord.com/api/v10"
 
 # --- Helpers ---
@@ -209,8 +212,7 @@ cmd_write_env() {
   validate_snowflake_id "$guild_id" "guild_id"
   require_token
 
-  local repo_root
-  repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  local repo_root="$GIT_ROOT"
   local env_file="${repo_root}/.env"
 
   # Remove existing Discord vars if .env exists
@@ -252,8 +254,7 @@ cmd_write_env() {
 
 cmd_verify() {
   # Verify .env configuration by running guild-info
-  local repo_root
-  repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  local repo_root="$GIT_ROOT"
   local env_file="${repo_root}/.env"
 
   if [[ ! -f "$env_file" ]]; then

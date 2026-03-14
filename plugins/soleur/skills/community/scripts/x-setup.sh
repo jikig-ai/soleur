@@ -25,6 +25,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../../../scripts/resolve-git-root.sh"
+
 X_API="https://api.x.com"
 
 # --- Dependency checks ---
@@ -231,8 +234,7 @@ cmd_validate_credentials() {
 cmd_write_env() {
   require_credentials
 
-  local repo_root
-  repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  local repo_root="$GIT_ROOT"
   local env_file="${repo_root}/.env"
 
   # Remove existing X vars if .env exists
@@ -263,8 +265,7 @@ cmd_write_env() {
 
 cmd_verify() {
   # Verify .env configuration by running validate-credentials
-  local repo_root
-  repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  local repo_root="$GIT_ROOT"
   local env_file="${repo_root}/.env"
 
   if [[ ! -f "$env_file" ]]; then
