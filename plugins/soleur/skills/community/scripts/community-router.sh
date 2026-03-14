@@ -13,6 +13,7 @@ PLATFORMS=(
   "github|github-community.sh||gh auth status 2>/dev/null"
   "x|x-community.sh|X_API_KEY,X_API_SECRET,X_ACCESS_TOKEN,X_ACCESS_TOKEN_SECRET|"
   "bsky|bsky-community.sh|BSKY_HANDLE,BSKY_APP_PASSWORD|"
+  "linkedin|linkedin-community.sh|LINKEDIN_ACCESS_TOKEN,LINKEDIN_PERSON_URN|"
   "hn|hn-community.sh||"
 )
 
