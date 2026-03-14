@@ -104,16 +104,16 @@ Note: `bsky-community.sh` currently lacks a `BASH_SOURCE` guard (line 412 uses b
 
 ## Acceptance Criteria
 
-- [ ] `cmd_post_tweet()` in `x-community.sh` checks `X_ALLOW_POST` before any posting logic
-- [ ] `cmd_post()` in `bsky-community.sh` checks `BSKY_ALLOW_POST` before any posting logic
-- [ ] Both guards use strict string equality (`!= "true"`) with `${VAR:-}` default
-- [ ] Both guards use `return 1` (not `exit 1`)
-- [ ] Script header comments document the new env vars
-- [ ] `bsky-community.sh` has `BASH_SOURCE` guard added for test harness support
-- [ ] `scheduled-community-monitor.yml` does NOT set `X_ALLOW_POST` or `BSKY_ALLOW_POST`
-- [ ] `scheduled-content-publisher.yml` sets `X_ALLOW_POST=true` in the publish step's env block
-- [ ] SKILL.md updated with post guard notes for X and Bluesky
-- [ ] Guard messages reference the variable name so operators know how to enable posting
+- [x] `cmd_post_tweet()` in `x-community.sh` checks `X_ALLOW_POST` before any posting logic
+- [x] `cmd_post()` in `bsky-community.sh` checks `BSKY_ALLOW_POST` before any posting logic
+- [x] Both guards use strict string equality (`!= "true"`) with `${VAR:-}` default
+- [x] Both guards use `return 1` (not `exit 1`)
+- [x] Script header comments document the new env vars
+- [x] `bsky-community.sh` has `BASH_SOURCE` guard added for test harness support
+- [x] `scheduled-community-monitor.yml` does NOT set `X_ALLOW_POST` or `BSKY_ALLOW_POST`
+- [x] `scheduled-content-publisher.yml` sets `X_ALLOW_POST=true` in the publish step's env block
+- [x] SKILL.md updated with post guard notes for X and Bluesky
+- [x] Guard messages reference the variable name so operators know how to enable posting
 
 ## Test Scenarios
 
