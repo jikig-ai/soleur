@@ -47,25 +47,13 @@ The monitoring workflow (`scheduled-community-monitor.yml`) does NOT set the var
 
 ## Technical Considerations
 
-### Guard placement
-
-The check must be the first statement in `cmd_post_content()`, before any argument parsing or API calls. This ensures no side effects occur when posting is disabled.
-
 ### Return code
 
 The guard returns 1 (not 0). Per constitution rule: "functions that create fallback issues on failure must return 1 (not 0) -- `return 0` after a fallback masks the failure from CI." The caller should see a non-zero exit to know posting was blocked.
 
-### Strict equality check
+### Implementation strategy
 
-The guard checks `"${LINKEDIN_ALLOW_POST:-}" != "true"` (exact string match), not just whether the variable is set. This prevents accidental enabling via `LINKEDIN_ALLOW_POST=""` or `LINKEDIN_ALLOW_POST=1`.
-
-### Dependency on linkedin-community.sh
-
-The `linkedin-community.sh` script is being implemented in the `feat-linkedin-api-scripts` branch (issue #589, plan at `knowledge-base/plans/2026-03-13-feat-linkedin-api-scripts-plan.md`). This guard should be integrated into `cmd_post_content()` during that implementation, or applied as a follow-up patch once that branch merges.
-
-### Pattern consistency
-
-The Bluesky script (`bsky-community.sh`) has no equivalent guard because Bluesky was not identified as a risk surface in the security review. If Bluesky autonomous posting becomes a concern, the same pattern can be applied to `cmd_post()` in `bsky-community.sh`.
+The `linkedin-community.sh` script is being implemented in the `feat-linkedin-api-scripts` branch (issue #589, task 2.6). This guard should be integrated directly into `cmd_post_content()` during that implementation -- amend task 2.6 in `knowledge-base/specs/feat-linkedin-api-scripts/tasks.md` to include the guard as a sub-task. This plan is a specification amendment to that plan, not a standalone deliverable requiring a separate PR.
 
 ## Non-goals
 
@@ -92,36 +80,6 @@ The Bluesky script (`bsky-community.sh`) has no equivalent guard because Bluesky
 - Given `LINKEDIN_ALLOW_POST=true` but no credentials, when `linkedin-community.sh post-content --text "test"`, then credential error (guard passes, credential check catches it)
 - Given monitoring workflow runs (no `LINKEDIN_ALLOW_POST` in env), when agent calls `post-content`, then post is blocked regardless of prompt instructions
 - Given content-publisher workflow runs (`LINKEDIN_ALLOW_POST=true` in env), when script calls `post-content`, then post succeeds
-
-## MVP
-
-### linkedin-community.sh (guard addition at top of cmd_post_content)
-
-```bash
-cmd_post_content() {
-  # Defense-in-depth: refuse to post unless explicitly allowed.
-  # The monitoring workflow does NOT set this variable, making
-  # autonomous posting structurally impossible during monitor runs.
-  if [[ "${LINKEDIN_ALLOW_POST:-}" != "true" ]]; then
-    echo "Error: LINKEDIN_ALLOW_POST is not set to 'true'." >&2
-    echo "Posting is disabled by default as a safety guard." >&2
-    echo "Set LINKEDIN_ALLOW_POST=true to enable posting." >&2
-    return 1
-  fi
-
-  local text=""
-  # ... rest of existing posting logic ...
-}
-```
-
-### scheduled-content-publisher.yml (env block addition)
-
-```yaml
-env:
-  LINKEDIN_ALLOW_POST: "true"
-  LINKEDIN_ACCESS_TOKEN: ${{ secrets.LINKEDIN_ACCESS_TOKEN }}
-  LINKEDIN_PERSON_URN: ${{ secrets.LINKEDIN_PERSON_URN }}
-```
 
 ## Dependencies & Risks
 
