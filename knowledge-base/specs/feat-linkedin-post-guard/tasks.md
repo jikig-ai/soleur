@@ -11,8 +11,8 @@
   - [ ] 2.1.1 Check `"${LINKEDIN_ALLOW_POST:-}" != "true"` (strict string equality, not just set/unset)
   - [ ] 2.1.2 Print informational error message to stderr naming the variable and required value
   - [ ] 2.1.3 Return 1 (not 0) to signal failure to callers
-- [ ] 2.2 Add `LINKEDIN_ALLOW_POST: "true"` to the env block in `.github/workflows/scheduled-content-publisher.yml`
-- [ ] 2.3 Verify `scheduled-community-monitor.yml` does NOT set `LINKEDIN_ALLOW_POST` (confirm by reading the file)
+- [ ] 2.2 Verify `scheduled-community-monitor.yml` does NOT set `LINKEDIN_ALLOW_POST` (confirm by reading the file)
+- [ ] 2.3 Verify `scheduled-content-publisher.yml` does NOT set `LINKEDIN_ALLOW_POST` yet (deferred to #590 when `content-publisher.sh` gains LinkedIn channel support)
 
 ## Phase 3: Testing & Validation
 
@@ -20,5 +20,4 @@
 - [ ] 3.2 Source the script and verify guard blocks posting when `LINKEDIN_ALLOW_POST` is unset
 - [ ] 3.3 Source the script and verify guard blocks posting when `LINKEDIN_ALLOW_POST=false`
 - [ ] 3.4 Source the script and verify guard allows posting when `LINKEDIN_ALLOW_POST=true`
-- [ ] 3.5 Verify `scheduled-content-publisher.yml` YAML is valid after changes
-- [ ] 3.6 Verify `scheduled-community-monitor.yml` has no `LINKEDIN_ALLOW_POST` in env block
+- [ ] 3.5 Verify `scheduled-community-monitor.yml` has no `LINKEDIN_ALLOW_POST` in env block

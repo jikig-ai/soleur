@@ -2,9 +2,21 @@
 title: "feat: Add programmatic no-post guard to linkedin-community.sh"
 type: feat
 date: 2026-03-15
+deepened: 2026-03-15
 ---
 
 # feat: Add Programmatic No-Post Guard to linkedin-community.sh
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-15
+**Sections enhanced:** 3 (Proposed Solution, Acceptance Criteria, Dependencies & Risks)
+
+### Key Improvements
+
+1. Corrected content-publisher workflow scope -- `content-publisher.sh` has no LinkedIn channel support yet, so adding `LINKEDIN_ALLOW_POST` to its workflow YAML is premature. Deferred to the LinkedIn content-publisher integration issue (#590).
+2. Added `BASH_SOURCE` guard verification -- the guard depends on `linkedin-community.sh` having the source guard pattern (task 2.10 in feat-linkedin-api-scripts), which is confirmed in the tasks.
+3. Applied institutional learning: shell script defensive patterns (return code 1, guard-first placement) align with documented prevention strategies from `knowledge-base/learnings/2026-03-13-shell-script-defensive-patterns.md`.
 
 ## Overview
 
@@ -38,12 +50,16 @@ cmd_post_content() {
 }
 ```
 
-Then set `LINKEDIN_ALLOW_POST=true` in the two workflows that should be allowed to post:
+Callers that should be allowed to post set `LINKEDIN_ALLOW_POST=true` in their environment:
 
-1. `scheduled-content-publisher.yml` -- the content distribution workflow
-2. Manual invocations via the terminal (user sets the env var)
+1. Manual invocations via the terminal (user sets the env var)
+2. `scheduled-content-publisher.yml` -- deferred until `content-publisher.sh` gains LinkedIn channel support (issue #590); the script currently handles only `discord` and `x` channels
 
 The monitoring workflow (`scheduled-community-monitor.yml`) does NOT set the variable, so even if the agent calls `post-content`, the script refuses.
+
+### Research Insight: content-publisher.sh has no LinkedIn support
+
+The `channel_to_section()` function in `scripts/content-publisher.sh` only maps `discord` and `x`. Adding `LINKEDIN_ALLOW_POST=true` to the content-publisher workflow YAML before the script supports a `linkedin` channel would be dead code. The workflow env block change should ship with issue #590 (content-publisher LinkedIn support), not with this guard.
 
 ## Technical Considerations
 
@@ -68,8 +84,8 @@ The `linkedin-community.sh` script is being implemented in the `feat-linkedin-ap
 - [ ] When `LINKEDIN_ALLOW_POST` is unset, `post-content` exits with code 1 and prints an informational message to stderr
 - [ ] When `LINKEDIN_ALLOW_POST=false`, `post-content` exits with code 1
 - [ ] When `LINKEDIN_ALLOW_POST=true`, `post-content` proceeds normally
-- [ ] `scheduled-content-publisher.yml` sets `LINKEDIN_ALLOW_POST: true` in the env block
 - [ ] `scheduled-community-monitor.yml` does NOT set `LINKEDIN_ALLOW_POST`
+- [ ] `scheduled-content-publisher.yml` does NOT set `LINKEDIN_ALLOW_POST` yet (deferred to #590 when `content-publisher.sh` gains LinkedIn channel support)
 - [ ] Guard message references `LINKEDIN_ALLOW_POST=true` so operators know how to enable posting
 
 ## Test Scenarios
@@ -79,15 +95,22 @@ The `linkedin-community.sh` script is being implemented in the `feat-linkedin-ap
 - Given `LINKEDIN_ALLOW_POST=true` and valid credentials, when `linkedin-community.sh post-content --text "test"`, then post is created normally
 - Given `LINKEDIN_ALLOW_POST=true` but no credentials, when `linkedin-community.sh post-content --text "test"`, then credential error (guard passes, credential check catches it)
 - Given monitoring workflow runs (no `LINKEDIN_ALLOW_POST` in env), when agent calls `post-content`, then post is blocked regardless of prompt instructions
-- Given content-publisher workflow runs (`LINKEDIN_ALLOW_POST=true` in env), when script calls `post-content`, then post succeeds
+- Given `LINKEDIN_ALLOW_POST=true` set manually, when script calls `post-content`, then post succeeds (content-publisher workflow integration deferred to #590)
+
+## Applicable Institutional Learnings
+
+- **Shell script defensive patterns** (`knowledge-base/learnings/2026-03-13-shell-script-defensive-patterns.md`): Prevention strategy #5 (always include an `else`/default case) applies -- the guard's `return 1` path is the catch-all for all non-`"true"` values.
+- **Platform integration scope calibration** (`knowledge-base/learnings/2026-03-13-platform-integration-scope-calibration.md`): "Match scope to what can be validated on day one." The content-publisher workflow env change cannot be validated until #590 ships, so it is deferred.
+- **Community router deduplication** (`knowledge-base/learnings/2026-03-13-community-router-deduplication.md`): The guard lives in `linkedin-community.sh` (the platform script), not in the router or caller. This follows the pattern where platform-specific behavior belongs in platform scripts.
 
 ## Dependencies & Risks
 
 | Risk | Impact | Mitigation |
 |------|--------|-----------|
-| `linkedin-community.sh` not yet merged | Cannot add guard to a file that does not exist | Coordinate with feat-linkedin-api-scripts branch -- either include guard during initial implementation or apply as follow-up |
+| `linkedin-community.sh` not yet merged | Cannot add guard to a file that does not exist | Integrate guard into `cmd_post_content()` during feat-linkedin-api-scripts implementation (amend task 2.6) |
 | Operator forgets to set env var in new workflows | Posting silently blocked | Error message explicitly names the variable and required value |
 | Guard bypassed by sourcing and calling internal functions | Direct API calls bypass guard | Acceptable risk -- sourcing is a deliberate developer action, not an agent behavior |
+| Content-publisher LinkedIn support not yet implemented | `LINKEDIN_ALLOW_POST` env in workflow YAML would be dead code | Defer workflow YAML change to #590 |
 
 ## Semver Intent
 
