@@ -80,13 +80,13 @@ The `linkedin-community.sh` script is being implemented in the `feat-linkedin-ap
 
 ## Acceptance Criteria
 
-- [ ] `cmd_post_content()` in `linkedin-community.sh` checks `LINKEDIN_ALLOW_POST` before any posting logic
-- [ ] When `LINKEDIN_ALLOW_POST` is unset, `post-content` exits with code 1 and prints an informational message to stderr
-- [ ] When `LINKEDIN_ALLOW_POST=false`, `post-content` exits with code 1
-- [ ] When `LINKEDIN_ALLOW_POST=true`, `post-content` proceeds normally
-- [ ] `scheduled-community-monitor.yml` does NOT set `LINKEDIN_ALLOW_POST`
-- [ ] `scheduled-content-publisher.yml` does NOT set `LINKEDIN_ALLOW_POST` yet (deferred to #590 when `content-publisher.sh` gains LinkedIn channel support)
-- [ ] Guard message references `LINKEDIN_ALLOW_POST=true` so operators know how to enable posting
+- [x] `cmd_post_content()` in `linkedin-community.sh` checks `LINKEDIN_ALLOW_POST` before any posting logic
+- [x] When `LINKEDIN_ALLOW_POST` is unset, `post-content` exits with code 1 and prints an informational message to stderr
+- [x] When `LINKEDIN_ALLOW_POST=false`, `post-content` exits with code 1
+- [x] When `LINKEDIN_ALLOW_POST=true`, `post-content` proceeds normally
+- [x] `scheduled-community-monitor.yml` does NOT set `LINKEDIN_ALLOW_POST`
+- [x] `scheduled-content-publisher.yml` does NOT set `LINKEDIN_ALLOW_POST` yet (deferred to #590 when `content-publisher.sh` gains LinkedIn channel support)
+- [x] Guard message references `LINKEDIN_ALLOW_POST=true` so operators know how to enable posting
 
 ## Test Scenarios
 

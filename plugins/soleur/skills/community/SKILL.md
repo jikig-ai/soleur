@@ -147,6 +147,7 @@ If no sub-command is provided, present options using the AskUserQuestion tool:
 - The `community-manager` agent handles data collection, analysis, and output formatting
 - This skill is the entry point; the agent does the work
 - Ownership boundary: community = monitoring + engagement. Broadcasting/distribution is handled by the `social-distribute` skill.
+- LinkedIn posting requires `LINKEDIN_ALLOW_POST=true` in the environment (defense-in-depth guard). Monitoring workflows omit this variable intentionally.
 
 ## Platform Surface Check
 
