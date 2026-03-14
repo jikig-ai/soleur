@@ -91,13 +91,13 @@ Blocked on LinkedIn company page creation at `https://linkedin.com/company/soleu
 
 ## Acceptance Criteria
 
-- [ ] `site.json` contains `"linkedin": "https://linkedin.com/company/soleur"` after the `"x"` entry
-- [ ] `community.njk` Connect section has 4 cards: Discord, X/Twitter, GitHub, LinkedIn
-- [ ] LinkedIn card uses `#0A66C2` dot color and "Professional" category label
-- [ ] LinkedIn card links to `{{ site.linkedin }}` with `target="_blank" rel="noopener"`
-- [ ] `base.njk` footer `.footer-social` includes LinkedIn link with `aria-label="LinkedIn"`
+- [x] `site.json` contains `"linkedin": "https://linkedin.com/company/soleur"` after the `"x"` entry
+- [x] `community.njk` Connect section has 4 cards: Discord, X/Twitter, GitHub, LinkedIn
+- [x] LinkedIn card uses `#0A66C2` dot color and "Professional" category label
+- [x] LinkedIn card links to `{{ site.linkedin }}` with `target="_blank" rel="noopener"`
+- [x] `base.njk` footer `.footer-social` includes LinkedIn link with `aria-label="LinkedIn"`
 - [ ] Card renders correctly at desktop, tablet, and mobile breakpoints (visual check)
-- [ ] Footer LinkedIn link renders alongside Discord, GitHub, and X links
+- [x] Footer LinkedIn link renders alongside Discord, GitHub, and X links
 
 ## Test Scenarios
 
