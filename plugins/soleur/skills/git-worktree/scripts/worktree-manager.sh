@@ -3,6 +3,12 @@
 # Git Worktree Manager
 # Handles creating, listing, switching, and cleaning up Git worktrees
 # KISS principle: Simple, interactive, opinionated
+#
+# BARE REPO NOTE: This repo uses core.bare=true. On-disk files at the bare root
+# are never updated by git -- they become stale after every merge. The IS_BARE
+# flag (computed at init) guards all working-tree-dependent operations. If this
+# script crashes with "must be run in a work tree", the on-disk copy is stale.
+# Run from a worktree instead, or use: worktree-manager.sh sync-bare
 
 set -euo pipefail
 
@@ -16,8 +22,11 @@ NC='\033[0m' # No Color
 # Auto-confirm flag (--yes skips all interactive prompts)
 YES_FLAG=false
 
-# Get repo root (handles bare repos used with worktrees)
+# Get repo root and detect bare repo (single subprocess for both)
+# IS_BARE guards all working-tree-dependent operations (git diff, checkout, pull, status)
+IS_BARE=false
 if [[ "$(git rev-parse --is-bare-repository 2>/dev/null)" == "true" ]]; then
+  IS_BARE=true
   _git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null)
   if [[ "$_git_dir" == */.git ]]; then
     GIT_ROOT="${_git_dir%/.git}"
@@ -28,6 +37,15 @@ else
   GIT_ROOT=$(git rev-parse --show-toplevel)
 fi
 WORKTREE_DIR="$GIT_ROOT/.worktrees"
+
+# Exit with error if running in a bare repo (git checkout/pull require a working tree)
+require_working_tree() {
+  if [[ "$IS_BARE" == "true" ]]; then
+    echo -e "${RED}Error: Cannot create worktrees from bare repo root (git checkout requires a working tree).${NC}"
+    echo -e "${YELLOW}Run from an existing worktree, or use: git worktree add .worktrees/<name> -b <branch> main${NC}"
+    exit 1
+  fi
+}
 
 # Ensure .worktrees is in .gitignore
 ensure_gitignore() {
@@ -81,6 +99,8 @@ copy_env_files() {
 create_worktree() {
   local branch_name="$1"
   local from_branch="${2:-main}"
+
+  require_working_tree
 
   if [[ -z "$branch_name" ]]; then
     echo -e "${RED}Error: Branch name required${NC}"
@@ -149,6 +169,8 @@ create_worktree() {
 create_for_feature() {
   local name="$1"
   local from_branch="${2:-main}"
+
+  require_working_tree
 
   if [[ -z "$name" ]]; then
     echo -e "${RED}Error: Feature name required${NC}"
@@ -237,10 +259,15 @@ list_worktrees() {
   fi
 
   echo ""
-  echo -e "${BLUE}Main repository:${NC}"
-  local main_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-  echo "  Branch: $main_branch"
-  echo "  Path: $GIT_ROOT"
+  if [[ "$IS_BARE" == "true" ]]; then
+    echo -e "${YELLOW}Bare root (no working tree):${NC}"
+    echo "  Path: $GIT_ROOT"
+  else
+    echo -e "${BLUE}Main repository:${NC}"
+    local main_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    echo "  Branch: $main_branch"
+    echo "  Path: $GIT_ROOT"
+  fi
 }
 
 # Switch to a worktree
@@ -506,21 +533,28 @@ cleanup_merged_worktrees() {
     echo -e "${GREEN}Cleaned ${#cleaned[@]} merged worktree(s): ${cleaned[*]}${NC}"
 
     # After cleanup, update main checkout so next worktree branches from latest
-    # Only check tracked file changes (staged + unstaged) -- untracked files cannot
-    # conflict with a fast-forward pull and should not block the update
-    if ! git -C "$GIT_ROOT" diff --quiet HEAD 2>/dev/null || ! git -C "$GIT_ROOT" diff --cached --quiet 2>/dev/null; then
-      echo -e "${YELLOW}Warning: Main checkout has uncommitted changes to tracked files -- skipping pull${NC}"
+    # Skip entirely for bare repos -- there is no working tree to update
+    if [[ "$IS_BARE" == "true" ]]; then
+      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Bare repo -- skipping main checkout update (no working tree)${NC}"
+      # Auto-sync stale on-disk files so the next session reads current versions
+      sync_bare_files
     else
-      local current_branch
-      current_branch=$(git -C "$GIT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)
-      if [[ "$current_branch" != "main" && "$current_branch" != "master" ]]; then
-        git -C "$GIT_ROOT" checkout main 2>/dev/null || git -C "$GIT_ROOT" checkout master 2>/dev/null || true
-      fi
-      local pull_output
-      if pull_output=$(git -C "$GIT_ROOT" pull --ff-only origin main 2>&1); then
-        echo -e "${GREEN}Updated main to latest${NC}"
+      # Only check tracked file changes (staged + unstaged) -- untracked files cannot
+      # conflict with a fast-forward pull and should not block the update
+      if ! git -C "$GIT_ROOT" diff --quiet HEAD 2>/dev/null || ! git -C "$GIT_ROOT" diff --cached --quiet 2>/dev/null; then
+        echo -e "${YELLOW}Warning: Main checkout has uncommitted changes to tracked files -- skipping pull${NC}"
       else
-        echo -e "${YELLOW}Warning: Could not pull latest main: $pull_output${NC}"
+        local current_branch
+        current_branch=$(git -C "$GIT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)
+        if [[ "$current_branch" != "main" && "$current_branch" != "master" ]]; then
+          git -C "$GIT_ROOT" checkout main 2>/dev/null || git -C "$GIT_ROOT" checkout master 2>/dev/null || true
+        fi
+        local pull_output
+        if pull_output=$(git -C "$GIT_ROOT" pull --ff-only origin main 2>&1); then
+          echo -e "${GREEN}Updated main to latest${NC}"
+        else
+          echo -e "${YELLOW}Warning: Could not pull latest main: $pull_output${NC}"
+        fi
       fi
     fi
   fi
@@ -532,6 +566,8 @@ cleanup_merged_worktrees() {
 # Idempotent: skips if a PR already exists
 # All push/PR failures warn but do not block (returns 0)
 create_draft_pr() {
+  require_working_tree
+
   local branch
   branch=$(git rev-parse --abbrev-ref HEAD)
 
@@ -576,6 +612,97 @@ create_draft_pr() {
   echo -e "${GREEN}Draft PR created: $pr_url${NC}"
 }
 
+# Sync critical on-disk files from git HEAD in a bare repo.
+# Bare repos have no working tree, so on-disk files become stale after merges.
+# This extracts the latest versions from git and overwrites the stale copies.
+sync_bare_files() {
+  if [[ "$IS_BARE" != "true" ]]; then
+    echo -e "${YELLOW}Not a bare repo -- sync-bare-files is only needed for bare repo roots${NC}"
+    return 0
+  fi
+
+  echo -e "${BLUE}Syncing critical on-disk files from git HEAD...${NC}"
+
+  # Create a temp directory on the same filesystem for atomic writes
+  local tmpdir
+  tmpdir=$(mktemp -d "${GIT_ROOT}/.sync-tmp.XXXXXX")
+  trap 'rm -rf "$tmpdir"' EXIT
+
+  # Files that Claude Code reads from the bare repo root
+  local files=(
+    "AGENTS.md"
+    "CLAUDE.md"
+    ".claude-plugin"
+    ".claude/settings.json"
+    "plugins/soleur/AGENTS.md"
+    "plugins/soleur/CLAUDE.md"
+    "plugins/soleur/scripts/resolve-git-root.sh"
+    "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
+  )
+
+  local synced=0
+  for file in "${files[@]}"; do
+    # Verify file exists in git HEAD
+    if ! git cat-file -e "HEAD:$file" 2>/dev/null; then
+      continue
+    fi
+
+    # Ensure parent directory exists on disk
+    local dir
+    dir=$(dirname "$GIT_ROOT/$file")
+    mkdir -p "$dir"
+
+    # Atomic write: extract to temp file, then mv into place
+    local safe_name="${file//\//_}"
+    local tmpfile="$tmpdir/${safe_name}"
+    if git show "HEAD:$file" > "$tmpfile" 2>/dev/null; then
+      mv "$tmpfile" "$GIT_ROOT/$file"
+      synced=$((synced + 1))
+    else
+      rm -f "$tmpfile"
+      echo -e "${YELLOW}Warning: Could not sync $file${NC}"
+    fi
+  done
+
+  # Restore execute permissions on scripts
+  chmod +x "$GIT_ROOT/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh" 2>/dev/null || true
+
+  # Sync hook scripts and restore execute permissions
+  local hook_files
+  hook_files=$(git ls-tree --name-only HEAD .claude/hooks/ 2>/dev/null || true)
+  if [[ -n "$hook_files" ]]; then
+    mkdir -p "$GIT_ROOT/.claude/hooks"
+    while IFS= read -r hook_file; do
+      # Validate path prefix to prevent unexpected writes
+      [[ "$hook_file" == .claude/hooks/* ]] || continue
+      local tmpfile="$tmpdir/$(basename "$hook_file").$$"
+      if git show "HEAD:$hook_file" > "$tmpfile" 2>/dev/null; then
+        mv "$tmpfile" "$GIT_ROOT/$hook_file"
+        chmod +x "$GIT_ROOT/$hook_file" 2>/dev/null || true
+        synced=$((synced + 1))
+      else
+        rm -f "$tmpfile"
+      fi
+    done <<< "$hook_files"
+  fi
+
+  # Remove stale hook files that no longer exist in git HEAD
+  if [[ -d "$GIT_ROOT/.claude/hooks" ]]; then
+    for on_disk_hook in "$GIT_ROOT/.claude/hooks"/*; do
+      [[ -f "$on_disk_hook" ]] || continue
+      local hook_name
+      hook_name=$(basename "$on_disk_hook")
+      if ! git cat-file -e "HEAD:.claude/hooks/$hook_name" 2>/dev/null; then
+        rm "$on_disk_hook"
+        echo -e "${YELLOW}Removed stale hook: $hook_name${NC}"
+      fi
+    done
+  fi
+
+
+  echo -e "${GREEN}Synced $synced file(s) from git HEAD${NC}"
+}
+
 # Main command handler
 main() {
   local command="${1:-list}"
@@ -604,6 +731,9 @@ main() {
       ;;
     draft-pr)
       create_draft_pr
+      ;;
+    sync-bare-files|sync-bare|sync)
+      sync_bare_files
       ;;
     help)
       show_help
@@ -640,6 +770,10 @@ Commands:
                                       (detects [gone] branches, archives specs)
   draft-pr                            Create empty commit, push, and open draft PR
                                       (idempotent: skips if PR already exists)
+  sync-bare | sync-bare-files | sync  Sync stale on-disk files from git HEAD
+                                      (bare repos only -- overwrites AGENTS.md,
+                                      CLAUDE.md, hooks, settings, plugin manifest,
+                                      and this script. Removes stale hooks.)
   help                                Show this help message
 
 Environment Files:
@@ -671,5 +805,7 @@ for arg in "$@"; do
   fi
 done
 
-# Run
-main "${args[@]+"${args[@]}"}"
+# Guard for testability: only run main() when executed directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "${args[@]+"${args[@]}"}"
+fi

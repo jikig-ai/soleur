@@ -21,6 +21,7 @@ SETUP="$SCRIPT_DIR/../scripts/setup-ralph-loop.sh"
 setup_test() {
   local test_dir
   test_dir=$(mktemp -d)
+  git -C "$test_dir" init -q
   mkdir -p "$test_dir/.claude"
   echo "$test_dir"
 }
@@ -380,8 +381,6 @@ echo ""
 # Test 16: Hook exits 0 from a non-root CWD when state file does not exist
 echo "Test 16: Hook exits 0 from subdirectory when no state file"
 TEST_DIR=$(setup_test)
-# Initialize a git repo so git rev-parse --show-toplevel works
-git -C "$TEST_DIR" init -q
 mkdir -p "$TEST_DIR/sub/deep"
 # No state file created -- hook should exit 0 cleanly
 HOOK_OUTPUT=$(cd "$TEST_DIR/sub/deep" && echo '{}' | bash "$HOOK" 2>&1) || true
@@ -394,7 +393,6 @@ echo ""
 # Test 17: Hook finds state file at project root when CWD is a subdirectory
 echo "Test 17: Hook finds state file from subdirectory via git rev-parse"
 TEST_DIR=$(setup_test)
-git -C "$TEST_DIR" init -q
 create_state_file "$TEST_DIR" 1 0 "null" 0 3
 mkdir -p "$TEST_DIR/sub/deep"
 # run_hook uses a subshell, so CWD isolation is automatic
@@ -427,7 +425,6 @@ echo ""
 # Test 20: TTL auto-removes stale state file (started_at older than TTL)
 echo "Test 20: TTL auto-removes stale state file"
 TEST_DIR=$(setup_test)
-git -C "$TEST_DIR" init -q
 cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<EOF
 ---
 active: true

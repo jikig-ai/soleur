@@ -22,6 +22,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../../scripts/resolve-git-root.sh"
+
 BSKY_API="https://bsky.social/xrpc"
 
 # --- Dependency checks ---
@@ -62,8 +65,7 @@ require_credentials() {
 cmd_write_env() {
   require_credentials
 
-  local repo_root
-  repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  local repo_root="$GIT_ROOT"
   local env_file="${repo_root}/.env"
 
   # Remove existing Bluesky vars if .env exists
@@ -89,8 +91,7 @@ cmd_write_env() {
 }
 
 cmd_verify() {
-  local repo_root
-  repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  local repo_root="$GIT_ROOT"
   local env_file="${repo_root}/.env"
 
   if [[ ! -f "$env_file" ]]; then

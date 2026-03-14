@@ -10,7 +10,9 @@
 set -euo pipefail
 
 # Resolve project root (worktree-safe: CWD may be .worktrees/feat-* instead of repo root)
-PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || PROJECT_ROOT="."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../scripts/resolve-git-root.sh"
+PROJECT_ROOT="$GIT_ROOT"
 RALPH_STATE_FILE="${PROJECT_ROOT}/.claude/ralph-loop.local.md"
 
 # Check if ralph-loop is active BEFORE reading stdin
