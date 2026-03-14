@@ -8,10 +8,15 @@
 
 set -euo pipefail
 
-# Resolve project root (worktree-safe: CWD may be .worktrees/feat-* instead of repo root)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/resolve-git-root.sh"
-PROJECT_ROOT="$GIT_ROOT"
+# Resolve shared repo root (not worktree root) so state file survives worktree cleanup.
+# git rev-parse --git-common-dir returns the shared .git dir across all worktrees.
+# May return a relative path, so resolve to absolute first, then strip trailing /.git.
+_common_dir=$(cd "$(git rev-parse --git-common-dir 2>/dev/null)" && pwd) || {
+  echo "Error: Not inside a git repository." >&2
+  exit 1
+}
+PROJECT_ROOT="${_common_dir%/.git}"
+unset _common_dir
 
 # Parse arguments
 PROMPT_PARTS=()
