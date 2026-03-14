@@ -1,6 +1,6 @@
 ---
 name: user-story-writer
-description: This skill should be used when decomposing feature requirements into granular, implementable user stories. It applies Elephant Carpaccio slicing, INVEST criteria, and story prioritization. Triggers on "write user stories", "break down feature", "story mapping", "INVEST criteria", "Elephant Carpaccio", "decompose requirements".
+description: "This skill should be used when decomposing feature requirements into granular, implementable user stories. It applies Elephant Carpaccio slicing, INVEST criteria, and story prioritization."
 ---
 
 # User Story Writer

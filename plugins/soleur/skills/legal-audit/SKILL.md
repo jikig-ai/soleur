@@ -1,6 +1,6 @@
 ---
 name: legal-audit
-description: "This skill should be used when auditing existing legal documents for compliance gaps, outdated clauses, missing disclosures, and cross-document consistency. It scans a project for legal documents, invokes the legal-compliance-auditor agent, and displays findings inline. Triggers on \"legal audit\", \"audit privacy policy\", \"check legal compliance\", \"review legal documents\", \"legal-audit\", \"legal benchmark\", \"benchmark legal compliance\", \"regulatory checklist\", \"compare legal documents\"."
+description: "This skill should be used when auditing existing legal documents for compliance gaps, outdated clauses, missing disclosures, and cross-document consistency. It scans a project for legal documents and displays findings inline."
 ---
 
 # Legal Compliance Auditor

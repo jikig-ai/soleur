@@ -1,6 +1,6 @@
 ---
 name: docs-site
-description: This skill should be used when scaffolding a Markdown-based documentation site using Eleventy. It generates a complete docs setup with base layout, data files for build-time injection, GitHub Pages deployment workflow, and passthrough copy configuration. Triggers on "create docs site", "scaffold docs", "setup documentation", "eleventy docs", "docs-site".
+description: "This skill should be used when scaffolding a Markdown-based documentation site using Eleventy. It generates a complete docs setup with base layout, data files, GitHub Pages deployment workflow, and passthrough copy configuration."
 ---
 
 # docs-site Skill

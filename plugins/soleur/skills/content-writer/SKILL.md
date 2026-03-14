@@ -1,6 +1,6 @@
 ---
 name: content-writer
-description: "This skill should be used when generating full article drafts with brand-consistent voice, Eleventy frontmatter, and structured data. It requires a brand guide and existing blog infrastructure. Triggers on \"write article\", \"content writer\", \"draft blog post\", \"generate article\", \"write content\", \"blog post\"."
+description: "This skill should be used when generating full article drafts with brand-consistent voice, Eleventy frontmatter, and structured data. It requires a brand guide and existing blog infrastructure."
 ---
 
 # Content Writer

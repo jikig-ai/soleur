@@ -177,7 +177,7 @@ These guardrails apply in both automatic mode (fetch-mentions) and manual mode (
 
 **Exception:** Engaging with #solofounder, #buildinpublic, and AI/developer tooling communities is encouraged even when conversations touch on industry trends. The prohibition targets partisan, religious, and inflammatory topics, not the broader tech ecosystem.
 
-### LinkedIn
+### LinkedIn Personal
 
 - Thought leadership is the primary format. Case studies, reflections on building with AI agents, lessons learned, and honest assessments of what worked and what didn't.
 - First-person founder voice. Write as the person behind the company, not as a faceless brand. "I built..." not "We launched..."
@@ -226,6 +226,16 @@ These guardrails apply in both automatic mode (fetch-mentions) and manual mode (
 | Avatar overlap | Bottom-left clear of critical content |
 | Source file | `knowledge-base/design/brand/brand-x-banner.pen` |
 | Generated with | Pencil MCP (design) + Pillow (PNG export) |
+
+### LinkedIn Company Page
+
+- Official announcement tone, third-person company voice
+- Product updates, feature announcements, milestone celebrations
+- Professional framing: "Soleur now supports...", "Today we're releasing..."
+- ~1,300 chars optimal, 3,000 max
+- Link to blog post or docs for details
+- Minimal hashtags (1-2 max, same as personal)
+- Cross-reference ### LinkedIn Personal for cadence, skip rules, and reply guidelines
 
 ### Bluesky
 

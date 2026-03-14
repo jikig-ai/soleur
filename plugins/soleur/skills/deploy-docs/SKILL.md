@@ -1,6 +1,6 @@
 ---
 name: deploy-docs
-description: "This skill should be used when validating the documentation build and preparing for GitHub Pages deployment. It runs the Eleventy build, validates output, checks component counts, and provides deployment instructions. Triggers on \"deploy docs\", \"publish documentation\", \"GitHub Pages\", \"validate docs site\"."
+description: "This skill should be used when validating the documentation build and preparing for GitHub Pages deployment. It runs the Eleventy build, validates output, checks component counts, and provides deployment instructions."
 ---
 
 # Deploy Documentation Command

@@ -1,6 +1,6 @@
 ---
 name: ship
-description: This skill should be used when preparing a feature for production deployment. It enforces the complete feature lifecycle checklist, ensuring all artifacts are committed, documentation is updated, and learnings are captured before creating a PR. Version bumping happens automatically in CI at merge time. Triggers on "ready to ship", "create PR", "ship it", "ready to merge", "/ship".
+description: "This skill should be used when preparing a feature for production deployment. It enforces the complete feature lifecycle checklist, ensuring all artifacts are committed, documentation is updated, and learnings are captured before creating a PR. Version bumping happens automatically in CI."
 ---
 
 # ship Skill
