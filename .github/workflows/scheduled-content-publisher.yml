@@ -52,6 +52,7 @@ jobs:
           X_API_SECRET: ${{ secrets.X_API_SECRET }}
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          X_ALLOW_POST: "true"
           LINKEDIN_ACCESS_TOKEN: ${{ secrets.LINKEDIN_ACCESS_TOKEN }}
           LINKEDIN_PERSON_URN: ${{ secrets.LINKEDIN_PERSON_URN }}
           # TODO(#590): Add LINKEDIN_ALLOW_POST: "true" when content-publisher.sh gains LinkedIn channel support
