@@ -24,6 +24,8 @@ YES_FLAG=false
 
 # Get repo root and detect bare repo (single subprocess for both)
 # IS_BARE guards all working-tree-dependent operations (git diff, checkout, pull, status)
+# Must also detect when running from a worktree whose parent repo is bare,
+# since git rev-parse --is-bare-repository returns false inside worktrees.
 IS_BARE=false
 if [[ "$(git rev-parse --is-bare-repository 2>/dev/null)" == "true" ]]; then
   IS_BARE=true
@@ -35,6 +37,17 @@ if [[ "$(git rev-parse --is-bare-repository 2>/dev/null)" == "true" ]]; then
   fi
 else
   GIT_ROOT=$(git rev-parse --show-toplevel)
+  # Check if we're in a worktree of a bare repo
+  _common_dir=$(git rev-parse --git-common-dir 2>/dev/null)
+  if [[ -n "$_common_dir" ]] && git -C "$_common_dir" rev-parse --is-bare-repository 2>/dev/null | grep -q true; then
+    IS_BARE=true
+    # GIT_ROOT should point to the bare repo, not the worktree
+    if [[ "$_common_dir" == */.git ]]; then
+      GIT_ROOT="${_common_dir%/.git}"
+    else
+      GIT_ROOT="$_common_dir"
+    fi
+  fi
 fi
 WORKTREE_DIR="$GIT_ROOT/.worktrees"
 
@@ -535,7 +548,10 @@ cleanup_merged_worktrees() {
     # After cleanup, update main checkout so next worktree branches from latest
     # Skip entirely for bare repos -- there is no working tree to update
     if [[ "$IS_BARE" == "true" ]]; then
-      [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Bare repo -- skipping main checkout update (no working tree)${NC}"
+      # Bare repos have no working tree -- use git fetch to update the main ref
+      if git fetch origin main 2>/dev/null; then
+        echo -e "${GREEN}Fetched latest main${NC}"
+      fi
       # Auto-sync stale on-disk files so the next session reads current versions
       sync_bare_files
     else
