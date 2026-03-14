@@ -7,6 +7,8 @@ semver: minor
 
 # feat: LinkedIn Company Page Variant + Playwright Setup
 
+[Updated 2026-03-14 — simplified after plan review: dropped linkedin-setup.sh, dropped legacy mapping, symmetric UTMs, collapsed to 2 commits]
+
 **Issue:** #593
 **Branch:** feat-linkedin-company-variant
 **Brainstorm:** `knowledge-base/brainstorms/2026-03-14-linkedin-company-variant-brainstorm.md`
@@ -14,7 +16,7 @@ semver: minor
 
 ## Summary
 
-Clear the gate on #593 by: (1) creating a LinkedIn company page via Playwright MCP automation in linkedin-setup.sh, and (2) adding a second social-distribute LinkedIn variant for company page content with official announcement tone. Three commits in one PR.
+Clear the gate on #593 by: (1) creating a LinkedIn company page via Playwright MCP during implementation (agent-driven, no script), and (2) adding a second social-distribute LinkedIn variant for company page content with official announcement tone. Two commits in one PR.
 
 ## Non-Goals
 
@@ -23,98 +25,90 @@ Clear the gate on #593 by: (1) creating a LinkedIn company page via Playwright M
 - LinkedIn comment engagement
 - Platform adapter interface refactor (#470)
 - Adding LinkedIn to `channels` frontmatter (stays manual-only like IndieHackers/Reddit/HN)
+- linkedin-setup.sh credential validation (belongs in #590 when API consumers exist)
 
 ## Architecture Decisions
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Playwright interaction model | Agent-orchestrated MCP tool calls with AskUserQuestion pauses | Playwright MCP tools are LLM tool calls, not bash commands. linkedin-setup.sh handles credential validation; the Playwright flow is documented as agent instructions. |
+| Playwright interaction model | Agent-orchestrated MCP tool calls with AskUserQuestion pauses, executed live during implementation | Company page creation is a one-time operation. No bash script needed — the agent drives Playwright MCP directly. |
 | Channel names | `linkedin-personal` + `linkedin-company` | Hyphenated compound names. Maps to `## LinkedIn Personal` and `## LinkedIn Company Page` section headings. |
 | site.json field names | `"linkedin"` (personal) + `"linkedinCompany"` (company) | Flat keys matching existing `discord`, `x` pattern. camelCase for multi-word. |
 | LinkedIn in channels frontmatter | No | Manual-only platform. Matches IndieHackers/Reddit/HN pattern. `channel_to_section()` mappings serve social-distribute content generation, not content-publisher automation. |
-| UTM source split | `linkedin` (personal, backward compatible) + `linkedin-company` (new) | Preserves existing analytics continuity for personal variant. |
+| UTM sources | `linkedin-personal` + `linkedin-company` | Symmetric naming. No legacy analytics data exists to preserve (zero existing content files have LinkedIn sections). |
 | Brand guide section rename | `### LinkedIn` → `### LinkedIn Personal` | Consistent naming across brand guide, content files, and channel names. |
-| Content file migration | No-op (confirmed: zero existing files have `## LinkedIn` sections) | All 6 distribution-content files pre-date LinkedIn variant shipping. Only SKILL.md template needs updating. |
-| Variant count | 6 → 7 | Update all references in SKILL.md description, Phase 6, and summary. |
-| community.njk | One card for company page | Company page is the public-facing entity. LinkedIn brand blue `#0A66C2`, category "Social". |
+| Content file migration | No-op | All 6 distribution-content files pre-date LinkedIn variant shipping. Zero have `## LinkedIn` sections. Only SKILL.md template needs updating. |
+| Variant count | Use "platform-specific variants" | Avoids hardcoding a count that changes with each new platform. |
+| community.njk | One card for company page | Company page is the public-facing entity. LinkedIn brand blue `#0A66C2`, category "Social". 4 cards in `auto-fill` grid — no orphan cards at any breakpoint. |
+| Legacy `linkedin` channel name | No backward-compatible mapping | Channel name `linkedin` was never shipped to production. The existing `*) echo "" ;;` catch-all handles unknown channels. |
 
 ## Implementation Plan
 
-### Commit 1: linkedin-setup.sh + Playwright company page creation
+### Pre-implementation: Create LinkedIn company page via Playwright MCP
 
-**New file:** `plugins/soleur/skills/community/scripts/linkedin-setup.sh`
+Before committing any code, create the company page interactively:
 
-Following x-setup.sh pattern (327 lines), create with subcommands:
+1. `browser_navigate` to `https://www.linkedin.com/company/setup/new/`
+2. `browser_snapshot` — check if login is required
+3. If login needed: AskUserQuestion — "Log into LinkedIn in the browser. Press continue when done."
+4. `browser_snapshot` — verify on company page creation form
+5. `browser_fill_form` — company name (from site.json `name`), company URL (from site.json `url`)
+6. `browser_snapshot` — verify fields, check for additional required fields (industry, logo)
+7. AskUserQuestion — "Review the form. Fill any remaining fields (logo, industry). Press continue when ready to submit."
+8. `browser_click` submit button
+9. `browser_snapshot` — capture resulting page URL
+10. Extract company page URL from browser state
+11. Write URL to site.json `linkedinCompany` field
 
-```text
-linkedin-setup.sh <command>
+If creation fails (name taken, rate limited, etc.), the human completes manually and provides the URL.
 
-Commands:
-  create-company-page   Guide Playwright MCP company page creation (prints instructions)
-  validate-credentials  Test LinkedIn OAuth token validity
-  write-env             Write LinkedIn credentials to .env
-  verify                Source .env and validate credentials
-```
+### Commit 1: social-distribute Phase 5.7 + brand guide + site.json
 
-**Script structure:**
-- Header with usage docs, env var requirements (`LINKEDIN_ACCESS_TOKEN`, `LINKEDIN_ORGANIZATION_ID`), exit codes
-- `set -euo pipefail`
-- `require_jq()` dependency check
-- `require_credentials()` checking env vars with setup instructions if missing
-- `validate_credentials()` — GET LinkedIn API endpoint with token, HTTP status dispatch
-- `write_env()` — append LinkedIn credentials to `.env` with `chmod 600`
-- `verify()` — source `.env` then run `validate_credentials`
-- `create_company_page()` — print Playwright MCP workflow instructions (the actual Playwright automation is agent-driven, not bash-driven)
-- Main dispatch case statement
-
-**Playwright MCP workflow** (agent-orchestrated, documented in script output and plan):
-
-```text
-Step 1: browser_navigate to https://www.linkedin.com/company/setup/new/
-Step 2: browser_snapshot — check if login required
-Step 3: [If login needed] AskUserQuestion: "Please log into LinkedIn in the browser. Press continue when done."
-Step 4: browser_snapshot — verify on company page creation form
-Step 5: browser_fill_form with company details:
-        - Company name (from site.json "name" field)
-        - Company URL (from site.json "url" field)
-Step 6: browser_snapshot — verify fields filled, check for additional required fields
-Step 7: AskUserQuestion: "Review the form. Fill any remaining fields (logo, industry). Press continue when ready to submit."
-Step 8: browser_click submit button
-Step 9: browser_snapshot — capture resulting page URL
-Step 10: Extract company page URL from browser URL bar or page content
-Step 11: Write URL to site.json as "linkedinCompany" field
-```
-
-**Key safety patterns:**
-- `git rev-parse --show-toplevel` for repo root resolution
-- Credentials never passed as CLI args
-- `2>/dev/null` on curl to prevent credential leakage
-- Idempotent: `create-company-page` checks if `linkedinCompany` already exists in site.json
-
-**site.json update** (`plugins/soleur/docs/_data/site.json`):
+**Edit:** `plugins/soleur/docs/_data/site.json`
 
 Add two fields after existing `"x"` field:
 ```json
 "linkedin": "",
-"linkedinCompany": ""
+"linkedinCompany": "<captured-url>"
 ```
 
-Personal URL populated manually or via future setup. Company URL populated by Playwright workflow.
+**Edit:** `knowledge-base/marketing/brand-guide.md`
 
-### Commit 2: social-distribute Phase 5.7 + template updates
+1. **Rename** `### LinkedIn` (lines 180-201) → `### LinkedIn Personal`
+2. **Add** `### LinkedIn Company Page` section after it:
+
+```text
+### LinkedIn Company Page
+
+- Official announcement tone, third-person company voice
+- Product updates, feature announcements, milestone celebrations
+- Professional framing: "Soleur now supports...", "Today we're releasing..."
+- ~1,300 chars optimal, 3,000 max
+- Link to blog post or docs for details
+- Minimal hashtags (1-2 max, same as personal)
+- Cross-reference ### LinkedIn Personal for cadence, skip rules, and reply guidelines
+```
 
 **Edit:** `plugins/soleur/skills/social-distribute/SKILL.md`
 
-1. **Update description frontmatter** — change "6 variants" to "7 variants" (or use "platform-specific variants" to avoid hardcoding count)
+1. **Update description frontmatter** — replace hardcoded "6 variants" with "platform-specific variants"
 
-2. **Update UTM table (Phase 3)** — split LinkedIn row:
+2. **Update UTM table (Phase 3)** — replace single LinkedIn row with two:
 
 | Platform | utm_source | utm_medium | utm_campaign |
 |----------|-----------|------------|-------------|
-| LinkedIn Personal | linkedin | social | `<slug>` |
+| LinkedIn Personal | linkedin-personal | social | `<slug>` |
 | LinkedIn Company Page | linkedin-company | social | `<slug>` |
 
-3. **Update Phase 4 (Read Brand Guide)** — add instruction to read both `### LinkedIn Personal` and `### LinkedIn Company Page` Channel Notes
+3. **Update Phase 4 (Read Brand Guide)** — replace the existing line:
+   ```
+   Read `## Channel Notes > ### LinkedIn`
+   ```
+   with two lines:
+   ```
+   Read `## Channel Notes > ### LinkedIn Personal`
+   Read `## Channel Notes > ### LinkedIn Company Page`
+   ```
 
 4. **Rename Phase 5.6** — `#### 5.6 LinkedIn Post` → `#### 5.6 LinkedIn Personal`
    - Update section heading reference from `## LinkedIn` to `## LinkedIn Personal`
@@ -134,9 +128,15 @@ Generate a LinkedIn company page variant:
 - Section heading: ## LinkedIn Company Page
 ```
 
-6. **Update Phase 6 (Present All Variants)** — add LinkedIn Company Page to display list, update count from 6 to 7
+6. **Update Phase 5 header text** — replace "generate all 6 variants" with "generate all platform-specific variants"
 
-7. **Update content file template (Phase 9)** — rename `## LinkedIn` to `## LinkedIn Personal`, add `## LinkedIn Company Page` section after it:
+7. **Update Phase 6 (Present All Variants)** — add LinkedIn Company Page to display list with format:
+   ```
+   ## LinkedIn Company Page (NNNN/1300 optimal, NNNN/3000 max)
+   ```
+   Replace "all 6 variants" with "all variants"
+
+8. **Update content file template (Phase 9)** — rename `## LinkedIn` to `## LinkedIn Personal`, add `## LinkedIn Company Page` section after it:
 
 ```text
 ---
@@ -152,30 +152,13 @@ Generate a LinkedIn company page variant:
 <LinkedIn company page variant content>
 ```
 
-8. **Update Phase 10 (Summary)** — add LinkedIn Company Page to manual posting list
+9. **Update Phase 10 (Summary)** — add LinkedIn Company Page to manual posting list
 
-**Edit:** `knowledge-base/marketing/brand-guide.md`
-
-1. **Rename** `### LinkedIn` (lines 180-201) → `### LinkedIn Personal`
-2. **Add** `### LinkedIn Company Page` section after it:
-
-```text
-### LinkedIn Company Page
-
-- Official announcement tone, third-person company voice
-- Product updates, feature announcements, milestone celebrations
-- Professional framing: "Soleur now supports...", "Today we're releasing..."
-- ~1,300 chars optimal, 3,000 max
-- Link to blog post or docs for details
-- Minimal hashtags (1-2 max, same as personal)
-- Cross-reference ### LinkedIn Personal for cadence and skip rules
-```
-
-### Commit 3: content-publisher channel mapping + tests + community.njk
+### Commit 2: content-publisher channel mapping + tests + community.njk
 
 **Edit:** `scripts/content-publisher.sh`
 
-1. **Update `channel_to_section()` (lines 53-59):**
+**Replace `channel_to_section()` (lines 53-59):**
 
 ```bash
 channel_to_section() {
@@ -185,17 +168,16 @@ channel_to_section() {
     x)                  echo "X/Twitter Thread" ;;
     linkedin-personal)  echo "LinkedIn Personal" ;;
     linkedin-company)   echo "LinkedIn Company Page" ;;
-    linkedin)           echo "LinkedIn Personal" ; echo "Warning: 'linkedin' is deprecated. Use 'linkedin-personal' instead." >&2 ;;
     *)                  echo "" ;;
   esac
 }
 ```
 
-Note: LinkedIn channels will NOT appear in `channels` frontmatter (manual-only), so the publishing loop case statement does NOT need new branches. The `channel_to_section()` mappings exist for social-distribute content generation consistency and potential future automation (#590).
+No changes to the publishing loop case statement — LinkedIn is manual-only and will not appear in `channels` frontmatter.
 
 **Edit:** `test/content-publisher.test.ts`
 
-1. **Update existing LinkedIn test (lines 313-317):**
+**Replace the existing test at line 313** (`"returns empty for unknown channel"` using `linkedin` as input) with two new tests:
 
 ```typescript
 test("maps linkedin-personal to LinkedIn Personal", () => {
@@ -207,11 +189,21 @@ test("maps linkedin-company to LinkedIn Company Page", () => {
   const result = runFunction(`channel_to_section "linkedin-company"`);
   expect(result.stdout).toBe("LinkedIn Company Page");
 });
+```
 
-test("maps legacy linkedin to LinkedIn Personal with deprecation warning", () => {
-  const result = runFunction(`channel_to_section "linkedin"`);
-  expect(result.stdout).toBe("LinkedIn Personal");
-  expect(result.stderr).toContain("deprecated");
+**Add `extract_section` boundary tests** in the existing `describe("extract_section")` block:
+
+```typescript
+test("extracts LinkedIn Personal without bleeding into LinkedIn Company Page", () => {
+  const result = runFunction(`extract_section "LinkedIn Personal"`, sampleContent);
+  expect(result.stdout).toContain("thought leadership");
+  expect(result.stdout).not.toContain("official announcement");
+});
+
+test("extracts LinkedIn Company Page without bleeding into LinkedIn Personal", () => {
+  const result = runFunction(`extract_section "LinkedIn Company Page"`, sampleContent);
+  expect(result.stdout).toContain("official announcement");
+  expect(result.stdout).not.toContain("thought leadership");
 });
 ```
 
@@ -252,40 +244,19 @@ Add LinkedIn card after X/Twitter card (line 36), before GitHub card:
 </a>
 ```
 
-**Edit:** `plugins/soleur/docs/_data/site.json`
-
-Ensure `linkedin` and `linkedinCompany` fields are populated (from Commit 1 or Playwright workflow).
-
 ## Files Changed
 
 | File | Action | Commit |
 |------|--------|--------|
-| `plugins/soleur/skills/community/scripts/linkedin-setup.sh` | CREATE | 1 |
 | `plugins/soleur/docs/_data/site.json` | EDIT | 1 |
-| `plugins/soleur/skills/social-distribute/SKILL.md` | EDIT | 2 |
-| `knowledge-base/marketing/brand-guide.md` | EDIT | 2 |
-| `scripts/content-publisher.sh` | EDIT | 3 |
-| `test/content-publisher.test.ts` | EDIT | 3 |
-| `test/helpers/sample-content.md` | EDIT | 3 |
-| `plugins/soleur/docs/pages/community.njk` | EDIT | 3 |
+| `knowledge-base/marketing/brand-guide.md` | EDIT | 1 |
+| `plugins/soleur/skills/social-distribute/SKILL.md` | EDIT | 1 |
+| `scripts/content-publisher.sh` | EDIT | 2 |
+| `test/content-publisher.test.ts` | EDIT | 2 |
+| `test/helpers/sample-content.md` | EDIT | 2 |
+| `plugins/soleur/docs/pages/community.njk` | EDIT | 2 |
 
 ## Test Scenarios
-
-### linkedin-setup.sh
-
-```text
-Given linkedin-setup.sh exists with validate-credentials command
-When LINKEDIN_ACCESS_TOKEN is not set
-Then exit with code 1 and print setup instructions
-
-Given linkedin-setup.sh exists with validate-credentials command
-When LINKEDIN_ACCESS_TOKEN is set and valid
-Then exit with code 0 and print success
-
-Given site.json already has a linkedinCompany URL
-When create-company-page is called
-Then skip creation and print existing URL
-```
 
 ### content-publisher channel mapping
 
@@ -299,8 +270,8 @@ When called with "linkedin-company"
 Then return "LinkedIn Company Page"
 
 Given channel_to_section function
-When called with "linkedin" (legacy)
-Then return "LinkedIn Personal" and print deprecation warning to stderr
+When called with "linkedin" (unknown)
+Then return "" (catch-all for unknown channels)
 
 Given a content file with channels: "discord, x"
 When content-publisher processes it
@@ -322,7 +293,7 @@ Then both ## LinkedIn Personal and ## LinkedIn Company Page sections are present
 And channels frontmatter contains "discord, x" only (no LinkedIn)
 ```
 
-### extract_section
+### extract_section boundary
 
 ```text
 Given a content file with both ## LinkedIn Personal and ## LinkedIn Company Page
@@ -338,14 +309,12 @@ Then only the company section content is returned
 
 | Risk | Mitigation |
 |------|-----------|
-| LinkedIn changes company page creation form (selector breakage) | Playwright uses accessibility tree snapshots (ref-based), not CSS selectors. AskUserQuestion pauses allow human recovery. |
-| Company name already taken on LinkedIn | Script checks for error messages in browser_snapshot after submission. Agent reports failure and asks user to resolve. |
-| LinkedIn rate-limits or blocks page creation | AskUserQuestion pause if unexpected modal detected. Human can complete manually; script captures URL afterward. |
-| Legacy `linkedin` channel in old content files | Backward-compatible mapping with deprecation warning. No existing files use this, so risk is theoretical. |
+| LinkedIn changes company page creation form | Playwright uses accessibility tree snapshots (ref-based), not CSS selectors. AskUserQuestion pauses allow human recovery. If automation fails, human completes manually and provides URL. |
+| Company name already taken on LinkedIn | Agent checks browser_snapshot for error messages. Human resolves naming conflict. |
+| `extract_section` bleed between adjacent LinkedIn sections | Dedicated boundary tests verify no content leakage between `## LinkedIn Personal` and `## LinkedIn Company Page`. |
 
 ## Rollback Plan
 
 Each commit is independently revertable:
-- Commit 3 (channel mapping + tests): `git revert` — content-publisher returns to 2-channel mapping
-- Commit 2 (social-distribute + brand guide): `git revert` — reverts to single LinkedIn variant
-- Commit 1 (linkedin-setup.sh + site.json): `git revert` — removes setup script and site.json fields
+- Commit 2 (channel mapping + tests + community.njk): `git revert` — content-publisher returns to 2-channel mapping, community page loses LinkedIn card
+- Commit 1 (social-distribute + brand guide + site.json): `git revert` — reverts to single LinkedIn variant
