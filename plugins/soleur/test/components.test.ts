@@ -133,6 +133,35 @@ describe("Skill frontmatter", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Skill description budget (prevents context compaction skill loss, see #618)
+// ---------------------------------------------------------------------------
+
+describe("Skill description budget", () => {
+  const skills = discoverSkills();
+
+  test("cumulative description word count under budget", () => {
+    let totalWords = 0;
+    for (const skillPath of skills) {
+      const { frontmatter } = parseComponent(skillPath);
+      const desc = String(frontmatter.description || "");
+      totalWords += desc.split(/\s+/).filter(Boolean).length;
+    }
+    // Budget ceiling: 1800 words across all skill descriptions
+    // Rationale: 58 skills at ~31 words avg; prevents context compaction from
+    // dropping skills mid-session (see #618)
+    expect(totalWords).toBeLessThanOrEqual(1800);
+  });
+
+  for (const skillPath of skills) {
+    test(`${skillPath} description under 1024 chars`, () => {
+      const { frontmatter } = parseComponent(skillPath);
+      const desc = String(frontmatter.description || "");
+      expect(desc.length).toBeLessThanOrEqual(1024);
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Convention: Third-person voice in skill descriptions
 // ---------------------------------------------------------------------------
 
