@@ -21,6 +21,7 @@ SETUP="$SCRIPT_DIR/../scripts/setup-ralph-loop.sh"
 setup_test() {
   local test_dir
   test_dir=$(mktemp -d)
+  git -C "$test_dir" init -q
   mkdir -p "$test_dir/.claude"
   echo "$test_dir"
 }
