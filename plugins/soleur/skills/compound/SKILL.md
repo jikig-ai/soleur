@@ -138,6 +138,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    - Running `git stash` in a worktree
    - Skipping compound before commit
    - Treating a failed command as success
+   - **Manual browser steps in prose output:** Scan all text output (summaries, handoffs, "next steps" lists) for browser tasks labeled as manual without a preceding Playwright MCP attempt. Phrases like "set up X in the browser", "go to the portal and configure", "manually create an account" are violations of the Playwright-first rule unless the session log shows a `mcp__plugin_playwright_playwright__browser_navigate` call for that task. This catches laziness in handoff text that hooks cannot detect.
 
 4. **Propose enforcement.** For each detected deviation, first check if an existing PreToolUse hook already covers it by scanning `.claude/hooks/*.sh` comment headers. If a hook already enforces the rule, note "already hook-enforced" and skip the proposal. If no hook covers it, propose enforcement following the hierarchy:
    - **PreToolUse hook** (preferred) — mechanical prevention, cannot be bypassed
