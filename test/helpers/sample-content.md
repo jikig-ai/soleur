@@ -61,6 +61,16 @@ End result: testing works.
 
 ---
 
+## LinkedIn
+
+Testing the LinkedIn content publisher integration.
+
+This post validates that extract_section correctly handles LinkedIn content with multiple paragraphs and a link.
+
+Read more: https://example.com/blog/test-case-study/
+
+---
+
 ## Hacker News
 
 **Title:** Test Case Study

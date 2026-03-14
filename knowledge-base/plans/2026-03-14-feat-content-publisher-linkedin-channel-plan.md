@@ -34,15 +34,18 @@ Follow the X/Twitter posting pattern in `content-publisher.sh`:
 
 ## Acceptance Criteria
 
-- [ ] `channel_to_section "linkedin"` returns `"LinkedIn"` (`scripts/content-publisher.sh`)
-- [ ] `post_linkedin()` calls `linkedin-community.sh post-content --text` with extracted `## LinkedIn` section content, returns 1 on failure (not 0)
-- [ ] `post_linkedin()` skips gracefully (return 0) when `LINKEDIN_ACCESS_TOKEN` is unset
-- [ ] `create_linkedin_fallback_issue()` creates a dedup GitHub issue on posting failure
-- [ ] Main channel dispatch loop handles `linkedin)` case
-- [ ] `scheduled-content-publisher.yml` passes `LINKEDIN_ACCESS_TOKEN` and `LINKEDIN_PERSON_URN` secrets
-- [ ] Test: `channel_to_section "linkedin"` returns `"LinkedIn"`
-- [ ] Test: unknown channel test uses a genuinely unknown channel name (not `linkedin`)
-- [ ] Existing tests pass unchanged (`bun test test/content-publisher.test.ts`)
+- [x] `channel_to_section "linkedin"` returns `"LinkedIn"` (`scripts/content-publisher.sh`)
+- [x] `post_linkedin()` calls `linkedin-community.sh post-content --text` with extracted `## LinkedIn` section content, returns 1 on failure (not 0)
+- [x] `post_linkedin()` skips gracefully (return 0) when `LINKEDIN_ACCESS_TOKEN` is unset
+- [x] `create_linkedin_fallback_issue()` creates a dedup GitHub issue on posting failure
+- [x] Main channel dispatch loop handles `linkedin)` case
+- [x] `main()` validates `LINKEDIN_SCRIPT` exists when `LINKEDIN_ACCESS_TOKEN` is set (matches X pattern)
+- [x] `scheduled-content-publisher.yml` passes `LINKEDIN_ACCESS_TOKEN` and `LINKEDIN_PERSON_URN` secrets
+- [x] `scheduled-content-publisher.yml` header comment updated to mention LinkedIn
+- [x] Test: `channel_to_section "linkedin"` returns `"LinkedIn"`
+- [x] Test: `extract_section` correctly extracts `## LinkedIn` section content
+- [x] Test: unknown channel test uses a genuinely unknown channel name (not `linkedin`)
+- [x] Existing tests pass unchanged (`bun test test/content-publisher.test.ts`)
 
 ## Test Scenarios
 

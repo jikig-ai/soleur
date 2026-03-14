@@ -119,6 +119,15 @@ describe("extract_section", () => {
     expect(result.stdout).toBe("");
   });
 
+  test("extracts LinkedIn section", () => {
+    const result = runFunction(
+      `extract_section "${SAMPLE_CONTENT}" "LinkedIn"`
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Testing the LinkedIn content publisher integration.");
+    expect(result.stdout).toContain("https://example.com/blog/test-case-study/");
+  });
+
   test("returns empty for nonexistent section", () => {
     const result = runFunction(
       `extract_section "${SAMPLE_CONTENT}" "Nonexistent"`
@@ -310,8 +319,14 @@ describe("channel_to_section", () => {
     expect(result.stdout).toBe("X/Twitter Thread");
   });
 
-  test("returns empty for unknown channel", () => {
+  test("maps linkedin to LinkedIn", () => {
     const result = runFunction(`channel_to_section "linkedin"`);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("LinkedIn");
+  });
+
+  test("returns empty for unknown channel", () => {
+    const result = runFunction(`channel_to_section "mastodon"`);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("");
   });
@@ -405,5 +420,70 @@ FRONTMATTER
     `], { env: BASE_ENV });
     expect(result.exitCode).toBe(0);
     expect(decode(result.stdout)).toContain("Published: 0");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// post_linkedin
+// ---------------------------------------------------------------------------
+
+describe("post_linkedin", () => {
+  test("skips gracefully when LINKEDIN_ACCESS_TOKEN is unset", () => {
+    const result = runFunction(
+      `post_linkedin "${SAMPLE_CONTENT}"`
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("LINKEDIN_ACCESS_TOKEN not set");
+    expect(result.stderr).toContain("Skipping LinkedIn posting");
+  });
+
+  test("skips gracefully when content file has no LinkedIn section", () => {
+    const result = runFunction(
+      `
+      tmpfile=$(mktemp)
+      echo "## Discord" > "$tmpfile"
+      echo "Some content" >> "$tmpfile"
+      post_linkedin "$tmpfile"
+      rm "$tmpfile"
+    `,
+      { LINKEDIN_ACCESS_TOKEN: "test-token" }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("No LinkedIn content found");
+  });
+
+  test("returns error when linkedin-community.sh fails", () => {
+    // Create a mock linkedin-community.sh that always fails
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+
+      # Create mock script that fails
+      mock_dir=$(mktemp -d)
+      cat > "$mock_dir/linkedin-community.sh" << 'MOCK'
+#!/usr/bin/env bash
+echo "Error: API returned 401" >&2
+exit 1
+MOCK
+      chmod +x "$mock_dir/linkedin-community.sh"
+      LINKEDIN_SCRIPT="$mock_dir/linkedin-community.sh"
+
+      # Stub create_dedup_issue to avoid gh CLI dependency
+      create_dedup_issue() { echo "[stub] Issue created: $1"; return 0; }
+      export -f create_dedup_issue
+      CASE_NAME="test-case"
+
+      post_linkedin "${SAMPLE_CONTENT}"
+      exit_code=$?
+      rm -r "$mock_dir"
+      exit $exit_code
+    `], {
+      env: {
+        ...BASE_ENV,
+        LINKEDIN_ACCESS_TOKEN: "test-token",
+      },
+    });
+    expect(result.exitCode).toBe(1);
+    expect(decode(result.stderr)).toContain("LinkedIn posting failed");
   });
 });
