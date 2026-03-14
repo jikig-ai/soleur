@@ -1,6 +1,6 @@
 ---
 name: agent-native-audit
-description: "This skill should be used when conducting a comprehensive agent-native architecture review with scored principles. It launches 8 parallel sub-agents to audit action parity, tools as primitives, context injection, shared workspace, CRUD completeness, UI integration, capability discovery, and prompt-native features. Triggers on \"agent-native audit\", \"architecture review\", \"agent parity check\", \"score agent-native\"."
+description: "This skill should be used when conducting a scored agent-native architecture review. It launches 8 parallel sub-agents to audit action parity, tools as primitives, context injection, shared workspace, CRUD completeness, UI integration, capability discovery, and prompt-native features."
 ---
 
 # Agent-Native Architecture Audit

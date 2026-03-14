@@ -144,13 +144,13 @@ The agent budget ceiling is 2,500 words (currently at 2,501). The prior learning
 
 ## Acceptance Criteria
 
-- [ ] All 58 skill descriptions trimmed to reduce cumulative word count by 25-35% (target: under 1,800 words)
-- [ ] No skill description exceeds 1024 characters
-- [ ] All descriptions retain third-person voice ("This skill should be used when...")
-- [ ] All descriptions retain routing-critical keywords for accurate skill matching
-- [ ] `components.test.ts` includes a cumulative description word budget test (ceiling: 1,800 words)
-- [ ] `verify-skills.sh` script created and validates all skills on disk
-- [ ] `bun test` passes with no regressions
+- [x] All 58 skill descriptions trimmed to reduce cumulative word count by 25-35% (target: under 1,800 words)
+- [x] No skill description exceeds 1024 characters
+- [x] All descriptions retain third-person voice ("This skill should be used when...")
+- [x] All descriptions retain routing-critical keywords for accurate skill matching
+- [x] `components.test.ts` includes a cumulative description word budget test (ceiling: 1,800 words)
+- [x] `verify-skills.sh` script created and validates all skills on disk
+- [x] `bun test` passes with no regressions
 
 ## Test Scenarios
 

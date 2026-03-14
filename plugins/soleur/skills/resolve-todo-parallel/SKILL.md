@@ -1,6 +1,6 @@
 ---
 name: resolve-todo-parallel
-description: This skill should be used when resolving all pending CLI todos from the /todos/ directory using parallel processing. It reads pending todos, plans resolution order with dependency analysis, and spawns parallel agents. Triggers on "resolve CLI todos", "fix pending todos", "parallel todo resolution", "clean up todos directory".
+description: "This skill should be used when resolving all pending CLI todos from the todos/ directory using parallel processing. It reads pending todos, plans resolution order with dependency analysis, and spawns parallel agents."
 ---
 
 # Resolve CLI Todos in Parallel

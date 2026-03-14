@@ -1,6 +1,6 @@
 ---
 name: community
-description: "This skill should be used when managing community presence across platforms (Discord, GitHub, X/Twitter, Bluesky, LinkedIn, Hacker News). It provides sub-commands for generating digests, checking health metrics, and listing enabled platforms. Triggers on \"community digest\", \"community health\", \"community platforms\", \"community report\"."
+description: "This skill should be used when managing community presence across platforms (Discord, GitHub, X/Twitter, Bluesky, LinkedIn, Hacker News). It provides sub-commands for generating digests, checking health metrics, and listing enabled platforms."
 ---
 
 # Community Management
