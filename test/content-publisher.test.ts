@@ -452,6 +452,35 @@ describe("post_linkedin", () => {
     expect(result.stderr).toContain("No LinkedIn content found");
   });
 
+  test("posts successfully when credentials set and script succeeds", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+
+      # Create mock script that succeeds
+      mock_dir=$(mktemp -d)
+      cat > "$mock_dir/linkedin-community.sh" << 'MOCK'
+#!/usr/bin/env bash
+echo '{"id":"urn:li:share:123456"}'
+exit 0
+MOCK
+      chmod +x "$mock_dir/linkedin-community.sh"
+      LINKEDIN_SCRIPT="$mock_dir/linkedin-community.sh"
+
+      post_linkedin "${SAMPLE_CONTENT}"
+      exit_code=$?
+      rm -r "$mock_dir"
+      exit $exit_code
+    `], {
+      env: {
+        ...BASE_ENV,
+        LINKEDIN_ACCESS_TOKEN: "test-token",
+      },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(decode(result.stdout)).toContain("[ok] LinkedIn post published.");
+  });
+
   test("returns error when linkedin-community.sh fails", () => {
     // Create a mock linkedin-community.sh that always fails
     const result = Bun.spawnSync(["bash", "-c", `
