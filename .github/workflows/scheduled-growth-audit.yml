@@ -1,6 +1,11 @@
 # Weekly growth audit (content + AEO) of soleur.ai using the growth-strategist agent.
 # Persists date-stamped reports to knowledge-base/marketing/audits/soleur-ai/ on main.
 # Creates a GitHub Issue summarizing key findings for CEO review.
+#
+# Complements scheduled-seo-aeo-audit.yml (technical SEO fixes) and
+# scheduled-growth-execution.yml (keyword optimization on stale pages).
+# This workflow produces audit REPORTS; those workflows apply FIXES.
+#
 # To test manually: gh workflow run scheduled-growth-audit.yml
 #
 # Security: This workflow does NOT use untrusted event inputs in run: commands.
@@ -110,3 +115,32 @@ jobs:
             git commit -m "docs: weekly growth audit $(date +%Y-%m-%d)"
             git push origin main || { git pull --rebase origin main && git push origin main; }
             ```
+
+      - name: Discord notification (failure)
+        if: failure()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if [[ -z "${DISCORD_WEBHOOK_URL:-}" ]]; then
+            echo "DISCORD_WEBHOOK_URL not set, skipping failure notification"
+            exit 0
+          fi
+          RUN_URL="${REPO_URL}/actions/runs/${RUN_ID}"
+          MESSAGE=$(printf '**Growth Audit failed**\n\nWorkflow run: %s\n\nCheck logs for details.' \
+            "$RUN_URL")
+          PAYLOAD=$(jq -n \
+            --arg content "$MESSAGE" \
+            --arg username "Sol" \
+            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
+            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL")
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Discord failure notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Discord failure notification failed (HTTP $HTTP_CODE)"
+          fi
