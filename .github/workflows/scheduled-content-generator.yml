@@ -1,0 +1,145 @@
+# Twice-weekly content generation from the SEO refresh queue.
+# Reads the queue for the highest-priority unwritten topic, generates an article
+# via content-writer, creates a distribution file via social-distribute, and
+# commits both to main. The existing content-publisher picks up the distribution
+# file for automated publishing at 14:00 UTC.
+# To test manually: gh workflow run scheduled-content-generator.yml
+
+name: "Scheduled: Content Generator"
+
+on:
+  schedule:
+    - cron: '0 10 * * 2,4'  # Tuesday + Thursday 10:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: schedule-content-generator
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  id-token: write
+
+jobs:
+  content-generator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 'lts/*'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Ensure label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create scheduled-content-generator \
+            --description "Automated content generation from SEO queue" \
+            --color "0E8A16" 2>/dev/null || true
+
+      - name: Run content generator
+        uses: anthropics/claude-code-action@64c7a0ef71df67b14cb4471f4d9c8565c61042bf # v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
+          plugins: 'soleur@soleur'
+          claude_args: '--model claude-sonnet-4-6 --max-turns 40 --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task'
+          prompt: |
+            IMPORTANT: This is an automated CI workflow. The AGENTS.md rule
+            "Never commit directly to main" does NOT apply here. You are
+            explicitly authorized to commit and push to main in this context.
+
+            STEP 1 — Select topic from queue:
+            Read knowledge-base/marketing/seo-refresh-queue.md and identify
+            the highest-priority item that does NOT have a "generated_date"
+            annotation. Priority order: Priority 1 items first, then Priority 2
+            pillar content pages, then Priority 2 comparison pages.
+
+            If ALL items already have a generated_date, create a GitHub issue
+            titled "[Scheduled] Content Generator - <today's date in YYYY-MM-DD format>"
+            with the label "scheduled-content-generator" and body
+            "SEO refresh queue exhausted -- all items have been generated.
+            Add more topics to the queue." Then stop.
+
+            STEP 2 — Generate article:
+            Run /soleur:content-writer <topic> --headless
+            where <topic> is the title/description of the selected queue item.
+
+            If the content-writer aborts due to FAIL citations, create a GitHub
+            issue documenting the failed citations and stop.
+
+            STEP 3 — Generate distribution content:
+            Run /soleur:social-distribute <path-to-generated-article> --headless
+            This creates a distribution content file in
+            knowledge-base/marketing/distribution-content/.
+
+            After the distribution file is created, ensure its frontmatter has:
+            - publish_date: <today's date in YYYY-MM-DD format>
+            - status: scheduled
+            - channels: discord, x
+
+            STEP 4 — Validate:
+            Build the site to verify the new article renders correctly:
+            ```
+            npx @11ty/eleventy
+            ```
+            If the build fails, do NOT commit. Create a GitHub issue documenting
+            the build error and stop.
+
+            STEP 5 — Mark queue item as generated:
+            Edit knowledge-base/marketing/seo-refresh-queue.md and add
+            "generated_date: <today's date>" annotation to the queue item
+            that was just written. Add it as a note below the item or as
+            an additional column in the table row.
+
+            STEP 6 — Create audit issue:
+            Create a GitHub issue titled
+            "[Scheduled] Content Generator - <today's date in YYYY-MM-DD format>"
+            with the label "scheduled-content-generator" summarizing:
+            - Topic selected from queue
+            - Article path written
+            - Distribution file path created
+            - Build validation result
+
+            MANDATORY FINAL STEP — persist to main:
+            Run these bash commands (do not skip, do not create a branch):
+            ```
+            git add -A
+            git diff --cached --quiet && echo "No changes to commit, skipping" && exit 0
+            git commit -m "feat(content): auto-generate article from SEO queue"
+            git push origin main || { git pull --rebase origin main && git push origin main; }
+            ```
+
+      - name: Discord notification (failure)
+        if: failure()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if [[ -z "$DISCORD_WEBHOOK_URL" ]]; then
+            echo "DISCORD_WEBHOOK_URL not set, skipping"
+            exit 0
+          fi
+          PAYLOAD=$(jq -n \
+            --arg content "Content Generator failed. [View run]($REPO_URL/actions/runs/$RUN_ID)" \
+            --arg username "Sol" \
+            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
+            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL")
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Discord failure notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Discord failure notification failed (HTTP $HTTP_CODE)"
+          fi
