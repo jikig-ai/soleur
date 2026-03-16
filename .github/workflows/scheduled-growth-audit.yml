@@ -1,0 +1,112 @@
+# Weekly growth audit (content + AEO) of soleur.ai using the growth-strategist agent.
+# Persists date-stamped reports to knowledge-base/marketing/audits/soleur-ai/ on main.
+# Creates a GitHub Issue summarizing key findings for CEO review.
+# To test manually: gh workflow run scheduled-growth-audit.yml
+#
+# Security: This workflow does NOT use untrusted event inputs in run: commands.
+# All inputs come from schedule/workflow_dispatch triggers (no user-controlled strings).
+
+name: "Scheduled: Growth Audit"
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'   # Every Monday at 09:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: scheduled-growth-audit
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+  contents: write
+  id-token: write
+
+jobs:
+  growth-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Ensure label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create scheduled-growth-audit \
+            --description "Weekly growth and AEO audit report" \
+            --color "0E8A16" 2>/dev/null || true
+
+      - name: Run growth audit
+        uses: anthropics/claude-code-action@1dd74842e568f373608605d9e45c9e854f65f543 # v1.0.63
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
+          plugins: 'soleur@soleur'
+          claude_args: '--model claude-opus-4-6 --max-turns 45 --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task'
+          prompt: |
+            IMPORTANT: This is an automated CI workflow. The AGENTS.md rule
+            "Never commit directly to main" does NOT apply here. You are
+            explicitly authorized to commit and push to main in this context.
+
+            Today's date is $(date +%Y-%m-%d). Run a full growth audit of https://soleur.ai.
+
+            ## Step 1: Content Audit
+
+            Launch the growth-strategist agent via the Task tool:
+
+            Task growth-strategist: "Audit the content at https://soleur.ai for keyword
+            alignment, search intent match, and readability. If
+            knowledge-base/overview/brand-guide.md exists, read it and align rewrite
+            suggestions with the brand voice. Produce a structured report with per-page
+            analysis, issues found, and rewrite suggestions. Use WebFetch to retrieve pages."
+
+            Save the report to:
+            knowledge-base/marketing/audits/soleur-ai/$(date +%Y-%m-%d)-content-audit.md
+
+            ## Step 2: AEO Audit
+
+            Launch the growth-strategist agent via the Task tool:
+
+            Task growth-strategist: "Audit the content at https://soleur.ai for GEO/AEO
+            optimization: source citations, statistics, conversational readiness, FAQ
+            structure, citation quality. If knowledge-base/overview/brand-guide.md exists,
+            read it. Produce a structured scoring table and detailed analysis. Use WebFetch
+            to retrieve pages."
+
+            Save the report to:
+            knowledge-base/marketing/audits/soleur-ai/$(date +%Y-%m-%d)-aeo-audit.md
+
+            ## Step 3: Content Plan
+
+            Launch the growth-strategist agent via the Task tool:
+
+            Task growth-strategist: "Based on the content audit and AEO audit reports just
+            saved in knowledge-base/marketing/audits/soleur-ai/, create a prioritized content
+            plan. Research keywords for 'claude code plugin', 'agentic engineering',
+            'AI company automation', 'solo founder AI tools'. Analyze gaps vs competitors.
+            Produce a P1/P2/P3 prioritized plan."
+
+            Save the report to:
+            knowledge-base/marketing/audits/soleur-ai/$(date +%Y-%m-%d)-content-plan.md
+
+            ## Step 4: GitHub Issue
+
+            Create a GitHub issue titled
+            "[Scheduled] Growth Audit - $(date +%Y-%m-%d)"
+            with the label "scheduled-growth-audit" summarizing:
+            - Top 3 content audit findings
+            - AEO score and grade
+            - Top 3 content plan priorities
+            - Link to the full reports in the repo
+
+            ## Step 5: Persist to main
+
+            MANDATORY FINAL STEP — commit reports to main:
+            ```
+            git add knowledge-base/marketing/audits/soleur-ai/
+            git diff --cached --quiet && echo "unchanged, skipping" && exit 0
+            git commit -m "docs: weekly growth audit $(date +%Y-%m-%d)"
+            git push origin main || { git pull --rebase origin main && git push origin main; }
+            ```
