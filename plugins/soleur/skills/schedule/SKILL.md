@@ -147,8 +147,32 @@ Prerequisites:
   - .claude-plugin/marketplace.json must exist at the repo root
 
 The schedule activates once this file is merged to the default branch.
-To test manually: gh workflow run scheduled-<NAME>.yml
 ```
+
+**Step 5: Verify workflow after merge**
+
+After the PR containing the new workflow is merged to the default branch, trigger a manual run and verify it succeeds:
+
+```bash
+# Trigger the workflow
+gh workflow run scheduled-<NAME>.yml
+
+# Wait for the run to appear (may take a few seconds)
+sleep 5
+RUN_ID=$(gh run list --workflow=scheduled-<NAME>.yml --limit=1 --json databaseId --jq '.[0].databaseId')
+
+# Poll until complete
+gh run watch "$RUN_ID"
+
+# Check conclusion
+CONCLUSION=$(gh run view "$RUN_ID" --json conclusion --jq '.conclusion')
+if [ "$CONCLUSION" != "success" ]; then
+  echo "WORKFLOW FAILED — investigate before moving on"
+  gh run view "$RUN_ID" --log-failed | tail -50
+fi
+```
+
+If the run fails, diagnose the issue, fix the workflow file, and re-run. Do not close the task until the workflow has completed successfully at least once.
 
 ### `list`
 

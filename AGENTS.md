@@ -30,6 +30,7 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 - At session start, from any active worktree (not the bare repo root): run `bash ../../plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged && git worktree list`. If no worktree exists, run `git worktree list` from the bare root to verify.
 - When an audit identifies pre-existing issues, create GitHub issues to track them before fixing. Don't just note them in conversation -- file them.
 - When creating PRs that resolve a GitHub issue, include `Closes #N` in the PR **body** (not just the title). Parenthetical `(#N)` in titles creates a link but does NOT trigger auto-close.
+- After merging a PR that adds or modifies a GitHub Actions workflow, trigger a manual run (`gh workflow run <file>.yml`), poll until complete (`gh run view <id> --json status,conclusion`), and investigate failures before moving on. New workflows must be verified working, not just syntactically valid.
 
 ## Passive Domain Routing
 
