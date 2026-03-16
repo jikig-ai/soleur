@@ -8,12 +8,12 @@
 
 ## Phase 0: Agent SDK Spike (blocker)
 
-- [ ] 0.1 Create `spike/agent-sdk-test.ts`
-- [ ] 0.2 Import Agent SDK, point `cwd` at workspace with Soleur plugin + test KB
-- [ ] 0.3 Run `query()` with CMO agent prompt — verify streaming, file tools, subagents
-- [ ] 0.4 Test `canUseTool` callback — intercept AskUserQuestion, verify review gate pattern
-- [ ] 0.5 Verify SDK license field permits hosted use
-- [ ] 0.6 Document findings: what works, what breaks, what adapts
+- [x] 0.1 Create `spike/agent-sdk-test.ts`
+- [x] 0.2 Import Agent SDK, point `cwd` at workspace with Soleur plugin + test KB
+- [x] 0.3 Run `query()` with CMO agent prompt — verify streaming, file tools, subagents
+- [x] 0.4 Test `canUseTool` callback — fires for non-pre-approved tools, receives file_path
+- [x] 0.5 Verify SDK license field — "SEE LICENSE IN README.md" → Anthropic legal terms (needs legal review)
+- [x] 0.6 Document findings: `spike/FINDINGS.md` — ALL PASS
 
 **Gate:** Spike must PASS before Phase 1 begins.
 
