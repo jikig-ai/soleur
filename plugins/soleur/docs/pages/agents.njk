@@ -73,3 +73,24 @@ The result: {{ stats.agents }} agents that function as a unified AI organization
       </section>
       {%- endfor %}
     </div>
+
+    <section class="landing-section">
+      <div class="landing-section-inner">
+        <p class="section-label">Common Questions</p>
+        <h2 class="section-title">Frequently Asked Questions</h2>
+        <div class="faq-list">
+          <details class="faq-item">
+            <summary class="faq-question">What are AI agents?</summary>
+            <p class="faq-answer">AI agents are autonomous software programs that perform specific business functions on your behalf. Each Soleur agent is specialized for a domain — engineering, marketing, legal, finance, and more — and operates with the depth of a dedicated specialist rather than a generic assistant.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">How many agents does Soleur have?</summary>
+            <p class="faq-answer">Soleur includes {{ stats.agents }} AI agents organized across {{ stats.departments }} business domains. Each domain has multiple specialized agents — the engineering domain alone includes agents for code review, architecture, security, performance, data integrity, and more.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">What domains do the agents cover?</summary>
+            <p class="faq-answer">The {{ stats.agents }} agents span {{ stats.departments }} domains: engineering, marketing, legal, finance, operations, product, sales, and support. Every agent shares context through a compounding knowledge base, so a decision in one domain automatically propagates to every other domain that depends on it.</p>
+          </details>
+        </div>
+      </div>
+    </section>
