@@ -1,6 +1,6 @@
 ---
 name: atdd-developer
-description: This skill should be used when implementing features using Acceptance Test Driven Development. It guides through the RED/GREEN/REFACTOR cycle with explicit permission gates between phases. Triggers on "TDD", "ATDD", "test-driven", "red green refactor", "acceptance test first", "write failing test".
+description: "This skill should be used when implementing features using Acceptance Test Driven Development. It guides through the RED/GREEN/REFACTOR cycle with explicit permission gates between phases."
 ---
 
 # ATDD Developer

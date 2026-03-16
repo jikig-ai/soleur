@@ -1,6 +1,6 @@
 ---
 name: community
-description: "This skill should be used when managing community presence across platforms (Discord, GitHub, X/Twitter, Bluesky, LinkedIn, Hacker News). It provides sub-commands for generating digests, checking health metrics, and listing enabled platforms. Triggers on \"community digest\", \"community health\", \"community platforms\", \"community report\"."
+description: "This skill should be used when managing community presence across platforms (Discord, GitHub, X/Twitter, Bluesky, LinkedIn, Hacker News). It provides sub-commands for generating digests, checking health metrics, and listing enabled platforms."
 ---
 
 # Community Management
@@ -42,6 +42,8 @@ Platform scripts are located at `plugins/soleur/skills/community/scripts/`:
 - [x-setup.sh](./scripts/x-setup.sh) -- X/Twitter credential setup and validation
 - [bsky-community.sh](./scripts/bsky-community.sh) -- Bluesky AT Protocol wrapper (create-session, post, get-metrics, get-notifications)
 - [bsky-setup.sh](./scripts/bsky-setup.sh) -- Bluesky credential setup and validation
+- [linkedin-community.sh](./scripts/linkedin-community.sh) -- LinkedIn API wrapper (post-content, fetch-metrics stub, fetch-activity stub)
+- [linkedin-setup.sh](./scripts/linkedin-setup.sh) -- LinkedIn credential setup, token introspection, and OAuth token generation
 - [hn-community.sh](./scripts/hn-community.sh) -- Hacker News Algolia API wrapper (mentions, trending, thread)
 
 ## Sub-Commands
@@ -73,6 +75,7 @@ List all platforms with their configuration status. Does NOT spawn an agent -- r
    - Discord: "Run `plugins/soleur/skills/community/scripts/discord-setup.sh` to configure"
    - X/Twitter: "Run `plugins/soleur/skills/community/scripts/x-setup.sh validate-credentials` to verify, or `x-setup.sh write-env` to save credentials"
    - Bluesky: "Run `plugins/soleur/skills/community/scripts/bsky-setup.sh write-env` to save credentials, or `bsky-setup.sh verify` to test"
+   - LinkedIn: "Run `plugins/soleur/skills/community/scripts/linkedin-setup.sh generate-token` to set up credentials, or `linkedin-setup.sh verify` to test"
 
 ### `engage`
 
@@ -144,6 +147,10 @@ If no sub-command is provided, present options using the AskUserQuestion tool:
 - The `community-manager` agent handles data collection, analysis, and output formatting
 - This skill is the entry point; the agent does the work
 - Ownership boundary: community = monitoring + engagement. Broadcasting/distribution is handled by the `social-distribute` skill.
+- Posting requires explicit opt-in via environment variables (defense-in-depth guard). Monitoring workflows omit these variables intentionally:
+  - LinkedIn: `LINKEDIN_ALLOW_POST=true`
+  - X/Twitter: `X_ALLOW_POST=true`
+  - Bluesky: `BSKY_ALLOW_POST=true`
 
 ## Platform Surface Check
 

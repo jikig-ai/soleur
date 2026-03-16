@@ -1,6 +1,6 @@
 ---
 name: resolve-pr-parallel
-description: This skill should be used when resolving all PR comments using parallel processing. It fetches unresolved comments, spawns parallel pr-comment-resolver agents, and verifies all threads are resolved. Triggers on "resolve PR comments", "fix PR feedback", "address review comments", "parallel PR resolution".
+description: "This skill should be used when resolving all PR comments using parallel processing. It fetches unresolved comments, spawns parallel resolver agents, and verifies all threads are resolved."
 ---
 
 # Resolve PR Comments in Parallel

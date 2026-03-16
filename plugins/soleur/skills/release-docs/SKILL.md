@@ -1,6 +1,6 @@
 ---
 name: release-docs
-description: This skill should be used when updating documentation metadata after adding or removing plugin components. It updates plugin.json description and README.md counts, then verifies the Eleventy build produces correct output. Triggers on "update docs", "release documentation", "sync docs site", "regenerate docs", "documentation release".
+description: "This skill should be used when updating documentation metadata after adding or removing plugin components. It updates plugin.json description and README.md counts, then verifies the Eleventy build produces correct output."
 ---
 
 # Release Documentation

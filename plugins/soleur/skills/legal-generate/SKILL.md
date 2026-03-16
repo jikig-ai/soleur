@@ -1,6 +1,6 @@
 ---
 name: legal-generate
-description: "This skill should be used when generating draft legal documents for a project or company. It gathers company context interactively, invokes the legal-document-generator agent, and writes markdown output. Triggers on \"legal generate\", \"generate privacy policy\", \"generate terms\", \"create legal documents\", \"draft legal\", \"legal-generate\"."
+description: "This skill should be used when generating draft legal documents for a project or company. It gathers company context interactively, invokes the legal-document-generator agent, and writes markdown output."
 ---
 
 # Legal Document Generator
