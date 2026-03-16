@@ -14,7 +14,7 @@ If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true` and strip `--hea
 **Argument format:** `<topic> [--outline <outline>] [--keywords <keywords>] [--headless]`
 
 **Headless defaults for interactive gates:**
-- Phase 3 (User Approval): auto-selects **Accept** when all citations are PASS or SOURCED. Auto-selects **Abort** (discard draft, create issue with failed citations) when any citation is FAIL.
+- Phase 3 (User Approval): auto-selects **Accept** when all citations are PASS or SOURCED. When any citation is FAIL, auto-selects **Fix** — removes or replaces the failed claims, re-runs fact-checker, and accepts only when all claims pass (max 2 fix cycles, then accepts with UNSOURCED markers for any remaining failures).
 - If citation verification was skipped (fact-checker unavailable), auto-selects **Accept** with a warning in the issue.
 
 ## Phase 0: Prerequisites
@@ -136,8 +136,14 @@ Re-verification runs after each Edit cycle in Phase 3 -- when the user selects "
 If Phase 2.5 produced a Verification Report, display the summary first (total claims, verified, failed, unsourced), then present the draft with any inline FAIL/UNSOURCED markers visible. If all claims passed, note "All citations verified." If verification was skipped, note "Citation verification was skipped -- manual review recommended."
 
 **If `HEADLESS_MODE=true`:**
-- If any citation has a FAIL marker: auto-select **Abort**. Do not write the article. Report: "Content generation aborted -- FAIL citations detected: [list failed claims]. Draft discarded."
 - If all citations are PASS/SOURCED, or verification was skipped: auto-select **Accept**. Proceed to Phase 4.
+- If any citation has a FAIL marker: auto-select **Fix**. For each FAIL claim:
+  1. Remove the unsupported statistic, quote, or claim entirely, OR
+  2. Replace it with a verifiable alternative (search for a real source via WebSearch/WebFetch)
+  3. Remove the `[FAIL: ...]` marker after fixing
+- After fixing all FAIL claims, re-run Phase 2.5 (fact-checker) on the updated draft.
+- If re-verification passes (all PASS/SOURCED): auto-select **Accept**. Proceed to Phase 4.
+- If FAIL claims persist after 2 fix cycles: convert remaining `[FAIL: ...]` markers to `[UNSOURCED]`, remove the specific claim text, and **Accept** the article. Do not abort — an article with conservative claims is better than no article. Note the removed claims in the GitHub audit issue.
 
 **If `HEADLESS_MODE` is not set (interactive mode):**
 
@@ -157,7 +163,7 @@ Report: "Article written to `<path>`. Review and commit when ready."
 
 ## Important Guidelines
 
-- All content requires explicit user approval before writing -- no auto-write (unless `--headless` is passed, which auto-accepts on PASS citations and aborts on FAIL)
+- All content requires explicit user approval before writing -- no auto-write (unless `--headless` is passed, which auto-accepts on PASS citations and auto-fixes FAIL claims before accepting)
 - Brand guide is a hard prerequisite. Without it, the skill cannot generate brand-consistent content.
 - Read the brand guide Voice section during draft generation, not as a separate post-hoc validation pass
 - If outline is provided, follow it. If not, generate a reasonable article structure from the topic.
