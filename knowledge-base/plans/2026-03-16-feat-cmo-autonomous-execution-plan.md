@@ -6,9 +6,11 @@ date: 2026-03-16
 
 # CMO Autonomous Execution
 
+[Updated 2026-03-16 — applied review feedback: eliminated Phase 2 + Phase 6, dropped queue exhaustion fallback, dropped issue dedup, switched to Sonnet, added build validation to content generator, reframed as delivery batches]
+
 ## Overview
 
-Close four automation gaps in the CMO domain by creating four independent scheduled GitHub Actions workflows + one skill modification. Today the CMO can orchestrate strategy interactively and publish pre-scheduled content, but cannot run SEO audits, generate content, execute growth fixes, or remediate KPI misses autonomously.
+Close three automation gaps in the CMO domain by creating three scheduled GitHub Actions workflows + one skill modification. Today the CMO can orchestrate strategy interactively and publish pre-scheduled content, but cannot run SEO audits, generate content, or execute growth fixes autonomously.
 
 ## Problem Statement
 
@@ -16,15 +18,14 @@ Six scheduled workflows exist for reporting and publishing, but none for proacti
 
 ## Proposed Solution
 
-Four independent `scheduled-*.yml` workflows following the proven claude-code-action pattern, plus `--headless` support for the `content-writer` skill.
+Three independent `scheduled-*.yml` workflows following the proven claude-code-action pattern, plus `--headless` support for the `content-writer` skill. KPI miss remediation deferred — the existing weekly analytics Discord notification is sufficient for the founder to manually trigger the standalone workflows when needed.
 
 ## Technical Approach
 
 ### Architecture
 
 ```
-Mon 06:00  weekly-analytics (existing) ─── writes analytics snapshot + trend-summary
-Mon 08:00  kpi-remediation (new) ──────── reads trend-summary → cascade if miss
+Mon 06:00  weekly-analytics (existing) ─── detects KPI miss, Discord alert
 Mon 10:00  seo-aeo-audit (new) ────────── /soleur:seo-aeo fix → commit to main
 Tue 10:00  content-generator (new) ────── queue → content-writer → social-distribute → commit
 Tue 14:00  content-publisher (existing) ── publishes distribution files
@@ -35,54 +36,29 @@ Fri 10:00  growth-execution (new, biweekly) ── /soleur:growth fix → commit
 
 All new workflows use `claude-code-action@64c7a0ef71df67b14cb4471f4d9c8565c61042bf` (v1), commit directly to main with AGENTS.md override, and follow existing patterns (concurrency groups, label pre-creation, Discord failure notifications, SHA-pinned actions).
 
-### Key Design Decisions (from SpecFlow analysis)
+### Key Design Decisions
 
 | Decision | Resolution | Rationale |
 |----------|-----------|-----------|
 | Topic tracking | Agent updates SEO refresh queue with `generated_date: YYYY-MM-DD` per item after writing | Lowest friction; queue stays single source of truth |
 | Content-writer approval gate | Add `--headless` support matching social-distribute pattern | Required for CI; auto-accept on PASS citations, abort on FAIL |
-| KPI miss detection | Read `trend-summary.md` latest row Status column | No cross-workflow state needed; trend-summary is committed to main by analytics PR |
+| KPI miss response | Deferred — rely on existing Discord alert for manual triage | All three reviewers agreed: a 60-turn cascade re-implementing the other workflows is overengineered. The founder can manually dispatch the standalone workflows on miss. |
 | Concurrent pushes | Per-workflow concurrency + `git pull --rebase && git push` retry | Matches competitive-analysis and community-monitor patterns |
 | Publish date | Same-day (`publish_date = today`) | Full autonomy model; founder reviews via git history |
-| Node.js for builds | `setup-node` + `npm ci` step before claude-code-action | Required for `npx @11ty/eleventy` in seo-aeo fix and growth fix |
-| Growth fix scope in KPI remediation | Read analytics snapshot Top Pages table | Available data; no Plausible API key needed in workflow |
-| Queue exhaustion fallback | Run `growth plan` then `content-writer` in same run | Full autonomy expects output every run |
-| Distribution file naming | Slug-based (no numeric prefix) | Matches new social-distribute convention |
-| Rollback on breakage | Internal validation (build + validate-seo.sh before push) | seo-aeo fix already does this; safer than post-merge revert |
-| Issue deduplication | Date-based title + agent checks for existing open issue before creating | Prevents duplicate issues on re-runs |
+| Node.js for builds | `setup-node` + `npm ci` step before claude-code-action | Required for `npx @11ty/eleventy` in seo-aeo fix, growth fix, and content generator |
+| Content generator model | Sonnet (not Opus) | Brand guide + fact-checker provide quality guardrails. Upgrade if quality is measurably lacking. |
+| Queue exhaustion | Create issue "SEO refresh queue exhausted — add more topics" and exit | 19+ items = 10+ weeks at 2/week. Build the `growth plan` fallback when the queue is actually running low. |
+| Distribution file naming | Slug-based (no numeric prefix) | Matches current social-distribute convention |
+| Rollback on breakage | Internal validation (build + validate-seo.sh before push) | seo-aeo fix already does this; content generator must also validate |
 
-### Implementation Phases
+### Implementation Batches
 
-#### Phase 1: Skill Preparation (content-writer headless mode)
+#### Batch 1: SEO/AEO Audit + Growth Execution (zero prerequisites)
 
-Add `--headless` support to `plugins/soleur/skills/content-writer/SKILL.md`:
+Ship immediately — these workflows invoke skills that already run autonomously (no approval gates).
 
-- Detect `--headless` in `$ARGUMENTS`, set `HEADLESS_MODE=true`
-- Phase 3 approval gate: if `HEADLESS_MODE=true`, auto-select **Accept** when fact-checker returns all PASS/SOURCED, auto-**Abort** when any FAIL citation detected
-- Match the established pattern in `plugins/soleur/skills/social-distribute/SKILL.md` (lines 12-14, 234, 312)
+##### 1a. Scheduled SEO/AEO Audit (`scheduled-seo-aeo-audit.yml`)
 
-**Files to modify:**
-- `plugins/soleur/skills/content-writer/SKILL.md` — add headless detection + bypass logic
-
-**Success criteria:** `/soleur:content-writer <topic> --headless` completes without AskUserQuestion, writes article to disk.
-
-#### Phase 2: KPI Miss Persistence (weekly analytics modification)
-
-Modify the weekly analytics to persist KPI miss state in a format readable by the remediation workflow:
-
-- Add `kpi_miss: true|false` field to the analytics snapshot markdown file (`knowledge-base/marketing/analytics/YYYY-MM-DD-weekly-analytics.md`)
-- Add `kpi_miss: true|false` to `trend-summary.md` latest row (already has Status column — augment with explicit boolean)
-
-**Files to modify:**
-- `scripts/weekly-analytics.sh` — add `kpi_miss` to snapshot frontmatter and trend-summary row
-
-**Success criteria:** After weekly analytics runs, `grep 'kpi_miss:' knowledge-base/marketing/analytics/$(date +%Y-%m-%d)-weekly-analytics.md` returns a value.
-
-#### Phase 3: Workflow 1 — Scheduled SEO/AEO Audit (`scheduled-seo-aeo-audit.yml`)
-
-Lowest complexity, no approval gate blockers. Validates the workflow pattern before building the others.
-
-**Workflow structure:**
 ```yaml
 name: "Scheduled: SEO/AEO Audit"
 on:
@@ -113,63 +89,15 @@ permissions:
 **Files to create:**
 - `.github/workflows/scheduled-seo-aeo-audit.yml`
 
-**Success criteria:** `gh workflow run scheduled-seo-aeo-audit.yml` completes, commits at least one SEO fix, creates labeled issue.
+**Success criteria:** `gh workflow run scheduled-seo-aeo-audit.yml` completes, commits SEO fixes (or validates no issues), creates labeled issue.
 
-#### Phase 4: Workflow 2 — Scheduled Content Generator (`scheduled-content-generator.yml`)
+##### 1b. Scheduled Growth Execution (`scheduled-growth-execution.yml`)
 
-Most complex workflow. Depends on Phase 1 (content-writer headless).
-
-**Workflow structure:**
-```yaml
-name: "Scheduled: Content Generator"
-on:
-  schedule:
-    - cron: '0 10 * * 2,4'  # Tuesday + Thursday 10:00 UTC
-  workflow_dispatch: {}
-concurrency:
-  group: schedule-content-generator
-  cancel-in-progress: false
-permissions:
-  contents: write
-  issues: write
-  id-token: write
-```
-
-**Steps:**
-1. `actions/checkout` (SHA-pinned)
-2. Pre-create `scheduled-content-generator` label
-3. `claude-code-action` with:
-   - Model: `claude-opus-4-6`
-   - Max turns: 50
-   - Timeout: 45 min
-   - Tools: `Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task`
-   - Prompt:
-     1. AGENTS.md override
-     2. Read `knowledge-base/marketing/seo-refresh-queue.md`
-     3. Identify highest-priority item without a `generated_date` field
-     4. If all items have `generated_date`, fall back to `/soleur:growth plan` for topic discovery
-     5. Run `/soleur:content-writer <topic> --headless`
-     6. Run `/soleur:social-distribute <article-path> --headless`
-     7. Set `publish_date` to today, `status: scheduled` in distribution file
-     8. Update SEO refresh queue: add `generated_date: YYYY-MM-DD` to the written item
-     9. `git add` article + distribution file + updated queue, commit, push (with rebase retry)
-     10. Create GitHub issue: `[Scheduled] Content Generator - YYYY-MM-DD`
-     11. Check for existing open issue with same title before creating (dedup)
-4. Discord failure notification (conditional)
-
-**Files to create:**
-- `.github/workflows/scheduled-content-generator.yml`
-
-**Success criteria:** Manual dispatch produces an article in `plugins/soleur/docs/blog/`, a distribution file in `knowledge-base/marketing/distribution-content/`, and updates the SEO refresh queue.
-
-#### Phase 5: Workflow 3 — Scheduled Growth Execution (`scheduled-growth-execution.yml`)
-
-**Workflow structure:**
 ```yaml
 name: "Scheduled: Growth Execution"
 on:
   schedule:
-    - cron: '0 10 1,15 * *'  # 1st and 15th of month, 10:00 UTC (biweekly)
+    - cron: '0 10 1,15 * *'  # 1st and 15th of month, 10:00 UTC
   workflow_dispatch: {}
 concurrency:
   group: schedule-growth-execution
@@ -203,19 +131,31 @@ permissions:
 
 **Success criteria:** Manual dispatch applies keyword optimizations to at least one page, builds successfully, creates issue.
 
-#### Phase 6: Workflow 4 — Scheduled KPI Remediation (`scheduled-kpi-remediation.yml`)
+#### Batch 2: Content-Writer Headless + Content Generator (depends on Batch 1 for pattern validation)
 
-Depends on Phase 2 (KPI miss persistence). Most complex orchestration — cascades three actions on miss.
+##### 2a. Content-Writer Headless Mode
 
-**Workflow structure:**
+Add `--headless` support to `plugins/soleur/skills/content-writer/SKILL.md`:
+
+- Detect `--headless` in `$ARGUMENTS`, set `HEADLESS_MODE=true`
+- Phase 3 approval gate: if `HEADLESS_MODE=true`, auto-select **Accept** when fact-checker returns all PASS/SOURCED, auto-**Abort** when any FAIL citation detected
+- Match the established pattern in `plugins/soleur/skills/social-distribute/SKILL.md` (lines 12-14, 234, 312)
+
+**Files to modify:**
+- `plugins/soleur/skills/content-writer/SKILL.md` — add headless detection + bypass logic
+
+**Success criteria:** `/soleur:content-writer <topic> --headless` completes without AskUserQuestion, writes article to disk.
+
+##### 2b. Scheduled Content Generator (`scheduled-content-generator.yml`)
+
 ```yaml
-name: "Scheduled: KPI Remediation"
+name: "Scheduled: Content Generator"
 on:
   schedule:
-    - cron: '0 8 * * 1'  # Monday 08:00 UTC
+    - cron: '0 10 * * 2,4'  # Tuesday + Thursday 10:00 UTC
   workflow_dispatch: {}
 concurrency:
-  group: schedule-kpi-remediation
+  group: schedule-content-generator
   cancel-in-progress: false
 permissions:
   contents: write
@@ -225,29 +165,37 @@ permissions:
 
 **Steps:**
 1. `actions/checkout` (SHA-pinned)
-2. `setup-node` + `npm ci`
-3. Pre-create `scheduled-kpi-remediation` label
+2. `setup-node` + `npm ci` (for Eleventy build validation)
+3. Pre-create `scheduled-content-generator` label
 4. `claude-code-action` with:
    - Model: `claude-sonnet-4-6`
-   - Max turns: 60
+   - Max turns: 40
    - Timeout: 45 min
    - Tools: `Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task`
    - Prompt:
      1. AGENTS.md override
-     2. Read `knowledge-base/marketing/analytics/trend-summary.md`
-     3. Find the latest row. If Status contains "below-target" or row has `kpi_miss: true`:
-        - a) Read the latest analytics snapshot for Top Pages. Run `/soleur:growth fix` on the top 3-5 page paths.
-        - b) Read `seo-refresh-queue.md`, pick highest-priority unwritten item. Run `/soleur:content-writer <topic> --headless`. Run `/soleur:social-distribute <article-path> --headless`. Set `publish_date = today`.
-        - c) Run `/soleur:seo-aeo fix`
-        - d) Commit all changes (with rebase retry)
-        - e) Create issue: `[Scheduled] KPI Remediation - YYYY-MM-DD` with details of all actions taken
-     4. If no KPI miss: create issue `[Scheduled] KPI Remediation - YYYY-MM-DD: No remediation needed`
-5. Discord failure notification (conditional)
+     2. Read `knowledge-base/marketing/seo-refresh-queue.md`
+     3. Identify highest-priority item without a `generated_date` field
+     4. If all items have `generated_date`, create an issue "SEO refresh queue exhausted — add more topics" and exit
+     5. Run `/soleur:content-writer <topic> --headless`
+     6. Run `/soleur:social-distribute <article-path> --headless`
+     7. Set `publish_date` to today, `status: scheduled`, `channels: discord, x` in distribution file
+     8. Build site (`npx @11ty/eleventy`) to validate the new article renders correctly
+     9. Update SEO refresh queue: add `generated_date: YYYY-MM-DD` to the written item
+     10. `git add` article + distribution file + updated queue, commit, push (with rebase retry)
+     11. Create GitHub issue: `[Scheduled] Content Generator - YYYY-MM-DD`
+4. Discord failure notification (conditional)
 
 **Files to create:**
-- `.github/workflows/scheduled-kpi-remediation.yml`
+- `.github/workflows/scheduled-content-generator.yml`
 
-**Success criteria:** Manual dispatch with a trend-summary showing "below-target" triggers the full cascade. Manual dispatch with "on-target" creates a no-op issue.
+**Success criteria:** Manual dispatch produces an article in `plugins/soleur/docs/blog/`, a distribution file in `knowledge-base/marketing/distribution-content/`, updates the SEO refresh queue, and the Eleventy build succeeds.
+
+#### Batch 3: KPI Remediation Dispatcher (optional, deferred)
+
+Add a lightweight `gh workflow run` dispatcher to the existing `scheduled-weekly-analytics.yml`. When `kpi_miss=true`, dispatch the three standalone workflows. No claude-code-action needed — just 5 lines of shell.
+
+This is explicitly deferred from this PR. Track as a follow-up issue.
 
 ## Acceptance Criteria
 
@@ -256,12 +204,12 @@ permissions:
 - [ ] SEO/AEO audit runs weekly Monday 10:00 UTC, auto-fixes technical SEO issues, commits to main
 - [ ] Content generator runs Tue + Thu 10:00 UTC, produces article + distribution file, commits to main
 - [ ] Growth execution runs biweekly, applies keyword optimizations to stale pages
-- [ ] KPI remediation runs Mon 08:00 UTC, triggers cascade only on actual KPI miss
 - [ ] Content-writer skill supports `--headless` flag (auto-accept, abort on FAIL citations)
 - [ ] Distribution files have valid frontmatter (`publish_date`, `channels`, `status: scheduled`)
 - [ ] Existing content-publisher auto-publishes generated distribution files
 - [ ] SEO refresh queue items are marked with `generated_date` after content generation
-- [ ] All workflows create labeled GitHub issues for audit trail (with dedup)
+- [ ] Content generator validates Eleventy build before pushing
+- [ ] All workflows create labeled GitHub issues for audit trail
 - [ ] All workflows support `workflow_dispatch` for manual testing
 
 ### Non-Functional Requirements
@@ -269,43 +217,43 @@ permissions:
 - [ ] All actions SHA-pinned per repo security policy
 - [ ] All workflows include Discord failure notifications
 - [ ] All workflows use concurrency groups (no self-overlap)
-- [ ] Push operations include `git pull --rebase` retry for concurrent push conflicts
-- [ ] Workflows that build Eleventy include `setup-node` + `npm ci`
-- [ ] Content generator and KPI remediation include `Task` in allowedTools (for sub-agent delegation)
+- [ ] Push operations include `git pull --rebase` retry
+- [ ] All workflows include `setup-node` + `npm ci` for Eleventy builds
+- [ ] Content generator includes `Task` in allowedTools (for sub-agent delegation)
 
 ## Test Scenarios
 
 ### SEO/AEO Audit
 - Given the docs site has JSON-LD issues, when the audit runs, then fixes are committed and an issue documents findings
 - Given no SEO issues exist, when the audit runs, then validate-seo.sh passes and a "no issues found" issue is created
-- Given the Eleventy build fails, when the audit runs, then no commit is made and Discord is notified
+- Given the Eleventy build fails after fixes, when the audit runs, then no commit is made and Discord is notified
 
 ### Content Generator
 - Given the SEO refresh queue has unwritten items, when the generator runs, then an article + distribution file are committed and the queue item is marked with `generated_date`
-- Given all queue items have `generated_date`, when the generator runs, then it falls back to `growth plan` for topic discovery
+- Given all queue items have `generated_date`, when the generator runs, then an "SEO refresh queue exhausted" issue is created and no article is generated
 - Given the fact-checker returns FAIL citations, when running in `--headless` mode, then the content-writer aborts and no article is committed
-- Given the generator runs twice on the same day, when checking the queue, then only one article is generated (idempotency via `generated_date`)
+- Given the Eleventy build fails with the new article, when the generator runs, then no commit is made and Discord is notified
 
 ### Growth Execution
 - Given the SEO refresh queue has Priority 1 stale pages, when growth execution runs, then keyword optimizations are applied and the build validates
 - Given no stale pages exist, when growth execution runs, then a "no pages to optimize" issue is created
-
-### KPI Remediation
-- Given weekly analytics detected a KPI miss (trend-summary shows "below-target"), when remediation runs, then growth fix + new article + SEO fix are all applied
-- Given no KPI miss occurred, when remediation runs, then a "No remediation needed" issue is created
-- Given the analytics PR has not merged yet, when remediation checks trend-summary, then it reads the last available data and defaults to "no miss"
 
 ## Dependencies & Risks
 
 | Risk | Mitigation |
 |------|-----------|
 | Content-writer headless mode produces low-quality content | Citation verification still runs; fact-checker aborts on FAIL. Post-publish review via git history. |
-| Opus cost escalation (twice-weekly at 50 turns) | `max-turns` cap limits worst case. Monitor via Anthropic dashboard. |
-| Weekly analytics PR not merged before KPI remediation | Remediation reads last available trend-summary data; defaults to "no miss" on missing data |
+| SEO fix or content generation breaks the site build | Internal validation (build + validate-seo.sh) before push in all three workflows |
 | Two workflows push to main simultaneously | Per-workflow concurrency + rebase retry. Schedule staggering (2+ hour gaps) |
-| SEO fix breaks the site build | Internal validation (build + validate-seo.sh) before push. Deploy-docs workflow runs post-push. |
 | Agent halts mid-pipeline (skill handoff stall) | Avoid halt language in prompts. Use explicit continuation instructions. |
 | Node.js version drift on ubuntu-latest | Pin setup-node to LTS version |
+| Content quality degrades with Sonnet | Monitor first few articles. Upgrade to Opus if quality drops. Brand guide + fact-checker are model-independent guardrails. |
+
+## Deferred Work
+
+- **KPI remediation dispatcher** — Add `gh workflow run` dispatch to weekly-analytics for automated response to KPI misses. Track as separate issue.
+- **Queue exhaustion fallback** — Add `growth plan` topic discovery when SEO refresh queue runs dry (~10+ weeks away). Track as separate issue.
+- **Cost monitoring** — Monthly Opus/Sonnet usage tracking. Not needed at Sonnet pricing.
 
 ## References & Research
 
@@ -330,7 +278,6 @@ permissions:
 - Pipeline continuation stalls: avoid halt language (`2026-03-03-pipeline-continuation-stalls.md`)
 - Schedule template gaps: include `--allowedTools`, `--max-turns`, `id-token: write` (`2026-02-27-schedule-skill-template-gaps-first-consumer.md`)
 - Multi-agent cascade checklist: `Task` in allowedTools, explicit write targets (`2026-03-02-multi-agent-cascade-orchestration-checklist.md`)
-- GITHUB_OUTPUT sanitization: `tr -d '\n\r'` for untrusted values (`2026-03-05-github-output-newline-injection-sanitization.md`)
 - Blog frontmatter: inherit layout from `blog.json`, don't duplicate (`2026-03-05-eleventy-blog-post-frontmatter-pattern.md`)
 - Citation verification: no naked numbers (`2026-03-06-blog-citation-verification-before-publish.md`)
 - Content discovery: awk frontmatter parsing pattern (`2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md`)
