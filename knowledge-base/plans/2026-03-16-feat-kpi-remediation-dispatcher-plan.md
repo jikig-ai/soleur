@@ -41,12 +41,12 @@ Closes #640
 
 ## Acceptance Criteria
 
-- [ ] New workflow step "Dispatch CMO remediation workflows" runs after the KPI miss Discord notification step
-- [ ] Step condition: `if: steps.analytics.outputs.kpi_miss == 'true'`
-- [ ] Step dispatches all three workflows via `gh workflow run` using `GH_TOKEN`
-- [ ] When no KPI miss (`kpi_miss != 'true'`), no workflows are dispatched (step is skipped)
-- [ ] Discord KPI miss notification message is updated to document which workflows were triggered
-- [ ] Workflow file retains its existing security comment header
+- [x] New workflow step "Dispatch CMO remediation workflows" runs after the KPI miss Discord notification step
+- [x] Step condition: `if: steps.analytics.outputs.kpi_miss == 'true'`
+- [x] Step dispatches all three workflows via `gh workflow run` using `GH_TOKEN`
+- [x] When no KPI miss (`kpi_miss != 'true'`), no workflows are dispatched (step is skipped)
+- [x] Discord KPI miss notification message is updated to document which workflows were triggered
+- [x] Workflow file retains its existing security comment header
 
 ## Non-goals
 
