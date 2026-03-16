@@ -7,6 +7,16 @@ description: "This skill should be used when generating full article drafts with
 
 Generate full publication-ready article drafts with brand-consistent voice, Eleventy frontmatter, JSON-LD structured data, and optional FAQ sections. Content is validated against the brand guide and presented for user approval before writing to disk.
 
+## Headless Mode Detection
+
+If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true` and strip `--headless` from `$ARGUMENTS`. The remainder is the topic/arguments.
+
+**Argument format:** `<topic> [--outline <outline>] [--keywords <keywords>] [--headless]`
+
+**Headless defaults for interactive gates:**
+- Phase 3 (User Approval): auto-selects **Accept** when all citations are PASS or SOURCED. Auto-selects **Abort** (discard draft, create issue with failed citations) when any citation is FAIL.
+- If citation verification was skipped (fact-checker unavailable), auto-selects **Accept** with a warning in the issue.
+
 ## Phase 0: Prerequisites
 
 <critical_sequence>
@@ -125,6 +135,12 @@ Re-verification runs after each Edit cycle in Phase 3 -- when the user selects "
 
 If Phase 2.5 produced a Verification Report, display the summary first (total claims, verified, failed, unsourced), then present the draft with any inline FAIL/UNSOURCED markers visible. If all claims passed, note "All citations verified." If verification was skipped, note "Citation verification was skipped -- manual review recommended."
 
+**If `HEADLESS_MODE=true`:**
+- If any citation has a FAIL marker: auto-select **Abort**. Do not write the article. Report: "Content generation aborted -- FAIL citations detected: [list failed claims]. Draft discarded."
+- If all citations are PASS/SOURCED, or verification was skipped: auto-select **Accept**. Proceed to Phase 4.
+
+**If `HEADLESS_MODE` is not set (interactive mode):**
+
 Present the generated draft with word count displayed. Use the **AskUserQuestion tool** with three options:
 
 - **Accept** -- Write article to disk
@@ -141,7 +157,7 @@ Report: "Article written to `<path>`. Review and commit when ready."
 
 ## Important Guidelines
 
-- All content requires explicit user approval before writing -- no auto-write
+- All content requires explicit user approval before writing -- no auto-write (unless `--headless` is passed, which auto-accepts on PASS citations and aborts on FAIL)
 - Brand guide is a hard prerequisite. Without it, the skill cannot generate brand-consistent content.
 - Read the brand guide Voice section during draft generation, not as a separate post-hoc validation pass
 - If outline is provided, follow it. If not, generate a reasonable article structure from the topic.
