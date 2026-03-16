@@ -35,7 +35,7 @@ Auth → BYOK → chat → agent execution → review gates. One phase. Ship it.
 - [x] 1.12 WebSocket client (connect, reconnect, message handling)
 - [x] 1.13 Persist conversations + messages to Supabase
 - [x] 1.14 Stripe subscription (single plan, webhook handler)
-- [ ] 1.15 Deploy to Hetzner (persistent volume) — deferred, needs account
+- [x] 1.15 Deploy to Hetzner — Terraform configs created, Dockerfile built, pending `terraform apply`
 
 ## Phase 2: Visibility
 
