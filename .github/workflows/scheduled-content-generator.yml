@@ -1,4 +1,6 @@
 # Twice-weekly content generation from the SEO refresh queue.
+# Growth plan fallback topic is scoped to brand positioning.
+# Update the STEP 1b topic string if brand-guide.md positioning changes.
 # Reads the queue for the highest-priority unwritten topic, generates an article
 # via content-writer, creates a distribution file via social-distribute, and
 # commits both to main. The existing content-publisher picks up the distribution
@@ -24,7 +26,7 @@ permissions:
 jobs:
   content-generator:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -51,7 +53,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
           plugins: 'soleur@soleur'
-          claude_args: '--model claude-sonnet-4-6 --max-turns 40 --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task'
+          claude_args: '--model claude-sonnet-4-6 --max-turns 50 --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task'
           prompt: |
             IMPORTANT: This is an automated CI workflow. The AGENTS.md rule
             "Never commit directly to main" does NOT apply here. You are
@@ -63,11 +65,21 @@ jobs:
             annotation. Priority order: Priority 1 items first, then Priority 2
             pillar content pages, then Priority 2 comparison pages.
 
-            If ALL items already have a generated_date, create a GitHub issue
-            titled "[Scheduled] Content Generator - <today's date in YYYY-MM-DD format>"
-            with the label "scheduled-content-generator" and body
-            "SEO refresh queue exhausted -- all items have been generated.
-            Add more topics to the queue." Then stop.
+            If ALL items already have a generated_date:
+
+              STEP 1b — Discover new topic via growth plan:
+              Run /soleur:growth plan "Company-as-a-Service content for solo founders building with AI"
+              From the growth plan output, extract the single highest-priority P1
+              content suggestion: its topic title and target keywords.
+
+              If growth plan produced no usable P1 topic (e.g., WebSearch failed
+              or no relevant results), create a GitHub issue titled
+              "[Scheduled] Content Generator - <today's date in YYYY-MM-DD format>"
+              with the label "scheduled-content-generator" and body
+              "SEO refresh queue exhausted and growth plan fallback produced no
+              usable topic. Add more topics to the queue manually." Then stop.
+
+              Use the discovered topic and keywords for STEP 2 below.
 
             STEP 2 — Generate article:
             Run /soleur:content-writer <topic> --headless
@@ -94,27 +106,39 @@ jobs:
             If the build fails, do NOT commit. Create a GitHub issue documenting
             the build error and stop.
 
-            STEP 5 — Mark queue item as generated:
-            Edit knowledge-base/marketing/seo-refresh-queue.md and add
-            "generated_date: <today's date>" annotation to the queue item
-            that was just written. Add it as a note below the item or as
-            an additional column in the table row.
+            STEP 5 — Record topic in queue:
+            If STEP 1b was used (topic was auto-discovered via growth plan):
+              Append the discovered topic to
+              knowledge-base/marketing/seo-refresh-queue.md under a
+              "## Auto-Discovered Topics" section (create if it doesn't exist)
+              as a table row:
+              | <topic> | <keywords> | growth plan (auto-discovered) | <today's date> |
+
+            If a queue item was used (normal path):
+              Edit knowledge-base/marketing/seo-refresh-queue.md and add
+              "generated_date: <today's date>" annotation to the queue item
+              that was just written. Add it as a note below the item or as
+              an additional column in the table row.
 
             STEP 6 — Create audit issue:
             Create a GitHub issue titled
             "[Scheduled] Content Generator - <today's date in YYYY-MM-DD format>"
             with the label "scheduled-content-generator" summarizing:
             - Topic selected from queue
+            - Topic source: growth plan (if STEP 1b) or SEO refresh queue
             - Article path written
             - Distribution file path created
             - Build validation result
 
             MANDATORY FINAL STEP — persist to main:
-            Run these bash commands (do not skip, do not create a branch):
+            Run these bash commands (do not skip, do not create a branch).
+            Use the appropriate commit message based on which path was taken:
+            - If STEP 1b was used: "feat(content): auto-generate article via growth plan discovery"
+            - If a queue item was used: "feat(content): auto-generate article from SEO queue"
             ```
             git add -A
             git diff --cached --quiet && echo "No changes to commit, skipping" && exit 0
-            git commit -m "feat(content): auto-generate article from SEO queue"
+            git commit -m "<appropriate commit message from above>"
             git push origin main || { git pull --rebase origin main && git push origin main; }
             ```
 
