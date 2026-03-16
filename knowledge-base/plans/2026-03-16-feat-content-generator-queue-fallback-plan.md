@@ -107,15 +107,15 @@ The fallback path flows through the same content-writer pipeline as the normal q
 
 ## Acceptance Criteria
 
-- [ ] When all SEO refresh queue items have `generated_date`, the content generator runs `growth plan` to discover a new topic
-- [ ] The discovered topic is passed to `content-writer --headless` for article generation
-- [ ] The new topic is appended to `seo-refresh-queue.md` under `## Auto-Discovered Topics` with `generated_date` set, using the table format specified in Technical Considerations
-- [ ] The audit GitHub issue notes the topic source (auto-discovered vs. SEO refresh queue)
-- [ ] If growth plan fails or returns no useful results, the workflow falls back to creating the exhaustion issue and stopping (current behavior preserved)
-- [ ] `timeout-minutes` bumped from 45 to 60
-- [ ] `--max-turns` bumped from 40 to 50
-- [ ] No changes to the growth skill SKILL.md or content-writer SKILL.md
-- [ ] No `--headless` flag passed to growth plan (it doesn't support it)
+- [x] When all SEO refresh queue items have `generated_date`, the content generator runs `growth plan` to discover a new topic
+- [x] The discovered topic is passed to `content-writer --headless` for article generation
+- [x] The new topic is appended to `seo-refresh-queue.md` under `## Auto-Discovered Topics` with `generated_date` set, using the table format specified in Technical Considerations
+- [x] The audit GitHub issue notes the topic source (auto-discovered vs. SEO refresh queue)
+- [x] If growth plan fails or returns no useful results, the workflow falls back to creating the exhaustion issue and stopping (current behavior preserved)
+- [x] `timeout-minutes` bumped from 45 to 60
+- [x] `--max-turns` bumped from 40 to 50
+- [x] No changes to the growth skill SKILL.md or content-writer SKILL.md
+- [x] No `--headless` flag passed to growth plan (it doesn't support it)
 
 ## Test Scenarios
 
