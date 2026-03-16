@@ -1,0 +1,100 @@
+# Weekly SEO/AEO audit and fix using the soleur:seo-aeo skill.
+# Runs /soleur:seo-aeo fix to auto-apply technical SEO fixes, then commits to main.
+# Produces a GitHub Issue documenting findings and changes.
+# To test manually: gh workflow run scheduled-seo-aeo-audit.yml
+
+name: "Scheduled: SEO/AEO Audit"
+
+on:
+  schedule:
+    - cron: '0 10 * * 1'  # Monday 10:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: schedule-seo-aeo-audit
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  id-token: write
+
+jobs:
+  seo-aeo-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 'lts/*'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Ensure label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create scheduled-seo-aeo-audit \
+            --description "Weekly SEO/AEO audit and fix" \
+            --color "0E8A16" 2>/dev/null || true
+
+      - name: Run SEO/AEO audit and fix
+        uses: anthropics/claude-code-action@64c7a0ef71df67b14cb4471f4d9c8565c61042bf # v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
+          plugins: 'soleur@soleur'
+          claude_args: '--model claude-sonnet-4-6 --max-turns 40 --allowedTools Bash,Read,Write,Edit,Glob,Grep'
+          prompt: |
+            IMPORTANT: This is an automated CI workflow. The AGENTS.md rule
+            "Never commit directly to main" does NOT apply here. You are
+            explicitly authorized to commit and push to main in this context.
+
+            Run /soleur:seo-aeo fix on this repository.
+
+            After the audit and fix is complete, create a GitHub issue titled
+            "[Scheduled] SEO/AEO Audit - <today's date in YYYY-MM-DD format>"
+            with the label "scheduled-seo-aeo-audit" summarizing:
+            - What issues were found
+            - What fixes were applied
+            - Build validation results
+
+            MANDATORY FINAL STEP — persist fixes to main:
+            Run these bash commands (do not skip, do not create a branch):
+            ```
+            git add -A
+            git diff --cached --quiet && echo "No changes to commit, skipping" && exit 0
+            git commit -m "fix(seo): weekly SEO/AEO audit fixes"
+            git push origin main || { git pull --rebase origin main && git push origin main; }
+            ```
+
+      - name: Discord notification (failure)
+        if: failure()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if [[ -z "$DISCORD_WEBHOOK_URL" ]]; then
+            echo "DISCORD_WEBHOOK_URL not set, skipping"
+            exit 0
+          fi
+          PAYLOAD=$(jq -n \
+            --arg content "SEO/AEO Audit failed. [View run]($REPO_URL/actions/runs/$RUN_ID)" \
+            --arg username "Sol" \
+            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
+            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL")
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Discord failure notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Discord failure notification failed (HTTP $HTTP_CODE)"
+          fi

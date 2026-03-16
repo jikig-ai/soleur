@@ -12,6 +12,7 @@
 # Environment variables (required):
 #   BSKY_HANDLE        - Bluesky handle (e.g., soleur.bsky.social)
 #   BSKY_APP_PASSWORD  - App password
+#   BSKY_ALLOW_POST    - Set to "true" to enable posting (defense-in-depth guard)
 #
 # Exit codes:
 #   0 - Success
@@ -228,6 +229,13 @@ cmd_create_session() {
 }
 
 cmd_post() {
+  # Guard: require explicit opt-in to post.
+  if [[ "${BSKY_ALLOW_POST:-}" != "true" ]]; then
+    echo "Error: BSKY_ALLOW_POST is not set to 'true'." >&2
+    echo "Set BSKY_ALLOW_POST=true to enable posting." >&2
+    return 1
+  fi
+
   local text=""
   local reply_to_uri="" reply_to_cid="" root_uri="" root_cid=""
 
@@ -409,4 +417,7 @@ main() {
   esac
 }
 
-main "$@"
+# Guard: allow sourcing without executing main (for test harness)
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

@@ -1,6 +1,6 @@
 ---
 name: growth
-description: "This skill should be used when performing content strategy analysis, keyword research, content auditing for search intent alignment, content gap analysis, content planning, AI agent consumability auditing, or applying content fixes. Triggers on \"keyword research\", \"content strategy\", \"content audit\", \"content plan\", \"growth audit\", \"growth plan\", \"growth fix\", \"aeo content\", \"search intent\", \"fix content\"."
+description: "This skill should be used when performing content strategy analysis, keyword research, content auditing for search intent alignment, content gap analysis, content planning, or AI agent consumability auditing. It provides sub-commands for auditing, planning, and applying fixes."
 ---
 
 # Growth Strategy

@@ -1,6 +1,6 @@
 ---
 name: discord-content
-description: "This skill should be used when creating and posting community content to Discord. It generates brand-consistent posts (project updates, tips, milestones, or custom topics), validates them against the brand guide, and posts via webhook after user approval. Triggers on \"post to Discord\", \"Discord update\", \"community post\", \"Discord announcement\", \"write Discord content\"."
+description: "This skill should be used when creating and posting community content to Discord. It generates brand-consistent posts (project updates, tips, milestones, or custom topics), validates against the brand guide, and posts via webhook after approval."
 ---
 
 # Discord Content

@@ -1,6 +1,6 @@
 ---
 name: schedule
-description: "This skill should be used when creating, listing, or deleting scheduled agent tasks via GitHub Actions cron workflows. It generates workflow YAML files that invoke Soleur skills on a recurring schedule using claude-code-action. Triggers on 'schedule a skill', 'recurring task', 'cron job', 'scheduled agent', 'automate skill', 'run periodically'."
+description: "This skill should be used when creating, listing, or deleting scheduled agent tasks via GitHub Actions cron workflows. It generates workflow YAML files that invoke Soleur skills on a recurring schedule using claude-code-action."
 ---
 
 # Schedule Manager

@@ -47,6 +47,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Never use "Announce to the user", "Output to the user", or "and stop" as terminal instructions in skills that can be invoked by pipelines (one-shot, ship) -- the model interprets these as implicit stop signals; use "Return control immediately" or "proceed to the next step in the orchestrator's sequence" for pipeline-compatible handoff, with a conditional single-line output for direct user invocation
 - Sub-skills that return control to an orchestrator must output a structured continuation marker (e.g., `## Work Phase Complete`), not natural-language completion phrases ("Implementation complete.") -- the orchestrator must include an explicit CONTINUATION GATE block that names the marker and forbids ending the turn; conclusive-sounding text is interpreted as a turn boundary even when followed by "proceed to next step"
 - Never write bash code blocks in agent/skill prompts that trigger Claude Code's approval heuristics -- pre-combine multiple blocks into a single `;`-joined command (models insert `echo "---"` separators otherwise), avoid quoted strings starting with dashes (`"---"`, `"-flag"`), and keep commands simple enough to auto-approve; if a command requires user consent, the agent blocks waiting for input it will never receive when running as a subagent
+- Never place deferred/forward-reference instructions ("NOTE: after STEP N, do X") in multi-step LLM prompts -- the agent reads the instruction at STEP 1 but must execute it at STEP N; this temporal gap causes either premature execution or silent omission; relocate the instruction to STEP N with a conditional guard ("If STEP 1b was used, do X")
 
 ### Prefer
 
@@ -60,6 +61,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Prefer a language identifier after triple backticks in code blocks (e.g., ```bash, ```yaml -- never bare ```)
 - Prefer verb-noun naming for skill directories where applicable (e.g., `deploy-docs`, `release-announce`, `resolve-pr-parallel`)
 - Prefer `# --- Section Name ---` comment headers in shell scripts to separate logical sections
+- Multi-step LLM prompts (workflow prompt blocks, skill instructions, agent prompts) must place every instruction at the step where it executes, not where it is conceptually related -- "NOTE: do X after STEP N" deferred instructions are unreliable because LLM agents either execute them immediately or forget them; use conditional blocks at the target step instead (e.g., "STEP 5: If STEP 1b was used, do X")
 
 ## Architecture
 

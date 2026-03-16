@@ -1,6 +1,6 @@
 # Scheduled content publisher for blog and case study distribution.
 # Scans distribution-content/ for files with publish_date == today and
-# status: scheduled, then posts to declared channels (Discord, X/Twitter).
+# status: scheduled, then posts to declared channels (Discord, X/Twitter, LinkedIn).
 # Implements #530, #549: directory-driven content publisher.
 #
 # Triggers: daily cron at 14:00 UTC + manual workflow_dispatch.
@@ -52,6 +52,10 @@ jobs:
           X_API_SECRET: ${{ secrets.X_API_SECRET }}
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          X_ALLOW_POST: "true"
+          LINKEDIN_ACCESS_TOKEN: ${{ secrets.LINKEDIN_ACCESS_TOKEN }}
+          LINKEDIN_PERSON_URN: ${{ secrets.LINKEDIN_PERSON_URN }}
+          # TODO(#590): Add LINKEDIN_ALLOW_POST: "true" when content-publisher.sh gains LinkedIn channel support
           GH_TOKEN: ${{ github.token }}
         run: |
           exit_code=0

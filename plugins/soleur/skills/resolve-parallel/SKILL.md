@@ -1,6 +1,6 @@
 ---
 name: resolve-parallel
-description: This skill should be used when resolving all TODO comments in the codebase using parallel processing. It analyzes dependencies, creates a resolution plan with a mermaid flow diagram, and spawns parallel pr-comment-resolver agents. Triggers on "resolve TODOs", "fix all TODOs", "parallel TODO resolution", "clean up TODO comments".
+description: "This skill should be used when resolving all TODO comments in the codebase using parallel processing. It analyzes dependencies, creates a resolution plan with a mermaid flow diagram, and spawns parallel resolver agents."
 ---
 
 # Resolve TODO Comments in Parallel
