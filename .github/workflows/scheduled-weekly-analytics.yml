@@ -101,7 +101,7 @@ jobs:
             --body "Automated weekly analytics snapshot from Plausible API." \
             --base main \
             --head "$BRANCH"
-          gh pr merge "$BRANCH" --squash --auto
+          gh pr merge "$BRANCH" --squash --auto || gh pr merge "$BRANCH" --squash
 
       - name: Discord notification (failure)
         if: failure()
