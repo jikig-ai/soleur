@@ -21,21 +21,21 @@
 
 Auth → BYOK → chat → agent execution → review gates. One phase. Ship it.
 
-- [ ] 1.1 Initialize `apps/web-platform/` (Next.js + custom `server.ts`)
-- [ ] 1.2 Set up Supabase project (database, auth)
-- [ ] 1.3 Database migration: USER, API_KEY, CONVERSATION, MESSAGE + RLS + indexes
-- [ ] 1.4 Magic-link auth flow (login + signup pages)
-- [ ] 1.5 BYOK key setup page
-- [ ] 1.6 Encrypted key storage (AES-256-GCM) + validation against Anthropic API
-- [ ] 1.7 Workspace provisioner (create dir, symlink plugin, init git)
-- [ ] 1.8 WebSocket server (auth, session routing)
-- [ ] 1.9 Agent SDK runner (`query()` with streaming input, `canUseTool`, BYOK env injection, systemPrompt, permissionMode)
-- [ ] 1.10 Domain leader selector UI (card grid, 8 leaders)
-- [ ] 1.11 Chat UI (message list, streaming text, review gate buttons inline)
-- [ ] 1.12 WebSocket client (connect, reconnect, message handling)
-- [ ] 1.13 Persist conversations + messages to Supabase
-- [ ] 1.14 Stripe subscription (single plan, webhook handler)
-- [ ] 1.15 Deploy to Railway/Fly.io (persistent volume)
+- [x] 1.1 Initialize `apps/web-platform/` (Next.js + custom `server.ts`)
+- [x] 1.2 Set up Supabase project (database, auth)
+- [x] 1.3 Database migration: USER, API_KEY, CONVERSATION, MESSAGE + RLS + indexes
+- [x] 1.4 Magic-link auth flow (login + signup pages)
+- [x] 1.5 BYOK key setup page
+- [x] 1.6 Encrypted key storage (AES-256-GCM) + validation against Anthropic API
+- [x] 1.7 Workspace provisioner (create dir, symlink plugin, init git)
+- [x] 1.8 WebSocket server (auth, session routing)
+- [x] 1.9 Agent SDK runner (`query()` with streaming input, `canUseTool`, BYOK env injection, systemPrompt, permissionMode)
+- [x] 1.10 Domain leader selector UI (card grid, 8 leaders)
+- [x] 1.11 Chat UI (message list, streaming text, review gate buttons inline)
+- [x] 1.12 WebSocket client (connect, reconnect, message handling)
+- [x] 1.13 Persist conversations + messages to Supabase
+- [x] 1.14 Stripe subscription (single plan, webhook handler)
+- [ ] 1.15 Deploy to Hetzner (persistent volume) — deferred, needs account
 
 ## Phase 2: Visibility
 
