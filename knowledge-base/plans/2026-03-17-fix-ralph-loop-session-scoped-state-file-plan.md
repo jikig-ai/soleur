@@ -86,16 +86,16 @@ The existing `.claude/*.local.md` pattern in `.gitignore` already covers PID-suf
 
 ## Acceptance Criteria
 
-- [ ] `setup-ralph-loop.sh` creates session-scoped state file at `$PROJECT_ROOT/.claude/ralph-loop.<PPID>.local.md`
-- [ ] `stop-hook.sh` reads/writes only the state file matching its own `$PPID`
-- [ ] `stop-hook.sh` ignores state files from other sessions (does not block exit)
-- [ ] TTL glob cleanup iterates all `ralph-loop.*.local.md` files and removes stale ones
-- [ ] Cancel instructions in setup output reflect the new filename pattern (both specific and glob)
-- [ ] Help text in setup-ralph-loop.sh updated for new filename
-- [ ] Existing tests pass after adapting to new file path
-- [ ] New test: state file from foreign PID does not block exit
-- [ ] New test: TTL glob cleanup removes stale files from other PIDs
-- [ ] New test: TTL glob cleanup preserves fresh files from other PIDs
+- [x] `setup-ralph-loop.sh` creates session-scoped state file at `$PROJECT_ROOT/.claude/ralph-loop.<PPID>.local.md`
+- [x] `stop-hook.sh` reads/writes only the state file matching its own `$PPID`
+- [x] `stop-hook.sh` ignores state files from other sessions (does not block exit)
+- [x] TTL glob cleanup iterates all `ralph-loop.*.local.md` files and removes stale ones
+- [x] Cancel instructions in setup output reflect the new filename pattern (both specific and glob)
+- [x] Help text in setup-ralph-loop.sh updated for new filename
+- [x] Existing tests pass after adapting to new file path
+- [x] New test: state file from foreign PID does not block exit
+- [x] New test: TTL glob cleanup removes stale files from other PIDs
+- [x] New test: TTL glob cleanup preserves fresh files from other PIDs
 
 ## Test Scenarios
 
