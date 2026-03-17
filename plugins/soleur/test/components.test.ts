@@ -9,6 +9,8 @@ import {
 
 const VALID_MODELS = ["inherit", "haiku", "sonnet", "opus"];
 const KEBAB_CASE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const SKILL_DESCRIPTION_WORD_BUDGET = 1800; // see #618
+const SKILL_DESCRIPTION_CHAR_LIMIT = 1024;
 
 // ---------------------------------------------------------------------------
 // Agent Frontmatter
@@ -128,6 +130,41 @@ describe("Skill frontmatter", () => {
       test("has non-empty body", () => {
         expect(body.trim().length).toBeGreaterThan(0);
       });
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Skill description budget (prevents context compaction skill loss, see #618)
+// ---------------------------------------------------------------------------
+
+describe("Skill description budget", () => {
+  const skills = discoverSkills();
+
+  test("cumulative description word count under budget", () => {
+    const counts: { path: string; words: number }[] = [];
+    let totalWords = 0;
+    for (const skillPath of skills) {
+      const { frontmatter } = parseComponent(skillPath);
+      const desc = String(frontmatter.description || "");
+      const words = desc.split(/\s+/).filter(Boolean).length;
+      counts.push({ path: skillPath, words });
+      totalWords += words;
+    }
+    if (totalWords > SKILL_DESCRIPTION_WORD_BUDGET) {
+      const top5 = counts.sort((a, b) => b.words - a.words).slice(0, 5);
+      const detail = top5.map((s) => `  ${s.path}: ${s.words} words`).join("\n");
+      throw new Error(
+        `Budget exceeded: ${totalWords}/${SKILL_DESCRIPTION_WORD_BUDGET} words.\nTop offenders:\n${detail}`,
+      );
+    }
+  });
+
+  for (const skillPath of skills) {
+    test(`${skillPath} description under ${SKILL_DESCRIPTION_CHAR_LIMIT} chars`, () => {
+      const { frontmatter } = parseComponent(skillPath);
+      const desc = String(frontmatter.description || "");
+      expect(desc.length).toBeLessThanOrEqual(SKILL_DESCRIPTION_CHAR_LIMIT);
     });
   }
 });

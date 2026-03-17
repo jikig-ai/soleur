@@ -1,6 +1,6 @@
 ---
 name: pencil-setup
-description: This skill should be used when Pencil MCP tools are unavailable and need to be installed and registered. It detects Pencil Desktop or an IDE with the Pencil extension and registers the MCP server with Claude Code CLI. Triggers on "setup pencil", "install pencil", "pencil not found", "pencil MCP missing".
+description: "This skill should be used when Pencil MCP tools are unavailable and need installation. It detects Pencil Desktop or an IDE with the Pencil extension and registers the MCP server with Claude Code CLI."
 ---
 
 # Pencil Setup

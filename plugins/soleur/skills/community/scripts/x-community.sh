@@ -14,6 +14,7 @@
 #   X_API_SECRET           - API secret (consumer secret)
 #   X_ACCESS_TOKEN         - Access token
 #   X_ACCESS_TOKEN_SECRET  - Access token secret
+#   X_ALLOW_POST           - Set to "true" to enable posting (defense-in-depth guard)
 #
 # Exit codes:
 #   0 - Success
@@ -561,6 +562,13 @@ cmd_fetch_user_timeline() {
 }
 
 cmd_post_tweet() {
+  # Guard: require explicit opt-in to post.
+  if [[ "${X_ALLOW_POST:-}" != "true" ]]; then
+    echo "Error: X_ALLOW_POST is not set to 'true'." >&2
+    echo "Set X_ALLOW_POST=true to enable posting." >&2
+    return 1
+  fi
+
   local text="${1:?Usage: x-community.sh post-tweet <text> [--reply-to TWEET_ID]}"
   shift
 

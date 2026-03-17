@@ -1,6 +1,6 @@
 ---
 name: archive-kb
-description: "This skill should be used when archiving completed knowledge-base artifacts (brainstorms, plans, specs) to their archive/ subdirectories with timestamp prefixes. It handles git history preservation automatically and avoids command substitution prompts."
+description: "This skill should be used when archiving completed knowledge-base artifacts (brainstorms, plans, specs) to their archive/ subdirectories with timestamp prefixes and git history preservation."
 ---
 
 # Archive Knowledge-Base Artifacts

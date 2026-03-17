@@ -1,6 +1,6 @@
 ---
 name: deepen-plan
-description: This skill should be used when enhancing an existing plan with parallel research agents for each section to add depth, best practices, and implementation details. It discovers all available skills, agents, and learnings, then spawns parallel sub-agents to enrich each plan section. Triggers on "deepen plan", "enhance plan", "research plan sections", "add depth to plan", "ground the plan".
+description: "This skill should be used when enhancing an existing plan with parallel research agents for each section. It discovers all available skills, agents, and learnings, then spawns parallel sub-agents to enrich each plan section with depth, best practices, and implementation details."
 ---
 
 # Deepen Plan - Power Enhancement Mode

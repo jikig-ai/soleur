@@ -1,6 +1,6 @@
 ---
 name: merge-pr
-description: This skill should be used when merging a feature branch to main with automatic conflict resolution and cleanup. It automates the merge pipeline -- merging main into the feature branch, resolving conflicts, pushing, creating a PR, waiting for CI, merging, and cleaning up the worktree. Triggers on "merge this PR", "merge my branch", "auto-merge", "merge and cleanup".
+description: "This skill should be used when merging a feature branch to main with automatic conflict resolution and cleanup. It automates merging main into the feature branch, resolving conflicts, pushing, creating a PR, waiting for CI, merging, and cleaning up the worktree."
 ---
 
 # merge-pr Skill

@@ -1,6 +1,6 @@
 ---
 name: seo-aeo
-description: "This skill should be used when auditing, fixing, or validating SEO and AEO (AI Engine Optimization) for Eleventy documentation sites. It provides sub-commands for running audits, applying fixes, and validating build output. Triggers on \"seo audit\", \"check seo\", \"aeo\", \"llms.txt\", \"validate seo\", \"seo fix\"."
+description: "This skill should be used when auditing, fixing, or validating SEO and AEO (AI Engine Optimization) for Eleventy documentation sites. It provides sub-commands for running audits, applying fixes, and validating build output."
 ---
 
 # SEO & AEO for Eleventy Docs

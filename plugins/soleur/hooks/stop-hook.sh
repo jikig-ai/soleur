@@ -9,31 +9,41 @@
 
 set -euo pipefail
 
-# Resolve project root (worktree-safe: CWD may be .worktrees/feat-* instead of repo root)
-PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || PROJECT_ROOT="."
-RALPH_STATE_FILE="${PROJECT_ROOT}/.claude/ralph-loop.local.md"
-
-# Check if ralph-loop is active BEFORE reading stdin
-if [[ ! -f "$RALPH_STATE_FILE" ]]; then
-  # No active loop - allow exit
+# Resolve shared repo root (not worktree root) so state file path matches setup-ralph-loop.sh.
+# git rev-parse --git-common-dir returns the shared .git dir across all worktrees.
+# May return a relative path, so resolve to absolute first, then strip trailing /.git.
+_common_dir=$(cd "$(git rev-parse --git-common-dir 2>/dev/null)" && pwd) || {
+  # Not in a git repo -- allow exit
   exit 0
-fi
+}
+PROJECT_ROOT="${_common_dir%/.git}"
+unset _common_dir
+# Session identifier: PPID by default, overridable via RALPH_LOOP_PID for testing
+_RALPH_LOOP_PID="${RALPH_LOOP_PID:-$PPID}"
+RALPH_STATE_FILE="${PROJECT_ROOT}/.claude/ralph-loop.${_RALPH_LOOP_PID}.local.md"
 
-# --- TTL Check: Auto-remove stale state files from crashed sessions ---
-# When a session crashes or context is exhausted, the state file persists and
-# traps all subsequent sessions in an infinite loop. The started_at timestamp
-# lets us detect orphaned state files and clean them up automatically.
+# --- TTL Check: Auto-remove stale state files from ANY crashed session ---
+# Glob over all session-scoped state files and remove stale ones before
+# checking our own file. This cleans up orphans from crashed sessions.
 TTL_HOURS=1
-STARTED_AT=$(awk '/^---$/{c++; next} c==1' "$RALPH_STATE_FILE" | grep '^started_at:' | sed 's/started_at: *//' | sed 's/^"\(.*\)"$/\1/' || true)
-if [[ -n "$STARTED_AT" ]]; then
-  STARTED_EPOCH=$(date -d "$STARTED_AT" +%s 2>/dev/null || true)
-  NOW_EPOCH=$(date +%s)
-  if [[ -n "$STARTED_EPOCH" ]] && [[ $((NOW_EPOCH - STARTED_EPOCH)) -gt $((TTL_HOURS * 3600)) ]]; then
-    AGE_MINS=$(( (NOW_EPOCH - STARTED_EPOCH) / 60 ))
-    echo "Ralph loop: stale state file detected (started ${AGE_MINS}m ago, TTL=${TTL_HOURS}h). Auto-removing." >&2
-    rm "$RALPH_STATE_FILE"
-    exit 0
+NOW_EPOCH=$(date +%s)
+for state_file in "${PROJECT_ROOT}/.claude"/ralph-loop.*.local.md; do
+  [[ -f "$state_file" ]] || continue
+  STARTED_AT=$(awk '/^---$/{c++; next} c==1' "$state_file" | grep '^started_at:' | sed 's/started_at: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+  if [[ -n "$STARTED_AT" ]]; then
+    STARTED_EPOCH=$(date -d "$STARTED_AT" +%s 2>/dev/null || true)
+    if [[ -n "$STARTED_EPOCH" ]] && [[ $((NOW_EPOCH - STARTED_EPOCH)) -gt $((TTL_HOURS * 3600)) ]]; then
+      AGE_MINS=$(( (NOW_EPOCH - STARTED_EPOCH) / 60 ))
+      echo "Ralph loop: stale state file detected ($(basename "$state_file"), started ${AGE_MINS}m ago, TTL=${TTL_HOURS}h). Auto-removing." >&2
+      rm "$state_file" || true
+    fi
   fi
+done
+
+# Check if ralph-loop is active for THIS session
+if [[ ! -f "$RALPH_STATE_FILE" ]]; then
+  # No active loop for this session - allow exit
+  exit 0
 fi
 
 # Read hook input from stdin (advanced stop hook API)

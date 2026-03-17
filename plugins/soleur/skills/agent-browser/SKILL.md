@@ -1,6 +1,6 @@
 ---
 name: agent-browser
-description: This skill should be used when automating browser interactions via Vercel's agent-browser CLI. It handles web page navigation, form filling, screenshots, and data scraping using Bash commands with ref-based element selection. Triggers on "browse website", "fill form", "click button", "take screenshot", "scrape page", "web automation".
+description: "This skill should be used when automating browser interactions via Vercel's agent-browser CLI. It handles web page navigation, form filling, screenshots, and data scraping using ref-based element selection."
 ---
 
 # agent-browser: CLI Browser Automation

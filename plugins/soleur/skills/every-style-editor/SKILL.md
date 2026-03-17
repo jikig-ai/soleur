@@ -1,6 +1,6 @@
 ---
 name: every-style-editor
-description: This skill should be used when reviewing or editing copy to ensure adherence to Every's style guide. It provides a systematic line-by-line review process for grammar, punctuation, mechanics, and style guide compliance. Triggers on "review this copy", "edit for style", "Every style guide", "proofread this article", "check grammar and style", "line edit this draft".
+description: "This skill should be used when reviewing or editing copy for adherence to Every's style guide. It provides systematic line-by-line review for grammar, punctuation, mechanics, and style compliance."
 ---
 
 # Every Style Editor

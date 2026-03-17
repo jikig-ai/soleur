@@ -30,6 +30,12 @@ validate_gh() {
 }
 
 detect_repo() {
+  # Fast path: GITHUB_REPOSITORY is always set in GitHub Actions
+  if [[ -n "${GITHUB_REPOSITORY:-}" ]]; then
+    echo "$GITHUB_REPOSITORY"
+    return 0
+  fi
+
   local remote_url
   remote_url=$(git remote get-url origin 2>/dev/null) || {
     echo "Error: No git remote 'origin' found." >&2
@@ -37,8 +43,11 @@ detect_repo() {
   }
 
   # Extract owner/repo from SSH or HTTPS URL
+  # Handles: https://github.com/owner/repo.git
+  #          git@github.com:owner/repo.git
+  #          https://x-access-token:TOKEN@github.com/owner/repo.git
   local repo
-  repo=$(echo "$remote_url" | sed -E 's#(https://github\.com/|git@github\.com:)##' | sed 's/\.git$//')
+  repo=$(echo "$remote_url" | sed -E 's#https?://([^@]+@)?github\.com/##' | sed -E 's#git@github\.com:##' | sed 's/\.git$//')
 
   if [[ -z "$repo" || "$repo" == "$remote_url" ]]; then
     echo "Error: Could not parse GitHub repo from remote URL: ${remote_url}" >&2

@@ -27,6 +27,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
   statuses: write
@@ -59,7 +60,7 @@ jobs:
             echo "DISCORD_WEBHOOK_URL not set, skipping KPI miss notification"
             exit 0
           fi
-          MESSAGE=$(printf '**Weekly Analytics: KPI Miss**\n\nPhase: %s\nTarget: %s WoW\nActual: %s WoW\nVisitors: %s\n\nDashboard: %s/tree/main/knowledge-base/marketing/analytics' \
+          MESSAGE=$(printf '**Weekly Analytics: KPI Miss**\n\nPhase: %s\nTarget: %s WoW\nActual: %s WoW\nVisitors: %s\n\nDashboard: %s/tree/main/knowledge-base/marketing/analytics\n\nRemediation: SEO audit, growth execution, and content generator workflows will be dispatched.' \
             "$KPI_PHASE" "$KPI_TARGET" "$KPI_ACTUAL" "$KPI_VISITORS" "$REPO_URL")
           PAYLOAD=$(jq -n \
             --arg content "$MESSAGE" \
@@ -75,6 +76,15 @@ jobs:
           else
             echo "::warning::Discord KPI miss notification failed (HTTP $HTTP_CODE)"
           fi
+
+      - name: Dispatch CMO remediation workflows
+        if: steps.analytics.outputs.kpi_miss == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run scheduled-seo-aeo-audit.yml || echo "::warning::Failed to dispatch scheduled-seo-aeo-audit.yml"
+          gh workflow run scheduled-growth-execution.yml || echo "::warning::Failed to dispatch scheduled-growth-execution.yml"
+          gh workflow run scheduled-content-generator.yml || echo "::warning::Failed to dispatch scheduled-content-generator.yml"
 
       - name: Create PR with snapshot
         env:
@@ -101,7 +111,7 @@ jobs:
             --body "Automated weekly analytics snapshot from Plausible API." \
             --base main \
             --head "$BRANCH"
-          gh pr merge "$BRANCH" --squash --auto
+          gh pr merge "$BRANCH" --squash --auto || gh pr merge "$BRANCH" --squash
 
       - name: Discord notification (failure)
         if: failure()
