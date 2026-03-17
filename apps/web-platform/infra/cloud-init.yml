@@ -42,6 +42,7 @@ runcmd:
       --env-file /mnt/data/.env \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
+      -p 0.0.0.0:80:3000 \
       -p 0.0.0.0:3000:3000 \
       ${image_name}
 

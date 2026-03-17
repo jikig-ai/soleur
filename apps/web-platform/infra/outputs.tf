@@ -9,7 +9,12 @@ output "ssh_command" {
 }
 
 output "app_url" {
-  description = "Direct app URL (before DNS setup)"
+  description = "App URL via Cloudflare proxy"
+  value       = "https://${var.app_domain}"
+}
+
+output "app_url_direct" {
+  description = "Direct app URL (bypasses Cloudflare)"
   value       = "http://${hcloud_server.web.ipv4_address}:3000"
 }
 
