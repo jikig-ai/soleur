@@ -193,7 +193,7 @@ create_for_feature() {
 
   local branch_name="feat-$name"
   local worktree_path="$WORKTREE_DIR/$branch_name"
-  local spec_dir="$GIT_ROOT/knowledge-base/specs/$branch_name"
+  local spec_dir="$GIT_ROOT/knowledge-base/project/specs/$branch_name"
 
   # Check if worktree already exists
   if [[ -d "$worktree_path" ]]; then
@@ -235,7 +235,7 @@ create_for_feature() {
   echo ""
   echo "Next steps:"
   echo -e "  1. ${BLUE}cd $worktree_path${NC}"
-  echo -e "  2. Create spec: ${BLUE}knowledge-base/specs/$branch_name/spec.md${NC}"
+  echo -e "  2. Create spec: ${BLUE}knowledge-base/project/specs/$branch_name/spec.md${NC}"
   echo ""
 }
 
@@ -489,25 +489,19 @@ cleanup_merged_worktrees() {
       fi
     fi
 
-    # Archive spec directories: current paths first, legacy paths second
-    local spec_candidates=(
-      "$GIT_ROOT/knowledge-base/specs/$safe_branch"
-      "$GIT_ROOT/knowledge-base/features/specs/$safe_branch"
-      "$GIT_ROOT/knowledge-base/project/specs/$safe_branch"
-    )
-    for spec_dir in "${spec_candidates[@]}"; do
-      if [[ -d "$spec_dir" ]]; then
-        local archive_dir archive_name archive_path
-        archive_dir="$(dirname "$spec_dir")/archive"
-        archive_name="$(date +%Y-%m-%d-%H%M%S)-$safe_branch"
-        archive_path="$archive_dir/$archive_name"
+    # Archive spec directory
+    local spec_dir="$GIT_ROOT/knowledge-base/project/specs/$safe_branch"
+    if [[ -d "$spec_dir" ]]; then
+      local archive_dir archive_name archive_path
+      archive_dir="$(dirname "$spec_dir")/archive"
+      archive_name="$(date +%Y-%m-%d-%H%M%S)-$safe_branch"
+      archive_path="$archive_dir/$archive_name"
 
-        mkdir -p "$archive_dir"
-        if ! mv "$spec_dir" "$archive_path" 2>/dev/null; then
-          [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not archive spec for $branch${NC}"
-        fi
+      mkdir -p "$archive_dir"
+      if ! mv "$spec_dir" "$archive_path" 2>/dev/null; then
+        [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not archive spec for $branch${NC}"
       fi
-    done
+    fi
 
     # Extract feature slug by stripping all known branch prefixes
     local feature_slug="$safe_branch"
@@ -515,10 +509,8 @@ cleanup_merged_worktrees() {
     feature_slug="${feature_slug#fix-}"
     feature_slug="${feature_slug#feature-}"
 
-    # Archive brainstorms and plans matching the feature slug (current + legacy paths)
-    archive_kb_files "$GIT_ROOT/knowledge-base/brainstorms" "$feature_slug" "brainstorm" "$verbose"
+    # Archive brainstorms and plans matching the feature slug
     archive_kb_files "$GIT_ROOT/knowledge-base/project/brainstorms" "$feature_slug" "brainstorm" "$verbose"
-    archive_kb_files "$GIT_ROOT/knowledge-base/plans" "$feature_slug" "plan" "$verbose"
     archive_kb_files "$GIT_ROOT/knowledge-base/project/plans" "$feature_slug" "plan" "$verbose"
 
     # Remove worktree if exists (use actual path from git, not constructed path)
@@ -776,7 +768,7 @@ Commands:
   create <branch-name> [from-branch]  Create new worktree (copies .env files automatically)
                                       (from-branch defaults to main)
   feature | feat <name> [from-branch] Create worktree for feature with spec directory
-                                      (creates feat-<name> branch + knowledge-base/specs/feat-<name>/)
+                                      (creates feat-<name> branch + knowledge-base/project/specs/feat-<name>/)
   list | ls                           List all worktrees
   switch | go [name]                  Switch to worktree
   copy-env | env [name]               Copy .env files from main repo to worktree
