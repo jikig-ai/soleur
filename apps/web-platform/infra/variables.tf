@@ -16,15 +16,15 @@ variable "ssh_key_path" {
 }
 
 variable "server_type" {
-  description = "Hetzner server type (cpx21 = 3 vCPU, 4GB RAM)"
+  description = "Hetzner server type (cx33 = 4 vCPU, 8GB RAM)"
   type        = string
-  default     = "cpx21"
+  default     = "cx33"
 }
 
 variable "location" {
   description = "Hetzner datacenter location"
   type        = string
-  default     = "nbg1"
+  default     = "hel1"
 }
 
 variable "image_name" {

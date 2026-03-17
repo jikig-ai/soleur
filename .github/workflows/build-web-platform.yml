@@ -1,0 +1,90 @@
+name: Build & Push Web Platform
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Deploy to server after push"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+  push:
+    branches: [feat/web-platform-ux]
+    paths:
+      - "apps/web-platform/**"
+      - ".github/workflows/build-web-platform.yml"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: jikig-ai/soleur-web-platform
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set short SHA
+        run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/web-platform
+          push: true
+          tags: |
+            ghcr.io/jikig-ai/soleur-web-platform:${{ env.SHORT_SHA }}
+            ghcr.io/jikig-ai/soleur-web-platform:latest
+
+  deploy:
+    needs: build-and-push
+    if: inputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_HOST: ${{ secrets.WEB_PLATFORM_HOST }}
+
+    steps:
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.WEB_PLATFORM_HOST }}
+          username: root
+          key: ${{ secrets.WEB_PLATFORM_SSH_KEY }}
+          script: |
+            docker pull ghcr.io/jikig-ai/soleur-web-platform:latest
+            docker stop soleur-web-platform 2>/dev/null || true
+            docker rm soleur-web-platform 2>/dev/null || true
+            docker run -d \
+              --name soleur-web-platform \
+              --restart unless-stopped \
+              --env-file /mnt/data/.env \
+              -v /mnt/data/workspaces:/workspaces \
+              -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
+              -p 0.0.0.0:3000:3000 \
+              ghcr.io/jikig-ai/soleur-web-platform:latest
+            echo "Waiting for health check..."
+            for i in $(seq 1 10); do
+              if curl -sf http://localhost:3000/health; then
+                echo " OK"
+                exit 0
+              fi
+              sleep 3
+            done
+            echo "Health check failed"
+            docker logs soleur-web-platform --tail 30
+            exit 1
