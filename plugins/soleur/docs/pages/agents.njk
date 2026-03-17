@@ -74,23 +74,81 @@ The result: {{ stats.agents }} agents that function as a unified AI organization
       {%- endfor %}
     </div>
 
+    <!-- FAQ Section -->
     <section class="landing-section">
       <div class="landing-section-inner">
         <p class="section-label">Common Questions</p>
         <h2 class="section-title">Frequently Asked Questions</h2>
         <div class="faq-list">
           <details class="faq-item">
-            <summary class="faq-question">What are AI agents?</summary>
-            <p class="faq-answer">AI agents are autonomous software programs that perform specific business functions on your behalf. Each Soleur agent is specialized for a domain — engineering, marketing, legal, finance, and more — and operates with the depth of a dedicated specialist rather than a generic assistant.</p>
+            <summary class="faq-question">What are Soleur agents?</summary>
+            <p class="faq-answer">Soleur agents are specialized AI personas with domain expertise that execute business tasks within Claude Code. Each agent is trained for a specific function &mdash; code review, brand strategy, legal compliance, financial reporting &mdash; not a generic chatbot that attempts everything.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">How many agents does Soleur have?</summary>
-            <p class="faq-answer">Soleur includes {{ stats.agents }} AI agents organized across {{ stats.departments }} business domains. Each domain has multiple specialized agents — the engineering domain alone includes agents for code review, architecture, security, performance, data integrity, and more.</p>
+            <p class="faq-answer">Soleur deploys {{ stats.agents }} agents across {{ stats.departments }} business departments, covering engineering, marketing, legal, finance, operations, product, sales, and support. The count updates automatically as new agents are added.</p>
           </details>
           <details class="faq-item">
-            <summary class="faq-question">What domains do the agents cover?</summary>
-            <p class="faq-answer">The {{ stats.agents }} agents span {{ stats.departments }} domains: engineering, marketing, legal, finance, operations, product, sales, and support. Every agent shares context through a compounding knowledge base, so a decision in one domain automatically propagates to every other domain that depends on it.</p>
+            <summary class="faq-question">Can I customize Soleur agents?</summary>
+            <p class="faq-answer">Agents read from a shared knowledge base that includes your brand guide, project constitution, and institutional learnings. Customization happens through documentation &mdash; update your knowledge base and every agent adapts to your context automatically.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">Do all Soleur agents run at once?</summary>
+            <p class="faq-answer">Agents activate only when relevant to the current task. Skills and workflows invoke the specific agents needed &mdash; a code review activates engineering reviewers, a competitive scan activates the marketing domain. Unused agents consume zero resources.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">What departments do Soleur agents cover?</summary>
+            <p class="faq-answer">Soleur provides the most comprehensive set of solo founder AI tools across {{ stats.departments }} departments: engineering, marketing, legal, finance, operations, product, sales, and support. Each department has a domain leader that orchestrates specialist agents.</p>
           </details>
         </div>
       </div>
     </section>
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "What are Soleur agents?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Soleur agents are specialized AI personas with domain expertise that execute business tasks within Claude Code. Each agent is trained for a specific function — code review, brand strategy, legal compliance, financial reporting — not a generic chatbot that attempts everything."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How many agents does Soleur have?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Soleur deploys {{ stats.agents }} agents across {{ stats.departments }} business departments, covering engineering, marketing, legal, finance, operations, product, sales, and support. The count updates automatically as new agents are added."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can I customize Soleur agents?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Agents read from a shared knowledge base that includes your brand guide, project constitution, and institutional learnings. Customization happens through documentation — update your knowledge base and every agent adapts to your context automatically."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Do all Soleur agents run at once?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Agents activate only when relevant to the current task. Skills and workflows invoke the specific agents needed — a code review activates engineering reviewers, a competitive scan activates the marketing domain. Unused agents consume zero resources."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What departments do Soleur agents cover?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Soleur provides the most comprehensive set of solo founder AI tools across {{ stats.departments }} departments: engineering, marketing, legal, finance, operations, product, sales, and support. Each department has a domain leader that orchestrates specialist agents."
+          }
+        }
+      ]
+    }
+    </script>
