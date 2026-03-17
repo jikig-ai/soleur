@@ -238,6 +238,7 @@ export function setupWebSocket(server: HTTPServer) {
     const userId = await authenticateConnection(req);
 
     if (!userId) {
+      console.warn(`[ws] Auth failed — closing with 4001 (url: ${req.url?.split("?")[0]})`);
       ws.close(4001, "Unauthorized");
       return;
     }
