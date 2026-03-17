@@ -157,14 +157,14 @@ Every SKILL.md that references root-level artifact paths. Full list:
 
 ## Acceptance Criteria
 
-- [ ] Root-level `brainstorms/`, `learnings/`, `plans/`, `specs/` directories removed
-- [ ] `knowledge-base/features/` directory removed
-- [ ] All files consolidated under `knowledge-base/project/` equivalents
-- [ ] All skill, agent, and script references updated to `knowledge-base/project/` paths
-- [ ] `feat-plausible-goals` and `feat-weekly-analytics-improvements` have merged contents
-- [ ] Documentation (README.md, components/knowledge-base.md) updated
-- [ ] Single atomic commit for file moves, separate commit for reference updates (or combined if clean)
-- [ ] `git log --follow` works on moved files
+- [x] Root-level `brainstorms/`, `learnings/`, `plans/`, `specs/` directories removed
+- [x] `knowledge-base/features/` directory removed
+- [x] All files consolidated under `knowledge-base/project/` equivalents
+- [x] All skill, agent, and script references updated to `knowledge-base/project/` paths
+- [x] `feat-plausible-goals` and `feat-weekly-analytics-improvements` have merged contents
+- [x] Documentation (README.md, components/knowledge-base.md) updated
+- [x] Single atomic commit for file moves, separate commit for reference updates (or combined if clean)
+- [x] `git log --follow` works on moved files
 
 ## Test Scenarios
 
