@@ -142,6 +142,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Never nest command `.md` files in subdirectories under `commands/` -- the plugin loader treats subdirectory names as namespace segments, causing double-namespacing (e.g., `commands/soleur/go.md` becomes `soleur:soleur:go` instead of `soleur:go`)
 - Never construct filesystem paths from git ref names -- use `git worktree list --porcelain` to resolve actual worktree paths; refs use `/` separators (e.g., `feat/fix-x`) but worktree directories may use `-` (e.g., `feat-fix-x`), causing silent path mismatches
 - Never attempt to edit a file that has not been read in the current conversation context -- the Edit tool will reject it, and context compaction erases prior reads; re-read after compaction
+- Never use `bytea` columns for data that will be stored and read as strings through PostgREST/Supabase -- PostgREST returns `bytea` in hex format (`\x...`) which silently corrupts string round-trips; use `text` columns for base64-encoded data; if migrating from `bytea` to `text`, use `convert_from(col, 'UTF8')` not `encode(col, 'base64')` to avoid double-encoding
 
 ### Prefer
 

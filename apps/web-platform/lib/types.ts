@@ -27,6 +27,10 @@ export interface ApiKey {
   provider: "anthropic" | "bedrock" | "vertex";
   is_valid: boolean;
   validated_at: string | null;
+  iv: string;
+  auth_tag: string;
+  updated_at: string;
+  created_at: string;
 }
 
 export interface Conversation {
