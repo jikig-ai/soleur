@@ -86,16 +86,16 @@ The new report will be: `2026-03-16-seo-audit.md`
 
 ## Acceptance Criteria
 
-- [ ] `scheduled-growth-audit.yml` prompt includes a new Step 3 (Technical SEO Audit) that launches `seo-aeo-analyst` via Task tool
-- [ ] Existing steps renumbered sequentially: Content Audit (1), AEO Audit (2), SEO Audit (3), Content Plan (4), GitHub Issue (5), Persist (6)
-- [ ] Step 3 instructs the agent to save the report to `knowledge-base/marketing/audits/soleur-ai/$(date +%Y-%m-%d)-seo-audit.md`
-- [ ] Step 3 includes a failure continuation instruction ("If the SEO audit agent fails, note the failure and continue to Step 4")
-- [ ] Step 5 (GitHub Issue) references top SEO audit findings alongside the existing content and AEO summaries
-- [ ] `timeout-minutes` increased from 45 to 55
-- [ ] `--max-turns` increased from 45 to 55
-- [ ] No new workflow files are created
-- [ ] No changes to `plugins/soleur/skills/seo-aeo/SKILL.md` or agent markdown files
-- [ ] The `git add` in Step 6 already uses `knowledge-base/marketing/audits/soleur-ai/` (directory glob) so it picks up the new file without changes
+- [x] `scheduled-growth-audit.yml` prompt includes a new Step 3 (Technical SEO Audit) that launches `seo-aeo-analyst` via Task tool
+- [x] Existing steps renumbered sequentially: Content Audit (1), AEO Audit (2), SEO Audit (3), Content Plan (4), GitHub Issue (5), Persist (6)
+- [x] Step 3 instructs the agent to save the report to `knowledge-base/marketing/audits/soleur-ai/$(date +%Y-%m-%d)-seo-audit.md`
+- [x] Step 3 includes a failure continuation instruction ("If the SEO audit agent fails, note the failure and continue to Step 4")
+- [x] Step 5 (GitHub Issue) references top SEO audit findings alongside the existing content and AEO summaries
+- [x] `timeout-minutes` increased from 45 to 55
+- [x] `--max-turns` increased from 45 to 55
+- [x] No new workflow files are created
+- [x] No changes to `plugins/soleur/skills/seo-aeo/SKILL.md` or agent markdown files
+- [x] The `git add` in Step 6 already uses `knowledge-base/marketing/audits/soleur-ai/` (directory glob) so it picks up the new file without changes
 
 ## Test Scenarios
 

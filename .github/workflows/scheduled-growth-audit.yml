@@ -1,4 +1,5 @@
-# Weekly growth audit (content + AEO) of soleur.ai using the growth-strategist agent.
+# Weekly growth audit (content + AEO + technical SEO) of soleur.ai.
+# Uses growth-strategist and seo-aeo-analyst agents.
 # Persists date-stamped reports to knowledge-base/marketing/audits/soleur-ai/ on main.
 # Creates a GitHub Issue summarizing key findings for CEO review.
 #
@@ -30,7 +31,7 @@ permissions:
 jobs:
   growth-audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 55
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -49,7 +50,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
           plugins: 'soleur@soleur'
-          claude_args: '--model claude-opus-4-6 --max-turns 45 --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task'
+          claude_args: '--model claude-opus-4-6 --max-turns 55 --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task'
           prompt: |
             IMPORTANT: This is an automated CI workflow. The AGENTS.md rule
             "Never commit directly to main" does NOT apply here. You are
@@ -83,30 +84,49 @@ jobs:
             Save the report to:
             knowledge-base/marketing/audits/soleur-ai/$(date +%Y-%m-%d)-aeo-audit.md
 
-            ## Step 3: Content Plan
+            ## Step 3: Technical SEO Audit
+
+            Launch the seo-aeo-analyst agent via the Task tool:
+
+            Task seo-aeo-analyst: "Audit the documentation site at https://soleur.ai for
+            technical SEO and AEO issues. Use WebFetch to retrieve pages. Check structured
+            data (JSON-LD), meta tags, canonical URLs, OG tags, Twitter cards, sitemap,
+            robots.txt AI bot access, llms.txt, E-E-A-T signals, heading hierarchy, and
+            Core Web Vitals indicators. Produce a structured report with Critical Issues,
+            Warnings, Passed Checks, and Recommendations sections. Do NOT make any changes."
+
+            Save the report to:
+            knowledge-base/marketing/audits/soleur-ai/$(date +%Y-%m-%d)-seo-audit.md
+
+            If the SEO audit agent fails or returns an error, write a stub report to
+            knowledge-base/marketing/audits/soleur-ai/$(date +%Y-%m-%d)-seo-audit.md
+            with content "SEO audit failed — see CI logs." then continue to Step 4.
+
+            ## Step 4: Content Plan
 
             Launch the growth-strategist agent via the Task tool:
 
-            Task growth-strategist: "Based on the content audit and AEO audit reports just
-            saved in knowledge-base/marketing/audits/soleur-ai/, create a prioritized content
-            plan. Research keywords for 'claude code plugin', 'agentic engineering',
-            'AI company automation', 'solo founder AI tools'. Analyze gaps vs competitors.
-            Produce a P1/P2/P3 prioritized plan."
+            Task growth-strategist: "Based on the content audit, AEO audit, and SEO audit
+            reports just saved in knowledge-base/marketing/audits/soleur-ai/, create a
+            prioritized content plan. Research keywords for 'claude code plugin',
+            'agentic engineering', 'AI company automation', 'solo founder AI tools'.
+            Analyze gaps vs competitors. Produce a P1/P2/P3 prioritized plan."
 
             Save the report to:
             knowledge-base/marketing/audits/soleur-ai/$(date +%Y-%m-%d)-content-plan.md
 
-            ## Step 4: GitHub Issue
+            ## Step 5: GitHub Issue
 
             Create a GitHub issue titled
             "[Scheduled] Growth Audit - $(date +%Y-%m-%d)"
             with the label "scheduled-growth-audit" summarizing:
             - Top 3 content audit findings
             - AEO score and grade
+            - Top 3 technical SEO findings (or "clean" if no issues)
             - Top 3 content plan priorities
             - Link to the full reports in the repo
 
-            ## Step 5: Persist to main
+            ## Step 6: Persist to main
 
             MANDATORY FINAL STEP — commit reports to main:
             ```
