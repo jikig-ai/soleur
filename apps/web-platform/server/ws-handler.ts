@@ -108,7 +108,12 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
   }
 
   const session = sessions.get(userId);
-  if (!session) return; // should never happen inside a message handler
+  if (!session) {
+    console.warn(`[ws] No session found for user ${userId} — message dropped`);
+    return;
+  }
+
+  console.log(`[ws] Message from ${userId}: ${msg.type}`);
 
   switch (msg.type) {
     // ------------------------------------------------------------------
@@ -116,14 +121,18 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
     // ------------------------------------------------------------------
     case "start_session": {
       try {
+        console.log(`[ws] start_session for user ${userId}, leader ${msg.leaderId}`);
         const conversationId = await createConversation(userId, msg.leaderId);
         session.conversationId = conversationId;
+        console.log(`[ws] Conversation ${conversationId} created, booting agent`);
 
         // Boot the agent runner (async -- streams will flow via sendToClient)
         startAgentSession(userId, conversationId, msg.leaderId);
 
         sendToClient(userId, { type: "session_started", conversationId });
+        console.log(`[ws] session_started sent to client`);
       } catch (err) {
+        console.error(`[ws] start_session error:`, err);
         const message =
           err instanceof Error ? err.message : "Failed to start session";
         sendToClient(userId, { type: "error", message });
