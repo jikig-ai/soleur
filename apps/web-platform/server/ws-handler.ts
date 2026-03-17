@@ -252,6 +252,13 @@ export function setupWebSocket(server: HTTPServer) {
     sessions.set(userId, { ws });
     console.log(`[ws] User ${userId} connected`);
 
+    // ---- Heartbeat (Cloudflare terminates idle WS after 100s) ----
+    const pingInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.ping();
+      }
+    }, 30_000);
+
     // ---- Message handling ----
     ws.on("message", (data) => {
       handleMessage(userId, data.toString()).catch((err) => {
@@ -265,6 +272,7 @@ export function setupWebSocket(server: HTTPServer) {
 
     // ---- Cleanup on disconnect ----
     ws.on("close", () => {
+      clearInterval(pingInterval);
       // Only delete if the session still points to THIS socket
       // (guards against race where a new connection already replaced it)
       const current = sessions.get(userId);
