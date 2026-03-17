@@ -35,7 +35,7 @@ for state_file in "${PROJECT_ROOT}/.claude"/ralph-loop.*.local.md; do
     if [[ -n "$STARTED_EPOCH" ]] && [[ $((NOW_EPOCH - STARTED_EPOCH)) -gt $((TTL_HOURS * 3600)) ]]; then
       AGE_MINS=$(( (NOW_EPOCH - STARTED_EPOCH) / 60 ))
       echo "Ralph loop: stale state file detected ($(basename "$state_file"), started ${AGE_MINS}m ago, TTL=${TTL_HOURS}h). Auto-removing." >&2
-      rm "$state_file"
+      rm "$state_file" || true
     fi
   fi
 done

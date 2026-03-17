@@ -729,6 +729,7 @@ EOF
 create_state_file "$TEST_DIR" 1 0 "null" 0 3
 run_hook "$TEST_DIR" "This is a substantive response with plenty of content to exceed the threshold."
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.88888.local.md" "fresh foreign PID file preserved by TTL"
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "own-session file preserved"
 cleanup_test "$TEST_DIR"
 echo ""
 
