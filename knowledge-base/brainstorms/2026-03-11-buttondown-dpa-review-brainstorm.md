@@ -1,7 +1,7 @@
 # Buttondown DPA Review Brainstorm
 
-**Date:** 2026-03-11
-**Status:** Complete
+**Date:** 2026-03-11 (updated 2026-03-17)
+**Status:** In Progress — Buttondown updated docs March 16, re-verification in progress
 **Related Issue:** #501 (Newsletter — closed, DPA verification outstanding)
 
 ## What We're Doing
@@ -61,10 +61,50 @@ See verification memo: `knowledge-base/specs/feat-buttondown-dpa-review/dpa-veri
 3. Are tracking pixels embedded in emails? (Would require additional privacy disclosure)
 4. What is the actual data retention period for backups after account termination?
 
+## March 16 Update — Buttondown Legal Docs Refresh
+
+[Updated 2026-03-17]
+
+On 2026-03-16, Buttondown published a [legal docs refresh](https://buttondown.com/blog/2026-03-16-legal-docs-refresh) addressing most of our identified gaps. The blog states changes came from "customer feedback during their own GDPR compliance review" — that's us.
+
+### What Changed
+
+| Document | Changes |
+|----------|---------|
+| DPA | Added Annex 1 (processing details), sub-processor list reference in Section 5, GDPR precedence clause in Section 12, updated Section 8 referencing SCCs |
+| Privacy Policy | First update since October 2019. Removed misleading advertising references. Contact email → support@buttondown.com |
+| Sub-Processor List | Now a dedicated page at `/legal/subprocessors` with 12 vendors (was 3 informally listed). Added: AWS, Betterstack, Cloudflare, Google Workspace, Heroku, Plain, Seline, Sentry, Slack |
+| Cookie Policy | New document categorizing cookies as essential, functional, or analytics. No advertising cookies. |
+| GDPR Compliance Page | Updated language, linked to sub-processor list and DPA |
+
+### Gap Re-Assessment
+
+| Gap | March 11 Status | March 16 Status | Verdict |
+|-----|-----------------|-----------------|---------|
+| 1. EU-US Transfer Mechanism | CRITICAL — no mechanism | Section 8 references SCCs generically | **PARTIALLY ADDRESSED** — reference ≠ execution. No Module 2 specified, no Decision 2021/914 cited, no SCCs annex |
+| 2. Missing DPA Annex | HIGH — no Art. 28(3) details | Annex 1 added (subject matter, duration, data types, data subjects) | **RESOLVED** |
+| 3. US Governing Law | MEDIUM — no GDPR supremacy | Section 12 GDPR/UK/Swiss precedence clause | **RESOLVED** |
+| 4. Privacy Policy Contradictions | MEDIUM — advertising references | Advertising references removed, policy updated | **RESOLVED** |
+| 5. Free Tier Scope | UNKNOWN | Not addressed | **STILL UNKNOWN** |
+
+### New Finding
+
+**Art. 28(3) instruction-infringement notification:** The DPA does not require Buttondown to notify us if they believe a processing instruction infringes GDPR (second subparagraph of Art. 28(3)). Minor gap, but worth flagging.
+
+### Revised Decision
+
+**Approach A: Update confirmed facts now, hold transfer claims.**
+
+1. Update our legal docs with confirmed new sub-processor list (12 vendors), confirmed data types (IP, referrer metadata), and new contact email
+2. Do NOT update our SCCs/transfer mechanism claims — Privacy Policy Section 5.3 still asserts SCCs that aren't substantiated
+3. Send follow-up email acknowledging improvements, requesting: (a) actual SCCs execution with Module 2, (b) free-tier DPA confirmation
+4. Update transfer-related claims only after Buttondown responds
+
 ## Next Steps
 
-1. Send reply email to Buttondown (draft in verification memo)
-2. Wait for Buttondown's response on transfer mechanism and DPA amendments
-3. Based on response: either sign amended DPA, or evaluate Loops as backup platform
-4. Update our 3 legal docs × 2 locations to reflect actual (not aspirational) terms
-5. Run legal-compliance-auditor for cross-document consistency after updates
+1. ~~Send reply email to Buttondown (draft in verification memo)~~ → Send updated follow-up email (see `dpa-verification-memo.md` Section 8b)
+2. Update our legal docs with confirmed facts (sub-processors, data types, contact email)
+3. Wait for Buttondown's response on SCCs execution and free-tier scope
+4. Based on response: either sign DPA with executed SCCs, or evaluate Loops as backup
+5. Update transfer-related claims in our docs only after SCCs are confirmed
+6. Run legal-compliance-auditor for cross-document consistency after all updates

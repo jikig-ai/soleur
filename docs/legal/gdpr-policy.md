@@ -10,7 +10,7 @@ generated-date: 2026-02-20
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 10, 2026 (newsletter subscription data)
+**Last Updated:** March 17, 2026 (Buttondown data types and sub-processor list update)
 
 ---
 
@@ -100,7 +100,7 @@ The following data may be processed by third-party services when users interact 
 | GitHub account data | GitHub (via repository) | Issue tracking, contributions |
 | Name, email, inquiry content | Proton AG (via Proton Mail) | Handling legal and GDPR inquiries (legal@jikigai.com) |
 | GitHub username, signature timestamp, PR reference | GitHub (via CLA Assistant) | Recording CLA signature for contributor IP license grants |
-| Email address | Buttondown (via newsletter signup) | Managing newsletter subscriptions and delivering newsletter emails |
+| Email address, IP address, referrer metadata, subscription timestamp | Buttondown (via newsletter signup) | Managing newsletter subscriptions and delivering newsletter emails |
 
 Users are responsible for reviewing the privacy policies of these third-party services.
 
@@ -217,7 +217,7 @@ The register documents six processing activities:
 3. **Source repository management** (GitHub) -- contributor profile data, issue reporters
 4. **Legal and GDPR inquiry handling** (legal@jikigai.com) -- names, email addresses, inquiry content
 5. **CLA signature collection** (GitHub CLA Assistant) -- GitHub username, signature timestamp, pull request reference. Legal basis: legitimate interest (Article 6(1)(f)). Signature data is stored on the `cla-signatures` branch in the public repository. Retention is indefinite (irrevocable license grants).
-6. **Newsletter subscription management** (soleur.ai via Buttondown) -- email addresses of newsletter subscribers. Legal basis: consent (Article 6(1)(a)). Data is processed by Buttondown (US-based, SCCs in place). Retention: until the subscriber unsubscribes. Double opt-in is used to verify consent.
+6. **Newsletter subscription management** (soleur.ai via Buttondown) -- email addresses, IP addresses, referrer metadata, and subscription timestamps of newsletter subscribers. Legal basis: consent (Article 6(1)(a)). Data is processed by Buttondown (US-based, SCCs in place). Buttondown's sub-processor list is maintained at [buttondown.com/legal/subprocessors](https://buttondown.com/legal/subprocessors). Retention: until the subscriber unsubscribes. Double opt-in is used to verify consent.
 
 The register is maintained internally and is available on request to the competent supervisory authority (CNIL for France). Since the 2018 reform of the Loi Informatique et Libertes, no registration or prior declaration to the CNIL is required.
 

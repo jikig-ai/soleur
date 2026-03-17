@@ -8,7 +8,7 @@ generated-date: 2026-02-20
 # Privacy Policy
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 10, 2026 (newsletter subscription data)
+**Last Updated:** March 17, 2026 (Buttondown data types and sub-processor list update)
 
 ## 1. Introduction
 
@@ -84,8 +84,8 @@ This data is stored in the Soleur GitHub repository on a dedicated branch (`cla-
 
 If you subscribe to the Soleur newsletter via the signup form on the Docs Site, we collect your **email address** for the purpose of sending periodic newsletter emails. This data is processed by **Buttondown** ([buttondown.com](https://buttondown.com)), a third-party newsletter platform, on our behalf.
 
-- **Data collected:** Email address only.
-- **Purpose:** Sending periodic newsletter emails about Soleur updates, features, and content.
+- **Data collected:** Email address, IP address, referrer metadata, and subscription timestamp.
+- **Purpose:** Sending periodic newsletter emails about Soleur updates, features, and content. IP addresses and referrer metadata are collected automatically by Buttondown for service operation and engagement analytics.
 - **Lawful basis:** Consent (Article 6(1)(a) GDPR) -- you actively opt in by submitting the signup form and confirming your subscription via the double opt-in confirmation email.
 - **Double opt-in:** After submitting your email, Buttondown sends a confirmation email. Your subscription is only activated after you click the confirmation link. This ensures informed, verified consent.
 - **Retention:** Your email address is retained by Buttondown until you unsubscribe. You can unsubscribe at any time via the link in every newsletter email. Upon unsubscription, your email is removed from the active subscriber list.
@@ -110,11 +110,12 @@ The Soleur Plugin is designed to work with the Anthropic Claude API through the 
 
 ### 5.3 Buttondown (Newsletter)
 
-We use **Buttondown** ([buttondown.com](https://buttondown.com)) to manage newsletter subscriptions and deliver newsletter emails. When you subscribe to our newsletter, your email address is transmitted to and stored by Buttondown. Buttondown acts as a data processor on our behalf.
+We use **Buttondown** ([buttondown.com](https://buttondown.com)) to manage newsletter subscriptions and deliver newsletter emails. When you subscribe to our newsletter, your email address, IP address, referrer metadata, and subscription timestamp are transmitted to and stored by Buttondown. Buttondown acts as a data processor on our behalf.
 
 - Buttondown's privacy practices are governed by [Buttondown's Privacy Policy](https://buttondown.com/legal/privacy).
+- Buttondown uses sub-processors for service delivery; the current list is maintained at [buttondown.com/legal/subprocessors](https://buttondown.com/legal/subprocessors).
 - Buttondown is a US-based service. International data transfers are covered by Standard Contractual Clauses (SCCs).
-- Buttondown does not share subscriber email addresses with third parties for marketing purposes.
+- Buttondown does not share subscriber data with third parties for advertising or marketing purposes.
 
 ### 5.4 Other Third-Party Integrations
 
