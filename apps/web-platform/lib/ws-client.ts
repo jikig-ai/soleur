@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { WSMessage } from "@/lib/types";
+import type { DomainLeaderId } from "@/server/domain-leaders";
 
 type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
 
@@ -19,6 +20,7 @@ interface ChatMessage {
 
 interface UseWebSocketReturn {
   messages: ChatMessage[];
+  startSession: (leaderId: string) => void;
   sendMessage: (content: string) => void;
   sendReviewGateResponse: (gateId: string, selection: string) => void;
   status: ConnectionStatus;
@@ -237,6 +239,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     };
   }, [connect, conversationId]);
 
+  const startSession = useCallback(
+    (leaderId: DomainLeaderId) => {
+      send({ type: "start_session", leaderId });
+    },
+    [send],
+  );
+
   const sendMessage = useCallback(
     (content: string) => {
       // Add the user message to local state immediately
@@ -261,5 +270,5 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     [send],
   );
 
-  return { messages, sendMessage, sendReviewGateResponse, status };
+  return { messages, startSession, sendMessage, sendReviewGateResponse, status };
 }

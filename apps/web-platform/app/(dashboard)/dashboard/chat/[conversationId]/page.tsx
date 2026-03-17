@@ -12,7 +12,7 @@ export default function ChatPage() {
   const conversationId = params.conversationId;
   const leaderId = searchParams.get("leader") as DomainLeaderId | null;
 
-  const { messages, sendMessage, sendReviewGateResponse, status } =
+  const { messages, startSession, sendMessage, sendReviewGateResponse, status } =
     useWebSocket(conversationId);
 
   const [input, setInput] = useState("");
@@ -34,9 +34,10 @@ export default function ChatPage() {
       leaderId &&
       !sessionStarted
     ) {
+      startSession(leaderId);
       setSessionStarted(true);
     }
-  }, [status, conversationId, leaderId, sessionStarted]);
+  }, [status, conversationId, leaderId, sessionStarted, startSession]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
