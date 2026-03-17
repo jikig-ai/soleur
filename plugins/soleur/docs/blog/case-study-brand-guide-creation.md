@@ -41,3 +41,59 @@ A brand strategy agency charges $5,000-15,000 for a brand guide of this scope. T
 ## The Compound Effect
 
 The brand guide is the single most referenced document in the knowledge base. The legal documents use its voice guidelines. The documentation site implements its color palette, typography, and layout patterns. Discord announcements are reviewed against its tone spectrum. The competitive intelligence report's positioning recommendations reference it. The `brand-voice-reviewer` agent uses it as a runtime reference for content audits. Every new document or public-facing artifact inherits consistency from this one artifact without requiring the founder to remember or enforce brand rules manually. The 100th piece of content is as on-brand as the 1st.
+
+## Frequently Asked Questions
+
+<details>
+<summary>Can AI create a brand guide?</summary>
+
+Yes. Soleur's brand-architect agent runs an interactive workshop covering mission, vision, positioning, voice, visual direction, and channel guidelines. The output is a structured brand guide document — not a template fill-in but a set of decisions from a guided conversation.
+
+</details>
+
+<details>
+<summary>How long does AI brand guide creation take?</summary>
+
+The brand guide was produced across two brainstorm sessions and a formalization step. A traditional brand agency takes 4–8 weeks for the same scope. The AI-produced guide includes identity, voice, visual direction, and channel-specific guidelines.
+
+</details>
+
+<details>
+<summary>Who is AI brand guide creation for?</summary>
+
+Solo founders and small teams who need professional brand consistency without hiring a brand agency. The brand guide becomes the single source of truth that governs all content — legal documents, documentation, Discord announcements, and marketing copy.
+
+</details>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Can AI create a brand guide?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Soleur's brand-architect agent runs an interactive workshop covering mission, vision, positioning, voice, visual direction, and channel guidelines. The output is a structured brand guide document — not a template fill-in but a set of decisions from a guided conversation."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How long does AI brand guide creation take?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "The brand guide was produced across two brainstorm sessions and a formalization step. A traditional brand agency takes 4–8 weeks for the same scope. The AI-produced guide includes identity, voice, visual direction, and channel-specific guidelines."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Who is AI brand guide creation for?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Solo founders and small teams who need professional brand consistency without hiring a brand agency. The brand guide becomes the single source of truth that governs all content — legal documents, documentation, Discord announcements, and marketing copy."
+      }
+    }
+  ]
+}
+</script>
