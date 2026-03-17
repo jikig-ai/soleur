@@ -47,6 +47,9 @@ jobs:
         with:
           context: apps/web-platform
           push: true
+          build-args: |
+            NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+            NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
           tags: |
             ghcr.io/jikig-ai/soleur-web-platform:${{ env.SHORT_SHA }}
             ghcr.io/jikig-ai/soleur-web-platform:latest
@@ -75,6 +78,7 @@ jobs:
               --env-file /mnt/data/.env \
               -v /mnt/data/workspaces:/workspaces \
               -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
+              -p 0.0.0.0:80:3000 \
               -p 0.0.0.0:3000:3000 \
               ghcr.io/jikig-ai/soleur-web-platform:latest
             echo "Waiting for health check..."

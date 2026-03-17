@@ -15,6 +15,10 @@ RUN npm ci --production=false
 # Copy source
 COPY . .
 
+# NEXT_PUBLIC_ vars must be present at build time for client-side inlining
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+
 # Build Next.js
 RUN npm run build
 
