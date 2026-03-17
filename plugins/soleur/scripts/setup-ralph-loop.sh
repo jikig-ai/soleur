@@ -18,6 +18,9 @@ _common_dir=$(cd "$(git rev-parse --git-common-dir 2>/dev/null)" && pwd) || {
 PROJECT_ROOT="${_common_dir%/.git}"
 unset _common_dir
 
+# Session identifier: PPID by default, overridable via RALPH_LOOP_PID for testing
+_RALPH_LOOP_PID="${RALPH_LOOP_PID:-$PPID}"
+
 # Parse arguments
 PROMPT_PARTS=()
 MAX_ITERATIONS=25
@@ -66,14 +69,14 @@ STOPPING:
   By reaching --max-iterations, detecting --completion-promise,
   stuck detection (N consecutive empty/idle responses), or repetition
   detection (3 identical responses). Or manually remove the state file:
-  rm .claude/ralph-loop.local.md
+  rm .claude/ralph-loop.*.local.md
 
 MONITORING:
   # View current iteration:
-  grep '^iteration:' .claude/ralph-loop.local.md
+  grep '^iteration:' .claude/ralph-loop.*.local.md
 
   # View full state:
-  head -10 .claude/ralph-loop.local.md
+  head -10 .claude/ralph-loop.*.local.md
 HELP_EOF
       exit 0
       ;;
@@ -140,7 +143,7 @@ else
   COMPLETION_PROMISE_YAML="null"
 fi
 
-cat > "${PROJECT_ROOT}/.claude/ralph-loop.local.md" <<EOF
+cat > "${PROJECT_ROOT}/.claude/ralph-loop.${_RALPH_LOOP_PID}.local.md" <<EOF
 ---
 active: true
 iteration: 1
@@ -168,8 +171,8 @@ The stop hook is now active. When you try to exit, the SAME PROMPT will be
 fed back to you. You'll see your previous work in files, creating a
 self-referential loop where you iteratively improve on the same task.
 
-To monitor: head -10 .claude/ralph-loop.local.md
-To cancel: rm .claude/ralph-loop.local.md
+To monitor: head -10 .claude/ralph-loop.${_RALPH_LOOP_PID}.local.md
+To cancel: rm .claude/ralph-loop.${_RALPH_LOOP_PID}.local.md
 
 NOTE: Default cap is 25 iterations. Pass --max-iterations 0 to run
 without a cap (not recommended -- stale state files trap future sessions).
