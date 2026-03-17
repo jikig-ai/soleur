@@ -20,7 +20,7 @@ interface ChatMessage {
 
 interface UseWebSocketReturn {
   messages: ChatMessage[];
-  startSession: (leaderId: string) => void;
+  startSession: (leaderId: DomainLeaderId) => void;
   sendMessage: (content: string) => void;
   sendReviewGateResponse: (gateId: string, selection: string) => void;
   status: ConnectionStatus;
