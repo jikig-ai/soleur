@@ -235,17 +235,17 @@ For `.njk` core pages, add the FAQ section as the last content section before th
 
 ## Acceptance Criteria
 
-- [ ] All 11 pages listed above have a visible FAQ section with 3-5 questions each
-- [ ] All 11 pages have a `<script type="application/ld+json">` block with `@type: FAQPage` schema
-- [ ] FAQ HTML uses the existing `.faq-item`, `.faq-question`, `.faq-answer` CSS classes (core pages) or `<details>` markdown pattern (blog posts)
-- [ ] Schema `mainEntity` entries match visible FAQ content exactly (no HTML entities in schema text)
-- [ ] "solo founder AI tools" exact phrase appears in 3+ distinct pages
-- [ ] All keyword injections read as natural prose (no keyword stuffing, max one occurrence per page)
-- [ ] Eleventy builds successfully with no template errors
-- [ ] P2 pricing page issue created as #656
-- [ ] Each FAQ answer opens with a self-contained ~40-word sentence (answer-first pattern for AEO)
-- [ ] No duplicate FAQ questions across pages (each page has unique Q&A pairs)
-- [ ] FAQ answers use "platform" not "plugin" or "tool" when referring to Soleur (brand guide compliance)
+- [x] All 11 pages listed above have a visible FAQ section with 3-5 questions each
+- [x] All 11 pages have a `<script type="application/ld+json">` block with `@type: FAQPage` schema
+- [x] FAQ HTML uses the existing `.faq-item`, `.faq-question`, `.faq-answer` CSS classes (core pages) or `<details>` markdown pattern (blog posts)
+- [x] Schema `mainEntity` entries match visible FAQ content exactly (no HTML entities in schema text)
+- [x] "solo founder AI tools" exact phrase appears in 3+ distinct pages (4 pages confirmed)
+- [x] All keyword injections read as natural prose (no keyword stuffing, max one occurrence per page)
+- [x] Eleventy builds successfully with no template errors
+- [x] P2 pricing page issue created as #656
+- [x] Each FAQ answer opens with a self-contained ~40-word sentence (answer-first pattern for AEO)
+- [x] No duplicate FAQ questions across pages (each page has unique Q&A pairs)
+- [x] FAQ answers use "platform" not "plugin" or "tool" when referring to Soleur (brand guide compliance)
 
 ## Test Scenarios
 
