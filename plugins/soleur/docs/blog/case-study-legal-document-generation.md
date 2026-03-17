@@ -47,3 +47,59 @@ A technology lawyer in France or the US charges EUR 300-500/hour for SaaS legal 
 ## The Compound Effect
 
 The legal documents feed forward in three ways. First, the `legal-compliance-auditor` agent now exists as a reusable capability -- any Soleur user can audit their own project's legal documents against the same regulatory checklists. Second, the CLO domain leader participates in brainstorm sessions automatically when legal implications are detected, so future product decisions get legal assessment without a separate workflow. Third, the governing law correction (Delaware to France) was caught by the system's own audit capability and propagated across all 9 documents consistently -- exactly the kind of cross-document coherence that falls apart when using separate tools or templates for each document.
+
+## Frequently Asked Questions
+
+<details>
+<summary>Can AI generate legal documents?</summary>
+
+Yes. Soleur's legal domain agents produce Terms & Conditions, Privacy Policies, GDPR Policies, CLAs, and more with dual-jurisdiction coverage. All documents are generated as drafts requiring professional legal review — the platform accelerates production, not replaces counsel.
+
+</details>
+
+<details>
+<summary>How long does AI legal document generation take?</summary>
+
+Nine legal documents totaling 17,761 words were produced across several sessions over two weeks, including multiple audit and revision cycles. A technology lawyer charges EUR 9,000–25,000 for equivalent scope over 30–50 billable hours.
+
+</details>
+
+<details>
+<summary>Who is AI legal document generation for?</summary>
+
+Solo founders and small teams who need a full legal compliance suite without the upfront cost of a law firm engagement. The generated documents address jurisdiction requirements, cross-document consistency, and regulatory benchmarking — then a lawyer reviews the output.
+
+</details>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Can AI generate legal documents?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Soleur's legal domain agents produce Terms & Conditions, Privacy Policies, GDPR Policies, CLAs, and more with dual-jurisdiction coverage. All documents are generated as drafts requiring professional legal review — the platform accelerates production, not replaces counsel."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How long does AI legal document generation take?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Nine legal documents totaling 17,761 words were produced across several sessions over two weeks, including multiple audit and revision cycles. A technology lawyer charges EUR 9,000–25,000 for equivalent scope over 30–50 billable hours."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Who is AI legal document generation for?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Solo founders and small teams who need a full legal compliance suite without the upfront cost of a law firm engagement. The generated documents address jurisdiction requirements, cross-document consistency, and regulatory benchmarking — then a lawyer reviews the output."
+      }
+    }
+  ]
+}
+</script>

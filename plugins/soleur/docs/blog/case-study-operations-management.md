@@ -57,3 +57,59 @@ A fractional COO or operations consultant for an early-stage startup charges $10
 ## The Compound Effect
 
 The operations data feeds directly into other domains. The expense tracker informed the business model evaluation in the business validation document (the cost structure constrains pricing). The Plausible Analytics decision simplified three legal documents (Cookie Policy, GDPR Policy, Privacy Policy) by eliminating tracking cookies from the disclosure requirements. The Cloudflare security configuration became a learning that applies to any future domain or infrastructure provisioning. The COO domain leader now participates automatically in brainstorm sessions when operational decisions arise -- the founder does not need to remember to "check with ops" because the system routes operational questions to the right agents. The expenses file has a `last_updated` field and review cadence, so the system itself flags when the data is stale.
+
+## Frequently Asked Questions
+
+<details>
+<summary>Can AI manage company operations?</summary>
+
+Yes. Soleur's operations domain includes a COO domain leader and specialist agents for expense tracking, vendor research, infrastructure provisioning, and security configuration. The system maintains structured documentation that survives context switches — no state is lost between sessions.
+
+</details>
+
+<details>
+<summary>How long does setting up AI operations management take?</summary>
+
+The full operations function — expense tracking, hosting evaluation, DNS configuration, analytics selection, and security hardening — was built across several sessions. An operations consultant charges $1,500–$6,250 for equivalent scope over 15–25 hours.
+
+</details>
+
+<details>
+<summary>Who benefits from AI operations management?</summary>
+
+Solo founders who handle operational logistics alongside engineering. The platform captures every decision in structured documentation so returning to operations after weeks of other work requires no context reconstruction.
+
+</details>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Can AI manage company operations?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Soleur's operations domain includes a COO domain leader and specialist agents for expense tracking, vendor research, infrastructure provisioning, and security configuration. The system maintains structured documentation that survives context switches — no state is lost between sessions."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How long does setting up AI operations management take?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "The full operations function — expense tracking, hosting evaluation, DNS configuration, analytics selection, and security hardening — was built across several sessions. An operations consultant charges $1,500–$6,250 for equivalent scope over 15–25 hours."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Who benefits from AI operations management?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Solo founders who handle operational logistics alongside engineering. The platform captures every decision in structured documentation so returning to operations after weeks of other work requires no context reconstruction."
+      }
+    }
+  ]
+}
+</script>

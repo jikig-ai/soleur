@@ -48,3 +48,59 @@ A competitive intelligence consultant charges $150-300/hour. A comprehensive com
 ## The Compound Effect
 
 The competitive intelligence feeds directly into three other domains. The pricing strategy references the competitive pricing matrix. The sales battlecards are structured for objection handling in real conversations. The content strategy identifies gaps that the marketing domain can execute against. The business validation document was updated with new threat assessments that changed the overall verdict. And the next scan (review cadence: quarterly, with 30-day monitoring for Notion Custom Agents) starts from the existing framework rather than from scratch -- the analysis compounds.
+
+## Frequently Asked Questions
+
+<details>
+<summary>Can AI run competitive intelligence analysis?</summary>
+
+Yes. Soleur's competitive-intelligence agent researches competitors across multiple tiers, builds overlap matrices, assesses convergence risk, and generates actionable recommendations — all sourced with URLs from live web research against 30+ sources.
+
+</details>
+
+<details>
+<summary>How long does AI competitive analysis take?</summary>
+
+The full competitive intelligence report covering 17 competitors with overlap matrices, battlecards, pricing matrix, and content strategy was generated in a single session. A competitive intelligence consultant charges $6,000–$18,000 for equivalent scope over 40–60 hours.
+
+</details>
+
+<details>
+<summary>Who benefits from AI competitive intelligence?</summary>
+
+Solo founders and small teams who cannot dedicate a full-time analyst to tracking competitors. The platform monitors market movements, generates battlecards for sales conversations, and feeds findings into pricing, content, and positioning strategies automatically.
+
+</details>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Can AI run competitive intelligence analysis?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Soleur's competitive-intelligence agent researches competitors across multiple tiers, builds overlap matrices, assesses convergence risk, and generates actionable recommendations — all sourced with URLs from live web research against 30+ sources."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How long does AI competitive analysis take?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "The full competitive intelligence report covering 17 competitors with overlap matrices, battlecards, pricing matrix, and content strategy was generated in a single session. A competitive intelligence consultant charges $6,000–$18,000 for equivalent scope over 40–60 hours."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Who benefits from AI competitive intelligence?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Solo founders and small teams who cannot dedicate a full-time analyst to tracking competitors. The platform monitors market movements, generates battlecards for sales conversations, and feeds findings into pricing, content, and positioning strategies automatically."
+      }
+    }
+  ]
+}
+</script>

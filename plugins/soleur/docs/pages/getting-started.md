@@ -129,6 +129,92 @@ The 5-step workflow (invoked automatically via `/soleur:go` or directly via Skil
   <li><a href="pages/changelog.html">Changelog <span class="learn-more-desc">All notable changes to Soleur</span></a></li>
 </ul>
 
+## Frequently Asked Questions
+
+<details>
+<summary>What do I need to run Soleur?</summary>
+
+Soleur requires the Claude Code CLI with an Anthropic API key or a Claude subscription. Install with `claude plugin install soleur` and run `/soleur:go` to start. No additional dependencies or server setup needed.
+
+</details>
+
+<details>
+<summary>Does Soleur work on Windows, Linux, and macOS?</summary>
+
+Soleur runs anywhere Claude Code runs — Linux, macOS, and Windows via WSL. The platform operates entirely within the Claude Code CLI environment with no platform-specific dependencies.
+
+</details>
+
+<details>
+<summary>How much does Soleur cost?</summary>
+
+Soleur is free and open source. Your costs depend entirely on your Claude usage through Anthropic. Among solo founder AI tools, Soleur is the only platform that gives you a full AI organization at zero software cost.
+
+</details>
+
+<details>
+<summary>What is the difference between /soleur:go and individual skills?</summary>
+
+`/soleur:go` is the unified entry point that classifies your intent and routes to the right workflow automatically. Individual skills like brainstorm, plan, work, and review can be invoked directly when you know exactly which stage you need.
+
+</details>
+
+<details>
+<summary>Can I use Soleur with an existing project?</summary>
+
+Yes. Run `/soleur:sync` to analyze your codebase and populate the knowledge base with your project's conventions, architecture, and patterns. Soleur adapts to your existing codebase rather than requiring a fresh start.
+
+</details>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "What do I need to run Soleur?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Soleur requires the Claude Code CLI with an Anthropic API key or a Claude subscription. Install with claude plugin install soleur and run /soleur:go to start. No additional dependencies or server setup needed."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does Soleur work on Windows, Linux, and macOS?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Soleur runs anywhere Claude Code runs — Linux, macOS, and Windows via WSL. The platform operates entirely within the Claude Code CLI environment with no platform-specific dependencies."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How much does Soleur cost?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Soleur is free and open source. Your costs depend entirely on your Claude usage through Anthropic. Among solo founder AI tools, Soleur is the only platform that gives you a full AI organization at zero software cost."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What is the difference between /soleur:go and individual skills?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "/soleur:go is the unified entry point that classifies your intent and routes to the right workflow automatically. Individual skills like brainstorm, plan, work, and review can be invoked directly when you know exactly which stage you need."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can I use Soleur with an existing project?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Run /soleur:sync to analyze your codebase and populate the knowledge base with your project's conventions, architecture, and patterns. Soleur adapts to your existing codebase rather than requiring a fresh start."
+      }
+    }
+  ]
+}
+</script>
+
     </div>
   </div>
 </section>

@@ -44,3 +44,59 @@ A startup strategy consultant or fractional CPO charges $200-400/hour for busine
 ## The Compound Effect
 
 The business validation is the strategic anchor for the entire project. The competitive intelligence report references it as the baseline. The pricing strategy is constrained by its business model assessment. The PIVOT verdict directly changed the project's activity from feature development to user validation. The kill criterion at Gate 4 -- demand evidence is thin -- is the most important finding in the entire knowledge base, because it prevents the founder from building in a vacuum. Future validation cycles (after the 10 user interviews prescribed in step 3) will update this document, and every downstream artifact (competitive strategy, pricing, content calendar) will re-derive from the updated verdicts.
+
+## Frequently Asked Questions
+
+<details>
+<summary>Can AI validate a business idea?</summary>
+
+Yes. Soleur's business-validator agent runs a structured 6-gate validation workshop covering problem definition, customer profiling, competitive landscaping, demand assessment, business model evaluation, and minimum viable scope. Each gate produces a verdict — PASS, CONDITIONAL PASS, FLAG, or FAIL.
+
+</details>
+
+<details>
+<summary>How long does AI business validation take?</summary>
+
+The full 6-gate validation was completed through the brainstorm workflow in a fraction of the time a consultant requires. A startup strategy consultant charges $4,000–$16,000 for equivalent scope over 20–40 hours.
+
+</details>
+
+<details>
+<summary>When should I use AI business validation?</summary>
+
+Before committing significant engineering time to a product. The validation workshop is designed to catch blind spots — especially the gap between "I need this" and "the market needs this" — before building features that may not resonate with customers.
+
+</details>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Can AI validate a business idea?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Soleur's business-validator agent runs a structured 6-gate validation workshop covering problem definition, customer profiling, competitive landscaping, demand assessment, business model evaluation, and minimum viable scope. Each gate produces a verdict — PASS, CONDITIONAL PASS, FLAG, or FAIL."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How long does AI business validation take?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "The full 6-gate validation was completed through the brainstorm workflow in a fraction of the time a consultant requires. A startup strategy consultant charges $4,000–$16,000 for equivalent scope over 20–40 hours."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "When should I use AI business validation?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Before committing significant engineering time to a product. The validation workshop is designed to catch blind spots — especially the gap between \"I need this\" and \"the market needs this\" — before building features that may not resonate with customers."
+      }
+    }
+  ]
+}
+</script>

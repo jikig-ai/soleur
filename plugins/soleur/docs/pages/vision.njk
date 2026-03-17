@@ -180,3 +180,70 @@ permalink: pages/vision.html
         </div>
       </section>
     </div>
+
+    <!-- FAQ Section -->
+    <section class="landing-section">
+      <div class="landing-section-inner">
+        <p class="section-label">Common Questions</p>
+        <h2 class="section-title">Frequently Asked Questions</h2>
+        <div class="faq-list">
+          <details class="faq-item">
+            <summary class="faq-question">What is the Soleur thesis?</summary>
+            <p class="faq-answer">The first billion-dollar company run by one person is an engineering problem, not a fantasy. Soleur solves it by deploying a full AI organization &mdash; {{ stats.agents }} agents across {{ stats.departments }} departments &mdash; that gives a single founder the operational capacity of a large company.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">What is company-as-a-service?</summary>
+            <p class="faq-answer">Company-as-a-service is a platform model where AI agents operate as a full business organization across every department. Unlike individual AI assistants, a company-as-a-service platform shares knowledge across all departments and compounds institutional memory over time.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">Is Soleur model-agnostic?</summary>
+            <p class="faq-answer">The current implementation runs on Claude Code. The vision includes model-agnostic orchestration &mdash; selecting the best model for each task. The architecture is designed so the orchestration layer is independent of any single model provider.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">What is the Soleur roadmap?</summary>
+            <p class="faq-answer">Three milestones define the roadmap. Milestone 1: automate software companies, giving one founder the leverage of a full organization. Milestone 2: extend orchestration to hardware companies and physical operations. Milestone 3: multiplanetary companies spanning off-world operations.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "What is the Soleur thesis?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "The first billion-dollar company run by one person is an engineering problem, not a fantasy. Soleur solves it by deploying a full AI organization — {{ stats.agents }} agents across {{ stats.departments }} departments — that gives a single founder the operational capacity of a large company."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What is company-as-a-service?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Company-as-a-service is a platform model where AI agents operate as a full business organization across every department. Unlike individual AI assistants, a company-as-a-service platform shares knowledge across all departments and compounds institutional memory over time."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is Soleur model-agnostic?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "The current implementation runs on Claude Code. The vision includes model-agnostic orchestration — selecting the best model for each task. The architecture is designed so the orchestration layer is independent of any single model provider."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What is the Soleur roadmap?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Three milestones define the roadmap. Milestone 1: automate software companies, giving one founder the leverage of a full organization. Milestone 2: extend orchestration to hardware companies and physical operations. Milestone 3: multiplanetary companies spanning off-world operations."
+          }
+        }
+      ]
+    }
+    </script>
