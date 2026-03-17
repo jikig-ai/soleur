@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { createClient } from "@/lib/supabase/client";
 import type { WSMessage } from "@/lib/types";
 
 type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
@@ -37,9 +38,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   /** Stable ref to the latest partial assistant message index for streaming */
   const streamIndexRef = useRef<number | null>(null);
 
-  const getWsUrl = useCallback(() => {
+  const getWsUrl = useCallback(async () => {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    return `${proto}://${window.location.host}/ws`;
+    const supabase = createClient();
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token || "";
+    return `${proto}://${window.location.host}/ws?token=${token}`;
   }, []);
 
   const send = useCallback((msg: WSMessage) => {
@@ -49,7 +53,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     }
   }, []);
 
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     if (!mountedRef.current) return;
 
     // Clean up any existing connection
@@ -67,7 +71,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     }
 
     setStatus("connecting");
-    const ws = new WebSocket(getWsUrl());
+    const url = await getWsUrl();
+    const ws = new WebSocket(url);
     wsRef.current = ws;
 
     ws.onopen = () => {
