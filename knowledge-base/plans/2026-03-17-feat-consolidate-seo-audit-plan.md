@@ -7,6 +7,20 @@ semver: patch
 
 # Consolidate SEO Audit into Weekly Growth Audit Workflow
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-17
+**Sections enhanced:** 3 (Technical Considerations, Acceptance Criteria, MVP)
+**Sources applied:** 3 learnings (linearize-multi-step-llm-prompts, scheduled-skill-wrapping-pattern, github-actions-workflow-dispatch-permissions), workflow source analysis
+
+### Key Improvements
+
+1. **Step renumbering** -- replaced fragile "Step 2.5" fractional numbering with clean sequential numbers (1-6), per the linearize-multi-step-llm-prompts learning
+2. **Turn budget** -- identified that `--max-turns 45` is insufficient for 4 agent invocations; added requirement to increase to 55
+3. **Date expansion pattern** -- corrected `<date>` placeholder to `$(date +%Y-%m-%d)` to match existing workflow pattern (shell-expanded before LLM receives prompt)
+4. **Failure continuation instruction** -- added explicit prompt-level guard for agent failure, acknowledging it is best-effort (not programmatic)
+5. **Edge cases documented** -- Eleventy prerequisite bypass, concurrent workflow overlap, report deduplication on same-day re-runs
+
 ## Overview
 
 The weekly growth audit workflow (`scheduled-growth-audit.yml`) produces three date-stamped reports (content-audit, aeo-audit, content-plan) but does not include a technical SEO audit. A separate `scheduled-seo-aeo-audit.yml` workflow exists but only applies fixes -- it does not persist an audit report. The `seo-aeo` skill's `audit` sub-command outputs inline without saving to disk. This plan adds a technical SEO audit step to the existing growth audit workflow and persists the report with the same naming convention.
@@ -37,11 +51,21 @@ Add a new step (Step 2.5) to the `scheduled-growth-audit.yml` workflow prompt th
 
 ### Workflow execution order
 
-The growth audit workflow runs steps sequentially within a single `claude-code-action` invocation. Adding Step 2.5 between the AEO audit (Step 2) and the content plan (Step 3) keeps the content plan last, since it benefits from seeing all prior audits. The seo-aeo-analyst agent uses WebFetch to retrieve live pages (same as growth-strategist), so it needs `WebFetch` in `--allowedTools`. The current workflow already includes `WebSearch,WebFetch` -- no change needed.
+The growth audit workflow runs steps sequentially within a single `claude-code-action` invocation. Adding the SEO audit between the AEO audit and the content plan keeps the content plan last, since it benefits from seeing all prior audits. The seo-aeo-analyst agent uses WebFetch to retrieve live pages (same as growth-strategist), so it needs `WebFetch` in `--allowedTools`. The current workflow already includes `WebSearch,WebFetch` -- no change needed.
+
+### Research Insights
+
+**Step renumbering (from linearize-multi-step-llm-prompts learning):** Using "Step 2.5" as a fractional step number is fragile -- LLM agents parsing sequential prompts may not reliably preserve fractional ordering. Renumber: the new SEO audit becomes Step 3, existing content plan becomes Step 4, existing GitHub Issue becomes Step 5, and existing persist step becomes Step 6. This follows the linearization principle: every instruction at the position where it executes, with clean sequential numbering.
+
+**Date expansion:** The existing workflow prompt uses `$(date +%Y-%m-%d)` for date placeholders in file paths. This is shell-expanded by GitHub Actions before `claude-code-action` receives the prompt, so the agent sees a literal date like `2026-03-17`. The new step must use the same `$(date +%Y-%m-%d)` pattern, NOT `<date>` or `today's date`.
+
+**Turn budget:** The workflow currently uses `--max-turns 45`. Each Task tool invocation of a subagent consumes turns from the parent's budget. The existing 3 agents (content audit, AEO audit, content plan) each use approximately 8-12 turns. Adding a 4th agent without increasing `--max-turns` risks hitting the limit before Step 6 (persist). Increase `--max-turns` from 45 to 55 alongside the `timeout-minutes` increase.
+
+**Failure isolation:** The prompt runs as a single sequential LLM turn within `claude-code-action`. There is no mechanism for step-level error isolation -- if the seo-aeo-analyst agent fails (WebFetch timeout, API error), the LLM may halt or skip subsequent steps. Mitigation: add explicit instruction after the Task invocation: "If the SEO audit agent fails or returns an error, note the failure and continue to Step 4." This is a prompt-level guard, not a programmatic one -- the test scenario for graceful degradation is best-effort.
 
 ### Agent capabilities
 
-The `seo-aeo-analyst` agent (`.worktrees/feat-consolidate-seo-audit/plugins/soleur/agents/marketing/seo-aeo-analyst.md`) already defines a Step 3: Report output format with structured markdown (Critical Issues, Warnings, Passed Checks, Recommendations). The workflow prompt instructs it to save this report to the target path.
+The `seo-aeo-analyst` agent (`plugins/soleur/agents/marketing/seo-aeo-analyst.md`) already defines a Step 3: Report output format with structured markdown (Critical Issues, Warnings, Passed Checks, Recommendations). The workflow prompt instructs it to save this report to the target path.
 
 ### Timeout
 
@@ -62,29 +86,35 @@ The new report will be: `2026-03-16-seo-audit.md`
 
 ## Acceptance Criteria
 
-- [ ] `scheduled-growth-audit.yml` prompt includes a Step 2.5 that launches `seo-aeo-analyst` via Task tool
-- [ ] Step 2.5 instructs the agent to save the report to `knowledge-base/marketing/audits/soleur-ai/<date>-seo-audit.md`
-- [ ] Step 4 (GitHub Issue) references top SEO audit findings alongside the existing content and AEO summaries
-- [ ] Timeout increased from 45 to 55 minutes
+- [ ] `scheduled-growth-audit.yml` prompt includes a new Step 3 (Technical SEO Audit) that launches `seo-aeo-analyst` via Task tool
+- [ ] Existing steps renumbered sequentially: Content Audit (1), AEO Audit (2), SEO Audit (3), Content Plan (4), GitHub Issue (5), Persist (6)
+- [ ] Step 3 instructs the agent to save the report to `knowledge-base/marketing/audits/soleur-ai/$(date +%Y-%m-%d)-seo-audit.md`
+- [ ] Step 3 includes a failure continuation instruction ("If the SEO audit agent fails, note the failure and continue to Step 4")
+- [ ] Step 5 (GitHub Issue) references top SEO audit findings alongside the existing content and AEO summaries
+- [ ] `timeout-minutes` increased from 45 to 55
+- [ ] `--max-turns` increased from 45 to 55
 - [ ] No new workflow files are created
 - [ ] No changes to `plugins/soleur/skills/seo-aeo/SKILL.md` or agent markdown files
-- [ ] The `git add` in Step 5 already uses `knowledge-base/marketing/audits/soleur-ai/` (directory glob) so it picks up the new file without changes
+- [ ] The `git add` in Step 6 already uses `knowledge-base/marketing/audits/soleur-ai/` (directory glob) so it picks up the new file without changes
 
 ## Test Scenarios
 
-- Given the growth audit workflow is triggered, when the seo-aeo-analyst agent completes, then a file matching `YYYY-MM-DD-seo-audit.md` exists in `knowledge-base/marketing/audits/soleur-ai/`
+- Given the growth audit workflow is triggered via `workflow_dispatch`, when the seo-aeo-analyst agent completes, then a file matching `YYYY-MM-DD-seo-audit.md` exists in `knowledge-base/marketing/audits/soleur-ai/`
 - Given the growth audit workflow completes all 4 audit steps, when the GitHub Issue is created, then the issue body includes a section summarizing SEO audit findings
-- Given the seo-aeo-analyst agent fails (timeout, WebFetch error), when the workflow continues, then the remaining steps (content plan, issue, commit) still execute and the issue notes the SEO audit failure
+- Given the seo-aeo-analyst agent fails (timeout, WebFetch error), when the workflow continues, then the remaining steps (content plan, issue, commit) still execute and the issue notes the SEO audit failure (best-effort -- depends on LLM following the failure continuation instruction)
 - Given no SEO issues are found, when the report is generated, then the report still persists with an empty Critical Issues section and populated Passed Checks section
+- Given the workflow runs on a Monday via cron schedule, when all steps complete, then exactly 4 files are committed (content-audit, aeo-audit, seo-audit, content-plan) with the same date prefix
 
 ## MVP
 
 ### `.github/workflows/scheduled-growth-audit.yml` (changes)
 
-The prompt section gains a new Step 2.5 block between the existing Step 2 (AEO Audit) and Step 3 (Content Plan):
+**Change 1: Renumber existing steps.** Current Step 3 (Content Plan) becomes Step 4, current Step 4 (GitHub Issue) becomes Step 5, current Step 5 (Persist) becomes Step 6.
+
+**Change 2: Insert new Step 3** between the existing AEO Audit (Step 2) and the renamed Content Plan (Step 4):
 
 ```yaml
-            ## Step 2.5: Technical SEO Audit
+            ## Step 3: Technical SEO Audit
 
             Launch the seo-aeo-analyst agent via the Task tool:
 
@@ -96,16 +126,29 @@ The prompt section gains a new Step 2.5 block between the existing Step 2 (AEO A
             Warnings, Passed Checks, and Recommendations sections. Do NOT make any changes."
 
             Save the report to:
-            knowledge-base/marketing/audits/soleur-ai/<date>-seo-audit.md
+            knowledge-base/marketing/audits/soleur-ai/$(date +%Y-%m-%d)-seo-audit.md
+
+            If the SEO audit agent fails or returns an error, note the failure and
+            continue to Step 4.
 ```
 
-The Step 4 (GitHub Issue) prompt gains an additional bullet:
+**Change 3:** The renamed Step 5 (GitHub Issue) prompt gains an additional bullet:
 
 ```yaml
             - Top 3 technical SEO findings (or "clean" if no issues)
 ```
 
-The `timeout-minutes` changes from 45 to 55.
+**Change 4:** `timeout-minutes` changes from 45 to 55.
+
+**Change 5:** `--max-turns` in `claude_args` changes from 45 to 55.
+
+### Research Insights (implementation details)
+
+**Edge case -- seo-aeo-analyst and the Eleventy prerequisite:** The seo-aeo-analyst agent's parent skill (seo-aeo) has a Phase 0 prerequisite that checks for `eleventy.config.js`. However, this prerequisite is only enforced by the skill's SKILL.md, not by the agent itself. Since the workflow invokes the agent directly via Task tool (not the skill), the prerequisite check is bypassed. This is intentional -- the agent audits the live site via WebFetch, not the local build. No issue here.
+
+**Edge case -- concurrent workflow runs:** The growth audit (09:00 UTC) and the SEO fix workflow (10:00 UTC) both write to main. If the growth audit runs long (45+ minutes), it could overlap with the SEO fix workflow. Both use `git push origin main || { git pull --rebase origin main && git push origin main; }` which handles this via rebase-on-conflict. The concurrency groups are different (`scheduled-growth-audit` vs `schedule-seo-aeo-audit`) so they can run in parallel. No change needed -- the existing conflict resolution pattern handles this.
+
+**Edge case -- report deduplication:** If the growth audit workflow is manually triggered twice on the same day, the second run overwrites the first run's `seo-audit.md` file (same date-prefixed filename). This matches the existing behavior for content-audit and aeo-audit. No special handling needed.
 
 ## References
 
@@ -116,5 +159,7 @@ The `timeout-minutes` changes from 45 to 55.
 - growth-strategist agent: `plugins/soleur/agents/marketing/growth-strategist.md`
 - Existing audit reports: `knowledge-base/marketing/audits/soleur-ai/`
 - Related brainstorm: `knowledge-base/brainstorms/2026-03-16-cmo-autonomous-execution-brainstorm.md`
-- Learning on skill wrapping pattern: `knowledge-base/learnings/2026-03-16-scheduled-skill-wrapping-pattern.md`
+- Learning -- skill wrapping pattern: `knowledge-base/learnings/2026-03-16-scheduled-skill-wrapping-pattern.md`
+- Learning -- linearize multi-step LLM prompts: `knowledge-base/learnings/2026-03-16-linearize-multi-step-llm-prompts.md`
+- Learning -- workflow dispatch permissions: `knowledge-base/learnings/2026-03-16-github-actions-workflow-dispatch-permissions.md`
 - Commit that triggered this task: `e56b9e5` (docs: weekly growth audit 2026-03-16)
