@@ -96,17 +96,17 @@ Synchronize the entire Section 4 with the Eleventy source:
 
 ## Acceptance Criteria
 
-- [ ] DPD Section 4.2 table includes GitHub Pages row with processing activity, data processed, legal basis, and sub-processor list link (`plugins/soleur/docs/pages/legal/data-protection-disclosure.md`)
-- [ ] DPD Section 4.2 table includes Plausible Analytics row with explicit note that data is anonymous/aggregated (`plugins/soleur/docs/pages/legal/data-protection-disclosure.md`)
-- [ ] DPD Section 4.2 cross-reference updated to include Section 2.3(a) alongside 2.3(e)
-- [ ] "Last Updated" date bumped on both DPD files
-- [ ] `docs/legal/data-processing-agreement.md` Section 4 restructured to match Eleventy source (4.1 Plugin Sub-processors, 4.2 Docs Site Processors, 4.3 Third-Party Services)
-- [ ] `docs/legal/data-processing-agreement.md` Section 4.2 table includes all three processor rows
-- [ ] Buttondown removed from `docs/legal/` Section 4.3 user-initiated services table
-- [ ] Cross-document consistency verified (Privacy Policy, GDPR Policy, Cookie Policy -- no changes needed)
-- [ ] Grep verification: no unscoped "No Sub-processors" statements remain across legal docs
-- [ ] Grep verification: `docs/legal/` source copy no longer contains old Section 4.1 "No Sub-processors" heading
-- [ ] Markdownlint passes on both files
+- [x] DPD Section 4.2 table includes GitHub Pages row with processing activity, data processed, legal basis, and sub-processor list link (`plugins/soleur/docs/pages/legal/data-protection-disclosure.md`)
+- [x] DPD Section 4.2 table includes Plausible Analytics row with explicit note that data is anonymous/aggregated (`plugins/soleur/docs/pages/legal/data-protection-disclosure.md`)
+- [x] DPD Section 4.2 cross-reference updated to include Section 2.3(a) alongside 2.3(e)
+- [x] "Last Updated" date bumped on both DPD files
+- [x] `docs/legal/data-processing-agreement.md` Section 4 restructured to match Eleventy source (4.1 Plugin Sub-processors, 4.2 Docs Site Processors, 4.3 Third-Party Services)
+- [x] `docs/legal/data-processing-agreement.md` Section 4.2 table includes all three processor rows
+- [x] Buttondown removed from `docs/legal/` Section 4.3 user-initiated services table
+- [x] Cross-document consistency verified (Privacy Policy, GDPR Policy, Cookie Policy -- no changes needed)
+- [x] Grep verification: no unscoped "No Sub-processors" statements remain across legal docs
+- [x] Grep verification: `docs/legal/` source copy no longer contains old Section 4.1 "No Sub-processors" heading
+- [x] Markdownlint passes on both files (pre-existing MD034 bare-email warnings in Section 12 unrelated to this change)
 
 ## Test Scenarios
 
