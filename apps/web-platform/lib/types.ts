@@ -1,5 +1,15 @@
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
+// Typed error codes for structured error handling over WebSocket
+export type WSErrorCode = "key_invalid";
+
+export class KeyInvalidError extends Error {
+  constructor() {
+    super("No valid API key found. Please set up your key first.");
+    this.name = "KeyInvalidError";
+  }
+}
+
 // WebSocket message protocol
 export type WSMessage =
   | { type: "chat"; content: string }
@@ -9,7 +19,7 @@ export type WSMessage =
   | { type: "review_gate"; gateId: string; question: string; options: string[] }
   | { type: "session_started"; conversationId: string }
   | { type: "session_ended"; reason: string }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; errorCode?: WSErrorCode };
 
 // Database types (matches Supabase schema)
 export interface User {
