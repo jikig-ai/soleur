@@ -165,7 +165,7 @@ Knowledge artifacts follow a lifecycle: **create** during brainstorm/plan, **use
 
 Paths follow predictable patterns:
 - Feature branches: `feat-<name>`
-- Specs: `knowledge-base/specs/feat-<name>/`
+- Specs: `knowledge-base/project/specs/feat-<name>/`
 - Worktrees: `.worktrees/feat-<name>/`
 
 ## Quick Start

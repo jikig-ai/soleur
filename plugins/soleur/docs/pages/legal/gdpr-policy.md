@@ -8,7 +8,7 @@ permalink: pages/legal/gdpr-policy.html
 <section class="page-hero">
   <div class="container">
     <h1>GDPR Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated March 10, 2026 (newsletter subscription data)</p>
+    <p>Effective February 20, 2026 | Last Updated March 18, 2026 (Buttondown international transfers and data retention)</p>
   </div>
 </section>
 
@@ -19,7 +19,7 @@ permalink: pages/legal/gdpr-policy.html
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 10, 2026 (newsletter subscription data)
+**Last Updated:** March 18, 2026 (Buttondown international transfers and data retention)
 
 ---
 
@@ -163,6 +163,7 @@ Soleur itself does not transfer personal data internationally. However, users sh
 
 - **Anthropic Claude API:** API requests may be processed in the United States or other jurisdictions where Anthropic operates. Users should review Anthropic's data processing terms regarding international transfer safeguards.
 - **GitHub Pages / GitHub:** GitHub infrastructure is located globally, including in the United States. GitHub (Microsoft Corporation) is certified under the **EU-US Data Privacy Framework** (adequacy decision C(2023) 4745), which provides the primary transfer mechanism. GitHub also maintains Standard Contractual Clauses as a supplementary safeguard. See [GitHub's Global Privacy Practices](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement#githubs-global-privacy-practices).
+- **Buttondown (Newsletter):** Newsletter subscriber email addresses are processed by Buttondown, a US-based service hosted on infrastructure in the United States. International data transfers are governed by **Standard Contractual Clauses (SCCs)** (Module 2, Controller to Processor) per Buttondown's [Data Processing Agreement](https://buttondown.com/legal/data-processing-agreement). See also [Buttondown's Privacy Policy](https://buttondown.com/legal/privacy).
 
 Users who are subject to the GDPR and have concerns about international data transfers should review the relevant third-party policies before using these services.
 
@@ -201,7 +202,11 @@ Soleur does not impose any retention period on locally stored data. Files persis
 
 Personal data contained in data subject rights requests and legal inquiries (names, email addresses, inquiry content) is retained for the duration necessary to resolve the inquiry, plus three years to comply with the French civil statute of limitations (prescription civile). After this period, correspondence is securely deleted.
 
-### 8.3 Third-Party Retention
+### 8.3 Newsletter Subscriber Data
+
+Newsletter subscriber email addresses are retained by Buttondown for as long as the subscriber remains subscribed. Upon unsubscription, the email address is removed from the active subscriber list. Buttondown may retain anonymized aggregate data (e.g., subscriber counts) after unsubscription. Upon termination of the service relationship, Buttondown will, at Jikigai's option, delete or return all personal data in accordance with Buttondown's Data Processing Agreement.
+
+### 8.4 Third-Party Retention
 
 Retention periods for data held by Anthropic and GitHub are governed by their respective privacy policies and data retention schedules.
 

@@ -68,6 +68,7 @@ Project principles organized by domain. Add principles as you learn them.
 ### Always
 
 - Verify the root cause before implementing any fix -- reproduce the error or run the simplest diagnostic first; do not change code based on a guess
+- When a plan involves directional ambiguity (merge A into B vs B into A, move files from X to Y), confirm the direction with the user before proceeding -- code evidence can be wrong (e.g., a prior PR may have moved references in the wrong direction); the cost of one clarifying question is trivial compared to executing an entire wrong plan
 - Core workflow stages (brainstorm, plan, work, review, compound, one-shot) are skills invoked via the Skill tool; only three commands remain (`go`, `sync`, `help`) using the `soleur:` prefix to avoid collisions with built-in commands
 - Never edit version fields in `plugin.json` or `marketplace.json` (frozen sentinels). Version is derived from git tags -- `version-bump-and-release.yml` creates GitHub Releases with `vX.Y.Z` tags at merge time via semver labels set by `/ship`
 - Always set a `semver:patch`, `semver:minor`, or `semver:major` label on PRs that touch `plugins/soleur/` -- CI uses this label to determine the version bump at merge time
@@ -152,7 +153,7 @@ Project principles organized by domain. Add principles as you learn them.
 - `project/` documents what the project does; `project/constitution.md` documents how to work on it
 - Component documentation in `project/components/` should follow the component template from spec-templates skill
 
-- Use convention over configuration for paths: `feat-<name>` maps to `knowledge-base/specs/feat-<name>/` and `.worktrees/feat-<name>/`
+- Use convention over configuration for paths: `feat-<name>` maps to `knowledge-base/project/specs/feat-<name>/` and `.worktrees/feat-<name>/`
 - Include sequence diagrams for complex flows
 - Complex commands should follow a four-phase pattern: Setup, Analyze, Review, Write
 - Scheduled workflows using claude-code-action should defer CI gating to GitHub's built-in required checks (`gh pr checks --required`) rather than reimplementing check status queries in jq -- GitHub already maintains the authoritative definition of "required checks"

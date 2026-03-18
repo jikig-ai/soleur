@@ -94,11 +94,9 @@ discover_artifacts() {
   # Enable nullglob so empty globs expand to nothing
   shopt -s nullglob
 
-  # Brainstorms and plans: current paths first, legacy paths second
+  # Brainstorms and plans
   local file_dirs=(
-    "knowledge-base/brainstorms"
     "knowledge-base/project/brainstorms"
-    "knowledge-base/plans"
     "knowledge-base/project/plans"
   )
   for dir in "${file_dirs[@]}"; do
@@ -107,17 +105,10 @@ discover_artifacts() {
     done
   done
 
-  # Specs: current paths first, legacy paths second
-  local spec_dirs=(
-    "knowledge-base/specs"
-    "knowledge-base/features/specs"
-    "knowledge-base/project/specs"
-  )
-  for dir in "${spec_dirs[@]}"; do
-    if [[ -d "$dir/feat-${slug}" ]]; then
-      artifacts+=("$dir/feat-${slug}")
-    fi
-  done
+  # Specs
+  if [[ -d "knowledge-base/project/specs/feat-${slug}" ]]; then
+    artifacts+=("knowledge-base/project/specs/feat-${slug}")
+  fi
 
   shopt -u nullglob
 
