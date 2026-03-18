@@ -21,6 +21,8 @@
 
 - [ ] 3.1 Cross-reference DPD Section 4.2 with Section 2.3(a) -- confirm GitHub Pages and Plausible are described consistently
 - [ ] 3.2 Cross-reference DPD Section 4.2 with GDPR Policy Article 30 register (Section 10.1) -- confirm all Docs Site processing activities are represented
-- [ ] 3.3 Verify `docs/legal/` Section 4 structure matches Eleventy source
-- [ ] 3.4 Run markdownlint on both files
-- [ ] 3.5 Run compound and commit
+- [ ] 3.3 Verify `docs/legal/` Section 4 structure matches Eleventy source (body content identical, only frontmatter and link format differ)
+- [ ] 3.4 Grep verification: `grep -ri "no sub-processor" docs/legal/ plugins/soleur/docs/pages/legal/` -- only scoped "no Plugin-level Sub-processors" should remain
+- [ ] 3.5 Grep verification: confirm `docs/legal/` no longer contains old Section 4.1 "No Sub-processors" heading
+- [ ] 3.6 Run markdownlint on both files
+- [ ] 3.7 Run compound and commit

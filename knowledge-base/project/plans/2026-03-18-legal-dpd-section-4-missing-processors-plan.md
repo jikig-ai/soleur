@@ -7,6 +7,22 @@ semver: patch
 
 # legal: DPD Section 4.2 missing GitHub Pages and Plausible from Docs Site Processors table
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-18
+**Sections enhanced:** 3 (Proposed Solution, GDPR Terminology Notes, Acceptance Criteria)
+**Research sources:** Plausible DPA (plausible.io/dpa), Plausible Privacy Policy (plausible.io/privacy), GitHub Pages documentation (docs.github.com), institutional learnings (5 files), legal-compliance-auditor agent spec
+
+### Key Improvements
+1. Verified Plausible's DPA confirms processor status and EU-only hosting (Hetzner Germany, BunnyWay Slovenia) -- strengthens the case for listing in processor table
+2. Verified GitHub Pages documentation confirms IP address logging for all visitors -- confirms processor classification
+3. Added grep verification step from institutional learnings to catch any remaining blanket statements
+4. Added Plausible sub-processor details (BunnyWay, Hetzner) for completeness in the "Sub-processor List" column link text
+
+### New Considerations Discovered
+- The Plausible DPA explicitly states Plausible is a "data processor" under GDPR despite processing only anonymous data -- this removes the ambiguity noted in the original plan about whether listing Plausible is strictly necessary (it is, per their own DPA)
+- Plausible hashes IP addresses with salts rotated every 24 hours -- this detail should be reflected in the "Data Processed" column to be precise about what "IP addresses are not stored" means
+
 ## Overview
 
 The DPD Section 4.2 ("Docs Site Processors") lists only Buttondown in its processor table, but Section 2.3(a) also discloses GitHub Pages and Plausible Analytics as processing activities where Jikigai acts as Controller on the Docs Site. A regulator reading Section 4 in isolation gets an incomplete picture of the Docs Site processing chain.
@@ -40,9 +56,9 @@ The issue suggests two approaches:
 1. Add GitHub Pages and Plausible rows to the Section 4.2 table
 2. Add a clarifying note explaining why they are excluded
 
-**Decision: Option 1 (add rows)** -- for two reasons:
-- GitHub Pages collects IP addresses and browser metadata on Jikigai's behalf (it is a data processor under GDPR)
-- While Plausible processes only anonymous aggregated data, it is still a named third-party service engaged by Jikigai for analytics -- listing it with a note about anonymous data is more transparent than omitting it
+**Decision: Option 1 (add rows)** -- for three reasons:
+- GitHub Pages collects IP addresses and browser metadata on Jikigai's behalf (it is a data processor under GDPR). GitHub Pages documentation confirms: "the visitor's IP address is logged and stored for security purposes, regardless of whether the visitor has signed into GitHub or not."
+- Plausible's own DPA (plausible.io/dpa) explicitly states: "The parties agree that customer is the data controller and that Plausible Analytics is its data processor." This removes the ambiguity about whether Plausible qualifies as a processor -- Plausible itself asserts processor status. Although it processes only anonymous aggregated data, listing it with a note about anonymous data is more transparent than omitting it.
 - Adding rows is consistent with the GDPR Policy's Article 30 register (Section 10.1) which already enumerates both as processing activities
 
 ### Changes to `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`
@@ -52,7 +68,7 @@ Add two rows to the Section 4.2 table:
 | Processor | Processing Activity | Data Processed | Legal Basis | Sub-processor List |
 |-----------|-------------------|----------------|-------------|-------------------|
 | GitHub Pages ([pages.github.com](https://pages.github.com)) | Docs Site hosting | IP addresses, browser user-agent strings, page request data | Legitimate interest (Article 6(1)(f)) | [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement) |
-| Plausible Analytics ([plausible.io](https://plausible.io)) | Privacy-respecting website analytics (cookie-free) | Aggregated anonymous data only: page URLs, referrer URLs, country, device type, browser type. IP addresses are not stored. | Legitimate interest (Article 6(1)(f)) | [Plausible DPA](https://plausible.io/dpa) |
+| Plausible Analytics ([plausible.io](https://plausible.io)) | Privacy-respecting website analytics (cookie-free, EU-hosted) | Aggregated anonymous data only: page URLs, referrer URLs, country, device type, browser type. IP addresses are hashed for daily unique visitor counts and never stored (salts rotated every 24 hours). | Legitimate interest (Article 6(1)(f)) | [Plausible DPA](https://plausible.io/dpa) |
 | Buttondown ([buttondown.com](https://buttondown.com)) | Newsletter subscription management and email delivery | Email addresses of subscribers | Consent (Article 6(1)(a)) -- double opt-in | [Buttondown Sub-processors](https://buttondown.com/legal/dpa) |
 
 Update the paragraph below the table: "This disclosure is consistent with Section 2.3(a) and Section 2.3(e)." (currently only references 2.3(e)).
@@ -88,6 +104,8 @@ Synchronize the entire Section 4 with the Eleventy source:
 - [ ] `docs/legal/data-processing-agreement.md` Section 4.2 table includes all three processor rows
 - [ ] Buttondown removed from `docs/legal/` Section 4.3 user-initiated services table
 - [ ] Cross-document consistency verified (Privacy Policy, GDPR Policy, Cookie Policy -- no changes needed)
+- [ ] Grep verification: no unscoped "No Sub-processors" statements remain across legal docs
+- [ ] Grep verification: `docs/legal/` source copy no longer contains old Section 4.1 "No Sub-processors" heading
 - [ ] Markdownlint passes on both files
 
 ## Test Scenarios
@@ -100,9 +118,35 @@ Synchronize the entire Section 4 with the Eleventy source:
 
 ## GDPR Terminology Notes
 
-- **GitHub Pages** acts as a **data processor** on Jikigai's behalf for Docs Site hosting. GitHub collects IP addresses and browser metadata as part of standard web server logging. Although GitHub's formal DPA applies only to paid plans, GitHub's standard terms acknowledge processor obligations for free-plan organizations.
-- **Plausible Analytics** presents a nuanced case: it processes only anonymous aggregated data that arguably does not constitute Personal Data under Article 4(1). However, listing it in the processor table with this clarification is more transparent than omitting it. The ePrivacy Directive Article 5(3) exemption (no cookies/local storage) is already documented in the GDPR Policy.
-- Buttondown remains a **data processor** (not sub-processor) since Jikigai is Controller for newsletter data.
+- **GitHub Pages** acts as a **data processor** on Jikigai's behalf for Docs Site hosting. GitHub's documentation explicitly states: "the visitor's IP address is logged and stored for security purposes, regardless of whether the visitor has signed into GitHub or not." Although GitHub's formal DPA applies only to paid plans (Enterprise Cloud, Teams), GitHub's standard terms acknowledge processor obligations for free-plan organizations and GitHub maintains EU-US Data Privacy Framework certification and Standard Contractual Clauses. The GDPR Policy Section 2.2 already correctly describes this relationship.
+- **Plausible Analytics** is explicitly a **data processor** per its own DPA (plausible.io/dpa): "The parties agree that customer is the data controller and that Plausible Analytics is its data processor." All site data is hosted exclusively in the EU on EU-owned infrastructure (Hetzner Germany for servers, BunnyWay Slovenia for CDN) and never leaves the EU. IP addresses are received in HTTP requests but immediately hashed for daily unique visitor counts -- raw IP addresses and User-Agent strings are never stored in logs, databases, or anywhere on disk. Hash salts are deleted every 24 hours, making visitor re-identification impossible. The ePrivacy Directive Article 5(3) exemption (no cookies/local storage) is already documented in the GDPR Policy.
+- **Buttondown** remains a **data processor** (not sub-processor) since Jikigai is Controller for newsletter data.
+
+### Research Insights
+
+**Processor table ordering:** List processors in order of data sensitivity (least to most personal data): GitHub Pages (IP addresses -- logged but standard web hosting), Plausible Analytics (anonymous aggregated data only), Buttondown (email addresses -- directly identifying PII). This ordering makes the table easier to scan for regulators assessing data protection risk.
+
+**Plausible's "Sub-processor List" column:** The Plausible DPA at plausible.io/dpa is the correct link. It discloses two sub-processors that access site data: BunnyWay d.o.o. (Slovenian, CDN) and Hetzner Online GmbH (German, servers). Additional sub-processors listed in plausible.io/privacy handle account management only (Paddle for payments, Postmark for emails) and do not access site visitor data.
+
+**GitHub Pages "Sub-processor List" column:** GitHub does not publish a standalone sub-processor list for Pages. The GitHub Privacy Statement (docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement) is the appropriate reference, consistent with how the GDPR Policy Section 2.2 already references it.
+
+**Post-edit grep verification** (from learning `2026-03-10-first-pii-collection-legal-update-pattern.md`): After applying edits, run grep verification across all legal docs to confirm no blanket statements were missed:
+- `grep -r "no Sub-processors" docs/legal/ plugins/soleur/docs/pages/legal/` -- should return zero matches after fix
+- `grep -r "No Sub-processors" docs/legal/ plugins/soleur/docs/pages/legal/` -- should return zero matches after fix
+- `grep -r "no.*sub-processor" docs/legal/ plugins/soleur/docs/pages/legal/` -- verify only scoped "no Plugin-level Sub-processors" remains
+
+## Edge Cases and Considerations
+
+**Plausible as "processor" vs. "not processing Personal Data":** There is a tension: Plausible's own DPA classifies them as a data processor, yet the data they process is arguably not Personal Data under Article 4(1) since IP addresses are never stored. The plan resolves this by listing Plausible in the processor table (consistent with their self-classification and with transparency principles) while explicitly noting in the "Data Processed" column that data is anonymous and aggregated. This is the conservative, regulator-friendly approach.
+
+**GitHub Pages DPA availability on free plans:** GitHub's formal Data Protection Agreement applies only to paid plans (Enterprise Cloud, Teams). Jikigai's free-plan organization is covered by GitHub's standard Terms of Service, under which GitHub acknowledges processor obligations and maintains EU-US Data Privacy Framework certification and SCCs. The "Sub-processor List" column should link to the GitHub Privacy Statement rather than a DPA that Jikigai cannot access. The GDPR Policy Section 2.2 already documents this limitation -- no change needed there.
+
+**Frontmatter differences between file locations** (from learning `2026-03-02-legal-doc-bulk-consistency-fix-pattern.md`):
+- `docs/legal/`: Has `type`, `jurisdiction`, `generated-date` YAML frontmatter; uses `.md` relative links
+- `plugins/soleur/docs/pages/legal/`: Has `layout`, `permalink`, `description` YAML frontmatter; uses `/pages/legal/*.html` absolute links; wrapped in `<section>` HTML tags
+- Body content (Section 4) should be identical in both files; only frontmatter and link format differ
+
+**Table column width in markdown rendering:** The "Data Processed" column for Plausible is longer than the others due to the detailed anonymous-data note. This may render poorly in narrow GitHub markdown views. Keep the note concise but complete -- readability in the Docs Site (which uses wider prose layout) takes precedence over raw markdown rendering.
 
 ## Context
 
