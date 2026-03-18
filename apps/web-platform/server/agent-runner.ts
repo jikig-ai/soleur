@@ -4,6 +4,7 @@ import { randomUUID } from "crypto";
 import path from "path";
 
 import { DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
+import { KeyInvalidError } from "@/lib/types";
 import { decryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
 
@@ -38,11 +39,12 @@ async function getUserApiKey(userId: string): Promise<string> {
     .select("encrypted_key, iv, auth_tag")
     .eq("user_id", userId)
     .eq("is_valid", true)
+    .eq("provider", "anthropic")
     .limit(1)
     .single();
 
   if (error || !data) {
-    throw new Error("No valid API key found. Please set up your key first.");
+    throw new KeyInvalidError();
   }
 
   return decryptKey(
@@ -257,7 +259,11 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
       console.error(`[agent] Session error for ${userId}/${conversationId}:`, err);
       const message =
         err instanceof Error ? err.message : "Agent session failed";
-      sendToClient(userId, { type: "error", message });
+      sendToClient(userId, {
+        type: "error",
+        message,
+        errorCode: err instanceof KeyInvalidError ? "key_invalid" : undefined,
+      });
       await updateConversationStatus(conversationId, "failed");
     }
   } finally {

@@ -1,5 +1,6 @@
 import { describe, test, expect } from "vitest";
 import type { WSMessage } from "../lib/types";
+import { KeyInvalidError } from "../lib/types";
 
 // Test the WebSocket message protocol types and routing logic.
 // The actual WebSocket server requires HTTP infrastructure, so we test
@@ -88,6 +89,38 @@ describe("WebSocket protocol", () => {
         expect(msg!.leaderId).toBe(id);
       }
     }
+  });
+});
+
+describe("key invalidation error handling", () => {
+  test("error message with errorCode key_invalid is detectable", () => {
+    const msg = parseMessage(
+      '{"type":"error","message":"No valid API key found.","errorCode":"key_invalid"}',
+    );
+    expect(msg).not.toBeNull();
+    expect(msg!.type).toBe("error");
+    if (msg!.type === "error") {
+      expect(msg!.errorCode).toBe("key_invalid");
+    }
+  });
+
+  test("error message without errorCode has undefined errorCode", () => {
+    const msg = parseMessage('{"type":"error","message":"Something went wrong"}');
+    expect(msg).not.toBeNull();
+    expect(msg!.type).toBe("error");
+    if (msg!.type === "error") {
+      expect(msg!.errorCode).toBeUndefined();
+    }
+  });
+
+  test("KeyInvalidError is instanceof Error and detectable", () => {
+    const keyErr = new KeyInvalidError();
+    const otherErr = new Error("Workspace not provisioned");
+
+    expect(keyErr).toBeInstanceOf(Error);
+    expect(keyErr).toBeInstanceOf(KeyInvalidError);
+    expect(otherErr).not.toBeInstanceOf(KeyInvalidError);
+    expect(keyErr.message).toContain("No valid API key");
   });
 });
 

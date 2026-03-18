@@ -50,12 +50,14 @@ DESCRIPTION:
   To signal completion, output: <promise>YOUR_PHRASE</promise>
 
   Stuck detection: The loop auto-terminates when responses are idle:
-  - Short responses (< 20 chars): counted as minimal (original behavior)
+  - Short responses (< 150 chars): counted as minimal
   - Idle patterns (< 200 chars): responses matching "all done", "nothing
     left to do", etc. are counted as semantically idle
   - Repetition: 3 consecutive identical responses trigger termination
+  - Similarity: 3 consecutive responses sharing >=80% words trigger
+    termination (catches minor variations of the same response)
   Set --stuck-threshold 0 to disable length/idle detection (repetition
-  detection remains active).
+  and similarity detection remain active).
 
 EXAMPLES:
   /soleur:ralph-loop Build a todo API --completion-promise 'DONE' --max-iterations 20
@@ -151,6 +153,8 @@ stuck_count: 0
 stuck_threshold: $STUCK_THRESHOLD
 last_response_hash:
 repeat_count: 0
+similarity_count: 0
+last_response_words:
 started_at: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ---
 
