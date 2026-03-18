@@ -56,11 +56,11 @@ The `_data/` directory is 4 levels below the repo root (`_data` -> `docs` -> `so
 
 ## Acceptance Criteria
 
-- [ ] All 4 data files (`agents.js`, `skills.js`, `stats.js`, `plugin.js`) use `import.meta.url`-based path resolution instead of CWD-relative `resolve()`
-- [ ] Dead `resolve` imports removed from all 4 files (no lint warnings)
-- [ ] `npm run docs:build` succeeds from the repo root (existing behavior preserved)
-- [ ] No hardcoded absolute paths -- all paths remain relative to the file's location
-- [ ] `agents.js` retains its `relative` import (used at line 146 for agent path derivation)
+- [x] All 4 data files (`agents.js`, `skills.js`, `stats.js`, `plugin.js`) use `import.meta.url`-based path resolution instead of CWD-relative `resolve()`
+- [x] Dead `resolve` imports removed from all 4 files (no lint warnings)
+- [x] `npm run docs:build` succeeds from the repo root (existing behavior preserved)
+- [x] No hardcoded absolute paths -- all paths remain relative to the file's location
+- [x] `agents.js` retains its `relative` import (used at line 146 for agent path derivation)
 
 ## Test Scenarios
 
