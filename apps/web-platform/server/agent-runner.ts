@@ -38,6 +38,7 @@ async function getUserApiKey(userId: string): Promise<string> {
     .select("encrypted_key, iv, auth_tag")
     .eq("user_id", userId)
     .eq("is_valid", true)
+    .eq("provider", "anthropic")
     .limit(1)
     .single();
 
