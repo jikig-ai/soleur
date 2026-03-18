@@ -114,10 +114,10 @@ This call uses `jq -n` (null input) and `--arg` for all inputs. It constructs JS
 
 ## Acceptance Criteria
 
-- [ ] Line 118 jq call guarded with `2>/dev/null || true`
-- [ ] New test: malformed text input (`"not json"`) to stop hook exits 0 when no ralph loop is active
-- [ ] New test: malformed text input with active ralph loop -- loop continues (block decision emitted), `LAST_OUTPUT` treated as empty
-- [ ] Existing tests pass (39/39 in `plugins/soleur/test/ralph-loop.test.sh`)
+- [x] Line 118 jq call guarded with `2>/dev/null || true`
+- [x] New test: malformed text input (`"not json"`) to stop hook exits 0 when no ralph loop is active
+- [x] New test: malformed text input with active ralph loop -- loop continues (block decision emitted), `LAST_OUTPUT` treated as empty
+- [x] Existing tests pass (41/41 in `plugins/soleur/test/ralph-loop.test.sh`)
 
 ## Test Scenarios
 

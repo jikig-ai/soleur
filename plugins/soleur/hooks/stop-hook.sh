@@ -115,7 +115,7 @@ if [[ $ITERATION -ge $HARD_CAP ]]; then
 fi
 
 # Extract last assistant message directly from hook input (stop hook API)
-LAST_OUTPUT=$(echo "$HOOK_INPUT" | jq -r '.last_assistant_message // ""')
+LAST_OUTPUT=$(echo "$HOOK_INPUT" | jq -r '.last_assistant_message // ""' 2>/dev/null || true)
 
 # Empty LAST_OUTPUT is valid for tool-use-only responses -- do not terminate
 # The stuck detection counter below handles repeated empty outputs

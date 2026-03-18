@@ -683,6 +683,29 @@ assert_file_not_exists "$TEST_DIR/.claude/ralph-loop.local.md" "old unscoped sta
 cleanup_test "$TEST_DIR"
 echo ""
 
+echo "=== Invalid JSON Input Tests ==="
+echo ""
+
+# Test 40: Malformed text input exits 0 without active loop
+echo "Test 40: malformed text input exits 0 without active ralph loop"
+TEST_DIR=$(setup_test)
+HOOK_OUTPUT=""
+EXIT_CODE=0
+HOOK_OUTPUT=$(cd "$TEST_DIR" && echo 'not json at all' | bash "$HOOK" 2>/dev/null) || EXIT_CODE=$?
+assert_eq "0" "$EXIT_CODE" "hook exits 0 on invalid JSON without active loop"
+assert_eq "" "$HOOK_OUTPUT" "no output when no active loop"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 41: Malformed text input with active loop emits block decision
+echo "Test 41: malformed text input with active ralph loop emits block decision"
+TEST_DIR=$(setup_test)
+create_state_file "$TEST_DIR" 1 0 "null" 0 3
+HOOK_OUTPUT=$(cd "$TEST_DIR" && echo 'not json at all' | bash "$HOOK" 2>/dev/null) || true
+assert_contains "$HOOK_OUTPUT" '"decision": "block"' "block decision emitted on invalid JSON with active loop"
+cleanup_test "$TEST_DIR"
+echo ""
+
 # --- Summary ---
 
 print_results
