@@ -158,8 +158,7 @@ For processing activities where Jikigai acts as Controller (see Sections 2.1b an
 | Supabase Inc ([supabase.com](https://supabase.com)) | Web Platform auth + database | Email addresses, hashed passwords, auth tokens, session data | Contract performance (Article 6(1)(b)) | [Supabase DPA](https://supabase.com/legal/dpa) |
 | Stripe Inc ([stripe.com](https://stripe.com)) | Web Platform payment processing (Stripe Checkout, PCI SAQ-A) | Customer email, subscription metadata (card data handled exclusively by Stripe) | Contract performance (Article 6(1)(b)) | [Stripe Sub-processors](https://stripe.com/legal/service-providers) |
 | Hetzner Online GmbH ([hetzner.com](https://hetzner.com)) | Web Platform infrastructure hosting (Helsinki, EU-only) | User workspaces, encrypted API keys, Docker containers | Contract performance (Article 6(1)(b)) | [Hetzner DPA](https://www.hetzner.com/legal/terms-and-conditions/) |
-
-Cloudflare, already used for DNS on `soleur.ai`, also proxies `app.soleur.ai` via the same zone configuration. The existing Cloudflare service relationship covers this subdomain -- no additional processor engagement is required.
+| Cloudflare Inc ([cloudflare.com](https://cloudflare.com)) | Web Platform CDN/proxy (`app.soleur.ai`, extending existing `soleur.ai` zone) | IP addresses, request headers, TLS termination data | Contract performance (Article 6(1)(b)) | [Cloudflare DPA](https://www.cloudflare.com/cloudflare-customer-dpa/) |
 
 This disclosure is consistent with Sections 2.1b, 2.3(a), 2.3(e), 2.3(f), 2.3(g), and 2.3(h).
 
@@ -251,11 +250,7 @@ The Soleur Web Platform (app.soleur.ai) represents the introduction of cloud-hos
 
 ### 8.2 Future Changes
 
-Any further expansion of cloud processing beyond the Web Platform (e.g., additional cloud services, new data categories) will follow the same disclosure process:
-
-### 8.2 Notification of Changes
-
-Any transition from local-only to cloud-assisted processing will be communicated:
+Any further expansion of cloud processing beyond the Web Platform (e.g., additional cloud services, new data categories) will follow the same disclosure process and will be communicated:
 
 - **(a)** At least 30 days before the change takes effect;
 - **(b)** Via the Soleur GitHub repository, Docs Site, and release notes;
@@ -273,9 +268,9 @@ Given the local-only nature of the Plugin, traditional audit rights under Articl
 - **(b)** Users may verify that the Plugin does not transmit data by inspecting network activity during use.
 - **(c)** Soleur welcomes security audits and responsible disclosure through the GitHub repository.
 
-### 9.2 Future Cloud Features
+### 9.2 Web Platform Audit Rights
 
-If cloud features are introduced, full audit rights consistent with Article 28(3)(h) will be provided, including the right to conduct or commission audits and inspections.
+For the Web Platform, audit rights consistent with Article 28(3)(h) are provided through the individual processor DPAs: [Supabase DPA](https://supabase.com/legal/dpa), [Stripe DPA](https://stripe.com/legal/dpa), and [Hetzner DPA](https://www.hetzner.com/legal/terms-and-conditions/). Users may request audit information from Jikigai regarding Web Platform data processing by contacting legal@jikigai.com.
 
 ---
 

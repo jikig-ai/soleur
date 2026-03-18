@@ -222,11 +222,11 @@ If you are located in the EU or EEA, you have the following rights with respect 
 - **Right to object** (Article 21) -- the right to object to processing based on legitimate interests.
 - **Right to lodge a complaint** -- the right to file a complaint with your local Data Protection Authority.
 
-Because the Plugin does not collect personal data, these rights are most relevant to your interactions with GitHub (the hosting platform). To exercise rights related to GitHub-collected data, contact GitHub directly through their privacy channels.
+For the Plugin, these rights are most relevant to your interactions with GitHub (the hosting platform). For the Web Platform (app.soleur.ai), you may exercise these rights directly against Jikigai for account data, workspace data, and subscription data by contacting legal@jikigai.com. To exercise rights related to GitHub-collected data, contact GitHub directly through their privacy channels.
 
 ### 8.2 Rights Under US Privacy Laws
 
-Users in the United States may have additional rights under state privacy laws (such as the California Consumer Privacy Act). Because Soleur does not collect personal information through the Plugin, these rights are primarily relevant to any data collected by GitHub as the hosting provider for the Docs Site and repository. Contact GitHub directly to exercise these rights.
+Users in the United States may have additional rights under state privacy laws (such as the California Consumer Privacy Act). For the Plugin, these rights are primarily relevant to any data collected by GitHub as the hosting provider. For the Web Platform, you may exercise these rights by contacting legal@jikigai.com.
 
 ## 9. Children's Privacy
 

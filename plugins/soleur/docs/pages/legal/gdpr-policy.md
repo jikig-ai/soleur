@@ -8,7 +8,7 @@ permalink: pages/legal/gdpr-policy.html
 <section class="page-hero">
   <div class="container">
     <h1>GDPR Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated March 18, 2026 (newsletter legal basis clarification)</p>
+    <p>Effective February 20, 2026 | Last Updated March 18, 2026 (Web Platform Services; Article 30 Register)</p>
   </div>
 </section>
 
@@ -155,7 +155,7 @@ The Docs Site uses **Plausible Analytics** ([plausible.io](https://plausible.io)
 
 ## 5. Data Subject Rights
 
-Under the GDPR, data subjects in the EEA have the following rights. Because Soleur's data collection is limited (newsletter email addresses via Buttondown, CLA signatures via GitHub), most of these rights are exercisable against the relevant third-party service providers or by unsubscribing from the newsletter:
+Under the GDPR, data subjects in the EEA have the following rights. For data processed through the Web Platform (app.soleur.ai), these rights are exercisable directly against Jikigai by contacting legal@jikigai.com. For newsletter subscriptions and CLA signatures, most rights are exercisable against the relevant third-party service providers or by unsubscribing from the newsletter:
 
 ### 5.1 Rights Exercisable Against Third Parties
 
@@ -235,7 +235,11 @@ Personal data contained in data subject rights requests and legal inquiries (nam
 
 Newsletter subscriber email addresses are retained by Buttondown for as long as the subscriber remains subscribed. Upon unsubscription, the email address is removed from the active subscriber list. Buttondown may retain anonymized aggregate data (e.g., subscriber counts) after unsubscription. Upon termination of the service relationship, Buttondown will, at Jikigai's option, delete or return all personal data in accordance with Buttondown's Data Processing Agreement.
 
-### 8.4 Third-Party Retention
+### 8.4 Web Platform Data
+
+Web Platform account data (email, hashed password, auth tokens) is retained while the account is active and deleted upon account deletion request. Encrypted API keys are deleted with the associated workspace. Payment records (subscription metadata, invoices) are retained for 10 years per French tax law (Code de commerce Art. L123-22).
+
+### 8.5 Third-Party Retention
 
 Retention periods for data held by Anthropic and GitHub are governed by their respective privacy policies and data retention schedules.
 
@@ -287,7 +291,7 @@ In the event of a personal data breach affecting data for which Jikigai acts as 
 
 ### 11.2 Practical Context
 
-Given Jikigai's minimal processing activities, the most likely breach scenario would involve unauthorized access to Proton AG (Proton Mail), the email provider handling legal@jikigai.com, or a compromise of the GitHub organization. In both cases, the third-party provider (Proton Mail, GitHub) would typically be the first to detect and communicate the breach.
+The most likely breach scenarios include: (a) unauthorized access to the Supabase database (user account data), (b) compromise of the Hetzner server (workspace data, encrypted API keys), (c) unauthorized access to Proton AG (Proton Mail, handling legal@jikigai.com), or (d) a compromise of the GitHub organization. In all cases, the third-party provider would typically be the first to detect and communicate the breach. Jikigai would assess the impact on Web Platform user data and notify affected users as required by Articles 33-34.
 
 ---
 
@@ -318,7 +322,7 @@ To exercise your data subject rights under GDPR, send a written request to legal
 
 Soleur is a source-available project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France.
 
-Soleur's limited data processing (standard web hosting, community repository interactions) does not meet the thresholds requiring a Data Protection Officer (DPO) under Article 37 of the GDPR: the processing is not core business activity involving regular and systematic monitoring of data subjects at large scale, nor does it involve large-scale processing of special categories of data. Accordingly, no DPO has been appointed. Should this assessment change, DPO contact information will be added to this policy.
+Jikigai's data processing (standard web hosting, community repository interactions, and Web Platform account/payment/workspace management) does not meet the thresholds requiring a Data Protection Officer (DPO) under Article 37 of the GDPR: the processing is not core business activity involving regular and systematic monitoring of data subjects at large scale, nor does it involve large-scale processing of special categories of data. The Web Platform processes user account data but at a scale consistent with a pre-revenue SaaS and does not involve profiling or monitoring. Accordingly, no DPO has been appointed. Should this assessment change (e.g., significant user base growth), DPO contact information will be added to this policy.
 
 ---
 
