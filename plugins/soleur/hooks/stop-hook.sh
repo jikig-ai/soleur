@@ -33,7 +33,7 @@ for state_file in "${PROJECT_ROOT}/.claude"/ralph-loop.*.local.md; do
     if [[ -n "$STARTED_EPOCH" ]] && [[ $((NOW_EPOCH - STARTED_EPOCH)) -gt $((TTL_HOURS * 3600)) ]]; then
       AGE_MINS=$(( (NOW_EPOCH - STARTED_EPOCH) / 60 ))
       echo "Ralph loop: stale state file detected ($(basename "$state_file"), started ${AGE_MINS}m ago, TTL=${TTL_HOURS}h). Auto-removing." >&2
-      rm "$state_file" || true
+      rm -f "$state_file"
     fi
   fi
 done
@@ -48,7 +48,7 @@ fi
 HOOK_INPUT=$(cat)
 
 # Re-check after potential race -- file may have been removed between
-# the guard on line 42 and here (stdin read above is blocking)
+# the existence check above and here (stdin read is blocking)
 [[ -f "$RALPH_STATE_FILE" ]] || exit 0
 
 # Parse markdown frontmatter (YAML between first and second --- only)
@@ -59,10 +59,10 @@ if [[ -z "$FRONTMATTER" ]]; then
   exit 0
 fi
 
-ITERATION=$(echo "$FRONTMATTER" | grep '^iteration:' | sed 's/iteration: *//')
-MAX_ITERATIONS=$(echo "$FRONTMATTER" | grep '^max_iterations:' | sed 's/max_iterations: *//')
+ITERATION=$(echo "$FRONTMATTER" | grep '^iteration:' | sed 's/iteration: *//' || true)
+MAX_ITERATIONS=$(echo "$FRONTMATTER" | grep '^max_iterations:' | sed 's/max_iterations: *//' || true)
 # Extract completion_promise and strip surrounding quotes if present
-COMPLETION_PROMISE=$(echo "$FRONTMATTER" | grep '^completion_promise:' | sed 's/completion_promise: *//' | sed 's/^"\(.*\)"$/\1/')
+COMPLETION_PROMISE=$(echo "$FRONTMATTER" | grep '^completion_promise:' | sed 's/completion_promise: *//' | sed 's/^"\(.*\)"$/\1/' || true)
 
 # --- Stuck Detection ---
 # Parse stuck detection fields from frontmatter
