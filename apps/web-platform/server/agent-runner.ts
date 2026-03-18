@@ -142,7 +142,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         maxTurns: 50,
         maxBudgetUsd: 5.0,
         systemPrompt,
-        env: { ANTHROPIC_API_KEY: apiKey },
+        env: { ...process.env, ANTHROPIC_API_KEY: apiKey },
         plugins: [{ type: "local" as const, path: pluginPath }],
         canUseTool: async (
           toolName: string,
@@ -254,6 +254,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
     }
   } catch (err) {
     if (!controller.signal.aborted) {
+      console.error(`[agent] Session error for ${userId}/${conversationId}:`, err);
       const message =
         err instanceof Error ? err.message : "Agent session failed";
       sendToClient(userId, { type: "error", message });
