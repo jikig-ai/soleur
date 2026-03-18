@@ -1,0 +1,68 @@
+import { describe, test, expect, afterEach, vi, beforeAll } from "vitest";
+import { existsSync, readFileSync, rmSync } from "fs";
+import { join } from "path";
+import { randomUUID } from "crypto";
+
+const TEST_WORKSPACES = "/tmp/soleur-test-workspaces";
+
+// Must set env BEFORE importing the module (reads at load time)
+vi.stubEnv("WORKSPACES_ROOT", TEST_WORKSPACES);
+vi.stubEnv("SOLEUR_PLUGIN_PATH", "/nonexistent");
+
+// Dynamic import after env is set
+let provisionWorkspace: (userId: string) => Promise<string>;
+
+beforeAll(async () => {
+  const mod = await import("../server/workspace");
+  provisionWorkspace = mod.provisionWorkspace;
+});
+
+afterEach(() => {
+  try {
+    rmSync(TEST_WORKSPACES, { recursive: true, force: true });
+  } catch {}
+});
+
+describe("workspace provisioning", () => {
+  test("creates workspace directory structure", async () => {
+    const userId = randomUUID();
+    const path = await provisionWorkspace(userId);
+
+    expect(path).toBe(join(TEST_WORKSPACES, userId));
+    expect(existsSync(path)).toBe(true);
+    expect(existsSync(join(path, "knowledge-base"))).toBe(true);
+    expect(existsSync(join(path, "knowledge-base/brainstorms"))).toBe(true);
+    expect(existsSync(join(path, "knowledge-base/specs"))).toBe(true);
+    expect(existsSync(join(path, "knowledge-base/plans"))).toBe(true);
+    expect(existsSync(join(path, "knowledge-base/learnings"))).toBe(true);
+  });
+
+  test("creates .claude/settings.json with default permissions", async () => {
+    const userId = randomUUID();
+    const path = await provisionWorkspace(userId);
+
+    const settingsPath = join(path, ".claude/settings.json");
+    expect(existsSync(settingsPath)).toBe(true);
+
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    expect(settings.permissions.allow).toContain("Read");
+    expect(settings.permissions.allow).toContain("Glob");
+    expect(settings.permissions.allow).toContain("Grep");
+  });
+
+  test("initializes a git repository", async () => {
+    const userId = randomUUID();
+    const path = await provisionWorkspace(userId);
+
+    expect(existsSync(join(path, ".git"))).toBe(true);
+  });
+
+  test("is idempotent — running twice does not error", async () => {
+    const userId = randomUUID();
+    const path1 = await provisionWorkspace(userId);
+    const path2 = await provisionWorkspace(userId);
+
+    expect(path1).toBe(path2);
+    expect(existsSync(path1)).toBe(true);
+  });
+});
