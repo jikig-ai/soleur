@@ -9,7 +9,7 @@ generated-date: 2026-02-20
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 18, 2026 (added GitHub Pages and Plausible Analytics to Docs Site Processors; added Plausible EU-only hosting disclosure to Section 6.3)
+**Last Updated:** March 18, 2026 (added web platform processors, restructured Section 2 for cloud services, addressed Section 8 transition commitments)
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -45,20 +45,33 @@ Soleur is a source-available project maintained by Jikigai, a company incorporat
 
 ## 2. Data Processing Relationship Classification
 
-### 2.1 Soleur Is Not a Data Processor
+### 2.1 The Soleur Plugin Is Not a Data Processor
 
-**This section is critical to understanding the data processing relationship.**
+**This section is critical to understanding the data processing relationship for the Plugin.**
 
-The Soleur Plugin operates entirely on the User's local machine. It is installed via CLI and runs as a local extension within the User's development environment. Soleur does not operate cloud infrastructure, servers, or hosted services that process User data.
+The Soleur Plugin operates entirely on the User's local machine. It is installed via CLI and runs as a local extension within the User's development environment.
 
 As a result:
 
-- **(a)** Soleur does **not** process Personal Data on behalf of the User within the meaning of Article 28 of the GDPR.
-- **(b)** Soleur does **not** have access to, collect, store, transmit, or otherwise process any Local Data created or managed through the Plugin.
+- **(a)** The Plugin does **not** process Personal Data on behalf of the User within the meaning of Article 28 of the GDPR.
+- **(b)** The Plugin does **not** have access to, collect, store, transmit, or otherwise process any Local Data created or managed through the Plugin.
 - **(c)** All knowledge-base files, plans, brainstorms, specs, generated code, and other artifacts remain exclusively on the User's local filesystem under the User's sole control.
-- **(d)** Soleur does **not** act as an intermediary for any API calls made by the User to third-party services (including, but not limited to, the Anthropic Claude API). Users authenticate directly with third-party services using their own API keys and credentials.
+- **(d)** The Plugin does **not** act as an intermediary for any API calls made by the User to third-party services (including, but not limited to, the Anthropic Claude API). Users authenticate directly with third-party services using their own API keys and credentials.
 
 **Therefore, Soleur is neither a Controller nor a Processor with respect to the data processed locally through the Plugin.**
+
+### 2.1b Web Platform Data Processing
+
+The Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) is a cloud-hosted service operated by Jikigai. Unlike the Plugin (Section 2.1), the Web Platform involves server-side processing of User data on Jikigai-operated infrastructure.
+
+For the Web Platform:
+
+- **(a)** Jikigai acts as the **data controller** for User account data, workspace data, and subscription data processed through the Web Platform.
+- **(b)** Jikigai engages the following **data processors** under Article 28 of the GDPR: Supabase (authentication and database), Stripe (payment processing), Hetzner (infrastructure hosting), and Cloudflare (CDN/proxy). See Section 4.2 for the full processor table.
+- **(c)** Data processed includes: email addresses, hashed passwords, authentication tokens, session data, encrypted API keys, subscription metadata, and technical data (IP addresses, request headers).
+- **(d)** The legal basis for this processing is **contract performance** (Article 6(1)(b) GDPR) -- processing is necessary to provide the Web Platform service the User signed up for.
+
+This section fulfills the commitment made in Section 8.1(a) to update this DPD with Article 28-compliant terms when cloud features are introduced.
 
 ### 2.2 User's Responsibilities as Controller
 
@@ -80,8 +93,11 @@ Soleur's data processing activities are limited to:
 - **(c)** **Plugin distribution:** The Plugin is distributed via GitHub and npm. Download and installation telemetry is handled by those respective platforms under their own privacy policies.
 - **(d)** **Contributor License Agreement (CLA) signatures:** Contributors who submit pull requests to the Soleur repository are asked to sign a CLA via the CLA Assistant integrated into GitHub. This processing collects the contributor's GitHub username, signature timestamp, and associated pull request reference. Signature data is stored in the Soleur GitHub repository on a dedicated branch (`cla-signatures`) and is publicly visible. The legal basis is legitimate interest (Article 6(1)(f) GDPR) in maintaining an enforceable record of contributor IP license grants. Signature data is retained indefinitely as the license grants are irrevocable.
 - **(e)** **Newsletter subscription management:** Visitors who subscribe to the Soleur newsletter via the Docs Site provide their email address, which is transmitted to and processed by **Buttondown** ([buttondown.com](https://buttondown.com)), a third-party newsletter platform. Buttondown also automatically collects IP address, referrer URL, subscription timestamp, and browser/device metadata during the subscription request. Buttondown acts as a data processor on behalf of Jikigai. The legal basis for email address processing is consent (Article 6(1)(a) GDPR), verified through a double opt-in confirmation email. The legal basis for technical metadata is legitimate interest (Article 6(1)(f) GDPR) -- service operation and abuse prevention. Email addresses are retained until the subscriber unsubscribes. Technical metadata retention is governed by Buttondown's data retention practices.
+- **(f)** **Web Platform account management:** The Web Platform (app.soleur.ai) processes email addresses, hashed passwords (managed by Supabase), authentication tokens, and session data for user account management and authentication. Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: while account is active; deleted on account deletion request.
+- **(g)** **Web Platform payment processing:** The Web Platform processes customer email addresses and subscription metadata via Stripe Checkout. Card data is handled exclusively by Stripe and never reaches Jikigai servers (PCI SAQ-A). Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: subscription records retained for 10 years per French tax law (Code de commerce Art. L123-22).
+- **(h)** **Web Platform infrastructure hosting:** The Web Platform hosts user workspaces, encrypted API keys (AES-256-GCM), and Docker containers on Hetzner servers in Helsinki, Finland (EU-only). Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: while account is active.
 
-For these limited activities, Soleur acts as a Controller only with respect to data it directly collects (including CLA signature data), and GitHub acts as a Processor or independent Controller as described in its own agreements.
+For these activities, Jikigai acts as a Controller with respect to data it directly collects and processes (including CLA signature data and Web Platform account data). Third-party processors are engaged as described in Section 4.2.
 
 ---
 
@@ -114,9 +130,11 @@ While Soleur does not process User data, we recommend the following security mea
 
 The Plugin does not process Personal Data on behalf of Users (see Section 2.1). Accordingly, there are no Plugin-level Sub-processors to disclose under Article 28(2) of the GDPR.
 
-### 4.2 Docs Site Processors
+### 4.2 Service Processors
 
-For processing activities where Jikigai acts as Controller (see Section 2.3), the following third-party processors are engaged:
+For processing activities where Jikigai acts as Controller (see Sections 2.1b and 2.3), the following third-party processors are engaged:
+
+**Docs Site and Newsletter Processors:**
 
 | Processor | Processing Activity | Data Processed | Legal Basis | Sub-processor List |
 |-----------|-------------------|----------------|-------------|-------------------|
@@ -124,7 +142,16 @@ For processing activities where Jikigai acts as Controller (see Section 2.3), th
 | Plausible Analytics ([plausible.io](https://plausible.io)) | Privacy-respecting website analytics (cookie-free, EU-hosted) | Aggregated anonymous data only: page URLs, referrer URLs, country, device type, browser type (no IP addresses stored; see Section 2.3(a)) | Legitimate interest (Article 6(1)(f)) | [Plausible DPA](https://plausible.io/dpa) |
 | Buttondown ([buttondown.com](https://buttondown.com)) | Newsletter subscription management and email delivery | Email addresses of subscribers | Consent (Article 6(1)(a)) — double opt-in | [Buttondown Sub-processors](https://buttondown.com/legal/dpa) |
 
-This disclosure is consistent with Section 2.3(a) and Section 2.3(e).
+**Web Platform Processors:**
+
+| Processor | Processing Activity | Data Processed | Legal Basis | Sub-processor List |
+|-----------|-------------------|----------------|-------------|-------------------|
+| Supabase Inc ([supabase.com](https://supabase.com)) | Web Platform auth + database | Email addresses, hashed passwords, auth tokens, session data | Contract performance (Article 6(1)(b)) | [Supabase DPA](https://supabase.com/legal/dpa) |
+| Stripe Inc ([stripe.com](https://stripe.com)) | Web Platform payment processing (Stripe Checkout, PCI SAQ-A) | Customer email, subscription metadata (card data handled exclusively by Stripe) | Contract performance (Article 6(1)(b)) | [Stripe Sub-processors](https://stripe.com/legal/service-providers) |
+| Hetzner Online GmbH ([hetzner.com](https://hetzner.com)) | Web Platform infrastructure hosting (Helsinki, EU-only) | User workspaces, encrypted API keys, Docker containers | Contract performance (Article 6(1)(b)) | [Hetzner DPA](https://www.hetzner.com/legal/terms-and-conditions/) |
+| Cloudflare Inc ([cloudflare.com](https://cloudflare.com)) | Web Platform CDN/proxy (`app.soleur.ai`, extending existing `soleur.ai` zone) | IP addresses, request headers, TLS termination data | Contract performance (Article 6(1)(b)) | [Cloudflare DPA](https://www.cloudflare.com/cloudflare-customer-dpa/) |
+
+This disclosure is consistent with Sections 2.1b, 2.3(a), 2.3(e), 2.3(f), 2.3(g), and 2.3(h).
 
 ### 4.3 Third-Party Services Used by Users
 
@@ -165,7 +192,16 @@ No international data transfers are performed by Soleur with respect to Local Da
 
 When Users interact with third-party services (e.g., Anthropic Claude API, GitHub), data may be transferred internationally. These transfers are governed by the respective third-party's data processing agreements and transfer mechanisms. Users are responsible for ensuring adequate safeguards are in place for any such transfers.
 
-### 6.3 Docs Site
+### 6.3 Web Platform
+
+For the Web Platform (app.soleur.ai):
+
+- **Supabase:** US-based (AWS). Transfer via Standard Contractual Clauses (SCCs), Module 2 (Controller to Processor).
+- **Stripe:** US-based (Stripe, LLC). Transfer via EU-US Data Privacy Framework (DPF, adequacy decision) and Standard Contractual Clauses (SCCs), EEA Module 2.
+- **Hetzner:** EU-based (Germany). Web Platform hosted in Helsinki, Finland (EU). **No international data transfers.**
+- **Cloudflare:** Global CDN. Transfer via EU-US Data Privacy Framework (DPF), Standard Contractual Clauses (SCCs), and Global CBPR certification.
+
+### 6.4 Docs Site
 
 The Docs Site is hosted on GitHub Pages, which may involve data processing in the United States and other jurisdictions where GitHub operates. GitHub maintains appropriate transfer mechanisms as described in its data processing agreements.
 
@@ -189,23 +225,23 @@ In the unlikely event that a breach affects the Soleur GitHub repository, Docs S
 
 ---
 
-## 8. Future Cloud Features
+## 8. Cloud Features Transition
 
-### 8.1 Prospective Data Processing Changes
+### 8.1 Transition Status
 
-If Soleur introduces cloud-hosted features, server-side processing, or any functionality that involves the transmission of User data to Soleur-operated infrastructure:
+The Soleur Web Platform (app.soleur.ai) represents the introduction of cloud-hosted features described prospectively in the original version of this section. The commitments made below have been addressed as follows:
 
-- **(a)** This DPD will be updated to include full Article 28 GDPR-compliant data processing terms, including: subject matter, duration, nature and purpose of processing, types of Personal Data processed, and categories of data subjects.
-- **(b)** Users will be notified of changes before any cloud processing begins.
-- **(c)** Appropriate technical and organizational measures will be implemented in accordance with Article 32 of the GDPR.
-- **(d)** A list of Sub-processors will be maintained and made available to Users.
-- **(e)** Standard Contractual Clauses or other appropriate transfer mechanisms will be implemented for any international data transfers.
-- **(f)** Data Processing Impact Assessments will be conducted where required under Article 35 of the GDPR.
-- **(g)** Users will have the opportunity to review and accept updated terms before using any cloud features.
+- **(a)** This DPD has been updated with Article 28 GDPR-compliant data processing terms (see Sections 2.1b, 2.3(f)-(h), and 4.2). **FULFILLED.**
+- **(b)** Users are notified of cloud processing via this updated DPD and the updated Privacy Policy. **FULFILLED.**
+- **(c)** Technical and organizational measures implemented: encryption at rest (AES-256-GCM for API keys), TLS for data in transit, EU-only hosting (Helsinki, Finland) for infrastructure. **FULFILLED.**
+- **(d)** Processor list maintained in Section 4.2. **FULFILLED.**
+- **(e)** Transfer mechanisms documented: SCCs for Supabase, DPF + SCCs for Stripe, EU-only for Hetzner (see Section 6.3). **FULFILLED.**
+- **(f)** DPIA evaluation: The Web Platform processes user PII (email, auth tokens, encrypted API keys, subscription metadata) but does not involve special categories (Article 9), systematic monitoring, or automated decision-making. Processing remains below the high-risk thresholds of Article 35(3). **Evaluated -- DPIA not required.** See the companion GDPR Policy Section 9 for the full analysis.
+- **(g)** Users accept the updated Terms and Conditions when creating a Web Platform account. **FULFILLED.**
 
-### 8.2 Notification of Changes
+### 8.2 Future Changes
 
-Any transition from local-only to cloud-assisted processing will be communicated:
+Any further expansion of cloud processing beyond the Web Platform (e.g., additional cloud services, new data categories) will follow the same disclosure process and will be communicated:
 
 - **(a)** At least 30 days before the change takes effect;
 - **(b)** Via the Soleur GitHub repository, Docs Site, and release notes;
@@ -223,9 +259,9 @@ Given the local-only nature of the Plugin, traditional audit rights under Articl
 - **(b)** Users may verify that the Plugin does not transmit data by inspecting network activity during use.
 - **(c)** Soleur welcomes security audits and responsible disclosure through the GitHub repository.
 
-### 9.2 Future Cloud Features
+### 9.2 Web Platform Audit Rights
 
-If cloud features are introduced, full audit rights consistent with Article 28(3)(h) will be provided, including the right to conduct or commission audits and inspections.
+For the Web Platform, audit rights consistent with Article 28(3)(h) are provided through the individual processor DPAs: [Supabase DPA](https://supabase.com/legal/dpa), [Stripe DPA](https://stripe.com/legal/dpa), and [Hetzner DPA](https://www.hetzner.com/legal/terms-and-conditions/). Users may request audit information from Jikigai regarding Web Platform data processing by contacting legal@jikigai.com.
 
 ---
 
