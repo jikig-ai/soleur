@@ -1,5 +1,8 @@
 import { readdirSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function countMdFilesRecursive(dir) {
   let count = 0;
@@ -14,9 +17,9 @@ function countMdFilesRecursive(dir) {
 }
 
 export default function () {
-  const agentsDir = resolve("plugins/soleur/agents");
-  const skillsDir = resolve("plugins/soleur/skills");
-  const commandsDir = resolve("plugins/soleur/commands");
+  const agentsDir = join(__dirname, "..", "..", "agents");
+  const skillsDir = join(__dirname, "..", "..", "skills");
+  const commandsDir = join(__dirname, "..", "..", "commands");
 
   const agents = countMdFilesRecursive(agentsDir);
 

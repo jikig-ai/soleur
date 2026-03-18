@@ -1,6 +1,10 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
 import yaml from "yaml";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Category mapping -- update here when skills are added/reorganized
 // Source of truth: plugins/soleur/docs/pages/skills.html
@@ -109,7 +113,7 @@ function cleanDescription(desc) {
 }
 
 export default function () {
-  const skillsDir = resolve("plugins/soleur/skills");
+  const skillsDir = join(__dirname, "..", "..", "skills");
   const entries = readdirSync(skillsDir, { withFileTypes: true });
 
   const skillsByCategory = {};
