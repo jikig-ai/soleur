@@ -23,8 +23,8 @@ The result is a deeply grounded, production-ready plan with concrete implementat
 <plan_path> #$ARGUMENTS </plan_path>
 
 **If the plan path above is empty:**
-1. Check for recent plans: `ls -la knowledge-base/plans/`
-2. Ask the user: "Which plan would you like to deepen? Please provide the path (e.g., `knowledge-base/plans/2026-01-15-feat-my-feature-plan.md`)."
+1. Check for recent plans: `ls -la knowledge-base/project/plans/`
+2. Ask the user: "Which plan would you like to deepen? Please provide the path (e.g., `knowledge-base/project/plans/2026-01-15-feat-my-feature-plan.md`)."
 
 Do not proceed until a valid plan file path is provided.
 
@@ -150,7 +150,7 @@ Check for documented learnings from the `soleur:compound` skill. These are solve
 **LEARNINGS LOCATION - Check these exact folders:**
 
 ```
-knowledge-base/learnings/           <-- PRIMARY: Project-level learnings (created by soleur:compound)
+knowledge-base/project/learnings/           <-- PRIMARY: Project-level learnings (created by soleur:compound)
 ├── performance-issues/
 │   └── *.md
 ├── debugging-patterns/
@@ -197,7 +197,7 @@ root_cause: "Missing includes on association"
 
 ```bash
 # Read first 20 lines of each learning (frontmatter + summary)
-head -20 knowledge-base/learnings/**/*.md
+head -20 knowledge-base/project/learnings/**/*.md
 ```
 
 **Step 3: Filter - only spawn sub-agents for LIKELY relevant learnings**
