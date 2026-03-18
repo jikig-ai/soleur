@@ -1,0 +1,37 @@
+{
+  "name": "soleur-web-platform",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "tsx server/index.ts",
+    "build": "next build",
+    "start": "NODE_ENV=production tsx server/index.ts",
+    "lint": "next lint",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.76",
+    "@supabase/ssr": "^0.6.0",
+    "@supabase/supabase-js": "^2.49.0",
+    "next": "^15.3.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "stripe": "^17.7.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.2.1",
+    "@types/node": "^22.14.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@types/ws": "^8.18.0",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^9.20.0",
+    "eslint-config-next": "^15.3.0",
+    "postcss": "^8.5.0",
+    "tailwindcss": "^4.1.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.1.0"
+  }
+}

@@ -3,7 +3,10 @@ set -euo pipefail
 
 # --- Sentinel Check ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/../scripts/resolve-git-root.sh"
+source "$SCRIPT_DIR/../scripts/resolve-git-root.sh" || {
+  # Not in a git repo -- skip welcome silently
+  exit 0
+}
 PROJECT_ROOT="$GIT_ROOT"
 SENTINEL_FILE="${PROJECT_ROOT}/.claude/soleur-welcomed.local"
 
