@@ -224,13 +224,13 @@ Document that Bun 1.3.5 segfaults on missing dependencies instead of reporting a
 
 ## Acceptance Criteria
 
-- [ ] Root `bunfig.toml` exists with `[test]` section documenting Bun's discovery behavior
-- [ ] CI pins Bun to `1.3.11` instead of `latest` in `.github/workflows/ci.yml`
-- [ ] `bun test` passes reliably from repo root (13 files, 1136 tests)
-- [ ] Worktree creation flow ensures `node_modules/` is populated via `install_deps()` in both `create_worktree()` and `create_for_feature()`
-- [ ] `install_deps()` degrades gracefully when bun/npm unavailable or network fails
-- [ ] Learning document captures the root cause, fix, and cross-references prior learning
-- [ ] `apps/telegram-bridge/bunfig.toml` coverage config continues to work (Bun merges configs)
+- [x] Root `bunfig.toml` exists with `[test]` section documenting Bun's discovery behavior
+- [x] CI pins Bun to `1.3.11` instead of `latest` in `.github/workflows/ci.yml`
+- [x] `bun test` passes reliably from repo root (13 files, 1136 tests)
+- [x] Worktree creation flow ensures `node_modules/` is populated via `install_deps()` in both `create_worktree()` and `create_for_feature()`
+- [x] `install_deps()` degrades gracefully when bun/npm unavailable or network fails
+- [x] Learning document captures the root cause, fix, and cross-references prior learning
+- [x] `apps/telegram-bridge/bunfig.toml` coverage config continues to work (Bun merges configs)
 
 ## Test Scenarios
 

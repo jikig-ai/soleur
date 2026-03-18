@@ -114,6 +114,34 @@ copy_env_files() {
   echo -e "  ${GREEN}✓ Copied $copied environment file(s)${NC}"
 }
 
+# Install dependencies in a newly created worktree
+install_deps() {
+  local worktree_path="$1"
+
+  if [[ ! -f "$worktree_path/package.json" ]]; then
+    return
+  fi
+
+  if [[ -d "$worktree_path/node_modules" ]]; then
+    return
+  fi
+
+  if ! command -v bun &>/dev/null; then
+    echo -e "  ${YELLOW}Warning: bun not found -- install dependencies manually${NC}"
+    return
+  fi
+
+  echo -e "${BLUE}Installing dependencies...${NC}"
+
+  local install_output
+  if install_output=$(bun install --frozen-lockfile --cwd "$worktree_path" 2>&1); then
+    echo -e "  ${GREEN}Dependencies installed${NC}"
+  else
+    echo -e "  ${YELLOW}Warning: bun install failed -- run manually in the worktree${NC}"
+    echo "  $install_output"
+  fi
+}
+
 # Create a new worktree
 create_worktree() {
   local branch_name="$1"
@@ -176,6 +204,9 @@ create_worktree() {
   # Copy environment files
   copy_env_files "$worktree_path"
 
+  # Install dependencies
+  install_deps "$worktree_path"
+
   echo -e "${GREEN}✓ Worktree created successfully!${NC}"
   echo ""
   echo "To switch to this worktree:"
@@ -235,6 +266,9 @@ create_for_feature() {
 
   # Copy environment files
   copy_env_files "$worktree_path"
+
+  # Install dependencies
+  install_deps "$worktree_path"
 
   echo ""
   echo -e "${GREEN}Feature setup complete!${NC}"
