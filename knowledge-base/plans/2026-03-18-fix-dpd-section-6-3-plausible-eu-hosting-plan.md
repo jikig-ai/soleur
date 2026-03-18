@@ -108,16 +108,16 @@ The Cookie Policy describes cookie usage and tracking technologies. It has no "I
 
 ## Acceptance Criteria
 
-- [ ] DPD Section 6.3 mentions Plausible Analytics EU-only hosting in `docs/legal/data-processing-agreement.md`
-- [ ] DPD Section 6.3 mentions Plausible Analytics EU-only hosting in `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`
-- [ ] Both DPD file copies have identical Section 6.3 content (verify with `diff`)
-- [ ] Privacy Policy Section 10 mentions Plausible EU-only hosting in `docs/legal/privacy-policy.md`
-- [ ] Privacy Policy Section 10 mentions Plausible EU-only hosting in `plugins/soleur/docs/pages/legal/privacy-policy.md`
-- [ ] Both Privacy Policy file copies have identical Section 10 content (verify with `diff`)
-- [ ] No changes to GDPR Policy (correct as-is)
-- [ ] No changes to Cookie Policy (correct as-is)
-- [ ] All markdownlint checks pass
-- [ ] DPD "Last Updated" date bumped to current date
+- [x] DPD Section 6.3 mentions Plausible Analytics EU-only hosting in `docs/legal/data-processing-agreement.md`
+- [x] DPD Section 6.3 mentions Plausible Analytics EU-only hosting in `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`
+- [x] Both DPD file copies have identical Section 6.3 content (verify with `diff`)
+- [x] Privacy Policy Section 10 mentions Plausible EU-only hosting in `docs/legal/privacy-policy.md`
+- [x] Privacy Policy Section 10 mentions Plausible EU-only hosting in `plugins/soleur/docs/pages/legal/privacy-policy.md`
+- [x] Both Privacy Policy file copies have identical Section 10 content (verify with `diff`)
+- [x] No changes to GDPR Policy (correct as-is)
+- [x] No changes to Cookie Policy (correct as-is)
+- [x] All markdownlint checks pass (12 pre-existing MD034 bare-URL warnings unrelated to this change)
+- [x] DPD "Last Updated" date bumped to current date
 
 ## Test Scenarios
 
