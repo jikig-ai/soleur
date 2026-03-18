@@ -2,9 +2,21 @@
 title: "fix: Privacy Policy section cross-reference 5.4 should be 5.3"
 type: fix
 date: 2026-03-18
+deepened: 2026-03-18
 ---
 
 # fix: Privacy Policy section cross-reference 5.4 should be 5.3
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-18
+**Sections enhanced:** 2 (Context, Acceptance Criteria)
+**Research approach:** Targeted verification -- confirmed fix correctness, checked for similar issues across docs
+
+### Key Findings
+1. Only one `See Section` cross-reference exists in the entire privacy policy -- the broken one on line 101
+2. No other files in `plugins/soleur/docs/` reference "Section 5.4" -- blast radius is zero
+3. Section numbering is stable (5.1 Anthropic, 5.2 GitHub, 5.3 Buttondown, 5.4 Other) -- no renumbering needed
 
 ## Overview
 
@@ -27,8 +39,25 @@ Line 101 of `plugins/soleur/docs/pages/legal/privacy-policy.md` contains a wrong
 - **Line:** 101
 - **Current text:** `- **Third-party processor:** Buttondown acts as a data processor. See Section 5.4 for details.`
 - **Corrected text:** `- **Third-party processor:** Buttondown acts as a data processor. See Section 5.3 for details.`
-- **Section 5.3:** Buttondown (Newsletter) -- the correct target
-- **Section 5.4:** Other Third-Party Integrations -- incorrect target
+- **Section 5.3:** Buttondown (Newsletter) -- the correct target (line 120)
+- **Section 5.4:** Other Third-Party Integrations -- incorrect target (line 128)
+
+### Verification Details
+
+Section 5 subsection numbering confirmed via `grep -n "^### 5\."`:
+
+| Line | Section | Heading |
+|------|---------|---------|
+| 105 | 5.1 | Anthropic Claude API |
+| 114 | 5.2 | GitHub |
+| 120 | 5.3 | Buttondown (Newsletter) |
+| 128 | 5.4 | Other Third-Party Integrations |
+
+The cross-reference on line 101 is in section 4.6 (Newsletter Subscription Data) and says "Buttondown acts as a data processor. See Section 5.4 for details." -- but 5.4 is the generic catch-all, not the Buttondown-specific section. The correct target is 5.3.
+
+**Scope check:** `grep "See Section" privacy-policy.md` returns only line 101. No other cross-references to audit.
+
+**Blast radius check:** `grep "Section 5.4" plugins/soleur/docs/` returns only line 101. No other docs reference this section number.
 
 ## References
 
