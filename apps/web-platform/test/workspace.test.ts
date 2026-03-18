@@ -1,21 +1,14 @@
-import { describe, test, expect, afterEach, vi, beforeAll } from "vitest";
+// Set env BEFORE any imports (module reads at load time)
+process.env.WORKSPACES_ROOT = "/tmp/soleur-test-workspaces";
+process.env.SOLEUR_PLUGIN_PATH = "/nonexistent";
+
+import { describe, test, expect, afterEach } from "vitest";
 import { existsSync, readFileSync, rmSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
+import { provisionWorkspace } from "../server/workspace";
 
 const TEST_WORKSPACES = "/tmp/soleur-test-workspaces";
-
-// Must set env BEFORE importing the module (reads at load time)
-vi.stubEnv("WORKSPACES_ROOT", TEST_WORKSPACES);
-vi.stubEnv("SOLEUR_PLUGIN_PATH", "/nonexistent");
-
-// Dynamic import after env is set
-let provisionWorkspace: (userId: string) => Promise<string>;
-
-beforeAll(async () => {
-  const mod = await import("../server/workspace");
-  provisionWorkspace = mod.provisionWorkspace;
-});
 
 afterEach(() => {
   try {

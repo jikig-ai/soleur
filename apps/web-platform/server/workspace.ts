@@ -2,9 +2,13 @@ import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { execFileSync } from "child_process";
 
-const WORKSPACES_ROOT = process.env.WORKSPACES_ROOT || "/workspaces";
-const SOLEUR_PLUGIN_PATH =
-  process.env.SOLEUR_PLUGIN_PATH || "/app/shared/plugins/soleur";
+function getWorkspacesRoot(): string {
+  return process.env.WORKSPACES_ROOT || "/workspaces";
+}
+
+function getPluginPath(): string {
+  return process.env.SOLEUR_PLUGIN_PATH || "/app/shared/plugins/soleur";
+}
 
 const KNOWLEDGE_BASE_DIRS = [
   "brainstorms",
@@ -28,7 +32,7 @@ const DEFAULT_SETTINGS = {
  * @returns The absolute path to the provisioned workspace.
  */
 export async function provisionWorkspace(userId: string): Promise<string> {
-  const workspacePath = join(WORKSPACES_ROOT, userId);
+  const workspacePath = join(getWorkspacesRoot(), userId);
 
   // 1. Create workspace root (skip if exists)
   ensureDir(workspacePath);
@@ -54,7 +58,7 @@ export async function provisionWorkspace(userId: string): Promise<string> {
   const symlinkTarget = join(pluginsDir, "soleur");
   if (!existsSync(symlinkTarget)) {
     try {
-      symlinkSync(SOLEUR_PLUGIN_PATH, symlinkTarget);
+      symlinkSync(getPluginPath(), symlinkTarget);
     } catch (err) {
       console.warn(
         `[workspace] Failed to symlink plugin for ${userId}:`,
