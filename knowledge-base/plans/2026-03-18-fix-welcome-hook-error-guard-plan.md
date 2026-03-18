@@ -37,10 +37,10 @@ The welcome hook should use `exit 0` (not `exit 1`) because a welcome hook must 
 
 ## Acceptance Criteria
 
-- [ ] `welcome-hook.sh` line 6 has `|| { exit 0; }` guard after the `source` command
-- [ ] Hook exits cleanly (exit 0) when run outside a git repo
-- [ ] Existing behavior is unchanged when run inside a git repo (sentinel check, welcome JSON output)
-- [ ] Shell script conventions maintained (`set -euo pipefail`, `#!/usr/bin/env bash`)
+- [x] `welcome-hook.sh` line 6 has `|| { exit 0; }` guard after the `source` command
+- [x] Hook exits cleanly (exit 0) when run outside a git repo
+- [x] Existing behavior is unchanged when run inside a git repo (sentinel check, welcome JSON output)
+- [x] Shell script conventions maintained (`set -euo pipefail`, `#!/usr/bin/env bash`)
 
 ## Test Scenarios
 
