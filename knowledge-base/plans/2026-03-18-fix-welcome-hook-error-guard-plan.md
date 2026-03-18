@@ -9,6 +9,22 @@ semver: patch
 
 Closes #692
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-18
+**Sections enhanced:** 2 (Test Scenarios, Implementation)
+**Research agents used:** None (trivial one-line fix; local analysis sufficient)
+
+### Key Improvements
+1. Verified all three failure paths in `resolve-git-root.sh` (lines 34-37, 41-44, and potential line 49 failure) are caught by the `|| { exit 0; }` guard
+2. Confirmed `source` propagates `return 1` from the sourced script as a non-zero exit status, which triggers the `||` guard under `set -e`
+3. Added edge case for stderr suppression -- `resolve-git-root.sh` prints to stderr on failure, which is acceptable for hooks (stderr does not interfere with JSON hook output on stdout)
+
+### Verification Notes
+- The `|| { ... }` guard on `source` catches both `return 1` paths and any command substitution failures within the sourced script
+- Under `set -euo pipefail`, the bare `source` on line 6 currently causes immediate script termination on any failure -- the guard converts this to a controlled exit 0
+- No new edge cases beyond what the issue describes; the fix is pattern-identical to `stop-hook.sh:14-17`
+
 ## Overview
 
 `plugins/soleur/hooks/welcome-hook.sh` sources `resolve-git-root.sh` on line 6 without an `|| { exit 0; }` error guard. Under `set -euo pipefail`, if `resolve-git-root.sh` returns 1 (not inside a git repo), the hook aborts with a non-zero exit code, which blocks Claude Code session startup.
@@ -52,6 +68,12 @@ source "$SCRIPT_DIR/../scripts/resolve-git-root.sh" || {
 ```
 
 This matches the exact pattern used in `stop-hook.sh:14-17`.
+
+### Edge Cases Verified
+
+1. **Multiple failure paths in resolve-git-root.sh:** The helper has three distinct failure modes: (a) `git rev-parse --show-toplevel` fails on line 34 (not in a git repo), (b) `GIT_ROOT` resolves to a non-existent directory on line 41, (c) `git rev-parse --git-common-dir` fails on line 49. All three propagate as non-zero return from `source`, caught by the `||` guard.
+2. **Stderr output:** `resolve-git-root.sh` prints error messages to stderr (e.g., "Not inside a git repository"). This is harmless for hooks -- Claude Code reads hook output from stdout (JSON), not stderr. No stderr suppression needed.
+3. **Unset variables after guard:** If `source` fails early, `GIT_ROOT`, `GIT_COMMON_ROOT`, and `IS_BARE` remain unset. The `exit 0` in the guard prevents any downstream code from accessing these undefined variables, so `-u` (nounset) cannot trigger.
 
 ## Non-Goals
 
