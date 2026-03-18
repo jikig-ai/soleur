@@ -112,6 +112,50 @@ assert_eq "unchanged" "$OPTS" "shell options unchanged after sourcing"
 rm -rf "$TEST_DIR"
 echo ""
 
+# Test 8: GIT_COMMON_ROOT equals GIT_ROOT in normal (non-worktree) repo
+echo "Test 8: GIT_COMMON_ROOT equals GIT_ROOT in normal repo"
+TEST_DIR=$(mktemp -d)
+git -C "$TEST_DIR" init -q
+COMMON=$(cd "$TEST_DIR" && source "$HELPER" && echo "$GIT_COMMON_ROOT")
+ROOT=$(cd "$TEST_DIR" && source "$HELPER" && echo "$GIT_ROOT")
+assert_eq "$ROOT" "$COMMON" "GIT_COMMON_ROOT equals GIT_ROOT in normal repo"
+rm -rf "$TEST_DIR"
+echo ""
+
+# Test 9: GIT_COMMON_ROOT points to parent repo in worktree
+echo "Test 9: GIT_COMMON_ROOT points to parent repo in worktree"
+TEST_DIR=$(mktemp -d)
+git -C "$TEST_DIR" init -q
+# Need an initial commit for worktree creation
+git -C "$TEST_DIR" commit --allow-empty -m "init" -q
+git -C "$TEST_DIR" worktree add -q "$TEST_DIR/wt" -b test-wt
+COMMON=$(cd "$TEST_DIR/wt" && source "$HELPER" && echo "$GIT_COMMON_ROOT")
+ROOT=$(cd "$TEST_DIR/wt" && source "$HELPER" && echo "$GIT_ROOT")
+assert_eq "$TEST_DIR" "$COMMON" "GIT_COMMON_ROOT points to parent repo root"
+assert_eq "$TEST_DIR/wt" "$ROOT" "GIT_ROOT points to worktree root"
+git -C "$TEST_DIR" worktree remove "$TEST_DIR/wt" 2>/dev/null || true
+rm -rf "$TEST_DIR"
+echo ""
+
+# Test 10: GIT_COMMON_ROOT is set correctly in bare repo
+echo "Test 10: GIT_COMMON_ROOT in bare repo"
+TEST_DIR=$(mktemp -d)
+git init --bare -q "$TEST_DIR/bare.git"
+COMMON=$(cd "$TEST_DIR/bare.git" && source "$HELPER" && echo "$GIT_COMMON_ROOT")
+ROOT=$(cd "$TEST_DIR/bare.git" && source "$HELPER" && echo "$GIT_ROOT")
+assert_eq "$ROOT" "$COMMON" "GIT_COMMON_ROOT equals GIT_ROOT in bare repo"
+rm -rf "$TEST_DIR"
+echo ""
+
+# Test 11: _resolve_common_dir is not leaked into caller namespace
+echo "Test 11: _resolve_common_dir is not leaked"
+TEST_DIR=$(mktemp -d)
+git -C "$TEST_DIR" init -q
+LEAKED=$(cd "$TEST_DIR" && source "$HELPER" && [[ -v _resolve_common_dir ]] && echo "leaked" || echo "clean")
+assert_eq "clean" "$LEAKED" "_resolve_common_dir not leaked into caller"
+rm -rf "$TEST_DIR"
+echo ""
+
 # --- Results ---
 
 echo "=== Results ==="

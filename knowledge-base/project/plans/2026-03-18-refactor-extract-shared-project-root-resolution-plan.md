@@ -133,15 +133,15 @@ Per learnings from `2026-03-14-bare-repo-helper-extraction-patterns.md`, verify 
 
 ## Acceptance Criteria
 
-- [ ] `resolve-git-root.sh` exports `GIT_COMMON_ROOT` in addition to `GIT_ROOT` and `IS_BARE`
-- [ ] `GIT_COMMON_ROOT` equals `GIT_ROOT` when not in a worktree
-- [ ] `GIT_COMMON_ROOT` points to the shared parent repo root when in a worktree
-- [ ] `stop-hook.sh` sources `resolve-git-root.sh` instead of inline resolution
-- [ ] `setup-ralph-loop.sh` sources `resolve-git-root.sh` instead of inline resolution
-- [ ] Error behaviors are preserved: hook exits 0 on failure, setup exits 1
-- [ ] Existing tests in `resolve-git-root.test.sh` still pass
-- [ ] New tests cover `GIT_COMMON_ROOT` in worktree and non-worktree scenarios
-- [ ] No temp variables leak into the caller's namespace
+- [x] `resolve-git-root.sh` exports `GIT_COMMON_ROOT` in addition to `GIT_ROOT` and `IS_BARE`
+- [x] `GIT_COMMON_ROOT` equals `GIT_ROOT` when not in a worktree
+- [x] `GIT_COMMON_ROOT` points to the shared parent repo root when in a worktree
+- [x] `stop-hook.sh` sources `resolve-git-root.sh` instead of inline resolution
+- [x] `setup-ralph-loop.sh` sources `resolve-git-root.sh` instead of inline resolution
+- [x] Error behaviors are preserved: hook exits 0 on failure, setup exits 1
+- [x] Existing tests in `resolve-git-root.test.sh` still pass
+- [x] New tests cover `GIT_COMMON_ROOT` in worktree and non-worktree scenarios
+- [x] No temp variables leak into the caller's namespace
 
 ## Test Scenarios
 

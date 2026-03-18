@@ -9,15 +9,13 @@
 
 set -euo pipefail
 
-# Resolve shared repo root (not worktree root) so state file path matches setup-ralph-loop.sh.
-# git rev-parse --git-common-dir returns the shared .git dir across all worktrees.
-# May return a relative path, so resolve to absolute first, then strip trailing /.git.
-_common_dir=$(cd "$(git rev-parse --git-common-dir 2>/dev/null)" && pwd) || {
+# Source shared helper for repo root resolution
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../scripts/resolve-git-root.sh" || {
   # Not in a git repo -- allow exit
   exit 0
 }
-PROJECT_ROOT="${_common_dir%/.git}"
-unset _common_dir
+PROJECT_ROOT="$GIT_COMMON_ROOT"
 # Session identifier: PPID by default, overridable via RALPH_LOOP_PID for testing
 _RALPH_LOOP_PID="${RALPH_LOOP_PID:-$PPID}"
 RALPH_STATE_FILE="${PROJECT_ROOT}/.claude/ralph-loop.${_RALPH_LOOP_PID}.local.md"

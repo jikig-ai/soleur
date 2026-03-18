@@ -8,15 +8,13 @@
 
 set -euo pipefail
 
-# Resolve shared repo root (not worktree root) so state file survives worktree cleanup.
-# git rev-parse --git-common-dir returns the shared .git dir across all worktrees.
-# May return a relative path, so resolve to absolute first, then strip trailing /.git.
-_common_dir=$(cd "$(git rev-parse --git-common-dir 2>/dev/null)" && pwd) || {
+# Source shared helper for repo root resolution
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/resolve-git-root.sh" || {
   echo "Error: Not inside a git repository." >&2
   exit 1
 }
-PROJECT_ROOT="${_common_dir%/.git}"
-unset _common_dir
+PROJECT_ROOT="$GIT_COMMON_ROOT"
 
 # Session identifier: PPID by default, overridable via RALPH_LOOP_PID for testing
 _RALPH_LOOP_PID="${RALPH_LOOP_PID:-$PPID}"
