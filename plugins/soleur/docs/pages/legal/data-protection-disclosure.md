@@ -8,7 +8,7 @@ permalink: pages/legal/data-protection-disclosure.html
 <section class="page-hero">
   <div class="container">
     <h1>Data Protection Disclosure</h1>
-    <p>Effective February 20, 2026 | Last Updated March 18, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated March 18, 2026 (Docs Site Processors)</p>
   </div>
 </section>
 
@@ -18,7 +18,7 @@ permalink: pages/legal/data-protection-disclosure.html
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 18, 2026 (newsletter legal basis clarification)
+**Last Updated:** March 18, 2026 (added GitHub Pages and Plausible Analytics to Docs Site Processors)
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -125,13 +125,15 @@ The Plugin does not process Personal Data on behalf of Users (see Section 2.1). 
 
 ### 4.2 Docs Site Processors
 
-For processing activities where Jikigai acts as Controller (see Section 2.3), the following third-party processor is engaged:
+For processing activities where Jikigai acts as Controller (see Section 2.3), the following third-party processors are engaged:
 
 | Processor | Processing Activity | Data Processed | Legal Basis | Sub-processor List |
 |-----------|-------------------|----------------|-------------|-------------------|
+| GitHub Pages ([pages.github.com](https://pages.github.com)) | Docs Site hosting | IP addresses, browser user-agent strings, page request data | Legitimate interest (Article 6(1)(f)) | [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement) |
+| Plausible Analytics ([plausible.io](https://plausible.io)) | Privacy-respecting website analytics (cookie-free, EU-hosted) | Aggregated anonymous data only: page URLs, referrer URLs, country, device type, browser type (no IP addresses stored; see Section 2.3(a)) | Legitimate interest (Article 6(1)(f)) | [Plausible DPA](https://plausible.io/dpa) |
 | Buttondown ([buttondown.com](https://buttondown.com)) | Newsletter subscription management and email delivery | Email addresses of subscribers | Consent (Article 6(1)(a)) — double opt-in | [Buttondown Sub-processors](https://buttondown.com/legal/dpa) |
 
-This disclosure is consistent with Section 2.3(e).
+This disclosure is consistent with Section 2.3(a) and Section 2.3(e).
 
 ### 4.3 Third-Party Services Used by Users
 
