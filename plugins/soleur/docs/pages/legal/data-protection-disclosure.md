@@ -130,7 +130,7 @@ For processing activities where Jikigai acts as Controller (see Section 2.3), th
 | Processor | Processing Activity | Data Processed | Legal Basis | Sub-processor List |
 |-----------|-------------------|----------------|-------------|-------------------|
 | GitHub Pages ([pages.github.com](https://pages.github.com)) | Docs Site hosting | IP addresses, browser user-agent strings, page request data | Legitimate interest (Article 6(1)(f)) | [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement) |
-| Plausible Analytics ([plausible.io](https://plausible.io)) | Privacy-respecting website analytics (cookie-free, EU-hosted) | Aggregated anonymous data only: page URLs, referrer URLs, country, device type, browser type. IP addresses are hashed for daily unique visitor counts and never stored (salts rotated every 24 hours). | Legitimate interest (Article 6(1)(f)) | [Plausible DPA](https://plausible.io/dpa) |
+| Plausible Analytics ([plausible.io](https://plausible.io)) | Privacy-respecting website analytics (cookie-free, EU-hosted) | Aggregated anonymous data only: page URLs, referrer URLs, country, device type, browser type (no IP addresses stored; see Section 2.3(a)) | Legitimate interest (Article 6(1)(f)) | [Plausible DPA](https://plausible.io/dpa) |
 | Buttondown ([buttondown.com](https://buttondown.com)) | Newsletter subscription management and email delivery | Email addresses of subscribers | Consent (Article 6(1)(a)) — double opt-in | [Buttondown Sub-processors](https://buttondown.com/legal/dpa) |
 
 This disclosure is consistent with Section 2.3(a) and Section 2.3(e).
