@@ -98,7 +98,7 @@ If you subscribe to the Soleur newsletter via the signup form on the Docs Site, 
 - **Lawful basis:** Consent (Article 6(1)(a) GDPR) -- you actively opt in by submitting the signup form and confirming your subscription via the double opt-in confirmation email.
 - **Double opt-in:** After submitting your email, Buttondown sends a confirmation email. Your subscription is only activated after you click the confirmation link. This ensures informed, verified consent.
 - **Retention:** Your email address is retained by Buttondown until you unsubscribe. You can unsubscribe at any time via the link in every newsletter email. Upon unsubscription, your email is removed from the active subscriber list.
-- **Third-party processor:** Buttondown acts as a data processor. See Section 5.4 for details.
+- **Third-party processor:** Buttondown acts as a data processor. See Section 5.3 for details.
 
 ## 5. Third-Party Services
 

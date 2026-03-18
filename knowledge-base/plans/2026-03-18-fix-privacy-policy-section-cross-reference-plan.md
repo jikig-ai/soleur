@@ -24,9 +24,9 @@ Line 101 of `plugins/soleur/docs/pages/legal/privacy-policy.md` contains a wrong
 
 ## Acceptance Criteria
 
-- [ ] Line 101 of `plugins/soleur/docs/pages/legal/privacy-policy.md` reads `See Section 5.3 for details.` instead of `See Section 5.4 for details.`
-- [ ] No other content in the file is changed
-- [ ] The Eleventy docs site builds successfully after the change
+- [x] Line 101 of `plugins/soleur/docs/pages/legal/privacy-policy.md` reads `See Section 5.3 for details.` instead of `See Section 5.4 for details.`
+- [x] No other content in the file is changed
+- [x] The Eleventy docs site builds successfully after the change
 
 ## Test Scenarios
 
