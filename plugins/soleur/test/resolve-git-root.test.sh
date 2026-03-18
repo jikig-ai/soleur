@@ -8,41 +8,12 @@ set -euo pipefail
 # Clear git env vars that leak when this test runs inside a git hook
 unset GIT_DIR GIT_WORK_TREE 2>/dev/null || true
 
-PASS=0
-FAIL=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/test-helpers.sh"
 HELPER="$SCRIPT_DIR/../scripts/resolve-git-root.sh"
 
 echo "=== resolve-git-root.sh Tests ==="
 echo ""
-
-# --- Test Helpers ---
-
-assert_eq() {
-  local expected="$1" actual="$2" label="$3"
-  if [[ "$expected" == "$actual" ]]; then
-    echo "  PASS: $label"
-    PASS=$((PASS + 1))
-  else
-    echo "  FAIL: $label"
-    echo "    expected: '$expected'"
-    echo "    actual:   '$actual'"
-    FAIL=$((FAIL + 1))
-  fi
-}
-
-assert_contains() {
-  local haystack="$1" needle="$2" label="$3"
-  if echo "$haystack" | grep -qF "$needle"; then
-    echo "  PASS: $label"
-    PASS=$((PASS + 1))
-  else
-    echo "  FAIL: $label"
-    echo "    expected to contain: '$needle'"
-    echo "    actual: '$haystack'"
-    FAIL=$((FAIL + 1))
-  fi
-}
 
 # --- Tests ---
 
@@ -112,16 +83,50 @@ assert_eq "unchanged" "$OPTS" "shell options unchanged after sourcing"
 rm -rf "$TEST_DIR"
 echo ""
 
-# --- Results ---
-
-echo "=== Results ==="
-echo "Passed: $PASS"
-echo "Failed: $FAIL"
+# Test 8: GIT_COMMON_ROOT equals GIT_ROOT in normal (non-worktree) repo
+echo "Test 8: GIT_COMMON_ROOT equals GIT_ROOT in normal repo"
+TEST_DIR=$(mktemp -d)
+git -C "$TEST_DIR" init -q
+COMMON=$(cd "$TEST_DIR" && source "$HELPER" && echo "$GIT_COMMON_ROOT")
+ROOT=$(cd "$TEST_DIR" && source "$HELPER" && echo "$GIT_ROOT")
+assert_eq "$ROOT" "$COMMON" "GIT_COMMON_ROOT equals GIT_ROOT in normal repo"
+rm -rf "$TEST_DIR"
 echo ""
 
-if [[ $FAIL -gt 0 ]]; then
-  echo "SOME TESTS FAILED"
-  exit 1
-else
-  echo "ALL TESTS PASSED"
-fi
+# Test 9: GIT_COMMON_ROOT points to parent repo in worktree
+echo "Test 9: GIT_COMMON_ROOT points to parent repo in worktree"
+TEST_DIR=$(mktemp -d)
+git -C "$TEST_DIR" init -q
+# Need an initial commit for worktree creation
+git -C "$TEST_DIR" commit --allow-empty -m "init" -q
+git -C "$TEST_DIR" worktree add -q "$TEST_DIR/wt" -b test-wt
+COMMON=$(cd "$TEST_DIR/wt" && source "$HELPER" && echo "$GIT_COMMON_ROOT")
+ROOT=$(cd "$TEST_DIR/wt" && source "$HELPER" && echo "$GIT_ROOT")
+assert_eq "$TEST_DIR" "$COMMON" "GIT_COMMON_ROOT points to parent repo root"
+assert_eq "$TEST_DIR/wt" "$ROOT" "GIT_ROOT points to worktree root"
+git -C "$TEST_DIR" worktree remove "$TEST_DIR/wt" 2>/dev/null || true
+rm -rf "$TEST_DIR"
+echo ""
+
+# Test 10: GIT_COMMON_ROOT is set correctly in bare repo
+echo "Test 10: GIT_COMMON_ROOT in bare repo"
+TEST_DIR=$(mktemp -d)
+git init --bare -q "$TEST_DIR/bare.git"
+COMMON=$(cd "$TEST_DIR/bare.git" && source "$HELPER" && echo "$GIT_COMMON_ROOT")
+ROOT=$(cd "$TEST_DIR/bare.git" && source "$HELPER" && echo "$GIT_ROOT")
+assert_eq "$ROOT" "$COMMON" "GIT_COMMON_ROOT equals GIT_ROOT in bare repo"
+rm -rf "$TEST_DIR"
+echo ""
+
+# Test 11: _resolve_common_dir is not leaked into caller namespace
+echo "Test 11: _resolve_common_dir is not leaked"
+TEST_DIR=$(mktemp -d)
+git -C "$TEST_DIR" init -q
+LEAKED=$(cd "$TEST_DIR" && source "$HELPER" && [[ -v _resolve_common_dir ]] && echo "leaked" || echo "clean")
+assert_eq "clean" "$LEAKED" "_resolve_common_dir not leaked into caller"
+rm -rf "$TEST_DIR"
+echo ""
+
+# --- Results ---
+
+print_results

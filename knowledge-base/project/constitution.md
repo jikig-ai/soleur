@@ -47,6 +47,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Never use "Announce to the user", "Output to the user", or "and stop" as terminal instructions in skills that can be invoked by pipelines (one-shot, ship) -- the model interprets these as implicit stop signals; use "Return control immediately" or "proceed to the next step in the orchestrator's sequence" for pipeline-compatible handoff, with a conditional single-line output for direct user invocation
 - Sub-skills that return control to an orchestrator must output a structured continuation marker (e.g., `## Work Phase Complete`), not natural-language completion phrases ("Implementation complete.") -- the orchestrator must include an explicit CONTINUATION GATE block that names the marker and forbids ending the turn; conclusive-sounding text is interpreted as a turn boundary even when followed by "proceed to next step"
 - Never write bash code blocks in agent/skill prompts that trigger Claude Code's approval heuristics -- pre-combine multiple blocks into a single `;`-joined command (models insert `echo "---"` separators otherwise), avoid quoted strings starting with dashes (`"---"`, `"-flag"`), and keep commands simple enough to auto-approve; if a command requires user consent, the agent blocks waiting for input it will never receive when running as a subagent
+- Never place deferred/forward-reference instructions ("NOTE: after STEP N, do X") in multi-step LLM prompts -- the agent reads the instruction at STEP 1 but must execute it at STEP N; this temporal gap causes either premature execution or silent omission; relocate the instruction to STEP N with a conditional guard ("If STEP 1b was used, do X")
 
 ### Prefer
 
@@ -60,12 +61,14 @@ Project principles organized by domain. Add principles as you learn them.
 - Prefer a language identifier after triple backticks in code blocks (e.g., ```bash, ```yaml -- never bare ```)
 - Prefer verb-noun naming for skill directories where applicable (e.g., `deploy-docs`, `release-announce`, `resolve-pr-parallel`)
 - Prefer `# --- Section Name ---` comment headers in shell scripts to separate logical sections
+- Multi-step LLM prompts (workflow prompt blocks, skill instructions, agent prompts) must place every instruction at the step where it executes, not where it is conceptually related -- "NOTE: do X after STEP N" deferred instructions are unreliable because LLM agents either execute them immediately or forget them; use conditional blocks at the target step instead (e.g., "STEP 5: If STEP 1b was used, do X")
 
 ## Architecture
 
 ### Always
 
 - Verify the root cause before implementing any fix -- reproduce the error or run the simplest diagnostic first; do not change code based on a guess
+- When a plan involves directional ambiguity (merge A into B vs B into A, move files from X to Y), confirm the direction with the user before proceeding -- code evidence can be wrong (e.g., a prior PR may have moved references in the wrong direction); the cost of one clarifying question is trivial compared to executing an entire wrong plan
 - Core workflow stages (brainstorm, plan, work, review, compound, one-shot) are skills invoked via the Skill tool; only three commands remain (`go`, `sync`, `help`) using the `soleur:` prefix to avoid collisions with built-in commands
 - Never edit version fields in `plugin.json` or `marketplace.json` (frozen sentinels). Version is derived from git tags -- `version-bump-and-release.yml` creates GitHub Releases with `vX.Y.Z` tags at merge time via semver labels set by `/ship`
 - Always set a `semver:patch`, `semver:minor`, or `semver:major` label on PRs that touch `plugins/soleur/` -- CI uses this label to determine the version bump at merge time
@@ -124,7 +127,7 @@ Project principles organized by domain. Add principles as you learn them.
 - All `workflow_dispatch` inputs must be validated against a strict regex before use in shell commands or `$GITHUB_OUTPUT` writes -- inputs are string-typed and accept arbitrary content including newlines; use `exit 1` on validation failure, not just a warning
 - Workflows that perform git operations against specific commits (revert, cherry-pick) must use `fetch-depth: 0` and validate that HEAD matches the expected SHA before acting -- `fetch-depth: 2` creates a race condition when additional commits land between trigger and execution
 - Always use absolute paths or verify CWD is repo root before `git worktree add` -- relative `.worktrees/` paths resolve from CWD, creating nested worktrees when run from inside an existing worktree
-- Run `worktree-manager.sh cleanup-merged` from inside any active worktree, not from the bare repo root -- bare checkouts lack a work tree and git commands fail with `fatal: this operation must be run in a work tree`
+- `worktree-manager.sh cleanup-merged` works from both worktrees and the bare repo root -- the `IS_BARE` guard routes bare repos to `git fetch origin main:main` (updates local ref) + `sync_bare_files` (refreshes stale on-disk files)
 
 ### Never
 
@@ -155,7 +158,7 @@ Project principles organized by domain. Add principles as you learn them.
 - `project/` documents what the project does; `project/constitution.md` documents how to work on it
 - Component documentation in `project/components/` should follow the component template from spec-templates skill
 
-- Use convention over configuration for paths: `feat-<name>` maps to `knowledge-base/specs/feat-<name>/` and `.worktrees/feat-<name>/`
+- Use convention over configuration for paths: `feat-<name>` maps to `knowledge-base/project/specs/feat-<name>/` and `.worktrees/feat-<name>/`
 - Include sequence diagrams for complex flows
 - Complex commands should follow a four-phase pattern: Setup, Analyze, Review, Write
 - Scheduled workflows using claude-code-action should defer CI gating to GitHub's built-in required checks (`gh pr checks --required`) rather than reimplementing check status queries in jq -- GitHub already maintains the authoritative definition of "required checks"

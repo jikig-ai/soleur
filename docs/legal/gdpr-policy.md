@@ -10,7 +10,7 @@ generated-date: 2026-02-20
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 10, 2026 (newsletter subscription data)
+**Last Updated:** March 18, 2026 (newsletter legal basis clarification)
 
 ---
 
@@ -70,7 +70,9 @@ For processing personal data contained in data subject rights requests and legal
 
 ### 3.6 Newsletter Subscription
 
-For processing of email addresses when visitors subscribe to the Soleur newsletter via the Docs Site, the lawful basis is **consent** (Article 6(1)(a)). Subscribers actively opt in by submitting the signup form and confirming their subscription via a double opt-in confirmation email sent by Buttondown. Consent may be withdrawn at any time by unsubscribing via the link included in every newsletter email. Upon withdrawal, the email address is removed from the active subscriber list.
+For processing of **email addresses** when visitors subscribe to the Soleur newsletter via the Docs Site, the lawful basis is **consent** (Article 6(1)(a)). Subscribers actively opt in by submitting the signup form and confirming their subscription via a double opt-in confirmation email sent by Buttondown. Consent may be withdrawn at any time by unsubscribing via the link included in every newsletter email. Upon withdrawal, the email address is removed from the active subscriber list.
+
+For the **technical metadata** automatically collected by Buttondown during the subscription request (IP address, referrer URL, subscription timestamp, browser/device metadata), the lawful basis is **legitimate interest** (Article 6(1)(f)). The balancing test for this interest considers: (a) the data is minimal and limited to standard HTTP request metadata, (b) the processing is necessary for service delivery and abuse prevention, (c) the data is within the reasonable expectations of someone subscribing to a newsletter, and (d) the processing does not involve profiling or automated decision-making. Data subjects may object to this processing under Article 21 by contacting legal@jikigai.com.
 
 ---
 
@@ -100,7 +102,7 @@ The following data may be processed by third-party services when users interact 
 | GitHub account data | GitHub (via repository) | Issue tracking, contributions |
 | Name, email, inquiry content | Proton AG (via Proton Mail) | Handling legal and GDPR inquiries (legal@jikigai.com) |
 | GitHub username, signature timestamp, PR reference | GitHub (via CLA Assistant) | Recording CLA signature for contributor IP license grants |
-| Email address | Buttondown (via newsletter signup) | Managing newsletter subscriptions and delivering newsletter emails |
+| Email address, IP address, referrer URL, subscription timestamp, browser/device metadata | Buttondown (via newsletter signup) | Managing newsletter subscriptions and delivering newsletter emails |
 
 Users are responsible for reviewing the privacy policies of these third-party services.
 
@@ -154,6 +156,7 @@ Soleur itself does not transfer personal data internationally. However, users sh
 
 - **Anthropic Claude API:** API requests may be processed in the United States or other jurisdictions where Anthropic operates. Users should review Anthropic's data processing terms regarding international transfer safeguards.
 - **GitHub Pages / GitHub:** GitHub infrastructure is located globally, including in the United States. GitHub (Microsoft Corporation) is certified under the **EU-US Data Privacy Framework** (adequacy decision C(2023) 4745), which provides the primary transfer mechanism. GitHub also maintains Standard Contractual Clauses as a supplementary safeguard. See [GitHub's Global Privacy Practices](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement#githubs-global-privacy-practices).
+- **Buttondown (Newsletter):** Newsletter subscriber email addresses are processed by Buttondown, a US-based service hosted on infrastructure in the United States. International data transfers are governed by **Standard Contractual Clauses (SCCs)** (Module 2, Controller to Processor) per Buttondown's [Data Processing Agreement](https://buttondown.com/legal/data-processing-agreement). See also [Buttondown's Privacy Policy](https://buttondown.com/legal/privacy).
 
 Users who are subject to the GDPR and have concerns about international data transfers should review the relevant third-party policies before using these services.
 
@@ -192,7 +195,11 @@ Soleur does not impose any retention period on locally stored data. Files persis
 
 Personal data contained in data subject rights requests and legal inquiries (names, email addresses, inquiry content) is retained for the duration necessary to resolve the inquiry, plus three years to comply with the French civil statute of limitations (prescription civile). After this period, correspondence is securely deleted.
 
-### 8.3 Third-Party Retention
+### 8.3 Newsletter Subscriber Data
+
+Newsletter subscriber email addresses are retained by Buttondown for as long as the subscriber remains subscribed. Upon unsubscription, the email address is removed from the active subscriber list. Buttondown may retain anonymized aggregate data (e.g., subscriber counts) after unsubscription. Upon termination of the service relationship, Buttondown will, at Jikigai's option, delete or return all personal data in accordance with Buttondown's Data Processing Agreement.
+
+### 8.4 Third-Party Retention
 
 Retention periods for data held by Anthropic and GitHub are governed by their respective privacy policies and data retention schedules.
 
@@ -217,7 +224,7 @@ The register documents six processing activities:
 3. **Source repository management** (GitHub) -- contributor profile data, issue reporters
 4. **Legal and GDPR inquiry handling** (legal@jikigai.com) -- names, email addresses, inquiry content
 5. **CLA signature collection** (GitHub CLA Assistant) -- GitHub username, signature timestamp, pull request reference. Legal basis: legitimate interest (Article 6(1)(f)). Signature data is stored on the `cla-signatures` branch in the public repository. Retention is indefinite (irrevocable license grants).
-6. **Newsletter subscription management** (soleur.ai via Buttondown) -- email addresses of newsletter subscribers. Legal basis: consent (Article 6(1)(a)). Data is processed by Buttondown (US-based, SCCs in place). Retention: until the subscriber unsubscribes. Double opt-in is used to verify consent.
+6. **Newsletter subscription management** (soleur.ai via Buttondown) -- (a) email addresses of newsletter subscribers, legal basis: consent (Article 6(1)(a)), verified through double opt-in; (b) IP address, referrer URL, subscription timestamp, and browser/device metadata automatically collected during subscription, legal basis: legitimate interest (Article 6(1)(f)) for service operation and abuse prevention. Data is processed by Buttondown (US-based, SCCs in place). Email retention: until the subscriber unsubscribes. Technical metadata retention: governed by Buttondown's data retention practices.
 
 The register is maintained internally and is available on request to the competent supervisory authority (CNIL for France). Since the 2018 reform of the Loi Informatique et Libertes, no registration or prior declaration to the CNIL is required.
 

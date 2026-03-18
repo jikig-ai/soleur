@@ -8,7 +8,7 @@ permalink: pages/legal/data-protection-disclosure.html
 <section class="page-hero">
   <div class="container">
     <h1>Data Protection Disclosure</h1>
-    <p>Effective February 20, 2026 | Last Updated March 10, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated March 18, 2026 (Docs Site Processors)</p>
   </div>
 </section>
 
@@ -18,7 +18,7 @@ permalink: pages/legal/data-protection-disclosure.html
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 10, 2026 (newsletter subscription data)
+**Last Updated:** March 18, 2026 (added GitHub Pages and Plausible Analytics to Docs Site Processors)
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -88,7 +88,7 @@ Soleur's data processing activities are limited to:
 - **(b)** **GitHub repository interaction:** Users who submit issues, pull requests, or participate in discussions on the Soleur GitHub repository interact with GitHub's platform. This processing is governed by GitHub's terms and privacy policies.
 - **(c)** **Plugin distribution:** The Plugin is distributed via GitHub and npm. Download and installation telemetry is handled by those respective platforms under their own privacy policies.
 - **(d)** **Contributor License Agreement (CLA) signatures:** Contributors who submit pull requests to the Soleur repository are asked to sign a CLA via the CLA Assistant integrated into GitHub. This processing collects the contributor's GitHub username, signature timestamp, and associated pull request reference. Signature data is stored in the Soleur GitHub repository on a dedicated branch (`cla-signatures`) and is publicly visible. The legal basis is legitimate interest (Article 6(1)(f) GDPR) in maintaining an enforceable record of contributor IP license grants. Signature data is retained indefinitely as the license grants are irrevocable.
-- **(e)** **Newsletter subscription management:** Visitors who subscribe to the Soleur newsletter via the Docs Site provide their email address, which is transmitted to and processed by **Buttondown** ([buttondown.com](https://buttondown.com)), a third-party newsletter platform. Buttondown acts as a data processor on behalf of Jikigai. The legal basis is consent (Article 6(1)(a) GDPR), verified through a double opt-in confirmation email. Email addresses are retained until the subscriber unsubscribes.
+- **(e)** **Newsletter subscription management:** Visitors who subscribe to the Soleur newsletter via the Docs Site provide their email address, which is transmitted to and processed by **Buttondown** ([buttondown.com](https://buttondown.com)), a third-party newsletter platform. Buttondown also automatically collects IP address, referrer URL, subscription timestamp, and browser/device metadata during the subscription request. Buttondown acts as a data processor on behalf of Jikigai. The legal basis for email address processing is consent (Article 6(1)(a) GDPR), verified through a double opt-in confirmation email. The legal basis for technical metadata is legitimate interest (Article 6(1)(f) GDPR) -- service operation and abuse prevention. Email addresses are retained until the subscriber unsubscribes. Technical metadata retention is governed by Buttondown's data retention practices.
 
 For these limited activities, Soleur acts as a Controller only with respect to data it directly collects (including CLA signature data), and GitHub acts as a Processor or independent Controller as described in its own agreements.
 
@@ -119,11 +119,23 @@ While Soleur does not process User data, we recommend the following security mea
 
 ## 4. Third-Party Services and Sub-processors
 
-### 4.1 No Sub-processors
+### 4.1 Plugin Sub-processors
 
-Because Soleur does not process Personal Data on behalf of Users, there are no Sub-processors to disclose under Article 28(2) of the GDPR.
+The Plugin does not process Personal Data on behalf of Users (see Section 2.1). Accordingly, there are no Plugin-level Sub-processors to disclose under Article 28(2) of the GDPR.
 
-### 4.2 Third-Party Services Used by Users
+### 4.2 Docs Site Processors
+
+For processing activities where Jikigai acts as Controller (see Section 2.3), the following third-party processors are engaged:
+
+| Processor | Processing Activity | Data Processed | Legal Basis | Sub-processor List |
+|-----------|-------------------|----------------|-------------|-------------------|
+| GitHub Pages ([pages.github.com](https://pages.github.com)) | Docs Site hosting | IP addresses, browser user-agent strings, page request data | Legitimate interest (Article 6(1)(f)) | [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement) |
+| Plausible Analytics ([plausible.io](https://plausible.io)) | Privacy-respecting website analytics (cookie-free, EU-hosted) | Aggregated anonymous data only: page URLs, referrer URLs, country, device type, browser type (no IP addresses stored; see Section 2.3(a)) | Legitimate interest (Article 6(1)(f)) | [Plausible DPA](https://plausible.io/dpa) |
+| Buttondown ([buttondown.com](https://buttondown.com)) | Newsletter subscription management and email delivery | Email addresses of subscribers | Consent (Article 6(1)(a)) — double opt-in | [Buttondown Sub-processors](https://buttondown.com/legal/dpa) |
+
+This disclosure is consistent with Section 2.3(a) and Section 2.3(e).
+
+### 4.3 Third-Party Services Used by Users
 
 Users may interact with the following third-party services through the Plugin's functionality. These interactions are initiated and controlled by the User, not by Soleur:
 
@@ -132,7 +144,6 @@ Users may interact with the following third-party services through the Plugin's 
 | Anthropic (Claude API) | AI model inference | Direct customer of Anthropic |
 | GitHub | Code hosting, issue tracking | Direct customer of GitHub |
 | npm | Package distribution | Direct customer of npm |
-| Buttondown | Newsletter subscription management | Buttondown acts as data processor on behalf of Jikigai |
 
 Users are responsible for reviewing and complying with the data processing terms of any third-party service they use in conjunction with the Plugin.
 

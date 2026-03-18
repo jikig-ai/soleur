@@ -13,10 +13,13 @@ layout: base.njk
   "headline": "{{ title }}",
   "description": "{{ description }}",
   "datePublished": "{{ date | dateToRfc3339 }}",
+  "dateModified": "{{ updated | dateToRfc3339 if updated else date | dateToRfc3339 }}",
   "url": "{{ site.url }}{{ page.url }}",
+  "image": "{{ site.url }}/images/og-image.png",
   "author": {
     "@type": "Person",
-    "name": "{{ site.author.name }}"
+    "name": "{{ site.author.name }}",
+    "url": "{{ site.author.url }}"
   },
   "publisher": {
     "@type": "Organization",
@@ -34,6 +37,7 @@ layout: base.njk
     <p class="subtitle">{{ description }}</p>
     <div class="blog-post-meta">
       <time datetime="{{ date | dateToRfc3339 }}">{{ date | readableDate }}</time>
+      <span class="blog-post-author">by <a href="{{ site.author.url }}" rel="author">{{ site.author.name }}</a></span>
     </div>
     {% if tags %}
     <div class="blog-tags">

@@ -193,7 +193,7 @@ create_for_feature() {
 
   local branch_name="feat-$name"
   local worktree_path="$WORKTREE_DIR/$branch_name"
-  local spec_dir="$GIT_ROOT/knowledge-base/specs/$branch_name"
+  local spec_dir="$GIT_ROOT/knowledge-base/project/specs/$branch_name"
 
   # Check if worktree already exists
   if [[ -d "$worktree_path" ]]; then
@@ -235,7 +235,7 @@ create_for_feature() {
   echo ""
   echo "Next steps:"
   echo -e "  1. ${BLUE}cd $worktree_path${NC}"
-  echo -e "  2. Create spec: ${BLUE}knowledge-base/specs/$branch_name/spec.md${NC}"
+  echo -e "  2. Create spec: ${BLUE}knowledge-base/project/specs/$branch_name/spec.md${NC}"
   echo ""
 }
 
@@ -489,25 +489,19 @@ cleanup_merged_worktrees() {
       fi
     fi
 
-    # Archive spec directories: current paths first, legacy paths second
-    local spec_candidates=(
-      "$GIT_ROOT/knowledge-base/specs/$safe_branch"
-      "$GIT_ROOT/knowledge-base/features/specs/$safe_branch"
-      "$GIT_ROOT/knowledge-base/project/specs/$safe_branch"
-    )
-    for spec_dir in "${spec_candidates[@]}"; do
-      if [[ -d "$spec_dir" ]]; then
-        local archive_dir archive_name archive_path
-        archive_dir="$(dirname "$spec_dir")/archive"
-        archive_name="$(date +%Y-%m-%d-%H%M%S)-$safe_branch"
-        archive_path="$archive_dir/$archive_name"
+    # Archive spec directory
+    local spec_dir="$GIT_ROOT/knowledge-base/project/specs/$safe_branch"
+    if [[ -d "$spec_dir" ]]; then
+      local archive_dir archive_name archive_path
+      archive_dir="$(dirname "$spec_dir")/archive"
+      archive_name="$(date +%Y-%m-%d-%H%M%S)-$safe_branch"
+      archive_path="$archive_dir/$archive_name"
 
-        mkdir -p "$archive_dir"
-        if ! mv "$spec_dir" "$archive_path" 2>/dev/null; then
-          [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not archive spec for $branch${NC}"
-        fi
+      mkdir -p "$archive_dir"
+      if ! mv "$spec_dir" "$archive_path" 2>/dev/null; then
+        [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not archive spec for $branch${NC}"
       fi
-    done
+    fi
 
     # Extract feature slug by stripping all known branch prefixes
     local feature_slug="$safe_branch"
@@ -515,10 +509,8 @@ cleanup_merged_worktrees() {
     feature_slug="${feature_slug#fix-}"
     feature_slug="${feature_slug#feature-}"
 
-    # Archive brainstorms and plans matching the feature slug (current + legacy paths)
-    archive_kb_files "$GIT_ROOT/knowledge-base/brainstorms" "$feature_slug" "brainstorm" "$verbose"
+    # Archive brainstorms and plans matching the feature slug
     archive_kb_files "$GIT_ROOT/knowledge-base/project/brainstorms" "$feature_slug" "brainstorm" "$verbose"
-    archive_kb_files "$GIT_ROOT/knowledge-base/plans" "$feature_slug" "plan" "$verbose"
     archive_kb_files "$GIT_ROOT/knowledge-base/project/plans" "$feature_slug" "plan" "$verbose"
 
     # Remove worktree if exists (use actual path from git, not constructed path)
@@ -548,9 +540,14 @@ cleanup_merged_worktrees() {
     # After cleanup, update main checkout so next worktree branches from latest
     # Skip entirely for bare repos -- there is no working tree to update
     if [[ "$IS_BARE" == "true" ]]; then
-      # Bare repos have no working tree -- use git fetch to update the main ref
-      if git fetch origin main 2>/dev/null; then
-        echo -e "${GREEN}Fetched latest main${NC}"
+      # Bare repos have no working tree -- use fetch with refspec to update the
+      # local main ref directly (plain "fetch origin main" only updates FETCH_HEAD
+      # and origin/main, leaving local main stale for new worktree creation)
+      if git fetch origin main:main 2>/dev/null; then
+        echo -e "${GREEN}Updated main to latest${NC}"
+      elif git fetch origin main 2>/dev/null; then
+        # Fallback: non-fast-forward (e.g., force-push) -- at least update origin/main
+        echo -e "${YELLOW}Warning: Could not fast-forward local main -- fetched origin/main only${NC}"
       fi
       # Auto-sync stale on-disk files so the next session reads current versions
       sync_bare_files
@@ -642,7 +639,8 @@ sync_bare_files() {
   # Create a temp directory on the same filesystem for atomic writes
   local tmpdir
   tmpdir=$(mktemp -d "${GIT_ROOT}/.sync-tmp.XXXXXX")
-  trap 'rm -rf "$tmpdir"' EXIT
+  # shellcheck disable=SC2064  # Intentional: expand tmpdir NOW so the trap works after local scope ends
+  trap "rm -rf '$tmpdir'" EXIT
 
   # Files that Claude Code reads from the bare repo root
   local files=(
@@ -776,7 +774,7 @@ Commands:
   create <branch-name> [from-branch]  Create new worktree (copies .env files automatically)
                                       (from-branch defaults to main)
   feature | feat <name> [from-branch] Create worktree for feature with spec directory
-                                      (creates feat-<name> branch + knowledge-base/specs/feat-<name>/)
+                                      (creates feat-<name> branch + knowledge-base/project/specs/feat-<name>/)
   list | ls                           List all worktrees
   switch | go [name]                  Switch to worktree
   copy-env | env [name]               Copy .env files from main repo to worktree

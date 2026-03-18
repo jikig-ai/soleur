@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-03-12
+last_updated: 2026-03-16
 ---
 
 # Campaign Calendar
@@ -10,6 +10,7 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|-------------|----------|--------|
+| Soleur vs. Anthropic Cowork: Which AI Agent Platform Is Right for Solo Founders? | comparison | 2026-03-16 | discord, x | scheduled |
 | Building an Operations Department for a One-Person Company | case-study | 2026-03-17 | discord, x | scheduled |
 | Tracking 17 Competitors in One Session -- With Battlecards | case-study | 2026-03-19 | discord, x | scheduled |
 | From Scattered Positioning to a Full Brand Guide in Two Sessions | case-study | 2026-03-24 | discord, x | scheduled |
