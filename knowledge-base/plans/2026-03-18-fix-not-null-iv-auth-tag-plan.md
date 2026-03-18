@@ -28,9 +28,9 @@ Closes #681. Discovered by SpecFlow analysis during #667 fix.
 
 ## Acceptance Criteria
 
-- [ ] New migration `004_add_not_null_iv_auth_tag.sql` adds `NOT NULL` constraints to `iv` and `auth_tag` columns on `api_keys`
-- [ ] Migration includes a safety check: DO block asserts no null rows exist before altering (fail loudly via `RAISE EXCEPTION` rather than silently dropping data)
-- [ ] Existing tests pass (`bun test`)
+- [x] New migration `004_add_not_null_iv_auth_tag.sql` adds `NOT NULL` constraints to `iv` and `auth_tag` columns on `api_keys`
+- [x] Migration includes a safety check: DO block asserts no null rows exist before altering (fail loudly via `RAISE EXCEPTION` rather than silently dropping data)
+- [x] Existing tests pass (`bun test`)
 
 ### Research Insights
 
