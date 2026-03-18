@@ -106,7 +106,19 @@ Project principles organized by domain. Add principles as you learn them.
 - Claude Code effort level must be set via `env.CLAUDE_CODE_EFFORT_LEVEL` in `.claude/settings.json`, not as a top-level `effortLevel` field (which is not in the schema); valid values: `low`, `medium`, `high`
 - When Dockerizing Next.js apps, every `NEXT_PUBLIC_` env var used in client code must be declared as a Docker `ARG` before the `npm run build` step and passed via `build-args` in CI -- Next.js inlines these at build time, not runtime; missing args produce no build error but cause silent client-side failures
 - After deploying a fix to a live service, verify the fix works end-to-end before reporting success -- "deployed, should be fixed" is not verification; use Playwright MCP to exercise the actual user flow, check server logs for expected output, and confirm the fix holds for 10+ seconds; deploy-without-verify wastes user trust and deploy cycles
-- When provisioning new external services or vendors (hosting, databases, auth, payments, analytics), update `knowledge-base/ops/expenses.md` with costs and trigger legal review for DPA/privacy impact before the session ends -- engineering workflows have no built-in vendor gate, so the agent must self-check; spawn ops-advisor and CLO background agents when any `terraform apply`, account signup, or API key generation occurs
+- When provisioning new external services or vendors (hosting, databases, auth, payments, analytics), complete the **New Vendor Checklist** below before the session ends. Spawn ops-advisor and CLO background agents when any `terraform apply`, account signup, or API key generation occurs.
+
+### New Vendor Checklist
+
+When a PR adds external services (terraform resources, account signups, API key generation, new SaaS dependencies), the following must be completed before merge:
+
+- [ ] Expense ledger updated (`knowledge-base/operations/expenses.md`) with cost, tier, status, and upgrade triggers
+- [ ] DPA verified -- either auto-accepted (e.g., Stripe) or manually signed (e.g., Hetzner Console) -- with link to vendor DPA page
+- [ ] Privacy policy updated with new processor in BOTH `docs/legal/` and `plugins/soleur/docs/pages/legal/`
+- [ ] Data protection disclosure updated with new processor in Section 4.2 table
+- [ ] GDPR policy updated: third-party services (2.2), lawful basis (3.x), data categories (4.2), transfers (6), Article 30 register (10)
+- [ ] International transfer mechanism documented (SCCs, DPF adequacy decision, or EU-only)
+- [ ] Grep verification run for contradicting blanket statements across all legal docs
 - When a plan includes user-facing pages or components (page.tsx, layout.tsx, signup/login/dashboard flows, forms, chat UI), invoke ux-design-lead for wireframes and spec-flow-analyzer for user flow review before implementation begins -- engineering plans default to infrastructure framing and silently skip product/UX validation; the agent must detect UI signals in the plan and cross-check with product domain
 - When fixing a pattern across plugin files (e.g., removing `$()`, renaming a reference), search ALL `.md` files under `plugins/soleur/` -- not just the category (commands/, skills/, agents/) that triggered the report; reference docs, SKILL.md, and agent definitions all contain executable bash blocks
 - GitHub Actions workflows that create issues with labels must pre-create labels via `gh label create <name> ... 2>/dev/null || true` -- `gh issue create --label` fails if the label does not exist; it does NOT auto-create labels
