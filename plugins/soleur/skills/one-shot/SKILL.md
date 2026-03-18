@@ -63,7 +63,7 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 **If present (success):**
 1. Extract the plan file path from `### Plan File`
 2. Detect the feature branch: run `git branch --show-current`
-3. Write the parsed content to `knowledge-base/specs/feat-<name>/session-state.md` (create if needed):
+3. Write the parsed content to `knowledge-base/project/specs/feat-<name>/session-state.md` (create if needed):
 
 ```markdown
 # Session State
