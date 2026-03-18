@@ -131,15 +131,15 @@ The `-s` test ensures we never overwrite the state file with empty content.
 
 ## Acceptance Criteria
 
-- [ ] `awk` calls on lines 30, 51, 190, and 210 of `stop-hook.sh` redirect stderr to `/dev/null`
-- [ ] A re-check `[[ -f "$RALPH_STATE_FILE" ]] || exit 0` is added before the frontmatter parse (between lines 48-51)
-- [ ] A re-check `[[ -f "$RALPH_STATE_FILE" ]] || exit 0` is added before the prompt extraction (before line 190)
-- [ ] An empty-FRONTMATTER guard exits cleanly after line 51
-- [ ] All 8 bare `rm "$RALPH_STATE_FILE"` calls are changed to `rm -f "$RALPH_STATE_FILE"` (lines 80, 86, 93, 103, 121, 174, 182, 194)
-- [ ] The `mv` on line 211 is guarded with a `-s` (non-empty) check on the temp file
-- [ ] Orphaned temp files are cleaned up on early exit
-- [ ] No behavioral change: hook still exits 0 when file is missing, still blocks when active
-- [ ] `set -euo pipefail` compatibility verified -- no unguarded commands that can exit non-zero
+- [x] `awk` calls on lines 30, 51, 190, and 210 of `stop-hook.sh` redirect stderr to `/dev/null`
+- [x] A re-check `[[ -f "$RALPH_STATE_FILE" ]] || exit 0` is added before the frontmatter parse (between lines 48-51)
+- [x] A re-check `[[ -f "$RALPH_STATE_FILE" ]] || exit 0` is added before the prompt extraction (before line 190)
+- [x] An empty-FRONTMATTER guard exits cleanly after line 51
+- [x] All 8 bare `rm "$RALPH_STATE_FILE"` calls are changed to `rm -f "$RALPH_STATE_FILE"` (lines 80, 86, 93, 103, 121, 174, 182, 194)
+- [x] The `mv` on line 211 is guarded with a `-s` (non-empty) check on the temp file
+- [x] Orphaned temp files are cleaned up on early exit
+- [x] No behavioral change: hook still exits 0 when file is missing, still blocks when active
+- [x] `set -euo pipefail` compatibility verified -- no unguarded commands that can exit non-zero
 
 ## Test Scenarios
 
