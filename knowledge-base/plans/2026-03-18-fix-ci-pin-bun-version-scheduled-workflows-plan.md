@@ -23,11 +23,11 @@ Two scheduled workflows use `oven-sh/setup-bun` without specifying `bun-version`
 
 ## Acceptance Criteria
 
-- [ ] `scheduled-ship-merge.yml` specifies `bun-version: "1.3.11"` in the Setup Bun step (`.github/workflows/scheduled-ship-merge.yml:43`)
-- [ ] `scheduled-bug-fixer.yml` specifies `bun-version: "1.3.11"` in the Setup Bun step (`.github/workflows/scheduled-bug-fixer.yml:48`)
-- [ ] Both `with:` blocks match the format used in `ci.yml` (`.github/workflows/ci.yml:17-19`)
-- [ ] Version comment on `scheduled-ship-merge.yml` line 43 updated from `# v2` to `# v2.1.2` for consistency with the other two files
-- [ ] No other workflows in `.github/workflows/` use `setup-bun` without a pinned version (verified -- only these three files use the action)
+- [x] `scheduled-ship-merge.yml` specifies `bun-version: "1.3.11"` in the Setup Bun step (`.github/workflows/scheduled-ship-merge.yml:43`)
+- [x] `scheduled-bug-fixer.yml` specifies `bun-version: "1.3.11"` in the Setup Bun step (`.github/workflows/scheduled-bug-fixer.yml:48`)
+- [x] Both `with:` blocks match the format used in `ci.yml` (`.github/workflows/ci.yml:17-19`)
+- [x] Version comment on `scheduled-ship-merge.yml` line 43 updated from `# v2` to `# v2.1.2` for consistency with the other two files
+- [x] No other workflows in `.github/workflows/` use `setup-bun` without a pinned version (verified -- only these three files use the action)
 
 ### Research Insights
 
