@@ -10,7 +10,7 @@ generated-date: 2026-02-20
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 18, 2026 (Buttondown international transfers and data retention)
+**Last Updated:** March 18, 2026 (newsletter legal basis clarification)
 
 ---
 
@@ -70,7 +70,9 @@ For processing personal data contained in data subject rights requests and legal
 
 ### 3.6 Newsletter Subscription
 
-For processing of email addresses when visitors subscribe to the Soleur newsletter via the Docs Site, the lawful basis is **consent** (Article 6(1)(a)). Subscribers actively opt in by submitting the signup form and confirming their subscription via a double opt-in confirmation email sent by Buttondown. Consent may be withdrawn at any time by unsubscribing via the link included in every newsletter email. Upon withdrawal, the email address is removed from the active subscriber list.
+For processing of **email addresses** when visitors subscribe to the Soleur newsletter via the Docs Site, the lawful basis is **consent** (Article 6(1)(a)). Subscribers actively opt in by submitting the signup form and confirming their subscription via a double opt-in confirmation email sent by Buttondown. Consent may be withdrawn at any time by unsubscribing via the link included in every newsletter email. Upon withdrawal, the email address is removed from the active subscriber list.
+
+For the **technical metadata** automatically collected by Buttondown during the subscription request (IP address, referrer URL, subscription timestamp, browser/device metadata), the lawful basis is **legitimate interest** (Article 6(1)(f)). The balancing test for this interest considers: (a) the data is minimal and limited to standard HTTP request metadata, (b) the processing is necessary for service delivery and abuse prevention, (c) the data is within the reasonable expectations of someone subscribing to a newsletter, and (d) the processing does not involve profiling or automated decision-making. Data subjects may object to this processing under Article 21 by contacting legal@jikigai.com.
 
 ---
 
@@ -100,7 +102,7 @@ The following data may be processed by third-party services when users interact 
 | GitHub account data | GitHub (via repository) | Issue tracking, contributions |
 | Name, email, inquiry content | Proton AG (via Proton Mail) | Handling legal and GDPR inquiries (legal@jikigai.com) |
 | GitHub username, signature timestamp, PR reference | GitHub (via CLA Assistant) | Recording CLA signature for contributor IP license grants |
-| Email address | Buttondown (via newsletter signup) | Managing newsletter subscriptions and delivering newsletter emails |
+| Email address, IP address, referrer URL, subscription timestamp, browser/device metadata | Buttondown (via newsletter signup) | Managing newsletter subscriptions and delivering newsletter emails |
 
 Users are responsible for reviewing the privacy policies of these third-party services.
 
@@ -222,7 +224,7 @@ The register documents six processing activities:
 3. **Source repository management** (GitHub) -- contributor profile data, issue reporters
 4. **Legal and GDPR inquiry handling** (legal@jikigai.com) -- names, email addresses, inquiry content
 5. **CLA signature collection** (GitHub CLA Assistant) -- GitHub username, signature timestamp, pull request reference. Legal basis: legitimate interest (Article 6(1)(f)). Signature data is stored on the `cla-signatures` branch in the public repository. Retention is indefinite (irrevocable license grants).
-6. **Newsletter subscription management** (soleur.ai via Buttondown) -- email addresses of newsletter subscribers. Legal basis: consent (Article 6(1)(a)). Data is processed by Buttondown (US-based, SCCs in place). Retention: until the subscriber unsubscribes. Double opt-in is used to verify consent.
+6. **Newsletter subscription management** (soleur.ai via Buttondown) -- (a) email addresses of newsletter subscribers, legal basis: consent (Article 6(1)(a)), verified through double opt-in; (b) IP address, referrer URL, subscription timestamp, and browser/device metadata automatically collected during subscription, legal basis: legitimate interest (Article 6(1)(f)) for service operation and abuse prevention. Data is processed by Buttondown (US-based, SCCs in place). Email retention: until the subscriber unsubscribes. Technical metadata retention: governed by Buttondown's data retention practices.
 
 The register is maintained internally and is available on request to the competent supervisory authority (CNIL for France). Since the 2018 reform of the Loi Informatique et Libertes, no registration or prior declaration to the CNIL is required.
 
