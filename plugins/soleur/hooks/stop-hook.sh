@@ -204,13 +204,16 @@ fi
 CURRENT_WORDS=$(echo "$LAST_OUTPUT" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '\n' | sort -u | tr '\n' ' ' | sed 's/ $//')
 
 if [[ -n "$LAST_RESPONSE_WORDS" ]] && [[ -n "$CURRENT_WORDS" ]]; then
-  PREV_SORTED=$(echo "$LAST_RESPONSE_WORDS" | tr ' ' '\n' | sort -u)
-  CURR_SORTED=$(echo "$CURRENT_WORDS" | tr ' ' '\n' | sort -u)
-  INTERSECTION=$(comm -12 <(echo "$PREV_SORTED") <(echo "$CURR_SORTED") | wc -l)
-  UNION=$(comm <(echo "$PREV_SORTED") <(echo "$CURR_SORTED") | sort -u | wc -l)
+  # Word lists are already sorted unique from tokenization
+  PREV_LINES=$(echo "$LAST_RESPONSE_WORDS" | tr ' ' '\n')
+  CURR_LINES=$(echo "$CURRENT_WORDS" | tr ' ' '\n')
+  PREV_N=$(echo "$PREV_LINES" | wc -l)
+  CURR_N=$(echo "$CURR_LINES" | wc -l)
+  COMMON=$(comm -12 <(echo "$PREV_LINES") <(echo "$CURR_LINES") | wc -l)
+  UNION=$(( PREV_N + CURR_N - COMMON ))
 
   if [[ $UNION -gt 0 ]]; then
-    SIMILARITY=$((INTERSECTION * 100 / UNION))
+    SIMILARITY=$((COMMON * 100 / UNION))
   else
     SIMILARITY=0
   fi
