@@ -95,18 +95,18 @@ Update the "Last Updated" date across all modified files to "March 18, 2026 (But
 
 ## Acceptance Criteria
 
-- [ ] GDPR Policy Section 6 lists Buttondown as a US-based processor with SCCs (Module 2) as the transfer mechanism, linking to Buttondown's DPA (`docs/legal/gdpr-policy.md`)
-- [ ] GDPR Policy Section 8 includes newsletter subscriber data retention terms as new subsection 8.3 (`docs/legal/gdpr-policy.md`)
-- [ ] GDPR Policy Section 8 existing "Third-Party Retention" renumbered from 8.3 to 8.4 (`docs/legal/gdpr-policy.md`)
-- [ ] Privacy Policy Section 10 mentions Buttondown international transfers with DPA link (`docs/legal/privacy-policy.md`)
-- [ ] Eleventy copy of GDPR Policy body content matches source (`plugins/soleur/docs/pages/legal/gdpr-policy.md`)
-- [ ] Eleventy copy of Privacy Policy body content matches source (`plugins/soleur/docs/pages/legal/privacy-policy.md`)
-- [ ] "Last Updated" dates updated across all modified files (both header and hero section in Eleventy copies)
-- [ ] No other sections need updating (Section 2.2, 3.6, 4.2, 5, 10 already reference Buttondown correctly)
-- [ ] DPD is NOT modified (Buttondown is already adequately disclosed in Section 2.3(e); Section 6.2 generic language is intentional for a disclosure document)
-- [ ] Grep verification: `grep -r "Buttondown" docs/legal/ plugins/soleur/docs/pages/legal/` shows consistent references across all locations
-- [ ] Links to Buttondown DPA (`https://buttondown.com/legal/data-processing-agreement`) are valid (verified 2026-03-18)
-- [ ] No references to EU-US Data Privacy Framework for Buttondown (Buttondown is not DPF-certified)
+- [x] GDPR Policy Section 6 lists Buttondown as a US-based processor with SCCs (Module 2) as the transfer mechanism, linking to Buttondown's DPA (`docs/legal/gdpr-policy.md`)
+- [x] GDPR Policy Section 8 includes newsletter subscriber data retention terms as new subsection 8.3 (`docs/legal/gdpr-policy.md`)
+- [x] GDPR Policy Section 8 existing "Third-Party Retention" renumbered from 8.3 to 8.4 (`docs/legal/gdpr-policy.md`)
+- [x] Privacy Policy Section 10 mentions Buttondown international transfers with DPA link (`docs/legal/privacy-policy.md`)
+- [x] Eleventy copy of GDPR Policy body content matches source (`plugins/soleur/docs/pages/legal/gdpr-policy.md`)
+- [x] Eleventy copy of Privacy Policy body content matches source (`plugins/soleur/docs/pages/legal/privacy-policy.md`)
+- [x] "Last Updated" dates updated across all modified files (both header and hero section in Eleventy copies)
+- [x] No other sections need updating (Section 2.2, 3.6, 4.2, 5, 10 already reference Buttondown correctly)
+- [x] DPD is NOT modified (Buttondown is already adequately disclosed in Section 2.3(e); Section 6.2 generic language is intentional for a disclosure document)
+- [x] Grep verification: `grep -r "Buttondown" docs/legal/ plugins/soleur/docs/pages/legal/` shows consistent references across all locations
+- [x] Links to Buttondown DPA (`https://buttondown.com/legal/data-processing-agreement`) are valid (verified 2026-03-18)
+- [x] No references to EU-US Data Privacy Framework for Buttondown (Buttondown is not DPF-certified)
 
 ## Test Scenarios
 
