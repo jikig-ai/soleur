@@ -73,6 +73,25 @@ ensure_gitignore() {
   fi
 }
 
+# Update a branch ref to latest remote, handling bare vs non-bare repos.
+# In bare repos: uses fetch with refspec (no working tree needed).
+# In non-bare repos: uses checkout + pull.
+update_branch_ref() {
+  local branch="$1"
+  echo -e "${BLUE}Updating $branch...${NC}"
+  if [[ "$IS_BARE" == "true" && "$IS_IN_WORKTREE" != "true" ]]; then
+    # Bare repo root: no working tree, so use fetch with refspec
+    if git fetch origin "$branch:$branch" 2>/dev/null; then
+      echo -e "${GREEN}Updated $branch to latest (via fetch)${NC}"
+    elif git fetch origin "$branch" 2>/dev/null; then
+      echo -e "${YELLOW}Warning: Could not fast-forward local $branch -- using origin/$branch${NC}"
+    fi
+  else
+    git checkout "$branch"
+    git pull origin "$branch" || true
+  fi
+}
+
 # Copy .env files from main repo to worktree
 copy_env_files() {
   local worktree_path="$1"
@@ -147,8 +166,6 @@ create_worktree() {
   local branch_name="$1"
   local from_branch="${2:-main}"
 
-  require_working_tree
-
   if [[ -z "$branch_name" ]]; then
     echo -e "${RED}Error: Branch name required${NC}"
     exit 1
@@ -189,10 +206,8 @@ create_worktree() {
     return
   fi
 
-  # Update main branch
-  echo -e "${BLUE}Updating $from_branch...${NC}"
-  git checkout "$from_branch"
-  git pull origin "$from_branch" || true
+  # Update base branch (bare-aware)
+  update_branch_ref "$from_branch"
 
   # Create worktree
   mkdir -p "$WORKTREE_DIR"
@@ -220,8 +235,6 @@ create_for_feature() {
   local name="$1"
   local from_branch="${2:-main}"
 
-  require_working_tree
-
   if [[ -z "$name" ]]; then
     echo -e "${RED}Error: Feature name required${NC}"
     echo "Usage: worktree-manager.sh feature <name> [from-branch]"
@@ -245,10 +258,8 @@ create_for_feature() {
   echo "  Spec dir: $spec_dir"
   echo ""
 
-  # Update base branch before creating worktree
-  echo -e "${BLUE}Updating $from_branch...${NC}"
-  git checkout "$from_branch"
-  git pull origin "$from_branch" || true
+  # Update base branch (bare-aware)
+  update_branch_ref "$from_branch"
 
   # Ensure directories exist
   mkdir -p "$WORKTREE_DIR"
