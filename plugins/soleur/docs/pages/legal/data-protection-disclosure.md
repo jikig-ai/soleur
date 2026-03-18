@@ -8,7 +8,7 @@ permalink: pages/legal/data-protection-disclosure.html
 <section class="page-hero">
   <div class="container">
     <h1>Data Protection Disclosure</h1>
-    <p>Effective February 20, 2026 | Last Updated March 10, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated March 18, 2026</p>
   </div>
 </section>
 
@@ -18,7 +18,7 @@ permalink: pages/legal/data-protection-disclosure.html
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 10, 2026 (newsletter subscription data)
+**Last Updated:** March 18, 2026 (sub-processor disclosure restructured)
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -119,11 +119,21 @@ While Soleur does not process User data, we recommend the following security mea
 
 ## 4. Third-Party Services and Sub-processors
 
-### 4.1 No Sub-processors
+### 4.1 Plugin Sub-processors
 
-Because Soleur does not process Personal Data on behalf of Users, there are no Sub-processors to disclose under Article 28(2) of the GDPR.
+The Plugin does not process Personal Data on behalf of Users (see Section 2.1). Accordingly, there are no Plugin-level Sub-processors to disclose under Article 28(2) of the GDPR.
 
-### 4.2 Third-Party Services Used by Users
+### 4.2 Docs Site Processors
+
+For processing activities where Jikigai acts as Controller (see Section 2.3), the following third-party processor is engaged:
+
+| Processor | Processing Activity | Data Processed | Legal Basis | Sub-processor List |
+|-----------|-------------------|----------------|-------------|-------------------|
+| Buttondown ([buttondown.com](https://buttondown.com)) | Newsletter subscription management and email delivery | Email addresses of subscribers | Consent (Article 6(1)(a)) — double opt-in | [Buttondown Sub-processors](https://buttondown.com/legal/dpa) |
+
+This disclosure is consistent with Section 2.3(e).
+
+### 4.3 Third-Party Services Used by Users
 
 Users may interact with the following third-party services through the Plugin's functionality. These interactions are initiated and controlled by the User, not by Soleur:
 
@@ -132,7 +142,6 @@ Users may interact with the following third-party services through the Plugin's 
 | Anthropic (Claude API) | AI model inference | Direct customer of Anthropic |
 | GitHub | Code hosting, issue tracking | Direct customer of GitHub |
 | npm | Package distribution | Direct customer of npm |
-| Buttondown | Newsletter subscription management | Buttondown acts as data processor on behalf of Jikigai |
 
 Users are responsible for reviewing and complying with the data processing terms of any third-party service they use in conjunction with the Plugin.
 

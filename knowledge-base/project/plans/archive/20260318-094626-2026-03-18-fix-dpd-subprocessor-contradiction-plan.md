@@ -57,14 +57,14 @@ Keep the existing content but remove the Buttondown row from the table (it now b
 
 ## Acceptance Criteria
 
-- [ ] Section 4.1 heading changed from "No Sub-processors" to "Plugin Sub-processors" (or equivalent) -- scoped to Plugin only (`data-protection-disclosure.md:122`)
-- [ ] Section 4.1 body updated to explicitly scope the "no sub-processors" statement to the Plugin (`data-protection-disclosure.md:124`)
-- [ ] New Section 4.2 added disclosing Buttondown as a Docs Site processor with structured table (`data-protection-disclosure.md`)
-- [ ] Current Section 4.2 renumbered to 4.3 (`data-protection-disclosure.md:127-137`)
-- [ ] Buttondown removed from Section 4.3 table (no longer mixed with user-initiated services) (`data-protection-disclosure.md:135`)
-- [ ] Cross-reference to Section 2.3(e) included in new Section 4.2
-- [ ] "Last Updated" date bumped to current date (`data-protection-disclosure.md:20-21`)
-- [ ] No other legal documents require changes (Privacy Policy and GDPR Policy already correctly describe Buttondown as a processor)
+- [x] Section 4.1 heading changed from "No Sub-processors" to "Plugin Sub-processors" (or equivalent) -- scoped to Plugin only (`data-protection-disclosure.md:122`)
+- [x] Section 4.1 body updated to explicitly scope the "no sub-processors" statement to the Plugin (`data-protection-disclosure.md:124`)
+- [x] New Section 4.2 added disclosing Buttondown as a Docs Site processor with structured table (`data-protection-disclosure.md`)
+- [x] Current Section 4.2 renumbered to 4.3 (`data-protection-disclosure.md:127-137`)
+- [x] Buttondown removed from Section 4.3 table (no longer mixed with user-initiated services) (`data-protection-disclosure.md:135`)
+- [x] Cross-reference to Section 2.3(e) included in new Section 4.2
+- [x] "Last Updated" date bumped to current date (`data-protection-disclosure.md:20-21`)
+- [x] No other legal documents require changes (Privacy Policy and GDPR Policy already correctly describe Buttondown as a processor)
 
 ## Test Scenarios
 
