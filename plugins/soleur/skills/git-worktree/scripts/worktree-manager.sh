@@ -540,9 +540,14 @@ cleanup_merged_worktrees() {
     # After cleanup, update main checkout so next worktree branches from latest
     # Skip entirely for bare repos -- there is no working tree to update
     if [[ "$IS_BARE" == "true" ]]; then
-      # Bare repos have no working tree -- use git fetch to update the main ref
-      if git fetch origin main 2>/dev/null; then
-        echo -e "${GREEN}Fetched latest main${NC}"
+      # Bare repos have no working tree -- use fetch with refspec to update the
+      # local main ref directly (plain "fetch origin main" only updates FETCH_HEAD
+      # and origin/main, leaving local main stale for new worktree creation)
+      if git fetch origin main:main 2>/dev/null; then
+        echo -e "${GREEN}Updated main to latest${NC}"
+      elif git fetch origin main 2>/dev/null; then
+        # Fallback: non-fast-forward (e.g., force-push) -- at least update origin/main
+        echo -e "${YELLOW}Warning: Could not fast-forward local main -- fetched origin/main only${NC}"
       fi
       # Auto-sync stale on-disk files so the next session reads current versions
       sync_bare_files
@@ -634,7 +639,8 @@ sync_bare_files() {
   # Create a temp directory on the same filesystem for atomic writes
   local tmpdir
   tmpdir=$(mktemp -d "${GIT_ROOT}/.sync-tmp.XXXXXX")
-  trap 'rm -rf "$tmpdir"' EXIT
+  # shellcheck disable=SC2064  # Intentional: expand tmpdir NOW so the trap works after local scope ends
+  trap "rm -rf '$tmpdir'" EXIT
 
   # Files that Claude Code reads from the bare repo root
   local files=(
