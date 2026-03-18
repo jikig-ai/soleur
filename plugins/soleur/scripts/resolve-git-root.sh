@@ -2,12 +2,14 @@
 
 # resolve-git-root.sh -- Sourceable helper to detect bare repos and resolve GIT_ROOT
 #
-# Usage: source this file. It sets GIT_ROOT and IS_BARE.
+# Usage: source this file. It sets GIT_ROOT, GIT_COMMON_ROOT, and IS_BARE.
 # Do NOT execute directly.
 #
 # Variables set:
-#   GIT_ROOT  -- absolute path to the repository root (bare or non-bare)
-#   IS_BARE   -- "true" or "false"
+#   GIT_ROOT        -- absolute path to the repository root (bare or non-bare)
+#   GIT_COMMON_ROOT -- absolute path to the shared repo root across all worktrees
+#                      (equals GIT_ROOT when not in a worktree)
+#   IS_BARE         -- "true" or "false"
 #
 # On error (not inside a git repo), returns 1 without calling exit.
 # Does not call set or modify the caller's shell options.
@@ -40,3 +42,14 @@ if [[ ! -d "$GIT_ROOT" ]]; then
   echo "Error: GIT_ROOT resolved to non-existent path: $GIT_ROOT" >&2
   return 1
 fi
+
+# Resolve common root (shared across worktrees)
+# git rev-parse --git-common-dir returns the shared .git dir; may be relative,
+# so cd+pwd resolves to absolute. Strip trailing /.git for the repo root.
+_resolve_common_dir=$(cd "$(git rev-parse --git-common-dir 2>/dev/null)" && pwd)
+if [[ "$_resolve_common_dir" == */.git ]]; then
+  GIT_COMMON_ROOT="${_resolve_common_dir%/.git}"
+else
+  GIT_COMMON_ROOT="$_resolve_common_dir"
+fi
+unset _resolve_common_dir
