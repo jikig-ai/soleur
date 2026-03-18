@@ -101,12 +101,12 @@ uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
 
 ## Acceptance Criteria
 
-- [ ] All four `uses:` lines in `build-web-platform.yml` reference commit SHAs, not version tags
-- [ ] Each SHA has a trailing `# vX.Y.Z` comment matching the resolved version
-- [ ] The `actions/checkout` SHA matches the one already used in `ci.yml` (`34e114876b0b11c390a56381ad16ebd13914f8d5`)
-- [ ] No other functional changes to the workflow (triggers, env vars, secrets, steps)
-- [ ] Workflow YAML remains valid (passes `actionlint` or equivalent)
-- [ ] No remaining `@v[0-9]` references in `build-web-platform.yml` (grep verification: `grep -E 'uses:.*@v[0-9]' .github/workflows/build-web-platform.yml` returns empty)
+- [x] All four `uses:` lines in `build-web-platform.yml` reference commit SHAs, not version tags
+- [x] Each SHA has a trailing `# vX.Y.Z` comment matching the resolved version
+- [x] The `actions/checkout` SHA matches the one already used in `ci.yml` (`34e114876b0b11c390a56381ad16ebd13914f8d5`)
+- [x] No other functional changes to the workflow (triggers, env vars, secrets, steps)
+- [x] Workflow YAML remains valid (passes `actionlint` or equivalent)
+- [x] No remaining `@v[0-9]` references in `build-web-platform.yml` (grep verification: `grep -E 'uses:.*@v[0-9]' .github/workflows/build-web-platform.yml` returns empty)
 
 ## Test Scenarios
 
