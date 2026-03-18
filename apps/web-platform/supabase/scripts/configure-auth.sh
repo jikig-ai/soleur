@@ -12,6 +12,11 @@ SUPABASE_ACCESS_TOKEN="${SUPABASE_ACCESS_TOKEN:?Missing SUPABASE_ACCESS_TOKEN}"
 PROJECT_REF="${PROJECT_REF:?Missing PROJECT_REF}"
 RESEND_API_KEY="${RESEND_API_KEY:?Missing RESEND_API_KEY}"
 
+if ! command -v jq &>/dev/null; then
+  echo "ERROR: jq is required but not installed" >&2
+  exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_FILE="$SCRIPT_DIR/../templates/magic-link.html"
 
@@ -24,7 +29,7 @@ MAGIC_LINK_TEMPLATE=$(cat "$TEMPLATE_FILE")
 
 echo "Configuring Supabase Auth for project $PROJECT_REF..."
 
-RESPONSE=$(curl -s -w "\n%{http_code}" -X PATCH \
+RESPONSE=$(curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" -X PATCH \
   "https://api.supabase.com/v1/projects/$PROJECT_REF/config/auth" \
   -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \

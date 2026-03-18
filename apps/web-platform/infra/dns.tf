@@ -37,7 +37,7 @@ resource "cloudflare_record" "mx_send" {
 resource "cloudflare_record" "dmarc" {
   zone_id = var.cloudflare_zone_id
   name    = "_dmarc"
-  content = "v=DMARC1; p=none;"
+  content = "v=DMARC1; p=quarantine; rua=mailto:dmarc-reports@soleur.ai; pct=100"
   type    = "TXT"
   ttl     = 1
 }
