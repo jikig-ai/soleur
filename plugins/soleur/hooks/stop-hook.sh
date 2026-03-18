@@ -27,13 +27,13 @@ TTL_HOURS=1
 NOW_EPOCH=$(date +%s)
 for state_file in "${PROJECT_ROOT}/.claude"/ralph-loop.*.local.md; do
   [[ -f "$state_file" ]] || continue
-  STARTED_AT=$(awk '/^---$/{c++; next} c==1' "$state_file" | grep '^started_at:' | sed 's/started_at: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+  STARTED_AT=$(awk '/^---$/{c++; next} c==1' "$state_file" 2>/dev/null | grep '^started_at:' | sed 's/started_at: *//' | sed 's/^"\(.*\)"$/\1/' || true)
   if [[ -n "$STARTED_AT" ]]; then
     STARTED_EPOCH=$(date -d "$STARTED_AT" +%s 2>/dev/null || true)
     if [[ -n "$STARTED_EPOCH" ]] && [[ $((NOW_EPOCH - STARTED_EPOCH)) -gt $((TTL_HOURS * 3600)) ]]; then
       AGE_MINS=$(( (NOW_EPOCH - STARTED_EPOCH) / 60 ))
       echo "Ralph loop: stale state file detected ($(basename "$state_file"), started ${AGE_MINS}m ago, TTL=${TTL_HOURS}h). Auto-removing." >&2
-      rm "$state_file" || true
+      rm -f "$state_file"
     fi
   fi
 done
@@ -47,12 +47,22 @@ fi
 # Read hook input from stdin (advanced stop hook API)
 HOOK_INPUT=$(cat)
 
+# Re-check after potential race -- file may have been removed between
+# the existence check above and here (stdin read is blocking)
+[[ -f "$RALPH_STATE_FILE" ]] || exit 0
+
 # Parse markdown frontmatter (YAML between first and second --- only)
-FRONTMATTER=$(awk '/^---$/{c++; next} c==1' "$RALPH_STATE_FILE")
-ITERATION=$(echo "$FRONTMATTER" | grep '^iteration:' | sed 's/iteration: *//')
-MAX_ITERATIONS=$(echo "$FRONTMATTER" | grep '^max_iterations:' | sed 's/max_iterations: *//')
+FRONTMATTER=$(awk '/^---$/{c++; next} c==1' "$RALPH_STATE_FILE" 2>/dev/null)
+
+# Safety net: if awk produced nothing (file vanished between check and read), exit cleanly
+if [[ -z "$FRONTMATTER" ]]; then
+  exit 0
+fi
+
+ITERATION=$(echo "$FRONTMATTER" | grep '^iteration:' | sed 's/iteration: *//' || true)
+MAX_ITERATIONS=$(echo "$FRONTMATTER" | grep '^max_iterations:' | sed 's/max_iterations: *//' || true)
 # Extract completion_promise and strip surrounding quotes if present
-COMPLETION_PROMISE=$(echo "$FRONTMATTER" | grep '^completion_promise:' | sed 's/completion_promise: *//' | sed 's/^"\(.*\)"$/\1/')
+COMPLETION_PROMISE=$(echo "$FRONTMATTER" | grep '^completion_promise:' | sed 's/completion_promise: *//' | sed 's/^"\(.*\)"$/\1/' || true)
 
 # --- Stuck Detection ---
 # Parse stuck detection fields from frontmatter
@@ -77,20 +87,20 @@ fi
 # Validate numeric fields before arithmetic operations
 if [[ ! "$ITERATION" =~ ^[0-9]+$ ]]; then
   echo "Warning: Ralph loop state file corrupted (iteration: '$ITERATION'). Stopping." >&2
-  rm "$RALPH_STATE_FILE"
+  rm -f "$RALPH_STATE_FILE"
   exit 0
 fi
 
 if [[ ! "$MAX_ITERATIONS" =~ ^[0-9]+$ ]]; then
   echo "Warning: Ralph loop state file corrupted (max_iterations: '$MAX_ITERATIONS'). Stopping." >&2
-  rm "$RALPH_STATE_FILE"
+  rm -f "$RALPH_STATE_FILE"
   exit 0
 fi
 
 # Check if max iterations reached
 if [[ $MAX_ITERATIONS -gt 0 ]] && [[ $ITERATION -ge $MAX_ITERATIONS ]]; then
   echo "Ralph loop: Max iterations ($MAX_ITERATIONS) reached." >&2
-  rm "$RALPH_STATE_FILE"
+  rm -f "$RALPH_STATE_FILE"
   exit 0
 fi
 
@@ -100,7 +110,7 @@ fi
 HARD_CAP=50
 if [[ $ITERATION -ge $HARD_CAP ]]; then
   echo "Ralph loop: Hard safety cap ($HARD_CAP iterations) reached. Auto-removing." >&2
-  rm "$RALPH_STATE_FILE"
+  rm -f "$RALPH_STATE_FILE"
   exit 0
 fi
 
@@ -118,7 +128,7 @@ if [[ "$COMPLETION_PROMISE" != "null" ]] && [[ -n "$COMPLETION_PROMISE" ]]; then
   # Use = for literal string comparison (not glob pattern matching)
   if [[ -n "$PROMISE_TEXT" ]] && [[ "$PROMISE_TEXT" = "$COMPLETION_PROMISE" ]]; then
     echo "Ralph loop: Detected <promise>$COMPLETION_PROMISE</promise>" >&2
-    rm "$RALPH_STATE_FILE"
+    rm -f "$RALPH_STATE_FILE"
     exit 0
   fi
 fi
@@ -171,7 +181,7 @@ fi
 # Check stuck threshold (0 = disabled)
 if [[ $STUCK_THRESHOLD -gt 0 ]] && [[ $STUCK_COUNT -ge $STUCK_THRESHOLD ]]; then
   echo "Ralph loop: terminated after $STUCK_COUNT consecutive empty/idle responses (stuck detection)" >&2
-  rm "$RALPH_STATE_FILE"
+  rm -f "$RALPH_STATE_FILE"
   exit 0
 fi
 
@@ -179,19 +189,22 @@ fi
 REPEAT_THRESHOLD=3
 if [[ $REPEAT_COUNT -ge $REPEAT_THRESHOLD ]]; then
   echo "Ralph loop: terminated after $((REPEAT_COUNT + 1)) consecutive identical responses (repetition detection)" >&2
-  rm "$RALPH_STATE_FILE"
+  rm -f "$RALPH_STATE_FILE"
   exit 0
 fi
 
 # Not complete - continue loop with SAME PROMPT
 NEXT_ITERATION=$((ITERATION + 1))
 
+# Re-check before prompt extraction -- file may have been removed by concurrent invocation
+[[ -f "$RALPH_STATE_FILE" ]] || exit 0
+
 # Extract prompt (everything after the closing ---)
-PROMPT_TEXT=$(awk '/^---$/{i++; next} i>=2' "$RALPH_STATE_FILE")
+PROMPT_TEXT=$(awk '/^---$/{i++; next} i>=2' "$RALPH_STATE_FILE" 2>/dev/null)
 
 if [[ -z "$PROMPT_TEXT" ]]; then
   echo "Warning: No prompt text in state file. Stopping." >&2
-  rm "$RALPH_STATE_FILE"
+  rm -f "$RALPH_STATE_FILE"
   exit 0
 fi
 
@@ -207,8 +220,14 @@ awk -v iter="$NEXT_ITERATION" -v sc="$STUCK_COUNT" -v lrh="$LAST_RESPONSE_HASH" 
   c==1 && /^last_response_hash:/ { print "last_response_hash: " lrh; next }
   c==1 && /^repeat_count:/ { print "repeat_count: " rc; next }
   { print }
-' "$RALPH_STATE_FILE" > "$TEMP_FILE"
-mv "$TEMP_FILE" "$RALPH_STATE_FILE"
+' "$RALPH_STATE_FILE" > "$TEMP_FILE" 2>/dev/null || true
+if [[ -s "$TEMP_FILE" ]]; then
+  mv "$TEMP_FILE" "$RALPH_STATE_FILE"
+else
+  # awk produced empty output (file vanished) -- clean up and exit
+  rm -f "$TEMP_FILE"
+  exit 0
+fi
 
 # Build system message with iteration count and completion promise info
 if [[ "$COMPLETION_PROMISE" != "null" ]] && [[ -n "$COMPLETION_PROMISE" ]]; then

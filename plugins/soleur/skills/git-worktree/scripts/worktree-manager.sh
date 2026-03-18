@@ -23,10 +23,15 @@ NC='\033[0m' # No Color
 YES_FLAG=false
 
 # Get repo root and detect bare repo (single subprocess for both)
-# IS_BARE guards all working-tree-dependent operations (git diff, checkout, pull, status)
+# IS_BARE: true when the parent/root repo is bare (affects fetch strategy, file sync)
+# IS_IN_WORKTREE: true when running from inside a worktree (has a working tree)
 # Must also detect when running from a worktree whose parent repo is bare,
 # since git rev-parse --is-bare-repository returns false inside worktrees.
 IS_BARE=false
+IS_IN_WORKTREE=false
+if [[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]]; then
+  IS_IN_WORKTREE=true
+fi
 if [[ "$(git rev-parse --is-bare-repository 2>/dev/null)" == "true" ]]; then
   IS_BARE=true
   _git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null)
@@ -51,10 +56,11 @@ else
 fi
 WORKTREE_DIR="$GIT_ROOT/.worktrees"
 
-# Exit with error if running in a bare repo (git checkout/pull require a working tree)
+# Exit with error if running at the bare repo root (no working tree available).
+# Allows execution from worktrees of bare repos (IS_BARE=true but IS_IN_WORKTREE=true).
 require_working_tree() {
-  if [[ "$IS_BARE" == "true" ]]; then
-    echo -e "${RED}Error: Cannot create worktrees from bare repo root (git checkout requires a working tree).${NC}"
+  if [[ "$IS_BARE" == "true" && "$IS_IN_WORKTREE" != "true" ]]; then
+    echo -e "${RED}Error: Cannot run from bare repo root (no working tree available).${NC}"
     echo -e "${YELLOW}Run from an existing worktree, or use: git worktree add .worktrees/<name> -b <branch> main${NC}"
     exit 1
   fi
