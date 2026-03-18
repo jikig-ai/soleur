@@ -3,8 +3,12 @@ import { provisionWorkspace } from "@/server/workspace";
 import { NextResponse } from "next/server";
 
 export async function GET(request: Request) {
-  const { searchParams, origin } = new URL(request.url);
+  const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
+  const forwardedHost = request.headers.get("x-forwarded-host");
+  const forwardedProto = request.headers.get("x-forwarded-proto") ?? "https";
+  const host = forwardedHost ?? request.headers.get("host") ?? "app.soleur.ai";
+  const origin = `${forwardedProto}://${host}`;
 
   if (code) {
     const supabase = await createClient();
