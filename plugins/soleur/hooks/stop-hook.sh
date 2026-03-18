@@ -72,6 +72,8 @@ STUCK_COUNT=$(echo "$FRONTMATTER" | grep '^stuck_count:' | sed 's/stuck_count: *
 STUCK_THRESHOLD=$(echo "$FRONTMATTER" | grep '^stuck_threshold:' | sed 's/stuck_threshold: *//' || true)
 LAST_RESPONSE_HASH=$(echo "$FRONTMATTER" | grep '^last_response_hash:' | sed 's/last_response_hash: *//' || true)
 REPEAT_COUNT=$(echo "$FRONTMATTER" | grep '^repeat_count:' | sed 's/repeat_count: *//' || true)
+SIMILARITY_COUNT=$(echo "$FRONTMATTER" | grep '^similarity_count:' | sed 's/similarity_count: *//' || true)
+LAST_RESPONSE_WORDS=$(echo "$FRONTMATTER" | grep '^last_response_words:' | sed 's/last_response_words: *//' || true)
 
 # Default values for backward compatibility with pre-existing state files
 if [[ ! "$STUCK_COUNT" =~ ^[0-9]+$ ]]; then
@@ -82,6 +84,9 @@ if [[ ! "$STUCK_THRESHOLD" =~ ^[0-9]+$ ]]; then
 fi
 if [[ ! "$REPEAT_COUNT" =~ ^[0-9]+$ ]]; then
   REPEAT_COUNT=0
+fi
+if [[ ! "$SIMILARITY_COUNT" =~ ^[0-9]+$ ]]; then
+  SIMILARITY_COUNT=0
 fi
 
 # Validate numeric fields before arithmetic operations
@@ -169,10 +174,10 @@ LAST_RESPONSE_HASH="$CURRENT_HASH"
 
 # Update stuck counter: idle patterns OR short responses increment, substantive resets
 # Three tiers:
-#   < 20 chars: definitely minimal (existing behavior)
-#   20-199 chars + idle pattern: semantically idle (new)
+#   < 150 chars: definitely minimal (formulaic responses fall below this)
+#   150-199 chars + idle pattern: semantically idle
 #   >= 200 chars: always substantive (long enough to contain real work)
-if [[ "$IS_IDLE" == "true" ]] || [[ $RESPONSE_LENGTH -lt 20 ]]; then
+if [[ "$IS_IDLE" == "true" ]] || [[ $RESPONSE_LENGTH -lt 150 ]]; then
   STUCK_COUNT=$((STUCK_COUNT + 1))
 else
   STUCK_COUNT=0
@@ -189,6 +194,41 @@ fi
 REPEAT_THRESHOLD=3
 if [[ $REPEAT_COUNT -ge $REPEAT_THRESHOLD ]]; then
   echo "Ralph loop: terminated after $((REPEAT_COUNT + 1)) consecutive identical responses (repetition detection)" >&2
+  rm -f "$RALPH_STATE_FILE"
+  exit 0
+fi
+
+# --- Similarity Detection ---
+# Catch loops producing minor variations of the same response.
+# Tokenize into unique words, compute Jaccard similarity via comm.
+CURRENT_WORDS=$(echo "$LAST_OUTPUT" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '\n' | sort -u | tr '\n' ' ' | sed 's/ $//')
+
+if [[ -n "$LAST_RESPONSE_WORDS" ]] && [[ -n "$CURRENT_WORDS" ]]; then
+  PREV_SORTED=$(echo "$LAST_RESPONSE_WORDS" | tr ' ' '\n' | sort -u)
+  CURR_SORTED=$(echo "$CURRENT_WORDS" | tr ' ' '\n' | sort -u)
+  INTERSECTION=$(comm -12 <(echo "$PREV_SORTED") <(echo "$CURR_SORTED") | wc -l)
+  UNION=$(comm <(echo "$PREV_SORTED") <(echo "$CURR_SORTED") | sort -u | wc -l)
+
+  if [[ $UNION -gt 0 ]]; then
+    SIMILARITY=$((INTERSECTION * 100 / UNION))
+  else
+    SIMILARITY=0
+  fi
+
+  if [[ $SIMILARITY -ge 80 ]]; then
+    SIMILARITY_COUNT=$((SIMILARITY_COUNT + 1))
+  else
+    SIMILARITY_COUNT=0
+  fi
+else
+  SIMILARITY_COUNT=0
+fi
+LAST_RESPONSE_WORDS="$CURRENT_WORDS"
+
+# Check similarity threshold (3 consecutive similar responses)
+SIMILARITY_THRESHOLD=3
+if [[ $SIMILARITY_COUNT -ge $SIMILARITY_THRESHOLD ]]; then
+  echo "Ralph loop: terminated after $((SIMILARITY_COUNT + 1)) consecutive similar responses (similarity detection)" >&2
   rm -f "$RALPH_STATE_FILE"
   exit 0
 fi
@@ -213,12 +253,14 @@ fi
 # The counter will not persist across iterations. Acceptable because legacy files are only
 # created by pre-stuck-detection versions of setup-ralph-loop.sh; all new loops include the field.
 TEMP_FILE="${RALPH_STATE_FILE}.tmp.$$"
-awk -v iter="$NEXT_ITERATION" -v sc="$STUCK_COUNT" -v lrh="$LAST_RESPONSE_HASH" -v rc="$REPEAT_COUNT" '
+awk -v iter="$NEXT_ITERATION" -v sc="$STUCK_COUNT" -v lrh="$LAST_RESPONSE_HASH" -v rc="$REPEAT_COUNT" -v simc="$SIMILARITY_COUNT" -v lrw="$LAST_RESPONSE_WORDS" '
   /^---$/ { c++; print; next }
   c==1 && /^iteration:/ { print "iteration: " iter; next }
   c==1 && /^stuck_count:/ { print "stuck_count: " sc; next }
   c==1 && /^last_response_hash:/ { print "last_response_hash: " lrh; next }
   c==1 && /^repeat_count:/ { print "repeat_count: " rc; next }
+  c==1 && /^similarity_count:/ { print "similarity_count: " simc; next }
+  c==1 && /^last_response_words:/ { print "last_response_words: " lrw; next }
   { print }
 ' "$RALPH_STATE_FILE" > "$TEMP_FILE" 2>/dev/null || true
 if [[ -s "$TEMP_FILE" ]]; then
