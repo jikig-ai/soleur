@@ -75,11 +75,11 @@ This is a two-line edit across two files.
 
 ## Acceptance Criteria
 
-- [ ] Eleventy DPD intro links use `/pages/legal/*.html` format matching footer pattern (`plugins/soleur/docs/pages/legal/data-protection-disclosure.md`)
-- [ ] Root DPD intro links use relative `*.md` format matching footer pattern (`docs/legal/data-processing-agreement.md`)
-- [ ] No other `/docs/legal/` absolute paths remain in either file
-- [ ] Footer "Related Documents" links remain unchanged
-- [ ] Both files remain content-identical except for their link format conventions
+- [x] Eleventy DPD intro links use `/pages/legal/*.html` format matching footer pattern (`plugins/soleur/docs/pages/legal/data-protection-disclosure.md`)
+- [x] Root DPD intro links use relative `*.md` format matching footer pattern (`docs/legal/data-processing-agreement.md`)
+- [x] No other `/docs/legal/` absolute paths remain in either file
+- [x] Footer "Related Documents" links remain unchanged
+- [x] Both files remain content-identical except for their link format conventions
 
 ## Test Scenarios
 
