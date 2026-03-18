@@ -357,13 +357,13 @@ echo "Supabase auth config updated successfully."
 
 ## Acceptance Criteria
 
-- [ ] Magic link emails are sent from `noreply@soleur.ai` (or similar `@soleur.ai` address)
-- [ ] Magic link emails display Soleur branding (dark theme, branded copy, footer)
-- [ ] Clicking the magic link redirects to `https://app.soleur.ai/callback` (not localhost)
+- [x] Magic link emails are sent from `noreply@soleur.ai` (or similar `@soleur.ai` address)
+- [x] Magic link emails display Soleur branding (dark theme, branded copy, footer)
+- [x] Clicking the magic link redirects to `https://app.soleur.ai/callback` (not localhost)
 - [ ] Auth callback completes successfully (user lands on dashboard or setup-key page)
-- [ ] SPF, DKIM, and DMARC DNS records pass validation (check via `dig` or mail-tester.com)
-- [ ] Local development still works with `http://localhost:3000` redirect
-- [ ] Email template HTML is committed to the repo at `apps/web-platform/supabase/templates/magic-link.html` for version control
+- [x] SPF, DKIM, and DMARC DNS records pass validation (check via `dig` or mail-tester.com)
+- [x] Local development still works with `http://localhost:3000` redirect
+- [x] Email template HTML is committed to the repo at `apps/web-platform/supabase/templates/magic-link.html` for version control
 - [ ] Login page magic link emails also work correctly (same flow as signup)
 - [ ] Email renders correctly in Gmail, Apple Mail, and Outlook (major email clients)
 
