@@ -257,7 +257,13 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
       console.error(`[agent] Session error for ${userId}/${conversationId}:`, err);
       const message =
         err instanceof Error ? err.message : "Agent session failed";
-      sendToClient(userId, { type: "error", message });
+      const isKeyError = err instanceof Error &&
+        err.message.includes("No valid API key");
+      sendToClient(userId, {
+        type: "error",
+        message,
+        ...(isKeyError && { errorCode: "key_invalid" as const }),
+      });
       await updateConversationStatus(conversationId, "failed");
     }
   } finally {

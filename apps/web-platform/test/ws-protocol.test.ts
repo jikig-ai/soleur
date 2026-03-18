@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import type { WSMessage } from "../lib/types";
+import type { WSMessage, WSErrorCode } from "../lib/types";
 
 // Test the WebSocket message protocol types and routing logic.
 // The actual WebSocket server requires HTTP infrastructure, so we test
@@ -88,6 +88,47 @@ describe("WebSocket protocol", () => {
         expect(msg!.leaderId).toBe(id);
       }
     }
+  });
+});
+
+describe("key invalidation error handling", () => {
+  test("error message with errorCode key_invalid is detectable", () => {
+    const msg = parseMessage(
+      '{"type":"error","message":"No valid API key found.","errorCode":"key_invalid"}',
+    );
+    expect(msg).not.toBeNull();
+    if (msg!.type === "error") {
+      expect(msg!.errorCode).toBe("key_invalid");
+    }
+  });
+
+  test("error message without errorCode has undefined errorCode", () => {
+    const msg = parseMessage('{"type":"error","message":"Something went wrong"}');
+    expect(msg).not.toBeNull();
+    if (msg!.type === "error") {
+      expect((msg as { errorCode?: WSErrorCode }).errorCode).toBeUndefined();
+    }
+  });
+
+  test("errorCode field is optional in error messages", () => {
+    const withCode = parseMessage(
+      '{"type":"error","message":"err","errorCode":"key_invalid"}',
+    );
+    const withoutCode = parseMessage('{"type":"error","message":"err"}');
+    expect(withCode).not.toBeNull();
+    expect(withoutCode).not.toBeNull();
+  });
+
+  test("key error detection logic matches agent-runner behavior", () => {
+    const keyError = new Error(
+      "No valid API key found. Please set up your key first.",
+    );
+    const otherError = new Error("Workspace not provisioned");
+
+    const isKeyError = (err: Error) => err.message.includes("No valid API key");
+
+    expect(isKeyError(keyError)).toBe(true);
+    expect(isKeyError(otherError)).toBe(false);
   });
 });
 

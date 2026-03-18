@@ -173,6 +173,19 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "error": {
           if (msg.type !== "error") break;
           streamIndexRef.current = null;
+
+          // Key invalidation: redirect to setup instead of showing error
+          if (msg.errorCode === "key_invalid") {
+            mountedRef.current = false;
+            clearTimeout(reconnectTimerRef.current);
+            if (wsRef.current) {
+              wsRef.current.onclose = null;
+              wsRef.current.close();
+            }
+            window.location.href = "/setup-key";
+            return; // Prevent post-redirect state updates
+          }
+
           setMessages((prev) => [
             ...prev,
             {

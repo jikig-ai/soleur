@@ -1,5 +1,8 @@
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
+// Typed error codes for structured error handling over WebSocket
+export type WSErrorCode = "key_invalid" | "workspace_missing" | "session_failed";
+
 // WebSocket message protocol
 export type WSMessage =
   | { type: "chat"; content: string }
@@ -9,7 +12,7 @@ export type WSMessage =
   | { type: "review_gate"; gateId: string; question: string; options: string[] }
   | { type: "session_started"; conversationId: string }
   | { type: "session_ended"; reason: string }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; errorCode?: WSErrorCode };
 
 // Database types (matches Supabase schema)
 export interface User {

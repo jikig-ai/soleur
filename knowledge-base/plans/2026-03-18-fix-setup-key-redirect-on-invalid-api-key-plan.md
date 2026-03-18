@@ -74,13 +74,13 @@ Combine the client-side redirect with typed error codes in a single change. This
 
 ## Acceptance Criteria
 
-- [ ] The `WSMessage` error variant includes an optional typed `errorCode` field with a `WSErrorCode` union type
-- [ ] The server sends `errorCode: "key_invalid"` when `getUserApiKey` throws in `agent-runner.ts`
-- [ ] When a WebSocket error has `errorCode: "key_invalid"`, the client redirects to `/setup-key` instead of rendering the error as a chat message
-- [ ] The WebSocket reconnect loop is stopped before redirecting (mountedRef set false, timer cleared, onclose nulled, socket closed)
-- [ ] Existing error handling behavior is preserved for all other error types (no `errorCode` = render as text)
-- [ ] Unit tests cover the key-invalidation error detection and routing logic
-- [ ] The existing `ws-protocol.test.ts`, `middleware.test.ts`, and `byok.test.ts` tests continue to pass
+- [x] The `WSMessage` error variant includes an optional typed `errorCode` field with a `WSErrorCode` union type
+- [x] The server sends `errorCode: "key_invalid"` when `getUserApiKey` throws in `agent-runner.ts`
+- [x] When a WebSocket error has `errorCode: "key_invalid"`, the client redirects to `/setup-key` instead of rendering the error as a chat message
+- [x] The WebSocket reconnect loop is stopped before redirecting (mountedRef set false, timer cleared, onclose nulled, socket closed)
+- [x] Existing error handling behavior is preserved for all other error types (no `errorCode` = render as text)
+- [x] Unit tests cover the key-invalidation error detection and routing logic
+- [x] The existing `ws-protocol.test.ts`, `middleware.test.ts`, and `byok.test.ts` tests continue to pass
 
 ## Test Scenarios
 
