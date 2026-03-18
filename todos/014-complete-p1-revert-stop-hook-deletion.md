@@ -15,14 +15,14 @@ The diff deletes 17 lines of functional TTL-check code from `plugins/soleur/hook
 ## Findings
 
 - `plugins/soleur/hooks/stop-hook.sh`: 17 lines of TTL logic removed
-- `knowledge-base/learnings/2026-03-09-ralph-loop-crash-orphan-recovery.md`: modified to say implementation "should" be done in a different worktree
+- `knowledge-base/project/learnings/2026-03-09-ralph-loop-crash-orphan-recovery.md`: modified to say implementation "should" be done in a different worktree
 - This mixes an unrelated behavioral change into a documentation PR
 
 ## Proposed Solutions
 
 ### Option 1: Revert both files to origin/main (Recommended)
 
-**Approach:** `git checkout origin/main -- plugins/soleur/hooks/stop-hook.sh knowledge-base/learnings/2026-03-09-ralph-loop-crash-orphan-recovery.md`
+**Approach:** `git checkout origin/main -- plugins/soleur/hooks/stop-hook.sh knowledge-base/project/learnings/2026-03-09-ralph-loop-crash-orphan-recovery.md`
 
 **Pros:**
 - Clean separation of concerns
@@ -40,7 +40,7 @@ The diff deletes 17 lines of functional TTL-check code from `plugins/soleur/hook
 
 **Affected files:**
 - `plugins/soleur/hooks/stop-hook.sh`
-- `knowledge-base/learnings/2026-03-09-ralph-loop-crash-orphan-recovery.md`
+- `knowledge-base/project/learnings/2026-03-09-ralph-loop-crash-orphan-recovery.md`
 
 ## Acceptance Criteria
 
