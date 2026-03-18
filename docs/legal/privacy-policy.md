@@ -8,7 +8,7 @@ generated-date: 2026-02-20
 # Privacy Policy
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 10, 2026 (newsletter subscription data)
+**Last Updated:** March 18, 2026 (Buttondown international transfers and data retention)
 
 ## 1. Introduction
 
@@ -172,6 +172,8 @@ The Plugin operates locally and does not transfer data internationally.
 For the Docs Site and repository interactions, GitHub may transfer data internationally in accordance with its own policies and applicable data transfer mechanisms (such as Standard Contractual Clauses). See [GitHub's Global Privacy Practices](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement#githubs-global-privacy-practices) for details.
 
 When using the Anthropic Claude API, data may be transferred to Anthropic's servers in the United States. This transfer is governed by Anthropic's privacy policies and your agreement with Anthropic.
+
+For newsletter subscriptions, subscriber email addresses are transmitted to Buttondown, a US-based service. International data transfers are governed by Standard Contractual Clauses (SCCs) per Buttondown's [Data Processing Agreement](https://buttondown.com/legal/data-processing-agreement). See [Buttondown's Privacy Policy](https://buttondown.com/legal/privacy) for details.
 
 ## 11. Security
 

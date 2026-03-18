@@ -8,41 +8,12 @@ set -euo pipefail
 # Clear git env vars that leak when this test runs inside a git hook
 unset GIT_DIR GIT_WORK_TREE 2>/dev/null || true
 
-PASS=0
-FAIL=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/test-helpers.sh"
 HELPER="$SCRIPT_DIR/../scripts/resolve-git-root.sh"
 
 echo "=== resolve-git-root.sh Tests ==="
 echo ""
-
-# --- Test Helpers ---
-
-assert_eq() {
-  local expected="$1" actual="$2" label="$3"
-  if [[ "$expected" == "$actual" ]]; then
-    echo "  PASS: $label"
-    PASS=$((PASS + 1))
-  else
-    echo "  FAIL: $label"
-    echo "    expected: '$expected'"
-    echo "    actual:   '$actual'"
-    FAIL=$((FAIL + 1))
-  fi
-}
-
-assert_contains() {
-  local haystack="$1" needle="$2" label="$3"
-  if echo "$haystack" | grep -qF "$needle"; then
-    echo "  PASS: $label"
-    PASS=$((PASS + 1))
-  else
-    echo "  FAIL: $label"
-    echo "    expected to contain: '$needle'"
-    echo "    actual: '$haystack'"
-    FAIL=$((FAIL + 1))
-  fi
-}
 
 # --- Tests ---
 
@@ -158,14 +129,4 @@ echo ""
 
 # --- Results ---
 
-echo "=== Results ==="
-echo "Passed: $PASS"
-echo "Failed: $FAIL"
-echo ""
-
-if [[ $FAIL -gt 0 ]]; then
-  echo "SOME TESTS FAILED"
-  exit 1
-else
-  echo "ALL TESTS PASSED"
-fi
+print_results
