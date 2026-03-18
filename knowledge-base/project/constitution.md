@@ -123,7 +123,7 @@ Project principles organized by domain. Add principles as you learn them.
 - All `workflow_dispatch` inputs must be validated against a strict regex before use in shell commands or `$GITHUB_OUTPUT` writes -- inputs are string-typed and accept arbitrary content including newlines; use `exit 1` on validation failure, not just a warning
 - Workflows that perform git operations against specific commits (revert, cherry-pick) must use `fetch-depth: 0` and validate that HEAD matches the expected SHA before acting -- `fetch-depth: 2` creates a race condition when additional commits land between trigger and execution
 - Always use absolute paths or verify CWD is repo root before `git worktree add` -- relative `.worktrees/` paths resolve from CWD, creating nested worktrees when run from inside an existing worktree
-- Run `worktree-manager.sh cleanup-merged` from inside any active worktree, not from the bare repo root -- bare checkouts lack a work tree and git commands fail with `fatal: this operation must be run in a work tree`
+- `worktree-manager.sh cleanup-merged` works from both worktrees and the bare repo root -- the `IS_BARE` guard routes bare repos to `git fetch origin main:main` (updates local ref) + `sync_bare_files` (refreshes stale on-disk files)
 
 ### Never
 
