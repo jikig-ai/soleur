@@ -35,9 +35,9 @@ This policy applies to all individuals located in the European Economic Area ("E
 
 ### 2.1 Soleur's Role
 
-Soleur operates as a **locally installed CLI plugin**. All data generated, processed, and stored by the plugin resides exclusively on the user's local machine. Soleur does not collect, transmit, receive, or store any personal data on its own servers.
+The Soleur **Plugin** operates as a **locally installed CLI extension**. All data generated, processed, and stored by the Plugin resides exclusively on the user's local machine. The Plugin does not collect, transmit, receive, or store any personal data on external servers.
 
-As a result, **Soleur does not act as a data processor** within the meaning of Article 4(8) of the GDPR with respect to user content, knowledge-base files, or any data created through the plugin's operation.
+As a result, **the Plugin does not act as a data processor** within the meaning of Article 4(8) of the GDPR with respect to user content, knowledge-base files, or any data created through the Plugin's operation.
 
 Jikigai acts as a **data controller** for: (a) the documentation site hosted on GitHub Pages, where standard web server logs (IP addresses, browser metadata) are collected via GitHub's infrastructure, (b) the GitHub repository, where issue reports and contributions involve processing of GitHub profile data, and (c) the Soleur Web Platform (app.soleur.ai), where user account data, workspace data, and subscription data are processed on Jikigai-operated infrastructure via third-party processors (Supabase, Stripe, Hetzner, Cloudflare).
 
