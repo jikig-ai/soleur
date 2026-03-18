@@ -17,7 +17,7 @@ from a shared interface contract. Run as Tier 0?"
 
 ## Step 02: Generate interface contract
 
-Read the plan file and generate a markdown contract at `knowledge-base/specs/feat-<name>/interface-contract.md` with exactly two sections:
+Read the plan file and generate a markdown contract at `knowledge-base/project/specs/feat-<name>/interface-contract.md` with exactly two sections:
 
 ```markdown
 ## File Scopes
@@ -43,7 +43,7 @@ Read the plan file and generate a markdown contract at `knowledge-base/specs/fea
 Commit the contract before spawning agents:
 
 ```bash
-git add knowledge-base/specs/feat-<name>/interface-contract.md
+git add knowledge-base/project/specs/feat-<name>/interface-contract.md
 git commit -m "docs: generate interface contract for feat-<name>"
 ```
 

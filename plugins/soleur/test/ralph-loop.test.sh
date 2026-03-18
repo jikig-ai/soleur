@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# Tests for Ralph Loop stuck detection in stop-hook.sh
-# Run: bash plugins/soleur/test/ralph-loop-stuck-detection.test.sh
+# Tests for Ralph Loop (stuck detection, session isolation, TTL, setup defaults)
+# Run: bash plugins/soleur/test/ralph-loop.test.sh
 
 set -euo pipefail
 
@@ -10,9 +10,8 @@ set -euo pipefail
 # outer repo instead of the test's temp git repos.
 unset GIT_DIR GIT_WORK_TREE 2>/dev/null || true
 
-PASS=0
-FAIL=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/test-helpers.sh"
 HOOK="$SCRIPT_DIR/../hooks/stop-hook.sh"
 SETUP="$SCRIPT_DIR/../scripts/setup-ralph-loop.sh"
 
@@ -84,64 +83,6 @@ run_hook_stderr() {
 
   # Subshell isolates CWD changes so they don't leak between tests
   (cd "$dir" && echo "$hook_input" | bash "$HOOK" 2>&1 1>/dev/null) || true
-}
-
-assert_eq() {
-  local expected="$1"
-  local actual="$2"
-  local msg="$3"
-
-  if [[ "$expected" == "$actual" ]]; then
-    echo "  PASS: $msg"
-    PASS=$((PASS + 1))
-  else
-    echo "  FAIL: $msg"
-    echo "    expected: '$expected'"
-    echo "    actual:   '$actual'"
-    FAIL=$((FAIL + 1))
-  fi
-}
-
-assert_file_exists() {
-  local path="$1"
-  local msg="$2"
-
-  if [[ -f "$path" ]]; then
-    echo "  PASS: $msg"
-    PASS=$((PASS + 1))
-  else
-    echo "  FAIL: $msg (file not found: $path)"
-    FAIL=$((FAIL + 1))
-  fi
-}
-
-assert_file_not_exists() {
-  local path="$1"
-  local msg="$2"
-
-  if [[ ! -f "$path" ]]; then
-    echo "  PASS: $msg"
-    PASS=$((PASS + 1))
-  else
-    echo "  FAIL: $msg (file still exists: $path)"
-    FAIL=$((FAIL + 1))
-  fi
-}
-
-assert_contains() {
-  local haystack="$1"
-  local needle="$2"
-  local msg="$3"
-
-  if [[ "$haystack" == *"$needle"* ]]; then
-    echo "  PASS: $msg"
-    PASS=$((PASS + 1))
-  else
-    echo "  FAIL: $msg"
-    echo "    expected to contain: '$needle'"
-    echo "    actual: '$haystack'"
-    FAIL=$((FAIL + 1))
-  fi
 }
 
 # --- Tests ---
@@ -744,15 +685,4 @@ echo ""
 
 # --- Summary ---
 
-echo "=== Results ==="
-echo "Passed: $PASS"
-echo "Failed: $FAIL"
-echo ""
-
-if [[ $FAIL -gt 0 ]]; then
-  echo "SOME TESTS FAILED"
-  exit 1
-else
-  echo "ALL TESTS PASSED"
-  exit 0
-fi
+print_results

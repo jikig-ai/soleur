@@ -14,7 +14,7 @@ import subprocess
 import sys
 import yaml
 
-LEARNINGS_DIR = "knowledge-base/learnings"
+LEARNINGS_DIR = "knowledge-base/project/learnings"
 
 # --- Statistics ---
 stats = {"processed": 0, "created": 0, "augmented": 0, "skipped": 0, "errors": 0}
