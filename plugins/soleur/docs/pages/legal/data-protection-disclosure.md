@@ -8,7 +8,7 @@ permalink: pages/legal/data-protection-disclosure.html
 <section class="page-hero">
   <div class="container">
     <h1>Data Protection Disclosure</h1>
-    <p>Effective February 20, 2026 | Last Updated March 18, 2026 (Docs Site Processors)</p>
+    <p>Effective February 20, 2026 | Last Updated March 18, 2026 (Docs Site Processors; EU Hosting Disclosure)</p>
   </div>
 </section>
 
@@ -18,7 +18,7 @@ permalink: pages/legal/data-protection-disclosure.html
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 18, 2026 (added GitHub Pages and Plausible Analytics to Docs Site Processors)
+**Last Updated:** March 18, 2026 (added GitHub Pages and Plausible Analytics to Docs Site Processors; added Plausible EU-only hosting disclosure to Section 6.3)
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -177,6 +177,8 @@ When Users interact with third-party services (e.g., Anthropic Claude API, GitHu
 ### 6.3 Docs Site
 
 The Docs Site is hosted on GitHub Pages, which may involve data processing in the United States and other jurisdictions where GitHub operates. GitHub maintains appropriate transfer mechanisms as described in its data processing agreements.
+
+Plausible Analytics, used for privacy-respecting website analytics on the Docs Site (see Section 4.2), processes all data exclusively within the European Union (Hetzner, Germany). No international data transfers occur for analytics data.
 
 ---
 
