@@ -1,4 +1,5 @@
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { provisionWorkspace } from "@/server/workspace";
 import { NextResponse } from "next/server";
 
 export async function GET(request: Request) {
@@ -10,12 +11,15 @@ export async function GET(request: Request) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
 
     if (!error) {
-      // Check if user has an API key set up
       const {
         data: { user },
       } = await supabase.auth.getUser();
 
       if (user) {
+        // Ensure workspace is provisioned (first-time users)
+        await ensureWorkspaceProvisioned(user.id, user.email ?? "");
+
+        // Check if user has an API key set up
         const { data: keys } = await supabase
           .from("api_keys")
           .select("id")
@@ -34,4 +38,43 @@ export async function GET(request: Request) {
 
   // Auth failed — redirect to login with error
   return NextResponse.redirect(`${origin}/login?error=auth_failed`);
+}
+
+async function ensureWorkspaceProvisioned(
+  userId: string,
+  email: string,
+): Promise<void> {
+  const serviceClient = createServiceClient();
+
+  // Upsert user row (first login creates it, subsequent logins are no-ops)
+  const { data: existing } = await serviceClient
+    .from("users")
+    .select("workspace_status")
+    .eq("id", userId)
+    .single();
+
+  if (!existing) {
+    // First-time user — create row and provision
+    const workspacePath = await provisionWorkspace(userId);
+    await serviceClient.from("users").insert({
+      id: userId,
+      email,
+      workspace_path: workspacePath,
+      workspace_status: "ready",
+    });
+    return;
+  }
+
+  if (existing.workspace_status === "ready") return;
+
+  // Workspace exists in DB but not provisioned on disk
+  try {
+    const workspacePath = await provisionWorkspace(userId);
+    await serviceClient
+      .from("users")
+      .update({ workspace_path: workspacePath, workspace_status: "ready" })
+      .eq("id", userId);
+  } catch (err) {
+    console.error(`[callback] Workspace provisioning failed for ${userId}:`, err);
+  }
 }
