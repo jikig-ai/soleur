@@ -1,5 +1,6 @@
 import { describe, test, expect } from "vitest";
-import type { WSMessage, WSErrorCode } from "../lib/types";
+import type { WSMessage } from "../lib/types";
+import { KeyInvalidError } from "../lib/types";
 
 // Test the WebSocket message protocol types and routing logic.
 // The actual WebSocket server requires HTTP infrastructure, so we test
@@ -97,6 +98,7 @@ describe("key invalidation error handling", () => {
       '{"type":"error","message":"No valid API key found.","errorCode":"key_invalid"}',
     );
     expect(msg).not.toBeNull();
+    expect(msg!.type).toBe("error");
     if (msg!.type === "error") {
       expect(msg!.errorCode).toBe("key_invalid");
     }
@@ -105,30 +107,20 @@ describe("key invalidation error handling", () => {
   test("error message without errorCode has undefined errorCode", () => {
     const msg = parseMessage('{"type":"error","message":"Something went wrong"}');
     expect(msg).not.toBeNull();
+    expect(msg!.type).toBe("error");
     if (msg!.type === "error") {
-      expect((msg as { errorCode?: WSErrorCode }).errorCode).toBeUndefined();
+      expect(msg!.errorCode).toBeUndefined();
     }
   });
 
-  test("errorCode field is optional in error messages", () => {
-    const withCode = parseMessage(
-      '{"type":"error","message":"err","errorCode":"key_invalid"}',
-    );
-    const withoutCode = parseMessage('{"type":"error","message":"err"}');
-    expect(withCode).not.toBeNull();
-    expect(withoutCode).not.toBeNull();
-  });
+  test("KeyInvalidError is instanceof Error and detectable", () => {
+    const keyErr = new KeyInvalidError();
+    const otherErr = new Error("Workspace not provisioned");
 
-  test("key error detection logic matches agent-runner behavior", () => {
-    const keyError = new Error(
-      "No valid API key found. Please set up your key first.",
-    );
-    const otherError = new Error("Workspace not provisioned");
-
-    const isKeyError = (err: Error) => err.message.includes("No valid API key");
-
-    expect(isKeyError(keyError)).toBe(true);
-    expect(isKeyError(otherError)).toBe(false);
+    expect(keyErr).toBeInstanceOf(Error);
+    expect(keyErr).toBeInstanceOf(KeyInvalidError);
+    expect(otherErr).not.toBeInstanceOf(KeyInvalidError);
+    expect(keyErr.message).toContain("No valid API key");
   });
 });
 

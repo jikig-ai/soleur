@@ -1,7 +1,14 @@
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
 // Typed error codes for structured error handling over WebSocket
-export type WSErrorCode = "key_invalid" | "workspace_missing" | "session_failed";
+export type WSErrorCode = "key_invalid";
+
+export class KeyInvalidError extends Error {
+  constructor() {
+    super("No valid API key found. Please set up your key first.");
+    this.name = "KeyInvalidError";
+  }
+}
 
 // WebSocket message protocol
 export type WSMessage =
