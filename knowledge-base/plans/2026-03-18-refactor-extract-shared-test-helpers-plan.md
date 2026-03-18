@@ -99,18 +99,18 @@ Also note the parameter name difference: `msg` vs `label`. The canonical version
 
 ## Acceptance Criteria
 
-- [ ] `plugins/soleur/test/test-helpers.sh` exists with shared helpers
-- [ ] `assert_eq`, `assert_contains`, `assert_file_exists`, `assert_file_not_exists` are defined once in `test-helpers.sh`
-- [ ] `print_results` function prints summary and exits with correct code
-- [ ] `ralph-loop-stuck-detection.test.sh` sources `test-helpers.sh` and removes inline duplicates
-- [ ] `resolve-git-root.test.sh` sources `test-helpers.sh` and removes inline duplicates
-- [ ] `ralph-loop-stuck-detection.test.sh` renamed to `ralph-loop.test.sh`
-- [ ] Run comment at top of renamed file updated to reflect new filename
-- [ ] All 39 ralph-loop tests pass: `bash plugins/soleur/test/ralph-loop.test.sh`
-- [ ] All 7 resolve-git-root tests pass: `bash plugins/soleur/test/resolve-git-root.test.sh`
-- [ ] `test-helpers.sh` uses `#!/usr/bin/env bash` shebang and `set -euo pipefail`
-- [ ] `test-helpers.sh` uses `local` for all function variables
-- [ ] No `$()` command substitution in the helper file (pure bash builtins only)
+- [x] `plugins/soleur/test/test-helpers.sh` exists with shared helpers
+- [x] `assert_eq`, `assert_contains`, `assert_file_exists`, `assert_file_not_exists` are defined once in `test-helpers.sh`
+- [x] `print_results` function prints summary and exits with correct code
+- [x] `ralph-loop-stuck-detection.test.sh` sources `test-helpers.sh` and removes inline duplicates
+- [x] `resolve-git-root.test.sh` sources `test-helpers.sh` and removes inline duplicates
+- [x] `ralph-loop-stuck-detection.test.sh` renamed to `ralph-loop.test.sh`
+- [x] Run comment at top of renamed file updated to reflect new filename
+- [x] All 39 ralph-loop tests pass: `bash plugins/soleur/test/ralph-loop.test.sh`
+- [x] All 7 resolve-git-root tests pass: `bash plugins/soleur/test/resolve-git-root.test.sh`
+- [x] `test-helpers.sh` uses `#!/usr/bin/env bash` shebang and `set -euo pipefail`
+- [x] `test-helpers.sh` uses `local` for all function variables
+- [x] No `$()` command substitution in the helper file (pure bash builtins only)
 
 ## Test Scenarios
 
