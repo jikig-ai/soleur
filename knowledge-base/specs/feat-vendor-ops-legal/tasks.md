@@ -2,63 +2,76 @@
 
 ## Phase 1: Ops -- Expense Ledger
 
-- [ ] 1.1 Verify whether Hetzner CX22 is decommissioned or running in parallel with CX33
+- [ ] 1.1 Check if Hetzner CX22 (telegram-bridge) is still running (`apps/telegram-bridge/infra/` Terraform state)
 - [ ] 1.2 Add Hetzner CX33 recurring entry (~EUR 15.37/mo, 4 vCPU, 8 GB RAM, hel1)
 - [ ] 1.3 Add Hetzner Volume recurring entry (~EUR 0.88/mo, 20 GB, hel1)
-- [ ] 1.4 Add Supabase free tier entry ($0, note upgrade thresholds)
-- [ ] 1.5 Add Stripe test mode entry ($0, note per-txn costs when live)
-- [ ] 1.6 Add Resend free tier entry ($0, note 3K emails/mo threshold)
-- [ ] 1.7 Update Cloudflare entry with `app.soleur.ai` subdomain note
+- [ ] 1.4 Add Supabase free tier entry ($0, upgrade thresholds: 500MB DB, 50K MAU, Pro: $25/mo)
+- [ ] 1.5 Add Stripe test mode entry ($0, per-txn: 2.9%+$0.30 US / 1.5%+EUR 0.25 EU when live)
+- [ ] 1.6 Update Cloudflare entry with `app.soleur.ai` subdomain note
+- [ ] 1.7 Consider adding Status column (active/test-mode/free-tier/deferred/decommissioned)
 - [ ] 1.8 Update `last_updated` date in expenses.md
+- [ ] 1.9 Fix constitution stale path: `knowledge-base/ops/expenses.md` -> `knowledge-base/operations/expenses.md`
 
 ## Phase 2: Legal -- DPA Verification
 
-- [ ] 2.1 Research Hetzner DPA -- verify Helsinki coverage, signing mechanism
-- [ ] 2.2 Research Supabase DPA -- verify free-tier coverage, US region transfer mechanism
-- [ ] 2.3 Research Stripe DPA -- verify all-tier coverage, PCI scope (SAQ-A vs SAQ-D)
-- [ ] 2.4 Confirm Cloudflare DPA already applies (existing relationship, new subdomain)
-- [ ] 2.5 Research Resend DPA -- verify free-tier coverage, data residency
-- [ ] 2.6 Document DPA findings in a vendor DPA memo (`knowledge-base/specs/feat-vendor-ops-legal/dpa-verification-memo.md`)
+- [ ] 2.1 **URGENT**: Sign Hetzner DPA (AVV) via Cloud Console account settings (NOT automatic per ToS 6.2)
+- [ ] 2.2 Verify Supabase DPA availability for free tier via dashboard Legal Documents section (PandaDoc)
+- [ ] 2.3 Check Supabase project region from `NEXT_PUBLIC_SUPABASE_URL` -- US or EU?
+- [ ] 2.4 Confirm Stripe DPA is automatic (part of Services Agreement -- no action needed)
+- [ ] 2.5 Verify Cloudflare DPA applicability for free tier (Self-Serve Subscription Agreement = Main Agreement?)
+- [ ] 2.6 Write DPA verification memo to `knowledge-base/specs/feat-vendor-ops-legal/dpa-verification-memo.md`
+  - [ ] 2.6.1 Row per vendor: DPA URL, tier coverage, acceptance mechanism, transfer mechanism, data categories
 
-## Phase 3: Privacy Policy Updates
+## Phase 3: Privacy Policy Updates (2 files)
 
-- [ ] 3.1 Draft new Section 4.7 (Web Platform Data Collection) for privacy policy
-- [ ] 3.2 Add Supabase, Stripe, Hetzner, Resend to Section 5 (Third-Party Services)
-- [ ] 3.3 Update Section 10 (International Data Transfers) with new vendors
-- [ ] 3.4 Update "Last Updated" date and change description
-- [ ] 3.5 Apply changes to `docs/legal/privacy-policy.md`
-- [ ] 3.6 Apply identical changes to `plugins/soleur/docs/pages/legal/privacy-policy.md`
-- [ ] 3.7 Verify cross-references to DPD and GDPR policy remain consistent
+- [ ] 3.1 Add Section 4.7 "Data Collected by the Web Platform" (email, auth tokens, session data, subscription status, encrypted API keys)
+- [ ] 3.2 Scope Section 4.1 title/content to plugin only -- ensure no blanket contradictions
+- [ ] 3.3 Add Section 5.5 Supabase (auth + database, processor, DPA reference)
+- [ ] 3.4 Add Section 5.6 Stripe (payments, Checkout integration, PCI SAQ-A, DPA reference)
+- [ ] 3.5 Add Section 5.7 Hetzner (hosting, Helsinki EU-only, DPA reference)
+- [ ] 3.6 Update Cloudflare mention to include `app.soleur.ai`
+- [ ] 3.7 Add Section 6 lawful basis for web platform (contract performance Art. 6(1)(b))
+- [ ] 3.8 Update Section 7 data retention for web platform (account active + French tax law 10yr for payment records)
+- [ ] 3.9 Update Section 10 international transfers (Supabase SCCs, Stripe DPF+SCCs, Hetzner EU-only)
+- [ ] 3.10 Update "Last Updated" date and change description
+- [ ] 3.11 Apply to `docs/legal/privacy-policy.md`
+- [ ] 3.12 Apply identical changes to `plugins/soleur/docs/pages/legal/privacy-policy.md`
+- [ ] 3.13 Run grep verification for contradicting blanket statements
 
-## Phase 4: Data Protection Disclosure Updates
+## Phase 4: Data Protection Disclosure Updates (2 files -- verify root copy exists)
 
-- [ ] 4.1 Update Section 2 to distinguish plugin (local) vs. web platform (cloud)
-- [ ] 4.2 Add web platform processing activities to Section 2.3
-- [ ] 4.3 Add Supabase, Stripe, Hetzner, Resend to Section 4.2 processor table
-- [ ] 4.4 Address Section 8 ("Future Cloud Features") -- mark transition as active
-- [ ] 4.5 Update "Last Updated" date and change description
-- [ ] 4.6 Apply changes to `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`
+- [ ] 4.1 Verify `docs/legal/data-processing-agreement.md` exists and check sync status with Eleventy copy
+- [ ] 4.2 Restructure Section 2.1: scope to plugin, add 2.1b for web platform
+- [ ] 4.3 Add processing activities (f)(g)(h) to Section 2.3
+- [ ] 4.4 Rename Section 4.2 to "Service Processors" and add Supabase, Stripe, Hetzner rows
+- [ ] 4.5 Update Section 8: mark each 8.1 commitment as fulfilled/in-progress
+- [ ] 4.6 Update "Last Updated" date and change description
+- [ ] 4.7 Apply to `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`
+- [ ] 4.8 Apply identical changes to root source copy
 
-## Phase 5: GDPR Policy Updates
+## Phase 5: GDPR Policy Updates (2 files)
 
-- [ ] 5.1 Add web platform services to Section 2.2 (Third-Party Services)
-- [ ] 5.2 Add web platform lawful bases to Section 3 (contract performance, legitimate interest)
+- [ ] 5.1 Add web platform services to Section 2.2 (Supabase, Stripe, Hetzner, Cloudflare update)
+- [ ] 5.2 Add Section 3.7 (contract performance Art. 6(1)(b) for web platform)
 - [ ] 5.3 Add web platform data categories to Section 4.2 table
-- [ ] 5.4 Add web platform transfer disclosures to Section 6
-- [ ] 5.5 Add processing activities 7-10 to Section 10 (Article 30 register)
-- [ ] 5.6 Update "Last Updated" date and change description
-- [ ] 5.7 Apply changes to `docs/legal/gdpr-policy.md`
-- [ ] 5.8 Apply identical changes to `plugins/soleur/docs/pages/legal/gdpr-policy.md`
+- [ ] 5.4 Add web platform transfer disclosures to Section 6 (Supabase SCCs, Stripe DPF+SCCs, Hetzner EU-only)
+- [ ] 5.5 Update Section 9 DPIA assessment (acknowledge web platform, explain below threshold)
+- [ ] 5.6 Add processing activities 7-9 to Section 10 Article 30 register
+- [ ] 5.7 Update "Last Updated" date and change description
+- [ ] 5.8 Apply to `docs/legal/gdpr-policy.md`
+- [ ] 5.9 Apply identical changes to `plugins/soleur/docs/pages/legal/gdpr-policy.md`
 
 ## Phase 6: Vendor Checklist Gate
 
-- [ ] 6.1 Strengthen vendor-management rule in constitution.md (line 109 area)
-- [ ] 6.2 Add vendor checklist section to constitution.md with concrete steps
-- [ ] 6.3 Add conditional vendor checklist to PR template (`.github/PULL_REQUEST_TEMPLATE.md`) if template exists
-- [ ] 6.4 Verify checklist is actionable for future PRs
+- [ ] 6.1 Replace self-check rule in constitution.md (line 109 area) with formal vendor checklist
+- [ ] 6.2 Add "Vendor Compliance" section to `.github/PULL_REQUEST_TEMPLATE.md`
+- [ ] 6.3 Verify checklist is actionable for future PRs
 
 ## Phase 7: Verification & Commit
 
-- [ ] 7.1 Cross-reference all updated documents for consistency (dates, vendor names, section numbers)
-- [ ] 7.2 Run compound skill before commit
-- [ ] 7.3 Commit and push all changes
+- [ ] 7.1 Run grep verification across all legal docs for contradicting blanket statements
+- [ ] 7.2 Cross-reference all updated documents for consistency (dates, vendor names, section numbers)
+- [ ] 7.3 Verify Resend is NOT mentioned in any legal doc updates (out of scope until integration exists)
+- [ ] 7.4 Run compound skill before commit
+- [ ] 7.5 Commit in logical chunks (ops, DPA memo, legal docs, process gate)
+- [ ] 7.6 Push all changes
