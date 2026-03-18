@@ -350,23 +350,24 @@ Update `.github/PULL_REQUEST_TEMPLATE.md` to add a conditional vendor section:
 
 ## Acceptance Criteria
 
-- [ ] `knowledge-base/operations/expenses.md` has entries for all four active services (Hetzner CX33, Supabase, Stripe, Cloudflare update) with costs, tiers, and upgrade thresholds
-- [ ] Hetzner DPA (AVV) explicitly concluded via account dashboard
-- [ ] Supabase DPA status verified (free-tier coverage confirmed or gap documented with upgrade plan)
-- [ ] Stripe DPA confirmed as automatic (part of Services Agreement)
-- [ ] Cloudflare DPA applicability for free-tier verified
-- [ ] DPA verification memo written to `knowledge-base/specs/feat-vendor-ops-legal/dpa-verification-memo.md`
-- [ ] Privacy policy updated in both locations (`docs/legal/` and `plugins/soleur/docs/pages/legal/`) with web platform data collection
-- [ ] Section 4.1 scoped to plugin only -- no blanket "does not collect" contradictions
-- [ ] Data protection disclosure updated in both locations with web platform processors and Section 8 transition
-- [ ] GDPR policy updated in both locations: Sections 2.2, 3.7, 4.2, 6, 9, 10
-- [ ] Article 30 register has processing activities 7-9 (auth, payments, hosting)
-- [ ] Vendor checklist gate added to `knowledge-base/project/constitution.md`
-- [ ] Vendor checklist added to `.github/PULL_REQUEST_TEMPLATE.md`
-- [ ] Constitution stale path `knowledge-base/ops/expenses.md` fixed to `knowledge-base/operations/expenses.md`
-- [ ] All legal document "Last Updated" dates updated
-- [ ] Cross-references consistent across all documents (grep verified)
-- [ ] Resend excluded from scope, tracked as future item when integration code is written
+- [x] `knowledge-base/operations/expenses.md` has entries for all four active services (Hetzner CX33, Supabase, Stripe, Cloudflare update) with costs, tiers, and upgrade thresholds
+- [ ] Hetzner DPA (AVV) explicitly concluded via account dashboard (requires founder action -- documented in DPA memo)
+- [ ] Supabase DPA status verified (free-tier coverage -- requires founder dashboard check, documented in DPA memo)
+- [x] Stripe DPA confirmed as automatic (part of Services Agreement)
+- [ ] Cloudflare DPA applicability for free-tier verified (requires founder dashboard check, documented in DPA memo)
+- [x] DPA verification memo written to `knowledge-base/specs/feat-vendor-ops-legal/dpa-verification-memo.md`
+- [x] Privacy policy updated in both locations (`docs/legal/` and `plugins/soleur/docs/pages/legal/`) with web platform data collection
+- [x] Section 4.1 scoped to plugin only -- no blanket "does not collect" contradictions
+- [x] Data protection disclosure updated in both locations with web platform processors and Section 8 transition
+- [x] GDPR policy updated in both locations: Sections 2.2, 3.7, 4.2, 6, 9, 10
+- [x] Article 30 register has processing activities 7-9 (auth, payments, hosting)
+- [x] Vendor checklist gate added to `knowledge-base/project/constitution.md`
+- [x] Vendor checklist added to `.github/PULL_REQUEST_TEMPLATE.md`
+- [x] Constitution stale path `knowledge-base/ops/expenses.md` fixed to `knowledge-base/operations/expenses.md`
+- [x] All legal document "Last Updated" dates updated
+- [x] Cross-references consistent across all documents (grep verified)
+- [x] Resend excluded from scope, tracked as future item when integration code is written
+- [x] T&C blanket statement contradictions filed as separate issue #736
 
 ## Test Scenarios
 
