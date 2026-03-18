@@ -155,13 +155,13 @@ This documentation. Describes what the project does and its component architectu
 
 ```bash
 # Search for authentication patterns
-grep -r "auth" knowledge-base/learnings/
+grep -r "auth" knowledge-base/project/learnings/
 ```
 
 **Check active specs:**
 
 ```bash
-ls knowledge-base/specs/feat-*/
+ls knowledge-base/project/specs/feat-*/
 ```
 
 **Read conventions:**
@@ -174,7 +174,7 @@ cat knowledge-base/project/constitution.md
 
 From `constitution.md`:
 
-- Use convention over configuration for paths: `feat-<name>` maps to `knowledge-base/specs/feat-<name>/`
+- Use convention over configuration for paths: `feat-<name>` maps to `knowledge-base/project/specs/feat-<name>/`
 - Use Given/When/Then format for scenarios in specs
 - Break tasks into chunks of max 2 hours
 - Commands should check for `knowledge-base/` existence and fall back gracefully
@@ -182,10 +182,10 @@ From `constitution.md`:
 ## Related Files
 
 - `knowledge-base/project/constitution.md` - Project conventions
-- `knowledge-base/learnings/` - Documented solutions
-- `knowledge-base/specs/` - Feature specifications
-- `knowledge-base/brainstorms/` - Design explorations
-- `knowledge-base/plans/` - Implementation plans
+- `knowledge-base/project/learnings/` - Documented solutions
+- `knowledge-base/project/specs/` - Feature specifications
+- `knowledge-base/project/brainstorms/` - Design explorations
+- `knowledge-base/project/plans/` - Implementation plans
 
 ## See Also
 
