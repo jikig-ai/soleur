@@ -212,11 +212,11 @@ No code changes or workflow modifications are needed -- this is a pure API-level
 
 ## Acceptance Criteria
 
-- [ ] Actor 262318 removed from CLA Required ruleset bypass_actors (verified in PUT response body)
-- [ ] All other ruleset fields unchanged (verified via separate `GET /repos/jikig-ai/soleur/rulesets/13304872`)
-- [ ] Remaining bypass actors verified: OrganizationAdmin (null), RepositoryRole (5), Claude Integration (1236702)
+- [x] Actor 262318 removed from CLA Required ruleset bypass_actors (verified in PUT response body)
+- [x] All other ruleset fields unchanged (verified via separate `GET /repos/jikig-ai/soleur/rulesets/13304872`)
+- [x] Remaining bypass actors verified: OrganizationAdmin (null), RepositoryRole (5), Claude Integration (1236702)
 - [ ] Bot workflow verified: this feature branch PR itself will test CLA check behavior -- the PR must pass CLA check before merge
-- [ ] Stale references to 262318 in autonomous bugfix plan noted as incorrect (the plan incorrectly claims 262318 is a Claude App ID)
+- [x] Stale references to 262318 in autonomous bugfix plan noted as incorrect (the plan incorrectly claims 262318 is a Claude App ID)
 
 ## Test Scenarios
 
