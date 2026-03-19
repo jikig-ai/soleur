@@ -168,20 +168,20 @@ Add an "Infrastructure Validation" block that triggers when `git diff --name-onl
 
 ## Acceptance Criteria
 
-- [ ] New workflow `.github/workflows/infra-validation.yml` exists and passes on PRs with valid infra files
-- [ ] All action references in the new workflow use SHA-pinned format (`@<sha> # vX.Y.Z`)
-- [ ] Workflow uses pure bash for change detection (no third-party `changed-files` actions)
-- [ ] Workflow detects which `apps/*/infra/` directories have changes and validates only those
-- [ ] `cloud-init schema` check validates both YAML syntax and schema in one step
-- [ ] `terraform fmt -check` catches unformatted `.tf` files (currently `dns.tf` would fail)
-- [ ] `terraform validate` catches HCL syntax errors (e.g., undefined variable references)
-- [ ] Workflow includes `workflow_dispatch` trigger for manual testing
-- [ ] Workflow `workflow_dispatch` validates ALL infra dirs (not just changed ones)
-- [ ] Work skill SKILL.md Phase 2 includes infrastructure validation instructions as section 5b
-- [ ] Work skill infrastructure validation covers: cloud-init schema, terraform fmt, terraform validate
-- [ ] Work skill detects infra file changes via `git diff --name-only` path matching
-- [ ] Existing `dns.tf` formatting issue is fixed (so the new CI passes on the same PR)
-- [ ] Security comment header present at top of workflow file
+- [x] New workflow `.github/workflows/infra-validation.yml` exists and passes on PRs with valid infra files
+- [x] All action references in the new workflow use SHA-pinned format (`@<sha> # vX.Y.Z`)
+- [x] Workflow uses pure bash for change detection (no third-party `changed-files` actions)
+- [x] Workflow detects which `apps/*/infra/` directories have changes and validates only those
+- [x] `cloud-init schema` check validates both YAML syntax and schema in one step
+- [x] `terraform fmt -check` catches unformatted `.tf` files (currently `dns.tf` would fail)
+- [x] `terraform validate` catches HCL syntax errors (e.g., undefined variable references)
+- [x] Workflow includes `workflow_dispatch` trigger for manual testing
+- [x] Workflow `workflow_dispatch` validates ALL infra dirs (not just changed ones)
+- [x] Work skill SKILL.md Phase 2 includes infrastructure validation instructions as section 5b
+- [x] Work skill infrastructure validation covers: cloud-init schema, terraform fmt, terraform validate
+- [x] Work skill detects infra file changes via `git diff --name-only` path matching
+- [x] Existing `dns.tf` formatting issue is fixed (so the new CI passes on the same PR)
+- [x] Security comment header present at top of workflow file
 
 ## Test Scenarios
 

@@ -1,0 +1,78 @@
+# Security: No secrets required. All validation is offline (cloud-init schema,
+# terraform fmt/validate with -backend=false).
+# Inputs: only paths from the PR diff (not user-controlled content).
+# All action references are SHA-pinned.
+name: Infra Validation
+
+on:
+  pull_request:
+    paths:
+      - "apps/*/infra/**"
+      - ".github/workflows/infra-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      directories: ${{ steps.dirs.outputs.directories }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Find changed infra directories
+        id: dirs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            DIRS=$(find apps/*/infra -maxdepth 0 -type d 2>/dev/null | jq -R -s -c 'split("\n") | map(select(. != ""))')
+          else
+            DIRS=$(git diff --name-only "origin/${BASE_REF}...HEAD" -- 'apps/*/infra/' \
+              | sed 's|\(apps/[^/]*/infra\)/.*|\1|' \
+              | sort -u \
+              | jq -R -s -c 'split("\n") | map(select(. != ""))')
+          fi
+          printf 'directories=%s\n' "$DIRS" >> "$GITHUB_OUTPUT"
+
+  validate:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.directories != '[]'
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        directory: ${{ fromJSON(needs.detect-changes.outputs.directories) }}
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Validate cloud-init schema
+        run: |
+          if [[ -f cloud-init.yml ]]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq cloud-init 2>&1 | tail -1
+            cloud-init schema -c cloud-init.yml
+          else
+            echo "No cloud-init.yml found, skipping"
+          fi
+        working-directory: ${{ matrix.directory }}
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: "1.10.5"
+
+      - name: Terraform format check
+        run: terraform fmt -check -recursive .
+        working-directory: ${{ matrix.directory }}
+
+      - name: Terraform validate
+        run: |
+          terraform init -backend=false
+          terraform validate
+        working-directory: ${{ matrix.directory }}

@@ -195,7 +195,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
      - Evaluate for incremental commit (see below)
    ```
 
-   **Test-First Enforcement**: If the plan includes a "Test Scenarios" section, write tests for each scenario BEFORE writing implementation code. If no test scenarios exist in the plan, derive them from acceptance criteria. For infrastructure-only tasks (config, CI, scaffolding), tests may be skipped.
+   **Test-First Enforcement**: If the plan includes a "Test Scenarios" section, write tests for each scenario BEFORE writing implementation code. If no test scenarios exist in the plan, derive them from acceptance criteria. For infrastructure-only tasks (config, CI, scaffolding), unit tests may be skipped, but config-specific validation is required -- see Infrastructure Validation below.
 
    **IMPORTANT**: Always update the original plan document by checking off completed items. Use the Edit tool to change `- [ ]` to `- [x]` for each task you finish. This keeps the plan as a living document showing progress and ensures no checkboxes are left unchecked.
 
@@ -246,7 +246,22 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - Fix failures immediately -- never move to the next task with failing tests
    - When a class becomes hard to test (too many dependencies), extract an interface and inject dependencies. See the `/atdd-developer` skill for detailed TDD guidance.
 
-6. **Track Progress**
+6. **Infrastructure Validation**
+
+   When any task modifies files in `apps/*/infra/`, run these checks after each change (in addition to or instead of the app test suite):
+
+   1. **cloud-init schema**: For each modified `cloud-init.yml`:
+      `cloud-init schema -c <file>` -- validates YAML syntax AND cloud-init schema in one step. Warnings about missing datasource are expected; only non-zero exit codes are failures. If `cloud-init` is not installed locally, warn and continue.
+
+   2. **Terraform format**: For each infra directory with modified `.tf` files:
+      `terraform fmt -check <dir>` -- exit 0 means formatted; exit 3 means violations. Fix with `terraform fmt <dir>`.
+
+   3. **Terraform validate**: For each infra directory with modified `.tf` files:
+      `terraform init -backend=false` then `terraform validate` -- catches HCL syntax errors and undefined references without requiring provider credentials.
+
+   These checks replace the "tests may be skipped" exemption for infra files. If any check fails, fix before proceeding to the next task.
+
+7. **Track Progress**
    - Keep TodoWrite updated as you complete tasks
    - Note any blockers or unexpected discoveries
    - Create new tasks if scope expands
