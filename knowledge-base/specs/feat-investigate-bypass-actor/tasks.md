@@ -18,5 +18,5 @@
 ## Phase 3: Cleanup
 
 - [x] 3.1 Update the todo file `todos/027-complete-p2-investigate-bypass-actor-262318.md` status to completed
-- [ ] 3.2 Add a learning documenting the stale bypass actor pattern and prevention guidance
+- [x] 3.2 Add a learning documenting the stale bypass actor pattern and prevention guidance
 - [ ] 3.3 Commit plan, tasks, learning, and todo update
