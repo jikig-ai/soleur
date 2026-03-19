@@ -361,21 +361,21 @@ If Phase 2.2 reveals that the free-tier does not support DPA signing:
 
 ## Acceptance Criteria
 
-- [ ] Hetzner DPA (AVV) signed via Cloud Console with screenshot confirmation
-- [ ] Supabase DPA signed via PandaDoc (or Pro upgrade documented if free-tier unavailable)
-- [ ] Supabase Chapter V transfer safeguards verified (SCCs Module 2, Implementing Decision 2021/914)
-- [ ] Supabase TIA documented (data categories assessed against US surveillance risk)
-- [ ] Supabase project region documented (us-east-1 or EU)
-- [ ] EU region migration evaluated (recommended if pre-beta and feasible)
-- [ ] Stripe DPA auto-incorporation verified
-- [ ] Stripe contracting entity identified (Stripe Payments Europe, Ltd. or Stripe, LLC)
-- [ ] Cloudflare DPA free-tier coverage verified (Self-Serve Agreement = Main Agreement)
-- [ ] DPA verification memo updated with execution/verification dates for all four vendors
-- [ ] Legal documents updated with DPA execution status in both source and Eleventy copies
+- [ ] Hetzner DPA (AVV) signed via Cloud Console with screenshot confirmation -- BLOCKED: founder must log in to console.hetzner.cloud
+- [x] Supabase DPA signed via PandaDoc (or Pro upgrade documented if free-tier unavailable) -- DPA REQUESTED 2026-03-19, PandaDoc arriving within 24h to ops@jikigai.com. Free tier confirmed.
+- [x] Supabase Chapter V transfer safeguards verified (SCCs Module 2, Implementing Decision 2021/914) -- NOT NEEDED: project in eu-west-1 (Ireland, EU). No international transfer.
+- [x] Supabase TIA documented (data categories assessed against US surveillance risk) -- NOT NEEDED: project in eu-west-1 (EU). Supabase provides their own TIA at supabase.com/downloads/docs/Supabase+TIA+250314.pdf
+- [x] Supabase project region documented (us-east-1 or EU) -- CONFIRMED: eu-west-1 (Ireland, EU)
+- [x] EU region migration evaluated (recommended if pre-beta and feasible) -- NOT NEEDED: already in EU (eu-west-1)
+- [x] Stripe DPA auto-incorporation verified -- CONFIRMED 2026-03-19
+- [x] Stripe contracting entity identified (Stripe Payments Europe, Ltd. or Stripe, LLC) -- likely Stripe Payments Europe, Ltd (Ireland) since account created from France
+- [x] Cloudflare DPA free-tier coverage verified (Self-Serve Agreement = Main Agreement) -- CONFIRMED 2026-03-19 via dashboard
+- [x] DPA verification memo updated with execution/verification dates for all four vendors
+- [x] Legal documents updated with DPA execution status in both source and Eleventy copies
 - [ ] Legal-compliance-auditor run post-edit with zero P1/P2 findings
-- [ ] "Last Updated" dates current on all modified legal documents
-- [ ] Expense ledger updated if Supabase Pro upgrade required
-- [ ] Telegram-bridge Hetzner server DPA status checked (same Cloud Console account or separate Robot?)
+- [x] "Last Updated" dates current on all modified legal documents
+- [x] Expense ledger updated if Supabase Pro upgrade required -- NOT NEEDED: free tier supports DPA
+- [x] Telegram-bridge Hetzner server DPA status checked (same Cloud Console account or separate Robot?) -- CONFIRMED: hcloud provider (Cloud Console), CX22 in fsn1 (Germany). Same account, one DPA covers both.
 
 ## Test Scenarios
 

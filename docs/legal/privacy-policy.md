@@ -8,7 +8,7 @@ generated-date: 2026-02-20
 # Privacy Policy
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 19, 2026 (added web platform data collection, processors, and international transfers for Supabase, Stripe, Hetzner, Cloudflare; Buttondown SCCs verification and free-tier DPA confirmation)
+**Last Updated:** March 19, 2026 (corrected Supabase region to EU (eu-west-1), updated DPA execution status, added DPA verification dates)
 
 ## 1. Introduction
 
@@ -146,8 +146,8 @@ We use **Supabase** ([supabase.com](https://supabase.com)) as the authentication
 
 - **Data processed:** Email addresses, hashed passwords, authentication tokens, and session data.
 - **Purpose:** User account management, authentication, and session handling for the Web Platform.
-- **DPA:** [Supabase Data Processing Agreement](https://supabase.com/legal/dpa).
-- Supabase is a US-based service. International data transfers are covered by Standard Contractual Clauses (SCCs), Module 2 (Controller to Processor).
+- **DPA:** [Supabase Data Processing Agreement](https://supabase.com/legal/dpa). DPA requested 2026-03-19; pending PandaDoc execution.
+- The Jikigai Supabase project is deployed to **AWS eu-west-1 (Ireland, EU)**. No international data transfers occur for Supabase-processed data.
 
 ### 5.6 Stripe (Web Platform Payments)
 
@@ -231,7 +231,7 @@ The Plugin operates locally and does not transfer data internationally.
 
 For the Web Platform:
 
-- **Supabase:** US-based (AWS). International data transfers are governed by Standard Contractual Clauses (SCCs), Module 2 (Controller to Processor). See [Supabase DPA](https://supabase.com/legal/dpa).
+- **Supabase:** EU-based deployment (AWS eu-west-1, Ireland). **No international data transfers.** Supabase Inc is a US-based company, but the Jikigai project is deployed to the EU region. See [Supabase DPA](https://supabase.com/legal/dpa).
 - **Stripe:** US-based (Stripe, LLC). International data transfers are governed by the EU-US Data Privacy Framework (DPF, adequacy decision) and Standard Contractual Clauses (SCCs), EEA Module 2, as supplementary safeguard. See [Stripe DPA](https://stripe.com/legal/dpa).
 - **Hetzner:** EU-based (Germany). Web Platform hosted in Helsinki, Finland (EU). **No international data transfers.**
 - **Cloudflare:** Global CDN. International data transfers are governed by the EU-US Data Privacy Framework (DPF), Standard Contractual Clauses (SCCs), and Global CBPR certification. See [Cloudflare DPA](https://www.cloudflare.com/cloudflare-customer-dpa/).

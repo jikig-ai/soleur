@@ -9,7 +9,7 @@ generated-date: 2026-02-20
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 19, 2026 (added web platform processors, restructured Section 2 for cloud services, addressed Section 8 transition commitments, Buttondown SCCs verification and free-tier DPA confirmation)
+**Last Updated:** March 19, 2026 (corrected Supabase region to EU (eu-west-1), updated DPA execution status for all web platform processors, added DPA verification dates)
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -201,10 +201,10 @@ Transfers of newsletter subscriber data (email addresses, IP addresses, referrer
 
 For the Web Platform (app.soleur.ai):
 
-- **Supabase:** US-based (AWS). Transfer via Standard Contractual Clauses (SCCs), Module 2 (Controller to Processor).
-- **Stripe:** US-based (Stripe, LLC). Transfer via EU-US Data Privacy Framework (DPF, adequacy decision) and Standard Contractual Clauses (SCCs), EEA Module 2.
-- **Hetzner:** EU-based (Germany). Web Platform hosted in Helsinki, Finland (EU). **No international data transfers.**
-- **Cloudflare:** Global CDN. Transfer via EU-US Data Privacy Framework (DPF), Standard Contractual Clauses (SCCs), and Global CBPR certification.
+- **Supabase:** EU-based deployment (AWS eu-west-1, Ireland). **No international data transfers.** Supabase Inc is a US-based company, but the Jikigai project is deployed to the EU region. DPA (Data Processing Addendum) requested 2026-03-19; pending PandaDoc execution.
+- **Stripe:** US-based (Stripe, LLC). Transfer via EU-US Data Privacy Framework (DPF, adequacy decision) and Standard Contractual Clauses (SCCs), EEA Module 2. DPA auto-incorporated in Services Agreement (verified 2026-03-19).
+- **Hetzner:** EU-based (Germany). Web Platform hosted in Helsinki, Finland (EU). **No international data transfers.** DPA (AVV) pending execution via Cloud Console.
+- **Cloudflare:** Global CDN. Transfer via EU-US Data Privacy Framework (DPF), Standard Contractual Clauses (SCCs), and Global CBPR certification. DPA self-executing via Self-Serve Subscription Agreement (verified 2026-03-19).
 
 ### 6.5 Docs Site
 
