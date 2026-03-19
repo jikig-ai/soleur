@@ -1,7 +1,7 @@
 resource "hcloud_firewall" "web" {
   name = "soleur-web-platform"
 
-  # SSH -- restricted to admin IPs only
+  # SSH -- admin IPs
   dynamic "rule" {
     for_each = var.admin_ips
     content {
@@ -13,9 +13,6 @@ resource "hcloud_firewall" "web" {
   }
 
   # SSH -- CI deploy (GitHub Actions runners use dynamic IPs)
-  # Key-based auth is the security boundary; firewall provides defense-in-depth.
-  # GitHub publishes 5000+ runner CIDR ranges that change frequently,
-  # so a blanket allow is the only practical approach for CI SSH deploys.
   rule {
     direction  = "in"
     protocol   = "tcp"
