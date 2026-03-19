@@ -7,12 +7,32 @@ semver: patch
 
 # feat: Add Infrastructure Validation to CI and Work Skill
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-19
+**Sections enhanced:** 6 (Proposed Solution, Technical Considerations, Dependencies & Risks, Implementation Sketch, Edge Cases, Acceptance Criteria)
+**Research sources:** GitHub runner image inventory, `hashicorp/setup-terraform` API, 5 institutional learnings, Terraform best practices doc, `cloud-init schema` local testing
+
+### Key Improvements
+
+1. **SHA-pinned action references** -- all actions use commit SHA with version comment, consistent with existing workflow conventions (`actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1`, `hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0`)
+2. **cloud-init NOT pre-installed on ubuntu-24.04 runners** -- explicit `apt-get install` required; PyYAML also not pre-installed but comes as a transitive dependency of `cloud-init`
+3. **Simplified YAML check** -- `cloud-init schema` performs YAML parsing as its first step; separate PyYAML check is redundant for `cloud-init.yml` files. Replaced with a single `cloud-init schema` step that covers both syntax and schema validation.
+4. **Pure-bash directory detection** -- avoids third-party actions (`tj-actions/changed-files`, `dorny/paths-filter`) that introduce supply-chain risk; uses `git diff --name-only` with shell extraction instead
+5. **GITHUB_OUTPUT sanitization** -- directory paths written to `$GITHUB_OUTPUT` use `printf '%s\n'` pattern per institutional learning on newline injection
+
+### New Considerations Discovered
+
+- `hashicorp/setup-terraform` latest is **v4.0.0** (not v3 as originally sketched)
+- The `security_reminder_hook.py` PreToolUse hook will block the first Edit to `.github/workflows/*.yml` -- the implementer should expect a retry on first edit (documented in `2026-03-18-security-reminder-hook-blocks-workflow-edits.md`)
+- `telegram-bridge/infra/.gitignore` excludes `.terraform.lock.hcl` -- `terraform init -backend=false` will download providers fresh each CI run (~5-10s)
+
 ## Overview
 
 Infrastructure files (`cloud-init.yml`, `*.tf`) in `apps/*/infra/` are currently unvalidated by CI and the agent work loop. A malformed cloud-init YAML or an unformatted Terraform file can merge silently, only discovered during a live deploy. This plan adds two complementary validation layers:
 
-1. **GitHub Actions CI workflow** -- validates cloud-init YAML syntax, cloud-init schema, and `terraform fmt`/`terraform validate` on PRs touching `apps/*/infra/` files.
-2. **Work skill Phase 2 infra-aware test rule** -- detects infrastructure file changes during agent work and runs config-specific validation (YAML syntax, cloud-init schema, `terraform fmt -check`, `terraform validate`) instead of only relying on the app test suite.
+1. **GitHub Actions CI workflow** -- validates cloud-init schema (which includes YAML syntax) and `terraform fmt`/`terraform validate` on PRs touching `apps/*/infra/` files.
+2. **Work skill Phase 2 infra-aware test rule** -- detects infrastructure file changes during agent work and runs config-specific validation (cloud-init schema, `terraform fmt -check`, `terraform validate`) instead of only relying on the app test suite.
 
 ## Problem Statement
 
@@ -30,12 +50,13 @@ Evidence of the gap:
 - **Terraform plan** -- `terraform plan` requires provider credentials. Only `fmt -check` and `validate` are in scope for CI.
 - **Modifying compound or ship skills** -- only the work skill's Phase 2 test loop is modified.
 - **Auto-fixing formatting** -- CI reports errors; developers fix them. No `terraform fmt -write` in CI.
+- **Committing `.terraform.lock.hcl` for telegram-bridge** -- that gitignore decision is a separate concern; the workflow handles missing lockfiles gracefully.
 
 ## Proposed Solution
 
 ### Component 1: GitHub Actions Workflow (`.github/workflows/infra-validation.yml`)
 
-A new workflow triggered on PRs that modify files matching `apps/*/infra/**`. The workflow runs three validation steps per infra directory that has changed files.
+A new workflow triggered on PRs that modify files matching `apps/*/infra/**`. The workflow runs validation steps per infra directory that has changed files.
 
 **Trigger:**
 
@@ -49,20 +70,36 @@ on:
 
 **Jobs:**
 
-1. **detect-changes** -- Uses `tj-actions/changed-files` or `dorny/paths-filter` to determine which `apps/*/infra/` directories have changes. Outputs a JSON matrix of changed directories.
+1. **detect-changes** -- Uses pure bash with `git diff --name-only` to determine which `apps/*/infra/` directories have changes. Outputs a JSON matrix of changed directories. For `workflow_dispatch`, discovers all infra dirs via `find`.
 
 2. **validate** (matrix strategy on changed directories) -- For each changed infra directory:
-   - **YAML lint**: Run `python3 -c "import yaml; yaml.safe_load(open('cloud-init.yml'))"` to validate YAML syntax. Lightweight, no extra deps.
-   - **cloud-init schema**: Install `cloud-init` via apt, run `cloud-init schema -c cloud-init.yml`. Warnings about missing datasource are expected and suppressed (exit code is still 0 for valid schemas).
+   - **cloud-init schema**: Install `cloud-init` via apt (NOT pre-installed on `ubuntu-24.04` runners), run `cloud-init schema -c cloud-init.yml`. This validates both YAML syntax and cloud-init schema in a single step. Warnings about missing datasource are expected (exit code remains 0 for valid schemas).
    - **terraform fmt**: Run `terraform fmt -check -recursive .` on the infra directory. Exit code 3 means formatting violations.
    - **terraform validate**: Run `terraform init -backend=false` then `terraform validate`. This catches HCL syntax errors and undefined variable references without provider credentials.
+
+### Research Insights: CI Workflow
+
+**Supply-chain security (from institutional learnings):**
+- Pin ALL action references to commit SHAs with version comments -- mutable tags are a supply-chain risk (ref: `2026-02-27-github-actions-sha-pinning-workflow.md`, tj-actions/changed-files compromise March 2025)
+- Avoid third-party change detection actions (`tj-actions/changed-files`, `dorny/paths-filter`) -- use `git diff` directly to minimize attack surface. The `tj-actions/changed-files` action was specifically compromised in 2025.
+- Use `printf '%s\n'` instead of `echo` for `$GITHUB_OUTPUT` writes, and always quote `"$GITHUB_OUTPUT"` (ref: `2026-03-05-github-output-newline-injection-sanitization.md`)
+
+**Runner environment findings:**
+- `ubuntu-latest` (24.04) does NOT have `cloud-init` pre-installed -- requires explicit `sudo apt-get install -y cloud-init`
+- `python3` IS pre-installed (3.12.3) but PyYAML is NOT -- however, `cloud-init` depends on `python3-yaml`, so installing `cloud-init` provides PyYAML as a transitive dependency
+- This means the separate `python3 -c "import yaml; ..."` YAML syntax check is redundant -- `cloud-init schema` performs YAML parsing as its first validation step. Removing the separate step simplifies the workflow.
+
+**Terraform action pinning:**
+- `hashicorp/setup-terraform` latest stable is **v4.0.0** (SHA: `5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85`)
+- `actions/checkout` is consistently pinned to `34e114876b0b11c390a56381ad16ebd13914f8d5` (v4.3.1) across all existing workflows
 
 **Security comment header** (per constitution preference):
 
 ```yaml
-# Security: No secrets required. All validation is offline (YAML parsing,
-# cloud-init schema, terraform fmt/validate with -backend=false).
+# Security: No secrets required. All validation is offline (cloud-init schema,
+# terraform fmt/validate with -backend=false).
 # Inputs: only paths from the PR diff (not user-controlled content).
+# All action references are SHA-pinned.
 ```
 
 **Key design decisions:**
@@ -70,14 +107,18 @@ on:
 - **Matrix strategy per infra dir**: Each app's infra is validated independently. A failure in telegram-bridge does not block web-platform validation results.
 - **`workflow_dispatch` included**: Per constitution, new workflows start with `workflow_dispatch` for manual testing before PR triggers are relied upon.
 - **No provider credentials needed**: `terraform init -backend=false` skips remote state and provider auth. `terraform validate` still catches syntax/reference errors.
-- **`cloud-init` installed via apt**: Ubuntu runners include `cloud-init` in apt repositories. `sudo apt-get install -y cloud-init` in CI.
-- **Terraform installed via `hashicorp/setup-terraform` action**: Standard pinned action for reproducible Terraform version.
+- **`cloud-init` installed via apt**: Ubuntu runners have `cloud-init` in apt repositories. `sudo apt-get install -y -qq cloud-init` in CI.
+- **Terraform installed via `hashicorp/setup-terraform` action**: SHA-pinned for supply-chain security.
+- **Pure bash change detection**: No third-party actions for detecting changed files -- `git diff --name-only` with shell pipeline extraction is sufficient and avoids supply-chain risk from the `tj-actions` compromise precedent.
 
 **Edge cases:**
 
-- **Terraform template variables in cloud-init.yml**: The `${image_name}` syntax in `cloud-init.yml` is valid YAML (unquoted `${...}` is a string literal in YAML). Python's `yaml.safe_load` and `cloud-init schema` both accept it. No preprocessing needed.
-- **No `.terraform.lock.hcl`**: `telegram-bridge/infra/.gitignore` excludes the lockfile. `terraform init -backend=false` will download providers fresh in CI -- this is acceptable for validation-only runs and avoids requiring lockfiles to be committed.
+- **Terraform template variables in cloud-init.yml**: The `${image_name}` syntax in `cloud-init.yml` is valid YAML (unquoted `${...}` is a string literal in YAML). `cloud-init schema` accepts it without errors. Verified locally on both `apps/web-platform/infra/cloud-init.yml` and `apps/telegram-bridge/infra/cloud-init.yml`.
+- **No `.terraform.lock.hcl`**: `telegram-bridge/infra/.gitignore` excludes the lockfile. `terraform init -backend=false` will download providers fresh in CI (~5-10s per provider). This is acceptable for validation-only runs.
 - **New apps added later**: The `apps/*/infra/**` glob and dynamic directory detection automatically cover new apps without workflow changes.
+- **`workflow_dispatch` with no changes**: When triggered manually, the workflow discovers ALL `apps/*/infra/` directories via `find` instead of `git diff`, validating everything.
+- **cloud-init `schema` exit code**: `cloud-init schema` returns exit 0 for valid configs even with WARNING-level messages about missing datasource. The workflow should check exit code, not parse stderr.
+- **Multiple matrix runners**: Each matrix job installs `cloud-init` and `terraform` independently. This adds ~15s per matrix entry but avoids cross-job state issues.
 
 ### Component 2: Work Skill Phase 2 Infra-Aware Test Rule
 
@@ -91,79 +132,99 @@ Modify `plugins/soleur/skills/work/SKILL.md` Phase 2 section 5 ("Test Continuous
 
 > **Test-First Enforcement**: If the plan includes a "Test Scenarios" section, write tests for each scenario BEFORE writing implementation code. If no test scenarios exist in the plan, derive them from acceptance criteria. For infrastructure-only tasks (config, CI, scaffolding), unit tests may be skipped, but config-specific validation is required -- see Infrastructure Validation below.
 
-**New subsection after section 5 (or as part of section 5):**
+**New subsection after section 5 ("Test Continuously"), as section 5b:**
 
-Add an "Infrastructure Validation" block in the test loop that triggers when `git diff --name-only` shows changes to files matching `apps/*/infra/**`:
+Add an "Infrastructure Validation" block that triggers when `git diff --name-only` shows changes to files matching `apps/*/infra/**`:
 
 ```text
-**Infrastructure Validation**: When any task modifies files in `apps/*/infra/`, run these checks after each change (in addition to or instead of the app test suite):
+5b. **Infrastructure Validation**
 
-1. **YAML syntax**: For each modified `*.yml` or `*.yaml` in the infra directory:
-   `python3 -c "import yaml; yaml.safe_load(open('<file>'))"` -- catches indentation errors, invalid YAML constructs.
+   When any task modifies files in `apps/*/infra/`, run these checks after each change (in addition to or instead of the app test suite):
 
-2. **cloud-init schema**: For each modified `cloud-init.yml`:
-   `cloud-init schema -c <file>` -- validates against the cloud-init JSON schema. Warnings about missing datasource are expected; only errors are failures.
+   1. **cloud-init schema**: For each modified `cloud-init.yml`:
+      `cloud-init schema -c <file>` -- validates YAML syntax AND cloud-init schema in one step. Warnings about missing datasource are expected; only errors (non-zero exit) are failures.
 
-3. **Terraform format**: For each infra directory with modified `.tf` files:
-   `terraform fmt -check <dir>` -- exit 0 means formatted; exit 3 means violations. Fix with `terraform fmt <dir>`.
+   2. **Terraform format**: For each infra directory with modified `.tf` files:
+      `terraform fmt -check <dir>` -- exit 0 means formatted; exit 3 means violations. Fix with `terraform fmt <dir>`.
 
-4. **Terraform validate**: For each infra directory with modified `.tf` files:
-   `terraform init -backend=false` then `terraform validate` -- catches HCL syntax errors and undefined references without requiring provider credentials.
+   3. **Terraform validate**: For each infra directory with modified `.tf` files:
+      `terraform init -backend=false` then `terraform validate` -- catches HCL syntax errors and undefined references without requiring provider credentials.
 
-These checks replace the "tests may be skipped" exemption for infra files. If any check fails, fix before proceeding to the next task.
+   These checks replace the "tests may be skipped" exemption for infra files. If any check fails, fix before proceeding to the next task.
 ```
 
-**Key design decisions:**
+### Research Insights: Work Skill Modification
 
-- **Detection via git diff**: The work skill already has access to `git diff` for various checks. Adding a path-based heuristic (`apps/*/infra/`) is consistent.
-- **Not a subagent**: These are deterministic shell commands with binary pass/fail outcomes -- per constitution, prefer inline instructions over Task agents for such checks.
-- **Complements CI, not replaces it**: CI catches issues on PRs. The work skill catches issues during development, providing faster feedback before push.
+**Pattern consistency:**
+- The work skill already checks for UI file patterns in Phase 0.5 scope check 7 (`page.tsx`, `layout.tsx`, etc.) and routes to UX review. Adding infra file pattern detection (`apps/*/infra/**`) follows the same pattern.
+- Per constitution: "Prefer inline instructions over Task agents for deterministic checks (shell commands with binary pass/fail outcomes)." These validation commands are deterministic -- no subagent needed.
+
+**Skill-enforced convention pattern** (from `2026-03-19-skill-enforced-convention-pattern.md`):
+- Constitution rules that require semantic judgment cannot use PreToolUse hooks. But infra validation is not semantic -- it's syntactic, using shell commands.
+- This means the work skill change is enforcement via instruction, complementing the CI enforcement. Both layers are needed: CI catches issues at PR time, the work skill catches them during development.
+
+**cloud-init availability on dev machines:**
+- `cloud-init` is available on the developer's machine (verified: version 25.3). On machines without `cloud-init`, the work skill should degrade gracefully -- warn and continue rather than block.
 
 ## Acceptance Criteria
 
 - [ ] New workflow `.github/workflows/infra-validation.yml` exists and passes on PRs with valid infra files
+- [ ] All action references in the new workflow use SHA-pinned format (`@<sha> # vX.Y.Z`)
+- [ ] Workflow uses pure bash for change detection (no third-party `changed-files` actions)
 - [ ] Workflow detects which `apps/*/infra/` directories have changes and validates only those
-- [ ] YAML syntax check catches malformed `cloud-init.yml` (e.g., bad indentation)
-- [ ] cloud-init schema check catches invalid cloud-init directives (e.g., unknown top-level key)
+- [ ] `cloud-init schema` check validates both YAML syntax and schema in one step
 - [ ] `terraform fmt -check` catches unformatted `.tf` files (currently `dns.tf` would fail)
 - [ ] `terraform validate` catches HCL syntax errors (e.g., undefined variable references)
 - [ ] Workflow includes `workflow_dispatch` trigger for manual testing
-- [ ] Work skill SKILL.md Phase 2 includes infrastructure validation instructions
-- [ ] Work skill infrastructure validation covers: YAML syntax, cloud-init schema, terraform fmt, terraform validate
+- [ ] Workflow `workflow_dispatch` validates ALL infra dirs (not just changed ones)
+- [ ] Work skill SKILL.md Phase 2 includes infrastructure validation instructions as section 5b
+- [ ] Work skill infrastructure validation covers: cloud-init schema, terraform fmt, terraform validate
 - [ ] Work skill detects infra file changes via `git diff --name-only` path matching
 - [ ] Existing `dns.tf` formatting issue is fixed (so the new CI passes on the same PR)
+- [ ] Security comment header present at top of workflow file
 
 ## Test Scenarios
 
-- Given a PR that modifies `apps/web-platform/infra/cloud-init.yml` with valid YAML, when CI runs, then the YAML syntax and cloud-init schema checks pass
+- Given a PR that modifies `apps/web-platform/infra/cloud-init.yml` with valid YAML, when CI runs, then the cloud-init schema check passes
+- Given a PR that introduces a cloud-init.yml with an unknown top-level key (e.g., `bogus_key: true`), when CI runs, then `cloud-init schema` reports an error and fails
 - Given a PR that modifies `apps/telegram-bridge/infra/server.tf` with invalid HCL syntax, when CI runs, then `terraform validate` fails and blocks merge
 - Given a PR that modifies `.tf` files with inconsistent formatting, when CI runs, then `terraform fmt -check` reports the files and fails
 - Given a PR that only modifies `plugins/soleur/` files (no infra changes), when CI runs, then `infra-validation.yml` does not trigger
-- Given the work skill processes a task that edits `cloud-init.yml`, when Phase 2 test loop runs, then the agent executes YAML syntax + cloud-init schema checks
+- Given `workflow_dispatch` is triggered manually, when the workflow runs, then ALL infra directories are validated (not just changed ones)
+- Given the work skill processes a task that edits `cloud-init.yml`, when Phase 2 test loop runs, then the agent executes `cloud-init schema` check
 - Given the work skill processes a task that edits `.tf` files, when Phase 2 test loop runs, then the agent runs `terraform fmt -check` and `terraform validate`
 - Given a PR modifies infra in both `telegram-bridge` and `web-platform`, when CI runs, then both directories are validated independently via matrix strategy
+- Given `cloud-init` is not installed on the dev machine, when the work skill runs infra validation, then it warns and continues (graceful degradation)
 
 ## Technical Considerations
 
-- **cloud-init availability in CI**: Ubuntu `ubuntu-latest` runners have `cloud-init` available via apt. No custom action needed.
-- **Terraform version pinning**: Use `hashicorp/setup-terraform@v3` with a pinned version matching the project's `required_version = ">= 1.0"` constraint.
-- **Terraform template variables**: `cloud-init.yml` files contain `${image_name}` Terraform template syntax. Both `yaml.safe_load` and `cloud-init schema` treat these as literal strings, not interpolation -- no preprocessing needed.
-- **No provider credentials in CI**: `terraform init -backend=false` skips remote backend and provider download when lockfile exists. When lockfile is absent (telegram-bridge), providers download but no credentials are needed for `validate`.
+- **cloud-init NOT pre-installed in CI**: Ubuntu `ubuntu-latest` (24.04) runners do NOT have `cloud-init` pre-installed. The workflow must `sudo apt-get install -y -qq cloud-init`. This also installs `python3-yaml` (PyYAML) as a transitive dependency.
+- **Terraform action version**: Use `hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0` (latest stable, SHA-pinned).
+- **Checkout action**: Use `actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1` (consistent with all other workflows in the repo).
+- **Terraform template variables**: `cloud-init.yml` files contain `${image_name}` Terraform template syntax. `cloud-init schema` treats these as literal strings -- verified locally on both existing cloud-init files. No preprocessing needed.
+- **No provider credentials in CI**: `terraform init -backend=false` skips remote backend. When lockfile is absent (telegram-bridge), providers download but no credentials are needed for `validate`.
 - **Pre-existing `dns.tf` formatting**: `terraform fmt -check` on `apps/web-platform/infra/dns.tf` currently returns exit 3. This must be fixed in the same PR to avoid immediate CI failure.
+- **Security hook behavior**: The `security_reminder_hook.py` PreToolUse hook will block the first Edit attempt on `.github/workflows/*.yml` files. This is advisory, not blocking -- retry the edit. (Ref: `2026-03-18-security-reminder-hook-blocks-workflow-edits.md`)
+- **GITHUB_OUTPUT sanitization**: Directory paths written to `$GITHUB_OUTPUT` must use `printf '%s\n'` and `tr -d '\n\r'` to prevent injection. (Ref: `2026-03-05-github-output-newline-injection-sanitization.md`)
 
 ## Dependencies & Risks
 
-- **Risk**: `cloud-init schema` behavior may differ between Ubuntu versions. Mitigation: pin `ubuntu-latest` (currently 24.04) and test with `workflow_dispatch` before relying on PR triggers.
-- **Risk**: `terraform validate` may require provider downloads that add latency. Mitigation: `terraform init -backend=false` only downloads providers, not state -- typically <10s per provider.
+- **Risk**: `cloud-init schema` behavior may differ between Ubuntu versions. Mitigation: pin to `ubuntu-24.04` explicitly (not `ubuntu-latest`) and test with `workflow_dispatch` before relying on PR triggers.
+- **Risk**: `terraform validate` may require provider downloads that add latency. Mitigation: `terraform init -backend=false` only downloads providers, not state -- typically <10s per provider. Verified locally.
+- **Risk**: `cloud-init` apt install adds ~5-10s to CI run time. Mitigation: acceptable for validation-only workflow that only triggers on infra changes.
+- **Risk**: Developer machine may not have `cloud-init` installed. Mitigation: work skill should attempt the command and warn on failure, not block.
 - **Dependency**: The PR must fix `dns.tf` formatting to pass the new CI check on the same PR.
+- **Dependency**: Post-merge manual trigger (`gh workflow run infra-validation.yml`) required to verify the workflow works, per constitution gate.
 
 ## Implementation Sketch
 
 ### `.github/workflows/infra-validation.yml`
 
 ```yaml
-# Security: No secrets required. All validation is offline.
+# Security: No secrets required. All validation is offline (cloud-init schema,
+# terraform fmt/validate with -backend=false).
 # Inputs: only paths from the PR diff (not user-controlled content).
+# All action references are SHA-pinned.
 name: Infra Validation
 
 on:
@@ -174,57 +235,76 @@ on:
 
 jobs:
   detect-changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
-      directories: # JSON array of changed infra dirs
+      directories: ${{ steps.dirs.outputs.directories }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
       - name: Find changed infra directories
         id: dirs
-        # Extract unique apps/*/infra/ prefixes from changed files
         run: |
-          # For PRs: diff against base
-          # For workflow_dispatch: validate all infra dirs
-          ...
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            # Manual trigger: validate ALL infra directories
+            DIRS=$(find apps/*/infra -maxdepth 0 -type d 2>/dev/null | jq -R -s -c 'split("\n") | map(select(. != ""))')
+          else
+            # PR trigger: only changed directories
+            DIRS=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'apps/*/infra/' \
+              | sed 's|/[^/]*$||' \
+              | sort -u \
+              | jq -R -s -c 'split("\n") | map(select(. != ""))')
+          fi
+          printf 'directories=%s\n' "$DIRS" >> "$GITHUB_OUTPUT"
 
   validate:
     needs: detect-changes
     if: needs.detect-changes.outputs.directories != '[]'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
-        directory: # fromJSON(needs.detect-changes.outputs.directories)
+        directory: ${{ fromJSON(needs.detect-changes.outputs.directories) }}
       fail-fast: false
+
     steps:
-      - uses: actions/checkout@v4
-      - name: YAML syntax check
-        run: python3 -c "import yaml; yaml.safe_load(open('cloud-init.yml'))"
-        working-directory: # matrix.directory
-      - name: cloud-init schema
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Validate cloud-init schema
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq cloud-init
-          cloud-init schema -c cloud-init.yml 2>&1 | grep -v WARNING || true
-          cloud-init schema -c cloud-init.yml
-        working-directory: # matrix.directory
-      - uses: hashicorp/setup-terraform@v3
-      - name: terraform fmt
+          if [[ -f cloud-init.yml ]]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq cloud-init 2>&1 | tail -1
+            cloud-init schema -c cloud-init.yml
+          else
+            echo "No cloud-init.yml found, skipping"
+          fi
+        working-directory: ${{ matrix.directory }}
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+
+      - name: Terraform format check
         run: terraform fmt -check -recursive .
-        working-directory: # matrix.directory
-      - name: terraform validate
+        working-directory: ${{ matrix.directory }}
+
+      - name: Terraform validate
         run: |
           terraform init -backend=false
           terraform validate
-        working-directory: # matrix.directory
+        working-directory: ${{ matrix.directory }}
 ```
 
 ### Work Skill SKILL.md Modification
 
-Edit the Phase 2 "Test-First Enforcement" note and add an "Infrastructure Validation" subsection after section 5.
+Edit `plugins/soleur/skills/work/SKILL.md`:
+
+1. **Line 198** -- Replace the "Test-First Enforcement" text to reference infra validation
+2. **After section 5** -- Add section 5b "Infrastructure Validation" with the three check commands
+3. Keep the text concise and actionable -- the agent follows inline instructions, not verbose documentation
 
 ### `apps/web-platform/infra/dns.tf` Fix
 
-Run `terraform fmt` to fix the existing formatting issue so CI passes on the PR that introduces the workflow.
+Run `terraform fmt apps/web-platform/infra/dns.tf` to fix the existing formatting issue so CI passes on the PR that introduces the workflow.
 
 ## References
 
@@ -238,10 +318,17 @@ Run `terraform fmt` to fix the existing formatting issue so CI passes on the PR 
 - `plugins/soleur/skills/work/SKILL.md:198` -- current "tests may be skipped" exemption
 - `knowledge-base/learnings/2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md` -- prior infra deployment learning
 - `knowledge-base/project/learnings/integration-issues/2026-02-10-cloud-deploy-infra-and-sdk-integration.md` -- Terraform + cloud-init volume mount learning
+- `knowledge-base/project/learnings/2026-02-21-github-actions-workflow-security-patterns.md` -- workflow security patterns (SHA pinning, input validation)
+- `knowledge-base/project/learnings/2026-02-27-github-actions-sha-pinning-workflow.md` -- SHA pinning audit process and tj-actions compromise precedent
+- `knowledge-base/project/learnings/2026-03-05-github-output-newline-injection-sanitization.md` -- GITHUB_OUTPUT sanitization patterns
+- `knowledge-base/learnings/2026-03-18-security-reminder-hook-blocks-workflow-edits.md` -- security hook retry behavior for workflow edits
+- `knowledge-base/learnings/2026-03-19-skill-enforced-convention-pattern.md` -- enforcement tier pattern for semantic vs syntactic rules
+- `knowledge-base/project/learnings/2026-02-13-terraform-best-practices-research.md` -- Terraform module structure and best practices
 
 ### External
 
-- [hashicorp/setup-terraform](https://github.com/hashicorp/setup-terraform) -- GitHub Action for Terraform CLI
+- [hashicorp/setup-terraform v4.0.0](https://github.com/hashicorp/setup-terraform) -- GitHub Action for Terraform CLI (SHA: `5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85`)
 - [cloud-init schema validation](https://cloudinit.readthedocs.io/en/latest/reference/cli.html#schema) -- cloud-init CLI schema subcommand
 - [terraform fmt](https://developer.hashicorp.com/terraform/cli/commands/fmt) -- Terraform format check
 - [terraform validate](https://developer.hashicorp.com/terraform/cli/commands/validate) -- Terraform syntax validation
+- [GitHub ubuntu-24.04 runner image](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md) -- pre-installed packages reference
