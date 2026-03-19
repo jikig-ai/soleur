@@ -174,7 +174,7 @@ We use **Hetzner** ([hetzner.com](https://hetzner.com)) to host the Web Platform
 
 - **Data processed:** User workspaces, Docker containers, and encrypted API keys stored on Hetzner servers.
 - **Purpose:** Infrastructure hosting for the Web Platform (compute, storage, networking).
-- **DPA:** Hetzner Data Processing Agreement (Auftragsverarbeitungsvertrag / AVV), to be concluded via the Hetzner Cloud Console account settings (pending execution).
+- **DPA:** Hetzner Data Processing Agreement (Auftragsverarbeitungsvertrag / AVV), concluded via the Hetzner Cloud Console account settings (signed 2026-03-19).
 - Hetzner is an EU-based company (Germany). The Web Platform is hosted in **Helsinki, Finland (hel1)** -- EU-only processing, no international data transfers.
 
 ### 5.8 Cloudflare (Web Platform CDN/Proxy)
@@ -242,7 +242,7 @@ For the Web Platform:
 
 - **Supabase:** EU-based deployment (AWS eu-west-1, Ireland). **No international data transfers.** Supabase Inc is a US-based company, but the Jikigai project is deployed to the EU region. See [Supabase DPA](https://supabase.com/legal/dpa).
 - **Stripe:** US-based (Stripe, LLC). International data transfers are governed by the EU-US Data Privacy Framework (DPF, adequacy decision) and Standard Contractual Clauses (SCCs), EEA Module 2, as supplementary safeguard. DPA auto-incorporated in Services Agreement (verified 2026-03-19). See [Stripe DPA](https://stripe.com/legal/dpa).
-- **Hetzner:** EU-based (Germany). Web Platform hosted in Helsinki, Finland (EU). **No international data transfers.** DPA (AVV) pending execution via Cloud Console.
+- **Hetzner:** EU-based (Germany). Web Platform hosted in Helsinki, Finland (EU). **No international data transfers.** DPA (AVV) signed 2026-03-19 via Cloud Console.
 - **Cloudflare:** Global CDN. International data transfers are governed by the EU-US Data Privacy Framework (DPF), Standard Contractual Clauses (SCCs), and Global CBPR certification. DPA self-executing via Self-Serve Agreement (verified 2026-03-19). See [Cloudflare DPA](https://www.cloudflare.com/cloudflare-customer-dpa/).
 
 For the Docs Site and repository interactions, GitHub may transfer data internationally in accordance with its own policies and applicable data transfer mechanisms (such as Standard Contractual Clauses). See [GitHub's Global Privacy Practices](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement#githubs-global-privacy-practices) for details.

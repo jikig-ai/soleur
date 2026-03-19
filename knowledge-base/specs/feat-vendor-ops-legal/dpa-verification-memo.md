@@ -9,13 +9,13 @@
 
 PR #637 deployed four external services for the Soleur web platform (app.soleur.ai). This memo documents the DPA status of each vendor per GDPR Article 28 requirements. Resend was listed in issue #670 but has no integration code in the codebase -- excluded from scope.
 
-**2026-03-19 Update:** Dashboard verification completed for all four vendors. Key finding: Supabase project is in **eu-west-1** (Ireland, EU), NOT us-east-1 -- eliminating Chapter V transfer concerns. Supabase DPA signed via PandaDoc (2026-03-19). Cloudflare DPA confirmed self-executing. Hetzner DPA pending founder login. Telegram-bridge CX22 confirmed on same Hetzner Cloud Console account.
+**2026-03-19 Update:** Dashboard verification completed for all four vendors. Key finding: Supabase project is in **eu-west-1** (Ireland, EU), NOT us-east-1 -- eliminating Chapter V transfer concerns. Supabase DPA signed via PandaDoc (2026-03-19). Cloudflare DPA confirmed self-executing. Hetzner DPA signed via Cloud Console (2026-03-19). Telegram-bridge CX22 confirmed on same Hetzner Cloud Console account.
 
 ## Vendor DPA Status
 
 | Vendor | DPA Status | Acceptance Mechanism | Transfer Mechanism | Data Categories | Action Required |
 |--------|-----------|---------------------|-------------------|-----------------|-----------------|
-| Hetzner Online GmbH | **NOT SIGNED** | Click-to-sign via Cloud Console (ToS 6.2) | N/A (EU-only: Germany/Finland) | Server compute, volume storage, user workspaces, encrypted API keys | **URGENT: Founder must log into console.hetzner.cloud and sign DPA (AVV)** |
+| Hetzner Online GmbH | **SIGNED** (2026-03-19) | Click-to-sign via Cloud Console (ToS 6.2) | N/A (EU-only: Germany/Finland) | Server compute, volume storage, user workspaces, encrypted API keys | None -- DPA executed |
 | Supabase Inc | **SIGNED** (2026-03-19) | PandaDoc via dashboard "Legal Documents" -- signed by founder | N/A (EU-only: eu-west-1, Ireland) | Email addresses, hashed passwords, auth tokens, session data | None -- DPA executed |
 | Stripe Inc | **VERIFIED** (2026-03-19) | Part of Stripe Services Agreement (automatic) | EU-US DPF + SCCs (EEA Module 2) | Customer email, subscription metadata (card data handled by Stripe, PCI SAQ-A) | None -- DPA is automatic |
 | Cloudflare Inc | **VERIFIED** (2026-03-19) | Self-Serve Subscription Agreement constitutes "Main Agreement" (confirmed via dashboard) | DPF + SCCs (Module 2 & 3) + Global CBPR | IP addresses, request headers, TLS termination | None -- DPA is self-executing |
@@ -29,7 +29,7 @@ PR #637 deployed four external services for the Soleur web platform (app.soleur.
 - **Tier coverage:** Applies to all plans including CX33.
 - **Region:** Helsinki (hel1), Finland -- EU jurisdiction. No international transfer concerns.
 - **Data processed:** Server compute, volume storage (20 GB), user workspaces, Docker containers, encrypted API keys (AES-256-GCM).
-- **Action:** Log into Hetzner Cloud Console, navigate to account settings, execute the DPA (Auftragsverarbeitungsvertrag / AVV). This is a click-to-sign process. **The web platform should not accept user registrations until this is signed.**
+- **Action:** None -- DPA (AVV) signed via Cloud Console on 2026-03-19.
 
 ### Supabase Inc
 
@@ -79,7 +79,7 @@ PR #637 deployed four external services for the Soleur web platform (app.soleur.
 
 ## Recommendations
 
-1. **BLOCKING:** Sign Hetzner DPA via Cloud Console (console.hetzner.cloud > account settings > DPA/AVV). This covers both CX33 (web platform) and CX22 (telegram-bridge).
+1. **DONE:** Hetzner DPA (AVV) signed via Cloud Console (2026-03-19). This covers both CX33 (web platform) and CX22 (telegram-bridge).
 2. **DONE:** Supabase DPA signed via PandaDoc (2026-03-19).
 3. **DONE:** Stripe DPA verified as automatic (2026-03-19).
 4. **DONE:** Cloudflare DPA verified as self-executing via Self-Serve Agreement (2026-03-19).
