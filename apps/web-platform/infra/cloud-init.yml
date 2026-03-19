@@ -4,7 +4,22 @@ packages:
   - curl
   - jq
 
+write_files:
+  - path: /etc/ssh/sshd_config.d/01-hardening.conf
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      MaxAuthTries 3
+      LoginGraceTime 30
+      PermitRootLogin prohibit-password
+      AllowUsers root
+    owner: root:root
+    permissions: '0644'
+
 runcmd:
+  # Apply SSH hardening immediately (drop-in written by write_files above)
+  - systemctl restart sshd
+
   # Install Docker
   - curl -fsSL https://get.docker.com | sh
 
@@ -45,8 +60,3 @@ runcmd:
       -p 0.0.0.0:80:3000 \
       -p 0.0.0.0:3000:3000 \
       ${image_name}
-
-  # SSH hardening
-  - sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
-  - sed -i 's/PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
-  - systemctl restart sshd
