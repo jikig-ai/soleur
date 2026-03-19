@@ -119,6 +119,14 @@ describe("readyz endpoint", () => {
     expect(body.ready).toBe(false);
   });
 
+  test("returns 503 when cliProcess exists but state is not ready", async () => {
+    const base = startServer({ cliState: "connecting", cliProcess: {} });
+    const res = await fetch(`${base}/readyz`);
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.ready).toBe(false);
+  });
+
   test("returns 404 for POST to /readyz", async () => {
     const base = startServer();
     const res = await fetch(`${base}/readyz`, { method: "POST" });
