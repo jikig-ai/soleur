@@ -1,0 +1,329 @@
+name: Reusable Release
+
+on:
+  workflow_call:
+    inputs:
+      component:
+        description: "Component identifier (e.g., plugin, web-platform, telegram-bridge)"
+        type: string
+        required: true
+      component_display:
+        description: "Human-readable name for notifications (e.g., Soleur Web Platform)"
+        type: string
+        required: true
+      path_filter:
+        description: "Path prefix to detect changes (e.g., apps/web-platform/)"
+        type: string
+        required: true
+      tag_prefix:
+        description: "Git tag prefix (e.g., v, web-v, telegram-v)"
+        type: string
+        required: true
+      docker_image:
+        description: "Docker image name (empty = skip Docker build)"
+        type: string
+        default: ""
+      docker_context:
+        description: "Docker build context path (e.g., apps/web-platform)"
+        type: string
+        default: ""
+      bump_type:
+        description: "Override bump type (empty = use PR labels)"
+        type: string
+        default: ""
+      force_run:
+        description: "Skip path change detection (for workflow_dispatch)"
+        type: boolean
+        default: false
+    outputs:
+      version:
+        description: "Computed version without prefix (e.g., 0.1.1)"
+        value: ${{ jobs.release.outputs.version }}
+      tag:
+        description: "Full git tag (e.g., web-v0.1.1)"
+        value: ${{ jobs.release.outputs.tag }}
+      released:
+        description: "Whether a release was created (true/false)"
+        value: ${{ jobs.release.outputs.released }}
+
+concurrency:
+  group: release-${{ inputs.component }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    outputs:
+      version: ${{ steps.version.outputs.next }}
+      tag: ${{ steps.version.outputs.tag }}
+      released: ${{ steps.create_release.outputs.released || 'false' }}
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 2
+          token: ${{ github.token }}
+
+      - name: Fetch all tags
+        run: git fetch --tags
+
+      - name: Check if component files changed
+        id: check_changed
+        run: |
+          if [ "$FORCE_RUN" = "true" ]; then
+            printf 'changed=%s\n' "true" >> "$GITHUB_OUTPUT"
+            echo "Release forced (workflow_dispatch or force_run)"
+            exit 0
+          fi
+
+          CHANGED=$(git diff --name-only HEAD~1 -- "$PATH_FILTER" | head -1)
+          if [ -z "$CHANGED" ]; then
+            printf 'changed=%s\n' "false" >> "$GITHUB_OUTPUT"
+            echo "No $COMPONENT files changed, skipping"
+          else
+            printf 'changed=%s\n' "true" >> "$GITHUB_OUTPUT"
+            echo "$COMPONENT files changed, proceeding"
+          fi
+        env:
+          FORCE_RUN: ${{ inputs.force_run }}
+          PATH_FILTER: ${{ inputs.path_filter }}
+          COMPONENT: ${{ inputs.component }}
+
+      - name: Create secure temp files
+        if: steps.check_changed.outputs.changed == 'true'
+        id: tmpfiles
+        run: |
+          printf 'pr_body=%s\n' "$(mktemp)" >> "$GITHUB_OUTPUT"
+          printf 'release_notes=%s\n' "$(mktemp)" >> "$GITHUB_OUTPUT"
+          printf 'gh_err=%s\n' "$(mktemp)" >> "$GITHUB_OUTPUT"
+
+      - name: Find merged PR
+        if: steps.check_changed.outputs.changed == 'true'
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          PR_BODY_FILE: ${{ steps.tmpfiles.outputs.pr_body }}
+        run: |
+          give_up() {
+            local reason="$1"
+            echo "::warning::${reason}, using commit message as title"
+            printf 'number=\n' >> "$GITHUB_OUTPUT"
+            printf 'title=%s\n' "$(echo "$COMMIT_MSG" | head -1 | tr -d '\n\r')" >> "$GITHUB_OUTPUT"
+            printf 'labels=\n' >> "$GITHUB_OUTPUT"
+            echo "" > "$PR_BODY_FILE"
+            printf 'body_file=%s\n' "$PR_BODY_FILE" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            printf 'number=\n' >> "$GITHUB_OUTPUT"
+            printf 'title=%s\n' "Manual version bump" >> "$GITHUB_OUTPUT"
+            printf 'labels=\n' >> "$GITHUB_OUTPUT"
+            echo "" > "$PR_BODY_FILE"
+            printf 'body_file=%s\n' "$PR_BODY_FILE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PR_NUM=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+            --jq '.[0].number // empty' 2>/dev/null || true)
+
+          if [ -z "$PR_NUM" ]; then
+            echo "::notice::API lookup returned empty, falling back to commit message parsing"
+            PR_NUM=$(echo "$COMMIT_MSG" | head -1 | grep -oP '\(#\K\d+(?=\))' || true)
+          fi
+
+          if [ -n "$PR_NUM" ] && ! [[ "$PR_NUM" =~ ^[0-9]+$ ]]; then
+            echo "::warning::PR_NUM '$PR_NUM' is not a valid integer"
+            PR_NUM=""
+          fi
+
+          [ -z "$PR_NUM" ] && give_up "No PR number found"
+
+          PR_JSON=$(gh pr view "$PR_NUM" --json number,title,labels,body 2>/dev/null) \
+            || give_up "#$PR_NUM is not a PR"
+
+          printf 'number=%s\n' "$PR_NUM" >> "$GITHUB_OUTPUT"
+          printf 'title=%s\n' "$(echo "$PR_JSON" | jq -r '.title' | tr -d '\n\r')" >> "$GITHUB_OUTPUT"
+          printf 'labels=%s\n' "$(echo "$PR_JSON" | jq -r '[.labels[].name] | join(",")' | tr -d '\n\r')" >> "$GITHUB_OUTPUT"
+          echo "$PR_JSON" | jq -r '.body // ""' > "$PR_BODY_FILE"
+          printf 'body_file=%s\n' "$PR_BODY_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Determine bump type
+        if: steps.check_changed.outputs.changed == 'true'
+        id: bump
+        env:
+          BUMP_TYPE_INPUT: ${{ inputs.bump_type }}
+          PR_LABELS: ${{ steps.pr.outputs.labels }}
+        run: |
+          # Direct override from caller (workflow_dispatch passthrough)
+          if [ -n "$BUMP_TYPE_INPUT" ]; then
+            printf 'type=%s\n' "$BUMP_TYPE_INPUT" >> "$GITHUB_OUTPUT"
+            echo "Bump type from input: $BUMP_TYPE_INPUT"
+            exit 0
+          fi
+
+          if echo "$PR_LABELS" | grep -q "semver:major"; then
+            printf 'type=%s\n' "major" >> "$GITHUB_OUTPUT"
+          elif echo "$PR_LABELS" | grep -q "semver:minor"; then
+            printf 'type=%s\n' "minor" >> "$GITHUB_OUTPUT"
+          elif echo "$PR_LABELS" | grep -q "semver:patch"; then
+            printf 'type=%s\n' "patch" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No semver label found on PR, defaulting to patch"
+            printf 'type=%s\n' "patch" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute next version
+        if: steps.check_changed.outputs.changed == 'true'
+        id: version
+        env:
+          BUMP_TYPE: ${{ steps.bump.outputs.type }}
+          TAG_PREFIX: ${{ inputs.tag_prefix }}
+        run: |
+          LATEST_TAG=$(git tag --list "${TAG_PREFIX}*" --sort=-version:refname | head -1)
+
+          if [ -z "$LATEST_TAG" ]; then
+            CURRENT="0.0.0"
+            echo "No existing ${TAG_PREFIX}* tags, starting from 0.0.0"
+          else
+            CURRENT="${LATEST_TAG#"$TAG_PREFIX"}"
+            echo "Latest tag: $LATEST_TAG (version: $CURRENT)"
+          fi
+          printf 'current=%s\n' "$CURRENT" >> "$GITHUB_OUTPUT"
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+          if ! [[ "$MAJOR" =~ ^[0-9]+$ && "$MINOR" =~ ^[0-9]+$ && "$PATCH" =~ ^[0-9]+$ ]]; then
+            echo "::error::Invalid version components: MAJOR=$MAJOR MINOR=$MINOR PATCH=$PATCH (from $CURRENT)"
+            exit 1
+          fi
+
+          case "$BUMP_TYPE" in
+            major) NEXT="$((MAJOR + 1)).0.0" ;;
+            minor) NEXT="${MAJOR}.$((MINOR + 1)).0" ;;
+            patch) NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+            *) echo "::error::Unknown bump type: $BUMP_TYPE"; exit 1 ;;
+          esac
+
+          printf 'next=%s\n' "$NEXT" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "${TAG_PREFIX}${NEXT}" >> "$GITHUB_OUTPUT"
+          echo "Bumping $CURRENT -> $NEXT ($BUMP_TYPE), tag: ${TAG_PREFIX}${NEXT}"
+
+      - name: Check idempotency
+        if: steps.check_changed.outputs.changed == 'true'
+        id: idempotency
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" &>/dev/null; then
+            printf 'exists=%s\n' "true" >> "$GITHUB_OUTPUT"
+            echo "Release $TAG already exists, skipping"
+          else
+            printf 'exists=%s\n' "false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract changelog from PR body
+        if: steps.check_changed.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
+        id: changelog
+        env:
+          PR_TITLE: ${{ steps.pr.outputs.title }}
+          BODY_FILE: ${{ steps.tmpfiles.outputs.pr_body }}
+          RELEASE_NOTES_FILE: ${{ steps.tmpfiles.outputs.release_notes }}
+        run: |
+          CHANGELOG=""
+          if [ -f "$BODY_FILE" ] && [ -s "$BODY_FILE" ]; then
+            CHANGELOG=$(awk '/^## Changelog/{found=1; next} /^## /{if(found) exit} found{print}' "$BODY_FILE")
+            CHANGELOG=$(echo "$CHANGELOG" | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')
+          fi
+
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="- $PR_TITLE"
+          fi
+
+          echo "$CHANGELOG" > "$RELEASE_NOTES_FILE"
+
+      - name: Create GitHub Release
+        if: steps.check_changed.outputs.changed == 'true' && steps.idempotency.outputs.exists == 'false'
+        id: create_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_NOTES_FILE: ${{ steps.tmpfiles.outputs.release_notes }}
+        run: |
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file "$RELEASE_NOTES_FILE"
+          printf 'released=%s\n' "true" >> "$GITHUB_OUTPUT"
+          echo "Created release $TAG"
+
+      - name: Docker login
+        if: steps.create_release.outputs.released == 'true' && inputs.docker_image != ''
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push Docker image
+        if: steps.create_release.outputs.released == 'true' && inputs.docker_image != ''
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ${{ inputs.docker_context }}
+          push: true
+          tags: |
+            ${{ inputs.docker_image }}:v${{ steps.version.outputs.next }}
+            ${{ inputs.docker_image }}:${{ github.sha }}
+            ${{ inputs.docker_image }}:latest
+          build-args: |
+            NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+            NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+
+      - name: Post to Discord
+        if: steps.create_release.outputs.released == 'true'
+        env:
+          DISCORD_RELEASES_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASES_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.next }}
+          COMPONENT_DISPLAY: ${{ inputs.component_display }}
+          RELEASE_NOTES_FILE: ${{ steps.tmpfiles.outputs.release_notes }}
+        run: |
+          WEBHOOK="${DISCORD_RELEASES_WEBHOOK_URL:-${DISCORD_WEBHOOK_URL:-}}"
+          if [ -z "$WEBHOOK" ]; then
+            echo "No Discord webhook URL configured, skipping"
+            exit 0
+          fi
+
+          BODY=$(cat "$RELEASE_NOTES_FILE")
+          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+          RELEASE_URL="${REPO_URL}/releases/tag/${TAG}"
+
+          if [ ${#BODY} -gt 1900 ]; then
+            BODY="${BODY:0:1897}..."
+          fi
+
+          MESSAGE=$(printf '**%s v%s released!**\n\n%s\n\nFull release notes: %s' \
+            "$COMPONENT_DISPLAY" "$VERSION" "$BODY" "$RELEASE_URL")
+
+          PAYLOAD=$(jq -n \
+            --arg content "$MESSAGE" \
+            --arg username "Sol" \
+            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
+            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
+
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$WEBHOOK")
+
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Discord notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Discord notification failed (HTTP $HTTP_CODE)"
+          fi

@@ -298,11 +298,29 @@ git diff --name-status HASH..HEAD -- plugins/soleur/commands/ plugins/soleur/ski
 
 Replace `HASH` with the actual commit hash.
 
+**Step 1b:** Check for app changes (in a separate Bash call):
+
+```bash
+git diff --name-only HASH..HEAD -- apps/web-platform/ | head -1
+git diff --name-only HASH..HEAD -- apps/telegram-bridge/ | head -1
+```
+
+If `apps/web-platform/` has changes, apply `app:web-platform` label. If `apps/telegram-bridge/` has changes, apply `app:telegram-bridge` label:
+
+```bash
+gh pr edit PR_NUMBER --add-label app:web-platform
+gh pr edit PR_NUMBER --add-label app:telegram-bridge
+```
+
+Only apply each label if the corresponding path has changes.
+
 **Step 2:** Determine the bump type:
 
 - **MAJOR**: Breaking changes (removed commands, renamed agents, restructured plugin interface)
-- **MINOR**: New agents, skills, or commands added (any `A` status files in the diff above)
+- **MINOR**: New agents, skills, or commands added (any `A` status files in the diff above), OR new files added under `apps/*/`
 - **PATCH**: Everything else (bug fixes, doc updates, improvements to existing components)
+
+When ONLY app files changed (no plugin files), still apply `semver:*` based on app change significance — new files added means `semver:minor`, changes only means `semver:patch`.
 
 **Step 3:** Apply the semver label to the PR:
 
@@ -312,7 +330,7 @@ gh pr edit PR_NUMBER --add-label semver:patch
 
 Replace `semver:patch` with `semver:minor` or `semver:major` as appropriate. Replace `PR_NUMBER` with the actual PR number.
 
-**Step 4:** Generate a `## Changelog` section from the changes and update the PR body to include it. The changelog should describe what changed in user-facing terms (not file paths). If the PR body already has a `## Changelog` section, update it.
+**Step 4:** Generate a `## Changelog` section from the changes and update the PR body to include it. The changelog should describe what changed in user-facing terms (not file paths). If the PR body already has a `## Changelog` section, update it. Include app changes alongside plugin changes — group by component if multiple components changed (e.g., "### Plugin", "### Web Platform").
 
 **Step 5:** Validate consistency -- if new agents, skills, or commands were detected in Step 1 but the label is `semver:patch`, warn the user that the label may be incorrect. New components typically warrant `semver:minor`.
 
