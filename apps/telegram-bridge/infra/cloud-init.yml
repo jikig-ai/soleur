@@ -4,7 +4,24 @@ packages:
   - curl
   - jq
 
+write_files:
+  - path: /etc/ssh/sshd_config.d/01-hardening.conf
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      MaxAuthTries 3
+      LoginGraceTime 30
+      PermitRootLogin prohibit-password
+      AllowUsers root
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+    owner: root:root
+    permissions: '0644'
+
 runcmd:
+  # Apply SSH hardening immediately (drop-in written by write_files above)
+  - systemctl restart sshd
+
   # Install Docker
   - curl -fsSL https://get.docker.com | sh
 
@@ -39,8 +56,3 @@ runcmd:
       -v /mnt/data:/home/soleur/data \
       -p 127.0.0.1:8080:8080 \
       ${image_name}
-
-  # SSH hardening
-  - sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
-  - sed -i 's/PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
-  - systemctl restart sshd

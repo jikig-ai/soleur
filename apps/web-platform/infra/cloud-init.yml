@@ -13,6 +13,8 @@ write_files:
       LoginGraceTime 30
       PermitRootLogin prohibit-password
       AllowUsers root
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
     owner: root:root
     permissions: '0644'
 
