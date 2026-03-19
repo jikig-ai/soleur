@@ -5,6 +5,23 @@ date: 2026-03-19
 semver: patch
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-19
+**Sections enhanced:** 0 (plan documents already-resolved work)
+**Research sources:** PR #783 diff, origin/main cloud-init verification, existing learnings
+
+### Key Findings
+
+1. **No implementation needed** -- all work described in #777 was completed by PR #783 (merged 2026-03-19T17:22:36Z)
+2. **Root cause of open issue** -- PR #783 body used `Closes #778` but omitted `Closes #777`, leaving the issue open despite full resolution
+3. **Verification confirmed** -- both `apps/telegram-bridge/infra/cloud-init.yml` and `apps/web-platform/infra/cloud-init.yml` on `origin/main` contain identical 8-directive `01-hardening.conf` drop-ins
+4. **Existing learning applies** -- `knowledge-base/learnings/2026-03-19-openssh-first-match-wins-drop-in-precedence.md` documents the first-match-wins semantics that informed the `01-` prefix choice
+
+### Deepen-Plan Assessment
+
+Research agents, review agents, and skill sub-agents were evaluated and skipped. This plan documents housekeeping for an already-resolved issue -- there are no implementation sections, code examples, architecture decisions, or technical approaches to deepen.
+
 # security: harden sshd config for telegram-bridge server
 
 ## Status: Already Resolved
