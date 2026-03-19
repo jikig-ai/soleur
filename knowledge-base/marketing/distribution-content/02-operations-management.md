@@ -1,9 +1,9 @@
 ---
 title: "Building an Operations Department for a One-Person Company"
 type: case-study
-publish_date: 2026-03-17
-channels: discord, x
-status: published
+publish_date: 2026-03-19
+channels: bluesky, linkedin-company
+status: scheduled
 ---
 
 ## Discord
@@ -64,3 +64,21 @@ Not scheduled for Reddit distribution. Use Discord + X only.
 ## Hacker News
 
 Not scheduled for Hacker News distribution. Use Discord + X only.
+
+---
+
+## Bluesky
+
+Solo founders lose ops state after two weeks away. We built an AI ops department: expense tracking, DNS inventory, hosting eval. The analytics choice simplified three legal docs. https://soleur.ai/blog/case-study-operations-management/?utm_source=bluesky&utm_medium=social&utm_campaign=ops
+
+---
+
+## LinkedIn Company Page
+
+Soleur now includes a complete operations department powered by AI agents — a COO domain leader, ops advisor, ops researcher, and ops provisioner.
+
+What the system produces: structured expense tracking with provider details and renewal dates, domain and DNS inventory with record-level documentation, hosting evaluation (Hetzner CX22 at EUR 5.83/mo — researched and compared, not just picked), and analytics selection (Plausible — cookie-free, which simplified three legal documents by eliminating tracking cookie disclosures).
+
+The compound effect: the analytics decision cascaded into the Cookie Policy, GDPR Policy, and Privacy Policy. The expense tracker informed the business model evaluation. The COO auto-joins brainstorm sessions when operational decisions arise. No context reconstruction required when returning to ops after weeks of engineering focus.
+
+Full case study: https://soleur.ai/blog/case-study-operations-management/?utm_source=linkedin-company&utm_medium=social&utm_campaign=case-study-operations-management
