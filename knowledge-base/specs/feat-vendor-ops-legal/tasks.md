@@ -40,7 +40,7 @@
 
 ## Phase 4: Data Protection Disclosure Updates (2 files -- verify root copy exists)
 
-- [ ] 4.1 Verify `docs/legal/data-processing-agreement.md` exists and check sync status with Eleventy copy
+- [ ] 4.1 Verify `docs/legal/data-protection-disclosure.md` exists and check sync status with Eleventy copy
 - [ ] 4.2 Restructure Section 2.1: scope to plugin, add 2.1b for web platform
 - [ ] 4.3 Add processing activities (f)(g)(h) to Section 2.3
 - [ ] 4.4 Rename Section 4.2 to "Service Processors" and add Supabase, Stripe, Hetzner rows

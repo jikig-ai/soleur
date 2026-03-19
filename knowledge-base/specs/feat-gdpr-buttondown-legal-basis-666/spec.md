@@ -48,4 +48,4 @@ Privacy Policy Section 4.6, GDPR Policy Section 3.6, and DPA Section 2.3(e) all 
 | `plugins/soleur/docs/pages/legal/privacy-policy.md` | 4.6, 6, 8.1 |
 | `docs/legal/gdpr-policy.md` | 3.6, 4.2 table, 10 register |
 | `plugins/soleur/docs/pages/legal/gdpr-policy.md` | 3.6, 4.2 table, 10 register |
-| `docs/legal/data-processing-agreement.md` | 2.3(e) |
+| `docs/legal/data-protection-disclosure.md` | 2.3(e) |

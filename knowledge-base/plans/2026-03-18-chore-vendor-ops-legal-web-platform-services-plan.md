@@ -21,7 +21,7 @@ deepened: 2026-03-18
 2. **Hetzner DPA requires explicit action**: Hetzner ToS Section 6.2 confirms DPA is NOT automatically included -- customer must affirmatively conclude a DPA via their account dashboard. This is an immediate action item.
 3. **Stripe PCI scope confirmed as SAQ-A**: Code review of `apps/web-platform/app/api/checkout/route.ts` confirms Stripe Checkout (server-side session, client-side redirect). Card data never touches Jikigai servers -- SAQ-A eligible.
 4. **Resend DPA is DPF-certified**: Unlike Buttondown (SCCs only), Resend is certified under EU-US DPF. All 21 sub-processors are US-based. Relevant when Resend is eventually integrated.
-5. **DPD has a second copy**: The DPD exists at `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` (Eleventy) but the root source copy at `docs/legal/data-processing-agreement.md` may be out of sync (per learning `dpd-processor-table-dual-file-sync`). Verify and update both.
+5. **DPD has a second copy**: The DPD exists at `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` (Eleventy) but the root source copy at `docs/legal/data-protection-disclosure.md` may be out of sync (per learning `dpd-processor-table-dual-file-sync`). Verify and update both.
 
 ### New Considerations Discovered
 
@@ -186,7 +186,7 @@ grep -rn "local.only\|locally.installed\|local machine" docs/legal/ plugins/sole
 Update the DPD in BOTH locations (per learning `dpd-processor-table-dual-file-sync`):
 
 - `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` (Eleventy template)
-- `docs/legal/data-processing-agreement.md` (root source -- **verify this file exists and check sync status**)
+- `docs/legal/data-protection-disclosure.md` (root source -- **verify this file exists and check sync status**)
 
 **4.1 Restructure Section 2 ("Data Processing Relationship")**
 
@@ -229,7 +229,7 @@ Section 8 committed to specific actions. Mark each as fulfilled or in-progress:
 ### Research Insights: DPD
 
 **Institutional Learnings Applied:**
-- `dpd-processor-table-dual-file-sync`: PR #686 restructured the Eleventy DPD but never propagated to the root copy. **Check `docs/legal/data-processing-agreement.md` sync status BEFORE editing. If out of sync, align first.**
+- `dpd-processor-table-dual-file-sync`: PR #686 restructured the Eleventy DPD but never propagated to the root copy. **Check `docs/legal/data-protection-disclosure.md` sync status BEFORE editing. If out of sync, align first.**
 - `dpd-sub-processor-contradiction-fix`: When adding new processors to Section 4.2, audit Section 4.1 ("No Sub-processors") to ensure it's scoped to the plugin. The current Section 4.1 says "there are no Plugin-level Sub-processors" which is correctly scoped.
 
 **GDPR Terminology Precision:**
@@ -404,7 +404,7 @@ Update `.github/PULL_REQUEST_TEMPLATE.md` to add a conditional vendor section:
 - Privacy policy (source): `docs/legal/privacy-policy.md`
 - Privacy policy (docs site): `plugins/soleur/docs/pages/legal/privacy-policy.md`
 - Data protection disclosure (docs site): `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`
-- Data protection disclosure (source): `docs/legal/data-processing-agreement.md` (verify exists and sync status)
+- Data protection disclosure (source): `docs/legal/data-protection-disclosure.md` (verify exists and sync status)
 - GDPR policy (source): `docs/legal/gdpr-policy.md`
 - GDPR policy (docs site): `plugins/soleur/docs/pages/legal/gdpr-policy.md`
 - Constitution vendor rule: `knowledge-base/project/constitution.md:109`

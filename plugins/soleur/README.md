@@ -215,7 +215,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `content-writer` | Generate full article drafts with brand voice, Eleventy frontmatter, and JSON-LD |
 | `growth` | Content strategy: keyword research, content auditing, gap analysis, fix, AI agent consumability |
 | `legal-audit` | Audit legal documents for compliance gaps, outdated clauses, and cross-document consistency |
-| `legal-generate` | Generate draft legal documents from company context (7 document types, 3 jurisdictions) |
+| `legal-generate` | Generate draft legal documents from company context (8 document types, 3 jurisdictions) |
 | `release-announce` | Announce releases to Discord and GitHub Releases |
 | `release-docs` | Build and update documentation site with current components |
 | `seo-aeo` | Audit, fix, and validate SEO/AEO for Eleventy docs sites |

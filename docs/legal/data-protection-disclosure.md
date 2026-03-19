@@ -1,6 +1,6 @@
 ---
 title: "Data Protection Disclosure"
-type: data-processing-agreement
+type: data-protection-disclosure
 jurisdiction: FR, EU
 generated-date: 2026-02-20
 ---

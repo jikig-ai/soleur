@@ -2,8 +2,8 @@
 
 ## Phase 1: DPD Section 6.3 Update
 
-- [ ] 1.1 Read `docs/legal/data-processing-agreement.md` Section 6.3 (line ~168-170)
-- [ ] 1.2 Append Plausible Analytics EU-only hosting sentence after the GitHub Pages paragraph in `docs/legal/data-processing-agreement.md`
+- [ ] 1.1 Read `docs/legal/data-protection-disclosure.md` Section 6.3 (line ~168-170)
+- [ ] 1.2 Append Plausible Analytics EU-only hosting sentence after the GitHub Pages paragraph in `docs/legal/data-protection-disclosure.md`
 - [ ] 1.3 Update DPD "Last Updated" date to current date
 - [ ] 1.4 Read `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` Section 6.3 (line ~177-179)
 - [ ] 1.5 Apply identical change to the Eleventy source copy

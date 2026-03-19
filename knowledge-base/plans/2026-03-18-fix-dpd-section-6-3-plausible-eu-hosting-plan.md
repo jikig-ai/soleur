@@ -54,7 +54,7 @@ Plausible Analytics is a documented Docs Site processor (Section 4.2) but is not
 
 | Document | Plausible mentioned? | International transfers section? | Change needed? |
 |----------|---------------------|--------------------------------|----------------|
-| DPD (`data-processing-agreement.md`) | Yes (Section 2.3(a), 4.2) | Yes (Section 6.3) -- missing Plausible | **Yes** |
+| DPD (`data-protection-disclosure.md`) | Yes (Section 2.3(a), 4.2) | Yes (Section 6.3) -- missing Plausible | **Yes** |
 | Privacy Policy (`privacy-policy.md`) | Yes (Section 4.3, 6) | Yes (Section 10) -- missing Plausible | **Yes** |
 | GDPR Policy (`gdpr-policy.md`) | Yes (Section 3.2, 4.3, 8 register) | Yes (Section 6) -- correctly omits Plausible (lists transfers only) | No |
 | Cookie Policy (`cookie-policy.md`) | Yes (Section 3.2, 4.2) | No transfers section | No |
@@ -67,7 +67,7 @@ Add a sentence to Section 6.3 in both DPD file copies confirming Plausible proce
 
 | File | Section | Change |
 |------|---------|--------|
-| `docs/legal/data-processing-agreement.md` | 6.3 Docs Site | Add Plausible EU-only hosting sentence |
+| `docs/legal/data-protection-disclosure.md` | 6.3 Docs Site | Add Plausible EU-only hosting sentence |
 | `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` | 6.3 Docs Site | Add Plausible EU-only hosting sentence (identical content) |
 | `docs/legal/privacy-policy.md` | 10. International Data Transfers | Add Plausible EU-only paragraph |
 | `plugins/soleur/docs/pages/legal/privacy-policy.md` | 10. International Data Transfers | Add Plausible EU-only paragraph (identical content) |
@@ -108,7 +108,7 @@ The Cookie Policy describes cookie usage and tracking technologies. It has no "I
 
 ## Acceptance Criteria
 
-- [x] DPD Section 6.3 mentions Plausible Analytics EU-only hosting in `docs/legal/data-processing-agreement.md`
+- [x] DPD Section 6.3 mentions Plausible Analytics EU-only hosting in `docs/legal/data-protection-disclosure.md`
 - [x] DPD Section 6.3 mentions Plausible Analytics EU-only hosting in `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`
 - [x] Both DPD file copies have identical Section 6.3 content (verify with `diff`)
 - [x] Privacy Policy Section 10 mentions Plausible EU-only hosting in `docs/legal/privacy-policy.md`

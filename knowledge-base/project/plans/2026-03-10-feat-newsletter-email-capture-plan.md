@@ -132,7 +132,7 @@ Update all legal docs BEFORE the form goes live. Both source (`docs/legal/`) and
 
 - [x] **Privacy Policy** — add new Section 4.6 "Newsletter Subscription Data" (not in 4.3 which is analytics-specific). Add Buttondown to Section 5 (Third-Party Services), consent basis to Section 6, retention to Section 7. Mirror to `docs/legal/privacy-policy.md`.
 - [x] **GDPR Policy** — add consent lawful basis (Art. 6(1)(a)) as Section 3.6. Remove email from "NOT collected" list in Section 4.1. Add Buttondown row to Section 4.2 table. Add processing activity #6 to Section 10 (Article 30 register). Fix pre-existing Section 3.4/3.5 numbering while editing. Mirror to `docs/legal/gdpr-policy.md`.
-- [x] **Data Protection Disclosure** — add newsletter to Section 2.3 limited processing list. Add Buttondown row to Section 4.2 table. Mirror to `docs/legal/data-processing-agreement.md` (note: filename differs from published version).
+- [x] **Data Protection Disclosure** — add newsletter to Section 2.3 limited processing list. Add Buttondown row to Section 4.2 table. Mirror to `docs/legal/data-protection-disclosure.md` (note: filename differs from published version).
 - [x] **Cookie Policy** — verify Buttondown form POST does not set cookies. If it does, update Cookie Policy (both locations).
 - [x] **Grep verification** — search all legal docs for "does not collect", "no personal data", "email addresses" in negation context. Fix any remaining contradictions.
 

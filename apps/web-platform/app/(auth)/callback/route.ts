@@ -32,6 +32,7 @@ export async function GET(request: Request) {
           .from("api_keys")
           .select("id")
           .eq("user_id", user.id)
+          .eq("provider", "anthropic")
           .eq("is_valid", true)
           .limit(1);
 
