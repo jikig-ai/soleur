@@ -22,11 +22,23 @@ date: 2026-03-19
 
 ---
 
+## Execution Notes (2026-03-19)
+
+**What was actually applied vs. planned:**
+
+- **Applied:** `integration_id: 15368` was added to the `cla-check` required status check. This succeeded and is live on the CLA Required ruleset (ID 13304872).
+- **Not applied:** Adding `github-actions` (ID 15368) as a bypass actor was **not feasible**. The GitHub API returned a 422 error because `github-actions` is a built-in platform app, not an installable integration. It cannot be added as a bypass actor via the Rulesets API.
+- **Retained:** Synthetic `cla-check` statuses in bot workflows remain in place as originally planned for Phase 1.
+
+Sections below that reference the bypass actor addition are annotated with strikethrough to preserve planning context. The tasks file (`knowledge-base/plans/2026-03-19-chore-cla-ruleset-integration-id-tasks.md`) reflects the actual outcome.
+
+---
+
 # Add integration_id to CLA Required Ruleset Status Check
 
 ## Overview
 
-Harden the CLA Required repository ruleset (ID 13304872) by adding `integration_id` to the `cla-check` required status check and adding `github-actions[bot]` to the bypass actors list. This eliminates the current soft-bypass vulnerability where any actor with `statuses: write` can satisfy the CLA check by posting a synthetic success status.
+Harden the CLA Required repository ruleset (ID 13304872) by adding `integration_id` to the `cla-check` required status check ~~and adding `github-actions[bot]` to the bypass actors list~~ *(bypass actor addition was not feasible -- see Execution Notes)*. This eliminates the current soft-bypass vulnerability where any actor with `statuses: write` can satisfy the CLA check by posting a synthetic success status.
 
 ## Problem Statement / Motivation
 
@@ -105,9 +117,9 @@ The original plan proposed removing synthetic cla-check statuses from bot workfl
 
 The revised approach uses a phased strategy:
 
-**Phase 1 (This PR): Ruleset hardening + bypass actor**
+**Phase 1 (This PR): Ruleset hardening ~~+ bypass actor~~**
 - Add `integration_id: 15368` to `cla-check` required status check
-- Add `github-actions` (ID 15368) to bypass actors with `bypass_mode: "always"`
+- ~~Add `github-actions` (ID 15368) to bypass actors with `bypass_mode: "always"`~~ *(NOT FEASIBLE -- 422 error, see Execution Notes)*
 - Keep synthetic `cla-check` statuses in bot workflows (safety net)
 
 **Phase 2 (Follow-up PR): Remove synthetic statuses after verification**
@@ -126,9 +138,11 @@ Set `integration_id: 15368` (the `github-actions` app) on the `cla-check` requir
 - The app (ID 15368) must be installed in the repository with `statuses:write` permission AND must have recently submitted a check run for the specified context. The CLA workflow already satisfies this.
 - Per [Terraform provider issue #2317](https://github.com/integrations/terraform-provider-github/issues/2317), the `integration_id` value can behave inconsistently in some edge cases. This is a Terraform-specific issue and does not affect the REST API.
 
-### Part 2: Add `github-actions[bot]` to bypass actors
+### ~~Part 2: Add `github-actions[bot]` to bypass actors~~ *(NOT IMPLEMENTED -- see Execution Notes)*
 
-Add the `github-actions` app (ID 15368) as a bypass actor on the CLA Required ruleset with `bypass_mode: "always"`.
+> **Note:** This entire section was not implemented. The GitHub API returned a 422 error when attempting to add `github-actions` (ID 15368) as a bypass actor because it is a built-in platform app, not an installable integration. The research below is preserved for context but does not reflect the actual applied state.
+
+~~Add the `github-actions` app (ID 15368) as a bypass actor on the CLA Required ruleset with `bypass_mode: "always"`.~~
 
 ### Research Insights: Bypass Behavior
 
@@ -190,11 +204,12 @@ The `PUT /repos/{owner}/{repo}/rulesets/{id}` endpoint **replaces the entire rul
     { "actor_id": null, "actor_type": "OrganizationAdmin", "bypass_mode": "always" },
     { "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" },
     { "actor_id": 262318, "actor_type": "Integration", "bypass_mode": "always" },
-    { "actor_id": 1236702, "actor_type": "Integration", "bypass_mode": "always" },
-    { "actor_id": 15368, "actor_type": "Integration", "bypass_mode": "always" }
+    { "actor_id": 1236702, "actor_type": "Integration", "bypass_mode": "always" }
   ]
 }
 ```
+
+> **Actual applied payload:** The JSON above reflects what was actually applied. The originally planned bypass actor entry `{ "actor_id": 15368, "actor_type": "Integration", "bypass_mode": "always" }` was **not included** -- the GitHub API returned 422 because `github-actions` is a built-in platform app, not an installable integration.
 
 ### Research Insight: API Execution
 
@@ -309,11 +324,11 @@ Update the CLA Required ruleset (ID 13304872) via the GitHub Rulesets API:
 
 ## Test Scenarios
 
-- Given the CLA Required ruleset, when inspected via API (`gh api repos/jikig-ai/soleur/rulesets/13304872`), then `integration_id: 15368` is present on `cla-check` and `github-actions` (15368) is in `bypass_actors`
+- Given the CLA Required ruleset, when inspected via API (`gh api repos/jikig-ai/soleur/rulesets/13304872`), then `integration_id: 15368` is present on `cla-check` ~~and `github-actions` (15368) is in `bypass_actors`~~ *(N/A -- bypass actor not added, see Execution Notes)*
 - Given a human PR from an unsigned contributor, when the CLA check runs, then the PR is blocked until the CLA is signed
 - Given a human PR from a signed contributor, when the CLA check runs, then it passes immediately
 - Given a bot PR from `scheduled-weekly-analytics.yml` (with synthetic status), when the PR is created, then it auto-merges normally (no regression)
-- Given a bot PR from a workflow WITHOUT synthetic status, when the PR is created, then the bypass actor allows merge (Phase 2 test)
+- ~~Given a bot PR from a workflow WITHOUT synthetic status, when the PR is created, then the bypass actor allows merge (Phase 2 test)~~ *(N/A -- bypass actor not added, see Execution Notes)*
 - Given an external actor with `statuses: write` but no GitHub Actions access, when they try to post a synthetic `cla-check` status, then the ruleset rejects it because `integration_id` does not match
 
 ## Dependencies & Risks
@@ -323,7 +338,7 @@ Update the CLA Required ruleset (ID 13304872) via the GitHub Rulesets API:
 | Auto-merge does not respect bypass actors (known GitHub limitation) | Medium | Low (synthetic statuses retained as safety net) | Phase 1 keeps synthetic statuses. Phase 3 only removes them after verification. |
 | `integration_id: 15368` blocks legitimate CLA check | Very Low | High | The CLA workflow runs as github-actions (15368), so integration_id: 15368 matches correctly. Verified via API inspection of PR #769. |
 | PUT payload missing a field drops existing config | Low | High | Complete payload documented in Technical Considerations with all existing fields preserved. Verify with GET after PUT. |
-| `bypass_mode: "always"` is too permissive | Very Low | Low | github-actions[bot] direct pushes are separately blocked by Force Push Prevention ruleset (ID 13044280). `"always"` only applies to the CLA Required ruleset. |
+| ~~`bypass_mode: "always"` is too permissive~~ *(N/A -- bypass actor not added)* | ~~Very Low~~ | ~~Low~~ | ~~github-actions[bot] direct pushes are separately blocked by Force Push Prevention ruleset (ID 13044280). `"always"` only applies to the CLA Required ruleset.~~ |
 | Unknown bypass actor 262318 may be stale | N/A | None | Out of scope for this issue. File a separate cleanup issue if needed. |
 | security_reminder_hook blocks workflow edits | Certain | None (advisory only) | Expect the warning, re-attempt edit, verify by re-reading file. Only relevant in Phase 3. |
 
