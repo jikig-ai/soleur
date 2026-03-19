@@ -2,8 +2,8 @@
 title: "Tracking 17 Competitors in One Session -- With Battlecards"
 type: case-study
 publish_date: 2026-03-19
-channels: discord, x
-status: published
+channels: bluesky, linkedin-company
+status: scheduled
 ---
 
 ## Discord
@@ -114,3 +114,23 @@ What's your approach to competitive intelligence as a founder? Especially intere
 ## Hacker News
 
 Not scheduled for Hacker News distribution. Use Discord + X + IndieHackers + Reddit.
+
+---
+
+## Bluesky
+
+17 competitors tracked in one session. 2,843-word report, overlap matrices, 37 cited sources, 4 battlecards. Changed our validation from PASS to CONDITIONAL PASS. https://soleur.ai/blog/case-study-competitive-intelligence/?utm_source=bluesky&utm_medium=social&utm_campaign=ci
+
+---
+
+## LinkedIn Company Page
+
+Soleur's competitive intelligence function analyzed 17 competitors in a single session — producing a 2,843-word report with structured overlap matrices, 37 cited research sources, and four cascade outputs: competitive pricing matrix, sales battlecards, content gap analysis, and SEO refresh queue.
+
+The system identified 7 platform-tier threats (Anthropic, Cursor, GitHub Copilot, OpenAI, Notion AI) and 10 full-stack competitors, plus 3 new market entrants. A competitive intelligence consultant prices this scope at $8,000-22,000 and 4-8 weeks.
+
+The most significant outcome: the analysis directly changed the business validation verdict from PASS to CONDITIONAL PASS based on Tier 0 threat materialization. The system surfaced a strategic risk the founder had rationalized away.
+
+The analysis compounds — the next quarterly scan starts from the existing framework, not from scratch.
+
+Full case study: https://soleur.ai/blog/case-study-competitive-intelligence/?utm_source=linkedin-company&utm_medium=social&utm_campaign=case-study-competitive-intelligence

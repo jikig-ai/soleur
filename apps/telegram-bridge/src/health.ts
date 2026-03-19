@@ -26,6 +26,14 @@ export function createHealthServer(port: number, state: HealthState) {
           { status: healthy ? 200 : 503 },
         );
       }
+      if (url.pathname === "/readyz" && req.method === "GET") {
+        const ready = state.cliProcess !== null && state.cliState === "ready";
+        return Response.json(
+          { ready, cli: state.cliState },
+          { status: ready ? 200 : 503 },
+        );
+      }
+
       return new Response("Not found", { status: 404 });
     },
   });
