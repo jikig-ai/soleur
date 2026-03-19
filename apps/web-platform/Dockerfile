@@ -1,7 +1,7 @@
 FROM node:22-slim AS base
 
 # Install Claude Code CLI (needed by Agent SDK)
-RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @anthropic-ai/claude-code@2.1.79
 
 # Install git (needed for workspace provisioning)
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*

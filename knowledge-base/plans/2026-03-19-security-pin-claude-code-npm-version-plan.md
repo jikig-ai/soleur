@@ -82,10 +82,10 @@ Issue #802 only mentions telegram-bridge. However, `apps/web-platform/Dockerfile
 
 ## Acceptance Criteria
 
-- [ ] `apps/telegram-bridge/Dockerfile` pins `@anthropic-ai/claude-code` to version `2.1.79`
-- [ ] `apps/web-platform/Dockerfile` pins `@anthropic-ai/claude-code` to version `2.1.79`
-- [ ] Docker build succeeds for both images with pinned version
-- [ ] All existing tests pass
+- [x] `apps/telegram-bridge/Dockerfile` pins `@anthropic-ai/claude-code` to version `2.1.79`
+- [x] `apps/web-platform/Dockerfile` pins `@anthropic-ai/claude-code` to version `2.1.79`
+- [x] Docker build succeeds for both images with pinned version
+- [x] All existing tests pass
 - [ ] PR body includes `Closes #802`
 
 ## Test Scenarios
