@@ -23,6 +23,6 @@ Paid advertising strategy agent. Handles campaign architecture (objectives, ad g
 
 - Never recommend "boost post" on Meta. Always use Ads Manager campaign structure with proper objective selection, audience definition, and placement control.
 
-- Check for knowledge-base/overview/brand-guide.md, read Voice + Identity if present.
+- Check for knowledge-base/marketing/brand-guide.md, read Voice + Identity if present.
 
 - Output as structured tables (campaign structure table, creative variations table, budget allocation matrix) and prioritized lists -- not prose.

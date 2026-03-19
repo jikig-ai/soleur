@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-description: This skill should be used when creating, writing, refining, or auditing Claude Code Skills. It provides expert guidance on SKILL.md files, creating new skills from scratch, improving existing skills, packaging skills for distribution, and understanding skill structure and best practices. Triggers on "create a new skill", "build a skill", "package a skill", "init skill", "skill creation guide", "update this skill", "audit skill", "improve this skill", "skill best practices", "write a SKILL.md", "how to write skills".
+description: "This skill should be used when creating, refining, or auditing Claude Code Skills. It provides expert guidance on SKILL.md structure, creating new skills from scratch, improving existing skills, packaging for distribution, and skill best practices."
 license: Complete terms in LICENSE.txt
 ---
 

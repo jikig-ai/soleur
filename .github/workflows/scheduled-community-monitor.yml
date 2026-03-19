@@ -1,7 +1,9 @@
 # Daily community monitoring using the community-manager agent.
-# Fetches Discord activity and X/Twitter metrics, generates a digest
-# committed to knowledge-base/community/, and creates a GitHub Issue
-# with the daily report. No autonomous posting -- human approval preserved.
+# Fetches Discord activity, X/Twitter metrics, LinkedIn status, GitHub
+# activity, and Hacker News mentions. Generates a digest committed to
+# knowledge-base/support/community/ and
+# creates a GitHub Issue with the daily report. No autonomous posting --
+# human approval preserved.
 # Implements #145: Run Community Agent continuously.
 # Runs daily at 08:00 UTC and on manual dispatch.
 # To test manually: gh workflow run scheduled-community-monitor.yml
@@ -52,6 +54,8 @@ jobs:
           X_API_SECRET: ${{ secrets.X_API_SECRET }}
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          LINKEDIN_ACCESS_TOKEN: ${{ secrets.LINKEDIN_ACCESS_TOKEN }}
+          LINKEDIN_PERSON_URN: ${{ secrets.LINKEDIN_PERSON_URN }}
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
@@ -67,34 +71,39 @@ jobs:
 
             ## Instructions
 
-            1. **Detect platforms** by checking environment variables:
-               - Discord: enabled if both DISCORD_BOT_TOKEN and DISCORD_GUILD_ID are set
-               - X/Twitter: enabled if ALL of X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN,
-                 X_ACCESS_TOKEN_SECRET are set
-               - If neither Discord nor X is configured, create a GitHub Issue titled
-                 "[Scheduled] Community Monitor - FAILED" with label
-                 "scheduled-community-monitor" explaining the misconfiguration, then stop.
+            1. **Detect platforms** using the community router:
+               Run: bash plugins/soleur/skills/community/scripts/community-router.sh platforms
+               This shows which platforms are enabled/disabled. If only GitHub and HN
+               are enabled (no Discord or X), create a GitHub Issue titled
+               "[Scheduled] Community Monitor - FAILED" with label
+               "scheduled-community-monitor" explaining the misconfiguration, then stop.
 
-            2. **Collect data** from enabled platforms using existing scripts:
-               - Discord: run `plugins/soleur/skills/community/scripts/discord-community.sh`
-                 with subcommands: guild-info, members, channels (to list channel IDs),
-                 then messages <channel_id> 100 for each channel.
-               - X/Twitter: run `plugins/soleur/skills/community/scripts/x-community.sh fetch-metrics`
-                 ONLY. Do NOT call fetch-mentions or fetch-timeline (they return 403 on
+            2. **Collect data** from enabled platforms using the router. Set:
+               ROUTER="plugins/soleur/skills/community/scripts/community-router.sh"
+               Then run:
+               - Discord (if enabled): $ROUTER discord guild-info, $ROUTER discord members,
+                 $ROUTER discord channels (to list channel IDs),
+                 then $ROUTER discord messages <channel_id> 100 for each channel.
+               - X/Twitter (if enabled): $ROUTER x fetch-metrics ONLY.
+                 Do NOT call fetch-mentions or fetch-timeline (they return 403 on
                  Free tier and waste turns). TODO: re-enable when paid API tier is activated.
-               - GitHub: run `plugins/soleur/skills/community/scripts/github-community.sh`
-                 with subcommands: activity 1, contributors 1, discussions 1.
-                 Use a 1-day lookback window (not the default 7-day).
+               - LinkedIn (if enabled): Do NOT post or fetch data -- log as
+                 "enabled (posting only)" and skip.
+               - GitHub: $ROUTER github activity 1, $ROUTER github contributors 1,
+                 $ROUTER github discussions 1. Use a 1-day lookback window.
+               - Hacker News: $ROUTER hn mentions --query soleur --limit 20,
+                 $ROUTER hn trending --limit 30. No secrets needed (public API).
                - If a script fails, log the error and continue with other platforms.
 
-            3. **Read brand guide** at knowledge-base/overview/brand-guide.md (section ## Voice)
+            3. **Read brand guide** at knowledge-base/marketing/brand-guide.md (section ## Voice)
                before writing any content. Match the brand voice in the digest.
 
-            4. **Generate digest** and write to knowledge-base/community/YYYY-MM-DD-digest.md
+            4. **Generate digest** and write to knowledge-base/support/community/YYYY-MM-DD-digest.md
                (use today's date). Follow the digest file contract from the community-manager
                agent: frontmatter with period_start/period_end/generated_at, then sections
                ## Period, ## Activity Summary, ## Top Contributors, and optional sections
-               ## Trending Topics, ## GitHub Activity, ## X/Twitter Metrics.
+               ## Trending Topics, ## GitHub Activity, ## X/Twitter Metrics,
+               ## LinkedIn Activity, ## Hacker News Activity.
                Summarize and aggregate -- do not store raw message transcripts. Brief
                contextual quotes (under 100 chars) with attribution are acceptable.
                If the file already exists for today, overwrite it.
@@ -102,7 +111,7 @@ jobs:
             5. **Commit and push** the digest:
                ```
                mkdir -p knowledge-base/community
-               git add knowledge-base/community/
+               git add knowledge-base/support/community/
                git diff --cached --quiet && echo "No changes to commit" && exit 0
                git commit -m "docs: daily community digest"
                git push origin main || { git pull --rebase origin main && git push origin main; }

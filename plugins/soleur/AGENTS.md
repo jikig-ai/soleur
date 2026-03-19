@@ -132,6 +132,12 @@ When adding or modifying skills, verify compliance with skill-creator spec:
 - [ ] `name:` present and matches directory name (lowercase-with-hyphens)
 - [ ] `description:` present and uses **third person** ("This skill should be used when..." NOT "Use this skill when...")
 
+### Token Budget Check (Required when adding skills)
+
+- [ ] Run: `bun test plugins/soleur/test/components.test.ts` -- cumulative description word count must stay under 1,800 words (see #618)
+- [ ] Descriptions are for **routing**, not instruction. Remove trigger phrases (`Triggers on "..."`) and verbose restatements. Target ~30 words per skill.
+- [ ] No single description exceeds 1,024 characters
+
 ### Reference Links (Required if references/ exists)
 
 - [ ] All files in `references/` are linked as `[filename.md](./references/filename.md)`
@@ -170,20 +176,20 @@ Domain leaders are agents that orchestrate a business domain's specialist team. 
 
 | Leader | Domain | Agents Orchestrated | Entry Point |
 |--------|--------|-------------------|-------------|
-| `cto` | Engineering | Research, review, design agents | Auto-consulted via brainstorm domain detection |
-| `clo` | Legal | legal-document-generator, legal-compliance-auditor | Auto-consulted via brainstorm domain detection |
-| `cmo` | Marketing | 11 specialists | Auto-consulted via brainstorm domain detection |
-| `coo` | Operations | ops-advisor, ops-research, ops-provisioner | Auto-consulted via brainstorm domain detection |
-| `cpo` | Product | spec-flow-analyzer, ux-design-lead, business-validator, competitive-intelligence | Auto-consulted via brainstorm domain detection |
-| `cfo` | Finance | budget-analyst, revenue-analyst, financial-reporter | Auto-consulted via brainstorm domain detection |
-| `cro` | Sales | outbound-strategist, deal-architect, pipeline-analyst | Auto-consulted via brainstorm domain detection |
-| `cco` | Support | ticket-triage, community-manager | Auto-consulted via brainstorm domain detection |
+| `cto` | Engineering | Research, review, design agents | Auto-consulted via passive domain routing and brainstorm domain detection |
+| `clo` | Legal | legal-document-generator, legal-compliance-auditor | Auto-consulted via passive domain routing and brainstorm domain detection |
+| `cmo` | Marketing | 11 specialists | Auto-consulted via passive domain routing and brainstorm domain detection |
+| `coo` | Operations | ops-advisor, ops-research, ops-provisioner | Auto-consulted via passive domain routing and brainstorm domain detection |
+| `cpo` | Product | spec-flow-analyzer, ux-design-lead, business-validator, competitive-intelligence | Auto-consulted via passive domain routing and brainstorm domain detection |
+| `cfo` | Finance | budget-analyst, revenue-analyst, financial-reporter | Auto-consulted via passive domain routing and brainstorm domain detection |
+| `cro` | Sales | outbound-strategist, deal-architect, pipeline-analyst | Auto-consulted via passive domain routing and brainstorm domain detection |
+| `cco` | Support | ticket-triage, community-manager | Auto-consulted via passive domain routing and brainstorm domain detection |
 
 ### Adding a New Domain Leader
 
 1. Create `agents/<domain>/` with leader + specialist `.md` files
 2. Follow the 3-phase contract (Assess, Recommend/Delegate, Sharp Edges) -- use `agents/legal/clo.md` as template
-3. Add a row to the Domain Config table in `skills/brainstorm/SKILL.md` Phase 0.5 with: domain name, assessment question, leader name, routing prompt, options, and task prompt
+3. Add a row to the Domain Config table in `skills/brainstorm/references/brainstorm-domain-config.md` with: domain name, assessment question, leader name, routing prompt, options, and task prompt. New domains are automatically routable via both passive domain routing (AGENTS.md) and brainstorm Phase 0.5
 4. Add disambiguation sentences to agents with overlapping scope in adjacent domains (both directions)
 5. Verify token budget: `shopt -s globstar && grep -h 'description:' agents/**/*.md | wc -w` (under 2,500)
 6. Update docs data files: `agents.js` (DOMAIN_META, DOMAIN_CSS_VARS, domainOrder), `style.css` (CSS variable). Landing page and legal docs update automatically from data.

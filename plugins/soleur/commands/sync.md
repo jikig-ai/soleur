@@ -1,7 +1,7 @@
 ---
 name: sync
 description: Analyze codebase and populate knowledge-base with conventions, patterns, and technical debt
-argument-hint: "[area: conventions|architecture|testing|debt|overview|all]"
+argument-hint: "[area: conventions|architecture|testing|debt|project|all]"
 ---
 
 # Sync Codebase to Knowledge Base
@@ -17,7 +17,7 @@ Analyze an existing codebase and populate knowledge-base files with coding conve
 
 <sync_area> #$ARGUMENTS </sync_area>
 
-**Valid areas:** `conventions`, `architecture`, `testing`, `debt`, `overview`, `all` (default)
+**Valid areas:** `conventions`, `architecture`, `testing`, `debt`, `project`, `all` (default)
 
 ## Execution Flow
 
@@ -38,7 +38,7 @@ Read `CLAUDE.md` if it exists - apply project conventions during sync analysis.
 
 ```bash
 if [[ ! -d "knowledge-base" ]]; then
-  mkdir -p knowledge-base/{learnings,brainstorms,specs,plans,overview/components}
+  mkdir -p knowledge-base/project/{learnings,brainstorms,specs,plans,components}
   echo "Created knowledge-base/ directory structure"
 fi
 ```
@@ -111,9 +111,9 @@ Look for technical debt by examining:
 
 Extract as learnings in `learnings/technical-debt/` with severity tags.
 
-#### Overview Analysis
+#### Project Analysis
 
-Generate or update project overview documentation by examining:
+Generate or update project documentation by examining:
 
 - **Project structure**: Top-level directories, entry points, main components
 - **Component boundaries**: Logical groupings of related code (not just directories)
@@ -128,8 +128,8 @@ Generate or update project overview documentation by examining:
 
 **Output:**
 
-- `knowledge-base/overview/README.md` - Project purpose, architecture diagram, component index
-- `knowledge-base/overview/components/<name>.md` - One file per detected component
+- `knowledge-base/project/README.md` - Project purpose, architecture diagram, component index
+- `knowledge-base/project/components/<name>.md` - One file per detected component
 
 **Component Template:** Use the template from the `spec-templates` skill.
 
@@ -157,8 +157,8 @@ Present only the top 20 findings by confidence. If more exist, inform user: "Fou
 
 Before reviewing findings, load existing knowledge-base content for deduplication:
 
-- **Constitution rules:** Parse `knowledge-base/overview/constitution.md` and extract all bullet points under Always/Never/Prefer sections
-- **Learnings:** List files in `knowledge-base/learnings/` and extract titles from YAML frontmatter or first heading
+- **Constitution rules:** Parse `knowledge-base/project/constitution.md` and extract all bullet points under Always/Never/Prefer sections
+- **Learnings:** List files in `knowledge-base/project/learnings/` and extract titles from YAML frontmatter or first heading
 
 Store as a list of existing entry texts for comparison.
 
@@ -241,7 +241,7 @@ Use AskUserQuestion with a text input option to let user modify the finding text
 
 For accepted constitution findings:
 
-1. Read current `knowledge-base/overview/constitution.md`
+1. Read current `knowledge-base/project/constitution.md`
 2. Find the target section (Code Style, Architecture, Testing, etc.)
 3. Find the subsection (Always, Never, Prefer)
 4. Append the new rule as a bullet point: `- [Rule text]`
@@ -323,13 +323,13 @@ Scan accumulated learnings against skill, agent, and command definitions. Propos
 
 Skip Phase 4 with an info message if any of these conditions are true:
 
-- Area is a specific scope (`conventions`, `architecture`, `testing`, `debt`, `overview`) -- Phase 4 only runs when area is `all` or unspecified
-- `knowledge-base/learnings/` directory does not exist
+- Area is a specific scope (`conventions`, `architecture`, `testing`, `debt`, `project`) -- Phase 4 only runs when area is `all` or unspecified
+- `knowledge-base/project/learnings/` directory does not exist
 - `plugins/soleur/` directory does not exist
 
 **4.2 Load**
 
-List all learning files from `knowledge-base/learnings/` recursively, excluding `archive/` and `patterns/` directories. For each learning, extract:
+List all learning files from `knowledge-base/project/learnings/` recursively, excluding `archive/` and `patterns/` directories. For each learning, extract:
 
 - Title (from first `#` heading)
 - Tags or metadata (from YAML frontmatter, ad-hoc tags sections, or title keywords -- any format)
@@ -388,12 +388,12 @@ If zero proposals were generated: "Phase 4: All learnings already synced to rele
 
 | Finding Type | Destination |
 | ------------ | ----------- |
-| Coding conventions | `knowledge-base/overview/constitution.md` |
-| Architecture decisions | `knowledge-base/learnings/architecture/` |
-| Testing practices | `knowledge-base/overview/constitution.md` (Testing section) |
-| Technical debt | `knowledge-base/learnings/technical-debt/` |
-| Project overview | `knowledge-base/overview/README.md` |
-| Component docs | `knowledge-base/overview/components/` |
+| Coding conventions | `knowledge-base/project/constitution.md` |
+| Architecture decisions | `knowledge-base/project/learnings/architecture/` |
+| Testing practices | `knowledge-base/project/constitution.md` (Testing section) |
+| Technical debt | `knowledge-base/project/learnings/technical-debt/` |
+| Project docs | `knowledge-base/project/README.md` |
+| Component docs | `knowledge-base/project/components/` |
 | Definition sync bullets | `plugins/soleur/{skills,agents,commands}/*.md` |
 
 ## Design Decisions
@@ -438,10 +438,10 @@ Uses the `compound-capture` YAML schema with `problem_type: best_practice` for n
 /sync debt
 ```
 
-**Sync project overview:**
+**Sync project docs:**
 
 ```bash
-/sync overview
+/sync project
 ```
 
 ## Limitations

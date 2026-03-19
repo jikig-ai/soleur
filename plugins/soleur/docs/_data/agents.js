@@ -1,6 +1,10 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { join, resolve, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import { dirname, join, relative } from "node:path";
+
 import yaml from "yaml";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Domain metadata: single source of truth for labels, landing-page icons, and card descriptions.
 // Adding a domain here (+ domainOrder + DOMAIN_CSS_VARS) is all that's needed --
@@ -136,7 +140,7 @@ function walkAgents(dir) {
 }
 
 export default function () {
-  const agentsDir = resolve("plugins/soleur/agents");
+  const agentsDir = join(__dirname, "..", "..", "agents");
   const files = walkAgents(agentsDir);
 
   // Parse each agent and derive domain/sub from path

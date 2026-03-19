@@ -1,6 +1,6 @@
 # Monthly competitive intelligence scan using the soleur:competitive-analysis skill.
 # Produces a GitHub Issue with competitive landscape findings for tiers 0 and 3.
-# Persists the report to knowledge-base/overview/competitive-intelligence.md on main.
+# Persists the report to knowledge-base/product/competitive-intelligence.md on main.
 # First consumer of the soleur:schedule infrastructure (v3.5.0).
 # To test manually: gh workflow run scheduled-competitive-analysis.yml
 
@@ -56,7 +56,7 @@ jobs:
             MANDATORY FINAL STEP — persist the report to main:
             Run these bash commands (do not skip, do not create a branch):
             ```
-            git add knowledge-base/overview/competitive-intelligence.md
+            git add knowledge-base/product/competitive-intelligence.md
             git diff --cached --quiet && echo "unchanged, skipping" && exit 0
             git commit -m "docs: update competitive intelligence report"
             git push origin main || { git pull --rebase origin main && git push origin main; }

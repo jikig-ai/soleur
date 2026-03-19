@@ -14,7 +14,7 @@ Evaluate current support posture before making recommendations.
 
 - Check for open GitHub issues: `gh issue list --state open --json number,title,labels,createdAt`. Note issue volume, age distribution, and label coverage.
 - Check for existing support artifacts in `knowledge-base/support/` (runbooks, FAQs, escalation guides). Note what exists and what is missing.
-- Check for community digests in `knowledge-base/community/` (recent digest files, community health trends).
+- Check for community digests in `knowledge-base/support/community/` (recent digest files, community health trends).
 - Inventory: issue triage state, documentation coverage, community health metrics.
 - Output: structured table of support health (area, status, action needed).
 

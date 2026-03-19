@@ -1,11 +1,11 @@
 ---
 name: competitive-analysis
-description: "This skill should be used when running competitive intelligence scans and market research reports against tracked competitors. It invokes the competitive-intelligence agent to produce a structured knowledge-base report. Triggers on \"competitive analysis\", \"competitor scan\", \"market research\"."
+description: "This skill should be used when running competitive intelligence scans and market research reports against tracked competitors. It produces a structured knowledge-base report."
 ---
 
 # Competitive Analysis
 
-Run a competitive intelligence scan producing a structured report at knowledge-base/overview/competitive-intelligence.md.
+Run a competitive intelligence scan producing a structured report at knowledge-base/product/competitive-intelligence.md.
 
 ## Steps
 
@@ -28,7 +28,7 @@ Use AskUserQuestion to select tiers:
 
 Spawn the competitive-intelligence agent via Task tool:
 
-Task competitive-intelligence: "Run a competitive intelligence scan for tiers <TIERS>. Research each competitor in the specified tiers, read brand-guide.md and business-validation.md for positioning context, and write the report to knowledge-base/overview/competitive-intelligence.md."
+Task competitive-intelligence: "Run a competitive intelligence scan for tiers <TIERS>. Research each competitor in the specified tiers, read brand-guide.md and business-validation.md for positioning context, and write the report to knowledge-base/product/competitive-intelligence.md."
 
 ### 4. Report Results
 

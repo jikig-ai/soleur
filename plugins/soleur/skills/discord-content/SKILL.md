@@ -1,6 +1,6 @@
 ---
 name: discord-content
-description: "This skill should be used when creating and posting community content to Discord. It generates brand-consistent posts (project updates, tips, milestones, or custom topics), validates them against the brand guide, and posts via webhook after user approval. Triggers on \"post to Discord\", \"Discord update\", \"community post\", \"Discord announcement\", \"write Discord content\"."
+description: "This skill should be used when creating and posting community content to Discord. It generates brand-consistent posts (project updates, tips, milestones, or custom topics), validates against the brand guide, and posts via webhook after approval."
 ---
 
 # Discord Content
@@ -13,7 +13,7 @@ Before generating content, verify both prerequisites. If either fails, display t
 
 ### 1. Brand Guide
 
-Check if `knowledge-base/overview/brand-guide.md` exists.
+Check if `knowledge-base/marketing/brand-guide.md` exists.
 
 **If missing:**
 > No brand guide found. Run the brand architect agent first to establish brand identity:

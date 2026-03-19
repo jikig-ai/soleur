@@ -1,6 +1,6 @@
 ---
 name: brainstorm-techniques
-description: This skill should be used before implementing features, building components, or making changes. It guides exploring user intent, approaches, and design decisions before planning. Triggers on "let's brainstorm", "help me think through", "what should we build", "explore approaches", ambiguous feature requests, or when the user's request has multiple valid interpretations that need clarification.
+description: "This skill should be used before implementing features or making changes. It guides exploring user intent, approaches, and design decisions when a request has multiple valid interpretations or ambiguous requirements needing clarification."
 ---
 
 # Brainstorming
@@ -154,7 +154,7 @@ topic: <kebab-case-topic>
 → Use `skill: soleur:plan` for implementation details
 ```
 
-**Output Location:** `knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`
+**Output Location:** `knowledge-base/project/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`
 
 ### Phase 4: Handoff
 

@@ -9,25 +9,60 @@
 
 set -euo pipefail
 
-# Resolve project root (worktree-safe: CWD may be .worktrees/feat-* instead of repo root)
-PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || PROJECT_ROOT="."
-RALPH_STATE_FILE="${PROJECT_ROOT}/.claude/ralph-loop.local.md"
+# Source shared helper for repo root resolution
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../scripts/resolve-git-root.sh" || {
+  # Not in a git repo -- allow exit
+  exit 0
+}
+PROJECT_ROOT="$GIT_COMMON_ROOT"
+# Session identifier: PPID by default, overridable via RALPH_LOOP_PID for testing
+_RALPH_LOOP_PID="${RALPH_LOOP_PID:-$PPID}"
+RALPH_STATE_FILE="${PROJECT_ROOT}/.claude/ralph-loop.${_RALPH_LOOP_PID}.local.md"
 
-# Check if ralph-loop is active BEFORE reading stdin
+# --- TTL Check: Auto-remove stale state files from ANY crashed session ---
+# Glob over all session-scoped state files and remove stale ones before
+# checking our own file. This cleans up orphans from crashed sessions.
+TTL_HOURS=1
+NOW_EPOCH=$(date +%s)
+for state_file in "${PROJECT_ROOT}/.claude"/ralph-loop.*.local.md; do
+  [[ -f "$state_file" ]] || continue
+  STARTED_AT=$(awk '/^---$/{c++; next} c==1' "$state_file" 2>/dev/null | grep '^started_at:' | sed 's/started_at: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+  if [[ -n "$STARTED_AT" ]]; then
+    STARTED_EPOCH=$(date -d "$STARTED_AT" +%s 2>/dev/null || true)
+    if [[ -n "$STARTED_EPOCH" ]] && [[ $((NOW_EPOCH - STARTED_EPOCH)) -gt $((TTL_HOURS * 3600)) ]]; then
+      AGE_MINS=$(( (NOW_EPOCH - STARTED_EPOCH) / 60 ))
+      echo "Ralph loop: stale state file detected ($(basename "$state_file"), started ${AGE_MINS}m ago, TTL=${TTL_HOURS}h). Auto-removing." >&2
+      rm -f "$state_file"
+    fi
+  fi
+done
+
+# Check if ralph-loop is active for THIS session
 if [[ ! -f "$RALPH_STATE_FILE" ]]; then
-  # No active loop - allow exit
+  # No active loop for this session - allow exit
   exit 0
 fi
 
 # Read hook input from stdin (advanced stop hook API)
 HOOK_INPUT=$(cat)
 
+# Re-check after potential race -- file may have been removed between
+# the existence check above and here (stdin read is blocking)
+[[ -f "$RALPH_STATE_FILE" ]] || exit 0
+
 # Parse markdown frontmatter (YAML between first and second --- only)
-FRONTMATTER=$(awk '/^---$/{c++; next} c==1' "$RALPH_STATE_FILE")
-ITERATION=$(echo "$FRONTMATTER" | grep '^iteration:' | sed 's/iteration: *//')
-MAX_ITERATIONS=$(echo "$FRONTMATTER" | grep '^max_iterations:' | sed 's/max_iterations: *//')
+FRONTMATTER=$(awk '/^---$/{c++; next} c==1' "$RALPH_STATE_FILE" 2>/dev/null)
+
+# Safety net: if awk produced nothing (file vanished between check and read), exit cleanly
+if [[ -z "$FRONTMATTER" ]]; then
+  exit 0
+fi
+
+ITERATION=$(echo "$FRONTMATTER" | grep '^iteration:' | sed 's/iteration: *//' || true)
+MAX_ITERATIONS=$(echo "$FRONTMATTER" | grep '^max_iterations:' | sed 's/max_iterations: *//' || true)
 # Extract completion_promise and strip surrounding quotes if present
-COMPLETION_PROMISE=$(echo "$FRONTMATTER" | grep '^completion_promise:' | sed 's/completion_promise: *//' | sed 's/^"\(.*\)"$/\1/')
+COMPLETION_PROMISE=$(echo "$FRONTMATTER" | grep '^completion_promise:' | sed 's/completion_promise: *//' | sed 's/^"\(.*\)"$/\1/' || true)
 
 # --- Stuck Detection ---
 # Parse stuck detection fields from frontmatter
@@ -35,6 +70,10 @@ COMPLETION_PROMISE=$(echo "$FRONTMATTER" | grep '^completion_promise:' | sed 's/
 # when fields are missing (pre-existing state files without stuck_count/stuck_threshold)
 STUCK_COUNT=$(echo "$FRONTMATTER" | grep '^stuck_count:' | sed 's/stuck_count: *//' || true)
 STUCK_THRESHOLD=$(echo "$FRONTMATTER" | grep '^stuck_threshold:' | sed 's/stuck_threshold: *//' || true)
+LAST_RESPONSE_HASH=$(echo "$FRONTMATTER" | grep '^last_response_hash:' | sed 's/last_response_hash: *//' || true)
+REPEAT_COUNT=$(echo "$FRONTMATTER" | grep '^repeat_count:' | sed 's/repeat_count: *//' || true)
+SIMILARITY_COUNT=$(echo "$FRONTMATTER" | grep '^similarity_count:' | sed 's/similarity_count: *//' || true)
+LAST_RESPONSE_WORDS=$(echo "$FRONTMATTER" | grep '^last_response_words:' | sed 's/last_response_words: *//' || true)
 
 # Default values for backward compatibility with pre-existing state files
 if [[ ! "$STUCK_COUNT" =~ ^[0-9]+$ ]]; then
@@ -43,29 +82,45 @@ fi
 if [[ ! "$STUCK_THRESHOLD" =~ ^[0-9]+$ ]]; then
   STUCK_THRESHOLD=3
 fi
+if [[ ! "$REPEAT_COUNT" =~ ^[0-9]+$ ]]; then
+  REPEAT_COUNT=0
+fi
+if [[ ! "$SIMILARITY_COUNT" =~ ^[0-9]+$ ]]; then
+  SIMILARITY_COUNT=0
+fi
 
 # Validate numeric fields before arithmetic operations
 if [[ ! "$ITERATION" =~ ^[0-9]+$ ]]; then
   echo "Warning: Ralph loop state file corrupted (iteration: '$ITERATION'). Stopping." >&2
-  rm "$RALPH_STATE_FILE"
+  rm -f "$RALPH_STATE_FILE"
   exit 0
 fi
 
 if [[ ! "$MAX_ITERATIONS" =~ ^[0-9]+$ ]]; then
   echo "Warning: Ralph loop state file corrupted (max_iterations: '$MAX_ITERATIONS'). Stopping." >&2
-  rm "$RALPH_STATE_FILE"
+  rm -f "$RALPH_STATE_FILE"
   exit 0
 fi
 
 # Check if max iterations reached
 if [[ $MAX_ITERATIONS -gt 0 ]] && [[ $ITERATION -ge $MAX_ITERATIONS ]]; then
   echo "Ralph loop: Max iterations ($MAX_ITERATIONS) reached." >&2
-  rm "$RALPH_STATE_FILE"
+  rm -f "$RALPH_STATE_FILE"
+  exit 0
+fi
+
+# --- Hard Safety Valve ---
+# Even with max_iterations=0 (unlimited), cap at 50 to prevent runaway loops
+# from trapping sessions indefinitely (e.g., after context compaction).
+HARD_CAP=50
+if [[ $ITERATION -ge $HARD_CAP ]]; then
+  echo "Ralph loop: Hard safety cap ($HARD_CAP iterations) reached. Auto-removing." >&2
+  rm -f "$RALPH_STATE_FILE"
   exit 0
 fi
 
 # Extract last assistant message directly from hook input (stop hook API)
-LAST_OUTPUT=$(echo "$HOOK_INPUT" | jq -r '.last_assistant_message // ""')
+LAST_OUTPUT=$(echo "$HOOK_INPUT" | jq -r '.last_assistant_message // ""' 2>/dev/null || true)
 
 # Empty LAST_OUTPUT is valid for tool-use-only responses -- do not terminate
 # The stuck detection counter below handles repeated empty outputs
@@ -78,7 +133,7 @@ if [[ "$COMPLETION_PROMISE" != "null" ]] && [[ -n "$COMPLETION_PROMISE" ]]; then
   # Use = for literal string comparison (not glob pattern matching)
   if [[ -n "$PROMISE_TEXT" ]] && [[ "$PROMISE_TEXT" = "$COMPLETION_PROMISE" ]]; then
     echo "Ralph loop: Detected <promise>$COMPLETION_PROMISE</promise>" >&2
-    rm "$RALPH_STATE_FILE"
+    rm -f "$RALPH_STATE_FILE"
     exit 0
   fi
 fi
@@ -91,8 +146,38 @@ fi
 STRIPPED_OUTPUT=$(echo "$LAST_OUTPUT" | tr -d '[:space:]')
 RESPONSE_LENGTH=${#STRIPPED_OUTPUT}
 
-# Update stuck counter
-if [[ $RESPONSE_LENGTH -lt 20 ]]; then
+# --- Idle Pattern Detection ---
+# Responses that say "nothing to do" in >20 chars fool the length check.
+# Only apply to short-ish responses (< 200 chars stripped) to avoid false positives
+# on substantive responses that contain idle phrases as substrings.
+# Verified: the `if` statement absorbs grep exit 1 under set -euo pipefail.
+IS_IDLE=false
+if [[ $RESPONSE_LENGTH -lt 200 ]]; then
+  NORMALIZED_OUTPUT=$(echo "$LAST_OUTPUT" | tr '[:upper:]' '[:lower:]' | tr -s '[:space:]' ' ' | sed 's/^ *//;s/ *$//')
+  if echo "$NORMALIZED_OUTPUT" | grep -iqE '(all (done|complete|finished)|all (slash )?commands? (are |have been )?(done|complete|finished|already)|nothing (left|pending|remaining|to do|to complete|to run)|no (active|running|pending) (commands?|tasks?|slash commands?)|session (complete|finished|done|already)|already (done|complete|finished))'; then
+    IS_IDLE=true
+  fi
+fi
+
+# --- Repetition Detection ---
+CURRENT_HASH=""
+if [[ -n "$STRIPPED_OUTPUT" ]]; then
+  CURRENT_HASH=$(echo "$STRIPPED_OUTPUT" | tr '[:upper:]' '[:lower:]' | md5sum | cut -d' ' -f1)
+fi
+
+if [[ -n "$CURRENT_HASH" ]] && [[ "$CURRENT_HASH" == "$LAST_RESPONSE_HASH" ]]; then
+  REPEAT_COUNT=$((REPEAT_COUNT + 1))
+else
+  REPEAT_COUNT=0
+fi
+LAST_RESPONSE_HASH="$CURRENT_HASH"
+
+# Update stuck counter: idle patterns OR short responses increment, substantive resets
+# Three tiers:
+#   < 150 chars: definitely minimal (formulaic responses fall below this)
+#   150-199 chars + idle pattern: semantically idle
+#   >= 200 chars: always substantive (long enough to contain real work)
+if [[ "$IS_IDLE" == "true" ]] || [[ $RESPONSE_LENGTH -lt 150 ]]; then
   STUCK_COUNT=$((STUCK_COUNT + 1))
 else
   STUCK_COUNT=0
@@ -100,20 +185,69 @@ fi
 
 # Check stuck threshold (0 = disabled)
 if [[ $STUCK_THRESHOLD -gt 0 ]] && [[ $STUCK_COUNT -ge $STUCK_THRESHOLD ]]; then
-  echo "Ralph loop: terminated after $STUCK_COUNT consecutive empty responses (stuck detection)" >&2
-  rm "$RALPH_STATE_FILE"
+  echo "Ralph loop: terminated after $STUCK_COUNT consecutive empty/idle responses (stuck detection)" >&2
+  rm -f "$RALPH_STATE_FILE"
+  exit 0
+fi
+
+# Check repetition threshold (3 identical consecutive responses)
+REPEAT_THRESHOLD=3
+if [[ $REPEAT_COUNT -ge $REPEAT_THRESHOLD ]]; then
+  echo "Ralph loop: terminated after $((REPEAT_COUNT + 1)) consecutive identical responses (repetition detection)" >&2
+  rm -f "$RALPH_STATE_FILE"
+  exit 0
+fi
+
+# --- Similarity Detection ---
+# Catch loops producing minor variations of the same response.
+# Tokenize into unique words, compute Jaccard similarity via comm.
+CURRENT_WORDS=$(echo "$LAST_OUTPUT" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '\n' | sort -u | tr '\n' ' ' | sed 's/ $//')
+
+if [[ -n "$LAST_RESPONSE_WORDS" ]] && [[ -n "$CURRENT_WORDS" ]]; then
+  # Word lists are already sorted unique from tokenization
+  PREV_LINES=$(echo "$LAST_RESPONSE_WORDS" | tr ' ' '\n')
+  CURR_LINES=$(echo "$CURRENT_WORDS" | tr ' ' '\n')
+  PREV_N=$(echo "$PREV_LINES" | wc -l)
+  CURR_N=$(echo "$CURR_LINES" | wc -l)
+  COMMON=$(comm -12 <(echo "$PREV_LINES") <(echo "$CURR_LINES") | wc -l)
+  UNION=$(( PREV_N + CURR_N - COMMON ))
+
+  if [[ $UNION -gt 0 ]]; then
+    SIMILARITY=$((COMMON * 100 / UNION))
+  else
+    SIMILARITY=0
+  fi
+
+  if [[ $SIMILARITY -ge 80 ]]; then
+    SIMILARITY_COUNT=$((SIMILARITY_COUNT + 1))
+  else
+    SIMILARITY_COUNT=0
+  fi
+else
+  SIMILARITY_COUNT=0
+fi
+LAST_RESPONSE_WORDS="$CURRENT_WORDS"
+
+# Check similarity threshold (3 consecutive similar responses)
+SIMILARITY_THRESHOLD=3
+if [[ $SIMILARITY_COUNT -ge $SIMILARITY_THRESHOLD ]]; then
+  echo "Ralph loop: terminated after $((SIMILARITY_COUNT + 1)) consecutive similar responses (similarity detection)" >&2
+  rm -f "$RALPH_STATE_FILE"
   exit 0
 fi
 
 # Not complete - continue loop with SAME PROMPT
 NEXT_ITERATION=$((ITERATION + 1))
 
+# Re-check before prompt extraction -- file may have been removed by concurrent invocation
+[[ -f "$RALPH_STATE_FILE" ]] || exit 0
+
 # Extract prompt (everything after the closing ---)
-PROMPT_TEXT=$(awk '/^---$/{i++; next} i>=2' "$RALPH_STATE_FILE")
+PROMPT_TEXT=$(awk '/^---$/{i++; next} i>=2' "$RALPH_STATE_FILE" 2>/dev/null)
 
 if [[ -z "$PROMPT_TEXT" ]]; then
   echo "Warning: No prompt text in state file. Stopping." >&2
-  rm "$RALPH_STATE_FILE"
+  rm -f "$RALPH_STATE_FILE"
   exit 0
 fi
 
@@ -122,13 +256,23 @@ fi
 # The counter will not persist across iterations. Acceptable because legacy files are only
 # created by pre-stuck-detection versions of setup-ralph-loop.sh; all new loops include the field.
 TEMP_FILE="${RALPH_STATE_FILE}.tmp.$$"
-awk -v iter="$NEXT_ITERATION" -v sc="$STUCK_COUNT" '
+awk -v iter="$NEXT_ITERATION" -v sc="$STUCK_COUNT" -v lrh="$LAST_RESPONSE_HASH" -v rc="$REPEAT_COUNT" -v simc="$SIMILARITY_COUNT" -v lrw="$LAST_RESPONSE_WORDS" '
   /^---$/ { c++; print; next }
   c==1 && /^iteration:/ { print "iteration: " iter; next }
   c==1 && /^stuck_count:/ { print "stuck_count: " sc; next }
+  c==1 && /^last_response_hash:/ { print "last_response_hash: " lrh; next }
+  c==1 && /^repeat_count:/ { print "repeat_count: " rc; next }
+  c==1 && /^similarity_count:/ { print "similarity_count: " simc; next }
+  c==1 && /^last_response_words:/ { print "last_response_words: " lrw; next }
   { print }
-' "$RALPH_STATE_FILE" > "$TEMP_FILE"
-mv "$TEMP_FILE" "$RALPH_STATE_FILE"
+' "$RALPH_STATE_FILE" > "$TEMP_FILE" 2>/dev/null || true
+if [[ -s "$TEMP_FILE" ]]; then
+  mv "$TEMP_FILE" "$RALPH_STATE_FILE"
+else
+  # awk produced empty output (file vanished) -- clean up and exit
+  rm -f "$TEMP_FILE"
+  exit 0
+fi
 
 # Build system message with iteration count and completion promise info
 if [[ "$COMPLETION_PROMISE" != "null" ]] && [[ -n "$COMPLETION_PROMISE" ]]; then

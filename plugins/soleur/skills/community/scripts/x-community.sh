@@ -6,6 +6,7 @@
 #   fetch-metrics                                    - Fetch account metrics (followers, following, tweets)
 #   fetch-mentions [--max-results N] [--since-id ID] - Fetch recent mentions of the authenticated user
 #   fetch-timeline [--max N]                         - Fetch recent tweets (paid API)
+#   fetch-user-timeline <user_id> [--max N]          - Fetch another user's recent tweets
 #   post-tweet <text> [--reply-to ID]                - Post a tweet (optionally as a reply)
 #
 # Environment variables (required):
@@ -13,6 +14,7 @@
 #   X_API_SECRET           - API secret (consumer secret)
 #   X_ACCESS_TOKEN         - Access token
 #   X_ACCESS_TOKEN_SECRET  - Access token secret
+#   X_ALLOW_POST           - Set to "true" to enable posting (defense-in-depth guard)
 #
 # Exit codes:
 #   0 - Success
@@ -349,6 +351,19 @@ resolve_user_id() {
   echo "$user_id"
 }
 
+# --- Shared helpers ---
+
+# Fetch tweets for a given user ID and return the data array.
+# Arguments: user_id max_results
+_fetch_tweets_for_user() {
+  local user_id="$1"
+  local max_results="$2"
+  local query_params="tweet.fields=created_at,public_metrics,text&max_results=${max_results}"
+  local body
+  body=$(get_request "/2/users/${user_id}/tweets" "$query_params")
+  echo "$body" | jq '.data // []'
+}
+
 # --- Commands ---
 
 cmd_fetch_metrics() {
@@ -414,7 +429,7 @@ cmd_fetch_mentions() {
   user_id=$(resolve_user_id)
 
   # Build query parameters
-  local query_params="max_results=${max_results}&tweet.fields=author_id,created_at,conversation_id&expansions=author_id&user.fields=username,name"
+  local query_params="max_results=${max_results}&tweet.fields=author_id,created_at,conversation_id,referenced_tweets&expansions=author_id&user.fields=username,name,profile_image_url,public_metrics"
   if [[ -n "$since_id" ]]; then
     query_params="${query_params}&since_id=${since_id}"
   fi
@@ -443,10 +458,14 @@ cmd_fetch_mentions() {
         {
           id: .id,
           text: .text,
+          author_id: .author_id,
           author_username: ($user.username // "unknown"),
           author_name: ($user.name // "unknown"),
+          author_profile_image_url: ($user.profile_image_url // null),
+          author_followers_count: ($user.public_metrics.followers_count // 0),
           created_at: .created_at,
-          conversation_id: .conversation_id
+          conversation_id: .conversation_id,
+          referenced_tweets: (.referenced_tweets // null)
         }
       ],
       meta: {
@@ -490,15 +509,66 @@ cmd_fetch_timeline() {
   local user_id
   user_id=$(resolve_user_id)
 
-  local query_params="tweet.fields=created_at,public_metrics,text&max_results=${max_results}"
+  _fetch_tweets_for_user "$user_id" "$max_results"
+}
 
-  local body
-  body=$(get_request "/2/users/${user_id}/tweets" "$query_params")
+cmd_fetch_user_timeline() {
+  local user_id="${1:-}"
+  shift || true
 
-  echo "$body" | jq '.data // []'
+  if [[ -z "$user_id" ]]; then
+    echo "Error: fetch-user-timeline requires a user_id argument." >&2
+    echo "Usage: x-community.sh fetch-user-timeline <user_id> [--max N]" >&2
+    exit 1
+  fi
+
+  # Validate user_id is a positive integer (prevents path traversal)
+  if [[ ! "$user_id" =~ ^[0-9]+$ ]]; then
+    echo "Error: user_id must be a positive integer, got '${user_id}'." >&2
+    exit 1
+  fi
+
+  local max_results=5
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --max)
+        max_results="${2:?--max requires a number}"
+        shift 2
+        ;;
+      *)
+        echo "Error: Unknown option '$1'" >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  # Validate --max is a positive integer
+  if [[ ! "$max_results" =~ ^[0-9]+$ ]]; then
+    echo "Error: --max must be a positive integer, got '${max_results}'" >&2
+    exit 1
+  fi
+
+  # Clamp max_results to API range 5-100
+  if (( max_results < 5 )); then
+    echo "Warning: --max ${max_results} is below API minimum of 5, clamping to 5." >&2
+    max_results=5
+  elif (( max_results > 100 )); then
+    echo "Warning: --max ${max_results} is above API maximum of 100, clamping to 100." >&2
+    max_results=100
+  fi
+
+  _fetch_tweets_for_user "$user_id" "$max_results"
 }
 
 cmd_post_tweet() {
+  # Guard: require explicit opt-in to post.
+  if [[ "${X_ALLOW_POST:-}" != "true" ]]; then
+    echo "Error: X_ALLOW_POST is not set to 'true'." >&2
+    echo "Set X_ALLOW_POST=true to enable posting." >&2
+    return 1
+  fi
+
   local text="${1:?Usage: x-community.sh post-tweet <text> [--reply-to TWEET_ID]}"
   shift
 
@@ -550,6 +620,7 @@ main() {
     echo "  fetch-metrics                                    - Fetch account metrics" >&2
     echo "  fetch-mentions [--max-results N] [--since-id ID] - Fetch recent mentions" >&2
     echo "  fetch-timeline [--max N]                         - Fetch recent tweets (paid API)" >&2
+    echo "  fetch-user-timeline <user_id> [--max N]          - Fetch another user's tweets" >&2
     echo "  post-tweet <text> [--reply-to ID]                - Post a tweet" >&2
     exit 1
   fi
@@ -561,8 +632,9 @@ main() {
   case "$command" in
     fetch-metrics)  cmd_fetch_metrics ;;
     fetch-mentions) cmd_fetch_mentions "$@" ;;
-    fetch-timeline) cmd_fetch_timeline "$@" ;;
-    post-tweet)     cmd_post_tweet "$@" ;;
+    fetch-timeline)      cmd_fetch_timeline "$@" ;;
+    fetch-user-timeline) cmd_fetch_user_timeline "$@" ;;
+    post-tweet)          cmd_post_tweet "$@" ;;
     *)
       echo "Error: Unknown command '${command}'" >&2
       echo "Run 'x-community.sh' without arguments for usage." >&2

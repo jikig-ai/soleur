@@ -26,7 +26,7 @@ If verdict is STOP at an early gate, subsequent headings are absent (not empty).
 
 ### Step 0: Detect Existing Validation Report
 
-Check if `knowledge-base/overview/business-validation.md` exists.
+Check if `knowledge-base/product/business-validation.md` exists.
 
 **If it exists:** Read the document and present a summary table:
 
@@ -44,7 +44,7 @@ For the selected gate: display current content, ask what changed, collect update
 
 ### Step 0.5: Read Project Identity
 
-Before starting the gates, read `knowledge-base/overview/brand-guide.md` if it exists -- extract the `## Identity` section (mission, positioning, target audience). If no brand guide exists, read `README.md` for positioning statements. If neither provides positioning context, proceed with a note: "No brand guide found. Vision alignment check will be skipped. Consider running the brand-architect workshop first." Keep the project's stated positioning in mind throughout all gates -- especially Gate 6, where a multi-domain platform's "minimum viable scope" may be its breadth, not a single feature.
+Before starting the gates, read `knowledge-base/marketing/brand-guide.md` if it exists -- extract the `## Identity` section (mission, positioning, target audience). If no brand guide exists, read `README.md` for positioning statements. If neither provides positioning context, proceed with a note: "No brand guide found. Vision alignment check will be skipped. Consider running the brand-architect workshop first." Keep the project's stated positioning in mind throughout all gates -- especially Gate 6, where a multi-domain platform's "minimum viable scope" may be its breadth, not a single feature.
 
 ### Gate 1: Problem (## Problem)
 
@@ -138,7 +138,7 @@ Present any contradictions to the user before writing. The user decides whether 
 
 ### Final Write
 
-Assemble all completed gate sections and the verdict into the final document. Write atomically to `knowledge-base/overview/business-validation.md`.
+Assemble all completed gate sections and the verdict into the final document. Write atomically to `knowledge-base/product/business-validation.md`.
 
 Document template:
 
@@ -189,9 +189,9 @@ last_updated: YYYY-MM-DD
 [Narrative summary of the validation -- what is strong, what is weak, what to do next]
 ```
 
-Set `last_updated` to today's date. Ensure the `knowledge-base/overview/` directory exists before writing.
+Set `last_updated` to today's date. Ensure the `knowledge-base/product/` directory exists before writing.
 
-After writing, announce: "Validation report saved to `knowledge-base/overview/business-validation.md`."
+After writing, announce: "Validation report saved to `knowledge-base/product/business-validation.md`."
 
 ## Important Guidelines
 

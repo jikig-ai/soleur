@@ -8,12 +8,20 @@
 
 set -euo pipefail
 
-# Resolve project root (worktree-safe: CWD may be .worktrees/feat-* instead of repo root)
-PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || PROJECT_ROOT="."
+# Source shared helper for repo root resolution
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/resolve-git-root.sh" || {
+  echo "Error: Not inside a git repository." >&2
+  exit 1
+}
+PROJECT_ROOT="$GIT_COMMON_ROOT"
+
+# Session identifier: PPID by default, overridable via RALPH_LOOP_PID for testing
+_RALPH_LOOP_PID="${RALPH_LOOP_PID:-$PPID}"
 
 # Parse arguments
 PROMPT_PARTS=()
-MAX_ITERATIONS=0
+MAX_ITERATIONS=25
 COMPLETION_PROMISE="null"
 STUCK_THRESHOLD=3
 
@@ -30,7 +38,7 @@ ARGUMENTS:
   PROMPT...    Initial prompt to start the loop (can be multiple words without quotes)
 
 OPTIONS:
-  --max-iterations <n>           Maximum iterations before auto-stop (default: unlimited)
+  --max-iterations <n>           Maximum iterations before auto-stop (default: 25, 0 for unlimited)
   --completion-promise '<text>'  Promise phrase (USE QUOTES for multi-word)
   --stuck-threshold <n>          Consecutive empty responses before auto-stop (default: 3, 0 to disable)
   -h, --help                     Show this help message
@@ -41,28 +49,34 @@ DESCRIPTION:
 
   To signal completion, output: <promise>YOUR_PHRASE</promise>
 
-  Stuck detection: If the assistant produces N consecutive responses with
-  fewer than 20 characters of text content, the loop auto-terminates.
-  This prevents infinite cycling after crash recovery. Set --stuck-threshold 0
-  to disable.
+  Stuck detection: The loop auto-terminates when responses are idle:
+  - Short responses (< 150 chars): counted as minimal
+  - Idle patterns (< 200 chars): responses matching "all done", "nothing
+    left to do", etc. are counted as semantically idle
+  - Repetition: 3 consecutive identical responses trigger termination
+  - Similarity: 3 consecutive responses sharing >=80% words trigger
+    termination (catches minor variations of the same response)
+  Set --stuck-threshold 0 to disable length/idle detection (repetition
+  and similarity detection remain active).
 
 EXAMPLES:
   /soleur:ralph-loop Build a todo API --completion-promise 'DONE' --max-iterations 20
   /soleur:ralph-loop --max-iterations 10 Fix the auth bug
-  /soleur:ralph-loop Refactor cache layer  (runs forever)
+  /soleur:ralph-loop Refactor cache layer  (default: 25 iterations)
   /soleur:ralph-loop --completion-promise 'TASK COMPLETE' Create a REST API
 
 STOPPING:
-  By reaching --max-iterations, detecting --completion-promise, or
-  stuck detection (N consecutive empty responses). Or manually remove
-  the state file: rm .claude/ralph-loop.local.md
+  By reaching --max-iterations, detecting --completion-promise,
+  stuck detection (N consecutive empty/idle responses), or repetition
+  detection (3 identical responses). Or manually remove the state file:
+  rm .claude/ralph-loop.*.local.md
 
 MONITORING:
   # View current iteration:
-  grep '^iteration:' .claude/ralph-loop.local.md
+  grep '^iteration:' .claude/ralph-loop.*.local.md
 
   # View full state:
-  head -10 .claude/ralph-loop.local.md
+  head -10 .claude/ralph-loop.*.local.md
 HELP_EOF
       exit 0
       ;;
@@ -129,7 +143,7 @@ else
   COMPLETION_PROMISE_YAML="null"
 fi
 
-cat > "${PROJECT_ROOT}/.claude/ralph-loop.local.md" <<EOF
+cat > "${PROJECT_ROOT}/.claude/ralph-loop.${_RALPH_LOOP_PID}.local.md" <<EOF
 ---
 active: true
 iteration: 1
@@ -137,6 +151,10 @@ max_iterations: $MAX_ITERATIONS
 completion_promise: $COMPLETION_PROMISE_YAML
 stuck_count: 0
 stuck_threshold: $STUCK_THRESHOLD
+last_response_hash:
+repeat_count: 0
+similarity_count: 0
+last_response_words:
 started_at: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ---
 
@@ -155,11 +173,11 @@ The stop hook is now active. When you try to exit, the SAME PROMPT will be
 fed back to you. You'll see your previous work in files, creating a
 self-referential loop where you iteratively improve on the same task.
 
-To monitor: head -10 .claude/ralph-loop.local.md
-To cancel: rm .claude/ralph-loop.local.md
+To monitor: head -10 .claude/ralph-loop.${_RALPH_LOOP_PID}.local.md
+To cancel: rm .claude/ralph-loop.${_RALPH_LOOP_PID}.local.md
 
-WARNING: This loop cannot be stopped manually! It will run infinitely
-unless you set --max-iterations or --completion-promise.
+NOTE: Default cap is 25 iterations. Pass --max-iterations 0 to run
+without a cap (not recommended -- stale state files trap future sessions).
 EOF
 
 # Output the initial prompt

@@ -1,6 +1,6 @@
 ---
 name: deploy
-description: "This skill should be used when deploying containerized applications to remote servers. It builds Docker images, pushes to GHCR, and deploys via SSH with health verification. Triggers on \"deploy\", \"deploy to production\", \"push to server\", \"ship to remote\"."
+description: "This skill should be used when deploying containerized applications to remote servers. It builds Docker images, pushes to GHCR, and deploys via SSH with health verification."
 ---
 
 # Deploy Skill

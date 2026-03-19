@@ -1,10 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Navigate to repo root so the script works from any directory
-cd "$(git rev-parse --show-toplevel)"
+# Resolve repo root (bare-repo-safe)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../plugins/soleur/scripts/resolve-git-root.sh"
 
-TEMPLATE="knowledge-base/specs/archive/20260221-044654-feat-cnil-article-30/article-30-register-template.md"
+if [[ "$IS_BARE" == "true" ]]; then
+  echo "Error: Cannot generate Article 30 register from bare repo root." >&2
+  echo "Run from a worktree: cd .worktrees/<name> && bash ../../scripts/generate-article-30-register.sh" >&2
+  exit 1
+fi
+
+# Navigate to repo root so the script works from any directory
+cd "$GIT_ROOT"
+
+TEMPLATE="knowledge-base/project/specs/archive/20260221-044654-feat-cnil-article-30/article-30-register-template.md"
 OUTPUT="article-30-register.md"
 TODAY=$(date +%Y-%m-%d)
 

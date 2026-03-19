@@ -14,7 +14,9 @@
 #   verify                          - Run guild-info check
 #
 # Environment variables:
-#   DISCORD_BOT_TOKEN_INPUT  - Bot token (required for API commands)
+#   DISCORD_BOT_TOKEN_INPUT              - Bot token (required for API commands)
+#   DISCORD_RELEASES_WEBHOOK_URL_INPUT   - Releases channel webhook (optional, write-env only)
+#   DISCORD_BLOG_WEBHOOK_URL_INPUT       - Blog channel webhook (optional, write-env only)
 #
 # Exit codes:
 #   0 - Success
@@ -25,6 +27,9 @@
 # Errors: Messages to stderr, exit 1
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../../scripts/resolve-git-root.sh"
 
 DISCORD_API="https://discord.com/api/v10"
 
@@ -207,8 +212,7 @@ cmd_write_env() {
   validate_snowflake_id "$guild_id" "guild_id"
   require_token
 
-  local repo_root
-  repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  local repo_root="$GIT_ROOT"
   local env_file="${repo_root}/.env"
 
   # Remove existing Discord vars if .env exists
@@ -217,7 +221,9 @@ cmd_write_env() {
     tmp=$(mktemp) || { echo "Error: Failed to create temp file." >&2; exit 1; }
     grep -v '^DISCORD_BOT_TOKEN=' "$env_file" | \
       grep -v '^DISCORD_GUILD_ID=' | \
-      grep -v '^DISCORD_WEBHOOK_URL=' > "$tmp" || true
+      grep -v '^DISCORD_WEBHOOK_URL=' | \
+      grep -v '^DISCORD_RELEASES_WEBHOOK_URL=' | \
+      grep -v '^DISCORD_BLOG_WEBHOOK_URL=' > "$tmp" || true
     mv "$tmp" "$env_file"
   fi
 
@@ -226,19 +232,29 @@ cmd_write_env() {
   chmod 600 "$env_file"
 
   # Append Discord vars (file already has correct permissions)
+  local var_count=3
   {
     echo "DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN_INPUT}"
     echo "DISCORD_GUILD_ID=${guild_id}"
     echo "DISCORD_WEBHOOK_URL=${webhook_url}"
   } >> "$env_file"
 
-  echo "Wrote 3 variables to ${env_file} (permissions: 600)" >&2
+  # Optional: write channel-specific webhooks if provided
+  if [[ -n "${DISCORD_RELEASES_WEBHOOK_URL_INPUT:-}" ]]; then
+    echo "DISCORD_RELEASES_WEBHOOK_URL=${DISCORD_RELEASES_WEBHOOK_URL_INPUT}" >> "$env_file"
+    var_count=$((var_count + 1))
+  fi
+  if [[ -n "${DISCORD_BLOG_WEBHOOK_URL_INPUT:-}" ]]; then
+    echo "DISCORD_BLOG_WEBHOOK_URL=${DISCORD_BLOG_WEBHOOK_URL_INPUT}" >> "$env_file"
+    var_count=$((var_count + 1))
+  fi
+
+  echo "Wrote ${var_count} variables to ${env_file} (permissions: 600)" >&2
 }
 
 cmd_verify() {
   # Verify .env configuration by running guild-info
-  local repo_root
-  repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  local repo_root="$GIT_ROOT"
   local env_file="${repo_root}/.env"
 
   if [[ ! -f "$env_file" ]]; then

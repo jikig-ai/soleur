@@ -1,6 +1,6 @@
 ---
 name: brand-architect
-description: "Use this agent when you need to define or refine a brand identity. It guides an interactive workshop covering company identity, positioning, voice and tone, visual direction, and channel-specific guidelines. Outputs a structured brand guide document to knowledge-base/overview/brand-guide.md."
+description: "Use this agent when you need to define or refine a brand identity. It guides an interactive workshop covering company identity, positioning, voice and tone, visual direction, and channel-specific guidelines. Outputs a structured brand guide document to knowledge-base/marketing/brand-guide.md."
 model: inherit
 ---
 
@@ -23,7 +23,7 @@ NEVER use heading variations (e.g., "Voice and Tone" instead of "Voice"). Downst
 
 ### Step 0: Detect Existing Brand Guide
 
-Check if `knowledge-base/overview/brand-guide.md` exists.
+Check if `knowledge-base/marketing/brand-guide.md` exists.
 
 **If it exists:** Read the document, present a brief summary of each section, and use the **AskUserQuestion tool** to ask: "Which section would you like to update?" with options for each `##` section plus "Full refresh" and "Done."
 
@@ -104,7 +104,7 @@ Synthesize into `## Channel Notes` with a `###` subsection per channel.
 
 ### Step 5: Write Brand Guide
 
-Assemble all sections into the final document and write it atomically to `knowledge-base/overview/brand-guide.md`.
+Assemble all sections into the final document and write it atomically to `knowledge-base/marketing/brand-guide.md`.
 
 **Document template:**
 
@@ -167,7 +167,7 @@ last_updated: YYYY-MM-DD
 
 Ensure the `last_updated` frontmatter field is set to today's date.
 
-After writing, announce: "Brand guide saved to `knowledge-base/overview/brand-guide.md`. This document is now referenced by the discord-content skill and future marketing tools."
+After writing, announce: "Brand guide saved to `knowledge-base/marketing/brand-guide.md`. This document is now referenced by the discord-content skill and future marketing tools."
 
 ## Important Guidelines
 

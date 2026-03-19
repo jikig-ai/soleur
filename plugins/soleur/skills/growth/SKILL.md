@@ -1,6 +1,6 @@
 ---
 name: growth
-description: "This skill should be used when performing content strategy analysis, keyword research, content auditing for search intent alignment, content gap analysis, content planning, AI agent consumability auditing, or applying content fixes. Triggers on \"keyword research\", \"content strategy\", \"content audit\", \"content plan\", \"growth audit\", \"growth plan\", \"growth fix\", \"aeo content\", \"search intent\", \"fix content\"."
+description: "This skill should be used when performing content strategy analysis, keyword research, content auditing for search intent alignment, content gap analysis, content planning, or AI agent consumability auditing. It provides sub-commands for auditing, planning, and applying fixes."
 ---
 
 # Growth Strategy
@@ -31,7 +31,7 @@ Analyze existing site content for keyword alignment, search intent match, and re
 2. Check for brand guide:
 
    ```bash
-   if [[ -f "knowledge-base/overview/brand-guide.md" ]]; then
+   if [[ -f "knowledge-base/marketing/brand-guide.md" ]]; then
      echo "Brand guide found. Will use for voice alignment."
    fi
    ```
@@ -41,7 +41,7 @@ Analyze existing site content for keyword alignment, search intent match, and re
    ```
    Task growth-strategist: "Audit the content at <url-or-path> for keyword alignment,
    search intent match, and readability. <if brand guide exists: Also read
-   knowledge-base/overview/brand-guide.md and align rewrite suggestions with the brand voice.>
+   knowledge-base/marketing/brand-guide.md and align rewrite suggestions with the brand voice.>
    Produce a structured report with per-page analysis, issues found, and rewrite suggestions.
    Use WebFetch for URLs or Read/Glob for local paths."
    ```
@@ -61,7 +61,7 @@ Audit existing content and apply fixes to local source files. Combines analysis 
 2. Check for brand guide:
 
    ```bash
-   if [[ -f "knowledge-base/overview/brand-guide.md" ]]; then
+   if [[ -f "knowledge-base/marketing/brand-guide.md" ]]; then
      echo "Brand guide found. Will validate rewrites against brand voice."
    fi
    ```
@@ -72,7 +72,7 @@ Audit existing content and apply fixes to local source files. Combines analysis 
    Task growth-strategist: "Audit the content at <path> for keyword alignment,
    search intent match, readability, and GEO/AEO gaps. For each issue found, apply
    a fix to the source files. Read each file before editing.
-   <if brand guide exists: Read knowledge-base/overview/brand-guide.md and
+   <if brand guide exists: Read knowledge-base/marketing/brand-guide.md and
    validate all rewrites against the brand voice before applying.>
    After all fixes, build the site to verify changes compile.
    Report what was changed per file."
@@ -114,7 +114,7 @@ Research keywords, analyze content gaps, and produce a prioritized content plan.
    4. Produce a prioritized content plan: P1 (high impact), P2 (medium), P3 (future).
       Each piece should include content type, target keywords, search intent, and outline.
 
-   <if brand guide exists: Read knowledge-base/overview/brand-guide.md and align
+   <if brand guide exists: Read knowledge-base/marketing/brand-guide.md and align
    keyword relevance and content priorities with the brand positioning.>"
    ```
 

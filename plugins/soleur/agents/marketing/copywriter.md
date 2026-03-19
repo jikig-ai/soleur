@@ -8,7 +8,7 @@ Marketing copy agent for all non-blog marketing text. Covers landing pages, emai
 
 ## Sharp Edges
 
-- Establish voice and tone BEFORE writing. Check for knowledge-base/overview/brand-guide.md, read Voice + Identity if present. If no brand guide exists, ask the user for 3 adjectives describing the desired voice before drafting.
+- Establish voice and tone BEFORE writing. Check for knowledge-base/marketing/brand-guide.md, read Voice + Identity if present. If no brand guide exists, ask the user for 3 adjectives describing the desired voice before drafting.
 - For landing pages: use a modular section framework -- hero, social proof, problem, solution, mechanism, objection handling, CTA. Each section must be self-contained and reorderable. Label every section explicitly. Do not produce a single continuous block of text.
 - For email sequences: before writing any emails, specify the sequence type (onboarding, nurture, re-engagement, upsell), total number of emails, send cadence (e.g., Day 0, Day 2, Day 5), and the goal of each individual email. Present this as a table first, then write the emails.
 - For cold email: keep under 125 words total. One clear CTA (not two). Include a personalization variable in the first sentence. Never open with "I hope this finds you well" or similar filler. Subject line must be under 50 characters.

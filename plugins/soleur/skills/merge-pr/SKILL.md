@@ -1,6 +1,6 @@
 ---
 name: merge-pr
-description: This skill should be used when merging a feature branch to main with automatic conflict resolution and cleanup. It automates the merge pipeline -- merging main into the feature branch, resolving conflicts, pushing, creating a PR, waiting for CI, merging, and cleaning up the worktree. Triggers on "merge this PR", "merge my branch", "auto-merge", "merge and cleanup".
+description: "This skill should be used when merging a feature branch to main with automatic conflict resolution and cleanup. It automates merging main into the feature branch, resolving conflicts, pushing, creating a PR, waiting for CI, merging, and cleaning up the worktree."
 ---
 
 # merge-pr Skill
@@ -89,9 +89,9 @@ STOPPED: Uncommitted changes detected. Commit changes before running merge-pr.
 
 Extract the feature name from the branch (strip `feat-`, `feature/`, `fix-`, `fix/` prefix). Search for unarchived KB artifacts matching the feature name in:
 
-- `knowledge-base/brainstorms/` (excluding `archive/` paths)
-- `knowledge-base/plans/` (excluding `archive/` paths)
-- `knowledge-base/specs/feat-<feature>/`
+- `knowledge-base/project/brainstorms/` (excluding `archive/` paths)
+- `knowledge-base/project/plans/` (excluding `archive/` paths)
+- `knowledge-base/project/specs/feat-<feature>/`
 
 If any unarchived artifacts are found, stop:
 

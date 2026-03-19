@@ -30,12 +30,12 @@
    Task brand-architect(feature_description)
    ```
 
-   The brand-architect agent runs its full interactive workshop and writes the brand guide to `knowledge-base/overview/brand-guide.md` inside the worktree.
+   The brand-architect agent runs its full interactive workshop and writes the brand guide to `knowledge-base/marketing/brand-guide.md` inside the worktree.
 
 5. **Commit and push workshop artifacts:**
 
    ```bash
-   git add knowledge-base/overview/brand-guide.md
+   git add knowledge-base/marketing/brand-guide.md
    git commit -m "docs: capture brand guide"
    git push
    ```
@@ -48,7 +48,7 @@
    Brand workshop complete!
 
    Document: none (brand workshop)
-   Brand guide: knowledge-base/overview/brand-guide.md
+   Brand guide: knowledge-base/marketing/brand-guide.md
    Issue: #N (using existing) | #N (created)
    Branch: feat-<name> (if worktree created)
    Working directory: .worktrees/feat-<name>/ (if worktree created)

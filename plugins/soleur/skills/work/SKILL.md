@@ -41,14 +41,14 @@ Navigate to the repository root, then run `bash ./plugins/soleur/skills/git-work
 Check if `knowledge-base/` directory exists. If it does:
 
 1. Run `git branch --show-current` to get the current branch name
-2. If the branch starts with `feat-`, read `knowledge-base/specs/<branch-name>/tasks.md` if it exists
+2. If the branch starts with `feat-`, read `knowledge-base/project/specs/<branch-name>/tasks.md` if it exists
 
 **If knowledge-base/ exists:**
 
 1. Read `CLAUDE.md` if it exists - apply project conventions during implementation
-2. If `# Project Constitution` heading is NOT already in context, read `knowledge-base/overview/constitution.md` - apply principles during implementation. Skip if already loaded (e.g., from a preceding `/soleur:plan`).
+2. If `# Project Constitution` heading is NOT already in context, read `knowledge-base/project/constitution.md` - apply principles during implementation. Skip if already loaded (e.g., from a preceding `/soleur:plan`).
 3. Detect feature from current branch (`feat-<name>` pattern)
-4. Read `knowledge-base/specs/feat-<name>/tasks.md` if it exists - use as work checklist alongside TodoWrite
+4. Read `knowledge-base/project/specs/feat-<name>/tasks.md` if it exists - use as work checklist alongside TodoWrite
 5. Announce: "Loaded constitution and tasks for `feat-<name>`"
 
 **If knowledge-base/ does NOT exist:**
@@ -293,7 +293,19 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 ### Phase 4: Handoff
 
-Implementation is complete. Determine how this skill was invoked and act accordingly:
+Implementation is complete. Before handing off, run the **Playwright-first audit**, then determine invocation mode.
+
+#### Playwright-First Audit
+
+Scan any "next steps", "setup instructions", or "to use this" text you are about to output. For each step that involves a browser action (account creation, credential generation, settings configuration, form submission, OAuth flow, portal navigation):
+
+1. **Classify:** Is this step automatable via Playwright MCP, or is it genuinely manual (CAPTCHA, interactive OAuth consent)?
+2. **If automatable:** Do not list it as a manual step. Either execute it now via Playwright MCP, or note it as "automatable via Playwright — will execute next."
+3. **If genuinely manual:** Drive the flow via Playwright up to the manual gate (e.g., navigate to the OAuth consent screen), then hand off only that single interaction to the user.
+
+If you catch yourself writing phrases like "set up X in the browser", "go to the portal and...", or "manually configure..." — stop and attempt Playwright first. This audit is mandatory; skipping it is a deviation.
+
+#### Invocation Mode
 
 **If invoked by one-shot** (the conversation contains `soleur:one-shot` skill output earlier): Do not invoke ship, review, or compound — the orchestrator handles those. Output exactly `## Work Phase Complete` (this is a continuation marker, NOT a turn-ending statement) and then **immediately continue executing the next numbered step in the one-shot sequence** (step 4: review). Do NOT end your turn after outputting this marker.
 

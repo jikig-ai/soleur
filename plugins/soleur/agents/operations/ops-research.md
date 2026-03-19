@@ -14,8 +14,8 @@ Read existing operations data before making recommendations:
 
 | File | Purpose |
 |------|---------|
-| `knowledge-base/ops/expenses.md` | Current recurring and one-time costs |
-| `knowledge-base/ops/domains.md` | Current domain registry |
+| `knowledge-base/operations/expenses.md` | Current recurring and one-time costs |
+| `knowledge-base/operations/domains.md` | Current domain registry |
 
 If files do not exist, proceed without baseline context.
 
@@ -43,10 +43,10 @@ When reaching a checkout-like page, report what you see and tell the user to com
 After the user confirms they completed a purchase:
 
 1. Ask for the actual amount paid (may differ from research)
-2. Update `knowledge-base/ops/expenses.md` following ops-advisor conventions:
+2. Update `knowledge-base/operations/expenses.md` following ops-advisor conventions:
    - Amounts: plain numbers in USD, no currency symbol
    - Dates: ISO 8601 (YYYY-MM-DD)
    - Categories: hosting, domain, dev-tools, saas, api
    - Update `last_updated` in YAML frontmatter
-3. For domain purchases, also update `knowledge-base/ops/domains.md`
+3. For domain purchases, also update `knowledge-base/operations/domains.md`
 4. For cost optimization switches, ask user whether to remove or annotate the old entry

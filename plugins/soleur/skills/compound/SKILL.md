@@ -9,7 +9,7 @@ Coordinate multiple subagents working in parallel to document a recently solved 
 
 ## Purpose
 
-Captures problem solutions while context is fresh, creating structured documentation in `knowledge-base/learnings/` with YAML frontmatter for searchability and future reference. Uses parallel subagents for maximum efficiency.
+Captures problem solutions while context is fresh, creating structured documentation in `knowledge-base/project/learnings/` with YAML frontmatter for searchability and future reference. Uses parallel subagents for maximum efficiency.
 
 **Why "compound"?** Each documented solution compounds your team's knowledge. The first time you solve a problem takes research. Document it, and the next occurrence takes minutes. Knowledge compounds.
 
@@ -46,7 +46,7 @@ Read `CLAUDE.md` if it exists - apply project conventions during documentation.
 
 HARD RULE: Before writing any learning, enumerate ALL errors encountered in this session. Output a numbered list to the user. This step cannot be skipped even if the session felt clean.
 
-**Check for session-state.md:** Run `git branch --show-current`. If on a `feat-*` branch, check if `knowledge-base/specs/feat-<name>/session-state.md` exists. If it does, read it and include any forwarded errors from `### Errors` in the inventory. These errors occurred in preceding pipeline phases (e.g., plan+deepen subagent) whose context was compacted.
+**Check for session-state.md:** Run `git branch --show-current`. If on a `feat-*` branch, check if `knowledge-base/project/specs/feat-<name>/session-state.md` exists. If it does, read it and include any forwarded errors from `### Errors` in the inventory. These errors occurred in preceding pipeline phases (e.g., plan+deepen subagent) whose context was compacted.
 
 Include:
 
@@ -64,6 +64,25 @@ If genuinely no errors occurred (including no forwarded errors), output: "Sessio
 This list feeds directly into the Session Errors section of the learning document. Every item on this list MUST appear in the final output unless the user explicitly excludes it.
 
 FAILURE MODE THIS PREVENTS: Compound runs in pipeline mode, the model judges the session as "clean," and silently drops errors that happened earlier in the conversation (e.g., a skill-not-found error from one-shot Step 1 gets omitted because compound focuses only on the main implementation task).
+
+### Post-Documentation Verification Gate (MANDATORY)
+
+After the learning file is written (by compound-capture Step 6), read it back and verify:
+
+1. If Phase 0.5 produced a non-empty error inventory, the learning file MUST contain a `## Session Errors` section with at least as many items as the inventory.
+2. For each session error, the learning MUST include a `**Prevention:**` line proposing how to avoid it in future sessions.
+3. If the verification fails (section missing or item count mismatch), append the missing errors to the learning file immediately. Do not proceed to Constitution Promotion until the learning is complete.
+
+This gate closes the gap where errors were enumerated in conversation but never made it into the persisted document.
+
+### Error-to-Workflow Feedback (MANDATORY)
+
+After verifying session errors are in the learning, determine if any error warrants a workflow change. For each session error, ask: "Could a rule, hook, or skill instruction have prevented this?"
+
+- If yes, produce a proposal in the same format as Phase 1.5 Deviation Analyst (rule text + enforcement tier) and feed it into Constitution Promotion alongside any deviation proposals.
+- If no (the error was a one-off or already covered by existing rules), skip.
+
+This ensures session errors don't just get documented — they feed back into the rules and definitions that govern future sessions. The goal is a closed loop: error happens → gets documented → workflow changes → error cannot recur.
 
 ## Execution Strategy: Parallel Subagents
 
@@ -85,7 +104,7 @@ This command launches multiple specialized subagents IN PARALLEL to maximize eff
 
 ### 3. **Related Docs Finder** (Parallel)
 
-- Searches `knowledge-base/learnings/` for related documentation
+- Searches `knowledge-base/project/learnings/` for related documentation
 - Identifies cross-references and links
 - Finds related GitHub issues
 - Returns: Links and relationships
@@ -99,7 +118,7 @@ This command launches multiple specialized subagents IN PARALLEL to maximize eff
 
 ### 5. **Documentation Writer** (Parallel)
 
-- Determines optimal `knowledge-base/learnings/` category
+- Determines optimal `knowledge-base/project/learnings/` category
 - Validates category against schema
 - Suggests filename based on slug
 - Assembles complete markdown file
@@ -129,7 +148,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 1. **Gather rules.** Read `AGENTS.md` and extract only `## Hard Rules` and `## Workflow Gates` items (Always/Never). Skip Prefer rules — they are advisory and flagging them adds noise.
 
 2. **Gather session evidence.** Two sources:
-   - **session-state.md** (if present): read `knowledge-base/specs/feat-<name>/session-state.md` for forwarded errors from preceding pipeline phases (pre-compaction deviations)
+   - **session-state.md** (if present): read `knowledge-base/project/specs/feat-<name>/session-state.md` for forwarded errors from preceding pipeline phases (pre-compaction deviations)
    - **Current context**: scan the conversation for post-compaction actions — tool calls, command outputs, file edits
 
 3. **Detect deviations.** For each hard rule, check if session evidence shows a violation. Common examples:
@@ -138,6 +157,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    - Running `git stash` in a worktree
    - Skipping compound before commit
    - Treating a failed command as success
+   - **Manual browser steps in prose output:** Scan all text output (summaries, handoffs, "next steps" lists) for browser tasks labeled as manual without a preceding Playwright MCP attempt. Phrases like "set up X in the browser", "go to the portal and configure", "manually create an account" are violations of the Playwright-first rule unless the session log shows a `mcp__plugin_playwright_playwright__browser_navigate` call for that task. This catches laziness in handoff text that hooks cannot detect.
 
 4. **Propose enforcement.** For each detected deviation, first check if an existing PreToolUse hook already covers it by scanning `.claude/hooks/*.sh` comment headers. If a hook already enforces the rule, note "already hook-enforced" and skip the proposal. If no hook covers it, propose enforcement following the hierarchy:
    - **PreToolUse hook** (preferred) — mechanical prevention, cannot be bypassed
@@ -167,13 +187,15 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    # jq -n '{ hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: "BLOCKED: [reason]" } }'
    ```
 
-6. **Feed into Constitution Promotion.** Present each deviation to the user via the existing Accept/Skip/Edit gate in the Constitution Promotion section below. Accepted hook proposals should be manually copied to `.claude/hooks/` after testing — never auto-install.
+6. **Feed into learning document.** For each detected deviation, add it to the learning file's `## Session Errors` section (if not already present from Phase 0.5). Format: `**[description]** — Recovery: [what fixed it] — Prevention: [proposed enforcement]`. This ensures workflow violations are documented in the learning, not just proposed as hooks.
 
-7. **Rule budget count.** After deviation analysis, count always-loaded rules: `grep -c '^- ' knowledge-base/overview/constitution.md` + `grep -c '^- ' AGENTS.md`. Output: `"Rule budget: N always-loaded rules (constitution: X, AGENTS.md: Y)"`. If N > 250, append: `"[WARNING] Rule budget exceeded (N/250). Consider retiring hook-enforced rules or migrating advisory rules to skill/agent instructions."`
+7. **Feed into Constitution Promotion.** Present each deviation to the user via the existing Accept/Skip/Edit gate in the Constitution Promotion section below. Accepted hook proposals should be manually copied to `.claude/hooks/` after testing — never auto-install.
+
+8. **Rule budget count.** After deviation analysis, count always-loaded rules: `grep -c '^- ' knowledge-base/project/constitution.md` + `grep -c '^- ' AGENTS.md`. Output: `"Rule budget: N always-loaded rules (constitution: X, AGENTS.md: Y)"`. If N > 250, append: `"[WARNING] Rule budget exceeded (N/250). Consider retiring hook-enforced rules or migrating advisory rules to skill/agent instructions."`
 
 ### Empty Case
 
-If no deviations are detected, output: "Deviation Analyst: no violations found." followed by the rule budget count from step 7, then proceed to Knowledge Base Integration.
+If no deviations are detected, output: "Deviation Analyst: no violations found." followed by the rule budget count from step 8, then proceed to Knowledge Base Integration.
 
 ## Knowledge Base Integration
 
@@ -181,9 +203,9 @@ If no deviations are detected, output: "Deviation Analyst: no violations found."
 
 ### Save Learning to Knowledge Base
 
-If `knowledge-base/` directory exists, save the learning file to `knowledge-base/learnings/YYYY-MM-DD-<topic>.md` (using today's date). Otherwise, fall back to `knowledge-base/learnings/<category>/<topic>.md`.
+If `knowledge-base/` directory exists, save the learning file to `knowledge-base/project/learnings/YYYY-MM-DD-<topic>.md` (using today's date). Otherwise, fall back to `knowledge-base/project/learnings/<category>/<topic>.md`.
 
-**Learning format for knowledge-base/learnings/:**
+**Learning format for knowledge-base/project/learnings/:**
 
 ```markdown
 # Learning: [topic]
@@ -218,12 +240,12 @@ HARD RULE: This phase MUST run even when compound is invoked inside an automated
 
 **If user says yes:**
 
-1. Show recent learnings (last 5 from `knowledge-base/learnings/`)
+1. Show recent learnings (last 5 from `knowledge-base/project/learnings/`)
 2. User selects which learning to promote
 3. Ask: "Which domain? (Code Style / Architecture / Testing)"
 4. Ask: "Which category? (Always / Never / Prefer)"
 5. User writes the principle (one line, actionable)
-6. Append to `knowledge-base/overview/constitution.md` under the correct section
+6. Append to `knowledge-base/project/constitution.md` under the correct section
 7. Commit: `git commit -m "constitution: add <domain> <category> principle"`
 
 **If user says no:** Continue to next step
@@ -235,7 +257,9 @@ HARD RULE: This phase MUST run even in automated pipelines. See constitution pro
 After constitution promotion, compound routes the captured learning to the skill, agent, or command definition that was active in the session. This feeds insights back into the instructions that directly govern behavior, preventing repeated mistakes.
 
 1. Detect which skills, agents, or commands were invoked in this conversation. Also check session-state.md `### Components Invoked` for components from preceding pipeline phases.
-2. Propose a one-line bullet edit to the most relevant section of the target definition file
+2. Route **two categories** of insights:
+   - **Solution insight:** The main learning (what was solved and how). Propose a one-line bullet edit to the most relevant section of the target definition file.
+   - **Error prevention:** For each session error that could have been prevented by a skill instruction, propose a one-line bullet to the skill that was active when the error occurred. Example: if a plan skill prescribed wrong paths, add a bullet to the plan skill's Sharp Edges saying "Verify relative paths by tracing each `../` step before prescribing them."
 3. **Headless mode:** If `HEADLESS_MODE=true`, auto-accept the LLM-proposed edit without prompting.
 4. **Interactive mode:** User confirms with Accept/Skip/Edit
 
@@ -246,19 +270,19 @@ See compound-capture Step 8 for the full flow.
 ### Managing Learnings (Update/Archive/Delete)
 
 **Update an existing learning:**
-Read the file in `knowledge-base/learnings/`, apply changes, and commit with `git commit -m "learning: update <topic>"`.
+Read the file in `knowledge-base/project/learnings/`, apply changes, and commit with `git commit -m "learning: update <topic>"`.
 
 **Archive an outdated learning:**
-Move it to `knowledge-base/learnings/archive/`: `mkdir -p knowledge-base/learnings/archive && git add knowledge-base/learnings/<category>/<file>.md && git mv knowledge-base/learnings/<category>/<file>.md knowledge-base/learnings/archive/`. The `git add` ensures the file is tracked before `git mv`.Commit with `git commit -m "learning: archive <topic>"`.
+Move it to `knowledge-base/project/learnings/archive/`: `mkdir -p knowledge-base/project/learnings/archive && git add knowledge-base/project/learnings/<category>/<file>.md && git mv knowledge-base/project/learnings/<category>/<file>.md knowledge-base/project/learnings/archive/`. The `git add` ensures the file is tracked before `git mv`.Commit with `git commit -m "learning: archive <topic>"`.
 
 **Delete a learning:**
-Only with user confirmation. `git rm knowledge-base/learnings/<category>/<file>.md` and commit.
+Only with user confirmation. `git rm knowledge-base/project/learnings/<category>/<file>.md` and commit.
 
 ### Managing Constitution Rules (Edit/Remove)
 
-**Edit a rule:** Read `knowledge-base/overview/constitution.md`, find the rule, modify it, commit with `git commit -m "constitution: update <domain> <category> rule"`.
+**Edit a rule:** Read `knowledge-base/project/constitution.md`, find the rule, modify it, commit with `git commit -m "constitution: update <domain> <category> rule"`.
 
-**Remove a rule:** Read `knowledge-base/overview/constitution.md`, remove the bullet point, commit with `git commit -m "constitution: remove <domain> <category> rule"`.
+**Remove a rule:** Read `knowledge-base/project/constitution.md`, remove the bullet point, commit with `git commit -m "constitution: remove <domain> <category> rule"`.
 
 ### Automatic Consolidation & Archival (feature branches)
 
@@ -266,11 +290,11 @@ On feature branches (`feat-*`, `feat/*`, `fix-*`, or `fix/*`), consolidation run
 
 The automatic consolidation:
 
-1. **Discovers artifacts** -- extracts the feature slug by stripping `feat/`, `feat-`, `fix/`, or `fix-` prefix from the branch name, then globs `knowledge-base/{brainstorms,plans}/*<slug>*` and `knowledge-base/specs/feat-<slug>/` (excluding `*/archive/`)
-2. **Extracts knowledge** -- a single agent reads all artifacts and proposes updates to `constitution.md`, component docs, and overview `README.md`
+1. **Discovers artifacts** -- extracts the feature slug by stripping `feat/`, `feat-`, `fix/`, or `fix-` prefix from the branch name, then globs `knowledge-base/project/{brainstorms,plans}/*<slug>*` and `knowledge-base/project/specs/feat-<slug>/` (excluding `*/archive/`)
+2. **Extracts knowledge** -- a single agent reads all artifacts and proposes updates to `constitution.md`, component docs, and project `README.md`
 3. **Approval flow** -- **Headless mode:** auto-accept all proposals (idempotency still checked via substring match). **Interactive mode:** proposals presented one at a time with Accept/Skip/Edit; idempotency checked via substring match
 4. **Archives sources** -- runs `bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` to move all discovered artifacts to `archive/` subdirectories via `git mv` with `YYYYMMDD-HHMMSS` timestamp prefix. **Headless mode:** auto-confirm archival without prompting
-5. **Single commit** -- overview edits and archival moves committed together for clean `git revert`
+5. **Single commit** -- project edits and archival moves committed together for clean `git revert`
 
 If no artifacts are found for the feature slug, consolidation is skipped silently. See the `compound-capture` skill for full implementation details.
 
@@ -318,7 +342,7 @@ git worktree remove .worktrees/feat-<name>
 
 **Organized documentation:**
 
-- File: `knowledge-base/learnings/[category]/[filename].md`
+- File: `knowledge-base/project/learnings/[category]/[filename].md`
 
 **Categories auto-detected from problem:**
 
@@ -351,7 +375,7 @@ Specialized Agent Reviews (Auto-Triggered):
   ✓ every-style-editor: Documentation style verified
 
 File created:
-- knowledge-base/learnings/performance-issues/n-plus-one-brief-generation.md
+- knowledge-base/project/learnings/performance-issues/n-plus-one-brief-generation.md
 
 This documentation will be searchable for future reference when similar
 issues occur in the Email Processing or Brief System modules.
@@ -370,7 +394,7 @@ What's next?  (Headless mode: auto-selects "Continue workflow")
 This creates a compounding knowledge system:
 
 1. First time you solve "N+1 query in brief generation" → Research (30 min)
-2. Document the solution → knowledge-base/learnings/performance-issues/n-plus-one-briefs.md (5 min)
+2. Document the solution → knowledge-base/project/learnings/performance-issues/n-plus-one-briefs.md (5 min)
 3. Next time similar issue occurs → Quick lookup (2 min)
 4. Knowledge compounds → Team gets smarter
 
@@ -423,5 +447,5 @@ Based on problem type, these agents can enhance documentation:
 
 ## Related Commands
 
-- `/research [topic]` - Deep investigation (searches knowledge-base/learnings/ for patterns)
+- `/research [topic]` - Deep investigation (searches knowledge-base/project/learnings/ for patterns)
 - `soleur:plan` skill - Planning workflow (references documented solutions)

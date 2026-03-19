@@ -2,7 +2,12 @@
 set -euo pipefail
 
 # --- Sentinel Check ---
-PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || PROJECT_ROOT="."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../scripts/resolve-git-root.sh" || {
+  # Not in a git repo -- skip welcome silently
+  exit 0
+}
+PROJECT_ROOT="$GIT_ROOT"
 SENTINEL_FILE="${PROJECT_ROOT}/.claude/soleur-welcomed.local"
 
 [[ -f "$SENTINEL_FILE" ]] && exit 0

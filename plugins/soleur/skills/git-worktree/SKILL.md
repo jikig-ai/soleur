@@ -1,6 +1,6 @@
 ---
 name: git-worktree
-description: This skill should be used when managing Git worktrees for isolated parallel development. It handles creating, listing, switching, and cleaning up worktrees with a simple interactive interface, following KISS principles. Triggers on "create a worktree", "parallel development", "isolated branch work", "git worktree", "work on multiple branches", "review in isolation".
+description: "This skill should be used when managing Git worktrees for isolated parallel development. It handles creating, listing, switching, and cleaning up worktrees with a simple interactive interface."
 ---
 
 # Git Worktree Manager
@@ -26,6 +26,8 @@ The script handles critical setup that raw git commands don't:
 1. Copies `.env`, `.env.local`, `.env.test`, etc. from main repo
 2. Ensures `.worktrees` is in `.gitignore`
 3. Creates consistent directory structure
+4. Detects bare repos (`core.bare = true`) and derives `GIT_ROOT` via `--absolute-git-dir` instead of `--show-toplevel`
+5. Sources the shared `plugins/soleur/scripts/resolve-git-root.sh` helper -- all scripts that need `GIT_ROOT` should source this helper instead of inlining their own detection logic
 
 **After creating a worktree**, run `npm install` if the project has a `package.json` — worktrees do not share `node_modules/` with the main working tree, and build commands (`npx @11ty/eleventy`, etc.) will silently hang instead of erroring.
 
@@ -141,6 +143,22 @@ bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup
 2. Asks for confirmation
 3. Removes selected worktrees
 4. Cleans up empty directories
+
+### `sync-bare-files` or `sync`
+
+Syncs stale on-disk files from git HEAD in a bare repo. Only needed when the repo uses `core.bare=true` — on-disk files at the bare root become stale after merges since git never updates them. Auto-called after `cleanup-merged` cleans branches in bare repo context.
+
+**Example:**
+```bash
+bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh sync-bare-files
+```
+
+**What it syncs:**
+- `AGENTS.md`, `CLAUDE.md` (session-start instructions)
+- `plugins/soleur/AGENTS.md`, `plugins/soleur/CLAUDE.md`
+- `.claude/settings.json` (permission rules)
+- `.claude/hooks/*.sh` (PreToolUse hooks)
+- The `worktree-manager.sh` script itself
 
 ## Workflow Examples
 

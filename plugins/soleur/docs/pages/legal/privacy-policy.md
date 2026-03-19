@@ -17,7 +17,7 @@ permalink: pages/legal/privacy-policy.html
     <div class="prose">
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 19, 2026 (Buttondown SCCs verification and free-tier DPA confirmation)
+**Last Updated:** March 19, 2026 (added web platform data collection, processors, and international transfers for Supabase, Stripe, Hetzner, Cloudflare; Buttondown SCCs verification and free-tier DPA confirmation)
 
 ## 1. Introduction
 
@@ -41,13 +41,14 @@ Soleur is a locally installed Claude Code plugin. It provides {{ stats.agents }}
 
 ### 4.1 Data Collected by the Plugin: None
 
-The Soleur Plugin **does not collect, transmit, or store any personal data on external servers**. Specifically:
+The Soleur **Plugin** (the locally installed Claude Code extension) **does not collect, transmit, or store any personal data on external servers**. Specifically:
 
 - The Plugin runs entirely on your local machine.
 - All knowledge-base files -- including plans, brainstorms, specifications, and learnings -- are stored exclusively on your local filesystem.
 - The Plugin does not phone home, send telemetry, or transmit analytics to Jikigai-operated servers.
-- The Plugin does not have its own backend, database, or cloud infrastructure.
 - We do not have access to your files, your code, or your usage patterns.
+
+This section applies to the Plugin only. For data collected by the Soleur Web Platform (app.soleur.ai), see Section 4.7 below.
 
 ### 4.2 Data Processed Locally
 
@@ -93,12 +94,29 @@ This data is stored in the Soleur GitHub repository on a dedicated branch (`cla-
 
 If you subscribe to the Soleur newsletter via the signup form on the Docs Site, we collect your **email address** for the purpose of sending periodic newsletter emails. This data is processed by **Buttondown** ([buttondown.com](https://buttondown.com)), a third-party newsletter platform, on our behalf.
 
-- **Data collected:** Email address, IP address, referrer metadata, and subscription timestamp.
-- **Purpose:** Sending periodic newsletter emails about Soleur updates, features, and content. IP addresses and referrer metadata are collected automatically by Buttondown for service operation and engagement analytics.
-- **Lawful basis:** Consent (Article 6(1)(a) GDPR) -- you actively opt in by submitting the signup form and confirming your subscription via the double opt-in confirmation email.
+- **Data collected:** Email address (actively provided by you); IP address, referrer URL, subscription timestamp, and browser/device metadata (automatically collected by Buttondown during the subscription request).
+- **Purpose:** Sending periodic newsletter emails about Soleur updates, features, and content.
+- **Lawful basis (email address):** Consent (Article 6(1)(a) GDPR) -- you actively opt in by submitting the signup form and confirming your subscription via the double opt-in confirmation email.
+- **Lawful basis (technical metadata):** Legitimate interest (Article 6(1)(f) GDPR) -- Buttondown automatically collects IP address, referrer URL, subscription timestamp, and browser/device metadata as part of standard service operation. This data is necessary for service delivery, abuse prevention, and maintaining the security of the newsletter infrastructure. The processing is minimal, within the reasonable expectations of a newsletter subscriber, and does not involve profiling or automated decision-making. You may object to this processing under Article 21 by contacting us at legal@jikigai.com.
 - **Double opt-in:** After submitting your email, Buttondown sends a confirmation email. Your subscription is only activated after you click the confirmation link. This ensures informed, verified consent.
-- **Retention:** Your email address is retained by Buttondown until you unsubscribe. You can unsubscribe at any time via the link in every newsletter email. Upon unsubscription, your email is removed from the active subscriber list.
+- **Retention (email address):** Your email address is retained by Buttondown until you unsubscribe. You can unsubscribe at any time via the link in every newsletter email. Upon unsubscription, your email is removed from the active subscriber list.
+- **Retention (technical metadata):** Governed by Buttondown's data retention practices. See [Buttondown's Privacy Policy](https://buttondown.com/legal/privacy) for details.
 - **Third-party processor:** Buttondown acts as a data processor. See Section 5.3 for details.
+
+### 4.7 Data Collected by the Web Platform
+
+The Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) is a cloud-hosted service operated by Jikigai. Unlike the Plugin (Section 4.1), the Web Platform processes personal data on Jikigai-operated infrastructure. The following data is collected when you use the Web Platform:
+
+- **Account data:** Email address (registration), hashed password (managed by Supabase), authentication tokens, and session cookies.
+- **Workspace data:** User workspaces and encrypted API keys (BYOK -- bring your own key). API keys are encrypted using AES-256-GCM before storage.
+- **Subscription data:** Subscription status and billing metadata (managed by Stripe). Card data is handled exclusively by Stripe via Stripe Checkout and never reaches Jikigai servers (PCI SAQ-A).
+- **Technical data:** IP addresses and request headers processed by Cloudflare CDN/proxy.
+
+**Purpose:** Providing the Web Platform service, including account management, workspace provisioning, and subscription billing.
+
+**Legal basis:** Contract performance (Article 6(1)(b) GDPR) -- processing is necessary to provide the Web Platform service you signed up for.
+
+**Retention:** Account data is retained while your account is active and deleted upon account deletion request. Payment records are retained per French tax law (10 years, Code de commerce Art. L123-22).
 
 ## 5. Third-Party Services
 
@@ -119,7 +137,7 @@ The Soleur Plugin is designed to work with the Anthropic Claude API through the 
 
 ### 5.3 Buttondown (Newsletter)
 
-We use **Buttondown** ([buttondown.com](https://buttondown.com)) to manage newsletter subscriptions and deliver newsletter emails. When you subscribe to our newsletter, your email address, IP address, referrer metadata, and subscription timestamp are transmitted to and stored by Buttondown. Buttondown acts as a data processor on our behalf.
+We use **Buttondown** ([buttondown.com](https://buttondown.com)) to manage newsletter subscriptions and deliver newsletter emails. When you subscribe to our newsletter, your email address is transmitted to and stored by Buttondown. Buttondown also automatically collects technical metadata during the subscription request, including IP address, referrer URL, subscription timestamp, and browser/device metadata. Buttondown acts as a data processor on our behalf.
 
 - Buttondown's privacy practices are governed by [Buttondown's Privacy Policy](https://buttondown.com/legal/privacy).
 - Buttondown uses sub-processors for service delivery; the current list is maintained at [buttondown.com/legal/subprocessors](https://buttondown.com/legal/subprocessors).
@@ -131,11 +149,50 @@ We use **Buttondown** ([buttondown.com](https://buttondown.com)) to manage newsl
 
 The Plugin may interact with other third-party tools and APIs as part of your development workflow (e.g., MCP servers, browser automation tools). These interactions are initiated by you, configured by you, and use your own credentials. Soleur does not control or monitor these interactions.
 
+### 5.5 Supabase (Web Platform Authentication and Database)
+
+We use **Supabase** ([supabase.com](https://supabase.com)) as the authentication and database provider for the Web Platform. Supabase Inc acts as a data processor on our behalf.
+
+- **Data processed:** Email addresses, hashed passwords, authentication tokens, and session data.
+- **Purpose:** User account management, authentication, and session handling for the Web Platform.
+- **DPA:** [Supabase Data Processing Agreement](https://supabase.com/legal/dpa).
+- Supabase is a US-based service. International data transfers are covered by Standard Contractual Clauses (SCCs), Module 2 (Controller to Processor).
+
+### 5.6 Stripe (Web Platform Payments)
+
+We use **Stripe** ([stripe.com](https://stripe.com)) for payment processing on the Web Platform. Stripe Inc acts as a data processor on our behalf.
+
+- **Data processed:** Customer email address and subscription metadata. Card data is handled exclusively by Stripe via Stripe Checkout and never reaches Jikigai servers (PCI SAQ-A).
+- **Purpose:** Subscription billing and payment processing for the Web Platform.
+- **DPA:** [Stripe Data Processing Agreement](https://stripe.com/legal/dpa) (incorporated into the Stripe Services Agreement automatically).
+- Stripe is PCI DSS Level 1 certified. Jikigai's integration uses Stripe Checkout (server-side session creation, client-side redirect), which qualifies for PCI SAQ-A (simplest self-assessment).
+- Stripe is a US-based service. International data transfers are covered by the EU-US Data Privacy Framework (DPF) and Standard Contractual Clauses (SCCs), EEA Module 2.
+
+### 5.7 Hetzner (Web Platform Infrastructure Hosting)
+
+We use **Hetzner** ([hetzner.com](https://hetzner.com)) to host the Web Platform infrastructure. Hetzner Online GmbH acts as a data processor on our behalf.
+
+- **Data processed:** User workspaces, Docker containers, and encrypted API keys stored on Hetzner servers.
+- **Purpose:** Infrastructure hosting for the Web Platform (compute, storage, networking).
+- **DPA:** Hetzner Data Processing Agreement (Auftragsverarbeitungsvertrag / AVV), concluded via the Hetzner Cloud Console account settings.
+- Hetzner is an EU-based company (Germany). The Web Platform is hosted in **Helsinki, Finland (hel1)** -- EU-only processing, no international data transfers.
+
+### 5.8 Cloudflare (Web Platform CDN/Proxy)
+
+The Web Platform at `app.soleur.ai` uses **Cloudflare** ([cloudflare.com](https://cloudflare.com)) as a CDN and reverse proxy, extending the existing Cloudflare zone used for `soleur.ai`.
+
+- **Data processed:** IP addresses, request headers, and TLS termination data.
+- **Purpose:** CDN, DDoS protection, and DNS resolution for the Web Platform.
+- **DPA:** [Cloudflare Customer Data Processing Agreement](https://www.cloudflare.com/cloudflare-customer-dpa/).
+- Cloudflare uses the EU-US Data Privacy Framework (DPF), Standard Contractual Clauses (SCCs), and Global CBPR certification for international data transfers.
+
 ## 6. Legal Basis for Processing (GDPR -- EU Users)
 
 For users in the European Union or European Economic Area:
 
 Because the Plugin itself does not collect or process personal data, no legal basis for processing is required for Plugin usage.
+
+For the Web Platform (app.soleur.ai), the legal basis for processing account data, workspace data, and subscription data is **contract performance** (Article 6(1)(b) GDPR) -- processing is necessary to provide the Web Platform service the user signed up for. For payment processing via Stripe, the legal basis is also contract performance -- processing is necessary to fulfill the subscription agreement.
 
 For the Docs Site, to the extent that technical data is collected by GitHub Pages, the legal basis is **legitimate interest** (Article 6(1)(f) GDPR) -- specifically, the legitimate interest in making documentation available to users via a standard web hosting service.
 
@@ -143,14 +200,15 @@ For website analytics via Plausible Analytics, the lawful basis is **legitimate 
 
 If you interact with the GitHub repository (e.g., filing issues), the legal basis for processing your GitHub profile information in that context is **legitimate interest** (Article 6(1)(f) GDPR) -- facilitating community participation in the project. The balancing test for this interest considers: (a) the processing is limited to publicly available GitHub profile data voluntarily shared by the user, (b) the user initiated the interaction, (c) the processing is necessary for the stated purpose (community participation), and (d) the user can withdraw by deleting their GitHub contributions.
 
-For newsletter subscriptions, the legal basis is **consent** (Article 6(1)(a) GDPR). You provide consent by submitting the signup form and confirming your subscription via the double opt-in email. You may withdraw consent at any time by unsubscribing.
+For newsletter subscriptions, the legal basis for processing your email address is **consent** (Article 6(1)(a) GDPR). You provide consent by submitting the signup form and confirming your subscription via the double opt-in email. You may withdraw consent at any time by unsubscribing. For the technical metadata automatically collected by Buttondown during subscription (IP address, referrer URL, subscription timestamp, browser/device metadata), the legal basis is **legitimate interest** (Article 6(1)(f) GDPR) -- service operation and abuse prevention. You may object to this processing under Article 21 (see Section 8).
 
 ## 7. Data Retention
 
 - **Plugin data:** All data created by the Plugin is stored locally on your machine. You control its retention and deletion entirely.
+- **Web Platform data:** Account data (email, auth tokens) is retained while your account is active and deleted upon account deletion request. Encrypted API keys are deleted with the associated workspace. Payment records (subscription metadata, invoices) are retained for 10 years per French tax law (Code de commerce Art. L123-22).
 - **Docs Site data:** Any data collected by GitHub Pages is retained according to GitHub's data retention policies.
 - **Repository interaction data:** Issues, pull requests, and other contributions are retained on GitHub according to its standard policies and your own account settings.
-- **Newsletter subscription data:** Your email address is retained by Buttondown for as long as you remain subscribed. Upon unsubscription, your email is removed from the active subscriber list. Buttondown may retain anonymized aggregate data (e.g., subscriber counts) after unsubscription.
+- **Newsletter subscription data:** Your email address is retained by Buttondown for as long as you remain subscribed. Upon unsubscription, your email is removed from the active subscriber list. Technical metadata (IP address, referrer URL, subscription timestamp, browser/device metadata) is retained according to Buttondown's data retention practices. Buttondown may retain anonymized aggregate data (e.g., subscriber counts) after unsubscription.
 
 ## 8. Your Rights
 
@@ -166,11 +224,11 @@ If you are located in the EU or EEA, you have the following rights with respect 
 - **Right to object** (Article 21) -- the right to object to processing based on legitimate interests.
 - **Right to lodge a complaint** -- the right to file a complaint with your local Data Protection Authority.
 
-Because the Plugin does not collect personal data, these rights are most relevant to your interactions with GitHub (the hosting platform). To exercise rights related to GitHub-collected data, contact GitHub directly through their privacy channels.
+For the Plugin, these rights are most relevant to your interactions with GitHub (the hosting platform). For the Web Platform (app.soleur.ai), you may exercise these rights directly against Jikigai for account data, workspace data, and subscription data by contacting legal@jikigai.com. To exercise rights related to GitHub-collected data, contact GitHub directly through their privacy channels.
 
 ### 8.2 Rights Under US Privacy Laws
 
-Users in the United States may have additional rights under state privacy laws (such as the California Consumer Privacy Act). Because Soleur does not collect personal information through the Plugin, these rights are primarily relevant to any data collected by GitHub as the hosting provider for the Docs Site and repository. Contact GitHub directly to exercise these rights.
+Users in the United States may have additional rights under state privacy laws (such as the California Consumer Privacy Act). For the Plugin, these rights are primarily relevant to any data collected by GitHub as the hosting provider. For the Web Platform, you may exercise these rights by contacting legal@jikigai.com.
 
 ## 9. Children's Privacy
 
@@ -180,9 +238,20 @@ The Soleur Plugin and Docs Site are not directed at children under the age of 16
 
 The Plugin operates locally and does not transfer data internationally.
 
+For the Web Platform:
+
+- **Supabase:** US-based (AWS). International data transfers are governed by Standard Contractual Clauses (SCCs), Module 2 (Controller to Processor). See [Supabase DPA](https://supabase.com/legal/dpa).
+- **Stripe:** US-based (Stripe, LLC). International data transfers are governed by the EU-US Data Privacy Framework (DPF, adequacy decision) and Standard Contractual Clauses (SCCs), EEA Module 2, as supplementary safeguard. See [Stripe DPA](https://stripe.com/legal/dpa).
+- **Hetzner:** EU-based (Germany). Web Platform hosted in Helsinki, Finland (EU). **No international data transfers.**
+- **Cloudflare:** Global CDN. International data transfers are governed by the EU-US Data Privacy Framework (DPF), Standard Contractual Clauses (SCCs), and Global CBPR certification. See [Cloudflare DPA](https://www.cloudflare.com/cloudflare-customer-dpa/).
+
 For the Docs Site and repository interactions, GitHub may transfer data internationally in accordance with its own policies and applicable data transfer mechanisms (such as Standard Contractual Clauses). See [GitHub's Global Privacy Practices](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement#githubs-global-privacy-practices) for details.
 
 When using the Anthropic Claude API, data may be transferred to Anthropic's servers in the United States. This transfer is governed by Anthropic's privacy policies and your agreement with Anthropic.
+
+For newsletter subscriptions, subscriber email addresses are transmitted to Buttondown, a US-based service. International data transfers are governed by Standard Contractual Clauses (SCCs) per Buttondown's [Data Processing Agreement](https://buttondown.com/legal/data-processing-agreement). See [Buttondown's Privacy Policy](https://buttondown.com/legal/privacy) for details.
+
+Plausible Analytics, used for Docs Site analytics (see Section 4.3), processes all data exclusively within the European Union (Hetzner, Germany). No international data transfers occur for analytics data. See [Plausible's Data Policy](https://plausible.io/data-policy) for details.
 
 ## 11. Security
 

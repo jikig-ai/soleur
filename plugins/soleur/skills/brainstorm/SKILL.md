@@ -69,18 +69,16 @@ Assess whether the feature description has implications for specific business do
 
 #### Processing Instructions
 
-1. Read the feature description and assess relevance against each domain in the table above.
-2. For each relevant domain, use **AskUserQuestion tool** with the routing prompt and options from the table.
-3. Workshop options ("Start brand workshop" in Marketing, "Start validation workshop" in Product): follow the named workshop section below (Brand Workshop, Validation Workshop).
-4. Standard participation: for each accepted leader, spawn a Task using the Task Prompt from the table, substituting `{desc}` with the feature description. Weave each leader's assessment into the brainstorm dialogue alongside repo research findings.
-5. If multiple domains are relevant, ask about each separately.
-6. If no domains are relevant or the user declines all domain leaders, continue to Phase 1.
+1. Read the feature description and assess relevance against each domain in the table above using the Assessment Question column.
+2. For each relevant domain, spawn a Task using the Task Prompt from the table, substituting `{desc}` with the feature description. If multiple domains are relevant, spawn them in parallel. Weave each leader's assessment into the brainstorm dialogue alongside repo research findings.
+3. If the user explicitly requests a brand workshop or validation workshop (e.g., "start brand workshop", "run validation workshop"), follow the named workshop section below instead of spawning an assessment.
+4. If no domains are relevant, continue to Phase 1.
 
-#### Brand Workshop (if selected)
+#### Brand Workshop (if explicitly requested)
 
 **Read `plugins/soleur/skills/brainstorm/references/brainstorm-brand-workshop.md` now** for the full Brand Workshop procedure (worktree creation, issue handling, brand-architect handoff, completion message). Follow all steps in the reference file, then STOP -- do not proceed to Phase 1.
 
-#### Validation Workshop (if selected)
+#### Validation Workshop (if explicitly requested)
 
 **Read `plugins/soleur/skills/brainstorm/references/brainstorm-validation-workshop.md` now** for the full Validation Workshop procedure (worktree creation, issue handling, business-validator handoff, completion message). Follow all steps in the reference file, then STOP -- do not proceed to Phase 1.
 
@@ -99,7 +97,7 @@ Run these agents **in parallel** to gather context before dialogue:
 
 **What to look for:**
 - **Repo research:** existing patterns, similar features, CLAUDE.md guidance
-- **Learnings:** documented solutions in `knowledge-base/learnings/` -- past gotchas, patterns, lessons learned that might inform WHAT to build
+- **Learnings:** documented solutions in `knowledge-base/project/learnings/` -- past gotchas, patterns, lessons learned that might inform WHAT to build
 
 If either agent fails or returns empty, proceed with whatever results are available. Weave findings naturally into your first question rather than presenting a formal summary.
 
@@ -156,7 +154,7 @@ fi
 
    This creates:
    - `.worktrees/feat-<name>/` (worktree)
-   - `knowledge-base/specs/feat-<name>/` (spec directory in worktree)
+   - `knowledge-base/project/specs/feat-<name>/` (spec directory in worktree)
 
 3. **Set worktree path for subsequent file operations:**
 
@@ -183,8 +181,8 @@ Write the brainstorm document. **Use worktree path if created.**
 
 **File path:**
 
-- If worktree exists: `<worktree-path>/knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md` (replace `<worktree-path>` with the actual worktree path, e.g., `.worktrees/feat-<name>`)
-- If no worktree: `knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`
+- If worktree exists: `<worktree-path>/knowledge-base/project/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md` (replace `<worktree-path>` with the actual worktree path, e.g., `.worktrees/feat-<name>`)
+- If no worktree: `knowledge-base/project/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md`
 
 **Document structure:** See the `brainstorm-techniques` skill for the template format. Key sections: What We're Building, Why This Approach, Key Decisions, Open Questions.
 
@@ -231,14 +229,14 @@ Ensure the brainstorms directory exists before writing.
    - Add Functional Requirements (FR1, FR2...) from key features
    - Add Technical Requirements (TR1, TR2...) from constraints
 
-5. **Save spec.md** to the worktree: `<worktree-path>/knowledge-base/specs/feat-<name>/spec.md` (replace `<worktree-path>` with the actual worktree path)
+5. **Save spec.md** to the worktree: `<worktree-path>/knowledge-base/project/specs/feat-<name>/spec.md` (replace `<worktree-path>` with the actual worktree path)
 
 6. **Commit and push all brainstorm artifacts:**
 
    After the brainstorm document (Phase 3.5) and spec are both written, commit and push everything:
 
    ```bash
-   git add knowledge-base/brainstorms/ knowledge-base/specs/feat-<name>/
+   git add knowledge-base/project/brainstorms/ knowledge-base/project/specs/feat-<name>/
    git commit -m "docs: capture brainstorm and spec for feat-<name>"
    git push
    ```
@@ -259,7 +257,7 @@ Ensure the brainstorms directory exists before writing.
 
 **If knowledge-base/ does NOT exist:**
 
-- Brainstorm saved to `knowledge-base/brainstorms/` only (no worktree)
+- Brainstorm saved to `knowledge-base/project/brainstorms/` only (no worktree)
 - No spec or issue created
 
 ### Phase 4: Handoff
@@ -284,8 +282,8 @@ When complete, display:
 ```text
 Brainstorm complete!
 
-Document: knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md
-Spec: knowledge-base/specs/feat-<name>/spec.md
+Document: knowledge-base/project/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md
+Spec: knowledge-base/project/specs/feat-<name>/spec.md
 Issue: #N (using existing) | #N (created) | none
 Branch: feat-<name> (if worktree created)
 Working directory: .worktrees/feat-<name>/ (if worktree created)
@@ -309,7 +307,7 @@ Next: Use `skill: soleur:plan` when ready to implement.
 If re-running brainstorm on the same topic, read the existing document first. Update in place rather than creating a duplicate. Preserve prior decisions and mark any changes with `[Updated YYYY-MM-DD]`.
 
 **Archive old brainstorms:**
-Run `bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` from the repository root. This moves matching artifacts to `knowledge-base/brainstorms/archive/` with timestamp prefixes, preserving git history. Commit with `git commit -m "brainstorm: archive <topic>"`.
+Run `bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` from the repository root. This moves matching artifacts to `knowledge-base/project/brainstorms/archive/` with timestamp prefixes, preserving git history. Commit with `git commit -m "brainstorm: archive <topic>"`.
 
 ## Important Guidelines
 

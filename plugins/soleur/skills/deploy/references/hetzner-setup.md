@@ -2,25 +2,35 @@
 
 First-time setup for deploying containerized applications to a Hetzner Cloud VM.
 
-## 1. Provision a VM
+## Primary Path: Terraform
 
-Create a Hetzner Cloud server:
-- **Type**: CX22 (2 vCPU, 4 GB RAM) or larger depending on application
-- **Image**: Ubuntu 24.04
-- **Location**: Choose nearest to target users
-- **SSH Key**: Add a public key during creation
+Always provision infrastructure via Terraform for reproducibility and cloud portability. See existing patterns:
 
-## 2. Install Docker
+- `apps/telegram-bridge/infra/` — CX22/CPX21 server, volume, firewall, cloud-init
+- `apps/web-platform/infra/` — CPX21 server, 20GB volume, HTTP/HTTPS firewall
 
-SSH into the server and install Docker:
+### Quick Start
 
 ```bash
-ssh root@<server-ip>
-apt update && apt install -y docker.io
-systemctl enable --now docker
+cd apps/<app>/infra
+terraform init
+terraform apply \
+  -var="hcloud_token=<your-token>" \
+  -var='admin_ips=["<your-ip>/32"]'
 ```
 
-## 3. Authenticate with GHCR
+Terraform handles: server creation, SSH key upload, volume attachment, firewall rules, and cloud-init (Docker install, volume mount, container start, SSH hardening).
+
+### Post-Terraform Steps
+
+1. Create `.env` with app secrets
+2. SCP `.env` to `root@<server-ip>:/mnt/data/.env`
+3. Authenticate Docker with GHCR on the server (see below)
+4. Restart container: `ssh root@<ip> "docker restart <container>"`
+
+## Manual Steps (only when Terraform doesn't cover them)
+
+### Authenticate with GHCR
 
 Create a GitHub Personal Access Token (classic) with `read:packages` scope, then log in on the server:
 
@@ -28,11 +38,9 @@ Create a GitHub Personal Access Token (classic) with `read:packages` scope, then
 echo "<ghcr-token>" | docker login ghcr.io -u <github-username> --password-stdin
 ```
 
-Replace `<ghcr-token>` with the actual token value and `<github-username>` with the GitHub username.
+Pipe the token via stdin — do not pass it as a command-line argument.
 
-Pipe the token via stdin -- do not pass it as a command-line argument.
-
-## 4. SSH Key Setup
+### SSH Key Setup
 
 On the local machine, generate a deploy key and copy it to the server:
 
@@ -47,51 +55,9 @@ Verify passwordless access:
 ssh -o BatchMode=yes -i ~/.ssh/deploy_key root@<server-ip> "echo OK"
 ```
 
-Set restrictive permissions on the key file:
-
-```bash
-chmod 600 ~/.ssh/deploy_key
-```
-
-## 5. Firewall Rules
-
-Configure `ufw` to allow only necessary traffic:
-
-```bash
-ufw allow 22/tcp       # SSH
-ufw allow 80/tcp       # HTTP (if needed)
-ufw allow 443/tcp      # HTTPS (if needed)
-ufw allow <app-port>/tcp  # Application port
-ufw enable
-```
-
-## 6. Volume Mounting (Optional)
-
-If the application needs persistent storage, attach a Hetzner volume and mount it.
-
-Use idempotent mounting -- `mount` with a fallback, not `mkfs.ext4 -F` which is destructive:
-
-```bash
-# Format only if not already formatted
-blkid /dev/sdb || mkfs.ext4 /dev/sdb
-
-# Mount idempotently
-mkdir -p /mnt/data
-mount /dev/sdb /mnt/data || true
-
-# Add to fstab for persistence across reboots
-grep -q '/dev/sdb /mnt/data' /etc/fstab || echo "/dev/sdb /mnt/data ext4 defaults 0 2" >> /etc/fstab
-```
-
-## 7. Health Endpoint
+### Health Endpoint
 
 Add a `/health` endpoint to the application that returns HTTP 200 when the service is ready. The deploy skill checks this endpoint after deployment.
-
-Example (Node.js):
-
-```javascript
-app.get("/health", (req, res) => res.sendStatus(200));
-```
 
 Set the `DEPLOY_HEALTH_URL` environment variable to enable automated health verification:
 

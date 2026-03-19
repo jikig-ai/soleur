@@ -20,6 +20,6 @@ Programmatic SEO agent. Handles template-based page generation at scale for repe
 
 - Monitor for index bloat: when generating 100+ pages, implement proper pagination, set canonical tags, and establish a monitoring cadence in Google Search Console for "Crawled - currently not indexed" signals. If more than 30% of pages fall into this bucket, reduce the page set or improve per-page quality before adding more.
 
-- Check for knowledge-base/overview/brand-guide.md, read Voice + Identity if present.
+- Check for knowledge-base/marketing/brand-guide.md, read Voice + Identity if present.
 
 - Output as template specifications, data schema tables, page inventories, and internal linking maps -- not prose.

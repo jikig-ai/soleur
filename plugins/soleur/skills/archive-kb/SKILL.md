@@ -1,6 +1,6 @@
 ---
 name: archive-kb
-description: "This skill should be used when archiving completed knowledge-base artifacts (brainstorms, plans, specs) to their archive/ subdirectories with timestamp prefixes. It handles git history preservation automatically and avoids command substitution prompts."
+description: "This skill should be used when archiving completed knowledge-base artifacts (brainstorms, plans, specs) to their archive/ subdirectories with timestamp prefixes and git history preservation."
 ---
 
 # Archive Knowledge-Base Artifacts
@@ -25,13 +25,13 @@ To archive a specific slug (override branch detection):
 
 ## What It Archives
 
-The script discovers artifacts matching the feature slug in three locations:
+The script discovers artifacts matching the feature slug:
 
 | Directory | Match Pattern | Type |
 |-----------|--------------|------|
-| `knowledge-base/brainstorms/` | Filename contains slug | File glob |
-| `knowledge-base/plans/` | Filename contains slug | File glob |
-| `knowledge-base/specs/feat-<slug>/` | Exact directory name | Directory match |
+| `knowledge-base/project/brainstorms/` | Filename contains slug | File glob |
+| `knowledge-base/project/plans/` | Filename contains slug | File glob |
+| `knowledge-base/project/specs/feat-<slug>/` | Exact directory name | Directory match |
 
 All `archive/` subdirectories are excluded from discovery.
 
