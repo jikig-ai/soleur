@@ -291,11 +291,11 @@ Update the CLA Required ruleset (ID 13304872) via the GitHub Rulesets API:
 ## Acceptance Criteria
 
 ### Phase 1 (This PR)
-- [ ] CLA Required ruleset `cla-check` has `integration_id: 15368`
-- [ ] CLA Required ruleset `bypass_actors` includes `github-actions` (ID 15368) with `bypass_mode: "always"`
-- [ ] Existing bypass actors preserved (OrganizationAdmin, RepositoryRole 5, Integration 262318, Integration 1236702)
+- [x] CLA Required ruleset `cla-check` has `integration_id: 15368`
+- [x] ~~CLA Required ruleset `bypass_actors` includes `github-actions` (ID 15368)~~ **NOT FEASIBLE** — `github-actions` is a built-in platform app, not an installable integration (API returns 422)
+- [x] Existing bypass actors preserved (OrganizationAdmin, RepositoryRole 5, Integration 262318, Integration 1236702)
 - [ ] Human PR still requires CLA signature via the CLA Assistant workflow
-- [ ] Bot workflows continue to work (synthetic statuses still in place)
+- [x] Bot workflows continue to work (synthetic statuses still in place, match `integration_id: 15368`)
 
 ### Phase 2 (Post-Merge Verification)
 - [ ] Bot PR from `scheduled-weekly-analytics.yml` auto-merges (with or without synthetic status)
