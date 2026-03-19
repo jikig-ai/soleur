@@ -43,15 +43,17 @@ jobs:
           host: ${{ secrets.WEB_PLATFORM_HOST }}
           username: root
           key: ${{ secrets.WEB_PLATFORM_SSH_KEY }}
-          envs: TELEGRAM_BOT_TOKEN,TELEGRAM_ALLOWED_USER_ID
+          envs: TELEGRAM_BOT_TOKEN,TELEGRAM_ALLOWED_USER_ID,ANTHROPIC_API_KEY
           script: |
             ENV_FILE="/mnt/data/.env"
             grep -q "^TELEGRAM_BOT_TOKEN=" "$ENV_FILE" || echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN" >> "$ENV_FILE"
             grep -q "^TELEGRAM_ALLOWED_USER_ID=" "$ENV_FILE" || echo "TELEGRAM_ALLOWED_USER_ID=$TELEGRAM_ALLOWED_USER_ID" >> "$ENV_FILE"
+            grep -q "^ANTHROPIC_API_KEY=" "$ENV_FILE" || echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" >> "$ENV_FILE"
             grep -q "^SOLEUR_PLUGIN_DIR=" "$ENV_FILE" || echo "SOLEUR_PLUGIN_DIR=/app/shared/plugins/soleur" >> "$ENV_FILE"
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_ALLOWED_USER_ID: ${{ secrets.TELEGRAM_ALLOWED_USER_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
       - name: Deploy to server
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
