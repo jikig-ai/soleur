@@ -367,6 +367,11 @@ post_linkedin_company() {
     return 0
   fi
 
+  if [[ "${LINKEDIN_ALLOW_POST:-}" != "true" ]]; then
+    echo "Warning: LINKEDIN_ALLOW_POST is not set to 'true'. Skipping LinkedIn Company Page posting." >&2
+    return 0
+  fi
+
   local content
   content=$(extract_section "$file" "LinkedIn Company Page")
   if [[ -z "$content" ]]; then
@@ -404,6 +409,11 @@ post_bluesky() {
 
   if [[ -z "${BSKY_HANDLE:-}" || -z "${BSKY_APP_PASSWORD:-}" ]]; then
     echo "Warning: Bluesky credentials not configured (checked BSKY_HANDLE, BSKY_APP_PASSWORD). Skipping Bluesky posting." >&2
+    return 0
+  fi
+
+  if [[ "${BSKY_ALLOW_POST:-}" != "true" ]]; then
+    echo "Warning: BSKY_ALLOW_POST is not set to 'true'. Skipping Bluesky posting." >&2
     return 0
   fi
 
