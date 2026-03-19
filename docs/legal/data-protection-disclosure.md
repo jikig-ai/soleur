@@ -9,7 +9,7 @@ generated-date: 2026-02-20
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 19, 2026 (added web platform processors, restructured Section 2 for cloud services, addressed Section 8 transition commitments, Buttondown SCCs verification and free-tier DPA confirmation)
+**Last Updated:** March 19, 2026 (corrected Supabase region to EU (eu-west-1), updated DPA execution status for all web platform processors, added DPA verification dates)
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -201,10 +201,10 @@ Transfers of newsletter subscriber data (email addresses, IP addresses, referrer
 
 For the Web Platform (app.soleur.ai):
 
-- **Supabase:** US-based (AWS). Transfer via Standard Contractual Clauses (SCCs), Module 2 (Controller to Processor).
-- **Stripe:** US-based (Stripe, LLC). Transfer via EU-US Data Privacy Framework (DPF, adequacy decision) and Standard Contractual Clauses (SCCs), EEA Module 2.
-- **Hetzner:** EU-based (Germany). Web Platform hosted in Helsinki, Finland (EU). **No international data transfers.**
-- **Cloudflare:** Global CDN. Transfer via EU-US Data Privacy Framework (DPF), Standard Contractual Clauses (SCCs), and Global CBPR certification.
+- **Supabase:** EU-based deployment (AWS eu-west-1, Ireland). **No international data transfers.** Supabase Inc is a US-based company, but the Jikigai project is deployed to the EU region. DPA (Data Processing Addendum) requested 2026-03-19; pending PandaDoc execution.
+- **Stripe:** US-based (Stripe, LLC). Transfer via EU-US Data Privacy Framework (DPF, adequacy decision) and Standard Contractual Clauses (SCCs), EEA Module 2. DPA auto-incorporated in Services Agreement (verified 2026-03-19).
+- **Hetzner:** EU-based (Germany). Web Platform hosted in Helsinki, Finland (EU). **No international data transfers.** DPA (AVV) pending execution via Cloud Console.
+- **Cloudflare:** Global CDN. Transfer via EU-US Data Privacy Framework (DPF), Standard Contractual Clauses (SCCs), and Global CBPR certification. DPA self-executing via Self-Serve Subscription Agreement (verified 2026-03-19).
 
 ### 6.5 Docs Site
 
@@ -240,7 +240,7 @@ The Soleur Web Platform (app.soleur.ai) represents the introduction of cloud-hos
 - **(b)** Users are notified of cloud processing via this updated DPD and the updated Privacy Policy. **FULFILLED.**
 - **(c)** Technical and organizational measures implemented: encryption at rest (AES-256-GCM for API keys), TLS for data in transit, EU-only hosting (Helsinki, Finland) for infrastructure. **FULFILLED.**
 - **(d)** Processor list maintained in Section 4.2. **FULFILLED.**
-- **(e)** Transfer mechanisms documented: SCCs for Supabase, DPF + SCCs for Stripe, EU-only for Hetzner (see Section 6.3). **FULFILLED.**
+- **(e)** Transfer mechanisms documented: EU-only for Supabase (eu-west-1, Ireland) and Hetzner (Helsinki, Finland), DPF + SCCs for Stripe (see Section 6.4). **FULFILLED.**
 - **(f)** DPIA evaluation: The Web Platform processes user PII (email, auth tokens, encrypted API keys, subscription metadata) but does not involve special categories (Article 9), systematic monitoring, or automated decision-making. Processing remains below the high-risk thresholds of Article 35(3). **Evaluated -- DPIA not required.** See the companion GDPR Policy Section 9 for the full analysis.
 - **(g)** Users accept the updated Terms and Conditions when creating a Web Platform account. **FULFILLED.**
 
