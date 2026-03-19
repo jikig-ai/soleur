@@ -119,6 +119,15 @@ describe("extract_section", () => {
     expect(result.stdout).toBe("");
   });
 
+  test("extracts Bluesky section", () => {
+    const result = runFunction(
+      `extract_section "${SAMPLE_CONTENT}" "Bluesky"`
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("AI agents");
+    expect(result.stdout).toContain("utm_source=bluesky");
+  });
+
   test("extracts LinkedIn Personal without bleeding into LinkedIn Company Page", () => {
     const result = runFunction(
       `extract_section "${SAMPLE_CONTENT}" "LinkedIn Personal"`
@@ -291,7 +300,7 @@ describe("get_frontmatter_field", () => {
       `get_frontmatter_field "${SAMPLE_FRONTMATTER}" "channels"`
     );
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe("discord, x");
+    expect(result.stdout).toBe("discord, x, bluesky, linkedin-company");
   });
 
   test("extracts status field", () => {
@@ -338,6 +347,12 @@ describe("channel_to_section", () => {
     const result = runFunction(`channel_to_section "linkedin-company"`);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("LinkedIn Company Page");
+  });
+
+  test("maps bluesky to Bluesky", () => {
+    const result = runFunction(`channel_to_section "bluesky"`);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("Bluesky");
   });
 
   test("returns empty for unknown channel", () => {
@@ -529,5 +544,161 @@ MOCK
     });
     expect(result.exitCode).toBe(1);
     expect(decode(result.stderr)).toContain("LinkedIn posting failed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// post_linkedin_company
+// ---------------------------------------------------------------------------
+
+describe("post_linkedin_company", () => {
+  test("skips gracefully when LINKEDIN_ACCESS_TOKEN is unset", () => {
+    const result = runFunction(
+      `post_linkedin_company "${SAMPLE_CONTENT}"`
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("LINKEDIN_ACCESS_TOKEN not set");
+    expect(result.stderr).toContain("Skipping LinkedIn Company Page posting");
+  });
+
+  test("skips gracefully when LINKEDIN_ORG_ID is unset", () => {
+    const result = runFunction(
+      `post_linkedin_company "${SAMPLE_CONTENT}"`,
+      { LINKEDIN_ACCESS_TOKEN: "test-token" }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("LINKEDIN_ORG_ID not set");
+    expect(result.stderr).toContain("Skipping LinkedIn Company Page posting");
+  });
+
+  test("posts successfully with mock script", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+
+      # Create mock script that succeeds
+      mock_dir=$(mktemp -d)
+      cat > "$mock_dir/linkedin-community.sh" << 'MOCK'
+#!/usr/bin/env bash
+echo '{"post_urn":"urn:li:share:123456"}'
+exit 0
+MOCK
+      chmod +x "$mock_dir/linkedin-community.sh"
+      LINKEDIN_SCRIPT="$mock_dir/linkedin-community.sh"
+
+      post_linkedin_company "${SAMPLE_CONTENT}"
+      exit_code=$?
+      rm -r "$mock_dir"
+      exit $exit_code
+    `], {
+      env: {
+        ...BASE_ENV,
+        LINKEDIN_ACCESS_TOKEN: "test-token",
+        LINKEDIN_PERSON_URN: "urn:li:person:test",
+        LINKEDIN_ORG_ID: "12345",
+      },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(decode(result.stdout)).toContain("[ok] LinkedIn Company Page post published.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// post_bluesky
+// ---------------------------------------------------------------------------
+
+describe("post_bluesky", () => {
+  test("skips gracefully when BSKY_HANDLE is unset", () => {
+    const result = runFunction(
+      `post_bluesky "${SAMPLE_CONTENT}"`
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("Bluesky credentials not configured");
+    expect(result.stderr).toContain("Skipping Bluesky posting");
+  });
+
+  test("skips gracefully when content file has no Bluesky section", () => {
+    const result = runFunction(
+      `
+      tmpfile=$(mktemp)
+      echo "## Discord" > "$tmpfile"
+      echo "Some content" >> "$tmpfile"
+      post_bluesky "$tmpfile"
+      rm "$tmpfile"
+    `,
+      {
+        BSKY_HANDLE: "test.bsky.social",
+        BSKY_APP_PASSWORD: "test-password",
+      }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("No Bluesky content found");
+  });
+
+  test("posts successfully with mock bsky script", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+
+      # Create mock script that succeeds
+      mock_dir=$(mktemp -d)
+      cat > "$mock_dir/bsky-community.sh" << 'MOCK'
+#!/usr/bin/env bash
+echo '{"uri":"at://did:plc:test/app.bsky.feed.post/abc","cid":"bafytest"}'
+exit 0
+MOCK
+      chmod +x "$mock_dir/bsky-community.sh"
+      BSKY_SCRIPT="$mock_dir/bsky-community.sh"
+
+      post_bluesky "${SAMPLE_CONTENT}"
+      exit_code=$?
+      rm -r "$mock_dir"
+      exit $exit_code
+    `], {
+      env: {
+        ...BASE_ENV,
+        BSKY_HANDLE: "test.bsky.social",
+        BSKY_APP_PASSWORD: "test-password",
+        BSKY_ALLOW_POST: "true",
+      },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(decode(result.stdout)).toContain("[ok] Bluesky post published.");
+  });
+
+  test("returns error when bsky-community.sh fails", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+
+      # Create mock script that fails
+      mock_dir=$(mktemp -d)
+      cat > "$mock_dir/bsky-community.sh" << 'MOCK'
+#!/usr/bin/env bash
+echo "Error: Authentication failed" >&2
+exit 1
+MOCK
+      chmod +x "$mock_dir/bsky-community.sh"
+      BSKY_SCRIPT="$mock_dir/bsky-community.sh"
+
+      # Stub create_dedup_issue to avoid gh CLI dependency
+      create_dedup_issue() { echo "[stub] Issue created: \$1"; return 0; }
+      export -f create_dedup_issue
+      CASE_NAME="test-case"
+
+      post_bluesky "${SAMPLE_CONTENT}"
+      exit_code=$?
+      rm -r "$mock_dir"
+      exit $exit_code
+    `], {
+      env: {
+        ...BASE_ENV,
+        BSKY_HANDLE: "test.bsky.social",
+        BSKY_APP_PASSWORD: "test-password",
+        BSKY_ALLOW_POST: "true",
+      },
+    });
+    expect(result.exitCode).toBe(1);
+    expect(decode(result.stderr)).toContain("Bluesky posting failed");
   });
 });
