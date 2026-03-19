@@ -26,12 +26,12 @@ resource "cloudflare_record" "spf_send" {
 }
 
 resource "cloudflare_record" "mx_send" {
-  zone_id = var.cloudflare_zone_id
-  name    = "send"
-  content = "feedback-smtp.eu-west-1.amazonses.com"
-  type    = "MX"
+  zone_id  = var.cloudflare_zone_id
+  name     = "send"
+  content  = "feedback-smtp.eu-west-1.amazonses.com"
+  type     = "MX"
   priority = 10
-  ttl     = 1
+  ttl      = 1
 }
 
 resource "cloudflare_record" "dmarc" {
