@@ -122,11 +122,11 @@ The `apps/telegram-bridge/infra/cloud-init.yml` has the exact same SSH hardening
 
 ## Acceptance Criteria
 
-- [ ] `apps/web-platform/infra/cloud-init.yml` includes a `write_files` section creating `/etc/ssh/sshd_config.d/01-hardening.conf`
-- [ ] Drop-in file sets: `PasswordAuthentication no`, `MaxAuthTries 3`, `LoginGraceTime 30`, `PermitRootLogin prohibit-password`, `AllowUsers root`
-- [ ] Existing `sed` commands for PasswordAuthentication are removed from `runcmd` (now redundant)
-- [ ] `systemctl restart sshd` remains in `runcmd` after Docker setup
-- [ ] CI deploy via `appleboy/ssh-action` with `username: root` and key auth is unaffected
+- [x] `apps/web-platform/infra/cloud-init.yml` includes a `write_files` section creating `/etc/ssh/sshd_config.d/01-hardening.conf`
+- [x] Drop-in file sets: `PasswordAuthentication no`, `MaxAuthTries 3`, `LoginGraceTime 30`, `PermitRootLogin prohibit-password`, `AllowUsers root`
+- [x] Existing `sed` commands for PasswordAuthentication are removed from `runcmd` (now redundant)
+- [x] `systemctl restart sshd` remains in `runcmd` after Docker setup
+- [x] CI deploy via `appleboy/ssh-action` with `username: root` and key auth is unaffected
 
 ## Test Scenarios
 
