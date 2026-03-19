@@ -571,6 +571,19 @@ describe("post_linkedin_company", () => {
     expect(result.stderr).toContain("Skipping LinkedIn Company Page posting");
   });
 
+  test("skips gracefully when LINKEDIN_ALLOW_POST is not true", () => {
+    const result = runFunction(
+      `post_linkedin_company "${SAMPLE_CONTENT}"`,
+      {
+        LINKEDIN_ACCESS_TOKEN: "test-token",
+        LINKEDIN_ORG_ID: "12345",
+      }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("LINKEDIN_ALLOW_POST is not set");
+    expect(result.stderr).toContain("Skipping LinkedIn Company Page posting");
+  });
+
   test("posts successfully with mock script", () => {
     const result = Bun.spawnSync(["bash", "-c", `
       set -euo pipefail
@@ -596,6 +609,7 @@ MOCK
         LINKEDIN_ACCESS_TOKEN: "test-token",
         LINKEDIN_PERSON_URN: "urn:li:person:test",
         LINKEDIN_ORG_ID: "12345",
+        LINKEDIN_ALLOW_POST: "true",
       },
     });
     expect(result.exitCode).toBe(0);
@@ -617,6 +631,19 @@ describe("post_bluesky", () => {
     expect(result.stderr).toContain("Skipping Bluesky posting");
   });
 
+  test("skips gracefully when BSKY_ALLOW_POST is not true", () => {
+    const result = runFunction(
+      `post_bluesky "${SAMPLE_CONTENT}"`,
+      {
+        BSKY_HANDLE: "test.bsky.social",
+        BSKY_APP_PASSWORD: "test-password",
+      }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("BSKY_ALLOW_POST is not set");
+    expect(result.stderr).toContain("Skipping Bluesky posting");
+  });
+
   test("skips gracefully when content file has no Bluesky section", () => {
     const result = runFunction(
       `
@@ -629,6 +656,7 @@ describe("post_bluesky", () => {
       {
         BSKY_HANDLE: "test.bsky.social",
         BSKY_APP_PASSWORD: "test-password",
+        BSKY_ALLOW_POST: "true",
       }
     );
     expect(result.exitCode).toBe(0);
