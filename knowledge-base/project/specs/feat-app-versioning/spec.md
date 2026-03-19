@@ -26,17 +26,17 @@ Only `plugins/soleur/` has versioning and release automation. The two deployable
 
 ## Functional Requirements
 
-- **FR1:** A reusable release workflow (`reusable-release.yml`) accepts component configuration as inputs and performs: path change detection, PR label extraction, semver bump computation, GitHub Release creation, Docker image build+push (optional), server deployment (optional), Discord notification
-- **FR2:** Per-app caller workflows (`web-platform-release.yml`, `telegram-bridge-release.yml`) invoke the reusable workflow with app-specific configuration
-- **FR3:** The existing plugin release workflow is refactored to use the same reusable workflow
+- **FR1:** A reusable release workflow (`reusable-release.yml`) accepts component configuration as inputs and performs: path change detection, PR label extraction, semver bump computation, GitHub Release creation, Docker image build+push (optional), Discord notification. Deploy is handled by caller workflows (structurally different per app).
+- **FR2:** Per-app caller workflows (`web-platform-release.yml`, `telegram-bridge-release.yml`) invoke the reusable workflow with app-specific configuration and handle deploy steps
+- **FR3:** The existing plugin release workflow remains unchanged (refactoring deferred to follow-up PR)
 - **FR4:** `/ship` skill detects changes in `apps/web-platform/**` and `apps/telegram-bridge/**`, applying `app:web-platform` and/or `app:telegram-bridge` labels alongside existing `semver:*` labels
 - **FR5:** A single PR touching multiple components produces independent releases (up to 3)
-- **FR6:** Docker images receive three tags: version (`web-v0.1.0`), commit SHA, and `latest`
+- **FR6:** Docker images receive three tags: version (`:v0.1.0` — component prefix stripped from git tag), commit SHA, and `:latest`
 - **FR7:** Each release posts a Discord notification via the releases webhook
 
 ## Technical Requirements
 
-- **TR1:** Version is derived from git tags via `gh release list` filtered by tag prefix, not from committed files
+- **TR1:** Version is derived from git tags via `git fetch --tags` + `git tag --list '<prefix>*' --sort=-version:refname | head -1` (semver-aware sort, avoids `gh release list` creation-date ordering)
 - **TR2:** All GitHub Actions are pinned to commit SHAs with version comments
 - **TR3:** All values written to `$GITHUB_OUTPUT` are sanitized with `printf` + `tr -d '\n\r'`
 - **TR4:** PR extraction uses `gh api commits/{sha}/pulls`, not commit message parsing
@@ -50,8 +50,8 @@ Only `plugins/soleur/` has versioning and release automation. The two deployable
 | Component | Tag prefix | Example | Docker image |
 |-----------|-----------|---------|-------------|
 | Plugin | `v` (unchanged) | `v3.22.0` | N/A |
-| Web Platform | `web-v` | `web-v0.1.0` | `ghcr.io/jikig-ai/soleur-web-platform:web-v0.1.0` |
-| Telegram Bridge | `telegram-v` | `telegram-v0.1.0` | `ghcr.io/jikig-ai/soleur-telegram-bridge:telegram-v0.1.0` |
+| Web Platform | `web-v` | `web-v0.1.0` | `ghcr.io/jikig-ai/soleur-web-platform:v0.1.0` |
+| Telegram Bridge | `telegram-v` | `telegram-v0.1.0` | `ghcr.io/jikig-ai/soleur-telegram-bridge:v0.1.0` |
 
 ## Label Strategy
 
@@ -63,9 +63,9 @@ Only `plugins/soleur/` has versioning and release automation. The two deployable
 | Plugin + web | `semver:minor`, `app:web-platform` | `v3.22.0` + `web-v0.1.1` |
 | All three | `semver:minor`, `app:web-platform`, `app:telegram-bridge` | All three |
 
-## Open Questions
+## Resolved Questions
 
-1. How should `gh release list` with prefix filtering handle semver ordering? (GitHub lists by creation date, not semver)
-2. What health check endpoints do each app expose for post-deploy verification?
-3. Should a telegram-bridge CI workflow be added as a prerequisite?
-4. What SSH secrets/deploy targets does each app need passed through `secrets: inherit`?
+1. **Semver ordering:** Use `git fetch --tags` + `git tag --sort=-version:refname` (semver-aware). Shallow clones with `fetch-depth: 2` miss older tags.
+2. **Health check endpoints:** Web: `http://localhost:3000/health`. Telegram: `http://localhost:8080/health`. Both return `{"status": "ok"}`.
+3. **Telegram CI build:** Deferred to separate issue (out of scope for #739).
+4. **SSH secrets:** Web: `WEB_PLATFORM_HOST`, `WEB_PLATFORM_SSH_KEY` (exist). Telegram: `TELEGRAM_BRIDGE_HOST`, `TELEGRAM_BRIDGE_SSH_KEY` (create via `gh secret set`).
