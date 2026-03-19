@@ -13,6 +13,10 @@
 - [ ] 3.2 Edit `plugins/soleur/agents/legal/legal-document-generator.md` line 39 -- change `data-processing-agreement` to `data-protection-disclosure` in kebab-case type values
 - [ ] 3.3 Edit `plugins/soleur/agents/legal/legal-document-generator.md` line 50 -- change "Data Processing Agreement" to "Data Protection Disclosure" in cross-reference hint
 - [ ] 3.4 Edit `plugins/soleur/skills/legal-generate/SKILL.md` line 17 -- change "Data Processing Agreement" to "Data Protection Disclosure"
+- [ ] 3.5 Edit `docs/legal/acceptable-use-policy.md` line 232 -- change "Data Processing Agreement" to "Data Protection Disclosure" in cross-reference hint
+- [ ] 3.6 Edit `docs/legal/disclaimer.md` line 202 -- change "Data Processing Agreement" to "Data Protection Disclosure" in cross-reference hint
+- [ ] 3.7 Edit `plugins/soleur/docs/pages/legal/acceptable-use-policy.md` line 241 -- mirror AUP cross-reference update
+- [ ] 3.8 Edit `plugins/soleur/docs/pages/legal/disclaimer.md` line 211 -- mirror Disclaimer cross-reference update
 
 ## Phase 4: Active Knowledge-Base Reference Updates
 - [ ] 4.1 Update `knowledge-base/learnings/2026-03-19-dpa-vendor-response-verification-lifecycle.md` -- lines 16, 25: replace `data-processing-agreement.md` with `data-protection-disclosure.md`

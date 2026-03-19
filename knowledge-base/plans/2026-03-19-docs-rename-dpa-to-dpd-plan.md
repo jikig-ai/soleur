@@ -6,6 +6,22 @@ date: 2026-03-19
 
 # docs: rename data-processing-agreement.md to data-protection-disclosure.md
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-19
+**Sections enhanced:** 3 (Phase 1 sharpened, Non-Goals validated, edge cases added)
+**Research sources:** 3 institutional learnings, full-repo grep audit, agent/skill/docs-data file inventory
+
+### Key Improvements
+1. Added `git add` pre-step for Phase 1 (from learning `git-add-before-git-mv-for-untracked-files`) -- prevents `fatal: not under version control` if the file was modified in the current session
+2. Confirmed no GitHub Actions workflows, `docs/_data/*.js`, or `.github/` files reference the old filename -- no CI breakage risk
+3. Validated Non-Goals exhaustively: all `data-processing-agreement` matches in `plugins/soleur/docs/pages/legal/` are Buttondown's external URL, not internal references
+
+### Applicable Learnings
+- **`git-add-before-git-mv-for-untracked-files`**: Always `git add` before `git mv` -- already in the tasks.md, confirmed as critical
+- **`legal-doc-bulk-consistency-fix-pattern`**: When fixing dual-location legal docs, edit source first, mirror to Eleventy -- not applicable here (Eleventy copy already correct, only source needs renaming)
+- **`dpd-processor-table-dual-file-sync`**: The dual-file naming mismatch is the exact problem this PR fixes -- after this PR lands, the sync trap documented in this learning is eliminated
+
 ## Overview
 
 The source legal document at `docs/legal/data-processing-agreement.md` has the wrong filename. Its title, frontmatter, and content all say "Data Protection Disclosure" -- the document explicitly states it is NOT a Data Processing Agreement (see introduction paragraph). The Eleventy copy at `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` already uses the correct filename. This mismatch has been a known sync trap since February 2026, documented in multiple learnings (`dpd-processor-table-dual-file-sync`, `dpa-vendor-response-verification-lifecycle`), and was formally filed as issue #741 during the Buttondown DPA review.
@@ -34,6 +50,14 @@ Rename the file using `git mv` and update all internal references.
 |--------|------|
 | `git mv` | `docs/legal/data-processing-agreement.md` -> `docs/legal/data-protection-disclosure.md` |
 
+### Research Insights -- Phase 1
+
+**Institutional learning applied:** The `git add` before `git mv` pattern (learning `2026-02-24-git-add-before-git-mv-for-untracked-files`) is already in the tasks.md. This is a known gotcha in this codebase -- `git mv` fails if the file was created or modified in the current session without being staged.
+
+**Edge case -- parallel branches:** If another branch modifies `docs/legal/data-processing-agreement.md` concurrently, merging that branch after this PR lands will fail with a conflict on the deleted file. This is unlikely given the file's stability, but the `pre-merge-rebase.sh` hook enforces `git merge origin/main` before PR merge, which would surface this conflict early.
+
+**Edge case -- `git log --follow` similarity threshold:** `git mv` with no content changes guarantees `--follow` detection. The Phase 2 frontmatter edit should be in a separate commit or the same commit as the `git mv` -- either way, the similarity will be high enough (only 1 line changes in a 270+ line file, well above git's 50% default threshold).
+
 #### Phase 2: Frontmatter Update
 
 | File | Change |
@@ -48,6 +72,10 @@ These files contain the `data-processing-agreement` type value or list the docum
 |------|---------|--------|
 | `plugins/soleur/agents/legal/legal-document-generator.md` | 11, 39, 50 | Update "Data Processing Agreement" to "Data Protection Disclosure" in supported types list, kebab-case type value, and cross-reference hint |
 | `plugins/soleur/skills/legal-generate/SKILL.md` | 17 | Update "Data Processing Agreement" to "Data Protection Disclosure" in supported types list |
+| `docs/legal/acceptable-use-policy.md` | 232 | Update "Data Processing Agreement" to "Data Protection Disclosure" in cross-reference hint (project self-reference) |
+| `docs/legal/disclaimer.md` | 202 | Update "Data Processing Agreement" to "Data Protection Disclosure" in cross-reference hint (project self-reference) |
+| `plugins/soleur/docs/pages/legal/acceptable-use-policy.md` | 241 | Mirror the AUP cross-reference update to the Eleventy copy |
+| `plugins/soleur/docs/pages/legal/disclaimer.md` | 211 | Mirror the Disclaimer cross-reference update to the Eleventy copy |
 
 #### Phase 4: Knowledge-Base and Historical References
 
@@ -88,6 +116,19 @@ These are **historical plan/spec/learning files** that reference the old filenam
 - Modifying references to Buttondown's external DPA URL (`https://buttondown.com/legal/data-processing-agreement`) -- that is Buttondown's filename, not ours
 - Modifying references in `docs/legal/privacy-policy.md` or `docs/legal/gdpr-policy.md` that mention "Data Processing Agreement" in the context of third-party vendor DPAs (Buttondown, Supabase, Stripe, Hetzner, Cloudflare) -- those are correct references to external vendor agreements
 
+### Research Insights -- Non-Goals Validation
+
+**Exhaustive grep audit confirmed these exclusions are correct:**
+- `plugins/soleur/docs/pages/legal/privacy-policy.md:252` -- Buttondown's external DPA URL
+- `plugins/soleur/docs/pages/legal/gdpr-policy.md:195, 274` -- Buttondown's DPA references
+- `plugins/soleur/docs/pages/legal/data-protection-disclosure.md:207` -- generic "data processing agreements" (lowercase, plural, referring to third-party vendor agreements)
+- `docs/legal/privacy-policy.md:135, 149, 158, 168, 177, 243` -- all reference external vendor DPAs (Buttondown, Supabase, Stripe, Hetzner, Cloudflare)
+- `docs/legal/gdpr-policy.md:186, 227, 265` -- external vendor DPA references
+- `docs/legal/acceptable-use-policy.md:232` -- generic "Data Processing Agreement" in a cross-reference hint (this should arguably update to "Data Protection Disclosure" since it describes the companion document for this project, not external vendor DPAs)
+- `docs/legal/disclaimer.md:202` -- same pattern as AUP above
+
+**New finding:** The cross-reference hints in `acceptable-use-policy.md` (line 232) and `disclaimer.md` (line 202) say "Data Processing Agreement" when referring to this project's own companion document. These should be updated to "Data Protection Disclosure" since they describe the Soleur document, not an external vendor's DPA. Adding these to Phase 3.
+
 ## Acceptance Criteria
 
 - [ ] `docs/legal/data-processing-agreement.md` no longer exists
@@ -98,6 +139,7 @@ These are **historical plan/spec/learning files** that reference the old filenam
 - [ ] `git log --follow docs/legal/data-protection-disclosure.md` shows full history
 - [ ] No stale references to `docs/legal/data-processing-agreement.md` in active (non-archived) knowledge-base files
 - [ ] All references to external vendor DPAs remain unchanged
+- [ ] Cross-reference hints in `acceptable-use-policy.md` and `disclaimer.md` (both locations) say "Data Protection Disclosure" not "Data Processing Agreement"
 
 ## Test Scenarios
 
