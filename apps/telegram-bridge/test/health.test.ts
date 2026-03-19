@@ -82,3 +82,54 @@ describe("health endpoint", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("readyz endpoint", () => {
+  test("returns 200 when CLI is ready", async () => {
+    const base = startServer({ cliState: "ready", cliProcess: {} });
+    const res = await fetch(`${base}/readyz`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ready).toBe(true);
+    expect(body.cli).toBe("ready");
+  });
+
+  test("returns 503 when CLI is connecting", async () => {
+    const base = startServer({ cliState: "connecting", cliProcess: null });
+    const res = await fetch(`${base}/readyz`);
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.ready).toBe(false);
+    expect(body.cli).toBe("connecting");
+  });
+
+  test("returns 503 when CLI is in error state", async () => {
+    const base = startServer({ cliState: "error", cliProcess: null });
+    const res = await fetch(`${base}/readyz`);
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.ready).toBe(false);
+    expect(body.cli).toBe("error");
+  });
+
+  test("returns 503 when cliProcess is null even if state is ready", async () => {
+    const base = startServer({ cliState: "ready", cliProcess: null });
+    const res = await fetch(`${base}/readyz`);
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.ready).toBe(false);
+  });
+
+  test("returns 503 when cliProcess exists but state is not ready", async () => {
+    const base = startServer({ cliState: "connecting", cliProcess: {} });
+    const res = await fetch(`${base}/readyz`);
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.ready).toBe(false);
+  });
+
+  test("returns 404 for POST to /readyz", async () => {
+    const base = startServer();
+    const res = await fetch(`${base}/readyz`, { method: "POST" });
+    expect(res.status).toBe(404);
+  });
+});
