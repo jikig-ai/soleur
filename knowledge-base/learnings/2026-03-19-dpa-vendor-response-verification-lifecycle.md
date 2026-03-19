@@ -22,7 +22,7 @@ The full DPA vendor response lifecycle:
 
 ## Key Insight
 
-The dual-location legal doc architecture (source in `docs/legal/` + Eleventy copy in `plugins/soleur/docs/pages/legal/`) with different filenames (`data-protection-disclosure.md` vs `data-protection-disclosure.md`) is a sync trap. Always enumerate ALL files referencing a vendor before starting edits, and always run the compliance auditor as a gate before commit. The auditor is not optional — it's the only reliable way to catch missed locations when files have inconsistent names.
+The dual-location legal doc architecture (source in `docs/legal/` + Eleventy copy in `plugins/soleur/docs/pages/legal/`) is a sync trap when filenames diverge. The original mismatch (`data-processing-agreement.md` vs `data-protection-disclosure.md`) was resolved by renaming the source file in PR #744. Always enumerate ALL files referencing a vendor before starting edits, and always run the compliance auditor as a gate before commit. The auditor is not optional — it's the only reliable way to catch missed locations.
 
 ## Session Errors
 
