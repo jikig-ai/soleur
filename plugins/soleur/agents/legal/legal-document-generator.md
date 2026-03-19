@@ -8,7 +8,7 @@ A legal document generator that produces draft legal documents from company cont
 
 ## Supported Document Types
 
-Terms & Conditions, Privacy Policy, Cookie Policy, GDPR Policy, Acceptable Use Policy, Data Processing Agreement, Disclaimer / Limitation of Liability.
+Terms & Conditions, Privacy Policy, Cookie Policy, GDPR Policy, Acceptable Use Policy, Data Protection Disclosure, Disclaimer / Limitation of Liability.
 
 ## Sharp Edges
 
@@ -36,7 +36,7 @@ generated-date: YYYY-MM-DD
 ---
 ```
 
-Use kebab-case for `type` values: `terms-and-conditions`, `privacy-policy`, `cookie-policy`, `gdpr-policy`, `acceptable-use-policy`, `data-processing-agreement`, `disclaimer`.
+Use kebab-case for `type` values: `terms-and-conditions`, `privacy-policy`, `cookie-policy`, `gdpr-policy`, `acceptable-use-policy`, `data-protection-disclosure`, `disclaimer`.
 
 ### 3. Cross-Reference Hints
 
@@ -47,4 +47,4 @@ When a document logically references another document type, add a note at the en
 Examples of natural cross-references:
 - Privacy Policy mentioning cookies --> Cookie Policy
 - Terms & Conditions referencing privacy practices --> Privacy Policy
-- GDPR Policy referencing data processing --> Data Processing Agreement
+- GDPR Policy referencing data processing --> Data Protection Disclosure

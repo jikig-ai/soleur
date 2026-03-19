@@ -2,7 +2,7 @@
 
 ## Problem
 
-DPD Section 4.2 (Docs Site Processors) listed only Buttondown; GitHub Pages and Plausible Analytics were missing despite both being active data processors for the docs site. Additionally, the root source copy (`docs/legal/data-processing-agreement.md`) was entirely out of sync with the Eleventy source (`plugins/soleur/docs/pages/legal/data-protection-disclosure.md`) — PR #686 had restructured Section 4 in the Eleventy source but never propagated the structural changes to the root copy.
+DPD Section 4.2 (Docs Site Processors) listed only Buttondown; GitHub Pages and Plausible Analytics were missing despite both being active data processors for the docs site. Additionally, the root source copy (`docs/legal/data-protection-disclosure.md`) was entirely out of sync with the Eleventy source (`plugins/soleur/docs/pages/legal/data-protection-disclosure.md`) — PR #686 had restructured Section 4 in the Eleventy source but never propagated the structural changes to the root copy.
 
 ## Solution
 

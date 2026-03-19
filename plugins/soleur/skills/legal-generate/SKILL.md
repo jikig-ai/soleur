@@ -14,7 +14,7 @@ Generate draft legal documents from company context. Supports 7 document types a
 - Cookie Policy
 - GDPR Policy
 - Acceptable Use Policy
-- Data Processing Agreement
+- Data Protection Disclosure
 - Disclaimer / Limitation of Liability
 
 ## Phase 0: Context Gathering

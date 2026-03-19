@@ -2,7 +2,7 @@
 
 ## Problem
 
-When a third-party vendor (Buttondown) responds to DPA gap analysis with document updates, the verification and legal doc update process touches many files across dual locations. In this session, updating 8 files across source (`docs/legal/`) and Eleventy (`plugins/soleur/docs/pages/legal/`) resulted in one source file (`docs/legal/data-processing-agreement.md`) being missed entirely — it was 9 days behind the Eleventy copy. The legal-compliance-auditor caught this, but only because we ran it before committing.
+When a third-party vendor (Buttondown) responds to DPA gap analysis with document updates, the verification and legal doc update process touches many files across dual locations. In this session, updating 8 files across source (`docs/legal/`) and Eleventy (`plugins/soleur/docs/pages/legal/`) resulted in one source file (`docs/legal/data-protection-disclosure.md`) being missed entirely — it was 9 days behind the Eleventy copy. The legal-compliance-auditor caught this, but only because we ran it before committing.
 
 ## Solution
 
@@ -13,7 +13,7 @@ The full DPA vendor response lifecycle:
 3. **Update ALL legal doc locations** — enumerate every file that references the vendor before editing:
    - `docs/legal/privacy-policy.md` (source)
    - `docs/legal/gdpr-policy.md` (source)
-   - `docs/legal/data-processing-agreement.md` (source DPD)
+   - `docs/legal/data-protection-disclosure.md` (source DPD)
    - `plugins/soleur/docs/pages/legal/privacy-policy.md` (Eleventy)
    - `plugins/soleur/docs/pages/legal/gdpr-policy.md` (Eleventy)
    - `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` (Eleventy)
@@ -22,7 +22,7 @@ The full DPA vendor response lifecycle:
 
 ## Key Insight
 
-The dual-location legal doc architecture (source in `docs/legal/` + Eleventy copy in `plugins/soleur/docs/pages/legal/`) with different filenames (`data-processing-agreement.md` vs `data-protection-disclosure.md`) is a sync trap. Always enumerate ALL files referencing a vendor before starting edits, and always run the compliance auditor as a gate before commit. The auditor is not optional — it's the only reliable way to catch missed locations when files have inconsistent names.
+The dual-location legal doc architecture (source in `docs/legal/` + Eleventy copy in `plugins/soleur/docs/pages/legal/`) with different filenames (`data-protection-disclosure.md` vs `data-protection-disclosure.md`) is a sync trap. Always enumerate ALL files referencing a vendor before starting edits, and always run the compliance auditor as a gate before commit. The auditor is not optional — it's the only reliable way to catch missed locations when files have inconsistent names.
 
 ## Session Errors
 

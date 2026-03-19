@@ -27,7 +27,7 @@ semver: patch
 
 The DPD Section 4.2 ("Docs Site Processors") lists only Buttondown in its processor table, but Section 2.3(a) also discloses GitHub Pages and Plausible Analytics as processing activities where Jikigai acts as Controller on the Docs Site. A regulator reading Section 4 in isolation gets an incomplete picture of the Docs Site processing chain.
 
-Additionally, the `docs/legal/data-processing-agreement.md` source copy is entirely out of sync -- it still has the old Section 4.1 "No Sub-processors" heading and Buttondown mixed into the user-initiated services table (Section 4.2), predating the March 18 restructuring from PR #686.
+Additionally, the `docs/legal/data-protection-disclosure.md` source copy is entirely out of sync -- it still has the old Section 4.1 "No Sub-processors" heading and Buttondown mixed into the user-initiated services table (Section 4.2), predating the March 18 restructuring from PR #686.
 
 **Severity:** Low -- pre-existing gap. The March 18 restructuring (PR #686) made the omission more visible by creating a dedicated "Docs Site Processors" heading.
 
@@ -42,7 +42,7 @@ Additionally, the `docs/legal/data-processing-agreement.md` source copy is entir
    - Section 2.3(a) (line 87) already correctly describes GitHub Pages hosting and Plausible Analytics
    - Gap: GitHub Pages and Plausible are disclosed in Section 2.3(a) but not represented in the Section 4.2 processor table
 
-2. **`docs/legal/data-processing-agreement.md`** (root source copy, used for GitHub rendering)
+2. **`docs/legal/data-protection-disclosure.md`** (root source copy, used for GitHub rendering)
    - Still has the OLD structure: Section 4.1 "No Sub-processors" (contradicts Section 2.3(e))
    - Section 4.2 table mixes Buttondown with user-initiated services
    - Was NOT updated during PR #686's restructuring
@@ -75,7 +75,7 @@ Update the paragraph below the table: "This disclosure is consistent with Sectio
 
 Bump "Last Updated" date.
 
-### Changes to `docs/legal/data-processing-agreement.md`
+### Changes to `docs/legal/data-protection-disclosure.md`
 
 Synchronize the entire Section 4 with the Eleventy source:
 - Replace Section 4.1 "No Sub-processors" with "Plugin Sub-processors" (scoped to Plugin only)
@@ -100,8 +100,8 @@ Synchronize the entire Section 4 with the Eleventy source:
 - [x] DPD Section 4.2 table includes Plausible Analytics row with explicit note that data is anonymous/aggregated (`plugins/soleur/docs/pages/legal/data-protection-disclosure.md`)
 - [x] DPD Section 4.2 cross-reference updated to include Section 2.3(a) alongside 2.3(e)
 - [x] "Last Updated" date bumped on both DPD files
-- [x] `docs/legal/data-processing-agreement.md` Section 4 restructured to match Eleventy source (4.1 Plugin Sub-processors, 4.2 Docs Site Processors, 4.3 Third-Party Services)
-- [x] `docs/legal/data-processing-agreement.md` Section 4.2 table includes all three processor rows
+- [x] `docs/legal/data-protection-disclosure.md` Section 4 restructured to match Eleventy source (4.1 Plugin Sub-processors, 4.2 Docs Site Processors, 4.3 Third-Party Services)
+- [x] `docs/legal/data-protection-disclosure.md` Section 4.2 table includes all three processor rows
 - [x] Buttondown removed from `docs/legal/` Section 4.3 user-initiated services table
 - [x] Cross-document consistency verified (Privacy Policy, GDPR Policy, Cookie Policy -- no changes needed)
 - [x] Grep verification: no unscoped "No Sub-processors" statements remain across legal docs
@@ -153,7 +153,7 @@ Synchronize the entire Section 4 with the Eleventy source:
 ### Files Modified
 
 - `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` -- add GitHub Pages and Plausible rows to Section 4.2 table
-- `docs/legal/data-processing-agreement.md` -- sync Section 4 structure with Eleventy source, add all three processor rows
+- `docs/legal/data-protection-disclosure.md` -- sync Section 4 structure with Eleventy source, add all three processor rows
 
 ### Related Issues
 
