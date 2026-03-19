@@ -611,12 +611,13 @@ echo ""
 echo "=== Session Isolation Tests ==="
 echo ""
 
-# Test 36: Foreign PID state file does not block exit
-echo "Test 36: Foreign PID state file does not block exit"
+# Test 36: Foreign PID state file (live process) does not block exit
+echo "Test 36: Foreign PID state file (live process) does not block exit"
 TEST_DIR=$(setup_test)
-# Create state file for PID 99999 (guaranteed not to be TEST_PID)
+# Use $$ (this test runner's PID) as the foreign session — guaranteed alive
+LIVE_FOREIGN_PID=$$
 NOW_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-cat > "$TEST_DIR/.claude/ralph-loop.99999.local.md" <<EOF
+cat > "$TEST_DIR/.claude/ralph-loop.${LIVE_FOREIGN_PID}.local.md" <<EOF
 ---
 active: true
 iteration: 1
@@ -632,9 +633,9 @@ EOF
 HOOK_OUTPUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>&1) || true
 EXIT_CODE=$?
 assert_eq "0" "$EXIT_CODE" "hook exits 0 when only foreign PID state file exists"
-assert_eq "" "$HOOK_OUTPUT" "no output for foreign PID"
-# Foreign file still exists (not our session, and it's fresh)
-assert_file_exists "$TEST_DIR/.claude/ralph-loop.99999.local.md" "foreign PID file preserved"
+assert_eq "" "$HOOK_OUTPUT" "no output for live foreign PID"
+# Foreign file still exists (live process, fresh timestamp)
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.${LIVE_FOREIGN_PID}.local.md" "live foreign PID file preserved"
 cleanup_test "$TEST_DIR"
 echo ""
 
@@ -659,11 +660,12 @@ assert_file_not_exists "$TEST_DIR/.claude/ralph-loop.99999.local.md" "stale fore
 cleanup_test "$TEST_DIR"
 echo ""
 
-# Test 38: TTL glob cleanup preserves fresh file from other PID
-echo "Test 38: TTL glob cleanup preserves fresh file from other PID"
+# Test 38: TTL glob cleanup preserves fresh file from live process
+echo "Test 38: TTL glob cleanup preserves fresh file from live process"
 TEST_DIR=$(setup_test)
+LIVE_FOREIGN_PID=$$
 NOW_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-cat > "$TEST_DIR/.claude/ralph-loop.88888.local.md" <<EOF
+cat > "$TEST_DIR/.claude/ralph-loop.${LIVE_FOREIGN_PID}.local.md" <<EOF
 ---
 active: true
 iteration: 3
@@ -679,7 +681,7 @@ EOF
 # Also create our own state file so the hook doesn't exit early
 create_state_file "$TEST_DIR" 1 0 "null" 0 3
 run_hook "$TEST_DIR" "$SUBSTANTIVE_RESPONSE"
-assert_file_exists "$TEST_DIR/.claude/ralph-loop.88888.local.md" "fresh foreign PID file preserved by TTL"
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.${LIVE_FOREIGN_PID}.local.md" "live foreign PID file preserved"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "own-session file preserved"
 cleanup_test "$TEST_DIR"
 echo ""
@@ -793,6 +795,106 @@ run_hook "$TEST_DIR" "$IDLE_LONG"
 assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "state file still exists (only 1 idle)"
 STUCK_COUNT=$(grep '^stuck_count:' "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" | sed 's/stuck_count: *//')
 assert_eq "1" "$STUCK_COUNT" "stuck_count incremented for idle pattern in 150-199 char range"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# === Legacy File Cleanup Tests ===
+echo "=== Legacy File Cleanup Tests ==="
+echo ""
+
+# Test 47: Stop hook removes legacy ralph-loop.local.md (no PID)
+echo "Test 47: Stop hook removes legacy ralph-loop.local.md"
+TEST_DIR=$(setup_test)
+NOW_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<EOF
+---
+active: true
+iteration: 5
+max_iterations: 0
+completion_promise: "DONE"
+stuck_count: 0
+stuck_threshold: 3
+started_at: "$NOW_TS"
+---
+
+Legacy format prompt
+EOF
+STDERR_OUTPUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>&1 1>/dev/null) || true
+assert_file_not_exists "$TEST_DIR/.claude/ralph-loop.local.md" "legacy state file removed"
+assert_contains "$STDERR_OUTPUT" "legacy state file" "stderr mentions legacy cleanup"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 48: Setup script removes legacy ralph-loop.local.md before creating new
+echo "Test 48: Setup script removes legacy ralph-loop.local.md"
+TEST_DIR=$(setup_test)
+NOW_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+cat > "$TEST_DIR/.claude/ralph-loop.local.md" <<EOF
+---
+active: true
+iteration: 1
+max_iterations: 0
+completion_promise: null
+started_at: "$NOW_TS"
+---
+
+Old format prompt
+EOF
+(cd "$TEST_DIR" && bash "$SETUP" "new prompt" > /dev/null 2>&1)
+assert_file_not_exists "$TEST_DIR/.claude/ralph-loop.local.md" "legacy file removed by setup"
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.${TEST_PID}.local.md" "new session-scoped file created"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# === Dead Process Cleanup Tests ===
+echo "=== Dead Process Cleanup Tests ==="
+echo ""
+
+# Test 49: Stop hook removes state file whose owner PID is dead
+echo "Test 49: Stop hook removes state file from dead process"
+TEST_DIR=$(setup_test)
+NOW_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# Use PID 2999999 which is guaranteed to not exist
+cat > "$TEST_DIR/.claude/ralph-loop.2999999.local.md" <<EOF
+---
+active: true
+iteration: 3
+max_iterations: 0
+completion_promise: null
+stuck_count: 0
+stuck_threshold: 3
+started_at: "$NOW_TS"
+---
+
+Dead process prompt
+EOF
+STDERR_OUTPUT=$(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>&1 1>/dev/null) || true
+assert_file_not_exists "$TEST_DIR/.claude/ralph-loop.2999999.local.md" "dead process state file removed"
+assert_contains "$STDERR_OUTPUT" "owner process 2999999 is dead" "stderr mentions dead process"
+cleanup_test "$TEST_DIR"
+echo ""
+
+# Test 50: Stop hook preserves state file whose owner PID is alive
+echo "Test 50: Stop hook preserves state file from live process"
+TEST_DIR=$(setup_test)
+NOW_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# Use $$ (test runner PID) which is guaranteed alive and signalable
+LIVE_PID=$$
+cat > "$TEST_DIR/.claude/ralph-loop.${LIVE_PID}.local.md" <<EOF
+---
+active: true
+iteration: 3
+max_iterations: 0
+completion_promise: null
+stuck_count: 0
+stuck_threshold: 3
+started_at: "$NOW_TS"
+---
+
+Live process prompt
+EOF
+(cd "$TEST_DIR" && echo '{}' | bash "$HOOK" 2>/dev/null) || true
+assert_file_exists "$TEST_DIR/.claude/ralph-loop.${LIVE_PID}.local.md" "live process state file preserved"
 cleanup_test "$TEST_DIR"
 echo ""
 

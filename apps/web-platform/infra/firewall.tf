@@ -1,7 +1,7 @@
 resource "hcloud_firewall" "web" {
   name = "soleur-web-platform"
 
-  # SSH -- restricted to admin IPs only
+  # SSH -- admin IPs
   dynamic "rule" {
     for_each = var.admin_ips
     content {
@@ -10,6 +10,14 @@ resource "hcloud_firewall" "web" {
       port       = "22"
       source_ips = [rule.value]
     }
+  }
+
+  # SSH -- CI deploy (GitHub Actions runners use dynamic IPs)
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "22"
+    source_ips = ["0.0.0.0/0", "::/0"]
   }
 
   # HTTP (redirect to HTTPS or direct app access)

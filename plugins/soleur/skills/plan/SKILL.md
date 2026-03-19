@@ -191,7 +191,60 @@ Think like a product manager - what would make this issue clear and actionable? 
 - [ ] Prepare code examples or reproduction steps if applicable, name the mock filenames in the lists
 - [ ] When planning a directory rename, enumerate ALL files in the target directory as potential self-reference holders -- directory trees and conceptual prose derived from the directory name don't match path-pattern greps
 
+### 2.5. Product/UX Gate
+
+After generating the plan structure, assess whether the plan involves user-facing work. This gate enforces constitution line 122: plans with user-facing pages or components must receive product/UX review before implementation.
+
+**Semantic assessment:** Based on the plan structure generated above, classify this plan into one of three tiers:
+
+- **BLOCKING**: Creates new user-facing pages, multi-step user flows, or significant new UI components (e.g., signup flows, dashboards, onboarding wizards, chat interfaces)
+- **ADVISORY**: Modifies existing user-facing pages or components (e.g., layout changes, form updates, adding fields to existing screens)
+- **NONE**: Infrastructure, backend, tooling, or orchestration changes with no user-facing impact
+
+A plan that *discusses* UI concepts but *implements* orchestration changes (e.g., adding a UX gate to a skill) is NONE.
+
+**On BLOCKING:**
+
+1. Run spec-flow-analyzer via Task with UI-flow-aware prompt: "Analyze the user flows in this plan. Map each screen, identify entry/exit points, dead ends, missing error states, and flows that drop the user. Focus on user journey completeness, not technical implementation."
+2. Run CPO via Task with scoped prompt: "Assess the product implications of this plan: {plan summary}. Cross-reference against brand-guide.md and constitution.md. Identify product strategy concerns, flow gaps, and positioning issues. Output a structured advisory — do not use AskUserQuestion."
+3. Invoke ux-design-lead via Task with scoped prompt: "Create wireframes for these user flows: {flow list}. Platform: desktop. Fidelity: wireframe." The agent has its own Pencil MCP prerequisite check — if Pencil is unavailable, the agent will stop with an installation message. If the Task returns without wireframes (agent self-stopped), write `Pencil available: no` in the UX Review section and display: "ux-design-lead skipped (Pencil MCP not available). Consider running wireframes manually before implementation."
+4. Write `## UX Review` section to the plan file (see contract below).
+5. Phase 3 SpecFlow is skipped (spec-flow-analyzer already ran in step 1 with UI-aware prompt — avoids duplicate invocation).
+6. If any agent in the pipeline fails (timeout, error), write partial findings to `## UX Review` with `Decision: reviewed (partial)` and proceed. Do not block the plan on agent failure.
+
+**On ADVISORY:**
+
+1. If in pipeline/subagent context (plan file path was provided as argument, not interactive): auto-accept, write `## UX Review` section with `Tier: advisory, Decision: auto-accepted (pipeline)`, proceed silently.
+2. If interactive: display notice via AskUserQuestion: "This plan modifies existing UI. Run UX review?" Options: "Yes, run full review" / "Skip — I'll handle UX manually". Record choice.
+3. If user chooses full review, run the BLOCKING pipeline above.
+4. Write `## UX Review` section with decision.
+
+**On NONE:**
+
+1. Write `## UX Review` section with `Tier: none, Decision: N/A`. Proceed silently.
+
+**`## UX Review` Heading Contract:**
+
+```markdown
+## UX Review
+
+**Tier:** blocking | advisory | none
+**Decision:** reviewed | reviewed (partial) | skipped | auto-accepted (pipeline) | N/A
+**Agents invoked:** spec-flow-analyzer, cpo, ux-design-lead | spec-flow-analyzer, cpo | none
+**Pencil available:** yes | no | N/A
+
+### Findings
+
+[Agent findings summary, or "No UI detected — infrastructure/tooling change."]
+```
+
+Place after Acceptance Criteria, before Test Scenarios (or before the last major section). If the plan lacks an Acceptance Criteria heading, place before the last major section or at the end of the plan.
+
+**Decision field values:** BLOCKING → `reviewed` (or `reviewed (partial)` if an agent failed), ADVISORY → `skipped` or `auto-accepted (pipeline)`, NONE → `N/A`.
+
 ### 3. SpecFlow Analysis
+
+**If spec-flow-analyzer was already invoked in Phase 2.5, skip this phase and proceed to Phase 4.**
 
 After planning the issue structure, run SpecFlow Analyzer to validate and refine the feature specification. SpecFlow is especially valuable for CI/workflow and infrastructure changes where bash conditional logic can silently drop edge cases that human review misses.
 
