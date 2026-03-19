@@ -1,6 +1,6 @@
 # Scheduled content publisher for blog and case study distribution.
 # Scans distribution-content/ for files with publish_date == today and
-# status: scheduled, then posts to declared channels (Discord, X/Twitter, LinkedIn).
+# status: scheduled, then posts to declared channels (Discord, X/Twitter, LinkedIn, Bluesky).
 # Implements #530, #549: directory-driven content publisher.
 #
 # Triggers: daily cron at 14:00 UTC + manual workflow_dispatch.
@@ -57,7 +57,11 @@ jobs:
           X_ALLOW_POST: "true"
           LINKEDIN_ACCESS_TOKEN: ${{ secrets.LINKEDIN_ACCESS_TOKEN }}
           LINKEDIN_PERSON_URN: ${{ secrets.LINKEDIN_PERSON_URN }}
-          # TODO(#590): Add LINKEDIN_ALLOW_POST: "true" when content-publisher.sh gains LinkedIn channel support
+          LINKEDIN_ORG_ID: ${{ secrets.LINKEDIN_ORG_ID }}
+          LINKEDIN_ALLOW_POST: "true"
+          BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
+          BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
+          BSKY_ALLOW_POST: "true"
           GH_TOKEN: ${{ github.token }}
         run: |
           exit_code=0
@@ -95,7 +99,7 @@ jobs:
             --body "Automated status update from content publisher workflow." \
             --base main \
             --head "$BRANCH"
-          gh pr merge "$BRANCH" --squash --auto || gh pr merge "$BRANCH" --squash
+          gh pr merge "$BRANCH" --squash --auto
 
       # Failure alerts use general webhook, not blog-specific
       - name: Discord notification (failure)

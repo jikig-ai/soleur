@@ -2,7 +2,7 @@
 title: "Test Case Study"
 type: case-study
 publish_date: 2026-03-12
-channels: discord, x
+channels: discord, x, bluesky, linkedin-company
 status: scheduled
 ---
 

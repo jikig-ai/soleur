@@ -100,7 +100,7 @@ jobs:
             After the distribution file is created, ensure its frontmatter has:
             - publish_date: <today's date in YYYY-MM-DD format>
             - status: scheduled
-            - channels: discord, x
+            - channels: discord, x, bluesky, linkedin-company
 
             STEP 4 — Validate:
             Build the site to verify the new article renders correctly:
@@ -158,7 +158,7 @@ jobs:
               --body "Automated commit from content generator workflow." \
               --base main \
               --head "$BRANCH"
-            gh pr merge "$BRANCH" --squash --auto || gh pr merge "$BRANCH" --squash
+            gh pr merge "$BRANCH" --squash --auto
             ```
 
       - name: Discord notification (failure)
