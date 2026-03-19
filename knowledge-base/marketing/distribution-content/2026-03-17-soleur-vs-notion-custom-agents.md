@@ -3,7 +3,7 @@ title: "Soleur vs. Notion Custom Agents: Company-as-a-Service vs. Workspace Auto
 type: comparison
 publish_date: 2026-03-17
 channels: discord, x
-status: scheduled
+status: published
 ---
 
 ## Discord

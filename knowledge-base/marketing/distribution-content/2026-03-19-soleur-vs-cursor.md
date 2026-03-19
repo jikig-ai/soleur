@@ -3,7 +3,7 @@ title: "Soleur vs. Cursor: When an AI Coding Tool Becomes an Agent Platform"
 type: comparison
 publish_date: 2026-03-19
 channels: discord, x
-status: scheduled
+status: published
 ---
 
 ## Discord
