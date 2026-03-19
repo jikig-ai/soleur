@@ -1,8 +1,8 @@
 FROM oven/bun:latest
 
-# Install system dependencies
+# Install system dependencies (nodejs/npm needed for claude-code CLI)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git curl openssh-client && \
+    apt-get install -y --no-install-recommends git curl openssh-client nodejs npm && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code CLI via npm (avoids curl-pipe-shell antipattern)

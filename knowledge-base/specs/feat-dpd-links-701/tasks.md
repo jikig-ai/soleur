@@ -8,7 +8,7 @@
 - [ ] Change `[Privacy Policy](/docs/legal/privacy-policy.md)` to `[Privacy Policy](/pages/legal/privacy-policy.html)`
 
 ### 1.2 Fix root source copy intro links
-- [ ] Edit `docs/legal/data-processing-agreement.md` line 20
+- [ ] Edit `docs/legal/data-protection-disclosure.md` line 20
 - [ ] Change `[Terms and Conditions](/docs/legal/terms-and-conditions.md)` to `[Terms and Conditions](terms-and-conditions.md)`
 - [ ] Change `[Privacy Policy](/docs/legal/privacy-policy.md)` to `[Privacy Policy](privacy-policy.md)`
 

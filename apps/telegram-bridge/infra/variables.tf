@@ -30,5 +30,5 @@ variable "location" {
 variable "image_name" {
   description = "Docker image to deploy"
   type        = string
-  default     = "ghcr.io/Jikigai/soleur-telegram-bridge:latest"
+  default     = "ghcr.io/jikig-ai/soleur-telegram-bridge:latest"
 }

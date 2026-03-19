@@ -37,7 +37,7 @@ The correct link patterns already exist in the "Related Documents" footer at the
 - Current (broken): `[Terms and Conditions](/docs/legal/terms-and-conditions.md)` and `[Privacy Policy](/docs/legal/privacy-policy.md)`
 - Footer (correct): `/pages/legal/terms-and-conditions.html` and `/pages/legal/privacy-policy.html`
 
-**Root source copy** (`docs/legal/data-processing-agreement.md`, line 20):
+**Root source copy** (`docs/legal/data-protection-disclosure.md`, line 20):
 - Current (broken): `[Terms and Conditions](/docs/legal/terms-and-conditions.md)` and `[Privacy Policy](/docs/legal/privacy-policy.md)`
 - Footer (correct): `terms-and-conditions.md` and `privacy-policy.md` (relative)
 
@@ -76,7 +76,7 @@ This is a two-line edit across two files.
 ## Acceptance Criteria
 
 - [x] Eleventy DPD intro links use `/pages/legal/*.html` format matching footer pattern (`plugins/soleur/docs/pages/legal/data-protection-disclosure.md`)
-- [x] Root DPD intro links use relative `*.md` format matching footer pattern (`docs/legal/data-processing-agreement.md`)
+- [x] Root DPD intro links use relative `*.md` format matching footer pattern (`docs/legal/data-protection-disclosure.md`)
 - [x] No other `/docs/legal/` absolute paths remain in either file
 - [x] Footer "Related Documents" links remain unchanged
 - [x] Both files remain content-identical except for their link format conventions
@@ -99,7 +99,7 @@ grep -rn '/docs/legal/' plugins/soleur/docs/pages/legal/ docs/legal/ | grep -v k
 grep '/pages/legal/' plugins/soleur/docs/pages/legal/data-protection-disclosure.md
 
 # Verify root intro links match footer pattern (relative)
-grep -E '\(terms-and-conditions\.md\)|\(privacy-policy\.md\)' docs/legal/data-processing-agreement.md
+grep -E '\(terms-and-conditions\.md\)|\(privacy-policy\.md\)' docs/legal/data-protection-disclosure.md
 ```
 
 **Dual-file drift check (institutional learning):** After editing both files, run a structural diff to confirm the intro paragraphs are semantically identical (same text, different link formats). This prevents the dual-file sync gap documented in learning `2026-03-18-dpd-processor-table-dual-file-sync.md`.
@@ -119,7 +119,7 @@ grep -E '\(terms-and-conditions\.md\)|\(privacy-policy\.md\)' docs/legal/data-pr
 This DPD supplements our [Terms and Conditions](/pages/legal/terms-and-conditions.html) and [Privacy Policy](/pages/legal/privacy-policy.html) and transparently describes the data processing relationship under the General Data Protection Regulation (EU) 2016/679 ("GDPR"). Because Soleur is not a data processor (see Section 2), this is not a Data Processing Agreement under Article 28. It is a disclosure document that clarifies data handling responsibilities.
 ```
 
-### docs/legal/data-processing-agreement.md (line 20)
+### docs/legal/data-protection-disclosure.md (line 20)
 
 ```markdown
 This DPD supplements our [Terms and Conditions](terms-and-conditions.md) and [Privacy Policy](privacy-policy.md) and transparently describes the data processing relationship under the General Data Protection Regulation (EU) 2016/679 ("GDPR"). Because Soleur is not a data processor (see Section 2), this is not a Data Processing Agreement under Article 28. It is a disclosure document that clarifies data handling responsibilities.

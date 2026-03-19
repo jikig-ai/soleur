@@ -5,7 +5,7 @@ description: "This skill should be used when generating draft legal documents fo
 
 # Legal Document Generator
 
-Generate draft legal documents from company context. Supports 7 document types across US, EU/GDPR, and UK jurisdictions. All output is marked as a draft requiring professional legal review.
+Generate draft legal documents from company context. Supports 8 document types across US, EU/GDPR, and UK jurisdictions. All output is marked as a draft requiring professional legal review.
 
 ## Supported Document Types
 
@@ -15,6 +15,7 @@ Generate draft legal documents from company context. Supports 7 document types a
 - GDPR Policy
 - Acceptable Use Policy
 - Data Processing Agreement
+- Data Protection Disclosure
 - Disclaimer / Limitation of Liability
 
 ## Phase 0: Context Gathering
@@ -31,7 +32,7 @@ If the user provides arguments after the skill name (e.g., `/legal-generate priv
 
 ## Phase 1: Document Selection
 
-Use the **AskUserQuestion tool** to select a document type from the 7 supported types listed above.
+Use the **AskUserQuestion tool** to select a document type from the 8 supported types listed above.
 
 ## Phase 2: Generation
 
