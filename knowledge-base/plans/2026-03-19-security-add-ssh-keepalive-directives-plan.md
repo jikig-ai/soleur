@@ -122,11 +122,11 @@ These sessions complete in seconds and never hit the 10-minute idle timeout. The
 
 ## Acceptance Criteria
 
-- [ ] `apps/web-platform/infra/cloud-init.yml` `01-hardening.conf` includes `ClientAliveInterval 300` and `ClientAliveCountMax 2`
-- [ ] `apps/telegram-bridge/infra/cloud-init.yml` migrated from `sed` to `write_files` with `01-hardening.conf` matching web-platform
-- [ ] `apps/telegram-bridge/infra/cloud-init.yml` `01-hardening.conf` includes `ClientAliveInterval 300` and `ClientAliveCountMax 2`
-- [ ] Telegram-bridge `runcmd` sed commands removed and replaced with `systemctl restart sshd` as first entry
-- [ ] Both cloud-init files produce identical SSH hardening configuration
+- [x] `apps/web-platform/infra/cloud-init.yml` `01-hardening.conf` includes `ClientAliveInterval 300` and `ClientAliveCountMax 2`
+- [x] `apps/telegram-bridge/infra/cloud-init.yml` migrated from `sed` to `write_files` with `01-hardening.conf` matching web-platform
+- [x] `apps/telegram-bridge/infra/cloud-init.yml` `01-hardening.conf` includes `ClientAliveInterval 300` and `ClientAliveCountMax 2`
+- [x] Telegram-bridge `runcmd` sed commands removed and replaced with `systemctl restart sshd` as first entry
+- [x] Both cloud-init files produce identical SSH hardening configuration
 
 ## Test Scenarios
 
