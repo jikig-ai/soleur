@@ -78,7 +78,7 @@ jobs:
               --body "Automated commit from campaign calendar workflow." \
               --base main \
               --head "$BRANCH"
-            gh pr merge "$BRANCH" --squash --auto || gh pr merge "$BRANCH" --squash
+            gh pr merge "$BRANCH" --squash --auto
             ```
 
       - name: Discord notification (failure)

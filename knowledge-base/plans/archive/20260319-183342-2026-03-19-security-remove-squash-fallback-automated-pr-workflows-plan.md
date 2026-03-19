@@ -108,10 +108,10 @@ This should return zero results after the fix.
 
 ## Acceptance Criteria
 
-- [ ] All 9 workflows use `gh pr merge "$BRANCH" --squash --auto` without fallback
-- [ ] No instances of `|| gh pr merge` remain in any workflow file
-- [ ] Each workflow retains its Discord failure notification step (already present via `if: failure()`)
-- [ ] Existing `[skip ci]` commit messages and synthetic `cla-check` status patterns are preserved unchanged
+- [x] All 9 workflows use `gh pr merge "$BRANCH" --squash --auto` without fallback
+- [x] No instances of `|| gh pr merge` remain in any workflow file
+- [x] Each workflow retains its Discord failure notification step (already present via `if: failure()`)
+- [x] Existing `[skip ci]` commit messages and synthetic `cla-check` status patterns are preserved unchanged
 
 ## Test Scenarios
 
