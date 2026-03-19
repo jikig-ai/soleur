@@ -153,17 +153,22 @@ jobs:
           CURRENT_TAG_FILE: ${{ steps.tmpfiles.outputs.current_tag }}
           GH_ERR_FILE: ${{ steps.tmpfiles.outputs.gh_err }}
         run: |
-          # Separate "no releases yet" from "API error"
-          if ! gh release view --json tagName --jq '.tagName' > "$CURRENT_TAG_FILE" 2>"$GH_ERR_FILE"; then
-            if grep -q "release not found" "$GH_ERR_FILE"; then
-              CURRENT="0.0.0"
-              echo "No existing releases, starting from 0.0.0"
-            else
-              echo "::error::gh release view failed: $(cat "$GH_ERR_FILE")"
+          # Find the latest plugin release (v* tags only, not web-v* or telegram-v*)
+          # gh release list returns all releases; filter for plugin's vX.Y.Z pattern
+          LATEST_TAG=$(gh release list --limit 100 --json tagName --jq '
+            [.[] | select(.tagName | test("^v[0-9]"))][0].tagName // empty
+          ' 2>"$GH_ERR_FILE")
+
+          if [ -z "$LATEST_TAG" ]; then
+            if [ -s "$GH_ERR_FILE" ] && ! grep -q "release not found" "$GH_ERR_FILE"; then
+              echo "::error::gh release list failed: $(cat "$GH_ERR_FILE")"
               exit 1
             fi
+            CURRENT="0.0.0"
+            echo "No plugin releases found (v* tags), starting from 0.0.0"
           else
-            CURRENT=$(sed 's/^v//' "$CURRENT_TAG_FILE")
+            CURRENT=$(echo "$LATEST_TAG" | sed 's/^v//')
+            echo "Latest plugin release: $LATEST_TAG"
           fi
           echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
 
