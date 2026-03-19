@@ -27,10 +27,6 @@ on:
         description: "Docker build context path (e.g., apps/web-platform)"
         type: string
         default: ""
-      docker_build_args:
-        description: "Docker build args, newline-delimited"
-        type: string
-        default: ""
       bump_type:
         description: "Override bump type (empty = use PR labels)"
         type: string
@@ -285,7 +281,9 @@ jobs:
             ${{ inputs.docker_image }}:v${{ steps.version.outputs.next }}
             ${{ inputs.docker_image }}:${{ github.sha }}
             ${{ inputs.docker_image }}:latest
-          build-args: ${{ inputs.docker_build_args }}
+          build-args: |
+            NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+            NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
 
       - name: Post to Discord
         if: steps.create_release.outputs.released == 'true'

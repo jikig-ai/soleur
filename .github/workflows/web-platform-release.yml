@@ -29,9 +29,6 @@ jobs:
       tag_prefix: "web-v"
       docker_image: "ghcr.io/jikig-ai/soleur-web-platform"
       docker_context: "apps/web-platform"
-      docker_build_args: |
-        NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-        NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
       bump_type: ${{ inputs.bump_type || '' }}
       force_run: ${{ github.event_name == 'workflow_dispatch' }}
     secrets: inherit
