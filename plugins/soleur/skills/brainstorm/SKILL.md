@@ -186,7 +186,27 @@ Write the brainstorm document. **Use worktree path if created.**
 
 **Document structure:** See the `brainstorm-techniques` skill for the template format. Key sections: What We're Building, Why This Approach, Key Decisions, Open Questions.
 
-If domain leaders participated and reported capability gaps in their assessments, include a `## Capability Gaps` section after "Open Questions" listing each gap with what is missing, which domain it belongs to, and why it is needed. Omit this section if no domain leaders participated or no gaps were reported.
+If domain leaders participated in Phase 0.5, include a `## Domain Assessments` section after "Open Questions" with structured carry-forward data for the plan skill:
+
+```markdown
+## Domain Assessments
+
+**Assessed:** Marketing, Engineering, Operations, Product, Legal, Sales, Finance, Support
+
+### [Domain Name]
+
+**Summary:** [1-2 sentence assessment summary from domain leader]
+
+### [Domain Name]
+
+**Summary:** [1-2 sentence assessment summary from domain leader]
+```
+
+- The `**Assessed:**` line lists all 8 domains to confirm completeness
+- Only relevant domains get `### [Domain Name]` subsections with summaries
+- Omit the entire section if no domain leaders participated
+
+If domain leaders reported capability gaps in their assessments, include a `## Capability Gaps` section after "Domain Assessments" listing each gap with what is missing, which domain it belongs to, and why it is needed. Omit this section if no gaps were reported.
 
 Ensure the brainstorms directory exists before writing.
 
