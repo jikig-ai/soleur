@@ -3,7 +3,7 @@ title: "Soleur vs. Anthropic Cowork: Which AI Agent Platform Is Right for Solo F
 type: comparison
 publish_date: 2026-03-16
 channels: discord, x
-status: scheduled
+status: published
 ---
 
 ## Discord

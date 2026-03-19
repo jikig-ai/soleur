@@ -178,13 +178,13 @@ Per learning `2026-02-21-github-actions-workflow-security-patterns`, all action 
 
 ## Acceptance Criteria
 
-- [ ] Status update step creates a PR instead of pushing directly to `main`
-- [ ] PR includes synthetic `cla-check` status via GitHub Statuses API
-- [ ] PR auto-merges via `gh pr merge --squash --auto`
+- [x] Status update step creates a PR instead of pushing directly to `main`
+- [x] PR includes synthetic `cla-check` status via GitHub Statuses API
+- [x] PR auto-merges via `gh pr merge --squash --auto`
 - [ ] Workflow succeeds end-to-end on the daily cron schedule without Discord failure notifications
-- [ ] Previously stale content files (`02-operations-management.md`, `2026-03-17-soleur-vs-notion-custom-agents.md`, `03-competitive-intelligence.md`, `2026-03-19-soleur-vs-cursor.md`) are updated to `status: published`
-- [ ] Partial failures (exit code 2) still commit status updates for successfully published files
-- [ ] Workflow permissions include `pull-requests: write` and `statuses: write`
+- [x] Previously stale content files (`02-operations-management.md`, `2026-03-17-soleur-vs-notion-custom-agents.md`, `03-competitive-intelligence.md`, `2026-03-19-soleur-vs-cursor.md`) are updated to `status: published`
+- [x] Partial failures (exit code 2) still commit status updates for successfully published files
+- [x] Workflow permissions include `pull-requests: write` and `statuses: write`
 
 ## Test Scenarios
 
