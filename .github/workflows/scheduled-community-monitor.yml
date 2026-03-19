@@ -132,7 +132,7 @@ jobs:
                  --body "Automated daily community digest commit." \
                  --base main \
                  --head "$BRANCH"
-               gh pr merge "$BRANCH" --squash --auto || gh pr merge "$BRANCH" --squash
+               gh pr merge "$BRANCH" --squash --auto
                ```
 
             6. **Create GitHub Issue** titled "[Scheduled] Community Monitor - YYYY-MM-DD"
