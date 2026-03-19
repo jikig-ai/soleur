@@ -484,23 +484,23 @@ MOCK
 
 ### Functional Requirements
 
-- [ ] `content-publisher.sh` posts to Bluesky when `BSKY_HANDLE`, `BSKY_APP_PASSWORD`, and `BSKY_ALLOW_POST` are set
-- [ ] `content-publisher.sh` posts to LinkedIn company page when `LINKEDIN_ACCESS_TOKEN`, `LINKEDIN_ORG_ID`, and `LINKEDIN_ALLOW_POST` are set
-- [ ] Both channels gracefully skip (exit 0, warning to stderr) when credentials are missing
-- [ ] Both channels create fallback GitHub issues when posting fails (dedup by title)
-- [ ] `social-distribute` generates a `## Bluesky` section with 300-char limit
-- [ ] `content-generator` workflow sets `channels: discord, x, bluesky, linkedin-company`
-- [ ] `content-publisher` workflow passes all required secrets to the script
-- [ ] LinkedIn company page posts use `urn:li:organization:{id}` as author, not person URN
-- [ ] Existing Discord, X, and LinkedIn personal channels continue to work unchanged
+- [x] `content-publisher.sh` posts to Bluesky when `BSKY_HANDLE`, `BSKY_APP_PASSWORD`, and `BSKY_ALLOW_POST` are set
+- [x] `content-publisher.sh` posts to LinkedIn company page when `LINKEDIN_ACCESS_TOKEN`, `LINKEDIN_ORG_ID`, and `LINKEDIN_ALLOW_POST` are set
+- [x] Both channels gracefully skip (exit 0, warning to stderr) when credentials are missing
+- [x] Both channels create fallback GitHub issues when posting fails (dedup by title)
+- [x] `social-distribute` generates a `## Bluesky` section with 300-char limit
+- [x] `content-generator` workflow sets `channels: discord, x, bluesky, linkedin-company`
+- [x] `content-publisher` workflow passes all required secrets to the script
+- [x] LinkedIn company page posts use `urn:li:organization:{id}` as author, not person URN
+- [x] Existing Discord, X, and LinkedIn personal channels continue to work unchanged
 
 ### Non-Functional Requirements
 
-- [ ] No new script files -- reuse existing `bsky-community.sh` and `linkedin-community.sh`
-- [ ] All new code follows existing patterns (graceful skip, fallback issue, dedup)
-- [ ] Bluesky post character limit (300) enforced by `bsky-community.sh`, not duplicated
-- [ ] LinkedIn post character limit (3000) enforced by `linkedin-community.sh`, not duplicated
-- [ ] Workflow file edits use `sed` via Bash (not Edit tool) due to `security_reminder_hook`
+- [x] No new script files -- reuse existing `bsky-community.sh` and `linkedin-community.sh`
+- [x] All new code follows existing patterns (graceful skip, fallback issue, dedup)
+- [x] Bluesky post character limit (300) enforced by `bsky-community.sh`, not duplicated
+- [x] LinkedIn post character limit (3000) enforced by `linkedin-community.sh`, not duplicated
+- [x] Workflow file edits use `sed` via Bash (not Edit tool) due to `security_reminder_hook`
 
 ## Test Scenarios
 

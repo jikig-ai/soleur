@@ -230,6 +230,7 @@ cmd_post_content() {
   fi
 
   local text=""
+  local author_override=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -241,9 +242,17 @@ cmd_post_content() {
         fi
         shift 2
         ;;
+      --author)
+        author_override="${2:-}"
+        if [[ -z "$author_override" ]]; then
+          echo "Error: --author requires a non-empty value." >&2
+          exit 1
+        fi
+        shift 2
+        ;;
       *)
         echo "Error: Unknown option '$1'" >&2
-        echo "Usage: linkedin-community.sh post-content --text \"<text>\"" >&2
+        echo "Usage: linkedin-community.sh post-content --text \"<text>\" [--author \"<urn>\"]" >&2
         exit 1
         ;;
     esac
@@ -260,10 +269,11 @@ cmd_post_content() {
     exit 1
   fi
 
-  # Build request body
+  # Build request body (--author overrides default LINKEDIN_PERSON_URN)
+  local author="${author_override:-$LINKEDIN_PERSON_URN}"
   local json_body
   json_body=$(jq -n \
-    --arg author "$LINKEDIN_PERSON_URN" \
+    --arg author "$author" \
     --arg text "$text" \
     '{
       author: $author,

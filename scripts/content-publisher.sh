@@ -16,6 +16,10 @@
 #   X_ACCESS_TOKEN_SECRET  - X access token secret
 #   LINKEDIN_ACCESS_TOKEN   - LinkedIn OAuth 2.0 token (optional; skips if unset)
 #   LINKEDIN_PERSON_URN    - LinkedIn person URN for posting
+#   LINKEDIN_ORG_ID        - LinkedIn organization ID for company page (optional; skips if unset)
+#   BSKY_HANDLE            - Bluesky handle (optional; skips if unset)
+#   BSKY_APP_PASSWORD      - Bluesky app password
+#   BSKY_ALLOW_POST        - Set to "true" to enable posting
 #   GH_TOKEN               - GitHub token for issue creation
 #
 # Exit codes:
@@ -30,6 +34,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONTENT_DIR="$REPO_ROOT/knowledge-base/marketing/distribution-content"
 X_SCRIPT="$REPO_ROOT/plugins/soleur/skills/community/scripts/x-community.sh"
 LINKEDIN_SCRIPT="$REPO_ROOT/plugins/soleur/skills/community/scripts/linkedin-community.sh"
+BSKY_SCRIPT="$REPO_ROOT/plugins/soleur/skills/community/scripts/bsky-community.sh"
 AVATAR_URL="https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png"
 
 # Global set per-file in the scan loop, used by fallback issue creators
@@ -60,6 +65,7 @@ channel_to_section() {
     x)                 echo "X/Twitter Thread" ;;
     linkedin-personal) echo "LinkedIn Personal" ;;
     linkedin-company)  echo "LinkedIn Company Page" ;;
+    bluesky)           echo "Bluesky" ;;
     *)                 echo "" ;;
   esac
 }
@@ -348,6 +354,74 @@ post_linkedin() {
   echo "[ok] LinkedIn post published ($section)."
 }
 
+post_linkedin_company() {
+  local file="$1"
+
+  if [[ -z "${LINKEDIN_ACCESS_TOKEN:-}" ]]; then
+    echo "Warning: LINKEDIN_ACCESS_TOKEN not set. Skipping LinkedIn Company Page posting." >&2
+    return 0
+  fi
+
+  if [[ -z "${LINKEDIN_ORG_ID:-}" ]]; then
+    echo "Warning: LINKEDIN_ORG_ID not set. Skipping LinkedIn Company Page posting." >&2
+    return 0
+  fi
+
+  local content
+  content=$(extract_section "$file" "LinkedIn Company Page")
+  if [[ -z "$content" ]]; then
+    echo "Warning: No LinkedIn Company Page content found in $(basename "$file"). Skipping." >&2
+    return 0
+  fi
+
+  bash "$LINKEDIN_SCRIPT" post-content --text "$content" --author "urn:li:organization:${LINKEDIN_ORG_ID}" || {
+    echo "Error: LinkedIn Company Page posting failed. Creating fallback issue." >&2
+    create_linkedin_fallback_issue "$file" "LinkedIn Company Page"
+    return 1
+  }
+  echo "[ok] LinkedIn Company Page post published."
+}
+
+# --- Bluesky Posting ---
+
+create_bluesky_fallback_issue() {
+  local file="$1"
+  local bsky_content
+  bsky_content=$(extract_section "$file" "Bluesky")
+
+  local title="[Content Publisher] Bluesky API failed -- manual posting required for $CASE_NAME"
+  local body
+  body=$(printf '## Manual Bluesky Posting Required\n\nThe scheduled content publisher could not post to Bluesky for **%s**.\n\nPost this content manually at https://bsky.app:\n\n---\n\n%s' "$CASE_NAME" "$bsky_content")
+
+  create_dedup_issue "$title" "$body" "action-required,content-publisher" || {
+    echo "FATAL: Bluesky posting failed AND fallback issue creation failed." >&2
+    return 1
+  }
+}
+
+post_bluesky() {
+  local file="$1"
+
+  if [[ -z "${BSKY_HANDLE:-}" || -z "${BSKY_APP_PASSWORD:-}" ]]; then
+    echo "Warning: Bluesky credentials not configured (checked BSKY_HANDLE, BSKY_APP_PASSWORD). Skipping Bluesky posting." >&2
+    return 0
+  fi
+
+  local content
+  content=$(extract_section "$file" "Bluesky")
+  if [[ -z "$content" ]]; then
+    echo "Warning: No Bluesky content found in $(basename "$file"). Skipping Bluesky." >&2
+    return 0
+  fi
+
+  bash "$BSKY_SCRIPT" post "$content" || {
+    echo "Error: Bluesky posting failed. Creating fallback issue." >&2
+    create_bluesky_fallback_issue "$file"
+    return 1
+  }
+  echo "[ok] Bluesky post published."
+}
+
 # --- Issue Management ---
 
 create_dedup_issue() {
@@ -390,6 +464,12 @@ main() {
   # Validate linkedin-community.sh exists if LinkedIn credentials are configured
   if [[ -n "${LINKEDIN_ACCESS_TOKEN:-}" && ! -f "$LINKEDIN_SCRIPT" ]]; then
     echo "Error: linkedin-community.sh not found at $LINKEDIN_SCRIPT" >&2
+    exit 1
+  fi
+
+  # Validate bsky-community.sh exists if Bluesky credentials are configured
+  if [[ -n "${BSKY_HANDLE:-}" && ! -f "$BSKY_SCRIPT" ]]; then
+    echo "Error: bsky-community.sh not found at $BSKY_SCRIPT" >&2
     exit 1
   fi
 
@@ -475,7 +555,10 @@ main() {
           post_linkedin "$file" "LinkedIn Personal" || file_failures=1
           ;;
         linkedin-company)
-          post_linkedin "$file" "LinkedIn Company Page" || file_failures=1
+          post_linkedin_company "$file" || file_failures=1
+          ;;
+        bluesky)
+          post_bluesky "$file" || file_failures=1
           ;;
       esac
     done < <(echo "$channels" | tr ',' '\n')
