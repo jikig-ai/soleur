@@ -2,7 +2,7 @@
 title: "Running a Business Validation Workshop With AI Gates"
 type: case-study
 publish_date: 2026-03-26
-channels: discord, x
+channels: discord, x, bluesky, linkedin-company
 status: scheduled
 ---
 
@@ -132,3 +132,25 @@ Anyone else used a structured validation approach to test their own assumptions?
 
 **Title:** Running a Business Validation Workshop With AI Gates
 **URL:** https://soleur.ai/blog/case-study-business-validation/?utm_source=hackernews&utm_medium=community&utm_campaign=case-study-business-validation
+
+---
+
+## Bluesky
+
+280+ PRs. 65+ agents. Zero external users. We ran a 6-gate AI validation against our own assumptions. Kill criterion triggered. Verdict: stop building, start validating. https://soleur.ai/blog/case-study-business-validation/?utm_source=bluesky&utm_medium=social&utm_campaign=bv
+
+---
+
+## LinkedIn Company Page
+
+Soleur ran a structured 6-gate business validation workshop against its own product using a business-validator agent — and the system recommended a pivot.
+
+The framework evaluated: problem definition (PASS), customer profiling (CONDITIONAL PASS — named contacts below threshold), competitive landscape (CONDITIONAL PASS — Tier 0 platform threats), demand evidence (FLAG — kill criterion triggered), business model (CONDITIONAL PASS), and minimum viable scope (PASS).
+
+The kill criterion at Gate 4 was the most significant finding: only 1-2 informal conversations vs. the 5+ threshold required. The AI system told the founder to stop building features and start validating the thesis with real users.
+
+Final verdict: PIVOT — not from the product, but from feature development to user validation. A startup strategy consultant charges $4,000-16,000 for structured validation of this scope.
+
+The validation function persists and re-derives its verdict as new evidence arrives — competitive data, user conversations, demand signals.
+
+Full case study: https://soleur.ai/blog/case-study-business-validation/?utm_source=linkedin-company&utm_medium=social&utm_campaign=case-study-business-validation
