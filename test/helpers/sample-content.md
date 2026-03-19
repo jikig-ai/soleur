@@ -68,6 +68,12 @@ End result: testing works.
 
 ---
 
+## Bluesky
+
+AI agents that run your whole company, not just write your code. 63 agents across 9 departments. Full case study: https://example.com/blog/test-case-study/?utm_source=bluesky&utm_medium=social&utm_campaign=test
+
+---
+
 ## LinkedIn Personal
 
 I've been thinking about how AI agents change the way we ship software...

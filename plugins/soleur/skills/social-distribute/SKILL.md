@@ -14,7 +14,7 @@ If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true` and strip `--hea
 **Argument format:** `<blog-post-path> [--headless]`
 
 **Headless defaults for interactive gates:**
-- Phase 7 (Discord Approval): auto-selects **Skip** (never auto-post to external platforms without human approval). `channels` is always `discord, x`.
+- Phase 7 (Discord Approval): auto-selects **Skip** (never auto-post to external platforms without human approval). `channels` is always `discord, x, bluesky, linkedin-company`.
 - Phase 9 Step 2 (Overwrite Check): auto-selects **Overwrite** (content is regenerated from the same blog post, so overwriting is idempotent).
 
 ## Prerequisites
@@ -195,6 +195,17 @@ Using the blog post content, stats values, article URL, and brand guide as conte
 - Minimal hashtags (1-2 max)
 - Section heading: `## LinkedIn Company Page`
 
+#### 5.8 Bluesky Post
+
+- Maximum 300 characters (grapheme count; Bluesky uses codepoint counting as approximation)
+- Standalone value post (no threads -- single posts perform better for distribution)
+- Match brand voice from `## Voice`
+- Include Bluesky tracked URL
+- No hashtags (Bluesky has no hashtag discovery)
+- Conversational, direct tone suited to the developer/indie community
+- Note: URLs will render as plain text (facet support for clickable links is a future enhancement)
+- Section heading: `## Bluesky`
+
 ## Approval Flow
 
 ### Phase 6: Present All Variants
@@ -226,6 +237,9 @@ Suggested subreddits: r/SaaS, r/startups
 [content]
 
 ## LinkedIn Company Page (1247/1300 optimal, 1247/3000 max)
+[content]
+
+## Bluesky (287/300 chars)
 [content]
 ```
 
@@ -318,8 +332,8 @@ If a match is found (either `<slug>.md` or `NN-<slug>.md`), use the matched file
 
 **Step 3: Determine channels field**
 
-- If Discord was posted successfully in Phase 8: set `channels: x` (Discord already done)
-- If Discord was skipped, failed, or no webhook configured: set `channels: discord, x`
+- If Discord was posted successfully in Phase 8: set `channels: x, bluesky, linkedin-company` (Discord already done)
+- If Discord was skipped, failed, or no webhook configured: set `channels: discord, x, bluesky, linkedin-company`
 
 **Step 4: Write the content file**
 
@@ -387,6 +401,12 @@ status: draft
 ## LinkedIn Company Page
 
 <linkedin company page content>
+
+---
+
+## Bluesky
+
+<bluesky content>
 ```
 
 ### Phase 10: Summary & Next Steps
@@ -399,24 +419,25 @@ Content file written: knowledge-base/marketing/distribution-content/<slug>.md
 Distribution summary:
 - Discord: [Posted now via webhook / Will publish via cron when scheduled]
 - X/Twitter: Will publish via cron when scheduled
+- Bluesky: Will publish via cron when scheduled
+- LinkedIn Company Page: Will publish via cron when scheduled
 - IndieHackers: Manual (content in file)
 - Reddit: Manual (content in file)
 - Hacker News: Manual (content in file)
 - LinkedIn Personal: Manual (content in file)
-- LinkedIn Company Page: Manual (content in file)
 
 Next steps:
 1. Review the content file
 2. Set publish_date to the target date (YYYY-MM-DD format)
 3. Change status from "draft" to "scheduled"
-4. The daily cron will publish to Discord and X on the scheduled date
-5. Reddit, IndieHackers, Hacker News, LinkedIn Personal, and LinkedIn Company Page sections are for manual posting
+4. The daily cron will publish to Discord, X, Bluesky, and LinkedIn Company Page on the scheduled date
+5. Reddit, IndieHackers, Hacker News, and LinkedIn Personal sections are for manual posting
 ```
 
 ## Important Guidelines
 
 - All Discord posting requires explicit user approval before sending -- no auto-send
-- Character limits are enforced during generation, not as a post-hoc check (2000 for Discord, 280 per tweet for X/Twitter, 80 for HN title, 1300 optimal / 3000 max for LinkedIn Personal and LinkedIn Company Page)
+- Character limits are enforced during generation, not as a post-hoc check (2000 for Discord, 280 per tweet for X/Twitter, 80 for HN title, 300 for Bluesky, 1300 optimal / 3000 max for LinkedIn Personal and LinkedIn Company Page)
 - Discord uses the plain `content` field, not rich embeds
 - JSON-escape all Discord content before inserting into the webhook payload
 - When posting via webhook, always include `username`, `avatar_url`, and `allowed_mentions: {parse: []}` fields
