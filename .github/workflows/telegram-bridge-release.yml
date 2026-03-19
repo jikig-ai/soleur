@@ -1,0 +1,65 @@
+name: Telegram Bridge Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: "Version bump type"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+jobs:
+  release:
+    uses: ./.github/workflows/reusable-release.yml
+    with:
+      component: telegram-bridge
+      component_display: "Soleur Telegram Bridge"
+      path_filter: "apps/telegram-bridge/"
+      tag_prefix: "telegram-v"
+      docker_image: "ghcr.io/jikig-ai/soleur-telegram-bridge"
+      docker_context: "apps/telegram-bridge"
+      bump_type: ${{ inputs.bump_type || '' }}
+      force_run: ${{ github.event_name == 'workflow_dispatch' }}
+    secrets: inherit
+
+  deploy:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to server
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        with:
+          host: ${{ secrets.TELEGRAM_BRIDGE_HOST }}
+          username: root
+          key: ${{ secrets.TELEGRAM_BRIDGE_SSH_KEY }}
+          script: |
+            IMAGE="ghcr.io/jikig-ai/soleur-telegram-bridge"
+            TAG="v${{ needs.release.outputs.version }}"
+            docker pull "$IMAGE:$TAG"
+            { docker stop soleur-bridge || true; }
+            { docker rm soleur-bridge || true; }
+            docker run -d \
+              --name soleur-bridge \
+              --restart unless-stopped \
+              --env-file /mnt/data/.env \
+              -v /mnt/data:/home/soleur/data \
+              -p 127.0.0.1:8080:8080 \
+              "$IMAGE:$TAG"
+            echo "Waiting for health check..."
+            for i in $(seq 1 10); do
+              if curl -sf http://localhost:8080/health; then
+                echo " OK"
+                exit 0
+              fi
+              sleep 3
+            done
+            echo "Health check failed"
+            docker logs soleur-bridge --tail 30
+            exit 1
