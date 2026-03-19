@@ -8,7 +8,7 @@ generated-date: 2026-02-20
 # Privacy Policy
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 17, 2026 (Buttondown data types and sub-processor list update)
+**Last Updated:** March 19, 2026 (Buttondown SCCs verification and free-tier DPA confirmation)
 
 ## 1. Introduction
 
@@ -114,7 +114,8 @@ We use **Buttondown** ([buttondown.com](https://buttondown.com)) to manage newsl
 
 - Buttondown's privacy practices are governed by [Buttondown's Privacy Policy](https://buttondown.com/legal/privacy).
 - Buttondown uses sub-processors for service delivery; the current list is maintained at [buttondown.com/legal/subprocessors](https://buttondown.com/legal/subprocessors).
-- Buttondown is a US-based service. International data transfers are covered by Standard Contractual Clauses (SCCs).
+- Buttondown is a US-based service. International data transfers are governed by the **EU Standard Contractual Clauses** (European Commission Implementing Decision (EU) 2021/914, Module 2: Controller-to-Processor), incorporated by reference into Buttondown's Data Processing Agreement.
+- Buttondown's DPA applies to all plan tiers, including the free tier.
 - Buttondown does not share subscriber data with third parties for advertising or marketing purposes.
 
 ### 5.4 Other Third-Party Integrations

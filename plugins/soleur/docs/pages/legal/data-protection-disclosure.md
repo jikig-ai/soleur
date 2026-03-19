@@ -8,7 +8,7 @@ permalink: pages/legal/data-protection-disclosure.html
 <section class="page-hero">
   <div class="container">
     <h1>Data Protection Disclosure</h1>
-    <p>Effective February 20, 2026 | Last Updated March 17, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated March 19, 2026</p>
   </div>
 </section>
 
@@ -18,7 +18,7 @@ permalink: pages/legal/data-protection-disclosure.html
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 17, 2026 (Buttondown data types and sub-processor list update)
+**Last Updated:** March 19, 2026 (Buttondown SCCs verification and free-tier DPA confirmation)
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -132,7 +132,7 @@ Users may interact with the following third-party services through the Plugin's 
 | Anthropic (Claude API) | AI model inference | Direct customer of Anthropic |
 | GitHub | Code hosting, issue tracking | Direct customer of GitHub |
 | npm | Package distribution | Direct customer of npm |
-| Buttondown | Newsletter subscription management (email, IP, referrer metadata, subscription timestamp) | Buttondown acts as data processor on behalf of Jikigai. [Sub-processor list](https://buttondown.com/legal/subprocessors) |
+| Buttondown | Newsletter subscription management (email, IP, referrer metadata, subscription timestamp) | Buttondown acts as data processor on behalf of Jikigai. International transfers governed by EU SCCs (Decision 2021/914, Module 2). DPA covers all plan tiers. [Sub-processor list](https://buttondown.com/legal/subprocessors) |
 
 Users are responsible for reviewing and complying with the data processing terms of any third-party service they use in conjunction with the Plugin.
 
@@ -163,7 +163,11 @@ No international data transfers are performed by Soleur with respect to Local Da
 
 When Users interact with third-party services (e.g., Anthropic Claude API, GitHub), data may be transferred internationally. These transfers are governed by the respective third-party's data processing agreements and transfer mechanisms. Users are responsible for ensuring adequate safeguards are in place for any such transfers.
 
-### 6.3 Docs Site
+### 6.3 Buttondown (Newsletter)
+
+Transfers of newsletter subscriber data (email addresses, IP addresses, referrer metadata, subscription timestamps) from the EEA to the United States are governed by the **EU Standard Contractual Clauses** (European Commission Implementing Decision (EU) 2021/914, Module 2: Controller-to-Processor), incorporated by reference into Buttondown's [Data Processing Agreement](https://buttondown.com/legal/data-processing-agreement). Buttondown's DPA applies to all plan tiers, including the free tier used by Jikigai.
+
+### 6.4 Docs Site
 
 The Docs Site is hosted on GitHub Pages, which may involve data processing in the United States and other jurisdictions where GitHub operates. GitHub maintains appropriate transfer mechanisms as described in its data processing agreements.
 

@@ -1,7 +1,7 @@
 # Buttondown DPA Review Brainstorm
 
-**Date:** 2026-03-11 (updated 2026-03-17)
-**Status:** In Progress — Buttondown updated docs March 16, re-verification in progress
+**Date:** 2026-03-11 (updated 2026-03-17, 2026-03-19)
+**Status:** Complete — All blocking gaps resolved. DPA ready to sign.
 **Related Issue:** #501 (Newsletter — closed, DPA verification outstanding)
 
 ## What We're Doing
@@ -81,30 +81,33 @@ On 2026-03-16, Buttondown published a [legal docs refresh](https://buttondown.co
 
 | Gap | March 11 Status | March 16 Status | Verdict |
 |-----|-----------------|-----------------|---------|
-| 1. EU-US Transfer Mechanism | CRITICAL — no mechanism | Section 8 references SCCs generically | **PARTIALLY ADDRESSED** — reference ≠ execution. No Module 2 specified, no Decision 2021/914 cited, no SCCs annex |
+| 1. EU-US Transfer Mechanism | CRITICAL — no mechanism | Section 8 references SCCs generically | **RESOLVED (March 19)** — SCCs (Decision 2021/914, Module 2) incorporated by reference with clause-by-clause completion. Annex B completes SCC annexes. |
 | 2. Missing DPA Annex | HIGH — no Art. 28(3) details | Annex 1 added (subject matter, duration, data types, data subjects) | **RESOLVED** |
 | 3. US Governing Law | MEDIUM — no GDPR supremacy | Section 12 GDPR/UK/Swiss precedence clause | **RESOLVED** |
 | 4. Privacy Policy Contradictions | MEDIUM — advertising references | Advertising references removed, policy updated | **RESOLVED** |
-| 5. Free Tier Scope | UNKNOWN | Not addressed | **STILL UNKNOWN** |
+| 5. Free Tier Scope | UNKNOWN | Not addressed | **RESOLVED (March 19)** — Steph confirmed DPA applies to all plans (free and paid). Paid plans expose additional Stripe data. |
 
 ### New Finding
 
 **Art. 28(3) instruction-infringement notification:** The DPA does not require Buttondown to notify us if they believe a processing instruction infringes GDPR (second subparagraph of Art. 28(3)). Minor gap, but worth flagging.
 
-### Revised Decision
+### Revised Decision (March 19)
 
-**Approach A: Update confirmed facts now, hold transfer claims.**
+**All blocking gaps resolved. DPA ready to sign.**
 
-1. Update our legal docs with confirmed new sub-processor list (12 vendors), confirmed data types (IP, referrer metadata), and new contact email
-2. Do NOT update our SCCs/transfer mechanism claims — Privacy Policy Section 5.3 still asserts SCCs that aren't substantiated
-3. Send follow-up email acknowledging improvements, requesting: (a) actual SCCs execution with Module 2, (b) free-tier DPA confirmation
-4. Update transfer-related claims only after Buttondown responds
+1. ~~Update confirmed facts (sub-processors, data types)~~ — DONE (March 17)
+2. ~~Send follow-up email requesting SCCs + free-tier confirmation~~ — DONE (sent; Steph replied March 19)
+3. Update SCCs/transfer mechanism claims in our legal docs — now substantiated by DPA Section 8 (Decision 2021/914, Module 2)
+4. Update free-tier DPA confirmation in our legal docs
+5. Run legal-compliance-auditor for cross-document consistency
+6. Sign DPA and close #501
 
 ## Next Steps
 
-1. ~~Send reply email to Buttondown (draft in verification memo)~~ → Send updated follow-up email (see `dpa-verification-memo.md` Section 8b)
-2. Update our legal docs with confirmed facts (sub-processors, data types, contact email)
-3. Wait for Buttondown's response on SCCs execution and free-tier scope
-4. Based on response: either sign DPA with executed SCCs, or evaluate Loops as backup
-5. Update transfer-related claims in our docs only after SCCs are confirmed
-6. Run legal-compliance-auditor for cross-document consistency after all updates
+1. ~~Send reply email to Buttondown~~ — DONE
+2. ~~Update legal docs with confirmed facts (sub-processors, data types)~~ — DONE (March 17)
+3. ~~Wait for Buttondown response on SCCs and free-tier scope~~ — DONE (Steph replied March 19)
+4. Update transfer-related claims in our docs — IN PROGRESS (March 19)
+5. Run legal-compliance-auditor for cross-document consistency
+6. Sign DPA — all blocking gaps resolved
+7. Close #501

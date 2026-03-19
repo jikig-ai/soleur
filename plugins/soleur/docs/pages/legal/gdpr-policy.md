@@ -8,7 +8,7 @@ permalink: pages/legal/gdpr-policy.html
 <section class="page-hero">
   <div class="container">
     <h1>GDPR Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated March 17, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated March 19, 2026</p>
   </div>
 </section>
 
@@ -19,7 +19,7 @@ permalink: pages/legal/gdpr-policy.html
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 17, 2026 (Buttondown data types and sub-processor list update)
+**Last Updated:** March 19, 2026 (Buttondown SCCs verification and free-tier DPA confirmation)
 
 ---
 
@@ -164,6 +164,8 @@ Soleur itself does not transfer personal data internationally. However, users sh
 - **Anthropic Claude API:** API requests may be processed in the United States or other jurisdictions where Anthropic operates. Users should review Anthropic's data processing terms regarding international transfer safeguards.
 - **GitHub Pages / GitHub:** GitHub infrastructure is located globally, including in the United States. GitHub (Microsoft Corporation) is certified under the **EU-US Data Privacy Framework** (adequacy decision C(2023) 4745), which provides the primary transfer mechanism. GitHub also maintains Standard Contractual Clauses as a supplementary safeguard. See [GitHub's Global Privacy Practices](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement#githubs-global-privacy-practices).
 
+- **Buttondown (Newsletter):** Buttondown is a US-based newsletter platform. Transfers of subscriber data (email addresses, IP addresses, referrer metadata) from the EEA to the United States are governed by the **EU Standard Contractual Clauses** (European Commission Implementing Decision (EU) 2021/914, Module 2: Controller-to-Processor), incorporated by reference into Buttondown's [Data Processing Agreement](https://buttondown.com/legal/data-processing-agreement). Buttondown's DPA applies to all plan tiers, including the free tier.
+
 Users who are subject to the GDPR and have concerns about international data transfers should review the relevant third-party policies before using these services.
 
 ---
@@ -226,7 +228,7 @@ The register documents six processing activities:
 3. **Source repository management** (GitHub) -- contributor profile data, issue reporters
 4. **Legal and GDPR inquiry handling** (legal@jikigai.com) -- names, email addresses, inquiry content
 5. **CLA signature collection** (GitHub CLA Assistant) -- GitHub username, signature timestamp, pull request reference. Legal basis: legitimate interest (Article 6(1)(f)). Signature data is stored on the `cla-signatures` branch in the public repository. Retention is indefinite (irrevocable license grants).
-6. **Newsletter subscription management** (soleur.ai via Buttondown) -- email addresses, IP addresses, referrer metadata, and subscription timestamps of newsletter subscribers. Legal basis: consent (Article 6(1)(a)). Data is processed by Buttondown (US-based, SCCs in place). Buttondown's sub-processor list is maintained at [buttondown.com/legal/subprocessors](https://buttondown.com/legal/subprocessors). Retention: until the subscriber unsubscribes. Double opt-in is used to verify consent.
+6. **Newsletter subscription management** (soleur.ai via Buttondown) -- email addresses, IP addresses, referrer metadata, and subscription timestamps of newsletter subscribers. Legal basis: consent (Article 6(1)(a)). Data is processed by Buttondown (US-based). International transfers governed by EU Standard Contractual Clauses (Implementing Decision (EU) 2021/914, Module 2: Controller-to-Processor), incorporated into Buttondown's [DPA](https://buttondown.com/legal/data-processing-agreement). DPA applies to all plan tiers including free. Buttondown's sub-processor list is maintained at [buttondown.com/legal/subprocessors](https://buttondown.com/legal/subprocessors). Retention: until the subscriber unsubscribes. Double opt-in is used to verify consent.
 
 The register is maintained internally and is available on request to the competent supervisory authority (CNIL for France). Since the 2018 reform of the Loi Informatique et Libertes, no registration or prior declaration to the CNIL is required.
 

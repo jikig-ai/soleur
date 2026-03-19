@@ -12,12 +12,13 @@ Buttondown refreshed their legal documents on March 16, 2026, addressing 3 of 5 
 
 ## Acceptance Criteria
 
-- [ ] All modified files committed and pushed to PR #528
+- [x] All modified files committed and pushed to PR #528
 - [ ] Legal-compliance-auditor run confirms cross-document consistency
 - [ ] Pre-existing audit findings filed as GitHub issues
-- [ ] PR #528 title and body updated (no longer WIP)
-- [ ] SCCs/transfer mechanism claims remain unchanged (intentionally held)
-- [ ] #501 stays open — DPA not yet signed
+- [x] PR #528 title and body updated (no longer WIP)
+- [x] SCCs/transfer mechanism claims updated — now substantiated by DPA Section 8 (Decision 2021/914, Module 2)
+- [x] Free-tier DPA coverage confirmed — DPA applies to all plans
+- [ ] #501 closed after DPA signed
 
 ## Context
 
@@ -38,8 +39,8 @@ Buttondown refreshed their legal documents on March 16, 2026, addressing 3 of 5 
 
 | Gap | Status | Blocks signing? |
 |-----|--------|----------------|
-| SCCs execution (Module 2) | Pending — email to be sent | Yes |
-| Free tier DPA applicability | Pending — email to be sent | Yes |
+| SCCs execution (Module 2) | RESOLVED — DPA Section 8 incorporates SCCs (Decision 2021/914, Module 2) | No |
+| Free tier DPA applicability | RESOLVED — Steph confirmed DPA covers all plans | No |
 | Art. 28(3) instruction-infringement notification | Missing — low severity | No |
 | Breach notification 72h timeline | "Without undue delay" only | No |
 

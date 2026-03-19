@@ -17,7 +17,7 @@ permalink: pages/legal/privacy-policy.html
     <div class="prose">
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 17, 2026 (Buttondown data types and sub-processor list update)
+**Last Updated:** March 19, 2026 (Buttondown SCCs verification and free-tier DPA confirmation)
 
 ## 1. Introduction
 
@@ -98,7 +98,7 @@ If you subscribe to the Soleur newsletter via the signup form on the Docs Site, 
 - **Lawful basis:** Consent (Article 6(1)(a) GDPR) -- you actively opt in by submitting the signup form and confirming your subscription via the double opt-in confirmation email.
 - **Double opt-in:** After submitting your email, Buttondown sends a confirmation email. Your subscription is only activated after you click the confirmation link. This ensures informed, verified consent.
 - **Retention:** Your email address is retained by Buttondown until you unsubscribe. You can unsubscribe at any time via the link in every newsletter email. Upon unsubscription, your email is removed from the active subscriber list.
-- **Third-party processor:** Buttondown acts as a data processor. See Section 5.4 for details.
+- **Third-party processor:** Buttondown acts as a data processor. See Section 5.3 for details.
 
 ## 5. Third-Party Services
 
@@ -123,7 +123,8 @@ We use **Buttondown** ([buttondown.com](https://buttondown.com)) to manage newsl
 
 - Buttondown's privacy practices are governed by [Buttondown's Privacy Policy](https://buttondown.com/legal/privacy).
 - Buttondown uses sub-processors for service delivery; the current list is maintained at [buttondown.com/legal/subprocessors](https://buttondown.com/legal/subprocessors).
-- Buttondown is a US-based service. International data transfers are covered by Standard Contractual Clauses (SCCs).
+- Buttondown is a US-based service. International data transfers are governed by the **EU Standard Contractual Clauses** (European Commission Implementing Decision (EU) 2021/914, Module 2: Controller-to-Processor), incorporated by reference into Buttondown's Data Processing Agreement.
+- Buttondown's DPA applies to all plan tiers, including the free tier.
 - Buttondown does not share subscriber data with third parties for advertising or marketing purposes.
 
 ### 5.4 Other Third-Party Integrations

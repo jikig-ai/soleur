@@ -1,6 +1,6 @@
 # Buttondown DPA Verification Memo
 
-**Date:** 2026-03-11 (re-verified 2026-03-17)
+**Date:** 2026-03-11 (re-verified 2026-03-17, 2026-03-19)
 **Author:** CLO Assessment (AI-assisted — requires legal review)
 **Controller:** Jikigai (France)
 **Processor:** Buttondown, LLC (United States)
@@ -56,29 +56,35 @@ On 2026-03-16, Buttondown published a [legal docs refresh](https://buttondown.co
 | Deletion/return after termination (f) | Section 11.2 | ADEQUATE — but no backup deletion timeline | No change |
 | Audit rights (h) | Section 9 | ADEQUATE — reasonable notice required | No change |
 | Breach notification | Section 7 | PARTIAL — "without undue delay," no 72-hour commitment | No change |
-| International transfers (Chapter V) | Section 8 | PARTIAL — references SCCs generically but does not incorporate them | **Upgraded from INADEQUATE** |
+| International transfers (Chapter V) | Section 8 + Annex B | ADEQUATE — SCCs (Decision 2021/914, Module 2) incorporated by reference with clause-by-clause completion | **Resolved (March 19 re-verification)** |
 | DPA Annex (processing details) | Annex 1 | ADEQUATE — subject matter, duration, data types, data subjects | **Upgraded from INADEQUATE** |
 | Instruction-infringement notification | Not present | MISSING — Art. 28(3) second subparagraph requires processor to notify controller if instruction infringes GDPR | **New finding** |
 | GDPR precedence over governing law | Section 12 | ADEQUATE — EU/UK/Swiss data protection law takes precedence | **New (resolved Gap 3)** |
 
 ## 4. Critical Gaps
 
-### Gap 1: EU-US Transfer Mechanism — PARTIALLY RESOLVED
+### Gap 1: EU-US Transfer Mechanism — RESOLVED
 
 ~~The DPA acknowledges international transfers must comply with GDPR Chapter V but does not incorporate or reference any mechanism.~~
 
-**March 17 update:** Section 8 now states transfers are "supported by appropriate safeguards as required by Chapter V of the GDPR, including the EU Standard Contractual Clauses where applicable."
+**March 17 update:** Section 8 referenced SCCs generically ("EU Standard Contractual Clauses where applicable") but lacked specifics.
 
-**Remaining issue:** This is a *reference* to SCCs, not *incorporation* or *execution*. Specifically:
-- No SCCs annex attached to the DPA
-- No Module specified (we need Module 2: Controller-to-Processor)
-- No reference to EU Commission Implementing Decision 2021/914
-- No Transfer Impact Assessment referenced
-- No mention of EU-US Data Privacy Framework as alternative
+**March 19 update (Steph's response + DPA re-verification):** Section 8 now fully incorporates SCCs:
 
-**Impact (reduced):** The generic reference shows intent but is unlikely to satisfy CNIL scrutiny as a valid transfer mechanism. SCCs require execution as a standalone instrument or detailed incorporation by reference with all required annexes.
+- **Section 8.2:** Transfers governed by "Standard Contractual Clauses issued by the European Commission pursuant to Implementing Decision (EU) 2021/914," **Module 2 (Controller to Processor)**. SCCs are "incorporated by reference into this DPA."
+- **Section 8.3:** Clause-by-clause SCC completion:
+  - Clause 7 (Docking clause): shall apply
+  - Clause 9(a) (Sub-processors): Option 2 (General written authorization)
+  - Clause 11 (Redress): shall not apply
+  - Clause 17 (Governing law): Option 1
+  - Clause 18(b) (Forum): EU Member State courts
+- **Section 8.4:** SCC annexes completed in **Annex B** (party details, transfer description, supervisory authority, technical/organizational measures, sub-processor list)
+- **Section 8.5:** SCCs prevail over any conflicting DPA provision
+- **Section 8.6:** UK Addendum and Swiss modifications referenced
 
-**Our exposure (unchanged):** Jikigai's Privacy Policy (Section 5.3) still asserts "International data transfers are covered by Standard Contractual Clauses (SCCs)." This remains unsupported until SCCs are actually executed.
+**Assessment:** This is proper SCCs incorporation by reference — the standard approach accepted by CNIL and other DPAs. The DPA cites the correct Decision (2021/914), specifies the correct Module (2: Controller-to-Processor), and completes clause-by-clause options as required. Annex B provides the required transfer-specific details.
+
+**Our exposure: RESOLVED.** Jikigai's Privacy Policy Section 5.3 claim that "International data transfers are covered by Standard Contractual Clauses (SCCs)" is now substantiated.
 
 ### Gap 2: Missing DPA Annex — RESOLVED
 
@@ -98,9 +104,19 @@ On 2026-03-16, Buttondown published a [legal docs refresh](https://buttondown.co
 
 **March 17 update:** Privacy policy updated March 16, 2026. Advertising references removed. Contact email changed to support@buttondown.com. Explicit statement: "Buttondown doesn't do anything weird with your data."
 
-### Gap 5: Plan Tier Scope — STILL UNKNOWN
+### Gap 5: Plan Tier Scope — RESOLVED
 
-Per our GitHub DPA precedent (learnings: `2026-02-21-github-dpa-free-plan-scope-limitation.md`), DPAs sometimes only cover paid plans. Buttondown's updated DPA still does not specify tier applicability. Annex 1 mentions "billing information (name/address via Stripe for paid tiers)" which implies awareness of tier differences but does not explicitly include or exclude free tier.
+~~Per our GitHub DPA precedent (learnings: `2026-02-21-github-dpa-free-plan-scope-limitation.md`), DPAs sometimes only cover paid plans. Buttondown's updated DPA still does not specify tier applicability.~~
+
+**March 19 update (Steph's email):** Confirmed that the DPA applies to **all plans — both free and paid**. Steph noted that paid plans expose additional data via Stripe (billing contact name, billing address), documented at [buttondown.com/legal/gdpr-eu-compliance](https://buttondown.com/legal/gdpr-eu-compliance).
+
+**Data by tier (from GDPR compliance page):**
+- Free authors: email address, subscriber emails, newsletter content
+- Paid authors: + billing contact name, billing address (via Stripe)
+- Free readers/subscribers: email address, IP address, referrer metadata
+- Paid subscribers: + billing contact name, billing address (via Stripe)
+
+This is the opposite of the GitHub precedent — Buttondown covers all tiers, while GitHub limits DPA to paid plans only.
 
 ### Gap 6: Instruction-Infringement Notification — NEW
 
@@ -157,25 +173,18 @@ Art. 28(3) second subparagraph requires the processor to "immediately inform the
 | ~~4~~ | ~~Request GDPR supremacy clause~~ | DONE — Section 12 updated |
 | ~~5~~ | ~~Clarify advertising contradiction~~ | DONE — Privacy policy updated |
 
-### Immediate (now)
+### Immediate (now — March 19)
 
-| # | Action | Owner |
-|---|--------|-------|
-| 1 | Send follow-up email acknowledging improvements, requesting SCCs execution + free-tier confirmation (see Section 8b) | Jean |
-| 2 | Update our legal docs with confirmed facts: sub-processor list (12 vendors), data types (IP, referrer metadata), contact email | Legal agents |
-| 3 | Do NOT update SCCs/transfer mechanism claims until confirmed | — |
-
-### After Buttondown responds
-
-| # | Action | Owner |
-|---|--------|-------|
-| 4 | If SCCs available: execute SCCs, sign DPA | Jean |
-| 5 | If no SCCs/DPF: evaluate Loops as backup platform | CLO |
-| 6 | Update Privacy Policy Section 5.3 (transfer mechanism claims) | Legal agents |
-| 7 | Update GDPR Policy Section 10 (transfer mechanism claims) | Legal agents |
-| 8 | Update Data Protection Disclosure Section 2.3(e) (transfer mechanism claims) | Legal agents |
-| 9 | Run legal-compliance-auditor for cross-document consistency | Legal agents |
-| 10 | Update Article 30 private register | Jean |
+| # | Action | Owner | Status |
+|---|--------|-------|--------|
+| 1 | ~~Send follow-up email requesting SCCs execution + free-tier confirmation~~ | Jean | DONE (sent; Steph replied March 19) |
+| 2 | ~~Update our legal docs with confirmed facts: sub-processor list, data types, contact email~~ | Legal agents | DONE (March 17 commit) |
+| 3 | Update SCCs/transfer mechanism claims — now substantiated by DPA Section 8 (Decision 2021/914, Module 2) | Legal agents | IN PROGRESS |
+| 4 | Update legal docs with free-tier DPA confirmation | Legal agents | IN PROGRESS |
+| 5 | Run legal-compliance-auditor for cross-document consistency | Legal agents | PENDING |
+| 6 | Sign DPA (all blocking gaps resolved) | Jean | PENDING |
+| 7 | Close #501 | — | PENDING (after DPA signed) |
+| 8 | Update Article 30 private register | Jean | PENDING |
 
 ## 8a. Original Draft Reply Email (March 11 — SUPERSEDED)
 
@@ -213,6 +222,20 @@ Thanks again — really appreciate how responsive you've been on this.
 Best regards,
 Jean
 Jikigai — soleur.ai
+
+## 8c. Buttondown Response (March 19)
+
+**From:** Steph (Buttondown support)
+**Date:** 2026-03-19
+**Subject:** Re: Buttondown GDPR/DPA — Great updates, two remaining items
+
+> **#1 (SCCs):** "We've updated our DPA to reflect this information. This is under Section 8, with more details in Annex B." — [buttondown.com/legal/data-processing-agreement](https://buttondown.com/legal/data-processing-agreement)
+>
+> **#2 (Free tier):** "Our DPA is applicable to all plans—both free and paid." Notes that paid plans expose additional Stripe data (billing contact name, billing address). Details at [buttondown.com/legal/gdpr-eu-compliance](https://buttondown.com/legal/gdpr-eu-compliance).
+
+**Verification (March 19):** DPA Section 8 confirmed to incorporate SCCs (Implementing Decision 2021/914, Module 2: Controller-to-Processor) by reference with clause-by-clause completion. Annex B completes the SCC annexes. See Gap 1 update in Section 4.
+
+**Outcome:** Both blocking gaps resolved. DPA is ready to sign.
 
 ## 9. Precedent Reference
 

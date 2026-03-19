@@ -9,7 +9,7 @@ generated-date: 2026-02-20
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 10, 2026 (newsletter subscription data)
+**Last Updated:** March 19, 2026 (Buttondown SCCs verification and free-tier DPA confirmation)
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -79,7 +79,7 @@ Soleur's data processing activities are limited to:
 - **(b)** **GitHub repository interaction:** Users who submit issues, pull requests, or participate in discussions on the Soleur GitHub repository interact with GitHub's platform. This processing is governed by GitHub's terms and privacy policies.
 - **(c)** **Plugin distribution:** The Plugin is distributed via GitHub and npm. Download and installation telemetry is handled by those respective platforms under their own privacy policies.
 - **(d)** **Contributor License Agreement (CLA) signatures:** Contributors who submit pull requests to the Soleur repository are asked to sign a CLA via the CLA Assistant integrated into GitHub. This processing collects the contributor's GitHub username, signature timestamp, and associated pull request reference. Signature data is stored in the Soleur GitHub repository on a dedicated branch (`cla-signatures`) and is publicly visible. The legal basis is legitimate interest (Article 6(1)(f) GDPR) in maintaining an enforceable record of contributor IP license grants. Signature data is retained indefinitely as the license grants are irrevocable.
-- **(e)** **Newsletter subscription management:** Visitors who subscribe to the Soleur newsletter via the Docs Site provide their email address, which is transmitted to and processed by **Buttondown** ([buttondown.com](https://buttondown.com)), a third-party newsletter platform. Buttondown acts as a data processor on behalf of Jikigai. The legal basis is consent (Article 6(1)(a) GDPR), verified through a double opt-in confirmation email. Email addresses are retained until the subscriber unsubscribes.
+- **(e)** **Newsletter subscription management:** Visitors who subscribe to the Soleur newsletter via the Docs Site provide their email address, which is transmitted to and processed by **Buttondown** ([buttondown.com](https://buttondown.com)), a third-party newsletter platform. Buttondown also automatically collects IP addresses, referrer metadata, and subscription timestamps for service operation and engagement analytics. Buttondown acts as a data processor on behalf of Jikigai. Buttondown's sub-processor list is maintained at [buttondown.com/legal/subprocessors](https://buttondown.com/legal/subprocessors). The legal basis is consent (Article 6(1)(a) GDPR), verified through a double opt-in confirmation email. Email addresses are retained until the subscriber unsubscribes.
 
 For these limited activities, Soleur acts as a Controller only with respect to data it directly collects (including CLA signature data), and GitHub acts as a Processor or independent Controller as described in its own agreements.
 
@@ -123,7 +123,7 @@ Users may interact with the following third-party services through the Plugin's 
 | Anthropic (Claude API) | AI model inference | Direct customer of Anthropic |
 | GitHub | Code hosting, issue tracking | Direct customer of GitHub |
 | npm | Package distribution | Direct customer of npm |
-| Buttondown | Newsletter subscription management | Buttondown acts as data processor on behalf of Jikigai |
+| Buttondown | Newsletter subscription management (email, IP, referrer metadata, subscription timestamp) | Buttondown acts as data processor on behalf of Jikigai. International transfers governed by EU SCCs (Decision 2021/914, Module 2). DPA covers all plan tiers. [Sub-processor list](https://buttondown.com/legal/subprocessors) |
 
 Users are responsible for reviewing and complying with the data processing terms of any third-party service they use in conjunction with the Plugin.
 
@@ -154,7 +154,11 @@ No international data transfers are performed by Soleur with respect to Local Da
 
 When Users interact with third-party services (e.g., Anthropic Claude API, GitHub), data may be transferred internationally. These transfers are governed by the respective third-party's data processing agreements and transfer mechanisms. Users are responsible for ensuring adequate safeguards are in place for any such transfers.
 
-### 6.3 Docs Site
+### 6.3 Buttondown (Newsletter)
+
+Transfers of newsletter subscriber data (email addresses, IP addresses, referrer metadata, subscription timestamps) from the EEA to the United States are governed by the **EU Standard Contractual Clauses** (European Commission Implementing Decision (EU) 2021/914, Module 2: Controller-to-Processor), incorporated by reference into Buttondown's [Data Processing Agreement](https://buttondown.com/legal/data-processing-agreement). Buttondown's DPA applies to all plan tiers, including the free tier used by Jikigai.
+
+### 6.4 Docs Site
 
 The Docs Site is hosted on GitHub Pages, which may involve data processing in the United States and other jurisdictions where GitHub operates. GitHub maintains appropriate transfer mechanisms as described in its data processing agreements.
 
