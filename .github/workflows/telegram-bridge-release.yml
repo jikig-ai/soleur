@@ -73,13 +73,13 @@ jobs:
               -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
               -p 127.0.0.1:8080:8080 \
               "$IMAGE:$TAG"
-            echo "Waiting for health check..."
-            for i in $(seq 1 10); do
+            echo "Waiting for health check (CLI spawn takes ~60s)..."
+            for i in $(seq 1 20); do
               if curl -sf http://localhost:8080/health; then
                 echo " OK"
                 exit 0
               fi
-              sleep 3
+              sleep 5
             done
             echo "Health check failed"
             docker logs soleur-bridge --tail 30
