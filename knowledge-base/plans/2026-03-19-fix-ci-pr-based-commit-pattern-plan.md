@@ -225,18 +225,18 @@ If any step fails, subsequent steps will also fail. The agent should treat any n
 
 ## Acceptance Criteria
 
-- [ ] All 7 workflows have `pull-requests: write` and `statuses: write` in their `permissions:` block
-- [ ] All 7 workflows replace `git push origin main` prompt instructions with the PR-based commit pattern
-- [ ] All 7 workflows have `GH_TOKEN: ${{ github.token }}` in the `claude-code-action` step's `env:` block
-- [ ] The "authorized to push to main" prompt override is replaced with "do not push directly" guidance
-- [ ] Branch names use timestamp format (`%Y-%m-%d-%H%M%S`) with the workflow's unique prefix
-- [ ] The `gh api` call uses `${GITHUB_REPOSITORY}` (not `${{ github.repository }}`) since it runs inside agent prompts
-- [ ] CLA synthetic status is set before PR creation (ordering: push, status, PR, merge)
-- [ ] Auto-merge is queued with squash strategy and fallback to immediate merge
-- [ ] `scheduled-content-generator.yml` preserves its conditional commit message logic
-- [ ] All commit messages include `[skip ci]` suffix to prevent recursive workflow triggers
-- [ ] No other prompt instructions are changed (only the authorization notice and commit/push section)
-- [ ] Grep confirms zero remaining `git push origin main` matches across all 7 files
+- [x] All 7 workflows have `pull-requests: write` and `statuses: write` in their `permissions:` block
+- [x] All 7 workflows replace `git push origin main` prompt instructions with the PR-based commit pattern
+- [x] All 7 workflows have `GH_TOKEN: ${{ github.token }}` in the `claude-code-action` step's `env:` block
+- [x] The "authorized to push to main" prompt override is replaced with "do not push directly" guidance
+- [x] Branch names use timestamp format (`%Y-%m-%d-%H%M%S`) with the workflow's unique prefix
+- [x] The `gh api` call uses `${GITHUB_REPOSITORY}` (not `${{ github.repository }}`) since it runs inside agent prompts
+- [x] CLA synthetic status is set before PR creation (ordering: push, status, PR, merge)
+- [x] Auto-merge is queued with squash strategy and fallback to immediate merge
+- [x] `scheduled-content-generator.yml` preserves its conditional commit message logic
+- [x] All commit messages include `[skip ci]` suffix to prevent recursive workflow triggers
+- [x] No other prompt instructions are changed (only the authorization notice and commit/push section)
+- [x] Grep confirms zero remaining `git push origin main` matches across all 7 files
 
 ## Test Scenarios
 
