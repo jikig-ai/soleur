@@ -240,7 +240,7 @@ The Soleur Web Platform (app.soleur.ai) represents the introduction of cloud-hos
 - **(b)** Users are notified of cloud processing via this updated DPD and the updated Privacy Policy. **FULFILLED.**
 - **(c)** Technical and organizational measures implemented: encryption at rest (AES-256-GCM for API keys), TLS for data in transit, EU-only hosting (Helsinki, Finland) for infrastructure. **FULFILLED.**
 - **(d)** Processor list maintained in Section 4.2. **FULFILLED.**
-- **(e)** Transfer mechanisms documented: SCCs for Supabase, DPF + SCCs for Stripe, EU-only for Hetzner (see Section 6.3). **FULFILLED.**
+- **(e)** Transfer mechanisms documented: EU-only for Supabase (eu-west-1, Ireland) and Hetzner (Helsinki, Finland), DPF + SCCs for Stripe (see Section 6.4). **FULFILLED.**
 - **(f)** DPIA evaluation: The Web Platform processes user PII (email, auth tokens, encrypted API keys, subscription metadata) but does not involve special categories (Article 9), systematic monitoring, or automated decision-making. Processing remains below the high-risk thresholds of Article 35(3). **Evaluated -- DPIA not required.** See the companion GDPR Policy Section 9 for the full analysis.
 - **(g)** Users accept the updated Terms and Conditions when creating a Web Platform account. **FULFILLED.**
 
