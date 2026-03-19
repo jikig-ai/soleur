@@ -20,6 +20,15 @@ PROJECT_ROOT="$GIT_COMMON_ROOT"
 _RALPH_LOOP_PID="${RALPH_LOOP_PID:-$PPID}"
 RALPH_STATE_FILE="${PROJECT_ROOT}/.claude/ralph-loop.${_RALPH_LOOP_PID}.local.md"
 
+# --- Legacy Cleanup: Remove old-format state files (pre-PID naming) ---
+# The official ralph-loop plugin and older Soleur versions used
+# ralph-loop.local.md (no PID). These collide across sessions. Remove them.
+LEGACY_FILE="${PROJECT_ROOT}/.claude/ralph-loop.local.md"
+if [[ -f "$LEGACY_FILE" ]]; then
+  echo "Ralph loop: removing legacy state file (no session isolation). Use Soleur's fork instead." >&2
+  rm -f "$LEGACY_FILE"
+fi
+
 # --- TTL Check: Auto-remove stale state files from ANY crashed session ---
 # Glob over all session-scoped state files and remove stale ones before
 # checking our own file. This cleans up orphans from crashed sessions.
@@ -27,6 +36,18 @@ TTL_HOURS=1
 NOW_EPOCH=$(date +%s)
 for state_file in "${PROJECT_ROOT}/.claude"/ralph-loop.*.local.md; do
   [[ -f "$state_file" ]] || continue
+
+  # Extract owner PID from filename: ralph-loop.PID.local.md
+  OWNER_PID=$(basename "$state_file" | sed 's/^ralph-loop\.\([0-9]*\)\.local\.md$/\1/')
+
+  # If the owning process is dead, clean up immediately (no TTL wait)
+  if [[ "$OWNER_PID" =~ ^[0-9]+$ ]] && ! kill -0 "$OWNER_PID" 2>/dev/null; then
+    echo "Ralph loop: owner process $OWNER_PID is dead ($(basename "$state_file")). Auto-removing." >&2
+    rm -f "$state_file"
+    continue
+  fi
+
+  # TTL fallback: remove files older than TTL_HOURS even if owner is alive
   STARTED_AT=$(awk '/^---$/{c++; next} c==1' "$state_file" 2>/dev/null | grep '^started_at:' | sed 's/started_at: *//' | sed 's/^"\(.*\)"$/\1/' || true)
   if [[ -n "$STARTED_AT" ]]; then
     STARTED_EPOCH=$(date -d "$STARTED_AT" +%s 2>/dev/null || true)
