@@ -199,4 +199,4 @@ If you have questions about this Disclaimer, you may contact us through:
 
 ---
 
-> **Related documents:** This Disclaimer references AI-generated output practices and data handling. Consider reviewing the companion **Terms & Conditions** and **Privacy Policy** documents for consistency. For EU/GDPR-specific data protection obligations, see the **GDPR Policy**. If the Platform processes personal data on behalf of users, see the **Data Processing Agreement**.
+> **Related documents:** This Disclaimer references AI-generated output practices and data handling. Consider reviewing the companion **Terms & Conditions** and **Privacy Policy** documents for consistency. For EU/GDPR-specific data protection obligations, see the **GDPR Policy**. If the Platform processes personal data on behalf of users, see the **Data Protection Disclosure**.

@@ -110,7 +110,7 @@ Draft both CLA documents using Apache ICLA/CCLA as templates adapted for BSL 1.1
   - Link to CLA Assistant signing flow
 
 - `docs/legal/privacy-policy.md` + `plugins/soleur/docs/pages/legal/privacy-policy.md` -- add section on CLA signature data processing (GitHub username, timestamp, legal basis: legitimate interest under GDPR Art. 6(1)(f)). Add CLA to "Related documents."
-- `docs/legal/data-processing-agreement.md` + `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` -- add CLA as a processing activity. Add CLA to "Related documents."
+- `docs/legal/data-protection-disclosure.md` + `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` -- add CLA as a processing activity. Add CLA to "Related documents."
 - `docs/legal/terms-and-conditions.md` + `plugins/soleur/docs/pages/legal/terms-and-conditions.md` -- update Section 5 to acknowledge contributor IP framework via CLA. Add CLA to "Related documents."
 
 Note: Only the 3 substantively affected legal docs get CLA cross-references. No blanket update to all 14 legal files -- CLA is not topically related to the Cookie Policy, Disclaimer, or GDPR Policy.

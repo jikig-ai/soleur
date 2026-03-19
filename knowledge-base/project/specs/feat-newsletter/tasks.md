@@ -18,7 +18,7 @@
   - [x] 2.2.2 Source: `docs/legal/gdpr-policy.md`
 - [x] 2.3 Update Data Protection Disclosure — newsletter in Section 2.3, Buttondown in 4.2
   - [x] 2.3.1 Published: `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`
-  - [x] 2.3.2 Source: `docs/legal/data-processing-agreement.md` (note: filename differs)
+  - [x] 2.3.2 Source: `docs/legal/data-protection-disclosure.md`
 - [x] 2.4 Verify Cookie Policy — confirm Buttondown form POST sets no cookies; update if it does
 - [x] 2.5 Grep verification — "does not collect", "no personal data", negated "email" references
 
