@@ -131,15 +131,15 @@ These are **historical plan/spec/learning files** that reference the old filenam
 
 ## Acceptance Criteria
 
-- [ ] `docs/legal/data-processing-agreement.md` no longer exists
-- [ ] `docs/legal/data-protection-disclosure.md` exists with identical content
-- [ ] `type` frontmatter in renamed file is `data-protection-disclosure`
-- [ ] `legal-document-generator.md` references `data-protection-disclosure` type
-- [ ] `legal-generate/SKILL.md` lists "Data Protection Disclosure" not "Data Processing Agreement"
-- [ ] `git log --follow docs/legal/data-protection-disclosure.md` shows full history
-- [ ] No stale references to `docs/legal/data-processing-agreement.md` in active (non-archived) knowledge-base files
-- [ ] All references to external vendor DPAs remain unchanged
-- [ ] Cross-reference hints in `acceptable-use-policy.md` and `disclaimer.md` (both locations) say "Data Protection Disclosure" not "Data Processing Agreement"
+- [x] `docs/legal/data-processing-agreement.md` no longer exists
+- [x] `docs/legal/data-protection-disclosure.md` exists with identical content
+- [x] `type` frontmatter in renamed file is `data-protection-disclosure`
+- [x] `legal-document-generator.md` references `data-protection-disclosure` type
+- [x] `legal-generate/SKILL.md` lists "Data Protection Disclosure" not "Data Processing Agreement"
+- [x] `git log --follow docs/legal/data-protection-disclosure.md` shows full history
+- [x] No stale references to `docs/legal/data-processing-agreement.md` in active (non-archived) knowledge-base files
+- [x] All references to external vendor DPAs remain unchanged
+- [x] Cross-reference hints in `acceptable-use-policy.md` and `disclaimer.md` (both locations) say "Data Protection Disclosure" not "Data Processing Agreement"
 
 ## Test Scenarios
 
