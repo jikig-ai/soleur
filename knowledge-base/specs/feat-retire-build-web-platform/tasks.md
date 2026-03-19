@@ -5,14 +5,14 @@
 
 ## Phase 1: Delete the Workflow
 
-- [ ] 1.1 Delete `.github/workflows/build-web-platform.yml` via `git rm` (Bash tool -- security hook blocks Edit/Write on workflow files)
-- [ ] 1.2 Verify no other workflows reference `build-web-platform` (grep `.github/`)
-- [ ] 1.3 Mark deferred task complete in `knowledge-base/project/specs/feat-app-versioning/tasks.md` line 55
+- [x] 1.1 Delete `.github/workflows/build-web-platform.yml` via `git rm` (Bash tool -- security hook blocks Edit/Write on workflow files)
+- [x] 1.2 Verify no other workflows reference `build-web-platform` (grep `.github/`)
+- [x] 1.3 Mark deferred task complete in `knowledge-base/project/specs/feat-app-versioning/tasks.md` line 55
 
 ## Phase 2: Verify No Regressions
 
-- [ ] 2.1 Confirm `web-platform-release.yml` runs successfully on main (check recent runs)
-- [ ] 2.2 Confirm `feat/web-platform-ux` branch does not exist on remote
+- [x] 2.1 Confirm `web-platform-release.yml` runs successfully on main (check recent runs)
+- [x] 2.2 Confirm `feat/web-platform-ux` branch does not exist on remote
 
 ## Phase 3: Ship
 

@@ -52,7 +52,7 @@
 
 - [ ] Refactor `version-bump-and-release.yml` to use reusable workflow (after stability proven)
 - [ ] Add telegram-bridge Docker build test to CI (out of scope for #739)
-- [ ] Retire/repurpose `build-web-platform.yml` (feature-branch-only workflow)
+- [x] Retire/repurpose `build-web-platform.yml` (feature-branch-only workflow) — deleted in #752
 
 ## Implementation Order
 

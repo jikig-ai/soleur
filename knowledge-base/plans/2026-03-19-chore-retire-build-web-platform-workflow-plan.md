@@ -1,6 +1,6 @@
 ---
 title: "chore: retire build-web-platform.yml"
-type: fix
+type: chore
 date: 2026-03-19
 ---
 
@@ -47,9 +47,9 @@ Repurposing for PR preview builds (option 2 from the issue) would require a comp
 
 ### Phase 1: Delete the Workflow
 
-- [ ] **1.1** Delete `.github/workflows/build-web-platform.yml` via `git rm`
-- [ ] **1.2** Verify no other workflows reference it: `grep -r "build-web-platform" .github/` (confirmed: only self-reference at line 18)
-- [ ] **1.3** Mark the deferred task in `knowledge-base/project/specs/feat-app-versioning/tasks.md` line 55 as complete (`[x]`)
+- [x] **1.1** Delete `.github/workflows/build-web-platform.yml` via `git rm`
+- [x] **1.2** Verify no other workflows reference it: `grep -r "build-web-platform" .github/` (confirmed: only self-reference at line 18)
+- [x] **1.3** Mark the deferred task in `knowledge-base/project/specs/feat-app-versioning/tasks.md` line 55 as complete (`[x]`)
 
 ### Research Insights
 
@@ -61,14 +61,14 @@ Repurposing for PR preview builds (option 2 from the issue) would require a comp
 
 ### Phase 2: Verify No Regressions
 
-- [ ] **2.1** Confirm `web-platform-release.yml` is the active workflow handling web-platform builds (confirmed: runs on every push to main, 5 recent successful runs)
-- [ ] **2.2** Confirm the `feat/web-platform-ux` branch does not exist on remote (`git ls-remote --heads origin feat/web-platform-ux` returns empty)
+- [x] **2.1** Confirm `web-platform-release.yml` is the active workflow handling web-platform builds (confirmed: runs on every push to main, 5 recent successful runs)
+- [x] **2.2** Confirm the `feat/web-platform-ux` branch does not exist on remote (`git ls-remote --heads origin feat/web-platform-ux` returns empty)
 
 ## Acceptance Criteria
 
-- [ ] `build-web-platform.yml` is deleted from `.github/workflows/`
-- [ ] No duplicate `:latest` tag pushes from two workflows
-- [ ] `web-platform-release.yml` continues to function as the sole web-platform CI/CD pipeline
+- [x] `build-web-platform.yml` is deleted from `.github/workflows/`
+- [x] No duplicate `:latest` tag pushes from two workflows
+- [x] `web-platform-release.yml` continues to function as the sole web-platform CI/CD pipeline
 
 ## Test Scenarios
 
