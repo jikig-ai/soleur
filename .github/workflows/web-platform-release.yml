@@ -1,0 +1,75 @@
+name: Web Platform Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: "Version bump type"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      skip_deploy:
+        description: "Skip deployment after release"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  release:
+    uses: ./.github/workflows/reusable-release.yml
+    with:
+      component: web-platform
+      component_display: "Soleur Web Platform"
+      path_filter: "apps/web-platform/"
+      tag_prefix: "web-v"
+      docker_image: "ghcr.io/jikig-ai/soleur-web-platform"
+      docker_context: "apps/web-platform"
+      docker_build_args: |
+        NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      bump_type: ${{ inputs.bump_type || '' }}
+      force_run: ${{ github.event_name == 'workflow_dispatch' }}
+    secrets: inherit
+
+  deploy:
+    needs: release
+    if: needs.release.outputs.released == 'true' && (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to server
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        with:
+          host: ${{ secrets.WEB_PLATFORM_HOST }}
+          username: root
+          key: ${{ secrets.WEB_PLATFORM_SSH_KEY }}
+          script: |
+            IMAGE="ghcr.io/jikig-ai/soleur-web-platform"
+            TAG="v${{ needs.release.outputs.version }}"
+            docker pull "$IMAGE:$TAG"
+            { docker stop soleur-web-platform || true; }
+            { docker rm soleur-web-platform || true; }
+            docker run -d \
+              --name soleur-web-platform \
+              --restart unless-stopped \
+              --env-file /mnt/data/.env \
+              -v /mnt/data/workspaces:/workspaces \
+              -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
+              -p 0.0.0.0:80:3000 \
+              -p 0.0.0.0:3000:3000 \
+              "$IMAGE:$TAG"
+            echo "Waiting for health check..."
+            for i in $(seq 1 10); do
+              if curl -sf http://localhost:3000/health; then
+                echo " OK"
+                exit 0
+              fi
+              sleep 3
+            done
+            echo "Health check failed"
+            docker logs soleur-web-platform --tail 30
+            exit 1
