@@ -8,7 +8,7 @@ generated-date: 2026-02-20
 # Privacy Policy
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 18, 2026 (added web platform data collection, processors, and international transfers for Supabase, Stripe, Hetzner, Cloudflare)
+**Last Updated:** March 19, 2026 (added web platform data collection, processors, and international transfers for Supabase, Stripe, Hetzner, Cloudflare; Buttondown SCCs verification and free-tier DPA confirmation)
 
 ## 1. Introduction
 
@@ -131,8 +131,10 @@ The Soleur Plugin is designed to work with the Anthropic Claude API through the 
 We use **Buttondown** ([buttondown.com](https://buttondown.com)) to manage newsletter subscriptions and deliver newsletter emails. When you subscribe to our newsletter, your email address is transmitted to and stored by Buttondown. Buttondown also automatically collects technical metadata during the subscription request, including IP address, referrer URL, subscription timestamp, and browser/device metadata. Buttondown acts as a data processor on our behalf.
 
 - Buttondown's privacy practices are governed by [Buttondown's Privacy Policy](https://buttondown.com/legal/privacy).
-- Buttondown is a US-based service. International data transfers are covered by Standard Contractual Clauses (SCCs).
-- Buttondown does not share subscriber email addresses with third parties for marketing purposes.
+- Buttondown uses sub-processors for service delivery; the current list is maintained at [buttondown.com/legal/subprocessors](https://buttondown.com/legal/subprocessors).
+- Buttondown is a US-based service. International data transfers are governed by the **EU Standard Contractual Clauses** (European Commission Implementing Decision (EU) 2021/914, Module 2: Controller-to-Processor), incorporated by reference into Buttondown's Data Processing Agreement.
+- Buttondown's DPA applies to all plan tiers, including the free tier.
+- Buttondown does not share subscriber data with third parties for advertising or marketing purposes.
 
 ### 5.4 Other Third-Party Integrations
 

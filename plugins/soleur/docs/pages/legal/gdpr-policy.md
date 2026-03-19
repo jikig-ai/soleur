@@ -8,7 +8,7 @@ permalink: pages/legal/gdpr-policy.html
 <section class="page-hero">
   <div class="container">
     <h1>GDPR Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated March 18, 2026 (Web Platform Services; Article 30 Register)</p>
+    <p>Effective February 20, 2026 | Last Updated March 19, 2026 (Web Platform Services; Article 30 Register; Buttondown SCCs)</p>
   </div>
 </section>
 
@@ -19,7 +19,7 @@ permalink: pages/legal/gdpr-policy.html
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 18, 2026 (added web platform services, lawful basis, data categories, transfers, and Article 30 register entries 7-9)
+**Last Updated:** March 19, 2026 (added web platform services, lawful basis, data categories, transfers, Article 30 register entries 7-9, Buttondown SCCs verification and free-tier DPA confirmation)
 
 ---
 
@@ -192,7 +192,7 @@ The Soleur Plugin itself does not transfer personal data internationally. Howeve
 
 - **Anthropic Claude API:** API requests may be processed in the United States or other jurisdictions where Anthropic operates. Users should review Anthropic's data processing terms regarding international transfer safeguards.
 - **GitHub Pages / GitHub:** GitHub infrastructure is located globally, including in the United States. GitHub (Microsoft Corporation) is certified under the **EU-US Data Privacy Framework** (adequacy decision C(2023) 4745), which provides the primary transfer mechanism. GitHub also maintains Standard Contractual Clauses as a supplementary safeguard. See [GitHub's Global Privacy Practices](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement#githubs-global-privacy-practices).
-- **Buttondown (Newsletter):** Newsletter subscriber email addresses are processed by Buttondown, a US-based service hosted on infrastructure in the United States. International data transfers are governed by **Standard Contractual Clauses (SCCs)** (Module 2, Controller to Processor) per Buttondown's [Data Processing Agreement](https://buttondown.com/legal/data-processing-agreement). See also [Buttondown's Privacy Policy](https://buttondown.com/legal/privacy).
+- **Buttondown (Newsletter):** Buttondown is a US-based newsletter platform. Transfers of subscriber data (email addresses, IP addresses, referrer URL, subscription timestamps, browser/device metadata) from the EEA to the United States are governed by the **EU Standard Contractual Clauses** (European Commission Implementing Decision (EU) 2021/914, Module 2: Controller-to-Processor), incorporated by reference into Buttondown's [Data Processing Agreement](https://buttondown.com/legal/data-processing-agreement). Buttondown's DPA applies to all plan tiers, including the free tier. See also [Buttondown's Privacy Policy](https://buttondown.com/legal/privacy).
 
 Users who are subject to the GDPR and have concerns about international data transfers should review the relevant third-party policies before using these services.
 
@@ -271,7 +271,7 @@ The register documents nine processing activities:
 3. **Source repository management** (GitHub) -- contributor profile data, issue reporters
 4. **Legal and GDPR inquiry handling** (legal@jikigai.com) -- names, email addresses, inquiry content
 5. **CLA signature collection** (GitHub CLA Assistant) -- GitHub username, signature timestamp, pull request reference. Legal basis: legitimate interest (Article 6(1)(f)). Signature data is stored on the `cla-signatures` branch in the public repository. Retention is indefinite (irrevocable license grants).
-6. **Newsletter subscription management** (soleur.ai via Buttondown) -- (a) email addresses of newsletter subscribers, legal basis: consent (Article 6(1)(a)), verified through double opt-in; (b) IP address, referrer URL, subscription timestamp, and browser/device metadata automatically collected during subscription, legal basis: legitimate interest (Article 6(1)(f)) for service operation and abuse prevention. Data is processed by Buttondown (US-based, SCCs in place). Email retention: until the subscriber unsubscribes. Technical metadata retention: governed by Buttondown's data retention practices.
+6. **Newsletter subscription management** (soleur.ai via Buttondown) -- (a) email addresses of newsletter subscribers, legal basis: consent (Article 6(1)(a)), verified through double opt-in; (b) IP address, referrer URL, subscription timestamp, and browser/device metadata automatically collected during subscription, legal basis: legitimate interest (Article 6(1)(f)) for service operation and abuse prevention. Data is processed by Buttondown (US-based). International transfers governed by EU Standard Contractual Clauses (Implementing Decision (EU) 2021/914, Module 2: Controller-to-Processor), incorporated into Buttondown's [DPA](https://buttondown.com/legal/data-processing-agreement). DPA applies to all plan tiers including free. Buttondown's sub-processor list is maintained at [buttondown.com/legal/subprocessors](https://buttondown.com/legal/subprocessors). Email retention: until the subscriber unsubscribes. Technical metadata retention: governed by Buttondown's data retention practices.
 7. **Web Platform account management** (app.soleur.ai via Supabase) -- email addresses, hashed passwords (bcrypt via GoTrue), authentication tokens (JWT), session data. Legal basis: contract performance (Article 6(1)(b)). Data is processed by Supabase Inc (US-based, SCCs in place). Retention: while account is active; deleted on account deletion request.
 8. **Web Platform payment processing** (app.soleur.ai via Stripe Checkout) -- customer email, subscription metadata. Card data is processed exclusively by Stripe (PCI DSS Level 1, SAQ-A integration) and never reaches Jikigai servers. Legal basis: contract performance (Article 6(1)(b)). Data is processed by Stripe Inc (US-based, DPF + SCCs). Retention: subscription records retained for 10 years per French tax law (Code de commerce Art. L123-22).
 9. **Web Platform infrastructure hosting** (app.soleur.ai via Hetzner CX33, Helsinki) -- user workspaces, encrypted API keys (AES-256-GCM), Docker containers. Legal basis: contract performance (Article 6(1)(b)). Data is processed by Hetzner Online GmbH (EU-based, no international transfer). Retention: while account is active.
