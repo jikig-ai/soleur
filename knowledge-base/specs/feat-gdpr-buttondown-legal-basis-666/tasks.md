@@ -24,7 +24,7 @@
 
 ## Phase 4: DPD Updates (2 files)
 
-- [x] 4.1 Update `docs/legal/data-processing-agreement.md` — Section 2.3(e), Last Updated
+- [x] 4.1 Update `docs/legal/data-protection-disclosure.md` — Section 2.3(e), Last Updated
 - [x] 4.2 Update `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` — Section 2.3(e), Last Updated
 
 ## Phase 5: Verification

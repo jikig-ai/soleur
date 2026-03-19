@@ -40,7 +40,7 @@ Add a balancing test for the legitimate interest claim, mirroring the existing p
 | 2 | `plugins/soleur/docs/pages/legal/privacy-policy.md` | 4.6, 5.3, 6, 7, Last Updated |
 | 3 | `docs/legal/gdpr-policy.md` | 3.6, 4.2 table, 10 register, Last Updated |
 | 4 | `plugins/soleur/docs/pages/legal/gdpr-policy.md` | 3.6, 4.2 table, 10 register, Last Updated |
-| 5 | `docs/legal/data-processing-agreement.md` | 2.3(e), Last Updated |
+| 5 | `docs/legal/data-protection-disclosure.md` | 2.3(e), Last Updated |
 | 6 | `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` | 2.3(e), Last Updated |
 
 ### Replacement Content
@@ -85,7 +85,7 @@ Split into (a) email with consent basis, (b) technical metadata with legitimate 
 
 **DPD Section 2.3(e) — replacement (both copies):**
 
-Add technical metadata collection, split lawful basis, split retention. Apply same pattern to both `docs/legal/data-processing-agreement.md` and `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`.
+Add technical metadata collection, split lawful basis, split retention. Apply same pattern to both `docs/legal/data-protection-disclosure.md` and `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`.
 
 ### Verification Steps
 
@@ -94,7 +94,7 @@ Add technical metadata collection, split lawful basis, split retention. Apply sa
 grep -rn "Email address only" docs/legal/ plugins/soleur/docs/pages/legal/
 
 # 2. All modified files mention legitimate interest for newsletter
-grep -rn "legitimate interest" docs/legal/privacy-policy.md docs/legal/gdpr-policy.md docs/legal/data-processing-agreement.md | grep -i "newsletter\|buttondown\|subscription"
+grep -rn "legitimate interest" docs/legal/privacy-policy.md docs/legal/gdpr-policy.md docs/legal/data-protection-disclosure.md | grep -i "newsletter\|buttondown\|subscription"
 
 # 3. Both privacy policy copies match on modified sections
 diff <(grep -A5 "Data collected" docs/legal/privacy-policy.md) <(grep -A5 "Data collected" plugins/soleur/docs/pages/legal/privacy-policy.md)
@@ -103,10 +103,10 @@ diff <(grep -A5 "Data collected" docs/legal/privacy-policy.md) <(grep -A5 "Data 
 diff <(grep -A15 "3.6 Newsletter" docs/legal/gdpr-policy.md) <(grep -A15 "3.6 Newsletter" plugins/soleur/docs/pages/legal/gdpr-policy.md)
 
 # 5. Both DPD copies match on Section 2.3(e)
-diff <(grep -A8 "Newsletter subscription management" docs/legal/data-processing-agreement.md) <(grep -A8 "Newsletter subscription management" plugins/soleur/docs/pages/legal/data-protection-disclosure.md)
+diff <(grep -A8 "Newsletter subscription management" docs/legal/data-protection-disclosure.md) <(grep -A8 "Newsletter subscription management" plugins/soleur/docs/pages/legal/data-protection-disclosure.md)
 
 # 6. Last Updated dates
-grep -rn "Last Updated" docs/legal/privacy-policy.md docs/legal/gdpr-policy.md docs/legal/data-processing-agreement.md
+grep -rn "Last Updated" docs/legal/privacy-policy.md docs/legal/gdpr-policy.md docs/legal/data-protection-disclosure.md
 ```
 
 ## References

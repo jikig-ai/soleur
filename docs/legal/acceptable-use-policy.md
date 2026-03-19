@@ -229,6 +229,6 @@ For questions about this Policy, please contact us through:
 
 ---
 
-> **Related documents:** This Acceptable Use Policy references data protection practices and obligations. Consider generating companion **Privacy Policy**, **GDPR Policy**, and **Terms and Conditions** documents to ensure consistency. If Soleur processes personal data on behalf of users in a controller-processor relationship, a **Data Processing Agreement** may also be appropriate.
+> **Related documents:** This Acceptable Use Policy references data protection practices and obligations. Consider generating companion **Privacy Policy**, **GDPR Policy**, and **Terms and Conditions** documents to ensure consistency. If Soleur processes personal data on behalf of users in a controller-processor relationship, a **Data Protection Disclosure** may also be appropriate.
 
 ---
