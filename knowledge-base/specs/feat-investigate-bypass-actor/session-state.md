@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-investigate-bypass-actor/knowledge-base/plans/2026-03-19-chore-remove-stale-bypass-actor-262318-plan.md
+- Plan file: knowledge-base/plans/2026-03-19-chore-remove-stale-bypass-actor-262318-plan.md
 - Status: complete
 
 ### Errors

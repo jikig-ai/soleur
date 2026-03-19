@@ -1,6 +1,6 @@
 ---
 title: "chore: remove stale bypass actor 262318 from CLA Required ruleset"
-type: fix
+type: chore
 date: 2026-03-19
 semver: patch
 ---
@@ -180,7 +180,7 @@ Multiple Terraform provider issues ([#2269](https://github.com/integrations/terr
 
 ### Rollback plan
 
-If removal causes unexpected issues, re-add the entry immediately:
+If removal causes unexpected issues, re-add the entry immediately. **Note:** If other ruleset fields have been modified since this plan was written, regenerate the payload from the current live state (`gh api repos/jikig-ai/soleur/rulesets/13304872`) and only change the `bypass_actors` array — do not blindly use the hardcoded payload below:
 
 ```bash
 cat > /tmp/ruleset-rollback.json << 'PAYLOAD'
@@ -247,7 +247,7 @@ No code changes or workflow modifications are needed -- this is a pure API-level
 ### Internal
 
 - Issue: [#779](https://github.com/jikig-ai/soleur/issues/779)
-- Related PR: [#775](https://github.com/jikig-ai/soleur/pulls/775) (added `integration_id` to CLA check)
+- Related PR: [#775](https://github.com/jikig-ai/soleur/pull/775) (added `integration_id` to CLA check)
 - Related issue: [#773](https://github.com/jikig-ai/soleur/issues/773) (CLA check security gap)
 - Learning: `knowledge-base/learnings/2026-03-19-github-actions-bypass-actor-not-feasible.md`
 - Learning: `knowledge-base/learnings/2026-03-19-content-publisher-cla-ruleset-push-rejection.md`

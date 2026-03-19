@@ -1,5 +1,5 @@
 ---
-status: pending
+status: complete
 priority: p2
 issue_id: 773
 tags: [code-review, security]
@@ -47,14 +47,17 @@ Option A -- file a separate GitHub issue
 
 ## Acceptance Criteria
 
-- [ ] GitHub issue filed to investigate actor 262318
-- [ ] Issue includes steps to reproduce the 404 and investigation suggestions
+- [x] GitHub issue filed to investigate actor 262318 (#779)
+- [x] Issue includes steps to reproduce the 404 and investigation suggestions
+- [x] Actor 262318 removed from ruleset via PUT API call
+- [x] Removal verified via separate GET call
 
 ## Work Log
 
 | Date | Action | Learnings |
 |------|--------|-----------|
 | 2026-03-19 | Identified during PR #775 review | github-actions is a platform app (not installable), unknown apps return 404 |
+| 2026-03-19 | Resolved: actor 262318 removed via gh api PUT | GitHub does not auto-prune bypass actors when apps are uninstalled |
 
 ## Resources
 
