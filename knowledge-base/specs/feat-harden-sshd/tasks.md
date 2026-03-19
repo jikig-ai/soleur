@@ -5,7 +5,7 @@
 ### 1.1 Add `write_files` section to cloud-init.yml
 
 - [ ] 1.1.1 Add `write_files` block before `runcmd` in `apps/web-platform/infra/cloud-init.yml`
-- [ ] 1.1.2 Create `/etc/ssh/sshd_config.d/99-hardening.conf` drop-in with all five directives: `PasswordAuthentication no`, `MaxAuthTries 3`, `LoginGraceTime 30`, `PermitRootLogin prohibit-password`, `AllowUsers root`
+- [ ] 1.1.2 Create `/etc/ssh/sshd_config.d/01-hardening.conf` drop-in (prefix `01-` for first-match-wins precedence over vendor drop-ins) with all five directives: `PasswordAuthentication no`, `MaxAuthTries 3`, `LoginGraceTime 30`, `PermitRootLogin prohibit-password`, `AllowUsers root`
 - [ ] 1.1.3 Set owner `root:root` and permissions `0644`
 
 ### 1.2 Remove redundant sed commands
