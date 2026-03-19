@@ -133,7 +133,7 @@ Ubuntu 24.04 initially shipped fail2ban 1.0.2-3, which was incompatible with Pyt
 
 ## Acceptance Criteria
 
-- [ ] `fail2ban` added to `packages:` list in `apps/web-platform/infra/cloud-init.yml`
+- [x] `fail2ban` added to `packages:` list in `apps/web-platform/infra/cloud-init.yml`
 - [ ] fail2ban installed and running on web-platform server after rebuild
 - [ ] SSH brute-force attempts are rate-limited (IPs banned after repeated failures)
 

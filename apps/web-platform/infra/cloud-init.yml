@@ -2,6 +2,7 @@
 package_update: true
 packages:
   - curl
+  - fail2ban
   - jq
 
 write_files:
