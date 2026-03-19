@@ -12,6 +12,17 @@ resource "hcloud_firewall" "web" {
     }
   }
 
+  # SSH -- CI deploy (GitHub Actions runners use dynamic IPs)
+  # Key-based auth is the security boundary; firewall provides defense-in-depth.
+  # GitHub publishes 5000+ runner CIDR ranges that change frequently,
+  # so a blanket allow is the only practical approach for CI SSH deploys.
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "22"
+    source_ips = ["0.0.0.0/0", "::/0"]
+  }
+
   # HTTP (redirect to HTTPS or direct app access)
   rule {
     direction  = "in"

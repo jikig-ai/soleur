@@ -212,12 +212,12 @@ This is relevant because while this fix is primarily a secret rotation (no workf
 
 ## Acceptance Criteria
 
-- [ ] `gh workflow run build-web-platform.yml -f deploy=true` completes successfully
-- [ ] Deploy job connects to server and restarts the container
-- [ ] Health check passes after deploy (`curl -sf http://localhost:3000/health` returns 200)
-- [ ] No passphrase-related errors in workflow logs
-- [ ] `WEB_PLATFORM_SSH_KEY` secret contains a passwordless Ed25519 private key
-- [ ] Old passphrase-protected key is no longer in the secret store
+- [x] `gh workflow run build-web-platform.yml -f deploy=true` completes successfully
+- [x] Deploy job connects to server and restarts the container
+- [x] Health check passes after deploy (`curl -sf http://localhost:3000/health` returns 200)
+- [x] No passphrase-related errors in workflow logs
+- [x] `WEB_PLATFORM_SSH_KEY` secret contains a passwordless Ed25519 private key
+- [x] Old passphrase-protected key is no longer in the secret store
 
 ## Test Scenarios
 
