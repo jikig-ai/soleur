@@ -146,7 +146,7 @@ We use **Supabase** ([supabase.com](https://supabase.com)) as the authentication
 
 - **Data processed:** Email addresses, hashed passwords, authentication tokens, and session data.
 - **Purpose:** User account management, authentication, and session handling for the Web Platform.
-- **DPA:** [Supabase Data Processing Agreement](https://supabase.com/legal/dpa). DPA requested 2026-03-19; pending PandaDoc execution.
+- **DPA:** [Supabase Data Processing Agreement](https://supabase.com/legal/dpa). DPA signed 2026-03-19 via PandaDoc.
 - The Jikigai Supabase project is deployed to **AWS eu-west-1 (Ireland, EU)**. No international data transfers occur for Supabase-processed data.
 
 ### 5.6 Stripe (Web Platform Payments)

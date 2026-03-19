@@ -1,7 +1,7 @@
 # DPA Verification Memo -- Web Platform Services
 
 **Date:** 2026-03-18
-**Updated:** 2026-03-19 (dashboard verification via Playwright, DPA execution initiated)
+**Updated:** 2026-03-19 (dashboard verification via Playwright, Supabase DPA signed)
 **Issue:** #670, #702
 **Reviewed by:** Soleur CLO agent (automated review, not legal advice)
 
@@ -9,14 +9,14 @@
 
 PR #637 deployed four external services for the Soleur web platform (app.soleur.ai). This memo documents the DPA status of each vendor per GDPR Article 28 requirements. Resend was listed in issue #670 but has no integration code in the codebase -- excluded from scope.
 
-**2026-03-19 Update:** Dashboard verification completed for all four vendors. Key finding: Supabase project is in **eu-west-1** (Ireland, EU), NOT us-east-1 -- eliminating Chapter V transfer concerns. Supabase DPA request submitted via PandaDoc. Cloudflare DPA confirmed self-executing. Hetzner DPA pending founder login. Telegram-bridge CX22 confirmed on same Hetzner Cloud Console account.
+**2026-03-19 Update:** Dashboard verification completed for all four vendors. Key finding: Supabase project is in **eu-west-1** (Ireland, EU), NOT us-east-1 -- eliminating Chapter V transfer concerns. Supabase DPA signed via PandaDoc (2026-03-19). Cloudflare DPA confirmed self-executing. Hetzner DPA pending founder login. Telegram-bridge CX22 confirmed on same Hetzner Cloud Console account.
 
 ## Vendor DPA Status
 
 | Vendor | DPA Status | Acceptance Mechanism | Transfer Mechanism | Data Categories | Action Required |
 |--------|-----------|---------------------|-------------------|-----------------|-----------------|
 | Hetzner Online GmbH | **NOT SIGNED** | Click-to-sign via Cloud Console (ToS 6.2) | N/A (EU-only: Germany/Finland) | Server compute, volume storage, user workspaces, encrypted API keys | **URGENT: Founder must log into console.hetzner.cloud and sign DPA (AVV)** |
-| Supabase Inc | **DPA REQUESTED** (2026-03-19) | PandaDoc via dashboard "Legal Documents" -- request sent to ops@jikigai.com | N/A (EU-only: eu-west-1, Ireland) | Email addresses, hashed passwords, auth tokens, session data | Sign PandaDoc when it arrives (within 24h) |
+| Supabase Inc | **SIGNED** (2026-03-19) | PandaDoc via dashboard "Legal Documents" -- signed by founder | N/A (EU-only: eu-west-1, Ireland) | Email addresses, hashed passwords, auth tokens, session data | None -- DPA executed |
 | Stripe Inc | **VERIFIED** (2026-03-19) | Part of Stripe Services Agreement (automatic) | EU-US DPF + SCCs (EEA Module 2) | Customer email, subscription metadata (card data handled by Stripe, PCI SAQ-A) | None -- DPA is automatic |
 | Cloudflare Inc | **VERIFIED** (2026-03-19) | Self-Serve Subscription Agreement constitutes "Main Agreement" (confirmed via dashboard) | DPF + SCCs (Module 2 & 3) + Global CBPR | IP addresses, request headers, TLS termination | None -- DPA is self-executing |
 
@@ -40,8 +40,8 @@ PR #637 deployed four external services for the Soleur web platform (app.soleur.
 - **Tier coverage:** **CONFIRMED** -- Free tier supports DPA signing. Dashboard text: "All organizations can sign our Data Processing Addendum ("DPA") as part of their GDPR compliance." No Pro upgrade required.
 - **Region:** **eu-west-1** (Ireland, EU) -- confirmed via Supabase dashboard (project: soleur-web-platform, AWS eu-west-1). **No international data transfer. No Chapter V concerns. No TIA required for this deployment.**
 - **Data processed:** Email addresses, hashed passwords (bcrypt via GoTrue), auth tokens (JWT), session metadata.
-- **DPA request status:** Submitted 2026-03-19 via dashboard to ops@jikigai.com. PandaDoc executable version will arrive within 24 hours.
-- **Action:** Sign PandaDoc document when it arrives at ops@jikigai.com. No Pro upgrade needed. No transfer safeguards needed (EU-only).
+- **DPA execution status:** **SIGNED 2026-03-19** via PandaDoc. DPA version dated August 5, 2025. Supervisory authority: CNIL. Special categories: None. SCCs (Module 2 C2P + Module 3 P2P) incorporated. Governing law: Irish law (SCCs Clause 17). Jurisdiction: courts of Ireland (SCCs Clause 18).
+- **Action:** None -- DPA executed.
 
 ### Stripe Inc
 
@@ -80,7 +80,7 @@ PR #637 deployed four external services for the Soleur web platform (app.soleur.
 ## Recommendations
 
 1. **BLOCKING:** Sign Hetzner DPA via Cloud Console (console.hetzner.cloud > account settings > DPA/AVV). This covers both CX33 (web platform) and CX22 (telegram-bridge).
-2. **PENDING (24h):** Sign Supabase PandaDoc DPA when it arrives at ops@jikigai.com.
+2. **DONE:** Supabase DPA signed via PandaDoc (2026-03-19).
 3. **DONE:** Stripe DPA verified as automatic (2026-03-19).
 4. **DONE:** Cloudflare DPA verified as self-executing via Self-Serve Agreement (2026-03-19).
 5. **Future:** When Resend integration PR is opened, trigger DPA review and expense ledger update.

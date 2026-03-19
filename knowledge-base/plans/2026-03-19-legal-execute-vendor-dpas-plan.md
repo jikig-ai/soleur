@@ -362,7 +362,7 @@ If Phase 2.2 reveals that the free-tier does not support DPA signing:
 ## Acceptance Criteria
 
 - [ ] Hetzner DPA (AVV) signed via Cloud Console with screenshot confirmation -- BLOCKED: founder must log in to console.hetzner.cloud
-- [x] Supabase DPA signed via PandaDoc (or Pro upgrade documented if free-tier unavailable) -- DPA REQUESTED 2026-03-19, PandaDoc arriving within 24h to ops@jikigai.com. Free tier confirmed.
+- [x] Supabase DPA signed via PandaDoc (or Pro upgrade documented if free-tier unavailable) -- DPA SIGNED 2026-03-19 via PandaDoc. Free tier confirmed.
 - [x] Supabase Chapter V transfer safeguards verified (SCCs Module 2, Implementing Decision 2021/914) -- NOT NEEDED: project in eu-west-1 (Ireland, EU). No international transfer.
 - [x] Supabase TIA documented (data categories assessed against US surveillance risk) -- NOT NEEDED: project in eu-west-1 (EU). Supabase provides their own TIA at supabase.com/downloads/docs/Supabase+TIA+250314.pdf
 - [x] Supabase project region documented (us-east-1 or EU) -- CONFIRMED: eu-west-1 (Ireland, EU)
