@@ -1,9 +1,9 @@
 ---
 title: "How We Generated 9 Legal Documents in Days, Not Months"
 type: case-study
-publish_date: 2026-03-12
-channels: discord, x
-status: published
+publish_date: 2026-03-19
+channels: bluesky, linkedin-company
+status: scheduled
 ---
 
 ## Discord
@@ -109,3 +109,23 @@ Anyone else found cost-effective approaches to legal compliance as a solo founde
 
 **Title:** How We Generated 9 Legal Documents in Days, Not Months
 **URL:** https://soleur.ai/blog/case-study-legal-document-generation/
+
+---
+
+## Bluesky
+
+9 legal documents. 17,761 words. Dual-jurisdiction. Two AI agents caught governing law set to Delaware and fixed it across all docs. https://soleur.ai/blog/case-study-legal-document-generation/?utm_source=bluesky&utm_medium=social&utm_campaign=case-study-legal
+
+---
+
+## LinkedIn Company Page
+
+Soleur's legal agents generated a complete compliance suite in days — 9 documents covering Terms & Conditions, Privacy Policy, GDPR Policy, Cookie Policy, Acceptable Use Policy, Data Protection Disclosure, Disclaimer, and two Contributor License Agreements.
+
+The system uses two specialized agents: a legal-document-generator that drafts from company context, and a legal-compliance-auditor that benchmarks against GDPR Articles 13/14, CCPA, ICO cookie guidance, and CNIL recommendations. The auditor caught governing law incorrectly set to Delaware (inherited from US templates) and corrected it to French law across all 9 documents.
+
+Result: 17,761 words of structured, cross-referenced legal documentation with dual-jurisdiction coverage. A technology lawyer prices this scope at EUR 9,000-25,000.
+
+The compound effect: the legal-compliance-auditor is now a reusable capability that auto-joins brainstorm sessions when legal implications are detected.
+
+Full case study: https://soleur.ai/blog/case-study-legal-document-generation/?utm_source=linkedin-company&utm_medium=social&utm_campaign=case-study-legal-document-generation

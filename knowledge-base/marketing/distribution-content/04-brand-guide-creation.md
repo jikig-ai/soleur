@@ -2,7 +2,7 @@
 title: "From Scattered Positioning to a Full Brand Guide in Two Sessions"
 type: case-study
 publish_date: 2026-03-24
-channels: discord, x
+channels: discord, x, bluesky, linkedin-company
 status: scheduled
 ---
 
@@ -62,3 +62,23 @@ Not scheduled for Reddit distribution. Use Discord + X only.
 ## Hacker News
 
 Not scheduled for Hacker News distribution. Use Discord + X only.
+
+---
+
+## Bluesky
+
+Brand positioning scattered across READMEs. Two AI sessions later: full identity, voice definition, 9-color palette, typography system. A reviewer agent now audits all content against it. https://soleur.ai/blog/case-study-brand-guide-creation/?utm_source=bluesky&utm_medium=social&utm_campaign=brand
+
+---
+
+## LinkedIn Company Page
+
+Soleur formalized its brand identity in two AI-assisted sessions — moving from scattered positioning across READMEs and commit messages to a complete brand guide covering identity, voice, visual direction, and channel guidelines.
+
+The brand-architect agent produced: mission and positioning statements, a voice definition with tone spectrum across 5 contexts (7 do's, 7 don'ts), a 9-color Solar Forge palette with hex values, a 5-row typography system (Cormorant Garamond headlines, Inter body, JetBrains Mono code), and channel-specific guidelines for Discord, GitHub, and the website.
+
+Four visual concepts were explored and evaluated against positioning before selecting Solar Forge. A brand-voice-reviewer agent now audits all content against the guide before publishing. A brand strategy agency charges $5,000-15,000 for this scope.
+
+The guide is the single most referenced document in the knowledge base — legal docs use its voice, the site implements its palette, Discord announcements are reviewed against its tone spectrum.
+
+Full case study: https://soleur.ai/blog/case-study-brand-guide-creation/?utm_source=linkedin-company&utm_medium=social&utm_campaign=case-study-brand-guide-creation

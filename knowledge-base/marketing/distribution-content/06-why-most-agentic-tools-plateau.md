@@ -1,9 +1,9 @@
 ---
 title: "Why Most Agentic Engineering Tools Plateau"
 type: pillar
-publish_date: 2026-03-14
-channels: discord, x
-status: published
+publish_date: 2026-03-19
+channels: bluesky, linkedin-company
+status: scheduled
 ---
 
 ## Discord
@@ -126,3 +126,27 @@ Curious whether others have found ways to make their AI development tools accumu
 
 **Title:** Why Most Agentic Engineering Tools Plateau
 **URL:** https://soleur.ai/blog/why-most-agentic-tools-plateau/
+
+---
+
+## Bluesky
+
+Your AI coding tools stop getting better after week two. Session 100 starts from the same blank slate as session 1. We wrote about why — and what breaks through. https://soleur.ai/blog/why-most-agentic-tools-plateau/?utm_source=bluesky&utm_medium=social&utm_campaign=why-most-agentic-tools-plateau
+
+---
+
+## LinkedIn Company Page
+
+Most agentic engineering tools plateau. Session 100 starts from the same blank slate as session 1. The models improve. The system around them does not.
+
+Soleur takes a different approach: compound knowledge into behavior, not documentation. Every task generates insights that feed back into the system's rules, agents, and workflows.
+
+Four proof points from real incidents:
+
+An agent edited files outside its workspace. Two hours lost. The failure triggered a four-stage response: documentation, governance rule, enforcement hook, routing. Seventeen days from failure to mechanical prevention. The system can never make that mistake again.
+
+Documentation-only rules fail. Every enforcement hook exists because a written rule was insufficient. Plan review reduced scope by 30-96% across eight features — 65 tasks became 4. The governance document grew from 26 lines to 200+ rules, each triggered by a real failure.
+
+This is what compound knowledge looks like. Not a feature. An architectural property.
+
+Full breakdown: https://soleur.ai/blog/why-most-agentic-tools-plateau/?utm_source=linkedin-company&utm_medium=social&utm_campaign=why-most-agentic-tools-plateau
