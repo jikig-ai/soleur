@@ -205,14 +205,14 @@ Docker's `--start-period=120s` is the correct solution:
 
 ## Acceptance Criteria
 
-- [ ] CI deploy health check passes when the health endpoint returns HTTP 503 with `status: degraded` (`telegram-bridge-release.yml`)
-- [ ] CI deploy health check still fails when the health endpoint is unreachable (container not started)
-- [ ] `/readyz` endpoint returns 200 only when CLI is fully ready (`health.ts`)
-- [ ] `/readyz` endpoint returns 503 when CLI is connecting or in error state (`health.ts`)
-- [ ] Dockerfile HEALTHCHECK uses `--start-period=120s` to tolerate CLI spawn (`Dockerfile`)
-- [ ] Existing health endpoint behavior unchanged -- 200 when ready, 503 when degraded (`health.ts`)
-- [ ] All existing health tests continue to pass (`test/health.test.ts`)
-- [ ] New tests cover `/readyz` endpoint behavior (`test/health.test.ts`)
+- [x] CI deploy health check passes when the health endpoint returns HTTP 503 with `status: degraded` (`telegram-bridge-release.yml`)
+- [x] CI deploy health check still fails when the health endpoint is unreachable (container not started)
+- [x] `/readyz` endpoint returns 200 only when CLI is fully ready (`health.ts`)
+- [x] `/readyz` endpoint returns 503 when CLI is connecting or in error state (`health.ts`)
+- [x] Dockerfile HEALTHCHECK uses `--start-period=120s` to tolerate CLI spawn (`Dockerfile`)
+- [x] Existing health endpoint behavior unchanged -- 200 when ready, 503 when degraded (`health.ts`)
+- [x] All existing health tests continue to pass (`test/health.test.ts`)
+- [x] New tests cover `/readyz` endpoint behavior (`test/health.test.ts`)
 
 ## Test Scenarios
 
