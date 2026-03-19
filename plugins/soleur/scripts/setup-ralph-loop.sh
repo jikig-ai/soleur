@@ -136,6 +136,30 @@ fi
 # Create state file for stop hook (markdown with YAML frontmatter)
 mkdir -p "${PROJECT_ROOT}/.claude"
 
+# Remove legacy state files (pre-PID naming) that collide across sessions
+LEGACY_FILE="${PROJECT_ROOT}/.claude/ralph-loop.local.md"
+if [[ -f "$LEGACY_FILE" ]]; then
+  echo "Removing legacy ralph-loop state file (no session isolation)." >&2
+  rm -f "$LEGACY_FILE"
+fi
+
+# Check for other sessions' active loops
+for existing in "${PROJECT_ROOT}/.claude"/ralph-loop.*.local.md; do
+  [[ -f "$existing" ]] || continue
+  EXISTING_PID=$(basename "$existing" | sed 's/^ralph-loop\.\([0-9]*\)\.local\.md$/\1/')
+  if [[ "$EXISTING_PID" =~ ^[0-9]+$ ]] && [[ "$EXISTING_PID" != "$_RALPH_LOOP_PID" ]]; then
+    if kill -0 "$EXISTING_PID" 2>/dev/null; then
+      echo "Warning: Another session (PID $EXISTING_PID) has an active ralph loop." >&2
+      echo "  File: $existing" >&2
+      echo "  Remove it to start a new loop: rm $existing" >&2
+      exit 1
+    else
+      echo "Removing orphaned state file from dead session (PID $EXISTING_PID)." >&2
+      rm -f "$existing"
+    fi
+  fi
+done
+
 # Quote completion promise for YAML if it contains special chars or is not null
 if [[ -n "$COMPLETION_PROMISE" ]] && [[ "$COMPLETION_PROMISE" != "null" ]]; then
   COMPLETION_PROMISE_YAML="\"$COMPLETION_PROMISE\""
