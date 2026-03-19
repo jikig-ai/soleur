@@ -75,14 +75,17 @@ jobs:
               -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
               -p 127.0.0.1:8080:8080 \
               "$IMAGE:$TAG"
-            echo "Waiting for health check (CLI spawn takes ~60s)..."
-            for i in $(seq 1 20); do
-              if curl -sf http://localhost:8080/health; then
-                echo " OK"
+            echo "Waiting for health endpoint (container liveness)..."
+            for i in $(seq 1 12); do
+              STATUS=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/health || echo "000")
+              if [ "$STATUS" = "200" ] || [ "$STATUS" = "503" ]; then
+                BODY=$(curl -s http://localhost:8080/health)
+                echo "Health endpoint responded: HTTP $STATUS - $BODY"
                 exit 0
               fi
+              echo "Attempt $i: HTTP $STATUS (waiting for health endpoint...)"
               sleep 5
             done
-            echo "Health check failed"
+            echo "Health check failed - endpoint not responding"
             docker logs soleur-bridge --tail 30
             exit 1
