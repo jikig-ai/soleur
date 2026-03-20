@@ -8,7 +8,7 @@ permalink: pages/legal/privacy-policy.html
 <section class="page-hero">
   <div class="container">
     <h1>Privacy Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated March 19, 2026 (corrected Supabase region to EU (eu-west-1), updated DPA execution status, added DPA verification dates)</p>
+    <p>Effective February 20, 2026 | Last Updated March 20, 2026 (added Web Platform to scope introduction, added Web Platform security measures to Section 11)</p>
   </div>
 </section>
 
@@ -17,11 +17,11 @@ permalink: pages/legal/privacy-policy.html
     <div class="prose">
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 19, 2026 (corrected Supabase region to EU (eu-west-1), updated DPA execution status, added DPA verification dates)
+**Last Updated:** March 20, 2026 (added Web Platform to scope introduction, added Web Platform security measures to Section 11)
 
 ## 1. Introduction
 
-This Privacy Policy describes how Jikigai ("we," "us," or "our"), operator of Soleur, handles information in connection with the Soleur Company-as-a-Service platform ("the Plugin"), a Claude Code plugin providing agents, skills, commands, and a knowledge base for structured software development workflows, and the Soleur documentation website located at soleur.ai ("the Docs Site").
+This Privacy Policy describes how Jikigai ("we," "us," or "our"), operator of Soleur, handles information in connection with the Soleur Company-as-a-Service platform ("the Plugin"), a Claude Code plugin providing agents, skills, commands, and a knowledge base for structured software development workflows, the Soleur documentation website located at soleur.ai ("the Docs Site"), and the Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) ("the Web Platform").
 
 We are committed to protecting your privacy. This Policy explains what data is and is not collected, how the Plugin operates, and your rights under applicable law, including the EU General Data Protection Regulation (GDPR) and US privacy regulations.
 
@@ -261,6 +261,14 @@ Because the Plugin runs locally and does not transmit data to our servers, the s
 - Using appropriate access controls on your local filesystem.
 - Managing your API keys securely (e.g., not committing them to version control).
 - Reviewing the Plugin's source code to verify its behavior.
+
+For the Web Platform (app.soleur.ai), Jikigai implements the following security measures:
+
+- **Encryption at rest:** User API keys are encrypted using AES-256-GCM before storage.
+- **Encryption in transit:** All communication with the Web Platform is protected by TLS.
+- **EU-only hosting:** Web Platform infrastructure is hosted on Hetzner servers in Helsinki, Finland (EU), with no data transfers outside the EU for infrastructure-hosted data.
+- **Payment security:** Card data is handled exclusively by Stripe (PCI DSS Level 1 certified) via Stripe Checkout and never reaches Jikigai servers (PCI SAQ-A).
+- **Authentication:** User passwords are hashed by Supabase (bcrypt via GoTrue); authentication tokens are JWT-based.
 
 ## 12. Cookies
 
