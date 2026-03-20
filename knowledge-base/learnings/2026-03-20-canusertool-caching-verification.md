@@ -27,6 +27,12 @@ Evidence that caching does not exist:
 
 Defense-in-depth recommendation: migrate sandbox enforcement from canUseTool (step 5) to PreToolUse hooks (step 1) for immunity to allowedTools, settings.json, and bypassPermissions mode.
 
+## Session Errors
+
+- Tests initially wrote a bridge-auth silent-pass path that passed with zero assertions — caught by all 5 review agents. Fix: gate on `ANTHROPIC_API_KEY` so the test skips rather than silently passes when it cannot verify its claim.
+- `npx vitest` global cache broke with a rolldown native binding error — use local `./node_modules/.bin/vitest` instead.
+- Cyrillic characters in branch name caused git pathspec issues — use proper quoting from worktree root.
+
 ## Tags
 category: security-verification
 module: agent-sdk
