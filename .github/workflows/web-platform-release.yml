@@ -54,6 +54,8 @@ jobs:
             docker pull "$IMAGE:$TAG"
             { docker stop soleur-web-platform || true; }
             { docker rm soleur-web-platform || true; }
+            # Ensure workspace volume is owned by soleur (UID 1001, must match apps/web-platform/Dockerfile)
+            chown 1001:1001 /mnt/data/workspaces
             docker run -d \
               --name soleur-web-platform \
               --restart unless-stopped \
