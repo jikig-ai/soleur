@@ -83,19 +83,19 @@ Apply identical content to both files, adjusting only link syntax (relative mark
 
 ## Acceptance Criteria
 
-- [ ] DPD Section 5.3 exists in both `docs/legal/data-protection-disclosure.md` and `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`
-- [ ] Section 5.3 enumerates all six GDPR rights (Articles 15-18, 20-21) for Web Platform data
-- [ ] Section 5.3 specifies legal@jikigai.com as the contact channel
-- [ ] Section 5.3 states the one-month response timeline (Article 12(3))
-- [ ] Section 5.3 states the 5-business-day acknowledgment timeline (matching T&C Section 16 and GDPR Policy Section 11)
-- [ ] Section 5.3 references GDPR Policy Section 5 for full details
-- [ ] Section 5.3 data categories match Section 2.1b (account data, workspace data, subscription data)
-- [ ] Right to Erasure clause cross-references Section 2.3(g) French tax law retention
-- [ ] Right to Object clause qualifies applicability for contract-performance legal basis
-- [ ] "Last Updated" date in both files reflects the change date
-- [ ] Both files remain in sync (identical legal content, differing only in link format)
-- [ ] No existing section numbering is broken (5.3 is new, no renumbering needed -- Section 6 follows)
-- [ ] Cross-document consistency: response timelines match GDPR Policy Section 11 and T&C Section 16
+- [x] DPD Section 5.3 exists in both `docs/legal/data-protection-disclosure.md` and `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`
+- [x] Section 5.3 enumerates all six GDPR rights (Articles 15-18, 20-21) for Web Platform data
+- [x] Section 5.3 specifies legal@jikigai.com as the contact channel
+- [x] Section 5.3 states the one-month response timeline (Article 12(3))
+- [x] Section 5.3 states the 5-business-day acknowledgment timeline (matching T&C Section 16 and GDPR Policy Section 11)
+- [x] Section 5.3 references GDPR Policy Section 5 for full details
+- [x] Section 5.3 data categories match Section 2.1b (account data, workspace data, subscription data)
+- [x] Right to Erasure clause cross-references Section 2.3(g) French tax law retention
+- [x] Right to Object clause qualifies applicability for contract-performance legal basis
+- [x] "Last Updated" date in both files reflects the change date
+- [x] Both files remain in sync (identical legal content, differing only in link format)
+- [x] No existing section numbering is broken (5.3 is new, no renumbering needed -- Section 6 follows)
+- [x] Cross-document consistency: response timelines match GDPR Policy Section 11 and T&C Section 16
 
 ## Test Scenarios
 
