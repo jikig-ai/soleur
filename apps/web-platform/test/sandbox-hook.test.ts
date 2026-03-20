@@ -146,7 +146,8 @@ describe("createSandboxHook - negative-space coverage", () => {
 
   test("safe tools do not overlap with FILE_TOOLS", () => {
     // LS removed from safe tools in #891 -- it has path inputs
-    const safeTools = ["Agent", "Skill", "TodoRead", "TodoWrite"];
+    // Agent removed from safe tools in #910 -- handled explicitly in canUseTool
+    const safeTools = ["Skill", "TodoRead", "TodoWrite"];
     const fileSet = new Set(FILE_TOOLS as readonly string[]);
     for (const tool of safeTools) {
       expect(fileSet.has(tool), `${tool} should NOT be a file tool`).toBe(false);
