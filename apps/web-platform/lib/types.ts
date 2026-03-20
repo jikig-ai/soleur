@@ -29,6 +29,7 @@ export interface User {
   email: string;
   workspace_path: string;
   workspace_status: "provisioning" | "ready";
+  tc_accepted_at: string | null;
   created_at: string;
 }
 
