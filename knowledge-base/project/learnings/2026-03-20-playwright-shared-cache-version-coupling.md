@@ -28,3 +28,14 @@ Upgraded to `agent-browser@0.21.4`, which is a Rust native CLI using Chrome for 
 4. Pin global npm installs to specific versions (`agent-browser@0.21.4`, not `@latest`)
 5. On Linux, `agent-browser install --with-deps` may be needed for system library dependencies
 6. The `--session` flag was renamed to `--session-name` in agent-browser 0.21.x — documentation must track CLI flag renames across major version jumps
+7. When `npm install -g` fails with EACCES (no sudo), use `npm install --prefix ~/.local -g` — but ensure `~/.local/bin` is prepended (not appended) to PATH so it shadows system binaries
+8. Plans that claim "no changes needed" for adjacent files are often wrong — review agents caught 6 missed references that the plan said were fine. Always grep comprehensively rather than trusting plan assertions
+
+## Session Errors
+
+1. `npm install -g` EACCES — resolved via `--prefix ~/.local`
+2. PATH ordering: `~/.local/bin` appended instead of prepended, old binary shadowed new
+3. Chrome sandbox failure on Linux — `--args "--no-sandbox"` needed
+4. one-shot referenced wrong path for `setup-ralph-loop.sh`
+5. Review found 6 unpinned install references the plan missed
+6. `gh issue create --label "refactor"` failed (label doesn't exist)
