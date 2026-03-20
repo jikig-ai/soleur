@@ -16,7 +16,7 @@ begin
     new.email,
     '/workspaces/' || new.id::text,
     case
-      when (new.raw_user_meta_data->>'tc_accepted')::boolean = true
+      when (new.raw_user_meta_data->>'tc_accepted') = 'true'
       then now()
       else null
     end

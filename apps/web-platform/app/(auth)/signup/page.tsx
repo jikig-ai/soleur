@@ -21,7 +21,7 @@ export default function SignupPage() {
       email,
       options: {
         emailRedirectTo: `${window.location.origin}/callback`,
-        data: { tc_accepted: true },
+        data: { tc_accepted: tcAccepted },
       },
     });
 
@@ -85,7 +85,6 @@ export default function SignupPage() {
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-white underline hover:text-neutral-300"
-                onClick={(e) => e.stopPropagation()}
               >
                 Terms &amp; Conditions
               </a>{" "}
@@ -95,7 +94,6 @@ export default function SignupPage() {
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-white underline hover:text-neutral-300"
-                onClick={(e) => e.stopPropagation()}
               >
                 Privacy Policy
               </a>
