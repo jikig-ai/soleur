@@ -23,22 +23,91 @@ case "$ARCH" in
   aarch64|arm64) ARCH_SUFFIX="arm64" ;;
 esac
 
+# BtbN uses different arch names than rclone
+FFMPEG_ARCH=""
+case "$ARCH" in
+  x86_64)        FFMPEG_ARCH="linux64" ;;
+  aarch64|arm64) FFMPEG_ARCH="linuxarm64" ;;
+esac
+
+# --- Pinned Versions ---
+# To update: change version/build constants, fetch new checksums, update SHA256 constants.
+#
+# rclone:
+#   1. Pick version from https://downloads.rclone.org/
+#   2. Fetch checksums: curl -sL https://downloads.rclone.org/v<NEW_VERSION>/SHA256SUMS
+#   3. Extract hashes for linux-amd64.zip and linux-arm64.zip
+#
+# ffmpeg (BtbN autobuilds):
+#   1. Find latest autobuild tag:
+#      curl -s "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases" | jq '.[1].tag_name'
+#      (index 1 because index 0 is the floating "latest" tag)
+#   2. Fetch checksums and extract build ID:
+#      curl -sL "https://github.com/BtbN/FFmpeg-Builds/releases/download/<tag>/checksums.sha256" \
+#        | grep linux64-gpl.tar.xz | grep -v shared
+#      Output: <hash>  ffmpeg-N-XXXXX-g<hash>-linux64-gpl.tar.xz
+#      The BUILD_ID is the "N-XXXXX-g<hash>" portion of the filename
+#   3. Update FFMPEG_AUTOBUILD (date from tag), FFMPEG_BUILD_ID, and both SHA256 constants
+
+RCLONE_VERSION="1.73.2"
+FFMPEG_AUTOBUILD="2026-03-20-13-06"
+FFMPEG_BUILD_ID="N-123570-gf72f692afa"
+
+# rclone checksums (from https://downloads.rclone.org/v1.73.2/SHA256SUMS)
+RCLONE_SHA256_AMD64="00a1d8cb85552b7b07bb0416559b2e78fcf9c6926662a52682d81b5f20c90535"
+RCLONE_SHA256_ARM64="2f7d8b807e6ea638855129052c834ca23aa538d3ad7786e30b8ad1e97c5db47b"
+
+# ffmpeg checksums (from BtbN autobuild-2026-03-20-13-06 checksums.sha256)
+FFMPEG_SHA256_LINUX64="f550cd5fad7bc9045f9e6b4370204ddd245b8120f6bc193e0c09c58569e3cb32"
+FFMPEG_SHA256_LINUXARM64="89b959bed4b6d63bad2d85870468a9a52cf84efd216a12fbf577a011ef391644"
+
+verify_checksum() {
+  local file="$1"
+  local expected="$2"
+  local actual
+  actual=$(sha256sum "$file" | cut -d' ' -f1)
+  if [[ "$actual" != "$expected" ]]; then
+    echo "  CHECKSUM MISMATCH for $file" >&2
+    echo "  Expected: $expected" >&2
+    echo "  Got:      $actual" >&2
+    return 1
+  fi
+  echo "  [ok] checksum verified"
+}
+
 install_ffmpeg_linux() {
-  local arch_suffix="$1"
-  if [[ -z "$arch_suffix" ]]; then
+  local ffmpeg_arch="$1"
+  if [[ -z "$ffmpeg_arch" ]]; then
     echo "  Unsupported architecture: $ARCH. Install ffmpeg manually." >&2
     return 1
   fi
-  local url="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${arch_suffix}-static.tar.xz"
-  echo "  Downloading ffmpeg static build (~80MB)..."
-  mkdir -p "$HOME/.local/bin"
-  if curl -sfL "$url" | tar -xJf - --strip-components=1 -C "$HOME/.local/bin" --wildcards '*/ffmpeg'; then
-    chmod +x "$HOME/.local/bin/ffmpeg"
-    return 0
-  else
-    echo "  Download failed. Install ffmpeg manually: https://johnvansickle.com/ffmpeg/" >&2
+  if ! tar --help >/dev/null 2>&1 || ! xz --help >/dev/null 2>&1; then
+    echo "  tar and xz are required to install ffmpeg. Install them first." >&2
     return 1
   fi
+  local filename="ffmpeg-${FFMPEG_BUILD_ID}-${ffmpeg_arch}-gpl.tar.xz"
+  local url="https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-${FFMPEG_AUTOBUILD}/${filename}"
+  local expected
+  case "$ffmpeg_arch" in
+    linux64)    expected="$FFMPEG_SHA256_LINUX64" ;;
+    linuxarm64) expected="$FFMPEG_SHA256_LINUXARM64" ;;
+    *) echo "  No checksum available for architecture: $ffmpeg_arch" >&2; return 1 ;;
+  esac
+  local tmpdir
+  tmpdir=$(mktemp -d)
+  trap "rm -rf '$tmpdir'" RETURN
+  echo "  Downloading ffmpeg (autobuild ${FFMPEG_AUTOBUILD})..."
+  mkdir -p "$HOME/.local/bin"
+  if ! curl -sfL "$url" -o "$tmpdir/ffmpeg.tar.xz"; then
+    echo "  Download failed. Install ffmpeg manually: https://github.com/BtbN/FFmpeg-Builds/releases" >&2
+    return 1
+  fi
+  if ! verify_checksum "$tmpdir/ffmpeg.tar.xz" "$expected"; then
+    return 1
+  fi
+  tar -xJf "$tmpdir/ffmpeg.tar.xz" -C "$tmpdir"
+  cp "$tmpdir"/ffmpeg-*/bin/ffmpeg "$HOME/.local/bin/ffmpeg"
+  chmod +x "$HOME/.local/bin/ffmpeg"
 }
 
 install_rclone_linux() {
@@ -51,21 +120,28 @@ install_rclone_linux() {
     echo "  unzip is required to install rclone. Install unzip first." >&2
     return 1
   fi
-  local url="https://downloads.rclone.org/rclone-current-linux-${arch_suffix}.zip"
+  local url="https://downloads.rclone.org/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-${arch_suffix}.zip"
+  local expected
+  case "$arch_suffix" in
+    amd64) expected="$RCLONE_SHA256_AMD64" ;;
+    arm64) expected="$RCLONE_SHA256_ARM64" ;;
+    *) echo "  No checksum available for architecture: $arch_suffix" >&2; return 1 ;;
+  esac
   local tmpdir
   tmpdir=$(mktemp -d)
-  echo "  Downloading rclone (~25MB)..."
+  trap "rm -rf '$tmpdir'" RETURN
+  echo "  Downloading rclone v${RCLONE_VERSION}..."
   mkdir -p "$HOME/.local/bin"
-  curl -sfL "$url" -o "$tmpdir/rclone.zip" && \
-    unzip -q "$tmpdir/rclone.zip" -d "$tmpdir" && \
-    cp "$tmpdir"/rclone-*/rclone "$HOME/.local/bin/rclone" && \
-    chmod +x "$HOME/.local/bin/rclone"
-  local rc=$?
-  rm -rf "$tmpdir"
-  if [[ $rc -ne 0 ]]; then
+  if ! curl -sfL "$url" -o "$tmpdir/rclone.zip"; then
     echo "  Download failed. Install rclone manually: https://rclone.org/install/" >&2
     return 1
   fi
+  if ! verify_checksum "$tmpdir/rclone.zip" "$expected"; then
+    return 1
+  fi
+  unzip -q "$tmpdir/rclone.zip" -d "$tmpdir"
+  cp "$tmpdir"/rclone-*/rclone "$HOME/.local/bin/rclone"
+  chmod +x "$HOME/.local/bin/rclone"
 }
 
 install_tool() {
@@ -77,7 +153,7 @@ install_tool() {
   case "$OS" in
     linux)
       case "$tool" in
-        ffmpeg) install_ffmpeg_linux "$ARCH_SUFFIX" ;;
+        ffmpeg) install_ffmpeg_linux "$FFMPEG_ARCH" ;;
         rclone) install_rclone_linux "$ARCH_SUFFIX" ;;
         *)
           echo "  No installer for $tool. Install manually." >&2
@@ -86,6 +162,7 @@ install_tool() {
       esac
       ;;
     macos)
+      # Homebrew handles its own integrity verification (bottle SHA256)
       if command -v brew >/dev/null 2>&1; then
         brew install "$tool"
       else
