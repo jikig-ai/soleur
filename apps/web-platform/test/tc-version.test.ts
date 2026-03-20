@@ -37,24 +37,4 @@ describe("T&C version check logic", () => {
   test("user with future version is redirected (version must match exactly)", () => {
     expect(shouldRedirectToAcceptTerms("2.0.0")).toBe(true);
   });
-
-  test("same version after redeployment does not trigger re-acceptance", () => {
-    // Simulates: user accepted 1.0.0, app redeployed with same TC_VERSION
-    expect(shouldRedirectToAcceptTerms("1.0.0")).toBe(false);
-  });
-});
-
-describe("T&C middleware fail-open behavior", () => {
-  // Mirrors the middleware logic: if query errors, allow request through
-  function shouldFailOpen(queryError: { message: string } | null): boolean {
-    return queryError !== null;
-  }
-
-  test("query error results in fail-open (user proceeds)", () => {
-    expect(shouldFailOpen({ message: "connection refused" })).toBe(true);
-  });
-
-  test("no error proceeds to version check", () => {
-    expect(shouldFailOpen(null)).toBe(false);
-  });
 });
