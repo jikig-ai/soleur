@@ -21,13 +21,18 @@ for file in "$WORKFLOW_DIR"/$PATTERN; do
   checked=$((checked + 1))
   file_ok=true
 
-  for ctx in "${REQUIRED_CONTEXTS[@]}"; do
-    if ! grep -q "context=$ctx" "$file"; then
-      echo "FAIL: $file contains 'gh pr create' but is missing 'context=$ctx'"
-      failures=$((failures + 1))
-      file_ok=false
-    fi
-  done
+  # Accept either inline context= patterns or the shared script call
+  if grep -q "post-bot-statuses.sh" "$file"; then
+    : # Shared script handles all required statuses
+  else
+    for ctx in "${REQUIRED_CONTEXTS[@]}"; do
+      if ! grep -q "context=$ctx" "$file"; then
+        echo "FAIL: $file contains 'gh pr create' but is missing 'context=$ctx'"
+        failures=$((failures + 1))
+        file_ok=false
+      fi
+    done
+  fi
 
   if [[ "$file_ok" == "true" ]]; then
     echo "ok: $file"

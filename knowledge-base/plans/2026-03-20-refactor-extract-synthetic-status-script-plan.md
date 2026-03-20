@@ -28,15 +28,15 @@ Nine scheduled bot workflows each copy-paste the same 8-line block to post synth
 
 ## Acceptance Criteria
 
-- [ ] New script `scripts/post-bot-statuses.sh` posts synthetic `cla-check` and `test` statuses for a given commit SHA
-- [ ] Script follows project shell conventions: `#!/usr/bin/env bash`, `set -euo pipefail`, `SCREAMING_SNAKE_CASE` globals, `snake_case` locals, `[[ ]]` tests
-- [ ] Script header comment follows the project pattern from `scripts/content-publisher.sh`: Usage, Environment variables, Exit codes sections
-- [ ] Script accepts SHA as `$1` argument (validated early with usage message on missing arg)
-- [ ] Script uses `GITHUB_REPOSITORY` env var (available in all GitHub Actions runners)
-- [ ] All 9 workflow files call `bash scripts/post-bot-statuses.sh "$SHA"` instead of inline `gh api` calls
-- [ ] Status context names and descriptions are defined in a single array/list inside the script, making future additions O(1)
-- [ ] `scripts/create-ci-required-ruleset.sh` reference comment updated if it mentions the inline pattern
-- [ ] Existing behavior is preserved: same API endpoint, same `state`, `context`, and `description` values
+- [x] New script `scripts/post-bot-statuses.sh` posts synthetic `cla-check` and `test` statuses for a given commit SHA
+- [x] Script follows project shell conventions: `#!/usr/bin/env bash`, `set -euo pipefail`, `SCREAMING_SNAKE_CASE` globals, `snake_case` locals, `[[ ]]` tests
+- [x] Script header comment follows the project pattern from `scripts/content-publisher.sh`: Usage, Environment variables, Exit codes sections
+- [x] Script accepts SHA as `$1` argument (validated early with usage message on missing arg)
+- [x] Script uses `GITHUB_REPOSITORY` env var (available in all GitHub Actions runners)
+- [x] All 9 workflow files call `bash scripts/post-bot-statuses.sh "$SHA"` instead of inline `gh api` calls
+- [x] Status context names and descriptions are defined in a single array/list inside the script, making future additions O(1)
+- [x] `scripts/create-ci-required-ruleset.sh` reference comment updated if it mentions the inline pattern
+- [x] Existing behavior is preserved: same API endpoint, same `state`, `context`, and `description` values
 
 ## Test Scenarios
 
