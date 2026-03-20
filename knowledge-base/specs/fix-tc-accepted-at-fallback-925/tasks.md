@@ -3,9 +3,11 @@
 ## Phase 1: Implementation
 
 - [ ] 1.1 Read `apps/web-platform/app/(auth)/callback/route.ts`
-- [ ] 1.2 Extract `user.user_metadata.tc_accepted` into a local boolean variable before the fallback INSERT (line ~72)
-- [ ] 1.3 Replace unconditional `tc_accepted_at: new Date().toISOString()` with conditional `tc_accepted_at: tcAccepted ? new Date().toISOString() : null`
-- [ ] 1.4 Update the comment block (lines 68-71) to note the conditional mirrors trigger logic
+- [ ] 1.2 In the `GET` handler (line ~26-28), extract `tcAccepted` boolean from `user.user_metadata?.tc_accepted` before calling `ensureWorkspaceProvisioned`
+- [ ] 1.3 Add `tcAccepted: boolean` as third parameter to `ensureWorkspaceProvisioned` function signature (line ~53)
+- [ ] 1.4 Update the `ensureWorkspaceProvisioned` call site to pass `tcAccepted` (line ~28)
+- [ ] 1.5 In the fallback INSERT (line ~73-79), replace unconditional `tc_accepted_at: new Date().toISOString()` with conditional `tc_accepted_at: tcAccepted ? new Date().toISOString() : null`
+- [ ] 1.6 Update the comment block (lines 68-71) to note the conditional mirrors trigger logic
 
 ## Phase 2: Verification
 
