@@ -259,17 +259,17 @@ No other download paths exist in the script.
 
 ## Acceptance Criteria
 
-- [ ] Version constants (`RCLONE_VERSION`, `FFMPEG_AUTOBUILD`, `FFMPEG_BUILD_ID`) pinned at script top in `plugins/soleur/skills/feature-video/scripts/check_deps.sh`
-- [ ] SHA256 checksum constants embedded for each architecture (amd64/arm64 for rclone, linux64/linuxarm64 for ffmpeg)
-- [ ] `verify_checksum` function added and called before extraction for both ffmpeg and rclone
-- [ ] ffmpeg source switched from johnvansickle.com to BtbN GitHub releases
-- [ ] Download flow changed from `curl | tar` pipe to download-then-verify-then-extract
-- [ ] Temp directory cleanup on both success and failure paths
-- [ ] Update procedure documented in script comments (including how to find `FFMPEG_BUILD_ID`)
-- [ ] macOS brew path unchanged
-- [ ] Script still works without `set -euo pipefail` (soft failures)
-- [ ] Architecture mapping updated: `FFMPEG_ARCH` added for BtbN naming (`linux64`/`linuxarm64`), existing `ARCH_SUFFIX` unchanged for rclone
-- [ ] Version printed during install (e.g., "Downloading rclone v1.73.2...")
+- [x] Version constants (`RCLONE_VERSION`, `FFMPEG_AUTOBUILD`, `FFMPEG_BUILD_ID`) pinned at script top in `plugins/soleur/skills/feature-video/scripts/check_deps.sh`
+- [x] SHA256 checksum constants embedded for each architecture (amd64/arm64 for rclone, linux64/linuxarm64 for ffmpeg)
+- [x] `verify_checksum` function added and called before extraction for both ffmpeg and rclone
+- [x] ffmpeg source switched from johnvansickle.com to BtbN GitHub releases
+- [x] Download flow changed from `curl | tar` pipe to download-then-verify-then-extract
+- [x] Temp directory cleanup on both success and failure paths
+- [x] Update procedure documented in script comments (including how to find `FFMPEG_BUILD_ID`)
+- [x] macOS brew path unchanged
+- [x] Script still works without `set -euo pipefail` (soft failures)
+- [x] Architecture mapping updated: `FFMPEG_ARCH` added for BtbN naming (`linux64`/`linuxarm64`), existing `ARCH_SUFFIX` unchanged for rclone
+- [x] Version printed during install (e.g., "Downloading rclone v1.73.2...")
 
 ## Test Scenarios
 
