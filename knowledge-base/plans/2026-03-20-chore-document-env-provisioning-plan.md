@@ -99,7 +99,7 @@ Use Terraform to write the `.env` file from variables. This is more automated bu
 | `STRIPE_PRICE_ID` | Yes | Checkout broken | Stripe price ID for checkout |
 | `STRIPE_WEBHOOK_SECRET` | Yes | Payment events lost | Stripe webhook signing secret |
 | `BYOK_ENCRYPTION_KEY` | Yes (prod) | BYOK setup page crashes | 32-byte hex key for BYOK encryption |
-| `ANTHROPIC_API_KEY` | Yes | Agent sessions fail | Anthropic API key for Claude Code CLI |
+| `ANTHROPIC_API_KEY` | No | Tests skip | Only used in test files; production uses BYOK keys from DB |
 | `PORT` | No | Uses default 3000 | Server port (default: 3000) |
 | `NODE_ENV` | No | Set by Dockerfile | Environment (default in container: `production`) |
 | `WORKSPACES_ROOT` | No | Uses default `/workspaces` | Workspace directory |

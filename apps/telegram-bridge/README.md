@@ -153,19 +153,22 @@ shared `.env` file via `--env-file /mnt/data/.env`.
 3. **Upload the `.env` file:**
 
    ```sh
-   scp .env deploy@<server_ip>:/mnt/data/.env
+   scp .env root@<server_ip>:/mnt/data/.env
    ```
+
+   If the server was rebuilt, remove the old host key first:
+   `ssh-keygen -R <server_ip>`
 
 4. **Restart both containers:**
 
    ```sh
-   ssh deploy@<server_ip> 'docker restart soleur-bridge soleur-web-platform'
+   ssh root@<server_ip> 'docker restart soleur-bridge soleur-web-platform'
    ```
 
 5. **Verify health:**
 
    ```sh
-   ssh deploy@<server_ip> 'docker ps && curl -sf http://localhost:8080/health'
+   ssh root@<server_ip> 'docker ps && curl -sf http://localhost:8080/health && curl -sf http://localhost:3000/health'
    ```
 
 > **Tip:** For a new deployment (no existing BYOK data), generate a fresh key
