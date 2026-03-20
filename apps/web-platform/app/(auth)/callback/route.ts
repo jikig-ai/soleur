@@ -24,17 +24,9 @@ export async function GET(request: Request) {
       } = await supabase.auth.getUser();
 
       if (user) {
-        await ensureWorkspaceProvisioned(user.id, user.email ?? "");
+        const tcAcceptedAt = await ensureWorkspaceProvisioned(user.id, user.email ?? "");
 
-        // Check T&C acceptance — redirect to accept-terms if not yet accepted
-        const serviceClient = createServiceClient();
-        const { data: userRow } = await serviceClient
-          .from("users")
-          .select("tc_accepted_at")
-          .eq("id", user.id)
-          .single();
-
-        if (!userRow?.tc_accepted_at) {
+        if (!tcAcceptedAt) {
           return NextResponse.redirect(`${origin}/accept-terms`);
         }
 
@@ -63,13 +55,12 @@ export async function GET(request: Request) {
 async function ensureWorkspaceProvisioned(
   userId: string,
   email: string,
-): Promise<void> {
+): Promise<string | null> {
   const serviceClient = createServiceClient();
 
-  // Upsert user row (first login creates it, subsequent logins are no-ops)
   const { data: existing } = await serviceClient
     .from("users")
-    .select("workspace_status")
+    .select("workspace_status, tc_accepted_at")
     .eq("id", userId)
     .single();
 
@@ -87,26 +78,26 @@ async function ensureWorkspaceProvisioned(
           email,
           workspace_path: workspacePath,
           workspace_status: "ready",
-          tc_accepted_at: null,
         },
         { onConflict: "id", ignoreDuplicates: true },
       );
     if (insertError) {
       console.error(`[callback] Fallback user upsert failed for ${userId}:`, insertError);
     }
-    return;
+    return null;
   }
 
-  if (existing.workspace_status === "ready") return;
-
-  // Workspace exists in DB but not provisioned on disk
-  try {
-    const workspacePath = await provisionWorkspace(userId);
-    await serviceClient
-      .from("users")
-      .update({ workspace_path: workspacePath, workspace_status: "ready" })
-      .eq("id", userId);
-  } catch (err) {
-    console.error(`[callback] Workspace provisioning failed for ${userId}:`, err);
+  if (existing.workspace_status !== "ready") {
+    try {
+      const workspacePath = await provisionWorkspace(userId);
+      await serviceClient
+        .from("users")
+        .update({ workspace_path: workspacePath, workspace_status: "ready" })
+        .eq("id", userId);
+    } catch (err) {
+      console.error(`[callback] Workspace provisioning failed for ${userId}:`, err);
+    }
   }
+
+  return existing.tc_accepted_at;
 }

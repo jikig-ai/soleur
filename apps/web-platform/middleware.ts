@@ -61,14 +61,18 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) {
+  function redirectWithCookies(pathname: string) {
     const url = request.nextUrl.clone();
-    url.pathname = "/login";
+    url.pathname = pathname;
     const redirectResponse = NextResponse.redirect(url);
     response.cookies.getAll().forEach((cookie) =>
       redirectResponse.cookies.set(cookie.name, cookie.value),
     );
     return redirectResponse;
+  }
+
+  if (!user) {
+    return redirectWithCookies("/login");
   }
 
   // Check T&C acceptance — redirect to /accept-terms if not yet accepted
@@ -79,13 +83,7 @@ export async function middleware(request: NextRequest) {
     .single();
 
   if (!userRow?.tc_accepted_at) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/accept-terms";
-    const redirectResponse = NextResponse.redirect(url);
-    response.cookies.getAll().forEach((cookie) =>
-      redirectResponse.cookies.set(cookie.name, cookie.value),
-    );
-    return redirectResponse;
+    return redirectWithCookies("/accept-terms");
   }
 
   return response;
