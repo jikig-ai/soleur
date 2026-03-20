@@ -195,7 +195,6 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         maxBudgetUsd: 5.0,
         systemPrompt,
         env: buildAgentEnv(apiKey),
-        settingSources: [],
         disallowedTools: ["WebSearch", "WebFetch"],
         sandbox: {
           enabled: true,
