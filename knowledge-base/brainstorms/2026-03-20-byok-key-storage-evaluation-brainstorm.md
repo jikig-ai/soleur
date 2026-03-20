@@ -37,10 +37,10 @@ Current implementation uses one key for all users. HKDF derivation creates a uni
 ## Key Decisions
 
 1. **Keep crypto in Node.js** -- existing `byok.ts` AES-256-GCM implementation is correct and portable. Add HKDF derivation, don't move to pgcrypto
-2. **Use Supabase Vault for master key only** -- one infrastructure secret, not per-user secrets. Eliminates `.env` single point of failure
-3. **HKDF key derivation per user** -- `HKDF(master_key, user_id, "byok")` for per-user isolation
+2. **No Supabase Vault** -- [Updated 2026-03-20] plan review rejected Vault for one secret while other secrets stay in `.env`. Back up master key to password manager instead
+3. **HKDF key derivation per user** -- `hkdfSync('sha256', masterKey, Buffer.alloc(0), 'soleur:byok:' + userId, 32)`. [Updated 2026-03-20] Per RFC 5869: empty salt (IKM is high-entropy), user_id in info (domain separation)
 4. **No pgsodium column encryption** -- pending deprecation, do not adopt
-5. **Migration path needed** -- existing encrypted keys must be re-encrypted with per-user derived keys
+5. **Migration path needed** -- existing encrypted keys must be re-encrypted with per-user derived keys via lazy migration with `key_version` column
 
 ## Open Questions
 

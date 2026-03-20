@@ -1,4 +1,4 @@
-# Spec: BYOK Key Storage Enhancement
+# Spec: BYOK HKDF Per-User Key Derivation
 
 **Issue:** #676
 **Branch:** feat-evaluate-supabase-vault-byok
@@ -6,53 +6,55 @@
 
 ## Problem Statement
 
-The current BYOK implementation uses a single `BYOK_ENCRYPTION_KEY` stored in `.env` to encrypt all users' API keys via AES-256-GCM. This creates two risks: (1) losing the env var makes all stored keys unrecoverable, and (2) a single key compromise exposes all users' encrypted data.
+The current BYOK implementation uses a single `BYOK_ENCRYPTION_KEY` stored in `.env` to encrypt all users' API keys via AES-256-GCM. No cryptographic domain separation exists between users — the same key encrypts everyone's data.
 
 ## Goals
 
-- G1: Eliminate single point of failure for the master encryption key
-- G2: Isolate per-user key material so one compromise doesn't expose all users
-- G3: Enable master key rotation without re-deploying the application
-- G4: Maintain existing RLS enforcement and PostgREST access patterns
+- G1: Add per-user cryptographic domain separation via HKDF key derivation
+- G2: Back up master key to password manager (eliminate "lost key = unrecoverable" risk)
+- G3: Maintain existing RLS enforcement and PostgREST access patterns
+- G4: Keep `byok.ts` as a pure `node:crypto` module with no external dependencies
 
 ## Non-Goals
 
-- Migrating per-user secrets to Supabase Vault (evaluated and rejected -- see brainstorm)
+- Supabase Vault envelope encryption (evaluated and rejected — adds complexity for one secret while others stay in `.env`)
+- Migrating per-user secrets to Supabase Vault (cardinality mismatch, pgsodium pending deprecation)
 - Moving encryption from Node.js to PostgreSQL (pgcrypto)
-- Adopting pgsodium column-level encryption (pending deprecation)
-- Supporting client-side encryption (users encrypt before upload)
+- Key rotation hot-reload (rotation requires process restart; hot reload is a future goal)
 
 ## Functional Requirements
 
 - **FR1:** Derive a unique encryption key per user using HKDF from the master key and user ID
-- **FR2:** Store the master encryption key in Supabase Vault instead of `.env`
-- **FR3:** Retrieve the master key from Vault at application startup and cache in memory
-- **FR4:** Re-encrypt existing user keys with per-user derived keys during migration
-- **FR5:** Support lazy migration: keys encrypted with the old scheme are re-encrypted on next access
+- **FR2:** Re-encrypt existing user keys with per-user derived keys via lazy migration
+- **FR3:** Track encryption scheme version per row with a `key_version` column
 
 ## Technical Requirements
 
-- **TR1:** HKDF derivation must use `node:crypto` HKDF with SHA-256, salt = user_id, info = "byok"
-- **TR2:** Supabase Vault access via `supabase.rpc()` from the service client (not anon client)
-- **TR3:** Master key cached in-process after first retrieval (Vault is not called per-request)
-- **TR4:** Migration script must handle partial completion (idempotent, can resume)
-- **TR5:** Existing `byok.test.ts` round-trip tests must pass with derived keys
-- **TR6:** No changes to the `api_keys` table schema (encrypted_key, iv, auth_tag columns remain)
+- **TR1:** HKDF derivation uses `node:crypto` hkdfSync with SHA-256, salt = empty (`Buffer.alloc(0)`), info = `"soleur:byok:<user_id>"`, keylen = 32. Per RFC 5869: salt is for Extract phase (empty when IKM is high-entropy), info is for Expand phase (binds derived key to user identity)
+- **TR2:** `byok.ts` remains a pure crypto module — no Supabase imports, no network calls
+- **TR3:** Migration is idempotent — `key_version` column prevents double-migration
+- **TR4:** Existing `byok.test.ts` round-trip tests pass with updated signatures
+- **TR5:** Add `key_version integer NOT NULL DEFAULT 1` column to `api_keys`. Existing columns unchanged
 
 ## Affected Files
 
 | File | Change |
 |------|--------|
-| `apps/web-platform/server/byok.ts` | Add HKDF derivation, Vault master key retrieval |
-| `apps/web-platform/server/agent-runner.ts` | Pass user_id to decryption for key derivation |
-| `apps/web-platform/app/api/keys/route.ts` | Pass user_id to encryption for key derivation |
-| `apps/web-platform/test/byok.test.ts` | Update tests for per-user derived keys |
-| `apps/web-platform/.env.example` | Mark BYOK_ENCRYPTION_KEY as deprecated, add Vault instructions |
-| `apps/web-platform/supabase/migrations/` | Migration to store master key in Vault, re-encrypt existing keys |
+| `apps/web-platform/server/byok.ts` | Add HKDF derivation, update function signatures |
+| `apps/web-platform/server/agent-runner.ts` | Forward user_id to decrypt, add lazy migration |
+| `apps/web-platform/app/api/keys/route.ts` | Pass user_id to encrypt, set key_version = 2 |
+| `apps/web-platform/test/byok.test.ts` | Update tests, add cross-user isolation tests |
+| `apps/web-platform/.env.example` | Add backup-to-password-manager note |
+| `apps/web-platform/supabase/migrations/009_byok_hkdf.sql` | Add key_version column |
 
-## Open Questions
+## Resolved Questions
 
-1. Lazy migration vs. batch migration for existing keys?
-2. HKDF salt: user_id only, or user_id + random salt (requires new column)?
-3. Master key retrieval latency from Vault RPC -- needs benchmarking
-4. Key rotation: re-encryption job design when master key changes
+1. **Migration strategy:** Lazy migration on access. v1 rows re-encrypted to v2 on next decrypt
+2. **HKDF salt:** Empty (IKM is high-entropy). User identity goes in `info` per RFC 5869
+3. **Sync vs async:** Use `hkdfSync` (sub-millisecond, no event loop concern)
+4. **Vault:** Rejected after plan review. Back up key to password manager instead
+5. **Dev environment:** HKDF applies in dev using deterministic fallback key. Same code path as production
+
+## Rollback
+
+Backward-compatible decryption (v1 = raw key, v2 = HKDF) means the code handles both schemes. Keep `BYOK_ENCRYPTION_KEY` in the environment. If reverting to old code, v2 rows need a one-shot re-encryption script.
