@@ -80,11 +80,11 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 ## Acceptance Criteria
 
-- [ ] `HEALTHCHECK` in `apps/web-platform/Dockerfile` uses `node -e "fetch(...)"` instead of `curl -f`
-- [ ] `fetch()` call includes `AbortSignal.timeout(4_000)` for deterministic timeout behavior
-- [ ] No `curl` added to the `apt-get install` line
-- [ ] Health check correctly returns exit 0 when `/health` responds 200
-- [ ] Health check correctly returns exit 1 when `/health` responds non-200 or is unreachable
+- [x] `HEALTHCHECK` in `apps/web-platform/Dockerfile` uses `node -e "fetch(...)"` instead of `curl -f`
+- [x] `fetch()` call includes `AbortSignal.timeout(4_000)` for deterministic timeout behavior
+- [x] No `curl` added to the `apt-get install` line
+- [x] Health check correctly returns exit 0 when `/health` responds 200
+- [x] Health check correctly returns exit 1 when `/health` responds non-200 or is unreachable
 
 ## Test Scenarios
 
