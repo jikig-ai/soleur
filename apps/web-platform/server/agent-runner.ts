@@ -64,23 +64,33 @@ async function saveMessage(
   content: string,
   toolCalls?: unknown,
 ) {
-  await supabase.from("messages").insert({
+  const { error } = await supabase.from("messages").insert({
     id: randomUUID(),
     conversation_id: conversationId,
     role,
     content,
     tool_calls: toolCalls || null,
   });
+
+  if (error) {
+    throw new Error(`Failed to save message: ${error.message}`);
+  }
 }
 
 async function updateConversationStatus(
   conversationId: string,
   status: string,
 ) {
-  await supabase
+  const { error } = await supabase
     .from("conversations")
     .update({ status, last_active: new Date().toISOString() })
     .eq("id", conversationId);
+
+  if (error) {
+    throw new Error(
+      `Failed to update conversation status: ${error.message}`,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -264,7 +274,14 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         message,
         errorCode: err instanceof KeyInvalidError ? "key_invalid" : undefined,
       });
-      await updateConversationStatus(conversationId, "failed");
+      await updateConversationStatus(conversationId, "failed").catch(
+        (statusErr) => {
+          console.error(
+            `[agent] Failed to mark conversation ${conversationId} as failed:`,
+            statusErr,
+          );
+        },
+      );
     }
   } finally {
     activeSessions.delete(key);
