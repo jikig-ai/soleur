@@ -8,7 +8,7 @@ permalink: pages/legal/privacy-policy.html
 <section class="page-hero">
   <div class="container">
     <h1>Privacy Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated March 20, 2026 (added Web Platform to scope introduction, added Web Platform security measures to Section 11, removed infrastructure identifiers from processing descriptions)</p>
+    <p>Effective February 20, 2026 | Last Updated March 20, 2026 (added Web Platform to scope introduction, added Web Platform security measures to Section 11, removed infrastructure identifiers from processing descriptions, added Cloudflare dual legal basis to Section 6)</p>
   </div>
 </section>
 
@@ -17,7 +17,7 @@ permalink: pages/legal/privacy-policy.html
     <div class="prose">
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 20, 2026 (added Web Platform to scope introduction, added Web Platform security measures to Section 11, removed infrastructure identifiers from processing descriptions)
+**Last Updated:** March 20, 2026 (added Web Platform to scope introduction, added Web Platform security measures to Section 11, removed infrastructure identifiers from processing descriptions, added Cloudflare dual legal basis to Section 6)
 
 ## 1. Introduction
 
@@ -192,7 +192,7 @@ For users in the European Union or European Economic Area:
 
 Because the Plugin itself does not collect or process personal data, no legal basis for processing is required for Plugin usage.
 
-For the Web Platform (app.soleur.ai), the legal basis for processing account data, workspace data, and subscription data is **contract performance** (Article 6(1)(b) GDPR) -- processing is necessary to provide the Web Platform service the user signed up for. For payment processing via Stripe, the legal basis is also contract performance -- processing is necessary to fulfill the subscription agreement.
+For the Web Platform (app.soleur.ai), the legal basis for processing account data, workspace data, and subscription data is **contract performance** (Article 6(1)(b) GDPR) -- processing is necessary to provide the Web Platform service the user signed up for. For payment processing via Stripe, the legal basis is also contract performance -- processing is necessary to fulfill the subscription agreement. For technical data processed by Cloudflare (IP addresses, request headers -- see Section 5.8), the legal basis is contract performance for authenticated users and **legitimate interest** (Article 6(1)(f) GDPR) for unauthenticated traffic.
 
 For the Docs Site, to the extent that technical data is collected by GitHub Pages, the legal basis is **legitimate interest** (Article 6(1)(f) GDPR) -- specifically, the legitimate interest in making documentation available to users via a standard web hosting service.
 
