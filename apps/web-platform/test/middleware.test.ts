@@ -15,7 +15,7 @@ describe("middleware path routing", () => {
     expect(isPublicPath("/callback")).toBe(true);
     expect(isPublicPath("/api/webhooks/stripe")).toBe(true);
     expect(isPublicPath("/ws")).toBe(true);
-    expect(isPublicPath("/ws?token=abc")).toBe(true);
+    expect(isPublicPath("/ws")).toBe(true); // no token in URL after auth refactor
   });
 
   test("dashboard paths require auth", () => {
