@@ -18,7 +18,7 @@ RUN bun install --frozen-lockfile
 COPY src/ ./src/
 
 # Non-root user
-RUN useradd -m soleur
+RUN useradd --no-log-init --uid 1001 -m soleur
 USER soleur
 
 # Persistent data volume
