@@ -44,12 +44,40 @@ jobs:
     steps:
       - name: Deploy to server
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        env:
+          DEPLOY_VERSION: ${{ needs.release.outputs.version }}
         with:
           host: ${{ secrets.WEB_PLATFORM_HOST }}
-          username: deploy
+          username: root
           key: ${{ secrets.WEB_PLATFORM_SSH_KEY }}
           fingerprint: ${{ secrets.WEB_PLATFORM_HOST_FINGERPRINT }}
+          envs: DEPLOY_VERSION
           script: |
-            TAG="v${{ needs.release.outputs.version }}"
+            IMAGE="ghcr.io/jikig-ai/soleur-web-platform"
+            TAG="v$DEPLOY_VERSION"
             [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ERROR: Invalid version format: $TAG"; exit 1; }
-            deploy web-platform ghcr.io/jikig-ai/soleur-web-platform "$TAG"
+            docker pull "$IMAGE:$TAG"
+            { docker stop soleur-web-platform || true; }
+            { docker rm soleur-web-platform || true; }
+            # Ensure workspace volume is owned by soleur (UID 1001, must match apps/web-platform/Dockerfile)
+            chown 1001:1001 /mnt/data/workspaces
+            docker run -d \
+              --name soleur-web-platform \
+              --restart unless-stopped \
+              --env-file /mnt/data/.env \
+              -v /mnt/data/workspaces:/workspaces \
+              -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
+              -p 0.0.0.0:80:3000 \
+              -p 0.0.0.0:3000:3000 \
+              "$IMAGE:$TAG"
+            echo "Waiting for health check..."
+            for i in $(seq 1 10); do
+              if curl -sf http://localhost:3000/health; then
+                echo " OK"
+                exit 0
+              fi
+              sleep 3
+            done
+            echo "Health check failed"
+            docker logs soleur-web-platform --tail 30
+            exit 1
