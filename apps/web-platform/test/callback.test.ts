@@ -47,13 +47,14 @@ describe("auth callback origin validation", () => {
     );
   });
 
-  test("rejects case variation (headers preserve case)", () => {
+  // --- Functional: legitimate origins are accepted ---
+
+  test("normalizes uppercase host to match allowlist", () => {
     expect(resolveOrigin("APP.SOLEUR.AI", "https", null)).toBe(
       "https://app.soleur.ai",
     );
+    expect(warnSpy).not.toHaveBeenCalled();
   });
-
-  // --- Functional: legitimate origins are accepted ---
 
   test("accepts legitimate Cloudflare-proxied request", () => {
     expect(resolveOrigin("app.soleur.ai", "https", null)).toBe(

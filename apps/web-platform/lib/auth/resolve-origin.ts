@@ -10,7 +10,7 @@ export function resolveOrigin(
 ): string {
   const proto = forwardedProto ?? "https";
   const resolvedHost = forwardedHost ?? host ?? "app.soleur.ai";
-  const computed = `${proto}://${resolvedHost}`;
+  const computed = `${proto}://${resolvedHost}`.toLowerCase();
   if (!ALLOWED_ORIGINS.has(computed)) {
     console.warn(`[callback] Rejected origin: ${computed.slice(0, 100)}`);
     return "https://app.soleur.ai";
