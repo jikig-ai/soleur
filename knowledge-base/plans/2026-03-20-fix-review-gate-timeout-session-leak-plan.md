@@ -91,15 +91,15 @@ Rejecting is safer than resolving with a synthetic selection:
 
 ## Acceptance Criteria
 
-- [ ] When a WebSocket disconnects, all pending review gate promises for that user reject within 1 second
-- [ ] The `AgentSession` is removed from `activeSessions` after disconnect (no leak)
-- [ ] The conversation status transitions to `failed` (not stuck on `waiting_for_user`)
-- [ ] A 5-minute timeout rejects the gate even without a disconnect event
-- [ ] Normal review gate flow (user responds) continues to work unchanged
-- [ ] The abort signal listener is cleaned up after normal resolution (no listener leak)
-- [ ] The timeout timer is cleaned up after normal resolution (no dangling timer)
-- [ ] The timeout timer uses `.unref()` so it does not block process shutdown
-- [ ] Duplicate `settingSources` entry removed from `query()` options
+- [x] When a WebSocket disconnects, all pending review gate promises for that user reject within 1 second
+- [x] The `AgentSession` is removed from `activeSessions` after disconnect (no leak)
+- [x] The conversation status transitions to `failed` (not stuck on `waiting_for_user`)
+- [x] A 5-minute timeout rejects the gate even without a disconnect event
+- [x] Normal review gate flow (user responds) continues to work unchanged
+- [x] The abort signal listener is cleaned up after normal resolution (no listener leak)
+- [x] The timeout timer is cleaned up after normal resolution (no dangling timer)
+- [x] The timeout timer uses `.unref()` so it does not block process shutdown
+- [x] Duplicate `settingSources` entry removed from `query()` options
 
 ## Test Scenarios
 

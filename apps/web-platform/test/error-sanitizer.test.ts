@@ -25,6 +25,12 @@ describe("sanitizeErrorForClient", () => {
     expect(sanitizeErrorForClient(new Error("Conversation not found"))).toBe(
       "Conversation not found. Please start a new session.",
     );
+    expect(sanitizeErrorForClient(new Error("Review gate timed out"))).toBe(
+      "The review prompt timed out. Please start a new session.",
+    );
+    expect(
+      sanitizeErrorForClient(new Error("Session aborted: user disconnected")),
+    ).toBe("Your session was disconnected. Please reconnect to continue.");
   });
 
   test("Unknown leader maps to safe message", () => {
