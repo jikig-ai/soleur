@@ -11,6 +11,13 @@ const nextConfig: NextConfig = {
   output: undefined,
   // Allow WebSocket upgrade on the same port
   serverExternalPackages: ["@anthropic-ai/claude-agent-sdk", "ws"],
+  // SECURITY: restrict Server Action origins for defense-in-depth
+  serverActions: {
+    allowedOrigins:
+      process.env.NODE_ENV === "development"
+        ? ["app.soleur.ai", "localhost:3000"]
+        : ["app.soleur.ai"],
+  },
   async headers() {
     return [
       {

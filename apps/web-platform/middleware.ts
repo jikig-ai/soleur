@@ -29,6 +29,11 @@ export async function middleware(request: NextRequest) {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      cookieOptions: {
+        sameSite: "lax" as const, // SECURITY: blocks cross-site cookie transmission
+        secure: process.env.NODE_ENV === "production", // SECURITY: HTTPS-only in production
+        path: "/",
+      },
       cookies: {
         getAll() {
           return request.cookies.getAll();

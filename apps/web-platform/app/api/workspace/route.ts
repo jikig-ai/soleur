@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { provisionWorkspace } from "@/server/workspace";
+import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 
-export async function POST() {
+export async function POST(request: Request) {
+  const { valid, origin } = validateOrigin(request);
+  if (!valid) return rejectCsrf("api/workspace", origin);
+
   // Authenticate the request
   const supabase = await createClient();
   const {

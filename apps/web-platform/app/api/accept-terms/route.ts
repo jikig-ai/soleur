@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 import { TC_VERSION } from "@/lib/legal/tc-version";
+import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 
 async function getRedirectDestination(
   supabase: SupabaseClient,
@@ -18,7 +19,10 @@ async function getRedirectDestination(
   return !keys || keys.length === 0 ? "/setup-key" : "/dashboard";
 }
 
-export async function POST() {
+export async function POST(request: Request) {
+  const { valid, origin } = validateOrigin(request);
+  if (!valid) return rejectCsrf("api/accept-terms", origin);
+
   const supabase = await createClient();
   const {
     data: { user },
