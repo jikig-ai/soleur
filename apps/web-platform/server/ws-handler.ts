@@ -1,10 +1,10 @@
-import { Server as HTTPServer, IncomingMessage } from "http";
+import { Server as HTTPServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { parse } from "url";
 import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
 
-import type { WSMessage, Conversation } from "@/lib/types";
+import { KeyInvalidError, type WSMessage, type Conversation } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
 // Agent runner stubs -- will be implemented in server/agent-runner.ts
@@ -48,27 +48,8 @@ export function sendToClient(userId: string, message: WSMessage): void {
   session.ws.send(JSON.stringify(message));
 }
 
-/**
- * Authenticate an incoming WebSocket upgrade request.
- * Expects `?token=<supabase_access_token>` on the connection URL.
- * Returns the authenticated user ID or null.
- */
-async function authenticateConnection(
-  req: IncomingMessage,
-): Promise<string | null> {
-  const { query } = parse(req.url || "", true);
-  const token = query.token as string | undefined;
-
-  if (!token) return null;
-
-  const {
-    data: { user },
-    error,
-  } = await supabase.auth.getUser(token);
-
-  if (error || !user) return null;
-  return user.id;
-}
+/** Auth timeout: close unauthenticated connections after 5 seconds. */
+const AUTH_TIMEOUT_MS = 5_000;
 
 /**
  * Create a conversation row in the database and return its ID.
@@ -128,7 +109,19 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
         console.log(`[ws] Conversation ${conversationId} created, booting agent`);
 
         // Boot the agent runner (async -- streams will flow via sendToClient)
-        startAgentSession(userId, conversationId, msg.leaderId);
+        startAgentSession(userId, conversationId, msg.leaderId).catch(
+          (err) => {
+            console.error(`[ws] startAgentSession error:`, err);
+            const message =
+              err instanceof Error ? err.message : "Failed to start session";
+            sendToClient(userId, {
+              type: "error",
+              message,
+              errorCode:
+                err instanceof KeyInvalidError ? "key_invalid" : undefined,
+            });
+          },
+        );
 
         sendToClient(userId, { type: "session_started", conversationId });
         console.log(`[ws] session_started sent to client`);
@@ -191,8 +184,20 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
     }
 
     // ------------------------------------------------------------------
+    // auth is handled at connection level, not here
+    // ------------------------------------------------------------------
+    case "auth": {
+      sendToClient(userId, {
+        type: "error",
+        message: "Already authenticated.",
+      });
+      break;
+    }
+
+    // ------------------------------------------------------------------
     // Server -> client only types are ignored if received from client
     // ------------------------------------------------------------------
+    case "auth_ok":
     case "stream":
     case "review_gate":
     case "session_started":
@@ -238,39 +243,88 @@ export function setupWebSocket(server: HTTPServer) {
     });
   });
 
-  // New connection
-  wss.on("connection", async (ws: WebSocket, req: IncomingMessage) => {
-    // ---- Auth gate ----
-    const userId = await authenticateConnection(req);
+  // New connection — auth moves to first message
+  wss.on("connection", (ws: WebSocket) => {
+    let authenticated = false;
+    let userId: string | null = null;
 
-    if (!userId) {
-      console.warn(`[ws] Auth failed — closing with 4001 (url: ${req.url?.split("?")[0]})`);
-      ws.close(4001, "Unauthorized");
-      return;
-    }
-
-    // If user already has an open socket, close the old one
-    const existing = sessions.get(userId);
-    if (existing && existing.ws.readyState === WebSocket.OPEN) {
-      existing.ws.close(4002, "Superseded by new connection");
-    }
-
-    // Register session
-    sessions.set(userId, { ws });
-    console.log(`[ws] User ${userId} connected`);
+    // ---- Auth timeout: close if no auth message within 5 seconds ----
+    const authTimer = setTimeout(() => {
+      if (!authenticated) {
+        ws.close(4001, "Auth timeout");
+      }
+    }, AUTH_TIMEOUT_MS);
 
     // ---- Heartbeat (Cloudflare terminates idle WS after 100s) ----
-    const pingInterval = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.ping();
-      }
-    }, 30_000);
+    let pingInterval: ReturnType<typeof setInterval> | undefined;
 
     // ---- Message handling ----
-    ws.on("message", (data) => {
-      handleMessage(userId, data.toString()).catch((err) => {
+    ws.on("message", async (data) => {
+      if (!authenticated) {
+        // First message MUST be { type: "auth", token: "..." }
+        let msg: { type: string; token?: string };
+        try {
+          msg = JSON.parse(data.toString());
+        } catch {
+          clearTimeout(authTimer);
+          ws.close(4003, "Auth required");
+          return;
+        }
+
+        if (msg.type !== "auth" || !msg.token) {
+          clearTimeout(authTimer);
+          ws.close(4003, "Auth required");
+          return;
+        }
+
+        // Validate token via Supabase
+        const {
+          data: { user },
+          error,
+        } = await supabase.auth.getUser(msg.token);
+
+        if (error || !user) {
+          clearTimeout(authTimer);
+          ws.close(4001, "Unauthorized");
+          return;
+        }
+
+        // Guard: if timeout fired during the await, socket is already closing
+        if (ws.readyState !== WebSocket.OPEN) {
+          clearTimeout(authTimer);
+          return;
+        }
+
+        // Auth success
+        clearTimeout(authTimer);
+        authenticated = true;
+        userId = user.id;
+
+        // If user already has an open socket, close the old one
+        const existing = sessions.get(userId);
+        if (existing && existing.ws.readyState === WebSocket.OPEN) {
+          existing.ws.close(4002, "Superseded by new connection");
+        }
+
+        // Register session
+        sessions.set(userId, { ws });
+        console.log(`[ws] User ${userId} connected`);
+
+        // Start heartbeat after auth
+        pingInterval = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.ping();
+          }
+        }, 30_000);
+
+        ws.send(JSON.stringify({ type: "auth_ok" }));
+        return;
+      }
+
+      // Authenticated — route to handleMessage
+      handleMessage(userId!, data.toString()).catch((err) => {
         console.error(`[ws] Unhandled error for user ${userId}:`, err);
-        sendToClient(userId, {
+        sendToClient(userId!, {
           type: "error",
           message: "Internal server error",
         });
@@ -279,18 +333,20 @@ export function setupWebSocket(server: HTTPServer) {
 
     // ---- Cleanup on disconnect ----
     ws.on("close", () => {
-      clearInterval(pingInterval);
+      clearTimeout(authTimer);
+      if (pingInterval) clearInterval(pingInterval);
       // Only delete if the session still points to THIS socket
-      // (guards against race where a new connection already replaced it)
-      const current = sessions.get(userId);
-      if (current?.ws === ws) {
-        sessions.delete(userId);
+      if (userId) {
+        const current = sessions.get(userId);
+        if (current?.ws === ws) {
+          sessions.delete(userId);
+        }
+        console.log(`[ws] User ${userId} disconnected`);
       }
-      console.log(`[ws] User ${userId} disconnected`);
     });
 
     ws.on("error", (err) => {
-      console.error(`[ws] Socket error for user ${userId}:`, err);
+      console.error(`[ws] Socket error${userId ? ` for user ${userId}` : ""}:`, err);
     });
   });
 

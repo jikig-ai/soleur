@@ -297,7 +297,25 @@ export async function sendUserMessage(
     userId,
     conversationId,
     conv.domain_leader as DomainLeaderId,
-  );
+  ).catch((err) => {
+    console.error(
+      `[agent] sendUserMessage session error for ${userId}/${conversationId}:`,
+      err,
+    );
+    const message =
+      err instanceof Error ? err.message : "Agent session failed";
+    sendToClient(userId, {
+      type: "error",
+      message,
+      errorCode: err instanceof KeyInvalidError ? "key_invalid" : undefined,
+    });
+    updateConversationStatus(conversationId, "failed").catch((statusErr) => {
+      console.error(
+        `[agent] Failed to mark conversation ${conversationId} as failed:`,
+        statusErr,
+      );
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
