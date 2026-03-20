@@ -88,15 +88,15 @@ Both cloud-init files reference the same single `ci-deploy.sh` file, so edits pr
 
 ## Acceptance Criteria
 
-- [ ] `apps/web-platform/infra/cloud-init.yml` no longer contains an inline copy of the deploy script
-- [ ] `apps/telegram-bridge/infra/cloud-init.yml` no longer contains an inline copy of the deploy script
-- [ ] Both `cloud-init.yml` files use `${ci_deploy_script_b64}` (or `${ci_deploy_script}` with `indent()`) in the `write_files` entry for `/usr/local/bin/ci-deploy.sh`
-- [ ] Both `server.tf` files pass the script content via `base64encode(file(...))` (or `file()`) into `templatefile()`
-- [ ] `terraform validate` passes for both `apps/web-platform/infra/` and `apps/telegram-bridge/infra/`
-- [ ] `terraform fmt -check` passes for both infra directories
-- [ ] `ci-deploy.test.sh` continues to pass (standalone script unchanged)
-- [ ] `cloud-init schema -c cloud-init.yml` in CI either passes or the CI step is updated to handle templates (see edge case below)
-- [ ] The rendered cloud-init (after Terraform processing) produces a valid script at `/usr/local/bin/ci-deploy.sh` with correct content and permissions
+- [x] `apps/web-platform/infra/cloud-init.yml` no longer contains an inline copy of the deploy script
+- [x] `apps/telegram-bridge/infra/cloud-init.yml` no longer contains an inline copy of the deploy script
+- [x] Both `cloud-init.yml` files use `${ci_deploy_script_b64}` (or `${ci_deploy_script}` with `indent()`) in the `write_files` entry for `/usr/local/bin/ci-deploy.sh`
+- [x] Both `server.tf` files pass the script content via `base64encode(file(...))` (or `file()`) into `templatefile()`
+- [x] `terraform validate` passes for both `apps/web-platform/infra/` and `apps/telegram-bridge/infra/`
+- [x] `terraform fmt -check` passes for both infra directories
+- [x] `ci-deploy.test.sh` continues to pass (standalone script unchanged)
+- [x] `cloud-init schema -c cloud-init.yml` in CI either passes or the CI step is updated to handle templates (see edge case below)
+- [x] The rendered cloud-init (after Terraform processing) produces a valid script at `/usr/local/bin/ci-deploy.sh` with correct content and permissions
 
 ### Research Insight: cloud-init schema validation edge case [Updated 2026-03-20]
 
