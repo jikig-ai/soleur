@@ -15,6 +15,8 @@ ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
 
 RUN npm run build
 RUN npm run build:server
+# Compile next.config.ts to .mjs so the runner stage doesn't need TypeScript
+RUN npx esbuild next.config.ts --format=esm --outfile=next.config.mjs
 
 # Stage 3: Production image with only runtime artifacts
 FROM node:22-slim AS runner
@@ -35,13 +37,12 @@ RUN npm ci --omit=dev
 
 # Next.js build output
 COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
 
 # Compiled custom server
 COPY --from=builder /app/dist/server ./dist/server
 
-# Config files needed at runtime
-COPY --from=builder /app/next.config.ts ./next.config.ts
+# Config file (compiled from .ts to .mjs to avoid TypeScript dep at runtime)
+COPY --from=builder /app/next.config.mjs ./next.config.mjs
 
 # Non-root user (node:22-slim includes a 'node' user at uid 1000)
 USER node
