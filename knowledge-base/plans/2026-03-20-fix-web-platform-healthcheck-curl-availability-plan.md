@@ -102,13 +102,13 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 ## Acceptance Criteria
 
-- [ ] `HEALTHCHECK` in `apps/web-platform/Dockerfile` uses `node -e "fetch(...)"` instead of `curl -f`
-- [ ] `fetch()` call includes `AbortSignal.timeout(4_000)` for deterministic timeout behavior
-- [ ] Incorrect comment ("curl is pre-installed in node:22-slim") is removed or corrected
-- [ ] No `curl` added to the `apt-get install` line
-- [ ] Health check returns exit 0 when `/health` responds 200
-- [ ] Health check returns exit 1 when `/health` responds non-200 or is unreachable
-- [ ] CI deploy health check in `.github/workflows/web-platform-release.yml:70` is unaffected (runs on the host, not inside the container)
+- [x] `HEALTHCHECK` in `apps/web-platform/Dockerfile` uses `node -e "fetch(...)"` instead of `curl -f`
+- [x] `fetch()` call includes `AbortSignal.timeout(4_000)` for deterministic timeout behavior
+- [x] Incorrect comment ("curl is pre-installed in node:22-slim") is removed or corrected
+- [x] No `curl` added to the `apt-get install` line
+- [x] Health check returns exit 0 when `/health` responds 200 (verified during planning via Docker build+run)
+- [x] Health check returns exit 1 when `/health` responds non-200 or is unreachable (verified: connection refused → exit 1)
+- [x] CI deploy health check in `.github/workflows/web-platform-release.yml:70` is unaffected (runs on the host, not inside the container)
 
 ## Test Scenarios
 
