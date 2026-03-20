@@ -10,8 +10,8 @@ const TC_EXEMPT_PATHS = ["/accept-terms", "/api/accept-terms"];
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow public paths
-  if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {
+  // Allow public paths (exact match or sub-path only, not prefix collisions)
+  if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
     return NextResponse.next();
   }
 
@@ -72,7 +72,7 @@ export async function middleware(request: NextRequest) {
   }
 
   // Skip T&C check for exempt paths (accept-terms page and API)
-  if (!TC_EXEMPT_PATHS.some((p) => pathname.startsWith(p))) {
+  if (!TC_EXEMPT_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
     const { data: userRow } = await supabase
       .from("users")
       .select("tc_accepted_at")

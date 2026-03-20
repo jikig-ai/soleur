@@ -17,12 +17,14 @@ export default function AcceptTermsPage() {
     const res = await fetch("/api/accept-terms", { method: "POST" });
 
     if (!res.ok) {
-      setError("Failed to record acceptance. Please try again.");
+      const body = await res.json().catch(() => ({}));
+      setError(body.error || "Failed to record acceptance. Please try again.");
       setLoading(false);
       return;
     }
 
-    router.push("/setup-key");
+    const { redirect } = await res.json();
+    router.push(redirect || "/setup-key");
   }
 
   return (

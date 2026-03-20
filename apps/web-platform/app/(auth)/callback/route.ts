@@ -56,6 +56,10 @@ async function ensureWorkspaceProvisioned(
   userId: string,
   email: string,
 ): Promise<string | null> {
+  // Uses service role client (bypasses RLS) intentionally: during callback,
+  // the user row may still be mid-creation by the trigger, and the session
+  // client's RLS query could return empty. Middleware uses the session client
+  // (anon key + RLS) which is appropriate for established sessions.
   const serviceClient = createServiceClient();
 
   const { data: existing } = await serviceClient

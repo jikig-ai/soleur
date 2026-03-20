@@ -1,5 +1,21 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
+
+async function getRedirectDestination(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<string> {
+  const { data: keys } = await supabase
+    .from("api_keys")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("provider", "anthropic")
+    .eq("is_valid", true)
+    .limit(1);
+
+  return !keys || keys.length === 0 ? "/setup-key" : "/dashboard";
+}
 
 export async function POST() {
   const supabase = await createClient();
@@ -29,7 +45,6 @@ export async function POST() {
 
   if (!data || data.length === 0) {
     // Either already accepted (idempotent no-op) or user row missing.
-    // Check which case to distinguish success from failure.
     const { data: existing } = await serviceClient
       .from("users")
       .select("tc_accepted_at")
@@ -37,7 +52,9 @@ export async function POST() {
       .single();
 
     if (existing?.tc_accepted_at) {
-      return NextResponse.json({ ok: true }); // already accepted
+      // Already accepted — return redirect destination for idempotent re-submit
+      const redirect = await getRedirectDestination(supabase, user.id);
+      return NextResponse.json({ ok: true, redirect });
     }
 
     console.error("[accept-terms] User row not found for:", user.id);
@@ -47,5 +64,6 @@ export async function POST() {
     );
   }
 
-  return NextResponse.json({ ok: true });
+  const redirect = await getRedirectDestination(supabase, user.id);
+  return NextResponse.json({ ok: true, redirect });
 }
