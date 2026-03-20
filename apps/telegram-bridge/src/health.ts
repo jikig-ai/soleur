@@ -1,6 +1,8 @@
+import type { CliState } from "./types";
+
 export interface HealthState {
   cliProcess: unknown | null;
-  cliState: string;
+  cliState: CliState;
   messageQueue: { length: number };
   startTime: number;
   messagesProcessed: number;
