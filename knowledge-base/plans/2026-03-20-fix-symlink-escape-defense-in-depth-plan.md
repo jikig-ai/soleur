@@ -113,14 +113,14 @@ All errors from `realpathSync` on existing-file tools (Read/Grep/Glob) should re
 
 ## Acceptance Criteria
 
-- [ ] `isPathInWorkspace` resolves symlinks via `fs.realpathSync` before containment check for existing paths (`sandbox.ts`)
-- [ ] `isPathInWorkspace` walks up to deepest existing ancestor for non-existent paths, resolves it, re-appends tail (`sandbox.ts`)
-- [ ] `isPathInWorkspace` denies paths where `realpathSync` throws ELOOP, EACCES, or other non-ENOENT errors (`sandbox.ts`)
-- [ ] `isPathInWorkspace` also resolves `workspacePath` with `realpathSync` (with `path.resolve` fallback) (`sandbox.ts`)
-- [ ] `resolveParentRealPath` returns `null` on non-ENOENT errors at any ancestor level (`sandbox.ts`)
-- [ ] Existing 11 tests continue to pass (path traversal, prefix collision, edge cases)
-- [ ] New tests cover symlink escape scenarios using real filesystem temp directories (`canusertool-sandbox.test.ts`)
-- [ ] TOCTOU limitation documented in code comments with CVE and CERT references
+- [x] `isPathInWorkspace` resolves symlinks via `fs.realpathSync` before containment check for existing paths (`sandbox.ts`)
+- [x] `isPathInWorkspace` walks up to deepest existing ancestor for non-existent paths, resolves it, re-appends tail (`sandbox.ts`)
+- [x] `isPathInWorkspace` denies paths where `realpathSync` throws ELOOP, EACCES, or other non-ENOENT errors (`sandbox.ts`)
+- [x] `isPathInWorkspace` also resolves `workspacePath` with `realpathSync` (with `path.resolve` fallback) (`sandbox.ts`)
+- [x] `resolveParentRealPath` returns `null` on non-ENOENT errors at any ancestor level (`sandbox.ts`)
+- [x] Existing 11 tests continue to pass (path traversal, prefix collision, edge cases)
+- [x] New tests cover symlink escape scenarios using real filesystem temp directories (`canusertool-sandbox.test.ts`)
+- [x] TOCTOU limitation documented in code comments with CVE and CERT references
 
 ## Test Scenarios
 
