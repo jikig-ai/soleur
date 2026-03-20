@@ -155,12 +155,12 @@ The caller (`handleMessage`) should not block on the agent session. The session 
 
 ## Acceptance Criteria
 
-- [ ] `startAgentSession()` call in `ws-handler.ts` line 130 has a `.catch()` that sends error to client (`apps/web-platform/server/ws-handler.ts`)
-- [ ] `startAgentSession()` call in `agent-runner.ts` line 296 has a `.catch()` that sends error to client and updates conversation status (`apps/web-platform/server/agent-runner.ts`)
-- [ ] Both `.catch()` handlers attach `errorCode: "key_invalid"` when error is `KeyInvalidError` instance (consistent with existing error handling in `startAgentSession`'s internal catch block and client-side redirect at `ws-client.ts:178`)
-- [ ] `KeyInvalidError` is imported in `ws-handler.ts` from `@/lib/types`
-- [ ] Existing tests pass (`bun test` in `apps/web-platform/`)
-- [ ] TypeScript compiles cleanly (`bunx tsc --noEmit` in `apps/web-platform/`)
+- [x] `startAgentSession()` call in `ws-handler.ts` line 130 has a `.catch()` that sends error to client (`apps/web-platform/server/ws-handler.ts`)
+- [x] `startAgentSession()` call in `agent-runner.ts` line 296 has a `.catch()` that sends error to client and updates conversation status (`apps/web-platform/server/agent-runner.ts`)
+- [x] Both `.catch()` handlers attach `errorCode: "key_invalid"` when error is `KeyInvalidError` instance (consistent with existing error handling in `startAgentSession`'s internal catch block and client-side redirect at `ws-client.ts:178`)
+- [x] `KeyInvalidError` is imported in `ws-handler.ts` from `@/lib/types`
+- [x] Existing tests pass (`bun test` in `apps/web-platform/`)
+- [x] TypeScript compiles cleanly (`bunx tsc --noEmit` in `apps/web-platform/`) (pre-existing module resolution errors only — no new errors from this change)
 
 ## Test Scenarios
 
