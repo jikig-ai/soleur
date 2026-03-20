@@ -6,6 +6,22 @@ date: 2026-03-20
 
 # fix: Replace curl-based HEALTHCHECK with Node.js fetch in web-platform Dockerfile
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-20
+**Sections enhanced:** 4 (Proposed Solution, Acceptance Criteria, Test Scenarios, Context)
+**Research sources:** Docker HEALTHCHECK docs (Context7), Node.js fetch/AbortSignal docs (Context7), empirical Docker build+run verification, project learnings (3 applicable)
+
+### Key Improvements
+1. Empirically verified the `node -e` one-liner works end-to-end inside Docker: healthy server returns exit 0 (`healthy`), connection refused returns exit 1 (`unhealthy`)
+2. Identified and documented a shell quoting gotcha: `!` inside double quotes gets backslash-escaped by bash but NOT by Docker's `/bin/sh -c` -- the Dockerfile shell form works correctly despite appearing broken in interactive bash testing
+3. Confirmed Node 22.22.1 ships in the pinned digest image and supports `AbortSignal.timeout()` and native `fetch()` without flags
+
+### New Considerations Discovered
+- The `node -e` approach uses Docker's shell form (`CMD command`), which runs under `/bin/sh -c` -- the `!` negation operator works correctly in `/bin/sh` but fails in interactive bash shells due to history expansion escaping (this is a testing artifact, not a runtime issue)
+- Node 22.22.1's `evalTypeScript` mode (the default `node -e` evaluator) handles the `!` operator correctly when invoked via `/bin/sh -c` in the Dockerfile -- no `--no-experimental-strip-types` flag needed
+- The `|| exit 1` at the end of the curl command is unnecessary with the node approach since `.catch(() => process.exit(1))` already guarantees exit code 1 on any failure
+
 ## Overview
 
 The web-platform Dockerfile HEALTHCHECK uses `curl -f http://localhost:3000/health`, but `node:22-slim` (Debian bookworm-slim) does not include `curl`. Every health probe fails with "command not found," causing Docker to permanently mark the container as unhealthy.
@@ -56,6 +72,34 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 - `.then(r => { if(!r.ok) process.exit(1) })` catches HTTP error responses (4xx, 5xx) that would not trigger a network error
 - In Node.js 15+, unhandled promise rejections terminate with a non-zero exit code -- the explicit `.catch()` guarantees exit code 1 specifically
 
+### Research Insights
+
+**Docker HEALTHCHECK docs (Context7):**
+- HEALTHCHECK uses exit code 0 = healthy, 1 = unhealthy -- any command that returns these codes works; `curl` is merely the convention in Docker docs examples, not a requirement
+- The shell form `CMD command` runs under `/bin/sh -c`, which is present in `node:22-slim` -- no need for exec form `CMD ["node", "-e", "..."]`
+- `--start-period` (already set to 10s) ignores health check failures during container startup -- appropriate for Next.js cold start
+
+**Node.js fetch/AbortSignal docs (Context7, v22.20.0):**
+- Node 22's native `fetch()` is powered by undici internally -- `AbortSignal` integration is well-tested and stable
+- `AbortSignal.timeout(ms)` creates a signal that auto-aborts after the specified duration -- no need for manual `AbortController` setup
+- The `signal` option in fetch options is the standard way to pass abort signals (same API as browser fetch)
+
+**Empirical verification (Docker build + run):**
+- Built and ran test containers with the exact proposed HEALTHCHECK command
+- **Healthy case**: Server returning HTTP 200 -> health check exit code 0, `docker inspect` reports `healthy` with `FailingStreak: 0`
+- **Unhealthy case**: No server listening (connection refused) -> health check exit code 1, `docker inspect` reports `unhealthy`
+- Health check probe completes in ~200ms (well within the 5s timeout)
+
+**Shell quoting gotcha (discovered during testing):**
+- The `!` operator inside double quotes in `node -e "if(!r.ok)..."` appears broken when tested in bash (bash escapes `!` to `\!` for history expansion)
+- This is a **testing artifact only** -- Docker's `/bin/sh -c` does NOT perform history expansion, so the `!` passes through to Node.js correctly
+- Verified by building and running the actual Dockerfile -- the health check works despite `bash -c` testing showing `\!` escaping
+
+**Applicable project learnings:**
+- `docker-healthcheck-start-period-for-slow-init`: The current `--start-period=10s` is appropriate for Next.js (unlike telegram-bridge which needs 120s for Claude CLI init)
+- `docker-base-image-digest-pinning`: The existing `FROM node:22-slim@sha256:...` already pins to a specific digest -- no changes needed
+- `docker-nonroot-user-with-volume-mounts`: The `USER soleur` directive (UID 1001) does not affect the health check -- `node` is in the global PATH and accessible to all users
+
 ## Acceptance Criteria
 
 - [ ] `HEALTHCHECK` in `apps/web-platform/Dockerfile` uses `node -e "fetch(...)"` instead of `curl -f`
@@ -73,6 +117,12 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 - Given a running web-platform container, when the server is not yet started, then the health check fails gracefully (exit 1) without crashing
 - Given the Dockerfile is built, when inspecting installed packages, then `curl` is NOT present in the image
 - Given a running web-platform container, when the `/health` endpoint hangs without responding, then the fetch times out after 4 seconds via `AbortSignal.timeout` and exits with code 1
+
+**Pre-verified during planning:**
+- Docker build: PASS (no syntax errors from shell quoting)
+- Healthy server (HTTP 200): PASS (exit 0, status `healthy`, probe ~200ms)
+- No server (connection refused): PASS (exit 1, status `unhealthy`)
+- curl absence: PASS (`bash: curl: command not found` in the pinned image)
 
 ## Context
 
@@ -108,3 +158,8 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 - Health endpoint: `apps/web-platform/server/index.ts:16-19`
 - CI deploy health check: `.github/workflows/web-platform-release.yml:70`
 - [Docker Healthchecks: Why Not To Use curl or iwr](https://blog.sixeyed.com/docker-healthchecks-why-not-to-use-curl-or-iwr/)
+- [Docker HEALTHCHECK reference](https://docs.docker.com/reference/dockerfile/#healthcheck) (Context7: /docker/docs)
+- [Node.js undici AbortSignal docs](https://github.com/nodejs/node/blob/v22.20.0/deps/undici/src/docs/docs/api/Dispatcher.md) (Context7: /nodejs/node/v22_20_0)
+- `knowledge-base/learnings/2026-03-19-docker-healthcheck-start-period-for-slow-init.md`
+- `knowledge-base/learnings/2026-03-19-docker-base-image-digest-pinning.md`
+- `knowledge-base/learnings/2026-03-20-docker-nonroot-user-with-volume-mounts.md`
