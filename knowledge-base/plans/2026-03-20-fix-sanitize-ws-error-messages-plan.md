@@ -3,7 +3,7 @@ title: "fix: sanitize error messages before sending to WebSocket client"
 type: fix
 date: 2026-03-20
 semver: patch
-closes: "#731"
+closes: "#731, #837"
 deepened: 2026-03-20
 ---
 
@@ -11,22 +11,31 @@ deepened: 2026-03-20
 
 ## Enhancement Summary
 
-**Deepened on:** 2026-03-20
-**Sections enhanced:** 5 (Problem Statement, Proposed Solution, Technical Considerations, Test Scenarios, MVP)
-**Research sources:** security-sentinel review, code-simplicity review, ws library docs (Context7), codebase error surface audit
+**Deepened on:** 2026-03-20 (pass 1), 2026-03-20 (pass 2 -- implementation verification)
+**Sections enhanced:** 5 (Problem Statement, Proposed Solution, Technical Considerations, Test Scenarios, MVP) + Resolution Status
+**Research sources:** security-sentinel review, code-simplicity review, ws library docs (Context7), codebase error surface audit, implementation verification audit
 
-### Key Improvements
+### Key Improvements (Pass 1)
 
 1. Discovered additional error leak in `ws-handler.ts:90` -- `createConversation` embeds raw Supabase `error.message` via string interpolation (`Failed to create conversation: ${error.message}`), which the `KNOWN_SAFE_MESSAGES` map cannot catch by exact match. The generic fallback handles it correctly, but this confirms the defense-in-depth approach is necessary.
 2. Identified `byok.ts` configuration errors (`"BYOK_ENCRYPTION_KEY must be a 64-character hex string"`, `"BYOK_ENCRYPTION_KEY is required in production"`) that would leak server configuration details through the agent-runner catch block. These correctly fall through to the generic message.
 3. Added test cases for interpolated error messages, `byok.ts` configuration leaks, and Anthropic SDK errors to strengthen the test suite.
 4. Confirmed the `ws` library's close codes (1011 = "Unexpected condition") are already correctly used in the codebase and do not need changes.
 
+### Key Improvements (Pass 2 -- Implementation Verification)
+
+5. **Full implementation audit confirms PR #829 resolves both #731 and #837.** Verified every `sendToClient` error path in `ws-handler.ts` (lines 88, 117, 128, 153, 179) and `agent-runner.ts` (lines 344, 395) -- all dynamic errors flow through `sanitizeErrorForClient()`, and all static error messages are safe hardcoded strings.
+6. **`console.error` coverage verified complete.** All five catch blocks in `ws-handler.ts` now log raw errors server-side (lines 114, 127, 152, 178, 324). The plan's concern about missing logging in `chat` and `review_gate_response` handlers is resolved.
+7. **Hardcoded error messages audit.** Seven static error messages in `ws-handler.ts` (lines 88, 140, 165, 190, 206, 215, 327) are all safe -- no user input or request data is interpolated into any of them.
+8. **Test suite matches implementation.** All 10 test cases in `test/error-sanitizer.test.ts` cover the exact error vectors identified in this plan (KeyInvalidError, allowlisted messages, interpolated errors, BYOK config, crypto, SDK, non-Error values).
+9. **Issue #837 confirmed as duplicate of #731.** Filed 14 minutes before PR #829 merged, referencing the same CWE-209 vulnerability with different line numbers (pre- vs post- intermediate PRs). Recommended action: close as duplicate.
+
 ### New Considerations Discovered
 
 - The `createConversation` function in `ws-handler.ts:90` constructs errors with `Failed to create conversation: ${error.message}` -- any Supabase error detail (column constraints, RLS policy violations, connection errors) gets embedded. The sanitizer's generic fallback is the correct catch-all for these.
 - The `startsWith("Unknown leader:")` prefix check is the right pattern for errors with interpolated content -- exact match would miss these.
-- `ws-handler.ts` line 277 (`"Internal server error"`) is already correctly sanitized and requires no change.
+- `ws-handler.ts` line 327 (`"Internal server error"`) is already correctly sanitized and requires no change.
+- No remaining error leak vectors found in the server directory. All 7 `.ts` files in `apps/web-platform/server/` were audited.
 
 ## Overview
 
@@ -323,9 +332,21 @@ describe("sanitizeErrorForClient", () => {
 });
 ```
 
+## Resolution Status
+
+**Issue #837 is a duplicate of #731.** Both describe the same CWE-209 vulnerability: raw `err.message` forwarded to WebSocket clients. Issue #837 was filed at 08:21 UTC on 2026-03-20, and PR #829 (which closes #731) was merged at 08:35 UTC the same day -- 14 minutes later. The fix in PR #829 fully addresses #837's concerns:
+
+- All 5 error leak sites in `ws-handler.ts` and `agent-runner.ts` now use `sanitizeErrorForClient()`
+- `error-sanitizer.ts` with allowlist-based sanitization is deployed on main
+- 10 unit tests in `test/error-sanitizer.test.ts` verify no leaks
+- All acceptance criteria are checked off
+
+**Recommended action:** Close #837 as duplicate of #731 with a comment linking to PR #829.
+
 ## References
 
-- Issue: [#731](https://github.com/jikig-ai/soleur/issues/731)
+- Issues: [#731](https://github.com/jikig-ai/soleur/issues/731), [#837](https://github.com/jikig-ai/soleur/issues/837) (duplicate)
+- Resolved by: [PR #829](https://github.com/jikig-ai/soleur/pull/829) (merged 2026-03-20)
 - Discovered during code review of PR #722 (issue #679)
 - Existing pattern: `KeyInvalidError` typed error class (`lib/types.ts`)
 - Learning: `knowledge-base/learnings/2026-03-18-typed-error-codes-websocket-key-invalidation.md`
