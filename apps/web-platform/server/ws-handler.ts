@@ -13,6 +13,7 @@ import {
   sendUserMessage,
   resolveReviewGate,
 } from "./agent-runner";
+import { sanitizeErrorForClient } from "./error-sanitizer";
 
 // ---------------------------------------------------------------------------
 // Supabase admin client (service role -- server-side only)
@@ -133,9 +134,7 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
         console.log(`[ws] session_started sent to client`);
       } catch (err) {
         console.error(`[ws] start_session error:`, err);
-        const message =
-          err instanceof Error ? err.message : "Failed to start session";
-        sendToClient(userId, { type: "error", message });
+        sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
       }
       break;
     }
@@ -159,9 +158,8 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
           msg.content,
         );
       } catch (err) {
-        const message =
-          err instanceof Error ? err.message : "Failed to send message";
-        sendToClient(userId, { type: "error", message });
+        console.error(`[ws] chat error for user ${userId}:`, err);
+        sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
       }
       break;
     }
@@ -186,9 +184,8 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
           msg.selection,
         );
       } catch (err) {
-        const message =
-          err instanceof Error ? err.message : "Failed to resolve review gate";
-        sendToClient(userId, { type: "error", message });
+        console.error(`[ws] review_gate_response error for user ${userId}:`, err);
+        sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
       }
       break;
     }
@@ -203,7 +200,7 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
     case "error": {
       sendToClient(userId, {
         type: "error",
-        message: `Message type "${msg.type}" is server-to-client only.`,
+        message: "This message type is server-to-client only.",
       });
       break;
     }
@@ -212,7 +209,7 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
       const _exhaustive: never = msg;
       sendToClient(userId, {
         type: "error",
-        message: `Unknown message type: ${(msg as { type: string }).type}`,
+        message: "Unknown message type.",
       });
       // Prevent unused-variable lint error
       void _exhaustive;

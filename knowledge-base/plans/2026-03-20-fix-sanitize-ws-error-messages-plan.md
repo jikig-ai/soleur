@@ -171,15 +171,15 @@ The `chat` catch block (line 161) and `review_gate_response` catch block (line 1
 
 ## Acceptance Criteria
 
-- [ ] No raw `err.message` is forwarded to WebSocket clients in `agent-runner.ts` or `ws-handler.ts`
-- [ ] `KeyInvalidError` retains its user-facing message and `errorCode: "key_invalid"`
-- [ ] Unknown errors produce a generic `"An unexpected error occurred. Please try again."` message
-- [ ] Known operational errors (workspace not provisioned, no active session, etc.) produce helpful but non-leaky messages
-- [ ] Server-side `console.error` continues logging full error details in `agent-runner.ts`
-- [ ] `console.error` added to `chat` and `review_gate_response` catch blocks in `ws-handler.ts` (currently missing)
-- [ ] New `error-sanitizer.ts` module has a corresponding test file
-- [ ] Existing `ws-protocol.test.ts` tests continue to pass
-- [ ] Interpolated errors (e.g., `createConversation` with embedded Supabase details) do not leak through to clients
+- [x] No raw `err.message` is forwarded to WebSocket clients in `agent-runner.ts` or `ws-handler.ts`
+- [x] `KeyInvalidError` retains its user-facing message and `errorCode: "key_invalid"`
+- [x] Unknown errors produce a generic `"An unexpected error occurred. Please try again."` message
+- [x] Known operational errors (workspace not provisioned, no active session, etc.) produce helpful but non-leaky messages
+- [x] Server-side `console.error` continues logging full error details in `agent-runner.ts`
+- [x] `console.error` added to `chat` and `review_gate_response` catch blocks in `ws-handler.ts` (currently missing)
+- [x] New `error-sanitizer.ts` module has a corresponding test file
+- [x] Existing `ws-protocol.test.ts` tests continue to pass
+- [x] Interpolated errors (e.g., `createConversation` with embedded Supabase details) do not leak through to clients
 
 ## Test Scenarios
 
