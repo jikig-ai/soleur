@@ -17,7 +17,8 @@ declare -A ALLOWED_IMAGES=(
   [telegram-bridge]="ghcr.io/jikig-ai/soleur-telegram-bridge"
 )
 
-logger -t "$LOG_TAG" "SSH_ORIGINAL_COMMAND: ${SSH_ORIGINAL_COMMAND:-<none>}"
+# Log truncated command to avoid persisting attacker payloads to syslog
+logger -t "$LOG_TAG" "SSH_ORIGINAL_COMMAND: ${SSH_ORIGINAL_COMMAND:0:200}"
 
 if [[ -z "${SSH_ORIGINAL_COMMAND:-}" ]]; then
   logger -t "$LOG_TAG" "REJECTED: no command provided"
