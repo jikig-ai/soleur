@@ -226,16 +226,16 @@ The `authenticated` role is what PostgREST uses when a valid JWT is present. Col
 
 ## Acceptance Criteria
 
-- [ ] New migration `006_restrict_tc_accepted_at_update.sql` revokes table-level UPDATE privilege on `public.users` from the `authenticated` role
-- [ ] Migration re-grants column-level UPDATE on `email` only to the `authenticated` role
-- [ ] `handle_new_user()` trigger still successfully sets `tc_accepted_at` at signup (SECURITY DEFINER bypass verified)
-- [ ] `ensureWorkspaceProvisioned()` fallback still successfully inserts rows with `tc_accepted_at` (service role bypass verified)
-- [ ] Stripe webhook route still successfully updates `stripe_customer_id` and `subscription_status` (service role bypass verified)
-- [ ] Workspace provisioning route still successfully updates `workspace_path` and `workspace_status` (service role bypass verified)
-- [ ] An authenticated user attempting to UPDATE `tc_accepted_at` via PostgREST receives a permission error
-- [ ] An authenticated user attempting to UPDATE `stripe_customer_id` via PostgREST receives a permission error
-- [ ] Migration is idempotent (running it twice does not error)
-- [ ] Verification query confirms only `email` appears in `column_privileges` for `authenticated` role with `UPDATE` type
+- [x] New migration `006_restrict_tc_accepted_at_update.sql` revokes table-level UPDATE privilege on `public.users` from the `authenticated` role
+- [x] Migration re-grants column-level UPDATE on `email` only to the `authenticated` role
+- [x] `handle_new_user()` trigger still successfully sets `tc_accepted_at` at signup (SECURITY DEFINER bypass verified)
+- [x] `ensureWorkspaceProvisioned()` fallback still successfully inserts rows with `tc_accepted_at` (service role bypass verified)
+- [x] Stripe webhook route still successfully updates `stripe_customer_id` and `subscription_status` (service role bypass verified)
+- [x] Workspace provisioning route still successfully updates `workspace_path` and `workspace_status` (service role bypass verified)
+- [x] An authenticated user attempting to UPDATE `tc_accepted_at` via PostgREST receives a permission error
+- [x] An authenticated user attempting to UPDATE `stripe_customer_id` via PostgREST receives a permission error
+- [x] Migration is idempotent (running it twice does not error)
+- [x] Verification query confirms only `email` appears in `column_privileges` for `authenticated` role with `UPDATE` type
 
 ## Test Scenarios
 
