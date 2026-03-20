@@ -58,6 +58,7 @@ runcmd:
   # Create .env placeholder and grant deploy user ownership of /mnt/data
   # (deploy user writes .env vars and manages containers via CI/CD)
   - touch /mnt/data/.env
+  - chmod 600 /mnt/data/.env
   - chown -R deploy:deploy /mnt/data
 
   # Pull and run container
