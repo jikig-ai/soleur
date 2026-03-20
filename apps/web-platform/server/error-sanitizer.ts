@@ -9,6 +9,10 @@ const KNOWN_SAFE_MESSAGES: Record<string, string> = {
     "This review prompt has already been answered.",
   "Conversation not found":
     "Conversation not found. Please start a new session.",
+  "Review gate timed out":
+    "The review prompt timed out. Please start a new session.",
+  "Session aborted: user disconnected":
+    "Your session was disconnected. Please reconnect to continue.",
 };
 
 export function sanitizeErrorForClient(err: unknown): string {
