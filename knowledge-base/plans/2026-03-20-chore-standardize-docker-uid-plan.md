@@ -119,12 +119,12 @@ The web-platform fix actually *resolves* the existing UID mismatch between the c
 
 ## Acceptance Criteria
 
-- [ ] `apps/telegram-bridge/Dockerfile` uses `useradd --no-log-init --uid 1001 -m soleur` (explicit UID, no-log-init)
-- [ ] `apps/web-platform/Dockerfile` creates `soleur` user with `useradd --no-log-init --uid 1001 -m soleur` instead of using the built-in `node` user
-- [ ] `apps/web-platform/Dockerfile` has `chown -R soleur:soleur .next` so the non-root user can write to the Next.js build output
-- [ ] `apps/web-platform/Dockerfile` uses `USER soleur` instead of `USER node`
-- [ ] Both containers report `uid=1001(soleur)` when running `id`
-- [ ] Web-platform container can write to `/workspaces` volume mount (UID now matches host ownership)
+- [x] `apps/telegram-bridge/Dockerfile` uses `useradd --no-log-init --uid 1001 -m soleur` (explicit UID, no-log-init)
+- [x] `apps/web-platform/Dockerfile` creates `soleur` user with `useradd --no-log-init --uid 1001 -m soleur` instead of using the built-in `node` user
+- [x] `apps/web-platform/Dockerfile` has `chown -R soleur:soleur .next` so the non-root user can write to the Next.js build output
+- [x] `apps/web-platform/Dockerfile` uses `USER soleur` instead of `USER node`
+- [x] Both containers report `uid=1001(soleur)` when running `id`
+- [x] Web-platform container can write to `/workspaces` volume mount (UID now matches host ownership)
 
 ## Test Scenarios
 
