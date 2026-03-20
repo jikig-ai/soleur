@@ -125,6 +125,62 @@ assert_exit_contains() {
   fi
 }
 
+run_deploy_traced() {
+  # Like run_deploy but docker mock prints DOCKER_TRACE:<subcommand> markers to stdout.
+  local cmd="${1:-}"
+  (
+    export SSH_ORIGINAL_COMMAND="$cmd"
+    MOCK_DIR=$(mktemp -d)
+    trap 'rm -rf "$MOCK_DIR"' EXIT
+
+    cat > "$MOCK_DIR/logger" << 'MOCK'
+#!/bin/bash
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/logger"
+
+    # Docker mock that prints trace markers for command ordering verification
+    cat > "$MOCK_DIR/docker" << 'MOCK'
+#!/bin/bash
+echo "DOCKER_TRACE:$1"
+if [[ "${1:-}" == "run" ]]; then echo "abc123"; fi
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/docker"
+
+    cat > "$MOCK_DIR/curl" << 'MOCK'
+#!/bin/bash
+for arg in "$@"; do
+  if [[ "$arg" == *"http_code"* ]]; then echo "200"; exit 0; fi
+done
+echo "OK"
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/curl"
+
+    cat > "$MOCK_DIR/sudo" << 'MOCK'
+#!/bin/bash
+exec "$@"
+MOCK
+    chmod +x "$MOCK_DIR/sudo"
+
+    cat > "$MOCK_DIR/chown" << 'MOCK'
+#!/bin/bash
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/chown"
+
+    cat > "$MOCK_DIR/seq" << 'MOCK'
+#!/bin/bash
+echo "1"
+MOCK
+    chmod +x "$MOCK_DIR/seq"
+
+    export PATH="$MOCK_DIR:$PATH"
+    bash "$DEPLOY_SCRIPT" 2>&1
+  )
+}
+
 echo "=== ci-deploy.sh tests ==="
 echo ""
 
@@ -199,6 +255,40 @@ assert_exit_contains "newline injection rejected" 1 "expected 4 fields" \
 
 assert_exit_contains "pipe injection in tag rejected" 1 "invalid tag format" \
   'deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0|id'
+
+echo ""
+echo "--- Docker prune before pull ---"
+
+assert_prune_before_pull() {
+  local description="$1"
+  local cmd="$2"
+
+  TOTAL=$((TOTAL + 1))
+
+  local output
+  local actual_exit
+  output=$(run_deploy_traced "$cmd" 2>&1) && actual_exit=0 || actual_exit=$?
+
+  # Check that DOCKER_TRACE:system appears before DOCKER_TRACE:pull in output
+  local prune_line pull_line
+  prune_line=$(printf '%s\n' "$output" | grep -n "DOCKER_TRACE:system" | head -1 | cut -d: -f1)
+  pull_line=$(printf '%s\n' "$output" | grep -n "DOCKER_TRACE:pull" | head -1 | cut -d: -f1)
+
+  if [[ "$actual_exit" -eq 0 ]] && [[ -n "$prune_line" ]] && [[ -n "$pull_line" ]] && [[ "$prune_line" -lt "$pull_line" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (prune_line=$prune_line pull_line=$pull_line exit=$actual_exit)"
+    echo "        output: $output"
+  fi
+}
+
+assert_prune_before_pull "web-platform: prune runs before pull" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+
+assert_prune_before_pull "telegram-bridge: prune runs before pull" \
+  "deploy telegram-bridge ghcr.io/jikig-ai/soleur-telegram-bridge v2.3.1"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
