@@ -57,12 +57,12 @@ The existing `validate` job uses a matrix over changed infra directories and run
 
 ## Acceptance Criteria
 
-- [ ] PRs touching `apps/web-platform/infra/ci-deploy.sh` run `ci-deploy.test.sh` automatically in CI
-- [ ] PRs touching only `apps/web-platform/infra/ci-deploy.test.sh` also trigger the job (so test refactors are validated)
-- [ ] The job fails the PR check if any test case fails (non-zero exit)
-- [ ] The job does not require secrets, docker, terraform, or elevated permissions
-- [ ] Existing `validate` job continues to work unchanged
-- [ ] `workflow_dispatch` runs the tests unconditionally (consistent with existing `detect-changes` behavior)
+- [x] PRs touching `apps/web-platform/infra/ci-deploy.sh` run `ci-deploy.test.sh` automatically in CI
+- [x] PRs touching only `apps/web-platform/infra/ci-deploy.test.sh` also trigger the job (so test refactors are validated)
+- [x] The job fails the PR check if any test case fails (non-zero exit)
+- [x] The job does not require secrets, docker, terraform, or elevated permissions
+- [x] Existing `validate` job continues to work unchanged
+- [x] `workflow_dispatch` runs the tests unconditionally (consistent with existing `detect-changes` behavior)
 
 ## Test Scenarios
 
