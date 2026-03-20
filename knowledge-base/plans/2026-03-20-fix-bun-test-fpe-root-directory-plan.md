@@ -162,12 +162,12 @@ Research confirms Bun's `[test]` section in `bunfig.toml` does not support `prel
 ## Acceptance Criteria
 
 - [ ] `bun test` from repo root succeeds reliably (10/10 runs) on Bun 1.3.11
-- [ ] `scripts/test-all.sh` runs all 14 test files across 6 suites and exits 0
+- [x] `scripts/test-all.sh` runs all 14 test files across 6 suites and exits 0
 - [ ] CI continues to pass (no regression from `bun-version-file` change)
-- [ ] `.bun-version` file exists at repo root with `1.3.11`
-- [ ] `package.json` has `"packageManager": "bun@1.3.11"` and `"test"` script
-- [ ] All 3 CI workflows (`ci.yml`, `scheduled-bug-fixer.yml`, `scheduled-ship-merge.yml`) use `bun-version-file` instead of hardcoded version
-- [ ] Learning document captures the FPE pattern, version sensitivity, and the 3-crash-class taxonomy
+- [x] `.bun-version` file exists at repo root with `1.3.11`
+- [x] `package.json` has `"test"` script (removed `packageManager` per architecture review — Corepack interference with `npx` docs scripts)
+- [x] All 3 CI workflows (`ci.yml`, `scheduled-bug-fixer.yml`, `scheduled-ship-merge.yml`) use `bun-version-file` instead of hardcoded version
+- [x] Learning document captures the FPE pattern, version sensitivity, and the 3-crash-class taxonomy
 
 ## Test Scenarios
 
