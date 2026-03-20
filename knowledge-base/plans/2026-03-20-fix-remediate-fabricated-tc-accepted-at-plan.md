@@ -114,16 +114,16 @@ The migration uses a DO block with `RAISE NOTICE` for audit logging. No `SECURIT
 
 ## Acceptance Criteria
 
-- [ ] Migration `007_remediate_fabricated_tc_accepted_at.sql` created in `apps/web-platform/supabase/migrations/`
-- [ ] Migration nulls `tc_accepted_at` only for rows where metadata does NOT confirm T&C acceptance
-- [ ] Migration is idempotent (safe to run multiple times)
-- [ ] Migration includes a preceding SELECT for dry-run verification (commented out or as a separate query)
-- [ ] Migration includes a comment documenting the bug, the fix PR (#927), and the GDPR rationale
-- [ ] No rows where `raw_user_meta_data->>'tc_accepted' = 'true'` are affected
-- [ ] Migration uses DO block with `GET DIAGNOSTICS` + `RAISE NOTICE` to log affected row count
-- [ ] Migration only reads from `auth.users` (no writes to auth-managed schema)
-- [ ] Migration header documents irreversibility rationale (fabricated timestamps must not be restored)
-- [ ] Existing test suite passes (no regressions)
+- [x] Migration `007_remediate_fabricated_tc_accepted_at.sql` created in `apps/web-platform/supabase/migrations/`
+- [x] Migration nulls `tc_accepted_at` only for rows where metadata does NOT confirm T&C acceptance
+- [x] Migration is idempotent (safe to run multiple times)
+- [x] Migration includes a preceding SELECT for dry-run verification (commented out or as a separate query)
+- [x] Migration includes a comment documenting the bug, the fix PR (#927), and the GDPR rationale
+- [x] No rows where `raw_user_meta_data->>'tc_accepted' = 'true'` are affected
+- [x] Migration uses DO block with `GET DIAGNOSTICS` + `RAISE NOTICE` to log affected row count
+- [x] Migration only reads from `auth.users` (no writes to auth-managed schema)
+- [x] Migration header documents irreversibility rationale (fabricated timestamps must not be restored)
+- [x] Existing test suite passes (no regressions)
 
 ## Test Scenarios
 
