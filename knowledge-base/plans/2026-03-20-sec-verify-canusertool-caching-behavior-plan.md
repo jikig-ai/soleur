@@ -38,12 +38,12 @@ Closes #876
 
 ## Acceptance Criteria
 
-- [ ] A dedicated integration test (`apps/web-platform/test/canusertool-caching.test.ts`) verifies callback invocation count when the same tool name is used with different `file_path` arguments
-- [ ] The test covers: (a) same tool name + different paths triggers the callback for each invocation, (b) same tool name + same path still triggers the callback each time, (c) different tool names each trigger the callback
-- [ ] If caching is confirmed: a `PreToolUse` hook-based sandbox implementation is written in `apps/web-platform/server/sandbox-hook.ts` as an alternative to the `canUseTool` callback, with equivalent path validation
-- [ ] If caching is NOT confirmed: the spike finding is corrected, the institutional learning updated, and the `canUseTool`-based sandbox is documented as safe for per-invocation enforcement
-- [ ] SDK version is bumped from `^0.2.76` to `^0.2.80` (latest) and the test re-run to check whether caching behavior changed between versions
-- [ ] The known limitation in the existing plan (`2026-03-20-sec-path-traversal-canusertool-workspace-sandbox-plan.md`, section "Known Limitations" item 3) is updated based on findings
+- [x] A dedicated integration test (`apps/web-platform/test/canusertool-caching.test.ts`) verifies callback invocation count when the same tool name is used with different `file_path` arguments
+- [x] The test covers: (a) same tool name + different paths triggers the callback for each invocation, (b) same tool name + same path still triggers the callback each time, (c) different tool names each trigger the callback
+- [x] ~~If caching is confirmed~~: N/A — caching was disproven
+- [x] If caching is NOT confirmed: the spike finding is corrected, the institutional learning updated, and the `canUseTool`-based sandbox is documented as safe for per-invocation enforcement
+- [x] SDK version is bumped from `^0.2.76` to `^0.2.80` (latest) and the test re-run to check whether caching behavior changed between versions
+- [x] ~~The known limitation in the existing plan~~ N/A — plan file was removed in prior work
 
 ## Research Findings
 
