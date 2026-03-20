@@ -98,10 +98,14 @@ describe("tool classification", () => {
     expect(isSafeTool("NotebookRead")).toBe(false);
   });
 
-  test("Agent, Skill, TodoRead, TodoWrite are safe tools", () => {
-    for (const tool of ["Agent", "Skill", "TodoRead", "TodoWrite"]) {
+  test("Skill, TodoRead, TodoWrite are safe tools", () => {
+    for (const tool of ["Skill", "TodoRead", "TodoWrite"]) {
       expect(isSafeTool(tool), `${tool} should be a safe tool`).toBe(true);
     }
+  });
+
+  test("Agent is NOT a safe tool (#910 -- handled explicitly in canUseTool)", () => {
+    expect(isSafeTool("Agent")).toBe(false);
   });
 });
 
@@ -133,7 +137,8 @@ describe("negative-space: SAFE_TOOLS and FILE_TOOLS are disjoint", () => {
   });
 
   test("SAFE_TOOLS contains exactly the expected tools (completeness guard)", () => {
-    expect([...SAFE_TOOLS]).toEqual(["Agent", "Skill", "TodoRead", "TodoWrite"]);
+    // Agent removed in #910 -- now handled by explicit block in canUseTool
+    expect([...SAFE_TOOLS]).toEqual(["Skill", "TodoRead", "TodoWrite"]);
   });
 
   test("UNVERIFIED_PARAM_TOOLS is a subset of FILE_TOOLS", () => {
