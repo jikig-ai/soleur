@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "tsx server/index.ts",
     "build": "next build",
-    "start": "NODE_ENV=production tsx server/index.ts",
+    "build:server": "esbuild server/index.ts --bundle --platform=node --target=node22 --outfile=dist/server/index.js --external:next --external:react --external:react-dom --external:@supabase/supabase-js --external:@supabase/ssr --external:ws --external:stripe --external:@anthropic-ai/claude-agent-sdk",
+    "start": "NODE_ENV=production node dist/server/index.js",
     "lint": "next lint",
     "test": "vitest"
   },
@@ -26,6 +27,7 @@
     "@types/react-dom": "^19.1.0",
     "@types/ws": "^8.18.0",
     "autoprefixer": "^10.4.20",
+    "esbuild": "^0.25.0",
     "eslint": "^9.20.0",
     "eslint-config-next": "^15.3.0",
     "postcss": "^8.5.0",
