@@ -44,8 +44,10 @@ COPY --from=builder /app/dist/server ./dist/server
 # Config file (compiled from .ts to .mjs to avoid TypeScript dep at runtime)
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
 
-# Non-root user (node:22-slim includes a 'node' user at uid 1000)
-USER node
+# Non-root user (UID 1001 avoids collision with node:22-slim's built-in node user at UID 1000)
+RUN useradd --no-log-init --uid 1001 -m soleur \
+    && chown -R soleur:soleur .next
+USER soleur
 RUN git config --global user.name "Soleur" && git config --global user.email "soleur@localhost"
 
 EXPOSE 3000
