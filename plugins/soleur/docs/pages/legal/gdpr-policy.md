@@ -8,7 +8,7 @@ permalink: pages/legal/gdpr-policy.html
 <section class="page-hero">
   <div class="container">
     <h1>GDPR Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated March 20, 2026 (removed infrastructure identifiers from processing descriptions)</p>
+    <p>Effective February 20, 2026 | Last Updated March 20, 2026 (added Web Platform to Section 1 scope enumeration, removed infrastructure identifiers from processing descriptions)</p>
   </div>
 </section>
 
@@ -19,7 +19,7 @@ permalink: pages/legal/gdpr-policy.html
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 20, 2026 (removed infrastructure identifiers from processing descriptions)
+**Last Updated:** March 20, 2026 (added Web Platform to Section 1 scope enumeration, removed infrastructure identifiers from processing descriptions)
 
 ---
 
@@ -27,7 +27,7 @@ permalink: pages/legal/gdpr-policy.html
 
 This GDPR Policy explains how Jikigai ("we", "us", "our"), operator of Soleur, approaches data protection and privacy in compliance with the General Data Protection Regulation (EU) 2016/679 ("GDPR") and related European data protection legislation. Soleur is a Company-as-a-Service platform delivered as a Claude Code plugin, providing a full-stack AI organization with 45 agents, 45 skills, and a compounding knowledge base for solo founders and technical builders.
 
-This policy applies to all individuals located in the European Economic Area ("EEA") who use or interact with Soleur, including the plugin software, documentation site, and GitHub repository.
+This policy applies to all individuals located in the European Economic Area ("EEA") who use or interact with Soleur, including the plugin software, Web Platform (app.soleur.ai), documentation site, and GitHub repository.
 
 ---
 
