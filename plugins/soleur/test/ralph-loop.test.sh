@@ -5,6 +5,13 @@
 
 set -euo pipefail
 
+# jq is required by stop-hook.sh (tested here). Skip gracefully if missing.
+if ! command -v jq &>/dev/null; then
+  echo "SKIP: ralph-loop.test.sh requires jq (not installed)"
+  echo "Install jq for full test coverage: https://jqlang.github.io/jq/download/"
+  exit 0
+fi
+
 # Clear git env vars that leak when this test runs inside a git hook (e.g., pre-push).
 # Without this, git rev-parse --show-toplevel in test subprocesses resolves to the
 # outer repo instead of the test's temp git repos.

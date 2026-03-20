@@ -22,7 +22,7 @@ jobs:
         run: bun install
 
       - name: Run tests
-        run: bun test
+        run: bash scripts/test-all.sh
 
       - name: Enforce telegram-bridge coverage
         run: bun test --coverage
