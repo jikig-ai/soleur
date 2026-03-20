@@ -1,14 +1,16 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { resolveOrigin } from "@/lib/auth/resolve-origin";
 import { provisionWorkspace } from "@/server/workspace";
 import { NextResponse } from "next/server";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
-  const forwardedHost = request.headers.get("x-forwarded-host");
-  const forwardedProto = request.headers.get("x-forwarded-proto") ?? "https";
-  const host = forwardedHost ?? request.headers.get("host") ?? "app.soleur.ai";
-  const origin = `${forwardedProto}://${host}`;
+  const origin = resolveOrigin(
+    request.headers.get("x-forwarded-host"),
+    request.headers.get("x-forwarded-proto"),
+    request.headers.get("host"),
+  );
 
   if (code) {
     const supabase = await createClient();
