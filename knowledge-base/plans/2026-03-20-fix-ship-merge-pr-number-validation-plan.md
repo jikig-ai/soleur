@@ -29,10 +29,10 @@ date: 2026-03-20
 
 ## Acceptance Criteria
 
-- [ ] The `Select PR` step in `.github/workflows/scheduled-ship-merge.yml` validates `$OVERRIDE` against `^[0-9]+$` before writing to `$GITHUB_OUTPUT`
-- [ ] Invalid input produces a `::error::` annotation and exits with code 1
-- [ ] The error message matches the pattern used in `scheduled-bug-fixer.yml` (field name adjusted to `pr_number`)
-- [ ] Existing behavior for valid integer input and empty input (auto-select mode) is unchanged
+- [x] The `Select PR` step in `.github/workflows/scheduled-ship-merge.yml` validates `$OVERRIDE` against `^[0-9]+$` before writing to `$GITHUB_OUTPUT`
+- [x] Invalid input produces a `::error::` annotation and exits with code 1
+- [x] The error message matches the pattern used in `scheduled-bug-fixer.yml` (field name adjusted to `pr_number`)
+- [x] Existing behavior for valid integer input and empty input (auto-select mode) is unchanged
 
 ### Research Insights
 
