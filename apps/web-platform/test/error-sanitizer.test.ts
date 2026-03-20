@@ -58,6 +58,9 @@ describe("sanitizeErrorForClient", () => {
     );
     expect(sanitizeErrorForClient(err)).not.toContain("relation");
     expect(sanitizeErrorForClient(err)).not.toContain("public.");
+    expect(sanitizeErrorForClient(err)).toBe(
+      "An unexpected error occurred. Please try again.",
+    );
   });
 
   test("interpolated createConversation error does not leak Supabase details", () => {

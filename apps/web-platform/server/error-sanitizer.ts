@@ -13,7 +13,7 @@ const KNOWN_SAFE_MESSAGES: Record<string, string> = {
 
 export function sanitizeErrorForClient(err: unknown): string {
   if (err instanceof KeyInvalidError) {
-    return err.message;
+    return "No valid API key found. Please set up your key first.";
   }
 
   if (err instanceof Error) {

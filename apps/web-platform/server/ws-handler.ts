@@ -133,7 +133,7 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
         sendToClient(userId, { type: "session_started", conversationId });
         console.log(`[ws] session_started sent to client`);
       } catch (err) {
-        console.error(`[ws] start_session error:`, err);
+        console.error(`[ws] start_session error for user ${userId}:`, err);
         sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
       }
       break;
