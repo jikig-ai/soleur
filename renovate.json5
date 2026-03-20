@@ -1,0 +1,48 @@
+// Renovate configuration for automated dependency rotation
+// Manages: Docker digest pins, GitHub Actions SHA pins, npm version pins in Dockerfiles
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "docker:pinDigests",
+    "helpers:pinGitHubActionDigests",
+    "default:automergeDigest",
+    "schedule:weekly"
+  ],
+  "timezone": "Europe/Paris",
+  "platformAutomerge": true,
+  // Only manage the three target categories -- suppress npm/Terraform/other auto-detected managers
+  "enabledManagers": ["dockerfile", "github-actions", "custom.regex"],
+  "packageRules": [
+    {
+      "description": "Group Docker digest updates into one PR",
+      "matchDatasources": ["docker"],
+      "matchUpdateTypes": ["digest", "pin"],
+      "groupName": "docker-digests"
+    },
+    {
+      "description": "Group GitHub Actions digest updates into one PR",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["digest", "pin"],
+      "groupName": "github-actions-digests"
+    },
+    {
+      "description": "Do not auto-merge version bumps (only digests)",
+      "matchUpdateTypes": ["major", "minor", "patch"],
+      "automerge": false
+    }
+  ],
+  // Detect npm install -g @scope/package@version in Dockerfiles
+  // The built-in Dockerfile manager does not detect RUN command dependencies
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["(^|/)Dockerfile$"],
+      "matchStrings": [
+        "npm install -g (?<depName>@[\\w-]+/[\\w-]+)@(?<currentValue>[\\d.]+)"
+      ],
+      "datasourceTemplate": "npm",
+      "versioningTemplate": "npm"
+    }
+  ]
+}

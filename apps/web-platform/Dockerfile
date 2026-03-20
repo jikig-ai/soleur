@@ -50,7 +50,8 @@ RUN git config --global user.name "Soleur" && git config --global user.email "so
 
 EXPOSE 3000
 
+# Health check (uses Node.js fetch -- curl is not available in node:22-slim)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD node -e "fetch('http://localhost:3000/health',{signal:AbortSignal.timeout(4_000)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://localhost:3000/health',{signal:AbortSignal.timeout(4_000)}).then(r=>{if(!r.ok)process.exit(1)}).catch(e=>{console.error(e.message);process.exit(1)})"
 
 CMD ["node", "dist/server/index.js"]
