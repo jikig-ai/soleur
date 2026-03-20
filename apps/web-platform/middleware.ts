@@ -1,5 +1,6 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { TC_VERSION } from "@/lib/legal/tc-version";
 
 // No auth required — middleware returns early
 const PUBLIC_PATHS = ["/login", "/signup", "/callback", "/api/webhooks", "/ws"];
@@ -75,18 +76,18 @@ export async function middleware(request: NextRequest) {
   if (!TC_EXEMPT_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
     const { data: userRow, error: tcError } = await supabase
       .from("users")
-      .select("tc_accepted_at")
+      .select("tc_accepted_version")
       .eq("id", user.id)
       .single();
 
     if (tcError) {
       // Fail open: allow request if we cannot verify T&C status.
       // Auth is already verified by getUser() above.
-      console.error(`[middleware] tc_accepted_at query failed: ${tcError.message}`);
+      console.error(`[middleware] tc_accepted_version query failed: ${tcError.message}`);
       return response;
     }
 
-    if (!userRow?.tc_accepted_at) {
+    if (userRow?.tc_accepted_version !== TC_VERSION) {
       return redirectWithCookies("/accept-terms");
     }
   }
