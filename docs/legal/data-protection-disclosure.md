@@ -242,7 +242,7 @@ The Soleur Web Platform (app.soleur.ai) represents the introduction of cloud-hos
 - **(d)** Processor list maintained in Section 4.2. **FULFILLED.**
 - **(e)** Transfer mechanisms documented: EU-only for Supabase (eu-west-1, Ireland) and Hetzner (Helsinki, Finland), DPF + SCCs for Stripe (see Section 6.4). **FULFILLED.**
 - **(f)** DPIA evaluation: The Web Platform processes user PII (email, auth tokens, encrypted API keys, subscription metadata) but does not involve special categories (Article 9), systematic monitoring, or automated decision-making. Processing remains below the high-risk thresholds of Article 35(3). **Evaluated -- DPIA not required.** See the companion GDPR Policy Section 9 for the full analysis.
-- **(g)** Users accept the updated Terms and Conditions when creating a Web Platform account. **FULFILLED.**
+- **(g)** Users accept the updated Terms and Conditions via a clickwrap checkbox on the Web Platform signup page (app.soleur.ai/signup). The checkbox is unchecked by default and must be actively checked before account creation. Acceptance is timestamped and recorded in the user database. **FULFILLED.**
 
 ### 8.2 Future Changes
 
