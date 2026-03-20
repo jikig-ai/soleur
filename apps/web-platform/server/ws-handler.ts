@@ -12,6 +12,7 @@ import {
   startAgentSession,
   sendUserMessage,
   resolveReviewGate,
+  abortSession,
 } from "./agent-runner";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 
@@ -333,11 +334,14 @@ export function setupWebSocket(server: HTTPServer) {
     ws.on("close", () => {
       clearTimeout(authTimer);
       if (pingInterval) clearInterval(pingInterval);
-      // Only delete if the session still points to THIS socket
       if (userId) {
         const current = sessions.get(userId);
         if (current?.ws === ws) {
           sessions.delete(userId);
+          // Abort any running agent session so review gate promises reject
+          if (current.conversationId) {
+            abortSession(userId, current.conversationId);
+          }
         }
         console.log(`[ws] User ${userId} disconnected`);
       }

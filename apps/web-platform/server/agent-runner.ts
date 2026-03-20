@@ -13,6 +13,7 @@ import { isPathInWorkspace } from "./sandbox";
 import { UNVERIFIED_PARAM_TOOLS, extractToolPath, isFileTool, isSafeTool } from "./tool-path-checker";
 import { buildAgentEnv } from "./agent-env";
 import { createSandboxHook } from "./sandbox-hook";
+import { abortableReviewGate, type AgentSession } from "./review-gate";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -50,15 +51,19 @@ function patchWorkspacePermissions(workspacePath: string): void {
 // ---------------------------------------------------------------------------
 // Active session tracking
 // ---------------------------------------------------------------------------
-interface AgentSession {
-  abort: AbortController;
-  reviewGateResolvers: Map<string, (selection: string) => void>;
-}
-
 const activeSessions = new Map<string, AgentSession>();
 
 function sessionKey(userId: string, conversationId: string) {
   return `${userId}:${conversationId}`;
+}
+
+/** Abort a running agent session (called from ws-handler on disconnect). */
+export function abortSession(userId: string, conversationId: string): void {
+  const key = sessionKey(userId, conversationId);
+  const session = activeSessions.get(key);
+  if (session) {
+    session.abort.abort(new Error("Session aborted: user disconnected"));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -281,9 +286,11 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
 
             await updateConversationStatus(conversationId, "waiting_for_user");
 
-            const selection = await new Promise<string>((resolve) => {
-              session.reviewGateResolvers.set(gateId, resolve);
-            });
+            const selection = await abortableReviewGate(
+              session,
+              gateId,
+              controller.signal,
+            );
 
             await updateConversationStatus(conversationId, "active");
 
@@ -374,7 +381,18 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
       }
     }
   } catch (err) {
-    if (!controller.signal.aborted) {
+    if (controller.signal.aborted) {
+      // Disconnect or abort -- mark conversation as failed so it does not
+      // stay stuck in "waiting_for_user" or "active" status forever.
+      await updateConversationStatus(conversationId, "failed").catch(
+        (statusErr) => {
+          console.error(
+            `[agent] Failed to mark aborted conversation ${conversationId} as failed:`,
+            statusErr,
+          );
+        },
+      );
+    } else {
       console.error(`[agent] Session error for ${userId}/${conversationId}:`, err);
       const message = sanitizeErrorForClient(err);
       sendToClient(userId, {
