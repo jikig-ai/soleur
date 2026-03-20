@@ -1,12 +1,16 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const PUBLIC_PATHS = ["/login", "/signup", "/callback", "/api/webhooks", "/ws", "/accept-terms", "/api/accept-terms"];
+// No auth required — middleware returns early
+const PUBLIC_PATHS = ["/login", "/signup", "/callback", "/api/webhooks", "/ws"];
+
+// Auth required, but T&C check skipped (user must reach these to accept terms)
+const TC_EXEMPT_PATHS = ["/accept-terms", "/api/accept-terms"];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow public paths (exact match or prefix with trailing slash)
+  // Allow public paths (exact match or sub-path only, not prefix collisions)
   if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
     return NextResponse.next();
   }
@@ -53,30 +57,38 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
+  function redirectWithCookies(pathname: string) {
+    const url = request.nextUrl.clone();
+    url.pathname = pathname;
+    const redirectResponse = NextResponse.redirect(url);
+    response.cookies.getAll().forEach((cookie) =>
+      redirectResponse.cookies.set(cookie.name, cookie.value),
+    );
+    return redirectResponse;
+  }
+
   if (!user) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    return NextResponse.redirect(url);
+    return redirectWithCookies("/login");
   }
 
-  // Enforce T&C acceptance — redirect to /accept-terms if not accepted
-  const { data: userRow, error: tcError } = await supabase
-    .from("users")
-    .select("tc_accepted_at")
-    .eq("id", user.id)
-    .single();
+  // Skip T&C check for exempt paths (accept-terms page and API)
+  if (!TC_EXEMPT_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
+    const { data: userRow, error: tcError } = await supabase
+      .from("users")
+      .select("tc_accepted_at")
+      .eq("id", user.id)
+      .single();
 
-  if (tcError) {
-    // Fail open: allow request if we cannot verify T&C status.
-    // Auth is already verified by getUser() above.
-    console.error(`[middleware] tc_accepted_at query failed: ${tcError.message}`);
-    return response;
-  }
+    if (tcError) {
+      // Fail open: allow request if we cannot verify T&C status.
+      // Auth is already verified by getUser() above.
+      console.error(`[middleware] tc_accepted_at query failed: ${tcError.message}`);
+      return response;
+    }
 
-  if (!userRow?.tc_accepted_at) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/accept-terms";
-    return NextResponse.redirect(url);
+    if (!userRow?.tc_accepted_at) {
+      return redirectWithCookies("/accept-terms");
+    }
   }
 
   return response;

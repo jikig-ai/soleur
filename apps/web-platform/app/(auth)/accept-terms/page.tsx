@@ -18,11 +18,13 @@ export default function AcceptTermsPage() {
       const res = await fetch("/api/accept-terms", { method: "POST" });
 
       if (!res.ok) {
-        setError("Something went wrong. Please try again.");
+        const body = await res.json().catch(() => ({}));
+        setError(body.error || "Something went wrong. Please try again.");
         return;
       }
 
-      router.push("/dashboard");
+      const { redirect } = await res.json();
+      router.push(redirect || "/setup-key");
     } catch {
       setError("Network error. Please check your connection and try again.");
     } finally {

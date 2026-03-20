@@ -1,5 +1,21 @@
-import { NextResponse } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { NextResponse } from "next/server";
+
+async function getRedirectDestination(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<string> {
+  const { data: keys } = await supabase
+    .from("api_keys")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("provider", "anthropic")
+    .eq("is_valid", true)
+    .limit(1);
+
+  return !keys || keys.length === 0 ? "/setup-key" : "/dashboard";
+}
 
 export async function POST() {
   const supabase = await createClient();
@@ -11,23 +27,43 @@ export async function POST() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const service = createServiceClient();
-  const { error: updateError } = await service
+  const serviceClient = createServiceClient();
+  const { data, error } = await serviceClient
     .from("users")
     .update({ tc_accepted_at: new Date().toISOString() })
     .eq("id", user.id)
-    .is("tc_accepted_at", null);
+    .is("tc_accepted_at", null) // idempotency guard: no-op if already accepted
+    .select("id");
 
-  if (updateError) {
-    console.error(
-      `[api/accept-terms] Failed to update tc_accepted_at for ${user.id}:`,
-      updateError,
-    );
+  if (error) {
+    console.error("[accept-terms] Failed to record acceptance:", error);
     return NextResponse.json(
       { error: "Failed to record acceptance" },
       { status: 500 },
     );
   }
 
-  return NextResponse.json({ accepted: true });
+  if (!data || data.length === 0) {
+    // Either already accepted (idempotent no-op) or user row missing.
+    const { data: existing } = await serviceClient
+      .from("users")
+      .select("tc_accepted_at")
+      .eq("id", user.id)
+      .single();
+
+    if (existing?.tc_accepted_at) {
+      // Already accepted — return redirect destination for idempotent re-submit
+      const redirect = await getRedirectDestination(supabase, user.id);
+      return NextResponse.json({ ok: true, redirect });
+    }
+
+    console.error("[accept-terms] User row not found for:", user.id);
+    return NextResponse.json(
+      { error: "User profile not found. Please try again shortly." },
+      { status: 404 },
+    );
+  }
+
+  const redirect = await getRedirectDestination(supabase, user.id);
+  return NextResponse.json({ ok: true, redirect });
 }
