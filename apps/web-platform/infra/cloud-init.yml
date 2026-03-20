@@ -5,6 +5,18 @@ packages:
   - fail2ban
   - jq
 
+groups:
+  - docker
+
+users:
+  - default
+  - name: deploy
+    groups: docker
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ${deploy_ssh_public_key}
+
 write_files:
   - path: /etc/ssh/sshd_config.d/01-hardening.conf
     content: |
@@ -13,11 +25,16 @@ write_files:
       MaxAuthTries 3
       LoginGraceTime 30
       PermitRootLogin prohibit-password
-      AllowUsers root
+      AllowUsers root deploy
       ClientAliveInterval 300
       ClientAliveCountMax 2
     owner: root:root
     permissions: '0644'
+  - path: /etc/sudoers.d/deploy-chown
+    content: |
+      deploy ALL=(root) NOPASSWD: /usr/bin/chown 1001\:1001 /mnt/data/workspaces
+    owner: root:root
+    permissions: '0440'
 
   # CI deploy forced command script. The CI SSH key in authorized_keys uses:
   #   restrict,command="/usr/local/bin/ci-deploy.sh" ssh-ed25519 AAAA... ci-deploy-2026@soleur-web-platform
@@ -98,7 +115,7 @@ write_files:
           docker pull "$IMAGE:$TAG"
           { docker stop soleur-web-platform || true; }
           { docker rm soleur-web-platform || true; }
-          chown 1001:1001 /mnt/data/workspaces
+          sudo chown 1001:1001 /mnt/data/workspaces
           docker run -d \
             --name soleur-web-platform \
             --restart unless-stopped \
@@ -181,13 +198,19 @@ runcmd:
   - mount /dev/disk/by-id/scsi-0HC_Volume_* /mnt/data || true
   - echo '/dev/disk/by-id/scsi-0HC_Volume_* /mnt/data ext4 defaults 0 2' >> /etc/fstab
 
-  # Create workspace and plugin directories (owned by soleur UID 1001, must match apps/web-platform/Dockerfile)
+  # Create workspace and plugin directories
   - mkdir -p /mnt/data/workspaces
-  - chown 1001:1001 /mnt/data/workspaces
   - mkdir -p /mnt/data/plugins/soleur
 
-  # Create .env placeholder
+  # Create .env placeholder and grant deploy user ownership of /mnt/data
+  # (deploy user writes .env vars and manages containers via CI/CD)
   - touch /mnt/data/.env
+  - chmod 600 /mnt/data/.env
+  - chown -R deploy:deploy /mnt/data
+
+  # Workspace dir must be owned by soleur UID 1001 (must match apps/web-platform/Dockerfile)
+  # Set after recursive chown so it isn't overridden
+  - chown 1001:1001 /mnt/data/workspaces
 
   # Pull and run container
   - docker pull ${image_name}

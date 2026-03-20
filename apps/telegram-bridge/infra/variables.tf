@@ -32,3 +32,8 @@ variable "image_name" {
   type        = string
   default     = "ghcr.io/jikig-ai/soleur-telegram-bridge:latest"
 }
+
+variable "deploy_ssh_public_key" {
+  description = "SSH public key for the deploy user (used by CI/CD)"
+  type        = string
+}
