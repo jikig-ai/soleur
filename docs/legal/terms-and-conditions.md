@@ -36,9 +36,9 @@ These Terms apply to all Users globally, with specific provisions for Users in t
 
 ## 3. Eligibility
 
-You must be at least 18 years of age (or the age of majority in your jurisdiction) to use the Plugin. By using Soleur, you represent and warrant that you meet this requirement.
+You must be at least 18 years of age (or the age of majority in your jurisdiction) to use the Plugin or the Web Platform. By using Soleur, you represent and warrant that you meet this requirement.
 
-If you are using the Plugin on behalf of an organization, you represent and warrant that you have the authority to bind that organization to these Terms.
+If you are using the Plugin or the Web Platform on behalf of an organization, you represent and warrant that you have the authority to bind that organization to these Terms.
 
 ## 4. Description of the Service
 
@@ -163,7 +163,7 @@ For any GDPR-related inquiries concerning the documentation site or third-party 
 
 ## 8. Acceptable Use
 
-You agree to use the Plugin only for lawful purposes and in accordance with these Terms. You shall not use the Plugin to:
+You agree to use the Plugin and the Web Platform only for lawful purposes and in accordance with these Terms. You shall not use the Plugin or the Web Platform to:
 
 - Violate any applicable local, national, or international law or regulation
 - Generate, store, or distribute content that is illegal, harmful, threatening, abusive, defamatory, or otherwise objectionable
