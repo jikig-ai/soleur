@@ -7,6 +7,7 @@ import { DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { KeyInvalidError } from "@/lib/types";
 import { decryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
+import { sanitizeErrorForClient } from "./error-sanitizer";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -257,8 +258,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
   } catch (err) {
     if (!controller.signal.aborted) {
       console.error(`[agent] Session error for ${userId}/${conversationId}:`, err);
-      const message =
-        err instanceof Error ? err.message : "Agent session failed";
+      const message = sanitizeErrorForClient(err);
       sendToClient(userId, {
         type: "error",
         message,
@@ -302,8 +302,7 @@ export async function sendUserMessage(
       `[agent] sendUserMessage session error for ${userId}/${conversationId}:`,
       err,
     );
-    const message =
-      err instanceof Error ? err.message : "Agent session failed";
+    const message = sanitizeErrorForClient(err);
     sendToClient(userId, {
       type: "error",
       message,
