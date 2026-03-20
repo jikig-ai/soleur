@@ -4,11 +4,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { isPathInWorkspace } from "./sandbox";
 import { containsSensitiveEnvAccess } from "./bash-sandbox";
-
-// File-accessing tools and the input fields that carry paths.
-// Read handles notebooks (.ipynb) natively -- no separate NotebookRead tool exists.
-// If NotebookEdit is ever enabled, add it here with notebook_path extraction.
-export const FILE_TOOLS = new Set(["Read", "Write", "Edit", "Glob", "Grep"]);
+import { isFileTool, extractToolPath } from "./tool-path-checker";
 
 export function createSandboxHook(workspacePath: string): HookCallback {
   return async (input, _toolUseID, _options) => {
@@ -17,11 +13,10 @@ export function createSandboxHook(workspacePath: string): HookCallback {
     const toolName = preInput.tool_name;
 
     // --- File-tool sandbox ---
-    if (FILE_TOOLS.has(toolName)) {
-      const filePath =
-        (toolInput?.file_path as string) ||
-        (toolInput?.path as string) ||
-        "";
+    // Uses shared FILE_TOOLS list from tool-path-checker.ts.
+    // Includes LS, NotebookRead, and NotebookEdit (#891).
+    if (isFileTool(toolName)) {
+      const filePath = extractToolPath(toolInput ?? {});
 
       // Empty path is allowed through -- Glob/Grep default to CWD (workspacePath),
       // and Read/Write/Edit require file_path so the SDK rejects empty values.

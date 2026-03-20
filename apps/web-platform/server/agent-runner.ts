@@ -9,6 +9,8 @@ import { KeyInvalidError } from "@/lib/types";
 import { decryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
 import { sanitizeErrorForClient } from "./error-sanitizer";
+import { isPathInWorkspace } from "./sandbox";
+import { UNVERIFIED_PARAM_TOOLS, extractToolPath, isFileTool, isSafeTool } from "./tool-path-checker";
 import { buildAgentEnv } from "./agent-env";
 import { createSandboxHook } from "./sandbox-hook";
 
@@ -211,18 +213,41 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         plugins: [{ type: "local" as const, path: pluginPath }],
         hooks: {
           PreToolUse: [{
-            matcher: "Read|Write|Edit|Glob|Grep|Bash",
+            // LS and NotebookEdit added for #891 path validation.
+            // NotebookRead included defensively (SDK may route via Read).
+            matcher: "Read|Write|Edit|Glob|Grep|LS|NotebookRead|NotebookEdit|Bash",
             hooks: [createSandboxHook(workspacePath)],
           }],
         },
-        // File tools (Read/Write/Edit/Glob/Grep) and Bash are resolved by
-        // PreToolUse hooks (step 1) and SDK sandbox auto-approval (step 3)
-        // before reaching this callback. Only AskUserQuestion, safe tools,
-        // and unrecognized tools reach canUseTool (step 5).
+        // File tools and Bash are resolved by PreToolUse hooks (step 1)
+        // and SDK sandbox auto-approval (step 3) before reaching this
+        // callback. The canUseTool file-tool check is defense-in-depth
+        // for tools that somehow bypass hooks. See #891.
         canUseTool: async (
           toolName: string,
           toolInput: Record<string, unknown>,
         ) => {
+          // Defense-in-depth: catch any file tool that bypasses hooks.
+          // PreToolUse hooks are the primary enforcement (layer 1).
+          // This is layer 2 -- see #891 for the audit that added it.
+          if (isFileTool(toolName)) {
+            const filePath = extractToolPath(toolInput);
+            if (filePath && !isPathInWorkspace(filePath, workspacePath)) {
+              return {
+                behavior: "deny" as const,
+                message: "Access denied: outside workspace",
+              };
+            }
+            if (!filePath && (UNVERIFIED_PARAM_TOOLS as readonly string[]).includes(toolName) && Object.keys(toolInput).length > 0) {
+              console.warn(
+                `[sec] ${toolName} invoked without recognized path parameter. ` +
+                `Keys: ${Object.keys(toolInput).join(", ")}. ` +
+                `SDK version may have changed parameter names. See #891.`,
+              );
+            }
+            return { behavior: "allow" as const };
+          }
+
           // Review gates: intercept AskUserQuestion
           if (toolName === "AskUserQuestion") {
             const gateId = randomUUID();
@@ -253,16 +278,11 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             };
           }
 
-          // Safe SDK tools: no security-sensitive inputs, allowed without checks
-          // Note: NotebookRead removed -- SDK reads notebooks via the Read tool
-          const SAFE_TOOLS = [
-            "Agent",
-            "Skill",
-            "TodoRead",
-            "TodoWrite",
-            "LS",
-          ];
-          if (SAFE_TOOLS.includes(toolName)) {
+          // Safe SDK tools: no filesystem path inputs, allowed without checks.
+          // See tool-path-checker.ts for rationale on each tool.
+          // LS removed (#891) -- it accepts path inputs and routes through
+          // isPathInWorkspace. NotebookRead removed -- SDK reads via Read tool.
+          if (isSafeTool(toolName)) {
             return { behavior: "allow" as const };
           }
 

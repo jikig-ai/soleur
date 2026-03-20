@@ -1,6 +1,7 @@
 import { describe, test, expect } from "vitest";
 import type { SyncHookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
-import { createSandboxHook, FILE_TOOLS } from "../server/sandbox-hook";
+import { createSandboxHook } from "../server/sandbox-hook";
+import { FILE_TOOLS } from "../server/tool-path-checker";
 
 const WORKSPACE = "/workspaces/user1";
 const hook = createSandboxHook(WORKSPACE);
@@ -43,6 +44,8 @@ describe("createSandboxHook - file tools", () => {
     { tool: "Edit", input: { file_path: "/etc/shadow" } },
     { tool: "Glob", input: { path: "/etc", pattern: "*.conf" } },
     { tool: "Grep", input: { path: "/etc", pattern: "password" } },
+    { tool: "LS", input: { path: "/etc" } },
+    { tool: "NotebookEdit", input: { notebook_path: "/tmp/evil.ipynb" } },
   ])("denies $tool outside workspace", async ({ tool, input }) => {
     const result = await invokeHook(tool, input);
     expectDenied(result, "workspace");
@@ -132,15 +135,21 @@ describe("createSandboxHook - negative-space coverage", () => {
   test("FILE_TOOLS covers all file-accessing tools", () => {
     // Asserts against the actual exported constant, not a local copy.
     // If a file-access tool is added to or removed from the implementation,
-    // this test fails.
-    const expectedFileTools = ["Read", "Write", "Edit", "Glob", "Grep"];
-    expect([...FILE_TOOLS].sort()).toEqual(expectedFileTools.sort());
+    // this test fails. LS/NotebookRead/NotebookEdit added in #891.
+    const fileToolsArray = [...FILE_TOOLS] as string[];
+    const expectedFileTools = [
+      "Read", "Write", "Edit", "Glob", "Grep",
+      "LS", "NotebookRead", "NotebookEdit",
+    ];
+    expect(fileToolsArray.sort()).toEqual(expectedFileTools.sort());
   });
 
   test("safe tools do not overlap with FILE_TOOLS", () => {
-    const safeTools = ["Agent", "Skill", "TodoRead", "TodoWrite", "LS"];
+    // LS removed from safe tools in #891 -- it has path inputs
+    const safeTools = ["Agent", "Skill", "TodoRead", "TodoWrite"];
+    const fileSet = new Set(FILE_TOOLS as readonly string[]);
     for (const tool of safeTools) {
-      expect(FILE_TOOLS.has(tool)).toBe(false);
+      expect(fileSet.has(tool), `${tool} should NOT be a file tool`).toBe(false);
     }
   });
 });
