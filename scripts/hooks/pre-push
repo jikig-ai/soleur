@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# pre-push hook: run tests affected by the current branch's changes.
+# Blocks the push if any test fails.
+#
+# Install: git config core.hooksPath scripts/hooks
+#
+# How it works:
+#   1. Diffs the current branch against origin/main to find changed files
+#   2. Maps changed source files to their corresponding test files
+#   3. Runs only the affected tests (fast — not the full suite)
+#   4. Blocks the push if any test fails
+#
+# Skips gracefully when:
+#   - bun is not installed
+#   - No test files are affected by the changes
+#   - Pushing to a non-main remote (e.g., forks)
+
+set -euo pipefail
+
+# Skip if bun is not available
+if ! command -v bun &>/dev/null; then
+  exit 0
+fi
+
+# Determine base branch
+base_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@') || base_branch="main"
+
+# Get changed files relative to base branch
+changed_files=$(git diff --name-only "origin/$base_branch"...HEAD 2>/dev/null) || true
+
+if [[ -z "$changed_files" ]]; then
+  exit 0
+fi
+
+# Collect affected test files
+declare -A seen_tests
+test_files=()
+
+while IFS= read -r file; do
+  [[ -z "$file" ]] && continue
+
+  # If a test file was directly changed, include it
+  if [[ "$file" == *.test.ts || "$file" == *.test.js || "$file" == *.test.sh ]]; then
+    if [[ -z "${seen_tests[$file]:-}" ]]; then
+      seen_tests["$file"]=1
+      test_files+=("$file")
+    fi
+    continue
+  fi
+
+  # Map source files to test files by basename
+  # scripts/content-publisher.sh -> test/content-publisher.test.ts
+  # plugins/soleur/skills/community/scripts/x-community.sh -> test/x-community.test.ts
+  base=$(basename "$file")
+  stem="${base%.*}"  # strip extension
+
+  # Search common test locations
+  while IFS= read -r tf; do
+    [[ -z "$tf" ]] && continue
+    if [[ -z "${seen_tests[$tf]:-}" ]]; then
+      seen_tests["$tf"]=1
+      test_files+=("$tf")
+    fi
+  done < <(git ls-files "test/${stem}.test.*" "*/test/${stem}.test.*" 2>/dev/null)
+done <<< "$changed_files"
+
+if [[ ${#test_files[@]} -eq 0 ]]; then
+  exit 0
+fi
+
+echo "pre-push: Running ${#test_files[@]} affected test file(s):"
+for tf in "${test_files[@]}"; do
+  echo "  - $tf"
+done
+echo ""
+
+# Split by runner: .test.sh -> bash, .test.ts/.test.js -> bun
+bun_tests=()
+bash_tests=()
+for tf in "${test_files[@]}"; do
+  if [[ "$tf" == *.test.sh ]]; then
+    bash_tests+=("$tf")
+  else
+    bun_tests+=("$tf")
+  fi
+done
+
+failed=0
+
+if [[ ${#bun_tests[@]} -gt 0 ]]; then
+  if ! bun test "${bun_tests[@]}"; then
+    failed=1
+  fi
+fi
+
+for bt in "${bash_tests[@]}"; do
+  if ! bash "$bt"; then
+    failed=1
+  fi
+done
+
+if [[ $failed -ne 0 ]]; then
+  echo ""
+  echo "pre-push: BLOCKED — tests failed. Fix them before pushing."
+  exit 1
+fi
+
+echo ""
+echo "pre-push: All affected tests passed."

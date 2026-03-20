@@ -1,6 +1,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
+import { readFileSync, writeFileSync } from "fs";
 import path from "path";
 
 import { DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
@@ -9,6 +10,8 @@ import { decryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 import { containsSensitiveEnvAccess } from "./bash-sandbox";
+import { isPathInWorkspace } from "./sandbox";
+import { buildAgentEnv } from "./agent-env";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -17,6 +20,27 @@ const supabase = createClient(
 
 const PLUGIN_PATH =
   process.env.SOLEUR_PLUGIN_PATH || "/app/shared/plugins/soleur";
+
+// ---------------------------------------------------------------------------
+// Workspace permissions migration (#725)
+// ---------------------------------------------------------------------------
+const FILE_TOOLS_TO_REMOVE = new Set(["Read", "Glob", "Grep"]);
+
+function patchWorkspacePermissions(workspacePath: string): void {
+  const settingsPath = path.join(workspacePath, ".claude", "settings.json");
+  try {
+    const raw = readFileSync(settingsPath, "utf8");
+    const settings = JSON.parse(raw);
+    const allow: string[] = settings?.permissions?.allow;
+    if (!Array.isArray(allow) || allow.length === 0) return;
+    const filtered = allow.filter((t: string) => !FILE_TOOLS_TO_REMOVE.has(t));
+    if (filtered.length === allow.length) return;
+    settings.permissions.allow = filtered;
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+  } catch {
+    // Settings file missing or malformed — workspace.ts will recreate on next provision
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Active session tracking
@@ -137,6 +161,11 @@ export async function startAgentSession(
     const workspacePath = user.workspace_path;
     const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
+    // Migrate existing workspaces: remove pre-approved permissions that
+    // bypass canUseTool (see #725). Safe to run on every session start —
+    // no-op for already-migrated workspaces.
+    patchWorkspacePermissions(workspacePath);
+
     // Build system prompt for the domain leader
     const systemPrompt = `You are the ${leader.title} (${leader.name}) for this user's business. ${leader.description}
 
@@ -156,15 +185,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         maxTurns: 50,
         maxBudgetUsd: 5.0,
         systemPrompt,
-        env: {
-          ANTHROPIC_API_KEY: apiKey,
-          HOME: workspacePath,
-          PATH: process.env.PATH,
-          GIT_AUTHOR_NAME: "Soleur",
-          GIT_AUTHOR_EMAIL: "soleur@localhost",
-          GIT_COMMITTER_NAME: "Soleur",
-          GIT_COMMITTER_EMAIL: "soleur@localhost",
-        },
+        env: buildAgentEnv(apiKey),
         disallowedTools: ["WebSearch", "WebFetch"],
         sandbox: {
           enabled: true,
@@ -192,12 +213,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               (toolInput.file_path as string) ||
               (toolInput.path as string) ||
               "";
-            const normalizedPath = path.resolve(filePath);
-            if (
-              filePath &&
-              normalizedPath !== workspacePath &&
-              !normalizedPath.startsWith(workspacePath + "/")
-            ) {
+            if (filePath && !isPathInWorkspace(filePath, workspacePath)) {
               return {
                 behavior: "deny" as const,
                 message: "Access denied: outside workspace",

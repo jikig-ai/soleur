@@ -1,6 +1,7 @@
 {
   "type": "module",
   "scripts": {
+    "test": "bash scripts/test-all.sh",
     "docs:dev": "npx @11ty/eleventy --serve",
     "docs:build": "npx @11ty/eleventy"
   },

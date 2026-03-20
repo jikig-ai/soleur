@@ -1,0 +1,416 @@
+---
+last_updated: 2026-03-13
+last_reviewed: 2026-03-03
+review_cadence: quarterly
+depends_on:
+  - knowledge-base/overview/brand-guide.md
+  - knowledge-base/overview/competitive-intelligence.md
+  - knowledge-base/overview/business-validation.md
+  - knowledge-base/overview/content-strategy.md
+  - knowledge-base/overview/pricing-strategy.md
+---
+
+# Soleur Marketing Strategy
+
+## Executive Summary
+
+Soleur is the Company-as-a-Service platform -- 61 agents, 56 skills, 3 commands -- built for solo founders who refuse to accept that scale requires headcount. The product is mature (420+ merged PRs, daily dogfooding across 8 domains). The marketing is not.
+
+**Current state:** Strong brand identity, zero distribution. The website serves people who already know Soleur but is invisible to anyone discovering the category. Content score 2/10. AEO 1.6/10. Zero target keywords in body copy. No blog infrastructure. No social proof. No testimonials. No case studies.
+
+**Strategic imperative:** The business validation verdict is PIVOT -- pause feature development and source 10 solo founders for problem interviews. Marketing exists to support that pivot, not to generate vanity traffic. Every marketing action must serve one of two goals: (1) find and recruit validation participants, or (2) establish category authority for "Company-as-a-Service" before competitors define the term differently.
+
+**Competitive context:** The window is narrowing. Anthropic Cowork now covers 6+ domains with first-party plugins. Notion 3.3 shipped Custom Agents. Tanka claims memory compounding. The differentiation axis is not domain coverage -- it is cross-domain orchestration with compounding institutional memory. Marketing must make this moat visible and understood.
+
+**Constraint:** One founder building the product. Marketing capacity is measured in hours per week, not headcount. Every initiative must be high-leverage, compounding, and executable without a team.
+
+---
+
+## Current State Assessment
+
+### What Exists and Works
+
+| Area | Status | Assessment |
+|------|--------|------------|
+| Brand guide | Complete, reviewed 2026-03-02 | Solar Forge identity is strong and differentiated. Voice is clear. Prohibited terms list exists. |
+| Visual identity | Implemented on soleur.ai | Dark mode, gold accents, Cormorant Garamond headlines, sharp corners. Consistent and distinctive. |
+| Technical SEO | Baseline functional | JSON-LD (WebSite, WebPage, SoftwareApplication), OG tags, Twitter cards, canonical URLs, sitemap, llms.txt all present. |
+| Analytics | Plausible live | Tracking installed, no insights documented or acted upon. |
+| Community channels | Discord + GitHub active | Builder-to-builder engagement. Discord tone matches brand guide. |
+| Competitive intelligence | Living document, reviewed 2026-03-02 | 16 competitors across Tiers 0 and 3. Moats identified. Convergence risks tracked. |
+| Content plan | 15 pieces prioritized | Detailed keyword research, gap analysis, content briefs complete. Zero executed. |
+
+### What Is Broken or Missing
+
+| Area | Status | Priority |
+|------|--------|----------|
+| Content marketing | 0% informational content. No blog. No articles. | Critical |
+| Keyword presence | Zero target keywords in body copy across all 5 pages. | Critical |
+| Blog infrastructure | Does not exist. Cannot publish articles without building Eleventy collection. | Critical |
+| Social proof | No testimonials, case studies, or "built with" examples. | High |
+| AEO (AI Engine Optimization) | FAQ schemas absent. No conversational Q&A sections. llms.txt uses generic description. | High |
+| User validation | 1-2 informal conversations. Need 10+ problem interviews. | High |
+| Pricing | Undecided. Vision page mentions "success tax" but no committed model. | Medium |
+| Email / newsletter | Does not exist. No way to capture or nurture leads. | Medium |
+| Comparison content | No "Soleur vs X" pages. Invisible to commercial-intent searches. | Medium |
+| Analytics insights | Plausible tracks visits. Weekly snapshots automated via CI. No funnels or conversion metrics yet. | Medium |
+
+---
+
+## Strategic Positioning
+
+### Positioning Statement
+
+For **solo founders building real companies** who are frustrated that AI helps with code but not with the other 70% of running a business, **Soleur** is the **Company-as-a-Service platform** that provides a full AI organization -- 61 agents across engineering, marketing, legal, operations, product, finance, sales, and support -- with compounding institutional memory. Unlike **Anthropic Cowork Plugins** (stateless, siloed per domain), **Cursor** (engineering-only), or **Notion Custom Agents** (workspace-scoped, no engineering), Soleur orchestrates workflows across every business domain while every decision the founder makes teaches the system, making the 100th session dramatically more productive than the first.
+
+### Three Validated Moats
+
+These are the structural advantages that competitors cannot replicate by shipping features. All marketing messaging must ladder up to at least one.
+
+1. **Compounding knowledge base.** Cross-domain institutional memory that persists across sessions. The brand guide informs marketing content. The competitive analysis shapes product positioning. The legal audit references the privacy policy. No competitor -- not Cowork, not Notion, not Tanka -- has this across business domains within a terminal-first workflow.
+
+2. **Cross-domain coherence.** 61 agents share context across 8 domains. A decision in product strategy propagates to engineering planning, marketing copy, and legal review. Competitors are either deep in one domain (Cursor, Devin) or broad but stateless across many (Cowork).
+
+3. **Workflow orchestration depth.** The brainstorm-plan-implement-review-compound lifecycle is not a feature -- it is the architecture. Each stage feeds the next with full domain context. Cowork plugins execute individual tasks. Soleur orchestrates business operations.
+
+### Messaging Hierarchy
+
+| Level | Message | Supporting Proof |
+|-------|---------|-----------------|
+| H1 (Hero) | "Build a Billion-Dollar Company. Alone." | Amodei's 2026 prediction. Soleur's thesis: this is an engineering problem, not science fiction. |
+| H2 (Value Prop) | "The Company-as-a-Service Platform" | 61 agents. 56 skills. 8 domains. Every department from strategy to shipping. |
+| H3 (Differentiator) | "Not a copilot. Not an assistant. A full AI organization that reviews, plans, builds, remembers, and self-improves." | Cross-domain coherence. Compounding knowledge base. Workflow orchestration. |
+| H3 (Proof Point) | "Every decision teaches the system. Every project starts faster than the last." | Knowledge compounding across sessions. The 100th session is dramatically more productive than the 1st. |
+| H3 (Social Proof) | "Designed, built, and shipped by Soleur -- using Soleur." | 420+ merged PRs. Daily dogfooding across all 8 domains. The platform runs itself. |
+
+### Key Objections and Responses
+
+| Objection | Response |
+|-----------|----------|
+| "Cowork has plugins for those domains." | Cowork plugins are stateless and siloed. They execute individual tasks. Soleur orchestrates workflows across domains with compounding memory. The brand guide informing marketing content informing sales battlecards -- that cross-domain flow does not exist in Cowork. |
+| "I already use Cursor/Copilot for engineering." | Soleur is not replacing your IDE. Engineering agents connect engineering work to business context -- brand guide, competitive intelligence, legal review. The value is in the connection, not the duplication. |
+| "Why not use separate best-of-breed tools?" | You can. Solo founders do. And every month they start from scratch because the marketing tool does not know about the brand guide, the legal tool does not know about the privacy policy, and the product tool does not know about the competitive landscape. Soleur's knowledge base makes the integration the product. |
+| "One person built this. Can I trust it?" | Soleur is open source (Apache-2.0). Inspect every agent, every skill, every line. The platform is designed, built, and shipped using itself -- 420+ PRs of dogfooding across all 8 domains. |
+| "What about pricing?" | Currently free and open source. Pricing model under active validation (see pricing-strategy.md). The core will remain open. |
+
+---
+
+## Target Audience
+
+### Ideal Customer Profile
+
+**Firmographics:**
+- Solo founders or very small teams (1-3 people)
+- Building SaaS products, developer tools, creative businesses, or consulting-turned-product companies
+- Pre-revenue through early revenue stage
+- Already using Claude Code as their primary development interface
+- Technical background (can read code, use terminal)
+
+**Psychographics:**
+- Think in terms of businesses, not just products
+- Frustrated that AI handles code but not the other 70% of running a company
+- Refuse to accept that scale requires headcount
+- Already patching together 5+ tools for different business functions
+- Value control and transparency (prefer open source, local-first)
+- Ambitious -- building toward a real company, not a side project
+
+### Beachhead Segment (Validation Phase)
+
+For the PIVOT validation, narrow to:
+- **Claude Code power users** who have already pushed beyond coding into broader workflows
+- **IndieHackers / solopreneur community members** actively building products
+- **GitHub signal**: developers with repos that show business operations (marketing content, legal docs, product specs) alongside code
+
+### Channels to Reach Them
+
+| Channel | Density | Effort | Priority |
+|---------|---------|--------|----------|
+| Claude Code Discord | High | Low | P1 -- direct builder-to-builder conversations |
+| GitHub (issue engagement, plugin discovery) | Medium | Low | P1 -- native discovery surface |
+| IndieHackers | Medium | Medium | P2 -- active solopreneur community |
+| X/Twitter solopreneur network | Medium | Medium | P2 -- amplification and thought leadership |
+| Hacker News | High (when triggered) | Low (organic) | P3 -- submit articles, not product launches |
+| Reddit (r/ClaudeAI, r/SaaS, r/solopreneur) | Medium | Low | P3 -- respond to relevant threads |
+
+---
+
+## Channel Strategy
+
+### Principle: Organic Before Paid
+
+No paid acquisition until organic channels prove the thesis. The validation phase requires conversations, not impressions. Paid media is a scaling mechanism for proven channels, not a discovery mechanism for unvalidated products.
+
+### Channel 1: Content (Owned)
+
+**Goal:** Establish category authority for "Company-as-a-Service" and capture informational search traffic.
+
+**Priority actions:**
+1. Build blog infrastructure (Eleventy collection, article layout, JSON-LD Article schema)
+2. Publish category-defining pillar: "What Is Company-as-a-Service?"
+3. Publish thought leadership: "The Billion-Dollar Solo Company"
+4. Publish methodology piece: "Agentic Engineering: Beyond Vibe Coding"
+5. Add "What is Soleur?" paragraph to Getting Started page (single highest-impact low-effort action)
+6. Rewrite homepage H1 and hero to include target keywords
+
+**Full content strategy:** See `knowledge-base/overview/content-strategy.md`.
+
+### Channel 2: Community (Earned)
+
+**Goal:** Build trust with solo founders through direct engagement, recruit validation participants.
+
+**Priority actions:**
+1. Active participation in Claude Code Discord -- answer questions, share Soleur workflows, recruit beta testers
+2. GitHub engagement -- respond to issues, contribute to related projects, signal competence
+3. IndieHackers -- share transparent building updates (revenue: $0, users: 1, agents: 61)
+4. X/Twitter -- share insights from building, not product announcements. Thread format: "Here is what I learned building an AI organization for solo founders."
+
+**Tone:** Builder-to-builder. Direct, collaborative, bold (per brand guide Discord channel notes). Share the process, not the product. Demonstrate competence through contribution.
+
+### Channel 3: SEO / AEO (Organic Search)
+
+**Goal:** Capture informational and commercial search traffic for target keywords.
+
+**Priority actions:**
+1. Fix keyword vacuum on existing pages (zero target keywords in body copy today)
+2. Publish pillar content targeting "company as a service", "agentic engineering", "solo founder AI"
+3. Add FAQ schemas to all pages for AI engine consumability
+4. Rewrite llms.txt with target keywords and platform positioning
+5. Build comparison pages: "Soleur vs Cowork", "Soleur vs Notion Custom Agents"
+
+**Full SEO queue:** See `knowledge-base/marketing/seo-refresh-queue.md`.
+
+### Channel 4: Product-Led (Native)
+
+**Goal:** Let the product itself be the distribution mechanism.
+
+**Priority actions:**
+1. Optimize Claude Code plugin registry listing (description, keywords, categories)
+2. Ensure `claude plugin install soleur` experience is clean and immediate
+3. Build onboarding flow that demonstrates cross-domain value in the first 10 minutes
+4. Create "Built with Soleur" showcase starting with soleur.ai itself
+
+---
+
+## Content Strategy Summary
+
+Full details in `knowledge-base/overview/content-strategy.md`. Key points:
+
+### Content Gaps (Ranked)
+
+1. **Cross-domain compounding narrative** -- No content explains the knowledge base moat. This is the single most defensible differentiator and it is invisible.
+2. **IDE positioning** -- No content explains how Soleur relates to Cursor, Copilot, Windsurf. Founders using those tools need to understand the "and" positioning.
+3. **CaaS category definition** -- Soleur coined "Company-as-a-Service" but has not defined it. Zero competition for this term. Category creation opportunity.
+4. **Engineering-in-context value proposition** -- No content explains why engineering agents that share context with marketing, legal, and ops are more valuable than standalone engineering tools.
+5. **Price justification framework** -- When pricing launches, content must frame the cost against replacement stack (5+ tools at $20-50/month each, plus agencies for legal and brand).
+
+### Pillar Content (Priority Order)
+
+| # | Title | Type | Target Keywords | Timeline |
+|---|-------|------|----------------|----------|
+| 1 | "What Is Company-as-a-Service?" | Pillar explainer | company as a service, CaaS platform, full-stack AI organization | Week 2 |
+| 2 | "The Billion-Dollar Solo Company" | Thought leadership | one person billion dollar company, solo founder AI, 2026 predictions | Week 2-3 |
+| 3 | "Agentic Engineering: Beyond Vibe Coding" | Methodology piece | agentic engineering, compound engineering, AI coding workflow | Week 3-4 |
+| 4 | "Soleur vs. Alternatives" | Comparison | Claude Code plugins, AI agent comparison, CrewAI alternatives | Week 5-6 |
+| 5 | "Knowledge Compounding in AI Development" | Concept explainer | knowledge compounding, AI agent memory, compound engineering | Week 7-8 |
+
+### Blog Infrastructure Prerequisite
+
+The Eleventy site has no blog/articles section. This must be built before any content can ship. Requirements: article collection with frontmatter, article layout template matching brand guide, JSON-LD Article schema, automatic sitemap inclusion, OG/Twitter meta per article.
+
+---
+
+## Phased Execution Plan
+
+### Phase 0: Foundation (Weeks 1-2) -- "Fix the Basics"
+
+**Goal:** Establish the minimum infrastructure for content and validation outreach.
+
+| Action | Owner | Effort | Deliverable |
+|--------|-------|--------|-------------|
+| Build blog infrastructure in Eleventy | Founder | 4-6 hours | Articles section with proper templates, schema, sitemap |
+| Fix keyword vacuum on existing 5 pages | Founder | 2-3 hours | Target keywords present in H1s, H2s, body copy on all pages |
+| Rewrite llms.txt with platform positioning | Founder | 30 min | Updated llms.txt with target keywords |
+| Add "What is Soleur?" paragraph to Getting Started | Founder | 30 min | Context paragraph before install command |
+| Add FAQ schema to homepage | Founder | 1 hour | Structured data for AI engine consumability |
+| Draft validation outreach message | Founder | 1 hour | Template for recruiting problem interview participants |
+
+**Success criteria:** Blog infrastructure live. All existing pages contain target keywords. llms.txt updated.
+
+### Phase 1: Category Creation (Weeks 3-4) -- "Define the Category"
+
+**Goal:** Publish the category-defining content and begin validation outreach.
+
+| Action | Owner | Effort | Deliverable |
+|--------|-------|--------|-------------|
+| Publish "What Is Company-as-a-Service?" | Founder | 6-8 hours | Pillar article live with full SEO |
+| Publish "Billion-Dollar Solo Company" | Founder | 6-8 hours | Thought leadership article live |
+| Begin validation outreach (target: 10 founders) | Founder | 5-10 hours | Messages sent to Claude Code Discord, GitHub, IndieHackers |
+| Share articles on X/Twitter, IndieHackers, HN | Founder | 2 hours | Distribution across channels |
+
+**Success criteria:** 2 pillar articles published. Outreach to 10+ potential validation participants initiated.
+
+### Phase 2: Validation + Positioning (Weeks 5-8) -- "Talk to Founders"
+
+**Goal:** Conduct problem interviews while building competitive positioning content.
+
+| Action | Owner | Effort | Deliverable |
+|--------|-------|--------|-------------|
+| Conduct 5-10 problem interviews (no demo) | Founder | 10-15 hours | Interview notes, pattern analysis |
+| Publish "Agentic Engineering" article | Founder | 6-8 hours | Methodology pillar article live |
+| Publish "Soleur vs. Alternatives" comparison | Founder | 4-6 hours | Comparison page live |
+| Guided onboarding with top 5 interviewees | Founder | 10-15 hours | Onboarding sessions, domain usage data |
+| Document analytics insights from Plausible | Founder | 2 hours | Traffic sources, page engagement, conversion paths |
+
+**Success criteria:** 5+ problem interviews complete. 3+ founders using Soleur on real projects. 4+ articles published.
+
+### Phase 3: Proof + Scale (Weeks 9-16) -- "Build Evidence"
+
+**Goal:** Convert validation into social proof and expand content.
+
+| Action | Owner | Effort | Deliverable |
+|--------|-------|--------|-------------|
+| Publish "Knowledge Compounding" explainer | Founder | 4-6 hours | Concept pillar article live |
+| Write first "Built with Soleur" case study | Founder | 4-6 hours | Case study from validation cohort |
+| Collect testimonials from validation participants | Founder | 2 hours | 3-5 testimonials for site |
+| Publish agentic company glossary | Founder | 4-6 hours | SEO-rich reference page |
+| Decide pricing model based on validation data | Founder | N/A | Pricing decision informed by user behavior |
+| Add testimonials and social proof to site | Founder | 2 hours | Updated homepage and Getting Started |
+
+**Success criteria:** Social proof exists. Pricing model decided. 6+ articles published. First case study live.
+
+### Phase 4: Growth (Weeks 17+) -- "Scale What Works"
+
+**Goal:** Double down on channels and content types that proved effective.
+
+| Action | Trigger | Deliverable |
+|--------|---------|-------------|
+| Launch pricing / paid tier | 50+ active users, 3+ willingness-to-pay signals | Pricing page, onboarding flow |
+| Evaluate paid acquisition | Organic channels producing consistent traffic | Test Google Ads on high-intent keywords |
+| Build email/newsletter | 100+ site visitors/week | Capture mechanism, nurture sequence |
+| Expand comparison content | New competitors emerge or existing ones shift | Updated battlecards, new comparison pages |
+| Create video content | Articles prove which topics resonate | YouTube walkthroughs of highest-performing article topics |
+
+**Success criteria:** Revenue model live. Consistent organic traffic growth. Community growing.
+
+---
+
+## KPIs and Success Metrics
+
+### Validation Phase (Weeks 1-8)
+
+| Metric | Target | Source |
+|--------|--------|--------|
+| Problem interviews conducted | 10+ | Manual tracking |
+| Founders who independently describe multi-domain pain | 5+ of 10 | Interview analysis |
+| Founders using Soleur on real projects (2+ domains) | 5+ | GitHub/Discord observation |
+| Founders expressing willingness to pay | 3+ of 10 | Interview/follow-up |
+| Pillar articles published | 4+ | soleur.ai/articles/ |
+
+### Growth Phase (Weeks 9-16)
+
+| Metric | Target | Source |
+|--------|--------|--------|
+| Monthly organic visitors | 500+ | Plausible |
+| Article pageviews | 100+ per article | Plausible |
+| Plugin installs | 50+ total | Claude Code registry (if available) |
+| Testimonials collected | 3-5 | Validation participants |
+| Case studies published | 1+ | soleur.ai |
+| AEO citation rate | Soleur mentioned in 2+ AI search results for target queries | Manual audit |
+
+### Scale Phase (Weeks 17+)
+
+| Metric | Target | Source |
+|--------|--------|--------|
+| Monthly organic visitors | 2,000+ | Plausible |
+| Weekly active users | 20+ | Analytics/GitHub |
+| Conversion rate (visit to install) | 5%+ | Plausible + install tracking |
+| Revenue | Any | Payment processor |
+| Content pieces published | 2+ per month | soleur.ai |
+| Community members (Discord) | 100+ | Discord metrics |
+
+### Week-over-Week Growth Targets
+
+Growth targets apply to **unique visitors only** -- other metrics are monitored directionally. Phase transitions are time-based. The founder assesses target adherence during weekly review. After Phase 3 ends, review targets quarterly based on accumulated data.
+
+| Phase | Period | WoW Target | Absolute Target |
+|-------|--------|-----------|----------------|
+| Phase 1: Content Traction | Weeks 1-4 (Mar 13 - Apr 10) | +15% WoW | 100/week by week 4 |
+| Phase 2: Content Velocity | Weeks 5-8 (Apr 11 - May 9) | +10% WoW | 250/week by week 8 |
+| Phase 3: Organic Growth | Weeks 9-16 (May 10 - Jul 4) | +7% WoW | 500/week by week 16 |
+
+Weekly snapshots are generated automatically by CI (`scheduled-weekly-analytics.yml`) and committed to `knowledge-base/marketing/analytics/`. Each snapshot includes the current growth target phase and actual WoW change for comparison.
+
+---
+
+## Competitive Response Playbook
+
+### If Anthropic Adds Persistent Memory to Cowork
+
+**Threat level:** Existential. This eliminates the compounding knowledge base moat.
+
+**Response:**
+1. Accelerate content establishing Soleur as the original CaaS platform (category ownership)
+2. Emphasize workflow orchestration depth (brainstorm-plan-implement-review-compound lifecycle)
+3. Emphasize open-source transparency vs. proprietary platform lock-in
+4. Pivot positioning to "the AI organization you own" vs. "the AI organization you rent"
+
+### If Notion Ships Engineering Agents
+
+**Threat level:** High. Notion has massive distribution (35M+ users) and would become the closest full-stack competitor.
+
+**Response:**
+1. Publish immediate comparison content: "Soleur vs. Notion Custom Agents"
+2. Emphasize terminal-first workflow vs. workspace-first (different audiences)
+3. Emphasize compounding knowledge base scoped to solo founder operations vs. team collaboration
+4. Lean into engineering depth (Notion's agents will start shallow)
+
+### If a Direct CaaS Competitor Emerges with Engineering + Business Domains
+
+**Threat level:** High. First-mover advantage on CaaS category naming is time-limited.
+
+**Response:**
+1. Category authority content must already exist (Phase 1 deliverables)
+2. "Built with Soleur" case studies demonstrate operational maturity
+3. Open-source core means community can be a moat
+4. 420+ PRs of compounding knowledge base demonstrate institutional depth no new entrant can replicate quickly
+
+---
+
+## What This Strategy Does NOT Include
+
+1. **Paid advertising.** No paid acquisition until organic channels prove the thesis. Budget is zero.
+2. **Hiring.** All execution is solo founder. No marketing team, no contractors, no agencies.
+3. **Enterprise marketing.** Target is solo founders. Enterprise is a future segment after individual validation.
+4. **Product features for marketing purposes.** The PIVOT verdict says pause features. Marketing works with the existing product.
+5. **Revenue projections.** Pricing model is undecided. Revenue projections require validated pricing, which requires validated demand, which requires the interviews this strategy enables.
+
+---
+
+## Review Cadence
+
+- **Weekly:** Check Plausible analytics. Note which content performs. Adjust distribution.
+- **Biweekly:** Review validation pipeline. How many interviews done? What patterns emerge?
+- **Monthly:** Review competitive intelligence for material changes. Update battlecards if needed.
+- **Quarterly:** Full strategy review. Update this document. Re-assess positioning, channel mix, and priorities based on accumulated data.
+
+Next review: 2026-06-03.
+
+---
+
+## Cascade Documents
+
+This strategy is supported by detailed specialist documents:
+
+| Document | Path | Contents |
+|----------|------|----------|
+| Content Strategy | `knowledge-base/overview/content-strategy.md` | Content gaps, pillar definitions, 4-week calendar, execution priorities |
+| Pricing Strategy | `knowledge-base/overview/pricing-strategy.md` | Competitive pricing matrix, recommended model, value metric analysis |
+| SEO Refresh Queue | `knowledge-base/marketing/seo-refresh-queue.md` | Stale pages, new pages needed, monitoring list |
+| Battlecard: Anthropic Cowork | `knowledge-base/sales/battlecards/tier-0-anthropic-cowork.md` | Talk tracks, differentiators, objection handling |
+| Battlecard: Cursor | `knowledge-base/sales/battlecards/tier-0-cursor.md` | Talk tracks, differentiators, objection handling |
+| Battlecard: Notion AI | `knowledge-base/sales/battlecards/tier-3-notion-ai.md` | Talk tracks, differentiators, objection handling |
+| Battlecard: Tanka | `knowledge-base/sales/battlecards/tier-3-tanka.md` | Talk tracks, differentiators, objection handling |
+
+---
+
+_Generated: 2026-03-03. Source documents: brand-guide.md (2026-02-21), competitive-intelligence.md (2026-03-02), business-validation.md (2026-02-25), content-plan.md (2026-02-19), content-audit.md (2026-02-19)._

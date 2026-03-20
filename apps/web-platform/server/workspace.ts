@@ -19,7 +19,7 @@ const KNOWLEDGE_BASE_DIRS = [
 
 const DEFAULT_SETTINGS = {
   permissions: {
-    allow: [],
+    allow: [] as string[],
   },
   sandbox: {
     enabled: true,

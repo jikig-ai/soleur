@@ -30,7 +30,7 @@ describe("workspace provisioning", () => {
     expect(existsSync(join(path, "knowledge-base/learnings"))).toBe(true);
   });
 
-  test("creates .claude/settings.json with empty permissions (all tools flow through canUseTool)", async () => {
+  test("creates .claude/settings.json with empty permissions for canUseTool routing", async () => {
     const userId = randomUUID();
     const path = await provisionWorkspace(userId);
 

@@ -1,0 +1,208 @@
+---
+last_updated: 2026-03-12
+last_reviewed: 2026-03-12
+review_cadence: quarterly
+depends_on:
+  - knowledge-base/marketing/brand-guide.md
+  - knowledge-base/marketing/marketing-strategy.md
+  - knowledge-base/product/competitive-intelligence.md
+  - knowledge-base/product/business-validation.md
+---
+
+# Soleur Pricing Strategy
+
+## Status
+
+**Pricing is undecided.** This document provides the analysis framework and recommendation for when the founder is ready to commit. Per the business validation verdict (PIVOT), pricing should follow validated adoption, not precede it. Commit to a model after 50+ active users, informed by observed behavior.
+
+---
+
+## Competitive Pricing Matrix
+
+### Tier 0: Platform Threats
+
+| Competitor | Pricing | Model | Engineering | Multi-Domain | Knowledge Persistence | Notes |
+|------------|---------|-------|-------------|-------------|----------------------|-------|
+| **Anthropic Cowork** | Included with Claude Pro ($20/mo) / Team ($25/seat/mo) / Enterprise (custom) | Bundled | Yes (as of Feb 2026) | Yes (11+ plugins across 6+ domains) | No (stateless per session) | Cowork plugins are free with subscription. Enterprise has private marketplace. |
+| **Claude Code** | Included with Claude Pro ($20/mo) / Max ($100-200/mo) | Bundled | Yes (native + 9,000+ plugins) | Limited (plugins are siloed) | Limited (auto-memory, project memory) | Claude Code itself is a bundled feature. Plugins are mostly free. |
+| **Microsoft Copilot Cowork** | Part of M365 E7 Frontier Suite (pricing TBD, Research Preview) | Bundled | No | Yes (Outlook, Teams, Excel workflow automation) | No (session-scoped) | NEW (Mar 9, 2026). Anthropic Claude-powered. Enterprise-targeted. Background task execution across M365. |
+| **Cursor** | $20/mo Pro, $40/mo Business | Subscription | Yes (deep) | Partial (30+ marketplace plugins from Atlassian, Datadog, GitLab, etc.) | Yes (project rules, .cursorrules, automation memory) | $1B ARR, $29.3B valuation. Now an agent platform: Automations (event-driven), cloud agents, marketplace. |
+| **GitHub Copilot** | $10/mo Individual, $19/mo Business, $39/mo Enterprise | Subscription | Yes (deep) | No | Yes (CLI memory, Spaces) | Bundled with GitHub. Coding agent + agentic capabilities GA in JetBrains (Mar 11). CLI code review. |
+| **OpenAI Codex** | Included with ChatGPT Pro ($200/mo), Plus ($20/mo limited), Business/Enterprise | Bundled | Yes (deep, GPT-5.4) | Partial (Codex Security agent) | Limited (session context) | GPT-5.4 with native computer-use, 1M context (experimental). Codex Security = first domain expansion beyond coding. Windows app (Mar 4). |
+| **Windsurf** | $15/mo | Subscription | Yes (deep) | No | Yes (Memories system) | Cheapest IDE-native option. Cognition/Devin merger. SWE-1.6 preview. Codemaps launched. |
+| **Google Gemini Code Assist** | Free (6,000 req/day), $299/year Premium | Freemium | Yes | No | No | Gemini 3 support. Finish Changes + Outlines GA. Enterprise/GCP focused. |
+
+### Tier 3: CaaS / Business Platforms
+
+| Competitor | Pricing | Model | Engineering | Multi-Domain | Knowledge Persistence | Notes |
+|------------|---------|-------|-------------|-------------|----------------------|-------|
+| **Devin 2.0** | $20/mo Core, custom Enterprise | Usage-based (ACU credits) | Yes (autonomous) | No | Limited (session context) | Dropped from $500 to $20/mo. Engineering-only. |
+| **Lovable.dev** | $0 Free, $25/mo Pro, $50/mo Teams | Freemium | Yes (web apps) | No | No | $300M+ ARR, $6.6B valuation. Claude Opus 4.5 upgrade (20% fewer errors). |
+| **Bolt.new** | $0 Free, $25/mo Pro, $109/mo Enterprise | Freemium | Yes (web apps) | No | No | Browser-based. $40M+ ARR. Open-source bolt.diy option. |
+| **v0.app** | $0 Free, $20/mo Premium, $30/mo Team | Freemium | Yes (frontend) | No | No | Rebranded from v0.dev. Agentic architecture, custom MCP server support (Mar 6). |
+| **Replit Agent** | $20/mo Core, $100/mo Pro | Usage-based (effort) | Yes (cloud) | No | Limited | Agent 4 launched. $400M Series D at $9B valuation. ChatGPT integration. |
+| **Notion AI** | $10/mo add-on per user; Custom Agents: free beta through May 3, then $10/1,000 credits | Add-on + credits | No | Yes (workspace agents, 21,000+ built) | Yes (workspace context) | 35M+ users. MiniMax M2.5 support (10x cheaper for basic tasks). Business/Enterprise plans only. |
+| **Polsia** | $29-59/mo tiers + potential revenue share | Hybrid (subscription + revenue share) | Yes (autonomous) | Yes (engineering, marketing, ops, sales outreach, social media) | No (no structured cross-domain knowledge base) | Most direct CaaS competitor. $1.5M ARR (up from $1M). 2,000+ managed companies. Pricing shifted from flat $50 to tiered $29-59. |
+| **Paperclip** | Free (MIT, self-hosted) | Open source | No (agent-agnostic orchestration) | Yes (org charts, budgets, governance for any domain) | No (no knowledge layer) | 14.6k GitHub stars. v0.3.0. Orchestration infrastructure, not domain intelligence. Complementary to Soleur. |
+| **Tanka** | $0/user/mo (<50 users), $299/mo (50+ users) | Freemium | No | Partial (communication-centric) | Yes (EverMemOS memory graphs) | Closest memory architecture to Soleur. Free for solo founders. SOC 2 + ISO 27001. |
+| **SoloCEO** | Unknown (previously $2,000 diagnostic) | Unknown | No | Yes (advisory) | No | Advisory-only. Limited public information. |
+| **Systeme.io** | $0 Free, $17/mo Startup, $97/mo Unlimited | Freemium | No | Marketing/sales only | No | Traditional SaaS. No AI agents. Startup plan dropped from $27 to $17. |
+
+---
+
+## Pricing Analysis
+
+### Market Price Anchors
+
+The competitive landscape establishes clear price anchors:
+
+| Category | Price Range | What Founders Expect |
+|----------|------------|---------------------|
+| AI coding tool (IDE) | $15-40/month | Per-seat subscription, engineering-only |
+| AI coding agent (autonomous) | $20-100/month | Usage-based credits, engineering-only |
+| AI web app builder | $0-50/month | Freemium, engineering-only |
+| AI workspace agent | $10/month + credits | Bundled with existing workspace tool. Notion: $10/1,000 credits post-May 2026. |
+| AI agent platform (engineering) | $20-40/month + marketplace plugins | Cursor: subscription + free/paid plugins. Event-driven automations included. |
+| Autonomous AI company operator | $29-59/month + potential revenue share | Polsia: tiered subscription (shifted from flat $50) + revenue share. |
+| AI company orchestration (OSS) | Free (self-hosted) | Paperclip: MIT-licensed, no recurring cost. Infrastructure-only. |
+| Multi-domain AI platform (human-in-loop) | No established anchor | Soleur would be first in this segment |
+
+**Key insight (updated 2026-03-12):** Polsia has shifted from a flat $50/month to tiered $29-59/month, establishing a lower entry point for CaaS. At the $29/month tier, Polsia undercuts Soleur's hypothesized $49/month by 40%. The revenue share model may still apply at higher tiers. Meanwhile, Cursor's $20/month now includes an agent platform with automations and a marketplace, making the "engineering-only" anchor more capable than before. Paperclip at $0 (MIT, self-hosted) provides orchestration infrastructure for free. The framing challenge intensifies: Soleur's $49/month must justify value beyond what $29 Polsia + $0 Paperclip + $20 Cursor provides. The justification centers on three things competitors lack: (1) cross-domain compounding knowledge, (2) legal, finance, and product strategy domains, (3) founder-as-decision-maker workflow orchestration. The "you keep 100% of revenue" argument against Polsia's revenue share remains Soleur's strongest pricing differentiator.
+
+### Replacement Stack Cost Analysis
+
+What a solo founder currently pays for the capabilities Soleur provides:
+
+| Function | Current Solution | Monthly Cost |
+|----------|-----------------|-------------|
+| Engineering (code review, architecture) | Cursor or Copilot | $20-40 |
+| Marketing (brand, content, SEO) | Agency or freelancer | $500-2,000 (amortized) |
+| Legal (contracts, privacy, compliance) | Lawyer consultations | $300-500/hour, ~$200-500/month amortized |
+| Operations (project management, process) | Notion + Linear + custom | $20-50 |
+| Product (specs, validation, research) | Manual + scattered tools | $0-50 |
+| Finance (tracking, planning) | QuickBooks + spreadsheets | $25-50 |
+| Sales (battlecards, competitive intel) | Manual research | $0 (time cost) |
+| Support (docs, community) | Manual | $0 (time cost) |
+| **Total replacement stack** | | **$765-3,190/month** |
+
+Even at 10% of replacement value, the justified price is $75-320/month.
+
+### Price Sensitivity Considerations
+
+1. **Solo founders are price-sensitive on individual tools** but spend significantly on the aggregate stack. The framing matters: $49/month for "another coding tool" feels expensive. $49/month for "every department of your company" feels like a bargain.
+
+2. **Devin's price collapse** ($500 to $20/month) signals that autonomous coding agents are commoditizing rapidly. Any pricing anchored to engineering value alone will face downward pressure.
+
+3. **Cowork plugins are bundled free** with Claude subscriptions that founders already pay. Soleur must provide value beyond what Cowork offers to justify a separate price.
+
+4. **Open-source core creates a floor problem.** If the free plugin provides 80% of the value, the paid tier must offer something the open-source version cannot: cloud sync, managed infrastructure, team features, or premium agents.
+
+---
+
+## Recommended Pricing Model
+
+### Model: Open Core with Hosted Platform
+
+**Rationale:** The open-source plugin is the distribution mechanism. The paid tier is the compounding mechanism -- cloud-synced knowledge base, managed agent execution, and features that require infrastructure the solo founder does not want to maintain.
+
+### Tier Structure
+
+| Tier | Price | Target | Includes |
+|------|-------|--------|----------|
+| **Open Source** | Free (Apache-2.0) | All users | Full plugin: 61 agents, 56 skills, 3 commands. Local knowledge base. Terminal-first workflow. Self-hosted. |
+| **Pro** | $49/month | Solo founders with active products | Cloud-synced knowledge base (access from any machine). Hosted agent execution (background tasks). Priority model access. Analytics dashboard. Email support. |
+| **Team** | $99/month (up to 3 seats) | Small founding teams | Everything in Pro + shared knowledge base across team members. Role-based agent permissions. Collaboration features. |
+
+### Why $49/month
+
+1. **Above the coding-tool anchor** ($15-40/month) -- signals that this is a different category
+2. **Below the SaaS-tool-stack anchor** ($100-200/month combined) -- feels like consolidation savings
+3. **Matches Lindy.ai's entry price** ($49/month) -- the closest pricing analog in the AI agent platform category
+4. **Justified by replacement-stack math** -- $49 vs. $765-3,190 in separate tools and services
+5. **Sustainable for one founder** -- even 100 Pro subscribers at $49/month = $4,900 MRR, enough to cover infrastructure and sustain development
+
+### Value Metric: Knowledge Base Growth
+
+The primary value metric should be **compounding knowledge** -- the more a founder uses Soleur, the more valuable it becomes. This creates natural retention and justifies recurring pricing.
+
+**Anti-churn mechanism:** The knowledge base is the moat. A founder with 6 months of compounding institutional memory faces a real switching cost -- not because of lock-in, but because the accumulated context cannot be replicated in a new tool.
+
+---
+
+## What Must Be True Before Launching Pricing
+
+These gates prevent premature monetization:
+
+| Gate | Criteria | Status |
+|------|----------|--------|
+| Demand validation | 10+ solo founders have used Soleur on real projects for 2+ weeks | Not started |
+| Multi-domain validation | 5+ users engage with agents from 2+ non-engineering domains | Not started |
+| Willingness-to-pay signal | 3+ founders express they would pay $49/month or identify what would justify it | Not started |
+| Infrastructure ready | Cloud sync, hosted execution, and analytics dashboard are buildable (not necessarily built) | Not assessed |
+| Cowork differentiation clear | Users can articulate why Soleur is worth paying for when Cowork plugins are free | Not started |
+
+**Do not launch pricing until at least 4 of 5 gates pass.**
+
+---
+
+## Pricing Page Messaging Framework
+
+When pricing launches, the page must frame the value correctly. Draft messaging:
+
+**Headline:** "Every department. One price."
+
+**Subheadline:** "Stop paying for 8 separate tools. Soleur replaces your engineering workflow, marketing agency, legal advisor, and operations team -- all for less than a single contractor."
+
+**Comparison framing:**
+
+| What You Replace | Typical Cost | With Soleur |
+|-----------------|-------------|-------------|
+| AI coding tool | $20-40/month | Included |
+| Brand agency (amortized) | $500-2,000/month | Included |
+| Legal consultations (amortized) | $200-500/month | Included |
+| Marketing tools | $50-200/month | Included |
+| Ops + project management | $20-50/month | Included |
+| **Total** | **$790-2,790/month** | **$49/month** |
+
+**Proof point:** "Designed, built, and shipped by Soleur -- using Soleur. 420+ PRs across all 8 domains."
+
+---
+
+## Pricing Risks and Mitigations
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|-----------|--------|------------|
+| Founders anchor against $15-25/month coding tools | High | Medium | Frame as team replacement, not tool replacement. Lead with non-engineering value. |
+| Cowork plugins commoditize domain breadth for free | High | High | Differentiate on compounding knowledge and workflow orchestration. Price the persistence, not the breadth. |
+| Open-source version provides 80%+ of value | Medium | High | Ensure Pro tier has clear infrastructure value (cloud sync, hosted execution) that cannot be self-hosted easily. |
+| Price compression forces below $49/month | Medium | Medium | $29/month floor still works at scale. The value metric (knowledge compounding) creates retention regardless of price point. |
+| Polsia's $29-59 tiered pricing undercuts Soleur's $49/month | High | Medium | Polsia shifted from flat $50 to tiered $29-59/month. At $29, Polsia is 40% cheaper than Soleur's hypothesized $49. Revenue share may still apply at higher tiers. Position Soleur's flat $49 as "premium, you keep 100%" and emphasize domains Polsia lacks (legal, finance, product strategy) plus cross-domain knowledge compounding. The revenue share remains Polsia's vulnerability at scale. |
+| Cursor's $20/month agent platform makes engineering-only pricing look cheap | Medium | Medium | Cursor at $20/month now includes automations, marketplace, cloud agents, and built-in memory. Solo founders may feel $49 for Soleur is expensive when Cursor handles engineering + some automation for less. Soleur must justify the $29 delta with non-engineering domain value. |
+| Paperclip at $0 sets orchestration floor to free | Medium | Low | Paperclip provides free, self-hosted company orchestration. If Clipmart ships pre-built company templates, founders may assemble a "Soleur-like" experience from Paperclip + free agents. Soleur's moat is curated domain intelligence and compounding knowledge, not orchestration infrastructure. |
+| Enterprise demand emerges before solo-founder validation | Low | Low | Good problem to have. Enterprise tier at custom pricing. Do not pivot to enterprise until solo-founder thesis is validated. |
+
+---
+
+## Alternative Models Considered
+
+| Model | Pros | Cons | Verdict |
+|-------|------|------|---------|
+| **Usage-based (per agent execution)** | Scales with value. Low entry barrier. | Unpredictable costs frustrate solo founders. Replit's backlash is a cautionary tale. | Reject |
+| **Success tax (% of revenue)** | Aligns incentives. Mentioned on vision page. Polsia validates model at $50/mo + 20% share ($1M ARR). | Requires revenue tracking integration. Trust barrier. 20% share creates friction at scale (a company earning $10k/month pays $2k to Polsia). Polsia's model works because they provision all infrastructure. | Defer -- Polsia proves this works for fully autonomous operation. For human-in-loop, pure subscription may be more compelling. Founders who choose Soleur likely want control, which correlates with not wanting revenue share. |
+| **Freemium with domain gating** | Free engineering, paid non-engineering domains. | Fragments the experience. Violates the "integration IS the product" thesis. | Reject |
+| **One-time license** | Simple. No recurring obligation. | Does not fund ongoing development. Knowledge compounding needs ongoing infrastructure. | Reject |
+| **Donation / sponsorship** | Community goodwill. Open-source aligned. | Does not build a business. Incompatible with "billion-dollar company" thesis. | Reject |
+
+---
+
+## Next Steps
+
+1. **Complete PIVOT validation** (10 founders, problem interviews, guided onboarding)
+2. **Track which domains users engage with** -- confirms or refutes the multi-domain value hypothesis
+3. **Ask willingness-to-pay question** in post-onboarding interviews: "Would you pay $49/month for this? What would it need to deliver?"
+4. **Assess infrastructure requirements** for Pro tier (cloud sync complexity, hosting costs, security)
+5. **Revisit this document** when 4 of 5 pricing gates pass
+
+---
+
+_Updated: 2026-03-12. Sources: competitive-intelligence.md (2026-03-12), business-validation.md (2026-03-12), brand-guide.md (2026-02-21)._

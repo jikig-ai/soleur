@@ -1,0 +1,31 @@
+name: Version Bump and Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: "Version bump type (escape hatch for manual releases)"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    uses: ./.github/workflows/reusable-release.yml
+    with:
+      component: plugin
+      component_display: "Soleur"
+      path_filter: "plugins/soleur/"
+      tag_prefix: "v"
+      bump_type: ${{ inputs.bump_type || '' }}
+      force_run: ${{ github.event_name == 'workflow_dispatch' }}
+    secrets: inherit
