@@ -2,9 +2,29 @@
 title: "fix: verify WEB_PLATFORM_HOST_FINGERPRINT secret after manual change"
 type: fix
 date: 2026-03-20
+deepened: 2026-03-20
 ---
 
 # fix: verify WEB_PLATFORM_HOST_FINGERPRINT secret after manual change
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-20
+**Sections enhanced:** 4 (Technical Considerations, Proposed Solution, MVP, Test Scenarios)
+**Research sources:** appleboy/ssh-action issue #275, appleboy/easyssh-proxy source code, SSH host key best practices for CI/CD
+
+### Key Improvements
+
+1. **Key type negotiation is unreliable** -- appleboy/ssh-action issue #275 reveals multiple users found ed25519 fingerprints fail while ecdsa works. The Go SSH library negotiates key type at runtime based on server/client algorithm preference ordering, which may not match ed25519 even on modern servers. The plan must retrieve and try ALL key types, not assume ed25519.
+2. **Systematic fallback procedure** added -- try ed25519 first, fall back to ecdsa, then rsa. Each attempt requires a deploy trigger to verify because the secret value is write-only (not readable via API).
+3. **Automation-first approach** -- direct SSH command execution via `ssh root@<host> <command>` avoids interactive sessions. The `ssh-keyscan` alternative provides a non-SSH fallback for fingerprint retrieval.
+4. **Post-fix hardening** -- document the working key type in a learning file so future reprovisioning knows which algorithm to pin.
+
+### New Considerations Discovered
+
+- The `easyssh-proxy` fingerprint comparison is an exact string match against `ssh.FingerprintSHA256(publicKey)` with no normalization -- trailing `=` padding, case differences, or prefix omission all cause silent failures
+- Multiple users in appleboy/ssh-action#275 report "I first tried rsa and ed25519, and finally switched to the ecdsa fingerprint, which successfully passed verification" -- the negotiated key type is server-configuration-dependent, not predictable
+- The error message `ssh: host key fingerprint mismatch` is the only diagnostic -- it does not reveal which key type was negotiated or what fingerprint was expected vs received, making debugging blind without trying all types
 
 ## Overview
 
@@ -18,35 +38,65 @@ Issue #857 (deploy user migration) is now CLOSED, meaning the `deploy` user and 
 
 ## Proposed Solution
 
-1. **SSH into the web platform server** and retrieve fingerprints for all key types
-2. **Identify the correct fingerprint** -- ed25519 is preferred (matches `appleboy/ssh-action` negotiation behavior)
-3. **Compare against the current secret** -- the secret value is not readable via `gh secret list`, so the comparison requires either:
-   - Setting the known-good value via `gh secret set` (idempotent if already correct)
-   - Or triggering a deploy and checking whether it succeeds
-4. **Set the correct fingerprint** via `gh secret set WEB_PLATFORM_HOST_FINGERPRINT --body "SHA256:<hash>"`
-5. **Verify end-to-end** by triggering a deploy workflow and confirming success
+1. **Retrieve fingerprints for ALL key types** from the server (ed25519, ecdsa, rsa) -- do not assume which type the SSH client will negotiate
+2. **Try ed25519 first** via `gh secret set`, then trigger a deploy to verify
+3. **If ed25519 fails with fingerprint mismatch**, try ecdsa fingerprint (most common fallback per appleboy/ssh-action#275)
+4. **If ecdsa also fails**, try rsa fingerprint as last resort
+5. **Verify end-to-end** with a successful deploy, then document the working key type
+
+### Research Insights
+
+**Why all key types must be tried:** The Go `crypto/ssh` library's key algorithm negotiation depends on the intersection of client-supported and server-offered algorithms, ordered by preference. The server's `sshd_config` `HostKeyAlgorithms` directive and the client's `Config.HostKeyAlgorithms` field both influence the outcome. The `appleboy/ssh-action` does not expose a way to force a specific algorithm, so the negotiated type is opaque to the workflow author.
+
+**Automation strategy:** Since `gh secret list` shows metadata but not values, verification requires a write-then-test loop. Each fingerprint attempt is: `gh secret set` -> `gh workflow run` -> poll for result -> check if the deploy step passed or failed with fingerprint mismatch.
 
 ## Technical Considerations
 
-- **Fingerprint format**: Must be `SHA256:<unpadded_base64>` (exact match, no normalization). This is the output format of `ssh-keygen -l -f <keyfile> | cut -d ' ' -f2`. See the existing plan (`2026-03-20-security-pin-host-fingerprint-ci-deploy-plan.md`) for the full call chain analysis through easyssh-proxy.
-- **Key type negotiation**: `appleboy/ssh-action` (via `drone-ssh` and `easyssh-proxy`) uses Go's `ssh` library which negotiates the key type with the server. Modern Ubuntu servers present ed25519 first. The fingerprint in the secret must match whichever key type is actually negotiated.
-- **Server access**: The server IP is stored in `WEB_PLATFORM_HOST` GitHub secret. It can also be obtained via `hcloud server list` (if the Hetzner token is configured) or from Terraform state. The learning from `2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md` notes the Hetzner API token was previously found in `settings.local.json`.
+- **Fingerprint format**: Must be `SHA256:<unpadded_base64>` (exact match, no normalization). The `easyssh-proxy` comparison is `ssh.FingerprintSHA256(publicKey) != config.Fingerprint` -- a direct string inequality check with no case folding, no prefix stripping, no padding normalization. The `ssh-keygen -l -f <keyfile> | cut -d ' ' -f2` output matches this format exactly.
+- **Key type negotiation is unreliable**: Despite modern Ubuntu servers offering ed25519, the Go SSH library may negotiate ecdsa or even rsa depending on the server's `HostKeyAlgorithms` configuration and the client library's preference ordering. Multiple users in [appleboy/ssh-action#275](https://github.com/appleboy/ssh-action/issues/275) report ed25519 failing and ecdsa working. The plan must not assume ed25519.
+- **Error message is opaque**: The fingerprint mismatch error (`ssh: host key fingerprint mismatch`) does not reveal which key type was negotiated or what the expected vs actual fingerprints were. Debugging requires trial-and-error across key types.
+- **Server access**: The server IP is stored in `WEB_PLATFORM_HOST` GitHub secret. It can also be obtained via `hcloud server list` (if the Hetzner token is configured) or from Terraform state. SSH access as root is available (the `deploy` user is also available but forced-command-restricted).
 - **No code changes needed**: This is a secrets-only fix. No workflow files need modification -- the `fingerprint:` input is already wired in both release workflows (PR #824).
 - **Both workflows affected**: `web-platform-release.yml` and `telegram-bridge-release.yml` both reference `WEB_PLATFORM_HOST_FINGERPRINT` and deploy to the same server.
 - **Deploy user readiness**: PR #859 completed the deploy user migration. Workflows now use `username: deploy` with forced commands. The next deploy should work if both auth and fingerprint are correct.
+- **Empty fingerprint fallback**: If the secret is empty or missing, `easyssh-proxy` falls back to `ssh.InsecureIgnoreHostKey()` -- equivalent to `StrictHostKeyChecking=no`. As a temporary unblock, clearing the secret would bypass fingerprint verification entirely (but removes MITM protection).
+
+### Fingerprint Verification Call Chain (from source code)
+
+```text
+appleboy/ssh-action (action.yml)
+  -> INPUT_FINGERPRINT env var
+  -> drone-ssh binary (plugin.go)
+  -> Config.Fingerprint -> easyssh.MakeConfig.Fingerprint
+  -> easyssh-proxy (easyssh.go:176-206)
+  -> if config.Fingerprint != "" {
+       hostKeyCallback = func(...) error {
+         if ssh.FingerprintSHA256(publicKey) != config.Fingerprint {
+           return fmt.Errorf("ssh: host key fingerprint mismatch")
+         }
+         return nil
+       }
+     }
+```
+
+The `publicKey` in the callback is whatever key the server presents during the SSH handshake -- its type depends on negotiation, not on the fingerprint value stored in the secret.
 
 ## Acceptance Criteria
 
-- [ ] SSH into web platform server and retrieve ed25519 host key fingerprint
-- [ ] Set `WEB_PLATFORM_HOST_FINGERPRINT` GitHub secret to the verified correct `SHA256:<hash>` value
+- [ ] SSH into web platform server and retrieve host key fingerprints for ALL key types (ed25519, ecdsa, rsa)
+- [ ] Identify which key type `appleboy/ssh-action` actually negotiates (by trial: set fingerprint, trigger deploy, check result)
+- [ ] Set `WEB_PLATFORM_HOST_FINGERPRINT` GitHub secret to the verified correct `SHA256:<hash>` value for the negotiated key type
 - [ ] Trigger a web-platform deploy and confirm SSH connection succeeds with fingerprint verification
-- [ ] Trigger a telegram-bridge deploy and confirm SSH connection succeeds with fingerprint verification (or verify both share the same host and one test suffices)
+- [ ] Confirm telegram-bridge uses the same host (both reference `WEB_PLATFORM_HOST`) so a single fingerprint covers both workflows
+- [ ] Document the working key type in a learning file for future reprovisioning reference
 
 ## Test Scenarios
 
-- Given the correct fingerprint in the GitHub secret, when a deploy workflow runs, then SSH connects successfully and the deploy command executes
+- Given the correct fingerprint for the negotiated key type in the GitHub secret, when a deploy workflow runs, then SSH connects successfully and the deploy command executes
+- Given the fingerprint is for ed25519 but the server negotiates ecdsa, when a deploy workflow runs, then it fails with `ssh: host key fingerprint mismatch` (key type mismatch, not a wrong fingerprint per se)
 - Given the server was reprovisioned since the secret was last set, when the fingerprint is retrieved, then it differs from the stored value (indicating the secret is stale)
 - Given an incorrect fingerprint was set manually during the incident, when the correct fingerprint replaces it, then deploys resume working
+- Given the fingerprint secret is cleared (empty string), when a deploy workflow runs, then SSH falls back to `InsecureIgnoreHostKey` and connects without verification (emergency unblock, not desired steady state)
 
 ## Context
 
@@ -56,46 +106,93 @@ Issue #857 (deploy user migration) is now CLOSED, meaning the `deploy` user and 
 
 ## MVP
 
-### Retrieve fingerprints from server
+### Step 1: Retrieve ALL fingerprints from server
 
 ```bash
-# SSH into the server (replace <server-ip> with WEB_PLATFORM_HOST value)
-ssh root@<server-ip>
+# Option A: Direct SSH (preferred -- reads key files on disk, no network MITM risk)
+ssh root@<server-ip> 'for f in /etc/ssh/ssh_host_*_key.pub; do echo "--- $f ---"; ssh-keygen -l -f "$f"; done'
+```
 
-# Get fingerprints for all key types
-for f in /etc/ssh/ssh_host_*_key.pub; do
-  echo "--- $f ---"
-  ssh-keygen -l -f "$f"
+```bash
+# Option B: Remote via ssh-keyscan (no SSH login needed, but trusts the network)
+for type in ed25519 ecdsa rsa; do
+  echo "--- $type ---"
+  ssh-keyscan -t "$type" <server-ip> 2>/dev/null | ssh-keygen -lf - | cut -d ' ' -f2
 done
 ```
 
-### Set the correct fingerprint
+Expected output format for each key type:
+
+```text
+--- /etc/ssh/ssh_host_ed25519_key.pub ---
+256 SHA256:AAAA... root@server (ED25519)
+--- /etc/ssh/ssh_host_ecdsa_key.pub ---
+256 SHA256:BBBB... root@server (ECDSA)
+--- /etc/ssh/ssh_host_rsa_key.pub ---
+3072 SHA256:CCCC... root@server (RSA)
+```
+
+Record all three `SHA256:...` values.
+
+### Step 2: Try ed25519 fingerprint first
 
 ```bash
-# Use the ed25519 fingerprint (most likely negotiated)
 gh secret set WEB_PLATFORM_HOST_FINGERPRINT --body "SHA256:<ed25519-hash>"
 ```
 
-### Alternative: Remote fingerprint retrieval (no SSH needed)
-
-```bash
-# Get ed25519 fingerprint via ssh-keyscan
-ssh-keyscan -t ed25519 <server-ip> 2>/dev/null | ssh-keygen -lf - | cut -d ' ' -f2
-```
-
-Note: `ssh-keyscan` fetches the key over the network. If the connection is already compromised, the fetched key could be the attacker's. Direct server access (Option A) is more trustworthy.
-
-### Verify via deploy
+### Step 3: Trigger a deploy to verify
 
 ```bash
 # Trigger a manual web-platform release
 gh workflow run web-platform-release.yml -f bump_type=patch
 
-# Monitor the run
+# Poll for completion (deploy job starts after release job)
 gh run list --workflow=web-platform-release.yml --limit 1 --json databaseId,status,conclusion
 ```
 
+### Step 4: If fingerprint mismatch, try ecdsa
+
+Check the deploy step logs for `ssh: host key fingerprint mismatch`. If present:
+
+```bash
+# Switch to ecdsa fingerprint
+gh secret set WEB_PLATFORM_HOST_FINGERPRINT --body "SHA256:<ecdsa-hash>"
+
+# Re-trigger (use skip_deploy=false or re-run the failed deploy job)
+gh run rerun <run-id> --job deploy
+```
+
+### Step 5: If ecdsa also fails, try rsa
+
+```bash
+gh secret set WEB_PLATFORM_HOST_FINGERPRINT --body "SHA256:<rsa-hash>"
+gh run rerun <run-id> --job deploy
+```
+
+### Step 6: Emergency fallback (temporary, removes MITM protection)
+
+If all three fail (unlikely -- indicates a deeper issue):
+
+```bash
+# Clear the fingerprint to bypass verification entirely
+gh secret set WEB_PLATFORM_HOST_FINGERPRINT --body ""
+```
+
+This falls back to `ssh.InsecureIgnoreHostKey()` and should be reverted once the correct fingerprint is identified.
+
+### Step 7: Document the working key type
+
+After a successful deploy, create a learning documenting which key type `appleboy/ssh-action` actually negotiated with this server. This prevents the same trial-and-error on future reprovisioning.
+
+### Edge Cases
+
+- **Server reprovisioned between secret set and deploy**: If `terraform apply -replace` ran between PR #824 and now, all host keys changed. The fingerprints retrieved in Step 1 are authoritative.
+- **Multiple key types work**: If the server's `HostKeyAlgorithms` config changes (e.g., via cloud-init on reprovision), the negotiated type could change. Store all three fingerprints in the learning file.
+- **Format gotcha**: `ssh-keygen -l` on some systems outputs MD5 by default. Use `ssh-keygen -l -E sha256 -f <keyfile>` to force SHA256 format if needed.
+
 ## References
+
+### Internal
 
 - Issue: [#858](https://github.com/jikig-ai/soleur/issues/858)
 - PR #824: Original fingerprint pinning setup
@@ -107,4 +204,11 @@ gh run list --workflow=web-platform-release.yml --limit 1 --json databaseId,stat
 - Learning: `knowledge-base/learnings/2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md`
 - Workflow: `.github/workflows/web-platform-release.yml:46-52`
 - Workflow: `.github/workflows/telegram-bridge-release.yml:40-47`
-- [appleboy/ssh-action fingerprint issue #275](https://github.com/appleboy/ssh-action/issues/275)
+
+### External
+
+- [appleboy/ssh-action fingerprint issue #275](https://github.com/appleboy/ssh-action/issues/275) -- multiple users confirm ecdsa works when ed25519 fails
+- [appleboy/ssh-action fingerprint format issue #81](https://github.com/appleboy/ssh-action/issues/81) -- fingerprint syntax documentation
+- [appleboy/easyssh-proxy source (easyssh.go)](https://github.com/appleboy/easyssh-proxy/blob/master/easyssh.go) -- fingerprint verification implementation at lines 176-206
+- [golang.org/x/crypto/ssh FingerprintSHA256](https://github.com/golang/crypto/blob/master/ssh/keys.go) -- returns `"SHA256:" + unpadded_base64`
+- [Comparing SSH Fingerprint Formats (Baeldung)](https://www.baeldung.com/linux/ssh-compare-fingerprint-formats) -- MD5 vs SHA256 format reference
