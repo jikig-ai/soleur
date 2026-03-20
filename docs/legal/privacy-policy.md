@@ -8,7 +8,7 @@ generated-date: 2026-02-20
 # Privacy Policy
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 20, 2026 (added Web Platform to scope introduction, added Web Platform security measures to Section 11)
+**Last Updated:** March 20, 2026 (added Web Platform to scope introduction, added Web Platform security measures to Section 11, removed infrastructure identifiers from processing descriptions)
 
 ## 1. Introduction
 
@@ -166,7 +166,7 @@ We use **Hetzner** ([hetzner.com](https://hetzner.com)) to host the Web Platform
 - **Data processed:** User workspaces, Docker containers, and encrypted API keys stored on Hetzner servers.
 - **Purpose:** Infrastructure hosting for the Web Platform (compute, storage, networking).
 - **DPA:** Hetzner Data Processing Agreement (Auftragsverarbeitungsvertrag / AVV), concluded via the Hetzner Cloud Console account settings (signed 2026-03-19).
-- Hetzner is an EU-based company (Germany). The Web Platform is hosted in **Helsinki, Finland (hel1)** -- EU-only processing, no international data transfers.
+- Hetzner is an EU-based company (Germany). The Web Platform is hosted in **Helsinki, Finland (EU)** -- EU-only processing, no international data transfers.
 
 ### 5.8 Cloudflare (Web Platform CDN/Proxy)
 
