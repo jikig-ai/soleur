@@ -51,8 +51,8 @@ const q = query({
 ### canUseTool behavior
 - **Only fires when tools are NOT pre-approved** via `allowedTools` or `.claude/settings.json`
 - Receives: `toolName` (string), `input` (full tool input including `file_path`), `options` (signal, suggestions, toolUseID)
-- Returns: `{ allow: true }` or `{ deny: true, reason: "..." }`
-- After first approval, the SDK may cache the permission for the session (only 1 call observed despite 5 tool uses)
+- Returns: `{ behavior: "allow" }` or `{ behavior: "deny", message: "..." }`
+- Does NOT cache permissions per tool name (#876 verified empirically). The "1 call vs 5 tool uses" observation was caused by two independent factors: (a) pre-approved tools in `.claude/settings.json` bypass `canUseTool` at permission chain step 4, and (b) Claude Code's bridge auth handles permissions internally without consulting `canUseTool`. Under BYOK keys (production), the callback fires per-invocation.
 - For workspace sandbox: validate `input.file_path` starts with user workspace path
 
 ### BYOK key injection
@@ -72,10 +72,12 @@ const q = query({
 - Not an explicit open-source license (Apache/MIT). Subject to Anthropic's usage terms.
 - **Action needed:** Review the legal agreements page to confirm hosted multi-tenant use is permitted.
 
-### 2. canUseTool caching
-- The callback was only called once for 5 tool uses. Likely the SDK caches "allow" permissions per-tool-name for the session.
-- **Mitigation:** For workspace sandbox, this is acceptable — once Read is approved for a workspace path, subsequent reads in the same workspace are fine.
-- **For review gates (AskUserQuestion):** Each AskUserQuestion call is unique, so the callback should fire each time. Needs verification.
+### 2. canUseTool "caching" (DISPROVEN — #876)
+- The callback was only called once for 5 tool uses. This was NOT SDK caching — two independent factors caused the observation:
+  1. The spike workspace had `.claude/settings.json` with `permissions.allow: ["Read", "Glob", "Grep"]`, causing those tools to be resolved at permission chain step 4 (allow rules) before reaching step 5 (`canUseTool`).
+  2. Running under Claude Code's bridge auth bypasses `canUseTool` entirely — the bridge handles permissions internally.
+- **Resolution:** The SDK does NOT cache `canUseTool` results. Each invocation receives a unique `toolUseID`. The `suggestions` field is the SDK's intended mechanism for externalizing permission caching to the host. See `apps/web-platform/test/canusertool-caching.test.ts` for the empirical verification.
+- **For the web platform (BYOK keys):** `canUseTool` fires on every tool invocation as expected. Workspace sandbox via `canUseTool` is safe.
 
 ### 3. Path resolution
 - First Read attempted `/root/knowledge-base/...` instead of workspace-relative path

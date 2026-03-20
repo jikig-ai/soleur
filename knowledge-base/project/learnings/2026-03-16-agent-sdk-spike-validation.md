@@ -19,7 +19,7 @@ To use `canUseTool` as a workspace sandbox (validating file paths), either:
 
 The Agent SDK's permission system has a priority chain: `allowedTools` > `.claude/settings.json` > `canUseTool` callback. If a tool is approved at a higher level, lower levels are never consulted. For a hosted web platform using `canUseTool` as a security boundary (workspace isolation), the workspace's `.claude/settings.json` must have empty permissions.
 
-Additionally, `canUseTool` may cache "allow" decisions per-tool-name within a session — only 1 callback invocation was observed despite 5 tool uses.
+**Update (2026-03-20, #876):** The SDK does NOT cache `canUseTool` decisions. The "1 callback vs 5 tool uses" observation had two root causes: (1) pre-approved tools in `.claude/settings.json` bypass `canUseTool` at permission chain step 4, and (2) Claude Code's bridge auth handles permissions internally without invoking the callback. Under BYOK keys (web platform production), `canUseTool` fires for every tool invocation with a unique `toolUseID`. See `apps/web-platform/test/canusertool-caching.test.ts`.
 
 ## Tags
 category: integration-issues
