@@ -249,18 +249,18 @@ grep -n "8.1(g)\|acceptance.*mechanism\|clickwrap\|checkbox" docs/legal/data-pro
 
 ## Acceptance Criteria
 
-- [ ] Signup page displays an unchecked checkbox with text "I agree to the Terms & Conditions and Privacy Policy" where both document names are clickable links opening in new tabs
-- [ ] Checkbox uses native HTML `<input type="checkbox">` with proper `<label>` association (WCAG)
-- [ ] Form submission is blocked (button disabled) when checkbox is unchecked
-- [ ] Checkbox links point to the live docs site URLs: `https://soleur.ai/pages/legal/terms-and-conditions.html` and `https://soleur.ai/pages/legal/privacy-policy.html`
-- [ ] Database migration adds `tc_accepted_at timestamptz` column to `public.users` table (nullable for existing users)
-- [ ] `handle_new_user()` trigger records `tc_accepted_at = now()` when `raw_user_meta_data->>'tc_accepted'` is true
-- [ ] Signup form passes `data: { tc_accepted: true }` in `signInWithOtp` options
-- [ ] DPD Section 8.1(g) specifies the clickwrap mechanism (checkbox, unchecked default, timestamped record)
-- [ ] T&C Section 4.3 describes the acceptance mechanism
-- [ ] DPD and T&C changes are synced between source (`docs/legal/`) and Eleventy (`plugins/soleur/docs/pages/legal/`) copies with correct link formats
+- [x] Signup page displays an unchecked checkbox with text "I agree to the Terms & Conditions and Privacy Policy" where both document names are clickable links opening in new tabs
+- [x] Checkbox uses native HTML `<input type="checkbox">` with proper `<label>` association (WCAG)
+- [x] Form submission is blocked (button disabled) when checkbox is unchecked
+- [x] Checkbox links point to the live docs site URLs: `https://soleur.ai/pages/legal/terms-and-conditions.html` and `https://soleur.ai/pages/legal/privacy-policy.html`
+- [x] Database migration adds `tc_accepted_at timestamptz` column to `public.users` table (nullable for existing users)
+- [x] `handle_new_user()` trigger records `tc_accepted_at = now()` when `raw_user_meta_data->>'tc_accepted'` is true
+- [x] Signup form passes `data: { tc_accepted: true }` in `signInWithOtp` options
+- [x] DPD Section 8.1(g) specifies the clickwrap mechanism (checkbox, unchecked default, timestamped record)
+- [x] T&C Section 4.3 describes the acceptance mechanism
+- [x] DPD and T&C changes are synced between source (`docs/legal/`) and Eleventy (`plugins/soleur/docs/pages/legal/`) copies with correct link formats
 - [ ] Legal compliance auditor reports zero new P1/P2 findings after changes
-- [ ] Trigger handles missing or false `tc_accepted` metadata gracefully (returns NULL, does not block signup)
+- [x] Trigger handles missing or false `tc_accepted` metadata gracefully (returns NULL, does not block signup)
 
 ## Test Scenarios
 
