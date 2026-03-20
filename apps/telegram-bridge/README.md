@@ -132,12 +132,56 @@ export BRIDGE_HOST=<server_ip>
 | 10 GB Volume    | EUR 0.44    |
 | **Total**       | **~EUR 4.43 (~$4.80 USD)** |
 
+## Reprovisioning / Disaster Recovery
+
+If the server is rebuilt (Terraform destroy + apply, or a fresh cloud-init run),
+the volume at `/mnt/data` retains data but `/mnt/data/.env` may be empty.
+Both the telegram-bridge and web-platform containers read from this single
+shared `.env` file via `--env-file /mnt/data/.env`.
+
+**Steps to restore service:**
+
+1. **Gather secrets.** Collect values for all required env vars listed in
+   `apps/telegram-bridge/.env.example` and `apps/web-platform/.env.example`.
+
+2. **Restore (do not regenerate) `BYOK_ENCRYPTION_KEY`.** This key encrypts
+   user API keys stored via the BYOK feature. If you generate a new key instead
+   of restoring the original, all existing BYOK-encrypted keys become
+   permanently unrecoverable. Restore it from your secure backup or the old
+   server's `.env`.
+
+3. **Upload the `.env` file:**
+
+   ```sh
+   scp .env root@<server_ip>:/mnt/data/.env
+   ```
+
+   If the server was rebuilt, remove the old host key first:
+   `ssh-keygen -R <server_ip>`
+
+4. **Restart both containers:**
+
+   ```sh
+   ssh root@<server_ip> 'docker restart soleur-bridge soleur-web-platform'
+   ```
+
+5. **Verify health:**
+
+   ```sh
+   ssh root@<server_ip> 'docker ps && curl -sf http://localhost:8080/health && curl -sf http://localhost:3000/health'
+   ```
+
+> **Tip:** For a new deployment (no existing BYOK data), generate a fresh key
+> with `openssl rand -hex 32` and store it in a secure backup location
+> (password manager, encrypted backup) separate from the server.
+
 ## Environment Variables
 
 | Variable                   | Required | Default            | Description                                      |
 |----------------------------|----------|--------------------|--------------------------------------------------|
 | `TELEGRAM_BOT_TOKEN`       | Yes      | --                 | Bot API token from @BotFather                    |
 | `TELEGRAM_ALLOWED_USER_ID` | Yes      | --                 | Numeric Telegram user ID (single-user lockdown)  |
+| `ANTHROPIC_API_KEY`        | Yes      | --                 | Anthropic API key for Claude Code CLI            |
 | `SOLEUR_PLUGIN_DIR`        | No       | --                 | Path to Soleur plugin directory                  |
 | `CLAUDE_MODEL`             | No       | `claude-opus-4-6`  | Claude model to use for CLI                      |
 | `SKIP_PERMISSIONS`         | No       | `true`             | Set to `false` to disable `--dangerously-skip-permissions` |

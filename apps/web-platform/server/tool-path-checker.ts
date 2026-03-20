@@ -36,17 +36,23 @@ export const FILE_TOOLS = [
 /**
  * SDK tools with no filesystem path inputs -- allowed without path checks.
  *
- * - Agent: orchestration tool (AgentInput: description/prompt/subagent_type)
  * - Skill: plugin-level tool (no exported SDK schema, no path args)
  * - TodoRead: in-memory task list (no exported SDK schema, no path args)
  * - TodoWrite: in-memory task list (TodoWriteInput: todos[] array only)
+ *
+ * Agent is NOT in this list despite having no path args. It spawns
+ * subagents that DO use path-bearing tools. The parent's canUseTool
+ * and PreToolUse hooks fire for subagent tool calls (confirmed via
+ * SDK CanUseTool type: options.agentID is populated for subagent calls).
+ * Agent is handled by an explicit block in canUseTool for auditability.
+ * See #910.
  *
  * NOTE: LS and NotebookRead removed from this list (#891) -- they accept
  * path inputs and must route through isPathInWorkspace. NotebookEdit also
  * added to the FILE_TOOLS list for defense-in-depth (previously hit
  * deny-by-default, now gets explicit path checking).
  */
-export const SAFE_TOOLS = ["Agent", "Skill", "TodoRead", "TodoWrite"] as const;
+export const SAFE_TOOLS = ["Skill", "TodoRead", "TodoWrite"] as const;
 
 /**
  * File tools whose parameter names are inferred (not confirmed via SDK

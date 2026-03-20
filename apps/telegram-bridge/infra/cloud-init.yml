@@ -199,6 +199,11 @@ runcmd:
 
   # Create .env placeholder and grant deploy user ownership of /mnt/data
   # (deploy user writes .env vars and manages containers via CI/CD)
+  #
+  # After provisioning, populate /mnt/data/.env with secrets.
+  # See apps/telegram-bridge/.env.example (bridge keys) and
+  #     apps/web-platform/.env.example (platform keys).
+  # Both containers read from this single shared file.
   - touch /mnt/data/.env
   - chmod 600 /mnt/data/.env
   - chown -R deploy:deploy /mnt/data
