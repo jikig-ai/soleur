@@ -11,6 +11,7 @@ import { sendToClient } from "./ws-handler";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 import { containsSensitiveEnvAccess } from "./bash-sandbox";
 import { isPathInWorkspace } from "./sandbox";
+import { UNVERIFIED_PARAM_TOOLS, extractToolPath, isFileTool, isSafeTool } from "./tool-path-checker";
 import { buildAgentEnv } from "./agent-env";
 
 const supabase = createClient(
@@ -205,20 +206,27 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           toolName: string,
           toolInput: Record<string, unknown>,
         ) => {
-          // Workspace sandbox: block file access outside workspace
-          if (
-            ["Read", "Write", "Edit", "Glob", "Grep"].includes(toolName)
-          ) {
-            const filePath =
-              (toolInput.file_path as string) ||
-              (toolInput.path as string) ||
-              "";
+          // Workspace sandbox: block file access outside workspace.
+          // All file-accessing tools route through isPathInWorkspace.
+          // See #891 for audit that added LS/NotebookRead/NotebookEdit.
+          if (isFileTool(toolName)) {
+            const filePath = extractToolPath(toolInput);
             if (filePath && !isPathInWorkspace(filePath, workspacePath)) {
               return {
                 behavior: "deny" as const,
                 message: "Access denied: outside workspace",
               };
             }
+            // Warn if a file tool has no recognized path parameter.
+            // SDK version may have changed parameter names. See #891.
+            if (!filePath && (UNVERIFIED_PARAM_TOOLS as readonly string[]).includes(toolName) && Object.keys(toolInput).length > 0) {
+              console.warn(
+                `[sec] ${toolName} invoked without recognized path parameter. ` +
+                `Keys: ${Object.keys(toolInput).join(", ")}. ` +
+                `SDK version may have changed parameter names. See #891.`,
+              );
+            }
+            return { behavior: "allow" as const };
           }
 
           // Bash: sandbox handles OS-level isolation; check env var access as defense-in-depth
@@ -266,16 +274,9 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             };
           }
 
-          // Safe SDK tools: no security-sensitive inputs, allowed without checks
-          const SAFE_TOOLS = [
-            "Agent",
-            "Skill",
-            "TodoRead",
-            "TodoWrite",
-            "LS",
-            "NotebookRead",
-          ];
-          if (SAFE_TOOLS.includes(toolName)) {
+          // Safe SDK tools: no filesystem path inputs, allowed without checks.
+          // See tool-path-checker.ts for rationale on each tool.
+          if (isSafeTool(toolName)) {
             return { behavior: "allow" as const };
           }
 

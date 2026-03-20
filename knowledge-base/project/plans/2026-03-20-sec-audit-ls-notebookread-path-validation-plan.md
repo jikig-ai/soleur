@@ -270,15 +270,15 @@ From learning `2026-03-20-canuse-tool-sandbox-defense-in-depth.md`: "Defense-in-
 
 ## Acceptance Criteria
 
-- [ ] Determine the actual parameter names for LS and NotebookRead by inspecting `toolInput` at runtime or SDK source
-- [ ] Move LS and NotebookRead out of `SAFE_TOOLS` into the `isPathInWorkspace` check block in `agent-runner.ts`
-- [ ] Add NotebookEdit to the `isPathInWorkspace` check block (defense-in-depth -- it currently hits deny-by-default)
-- [ ] Check `file_path`, `path`, and `notebook_path` parameter names in the path extraction logic
-- [ ] Add code comment documenting why remaining SAFE_TOOLS members are safe (no path inputs)
-- [ ] Add unit tests for LS and NotebookRead path validation in `canusertool-sandbox.test.ts`
-- [ ] Add a negative-space test that enumerates all tools with path args and asserts they route through `isPathInWorkspace`
-- [ ] Add a runtime warning for unrecognized parameter names on LS/NotebookRead (SDK version safety net)
-- [ ] All existing sandbox tests continue to pass
+- [x] Determine the actual parameter names for LS and NotebookRead by inspecting `toolInput` at runtime or SDK source
+- [x] Move LS and NotebookRead out of `SAFE_TOOLS` into the `isPathInWorkspace` check block in `agent-runner.ts`
+- [x] Add NotebookEdit to the `isPathInWorkspace` check block (defense-in-depth -- it currently hits deny-by-default)
+- [x] Check `file_path`, `path`, and `notebook_path` parameter names in the path extraction logic
+- [x] Add code comment documenting why remaining SAFE_TOOLS members are safe (no path inputs)
+- [x] Add unit tests for LS and NotebookRead path validation in `tool-path-checker.test.ts` (extracted for testability)
+- [x] Add a negative-space test that enumerates all tools with path args and asserts they route through `isPathInWorkspace`
+- [x] Add a runtime warning for unrecognized parameter names on LS/NotebookRead (SDK version safety net)
+- [x] All existing sandbox tests continue to pass
 
 ## Test Scenarios
 
