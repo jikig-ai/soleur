@@ -73,11 +73,18 @@ export async function middleware(request: NextRequest) {
 
   // Skip T&C check for exempt paths (accept-terms page and API)
   if (!TC_EXEMPT_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
-    const { data: userRow } = await supabase
+    const { data: userRow, error: tcError } = await supabase
       .from("users")
       .select("tc_accepted_at")
       .eq("id", user.id)
       .single();
+
+    if (tcError) {
+      // Fail open: allow request if we cannot verify T&C status.
+      // Auth is already verified by getUser() above.
+      console.error(`[middleware] tc_accepted_at query failed: ${tcError.message}`);
+      return response;
+    }
 
     if (!userRow?.tc_accepted_at) {
       return redirectWithCookies("/accept-terms");

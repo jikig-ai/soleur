@@ -2,10 +2,10 @@ import { describe, test, expect } from "vitest";
 
 // Test the PUBLIC_PATHS logic directly (middleware uses Next.js internals
 // that can't run outside the framework, so we test the routing logic)
-const PUBLIC_PATHS = ["/login", "/signup", "/callback", "/api/webhooks", "/ws"];
+const PUBLIC_PATHS = ["/login", "/signup", "/callback", "/api/webhooks", "/ws", "/accept-terms", "/api/accept-terms"];
 
 function isPublicPath(pathname: string): boolean {
-  return PUBLIC_PATHS.some((p) => pathname.startsWith(p));
+  return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"));
 }
 
 describe("middleware path routing", () => {
@@ -15,7 +15,19 @@ describe("middleware path routing", () => {
     expect(isPublicPath("/callback")).toBe(true);
     expect(isPublicPath("/api/webhooks/stripe")).toBe(true);
     expect(isPublicPath("/ws")).toBe(true);
-    expect(isPublicPath("/ws")).toBe(true); // no token in URL after auth refactor
+  });
+
+  test("public path sub-routes are allowed", () => {
+    expect(isPublicPath("/api/webhooks/stripe")).toBe(true);
+    expect(isPublicPath("/callback/")).toBe(true);
+  });
+
+  test("paths that share a prefix with public paths are NOT public", () => {
+    expect(isPublicPath("/accept-terms-evil")).toBe(false);
+    expect(isPublicPath("/api/webhooks-internal")).toBe(false);
+    expect(isPublicPath("/ws-debug")).toBe(false);
+    expect(isPublicPath("/login-admin")).toBe(false);
+    expect(isPublicPath("/callback-admin")).toBe(false);
   });
 
   test("dashboard paths require auth", () => {
@@ -29,5 +41,13 @@ describe("middleware path routing", () => {
     // This was a bug: middleware intercepted /ws and redirected to /login,
     // breaking WebSocket connections through Cloudflare proxy
     expect(isPublicPath("/ws")).toBe(true);
+  });
+
+  test("/accept-terms is a public path (no redirect loop)", () => {
+    expect(isPublicPath("/accept-terms")).toBe(true);
+  });
+
+  test("/api/accept-terms is a public path (allows POST from accept-terms page)", () => {
+    expect(isPublicPath("/api/accept-terms")).toBe(true);
   });
 });

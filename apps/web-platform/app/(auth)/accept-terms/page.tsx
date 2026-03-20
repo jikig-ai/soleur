@@ -4,27 +4,32 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 export default function AcceptTermsPage() {
+  const router = useRouter();
   const [accepted, setAccepted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const router = useRouter();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError("");
 
-    const res = await fetch("/api/accept-terms", { method: "POST" });
+    try {
+      const res = await fetch("/api/accept-terms", { method: "POST" });
 
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      setError(body.error || "Failed to record acceptance. Please try again.");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError(body.error || "Something went wrong. Please try again.");
+        return;
+      }
+
+      const { redirect } = await res.json();
+      router.push(redirect || "/setup-key");
+    } catch {
+      setError("Network error. Please check your connection and try again.");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const { redirect } = await res.json();
-    router.push(redirect || "/setup-key");
   }
 
   return (
@@ -33,13 +38,11 @@ export default function AcceptTermsPage() {
         <div className="space-y-2 text-center">
           <h1 className="text-2xl font-semibold">Accept Terms & Conditions</h1>
           <p className="text-sm text-neutral-400">
-            Please review and accept our terms before continuing.
+            To continue using Soleur, please review and accept our terms.
           </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {error && <p className="text-sm text-red-400">{error}</p>}
-
           <label className="flex items-start gap-3 text-sm text-neutral-400">
             <input
               type="checkbox"
@@ -70,12 +73,14 @@ export default function AcceptTermsPage() {
             </span>
           </label>
 
+          {error && <p className="text-sm text-red-400">{error}</p>}
+
           <button
             type="submit"
             disabled={loading || !accepted}
             className="w-full rounded-lg bg-white px-4 py-3 text-sm font-medium text-black hover:bg-neutral-200 disabled:opacity-50"
           >
-            {loading ? "Saving..." : "Continue"}
+            {loading ? "Saving..." : "Accept and continue"}
           </button>
         </form>
       </div>
