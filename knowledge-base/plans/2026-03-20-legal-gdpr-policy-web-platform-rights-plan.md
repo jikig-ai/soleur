@@ -87,20 +87,20 @@ The new section mirrors the DPD Section 5.3 content for consistency, with adjust
 
 ## Acceptance Criteria
 
-- [ ] Section 5 intro paragraph updated to include forward reference "(see Section 5.3)" for Web Platform rights
-- [ ] GDPR Policy Section 5.3 "Rights Exercisable Against Jikigai (Web Platform)" exists in both `docs/legal/gdpr-policy.md` and `plugins/soleur/docs/pages/legal/gdpr-policy.md`
-- [ ] Section 5.3 enumerates all six GDPR rights (Articles 15-18, 20-21) for Web Platform data
-- [ ] Section 5.3 specifies legal@jikigai.com as the contact channel
-- [ ] Section 5.3 states the 5-business-day acknowledgment timeline (matching Section 14 and DPD Section 5.3)
-- [ ] Section 5.3 states the one-month response timeline (Article 12(3))
-- [ ] Section 5.3 data categories match Section 3.7 (account data, workspace data, subscription metadata)
-- [ ] Right to Erasure clause uses Section 8.4's parenthetical format: "payment records (subscription metadata, invoices)" and cross-references Section 8.4
-- [ ] Right to Object clause qualifies applicability for contract-performance legal basis (Article 6(1)(b))
-- [ ] Former Section 5.3 (Supervisory Authority) renumbered to Section 5.4
-- [ ] "Last Updated" date in both files reflects the change date
-- [ ] Both file copies remain in sync (identical legal content, differing only in link format and HTML wrapper)
-- [ ] No cross-reference to "GDPR Policy Section 5.3" exists in any legal document (verified via grep -- renumbering is safe)
-- [ ] Article 30 register count in Section 10 remains accurate (nine activities, no new processing activity added)
+- [x] Section 5 intro paragraph updated to include forward reference "(see Section 5.3)" for Web Platform rights
+- [x] GDPR Policy Section 5.3 "Rights Exercisable Against Jikigai (Web Platform)" exists in both `docs/legal/gdpr-policy.md` and `plugins/soleur/docs/pages/legal/gdpr-policy.md`
+- [x] Section 5.3 enumerates all six GDPR rights (Articles 15-18, 20-21) for Web Platform data
+- [x] Section 5.3 specifies legal@jikigai.com as the contact channel
+- [x] Section 5.3 states the 5-business-day acknowledgment timeline (matching Section 14 and DPD Section 5.3)
+- [x] Section 5.3 states the one-month response timeline (Article 12(3))
+- [x] Section 5.3 data categories match Section 3.7 (account data, workspace data, subscription metadata)
+- [x] Right to Erasure clause uses Section 8.4's parenthetical format: "payment records (subscription metadata, invoices)" and cross-references Section 8.4
+- [x] Right to Object clause qualifies applicability for contract-performance legal basis (Article 6(1)(b))
+- [x] Former Section 5.3 (Supervisory Authority) renumbered to Section 5.4
+- [x] "Last Updated" date in both files reflects the change date
+- [x] Both file copies remain in sync (identical legal content, differing only in link format and HTML wrapper)
+- [x] No cross-reference to "GDPR Policy Section 5.3" exists in any legal document (verified via grep -- renumbering is safe)
+- [x] Article 30 register count in Section 10 remains accurate (nine activities, no new processing activity added)
 
 ## Test Scenarios
 
