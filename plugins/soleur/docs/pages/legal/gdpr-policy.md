@@ -8,7 +8,7 @@ permalink: pages/legal/gdpr-policy.html
 <section class="page-hero">
   <div class="container">
     <h1>GDPR Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated March 20, 2026 (added Web Platform data subject rights subsection (Section 5.3), renumbered Supervisory Authority to Section 5.4)</p>
+    <p>Effective February 20, 2026 | Last Updated March 20, 2026 (added Web Platform data subject rights subsection (Section 5.3), renumbered Supervisory Authority to Section 5.4, added CDN/proxy dual legal basis to Section 3.7)</p>
   </div>
 </section>
 
@@ -19,7 +19,7 @@ permalink: pages/legal/gdpr-policy.html
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 20, 2026 (added Web Platform data subject rights subsection (Section 5.3), renumbered Supervisory Authority to Section 5.4)
+**Last Updated:** March 20, 2026 (added Web Platform data subject rights subsection (Section 5.3), renumbered Supervisory Authority to Section 5.4, added CDN/proxy dual legal basis to Section 3.7)
 
 ---
 
@@ -94,8 +94,9 @@ For processing of account data, workspace data, and subscription data through th
 - **Account creation and management:** The lawful basis is **contract performance** (Article 6(1)(b)) -- processing is necessary to provide the Web Platform service the user signed up for. Data processed: email address, hashed password (managed by Supabase), authentication tokens, session cookies.
 - **Payment processing:** The lawful basis is **contract performance** (Article 6(1)(b)) -- processing is necessary to fulfill the subscription agreement. Data processed: customer email, subscription metadata. Card data is handled exclusively by Stripe via Stripe Checkout (PCI SAQ-A) and never reaches Jikigai servers.
 - **Infrastructure hosting:** The lawful basis is **contract performance** (Article 6(1)(b)) -- processing is necessary to provide workspace environments. Data processed: user workspaces, encrypted API keys (AES-256-GCM), Docker containers. Hosted on Hetzner in Helsinki, Finland (EU-only).
+- **CDN/proxy processing:** For authenticated users, the lawful basis is **contract performance** (Article 6(1)(b)) -- Cloudflare processes requests as part of delivering the Web Platform service. For unauthenticated traffic (visitors who have not signed up), the lawful basis is **legitimate interest** (Article 6(1)(f)) -- operating CDN and DDoS protection for `app.soleur.ai` is necessary for infrastructure security and service availability (see also GDPR Recital 49). Data processed: IP addresses, request headers, TLS termination data. Processed by Cloudflare (see DPD Section 4.2).
 
-A balancing test is not required for contract performance as a legal basis.
+A balancing test is not required for the contract performance basis used in account, payment, and infrastructure processing above. For the legitimate interest basis applied to unauthenticated CDN/proxy traffic, the balancing test considers: (a) the processing is limited to standard HTTP connection metadata (IP addresses, request headers), (b) operating CDN and DDoS protection is within the reasonable expectations of anyone visiting a web application, (c) Cloudflare does not use this data for profiling or advertising, and (d) the processing is necessary for infrastructure security and cannot be achieved without processing technical connection data from all visitors. Data subjects may object under Article 21 by contacting legal@jikigai.com.
 
 ---
 
