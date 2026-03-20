@@ -72,7 +72,8 @@ if command -v agent-browser >/dev/null 2>&1; then
   echo "  [ok] agent-browser"
 else
   echo "  [MISSING] agent-browser (required)"
-  echo "    Install: npm install -g agent-browser && agent-browser install"
+  echo "    Install: npm install -g agent-browser@0.21.4 && agent-browser install"
+  echo "    On Linux: agent-browser install --with-deps (if system deps missing)"
   echo
   echo "Cannot proceed without agent-browser."
   exit 1
