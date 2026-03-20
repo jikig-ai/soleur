@@ -24,8 +24,11 @@ export async function GET(request: Request) {
       } = await supabase.auth.getUser();
 
       if (user) {
-        // Ensure workspace is provisioned (first-time users)
-        await ensureWorkspaceProvisioned(user.id, user.email ?? "");
+        const tcAccepted =
+          user.user_metadata?.tc_accepted === true ||
+          user.user_metadata?.tc_accepted === "true";
+
+        await ensureWorkspaceProvisioned(user.id, user.email ?? "", tcAccepted);
 
         // Check if user has an API key set up
         const { data: keys } = await supabase
@@ -53,6 +56,7 @@ export async function GET(request: Request) {
 async function ensureWorkspaceProvisioned(
   userId: string,
   email: string,
+  tcAccepted: boolean,
 ): Promise<void> {
   const serviceClient = createServiceClient();
 
@@ -69,14 +73,23 @@ async function ensureWorkspaceProvisioned(
     // auth.users INSERT is the primary mechanism for creating the users row
     // (including tc_accepted_at). This fallback fires only if the trigger
     // failed silently or was not present.
+    // Mirror the trigger logic: only set tc_accepted_at when metadata confirms acceptance.
     const workspacePath = await provisionWorkspace(userId);
-    await serviceClient.from("users").insert({
-      id: userId,
-      email,
-      workspace_path: workspacePath,
-      workspace_status: "ready",
-      tc_accepted_at: new Date().toISOString(),
-    });
+    const { error: insertError } = await serviceClient
+      .from("users")
+      .upsert(
+        {
+          id: userId,
+          email,
+          workspace_path: workspacePath,
+          workspace_status: "ready",
+          tc_accepted_at: tcAccepted ? new Date().toISOString() : null,
+        },
+        { onConflict: "id", ignoreDuplicates: true },
+      );
+    if (insertError) {
+      console.error(`[callback] Fallback user upsert failed for ${userId}:`, insertError);
+    }
     return;
   }
 
