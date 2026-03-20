@@ -44,8 +44,8 @@ Internal T&C cross-references at Sections 5.2, 14.3 correctly reference 14.1b. T
 
 ### Phase 1: Fix cross-reference (2 files)
 
-- [ ] `docs/legal/data-protection-disclosure.md` line 308: Change "Section 13.1b" to "Section 14.1b"
-- [ ] `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` line 317: Change "Section 13.1b" to "Section 14.1b"
+- [x] `docs/legal/data-protection-disclosure.md` line 308: Change "Section 13.1b" to "Section 14.1b"
+- [x] `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` line 317: Change "Section 13.1b" to "Section 14.1b"
 
 ### Phase 2: Close issue #906
 

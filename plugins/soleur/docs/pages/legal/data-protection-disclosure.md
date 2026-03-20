@@ -314,7 +314,7 @@ Users may delete their Web Platform account at any time via account settings. Up
 - **(c)** Stripe retains payment records (subscription metadata, invoices) for 10 years per French tax law (Code de commerce Art. L123-22).
 - **(d)** Cloudflare cache entries expire per standard TTL; no persistent user data is stored by Cloudflare.
 
-See the [Terms and Conditions](/pages/legal/terms-and-conditions.html) Section 13.1b for the full account termination procedure.
+See the [Terms and Conditions](/pages/legal/terms-and-conditions.html) Section 14.1b for the full account termination procedure.
 
 ---
 
