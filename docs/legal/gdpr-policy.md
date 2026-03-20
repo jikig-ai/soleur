@@ -10,7 +10,7 @@ generated-date: 2026-02-20
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 20, 2026 (added Web Platform to Section 1 scope enumeration, removed infrastructure identifiers from processing descriptions, added CDN/proxy dual legal basis to Section 3.7)
+**Last Updated:** March 20, 2026 (added Web Platform data subject rights subsection (Section 5.3), renumbered Supervisory Authority to Section 5.4, added CDN/proxy dual legal basis to Section 3.7)
 
 ---
 
@@ -147,7 +147,7 @@ The Docs Site uses **Plausible Analytics** ([plausible.io](https://plausible.io)
 
 ## 5. Data Subject Rights
 
-Under the GDPR, data subjects in the EEA have the following rights. For data processed through the Web Platform (app.soleur.ai), these rights are exercisable directly against Jikigai by contacting legal@jikigai.com. For newsletter subscriptions and CLA signatures, most rights are exercisable against the relevant third-party service providers or by unsubscribing from the newsletter:
+Under the GDPR, data subjects in the EEA have the following rights. For data processed through the Web Platform (app.soleur.ai), these rights are exercisable directly against Jikigai (see Section 5.3). For newsletter subscriptions and CLA signatures, most rights are exercisable against the relevant third-party service providers or by unsubscribing from the newsletter:
 
 ### 5.1 Rights Exercisable Against Third Parties
 
@@ -163,7 +163,20 @@ Under the GDPR, data subjects in the EEA have the following rights. For data pro
 - **Right to Erasure of Local Data:** Because all Soleur plugin data is stored on your local machine, you have full and immediate control over its deletion. Uninstalling the plugin and deleting the plugin directory removes all associated data.
 - **Right to Access Local Data:** All knowledge-base files, plans, brainstorms, and other artifacts are stored as plaintext files on your filesystem and are fully accessible to you at all times.
 
-### 5.3 Supervisory Authority
+### 5.3 Rights Exercisable Against Jikigai (Web Platform)
+
+For data processed through the Web Platform (app.soleur.ai) where Jikigai acts as data controller (see Section 2.1), data subjects may exercise the following rights by contacting legal@jikigai.com:
+
+- **Right of Access (Article 15):** Request confirmation of whether personal data is being processed and obtain a copy of the data (account data, workspace data, subscription metadata).
+- **Right to Rectification (Article 16):** Request correction of inaccurate personal data held by Jikigai.
+- **Right to Erasure (Article 17):** Request deletion of personal data under applicable conditions. Note: payment records (subscription metadata, invoices) subject to French tax law retention (Code de commerce Art. L123-22) may be retained for up to 10 years (see Section 8.4).
+- **Right to Restriction of Processing (Article 18):** Request that Jikigai restrict processing of personal data.
+- **Right to Data Portability (Article 20):** Request personal data in a structured, commonly used, machine-readable format.
+- **Right to Object (Article 21):** Object to processing of personal data. The legal basis for Web Platform processing is contract performance (Article 6(1)(b)), so this right applies primarily when processing extends beyond strict contractual necessity.
+
+Jikigai will acknowledge requests within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3).
+
+### 5.4 Supervisory Authority
 
 Data subjects have the right to lodge a complaint with a supervisory authority in the EU Member State of their habitual residence, place of work, or place of the alleged infringement. A list of EU Data Protection Authorities is available at [edpb.europa.eu](https://edpb.europa.eu/about-edpb/about-edpb/members_en).
 
