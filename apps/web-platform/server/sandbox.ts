@@ -13,6 +13,7 @@ export function isPathInWorkspace(
   filePath: string,
   workspacePath: string,
 ): boolean {
+  if (!filePath) return false;
   const resolved = path.resolve(filePath);
   const resolvedWorkspace = path.resolve(workspacePath);
   return (

@@ -51,4 +51,16 @@ describe("isPathInWorkspace", () => {
   test("denies root path", () => {
     expect(isPathInWorkspace("/", WORKSPACE)).toBe(false);
   });
+
+  test("denies empty string input", () => {
+    expect(isPathInWorkspace("", WORKSPACE)).toBe(false);
+  });
+
+  test("handles trailing slash on workspace path", () => {
+    expect(isPathInWorkspace("/workspaces/user1/file.md", "/workspaces/user1/")).toBe(true);
+  });
+
+  test("normalizes dot segments", () => {
+    expect(isPathInWorkspace("/workspaces/user1/./file.md", WORKSPACE)).toBe(true);
+  });
 });
