@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { validateOrigin, rejectCsrf } from "./validate-origin";
 
 function makeRequest(headers: Record<string, string> = {}): Request {
@@ -9,8 +9,14 @@ function makeRequest(headers: Record<string, string> = {}): Request {
 }
 
 describe("validateOrigin", () => {
+  const origNodeEnv = process.env.NODE_ENV;
+
   beforeEach(() => {
-    vi.stubEnv("NODE_ENV", "production");
+    process.env.NODE_ENV = "production";
+  });
+
+  afterEach(() => {
+    process.env.NODE_ENV = origNodeEnv;
   });
 
   it("accepts a valid production origin", () => {
@@ -68,14 +74,14 @@ describe("validateOrigin", () => {
   });
 
   it("accepts localhost in development mode", () => {
-    vi.stubEnv("NODE_ENV", "development");
+    process.env.NODE_ENV = "development";
     const req = makeRequest({ origin: "http://localhost:3000" });
     const result = validateOrigin(req);
     expect(result.valid).toBe(true);
   });
 
   it("rejects localhost in production mode", () => {
-    vi.stubEnv("NODE_ENV", "production");
+    process.env.NODE_ENV = "production";
     const req = makeRequest({ origin: "http://localhost:3000" });
     const result = validateOrigin(req);
     expect(result.valid).toBe(false);
@@ -114,7 +120,6 @@ describe("rejectCsrf", () => {
     const longOrigin = "https://" + "a".repeat(200) + ".com";
     rejectCsrf("api/test", longOrigin);
     const loggedMessage = warnSpy.mock.calls[0][0] as string;
-    // The origin part (after "CSRF: rejected origin ") should be at most 100 chars
     const originPart = loggedMessage.split("rejected origin ")[1];
     expect(originPart.length).toBeLessThanOrEqual(100);
     warnSpy.mockRestore();
