@@ -125,11 +125,11 @@ Update to prepend the new change:
 
 ## Acceptance Criteria
 
-- [ ] Section 8.2(b) includes "Web Platform (app.soleur.ai)" and "(including email notification for Web Platform users with an account on file)" in both DPD copies
-- [ ] "Last Updated" header reflects the new change description prepended to existing entries
-- [ ] `diff` between root and Eleventy DPD copies shows only expected differences (frontmatter, HTML wrapper, link paths)
-- [ ] No other sections are modified beyond 8.2(b) and the Last Updated header
-- [ ] Parenthetical wording matches PR #919 pattern: "Web Platform users with an account on file" (not just "users with an account on file")
+- [x] Section 8.2(b) includes "Web Platform (app.soleur.ai)" and "(including email notification for Web Platform users with an account on file)" in both DPD copies
+- [x] "Last Updated" header reflects the new change description prepended to existing entries
+- [x] `diff` between root and Eleventy DPD copies shows only expected differences (frontmatter, HTML wrapper, link paths)
+- [x] No other sections are modified beyond 8.2(b) and the Last Updated header
+- [x] Parenthetical wording matches PR #919 pattern: "Web Platform users with an account on file" (not just "users with an account on file")
 
 ## Test Scenarios
 
