@@ -19,7 +19,7 @@ const KNOWLEDGE_BASE_DIRS = [
 
 const DEFAULT_SETTINGS = {
   permissions: {
-    allow: ["Read", "Glob", "Grep"],
+    allow: [] as string[],
   },
 };
 

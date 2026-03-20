@@ -36,12 +36,12 @@ Closes #725
 
 ## Acceptance Criteria
 
-- [ ] All file paths in the `canUseTool` callback are canonicalized with `path.resolve()` before the `startsWith` check
-- [ ] The `workspacePath` comparison target is also resolved (defense-in-depth -- it should already be absolute, but `path.resolve` is a no-op on absolute paths)
-- [ ] A trailing-separator edge case is handled: `path.resolve("/workspaces/user1")` must not match `/workspaces/user10/file.txt` -- append `/` to the resolved workspace path before comparison
-- [ ] The workspace `.claude/settings.json` pre-approved permissions (`Read`, `Glob`, `Grep`) are removed so that ALL file-accessing tools route through `canUseTool` for path validation
-- [ ] The `Bash` tool gap is documented as a known limitation with mitigation: the SDK's `cwd` option restricts Bash execution to the workspace directory, and `canUseTool` receives Bash input as a `command` string (not a file path) -- shell-level sandbox escape requires the SDK's built-in `cwd` lock or a container-level chroot, not path prefix checks
-- [ ] A dedicated unit test file `apps/web-platform/test/canusertool-sandbox.test.ts` covers:
+- [x] All file paths in the `canUseTool` callback are canonicalized with `path.resolve()` before the `startsWith` check
+- [x] The `workspacePath` comparison target is also resolved (defense-in-depth -- it should already be absolute, but `path.resolve` is a no-op on absolute paths)
+- [x] A trailing-separator edge case is handled: `path.resolve("/workspaces/user1")` must not match `/workspaces/user10/file.txt` -- append `/` to the resolved workspace path before comparison
+- [x] The workspace `.claude/settings.json` pre-approved permissions (`Read`, `Glob`, `Grep`) are removed so that ALL file-accessing tools route through `canUseTool` for path validation
+- [x] The `Bash` tool gap is documented as a known limitation with mitigation: the SDK's `cwd` option restricts Bash execution to the workspace directory, and `canUseTool` receives Bash input as a `command` string (not a file path) -- shell-level sandbox escape requires the SDK's built-in `cwd` lock or a container-level chroot, not path prefix checks
+- [x] A dedicated unit test file `apps/web-platform/test/canusertool-sandbox.test.ts` covers:
   - Path with `../` segments is denied
   - Path exactly at workspace root is allowed
   - Subdirectory path is allowed

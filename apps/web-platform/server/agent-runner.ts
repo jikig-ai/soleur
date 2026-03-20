@@ -8,6 +8,7 @@ import { KeyInvalidError } from "@/lib/types";
 import { decryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
 import { sanitizeErrorForClient } from "./error-sanitizer";
+import { isPathInWorkspace } from "./sandbox";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -169,7 +170,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               (toolInput.file_path as string) ||
               (toolInput.path as string) ||
               "";
-            if (filePath && !filePath.startsWith(workspacePath)) {
+            if (filePath && !isPathInWorkspace(filePath, workspacePath)) {
               return {
                 behavior: "deny" as const,
                 message: "Access denied: outside workspace",
