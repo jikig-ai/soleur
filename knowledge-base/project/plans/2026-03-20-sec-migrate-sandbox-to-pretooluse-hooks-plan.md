@@ -336,22 +336,22 @@ The `LS` tool likely accepts a directory path parameter but is not documented in
 
 ## Acceptance Criteria
 
-- [ ] `apps/web-platform/server/sandbox-hook.ts` exists with `createSandboxHook()` factory
-- [ ] `HookCallback` and `PreToolUseHookInput` imported from `@anthropic-ai/claude-agent-sdk`
-- [ ] PreToolUse hook registered in `agent-runner.ts` with matcher `"Read|Write|Edit|Glob|Grep|Bash"`
-- [ ] Hook denies file access outside workspace with `systemMessage` explaining the denial
-- [ ] Hook denies sensitive env-access patterns in Bash commands with `systemMessage`
-- [ ] Hook allows file access within workspace (no false positives)
-- [ ] Hook returns empty object `{}` for allowed operations (not explicit allow)
-- [ ] `canUseTool` retains only: AskUserQuestion review gate, safe-tool allowlist, deny-by-default
-- [ ] File-tool sandbox logic removed from `canUseTool` (no duplication)
-- [ ] Bash env-access check removed from `canUseTool` (moved to hook)
-- [ ] `NotebookRead` removed from `SAFE_TOOLS` (stale reference -- SDK has no such tool)
-- [ ] `patchWorkspacePermissions()` retained (defense-in-depth)
-- [ ] All existing tests pass (`bun test apps/web-platform/test/`)
-- [ ] New test file `sandbox-hook.test.ts` covers: allow in-workspace, deny out-of-workspace, deny env-access, allow clean bash, systemMessage present on deny
-- [ ] Negative-space test: enumerate all tools and assert each routes through hook, canUseTool, or is documented as exempt
-- [ ] No regression in review gate functionality
+- [x] `apps/web-platform/server/sandbox-hook.ts` exists with `createSandboxHook()` factory
+- [x] `HookCallback` and `PreToolUseHookInput` imported from `@anthropic-ai/claude-agent-sdk`
+- [x] PreToolUse hook registered in `agent-runner.ts` with matcher `"Read|Write|Edit|Glob|Grep|Bash"`
+- [x] Hook denies file access outside workspace with `systemMessage` explaining the denial
+- [x] Hook denies sensitive env-access patterns in Bash commands with `systemMessage`
+- [x] Hook allows file access within workspace (no false positives)
+- [x] Hook returns empty object `{}` for allowed operations (not explicit allow)
+- [x] `canUseTool` retains only: AskUserQuestion review gate, safe-tool allowlist, deny-by-default
+- [x] File-tool sandbox logic removed from `canUseTool` (no duplication)
+- [x] Bash env-access check removed from `canUseTool` (moved to hook)
+- [x] `NotebookRead` removed from `SAFE_TOOLS` (stale reference -- SDK has no such tool)
+- [x] `patchWorkspacePermissions()` retained (defense-in-depth)
+- [x] All existing tests pass (`bun test apps/web-platform/test/`)
+- [x] New test file `sandbox-hook.test.ts` covers: allow in-workspace, deny out-of-workspace, deny env-access, allow clean bash, systemMessage present on deny
+- [x] Negative-space test: enumerate all tools and assert each routes through hook, canUseTool, or is documented as exempt
+- [x] No regression in review gate functionality
 
 ## Test Scenarios
 
