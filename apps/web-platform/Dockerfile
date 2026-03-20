@@ -1,5 +1,5 @@
 # Stage 1: Install all dependencies (cached when package files unchanged)
-FROM node:22-slim AS deps
+FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -19,7 +19,7 @@ RUN npm run build:server
 RUN npx esbuild next.config.ts --format=esm --outfile=next.config.mjs
 
 # Stage 3: Production image with only runtime artifacts
-FROM node:22-slim AS runner
+FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d AS runner
 
 # Install Claude Code CLI (needed by Agent SDK)
 RUN npm install -g @anthropic-ai/claude-code@2.1.79
@@ -46,6 +46,7 @@ COPY --from=builder /app/next.config.mjs ./next.config.mjs
 
 # Non-root user (node:22-slim includes a 'node' user at uid 1000)
 USER node
+RUN git config --global user.name "Soleur" && git config --global user.email "soleur@localhost"
 
 EXPOSE 3000
 
