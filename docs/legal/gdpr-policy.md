@@ -10,7 +10,7 @@ generated-date: 2026-02-20
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 19, 2026 (corrected Supabase region to EU (eu-west-1), updated DPA execution status, added DPA verification dates)
+**Last Updated:** March 20, 2026 (removed infrastructure identifiers from processing descriptions)
 
 ---
 
@@ -263,9 +263,9 @@ The register documents nine processing activities:
 4. **Legal and GDPR inquiry handling** (legal@jikigai.com) -- names, email addresses, inquiry content
 5. **CLA signature collection** (GitHub CLA Assistant) -- GitHub username, signature timestamp, pull request reference. Legal basis: legitimate interest (Article 6(1)(f)). Signature data is stored on the `cla-signatures` branch in the public repository. Retention is indefinite (irrevocable license grants).
 6. **Newsletter subscription management** (soleur.ai via Buttondown) -- (a) email addresses of newsletter subscribers, legal basis: consent (Article 6(1)(a)), verified through double opt-in; (b) IP address, referrer URL, subscription timestamp, and browser/device metadata automatically collected during subscription, legal basis: legitimate interest (Article 6(1)(f)) for service operation and abuse prevention. Data is processed by Buttondown (US-based). International transfers governed by EU Standard Contractual Clauses (Implementing Decision (EU) 2021/914, Module 2: Controller-to-Processor), incorporated into Buttondown's [DPA](https://buttondown.com/legal/data-processing-agreement). DPA applies to all plan tiers including free. Buttondown's sub-processor list is maintained at [buttondown.com/legal/subprocessors](https://buttondown.com/legal/subprocessors). Email retention: until the subscriber unsubscribes. Technical metadata retention: governed by Buttondown's data retention practices.
-7. **Web Platform account management** (app.soleur.ai via Supabase) -- email addresses, hashed passwords (bcrypt via GoTrue), authentication tokens (JWT), session data. Legal basis: contract performance (Article 6(1)(b)). Data is processed by Supabase Inc (US-based company; project deployed to AWS eu-west-1, Ireland, EU -- no international data transfer). Retention: while account is active; deleted on account deletion request.
+7. **Web Platform account management** (app.soleur.ai via Supabase) -- email addresses, hashed passwords (managed by Supabase), authentication tokens (JWT), session data. Legal basis: contract performance (Article 6(1)(b)). Data is processed by Supabase Inc (US-based company; project deployed to AWS eu-west-1, Ireland, EU -- no international data transfer). Retention: while account is active; deleted on account deletion request.
 8. **Web Platform payment processing** (app.soleur.ai via Stripe Checkout) -- customer email, subscription metadata. Card data is processed exclusively by Stripe (PCI DSS Level 1, SAQ-A integration) and never reaches Jikigai servers. Legal basis: contract performance (Article 6(1)(b)). Data is processed by Stripe Inc (US-based, DPF + SCCs). Retention: subscription records retained for 10 years per French tax law (Code de commerce Art. L123-22).
-9. **Web Platform infrastructure hosting** (app.soleur.ai via Hetzner CX33, Helsinki) -- user workspaces, encrypted API keys (AES-256-GCM), Docker containers. Legal basis: contract performance (Article 6(1)(b)). Data is processed by Hetzner Online GmbH (EU-based, no international transfer). Retention: while account is active.
+9. **Web Platform infrastructure hosting** (app.soleur.ai via Hetzner (Helsinki, Finland, EU)) -- user workspaces, encrypted API keys (AES-256-GCM), Docker containers. Legal basis: contract performance (Article 6(1)(b)). Data is processed by Hetzner Online GmbH (EU-based, no international transfer). Retention: while account is active.
 
 The register is maintained internally and is available on request to the competent supervisory authority (CNIL for France). Since the 2018 reform of the Loi Informatique et Libertes, no registration or prior declaration to the CNIL is required.
 

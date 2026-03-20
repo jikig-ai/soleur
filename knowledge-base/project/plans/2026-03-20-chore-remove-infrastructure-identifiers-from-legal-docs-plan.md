@@ -114,13 +114,13 @@ Both the GDPR Policy and Privacy Policy have a `**Last Updated:**` line in their
 
 ## Acceptance Criteria
 
-- [ ] `Hetzner CX33, Helsinki` replaced with `Hetzner (Helsinki, Finland, EU)` in both GDPR Policy copies
-- [ ] `Helsinki, Finland (hel1)` replaced with `Helsinki, Finland (EU)` in both Privacy Policy copies
-- [ ] `hashed passwords (bcrypt via GoTrue)` replaced with `hashed passwords (managed by Supabase)` in both GDPR Policy copies
-- [ ] No other content changes -- surrounding text remains identical
-- [ ] Grep verification: zero matches for `CX33`, `hel1`, and `GoTrue` in `docs/legal/` and `plugins/soleur/docs/pages/legal/`
-- [ ] "Last Updated" date in GDPR Policy and Privacy Policy updated to 2026-03-20 in all four files
-- [ ] Cross-document consistency: `AES-256-GCM`, `JWT`, `Docker`, `eu-west-1` confirmed intentionally retained (no changes)
+- [x] `Hetzner CX33, Helsinki` replaced with `Hetzner (Helsinki, Finland, EU)` in both GDPR Policy copies
+- [x] `Helsinki, Finland (hel1)` replaced with `Helsinki, Finland (EU)` in both Privacy Policy copies
+- [x] `hashed passwords (bcrypt via GoTrue)` replaced with `hashed passwords (managed by Supabase)` in both GDPR Policy copies
+- [x] No other content changes -- surrounding text remains identical
+- [x] Grep verification: zero matches for `CX33`, `hel1`, and `GoTrue` in `docs/legal/` and `plugins/soleur/docs/pages/legal/`
+- [x] "Last Updated" date in GDPR Policy and Privacy Policy updated to 2026-03-20 in all four files
+- [x] Cross-document consistency: `AES-256-GCM`, `JWT`, `Docker`, `eu-west-1` confirmed intentionally retained (no changes)
 
 ## Test Scenarios
 
