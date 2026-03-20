@@ -14,6 +14,7 @@ resource "hcloud_server" "bridge" {
   user_data = templatefile("${path.module}/cloud-init.yml", {
     image_name            = var.image_name
     deploy_ssh_public_key = var.deploy_ssh_public_key
+    # Single source of truth: apps/web-platform/infra/ci-deploy.sh (tested by ci-deploy.test.sh)
     ci_deploy_script_b64  = base64encode(file("${path.module}/../../web-platform/infra/ci-deploy.sh"))
   })
 
