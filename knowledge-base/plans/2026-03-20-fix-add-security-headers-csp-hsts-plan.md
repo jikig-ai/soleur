@@ -182,22 +182,22 @@ Option 1 is preferred -- it is precise and does not open the CSP to all Supabase
 
 ## Acceptance Criteria
 
-- [ ] All HTML responses from the web platform include `Content-Security-Policy` header
-- [ ] All HTML responses include `X-Frame-Options: DENY`
-- [ ] All HTML responses include `X-Content-Type-Options: nosniff`
-- [ ] All HTML responses include `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`
-- [ ] All HTML responses include `Referrer-Policy: strict-origin-when-cross-origin`
-- [ ] All HTML responses include `Permissions-Policy: camera=(), microphone=(), geolocation=(), browsing-topics=()`
-- [ ] All HTML responses include `X-XSS-Protection: 0`
-- [ ] CSP `frame-ancestors 'none'` prevents iframe embedding
-- [ ] CSP `connect-src` includes `'self'`, and both `https://` and `wss://` for the Supabase host
-- [ ] CSP allows Next.js scripts and Tailwind-compiled CSS to load without violations
-- [ ] `unsafe-eval` is included in `script-src` only in development mode
-- [ ] WebSocket connections to `/ws` continue to work (covered by `'self'` in `connect-src`)
-- [ ] Header-building logic is extracted to `lib/security-headers.ts` for testability
-- [ ] Unit tests verify the header configuration structure via the extracted function
-- [ ] Existing middleware tests continue to pass
-- [ ] Build-time failure is graceful when `NEXT_PUBLIC_SUPABASE_URL` is not set (falls back to `*.supabase.co`)
+- [x] All HTML responses from the web platform include `Content-Security-Policy` header
+- [x] All HTML responses include `X-Frame-Options: DENY`
+- [x] All HTML responses include `X-Content-Type-Options: nosniff`
+- [x] All HTML responses include `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`
+- [x] All HTML responses include `Referrer-Policy: strict-origin-when-cross-origin`
+- [x] All HTML responses include `Permissions-Policy: camera=(), microphone=(), geolocation=(), browsing-topics=()`
+- [x] All HTML responses include `X-XSS-Protection: 0`
+- [x] CSP `frame-ancestors 'none'` prevents iframe embedding
+- [x] CSP `connect-src` includes `'self'`, and both `https://` and `wss://` for the Supabase host
+- [x] CSP allows Next.js scripts and Tailwind-compiled CSS to load without violations
+- [x] `unsafe-eval` is included in `script-src` only in development mode
+- [x] WebSocket connections to `/ws` continue to work (covered by `'self'` in `connect-src`)
+- [x] Header-building logic is extracted to `lib/security-headers.ts` for testability
+- [x] Unit tests verify the header configuration structure via the extracted function
+- [x] Existing middleware tests continue to pass
+- [x] Build-time failure is graceful when `NEXT_PUBLIC_SUPABASE_URL` is not set (falls back to `*.supabase.co`)
 
 ## Test Scenarios
 
