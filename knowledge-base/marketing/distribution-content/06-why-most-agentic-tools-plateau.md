@@ -1,7 +1,7 @@
 ---
 title: "Why Most Agentic Engineering Tools Plateau"
 type: pillar
-publish_date: 2026-03-19
+publish_date: 2026-03-21
 channels: bluesky, linkedin-company
 status: scheduled
 ---
