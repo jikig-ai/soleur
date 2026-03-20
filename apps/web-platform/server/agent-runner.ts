@@ -13,6 +13,7 @@ import { isPathInWorkspace } from "./sandbox";
 import { UNVERIFIED_PARAM_TOOLS, extractToolPath, isFileTool, isSafeTool } from "./tool-path-checker";
 import { buildAgentEnv } from "./agent-env";
 import { createSandboxHook } from "./sandbox-hook";
+import { abortableReviewGate, type AgentSession } from "./review-gate";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -50,56 +51,10 @@ function patchWorkspacePermissions(workspacePath: string): void {
 // ---------------------------------------------------------------------------
 // Active session tracking
 // ---------------------------------------------------------------------------
-interface AgentSession {
-  abort: AbortController;
-  reviewGateResolvers: Map<string, (selection: string) => void>;
-}
-
 const activeSessions = new Map<string, AgentSession>();
-
-const REVIEW_GATE_TIMEOUT_MS = 5 * 60 * 1_000; // 5 minutes
 
 function sessionKey(userId: string, conversationId: string) {
   return `${userId}:${conversationId}`;
-}
-
-/**
- * Create a promise that resolves when the user responds to a review gate,
- * or rejects when the session is aborted (disconnect) or the timeout elapses.
- */
-function abortableReviewGate(
-  session: AgentSession,
-  gateId: string,
-  signal: AbortSignal,
-  timeoutMs: number = REVIEW_GATE_TIMEOUT_MS,
-): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason || new Error("Session aborted"));
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      session.reviewGateResolvers.delete(gateId);
-      reject(new Error("Review gate timed out"));
-    }, timeoutMs);
-    timer.unref();
-
-    const onAbort = () => {
-      clearTimeout(timer);
-      session.reviewGateResolvers.delete(gateId);
-      reject(signal.reason || new Error("Session aborted"));
-    };
-
-    signal.addEventListener("abort", onAbort, { once: true });
-
-    session.reviewGateResolvers.set(gateId, (selection: string) => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      resolve(selection);
-    });
-  });
 }
 
 /** Abort a running agent session (called from ws-handler on disconnect). */
@@ -397,7 +352,18 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
       }
     }
   } catch (err) {
-    if (!controller.signal.aborted) {
+    if (controller.signal.aborted) {
+      // Disconnect or abort -- mark conversation as failed so it does not
+      // stay stuck in "waiting_for_user" or "active" status forever.
+      await updateConversationStatus(conversationId, "failed").catch(
+        (statusErr) => {
+          console.error(
+            `[agent] Failed to mark aborted conversation ${conversationId} as failed:`,
+            statusErr,
+          );
+        },
+      );
+    } else {
       console.error(`[agent] Session error for ${userId}/${conversationId}:`, err);
       const message = sanitizeErrorForClient(err);
       sendToClient(userId, {

@@ -338,10 +338,10 @@ export function setupWebSocket(server: HTTPServer) {
         const current = sessions.get(userId);
         if (current?.ws === ws) {
           sessions.delete(userId);
-        }
-        // Abort any running agent session so review gate promises reject
-        if (current?.conversationId) {
-          abortSession(userId, current.conversationId);
+          // Abort any running agent session so review gate promises reject
+          if (current.conversationId) {
+            abortSession(userId, current.conversationId);
+          }
         }
         console.log(`[ws] User ${userId} disconnected`);
       }

@@ -1,52 +1,9 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
-
-// We cannot import the private abortableReviewGate directly, so we
-// re-implement the same logic in a test-local copy. This validates the
-// algorithm without coupling to internal module structure.
-// The production code is verified end-to-end via the exported resolveReviewGate
-// and abortSession functions.
-
-interface AgentSession {
-  abort: AbortController;
-  reviewGateResolvers: Map<string, (selection: string) => void>;
-}
-
-const REVIEW_GATE_TIMEOUT_MS = 5 * 60 * 1_000;
-
-function abortableReviewGate(
-  session: AgentSession,
-  gateId: string,
-  signal: AbortSignal,
-  timeoutMs: number = REVIEW_GATE_TIMEOUT_MS,
-): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason || new Error("Session aborted"));
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      session.reviewGateResolvers.delete(gateId);
-      reject(new Error("Review gate timed out"));
-    }, timeoutMs);
-    timer.unref();
-
-    const onAbort = () => {
-      clearTimeout(timer);
-      session.reviewGateResolvers.delete(gateId);
-      reject(signal.reason || new Error("Session aborted"));
-    };
-
-    signal.addEventListener("abort", onAbort, { once: true });
-
-    session.reviewGateResolvers.set(gateId, (selection: string) => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      resolve(selection);
-    });
-  });
-}
+import {
+  abortableReviewGate,
+  REVIEW_GATE_TIMEOUT_MS,
+  type AgentSession,
+} from "../server/review-gate";
 
 describe("abortableReviewGate", () => {
   let session: AgentSession;
@@ -68,7 +25,6 @@ describe("abortableReviewGate", () => {
   test("resolves normally when user responds", async () => {
     const promise = abortableReviewGate(session, "g1", controller.signal);
 
-    // Simulate user response
     const resolver = session.reviewGateResolvers.get("g1");
     expect(resolver).toBeDefined();
     resolver!("Approve");
@@ -84,7 +40,7 @@ describe("abortableReviewGate", () => {
     resolver!("Approve");
     await promise;
 
-    // Aborting after resolution should not throw
+    // Aborting after resolution should not throw — the listener was removed
     controller.abort(new Error("late abort"));
   });
 
@@ -97,6 +53,7 @@ describe("abortableReviewGate", () => {
 
     // Advancing past the timeout should not cause rejection
     vi.advanceTimersByTime(2000);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   test("rejects when abort signal fires", async () => {
@@ -141,7 +98,6 @@ describe("abortableReviewGate", () => {
     const promise = abortableReviewGate(session, "g1", controller.signal);
 
     await expect(promise).rejects.toThrow("already aborted");
-    // Should not register a resolver
     expect(session.reviewGateResolvers.has("g1")).toBe(false);
   });
 
@@ -162,9 +118,12 @@ describe("abortableReviewGate", () => {
 
     // Advancing past timeout should not cause additional rejection
     vi.advanceTimersByTime(2000);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   test("uses default 5-minute timeout", async () => {
+    expect(REVIEW_GATE_TIMEOUT_MS).toBe(5 * 60 * 1_000);
+
     const promise = abortableReviewGate(session, "g1", controller.signal);
 
     // 4m59s should not timeout
@@ -177,8 +136,9 @@ describe("abortableReviewGate", () => {
   });
 
   test("no-op when no review gate is pending on disconnect", () => {
-    // Empty resolvers map — abort should not throw
     expect(session.reviewGateResolvers.size).toBe(0);
     controller.abort(new Error("disconnect"));
+    // Map should remain empty and not throw
+    expect(session.reviewGateResolvers.size).toBe(0);
   });
 });
