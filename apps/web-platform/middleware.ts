@@ -1,15 +1,11 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const PUBLIC_PATHS = [
-  "/login",
-  "/signup",
-  "/callback",
-  "/accept-terms",
-  "/api/accept-terms",
-  "/api/webhooks",
-  "/ws",
-];
+// No auth required — middleware returns early
+const PUBLIC_PATHS = ["/login", "/signup", "/callback", "/api/webhooks", "/ws"];
+
+// Auth required, but T&C check skipped (user must reach these to accept terms)
+const TC_EXEMPT_PATHS = ["/accept-terms", "/api/accept-terms"];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -75,15 +71,17 @@ export async function middleware(request: NextRequest) {
     return redirectWithCookies("/login");
   }
 
-  // Check T&C acceptance — redirect to /accept-terms if not yet accepted
-  const { data: userRow } = await supabase
-    .from("users")
-    .select("tc_accepted_at")
-    .eq("id", user.id)
-    .single();
+  // Skip T&C check for exempt paths (accept-terms page and API)
+  if (!TC_EXEMPT_PATHS.some((p) => pathname.startsWith(p))) {
+    const { data: userRow } = await supabase
+      .from("users")
+      .select("tc_accepted_at")
+      .eq("id", user.id)
+      .single();
 
-  if (!userRow?.tc_accepted_at) {
-    return redirectWithCookies("/accept-terms");
+    if (!userRow?.tc_accepted_at) {
+      return redirectWithCookies("/accept-terms");
+    }
   }
 
   return response;
