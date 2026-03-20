@@ -54,6 +54,13 @@ exit 0
 MOCK
     chmod +x "$MOCK_DIR/curl"
 
+    # Mock sudo (just runs the command without privilege escalation)
+    cat > "$MOCK_DIR/sudo" << 'MOCK'
+#!/bin/bash
+exec "$@"
+MOCK
+    chmod +x "$MOCK_DIR/sudo"
+
     # Mock chown
     cat > "$MOCK_DIR/chown" << 'MOCK'
 #!/bin/bash

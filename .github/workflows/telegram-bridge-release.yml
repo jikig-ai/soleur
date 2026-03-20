@@ -37,7 +37,6 @@ jobs:
     if: needs.release.outputs.released == 'true'
     runs-on: ubuntu-latest
     steps:
-
       - name: Deploy to server
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
@@ -45,7 +44,4 @@ jobs:
           username: deploy
           key: ${{ secrets.WEB_PLATFORM_SSH_KEY }}
           fingerprint: ${{ secrets.WEB_PLATFORM_HOST_FINGERPRINT }}
-          script: |
-            TAG="v${{ needs.release.outputs.version }}"
-            [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ERROR: Invalid version format: $TAG"; exit 1; }
-            deploy telegram-bridge ghcr.io/jikig-ai/soleur-telegram-bridge "$TAG"
+          script: deploy telegram-bridge ghcr.io/jikig-ai/soleur-telegram-bridge v${{ needs.release.outputs.version }}
