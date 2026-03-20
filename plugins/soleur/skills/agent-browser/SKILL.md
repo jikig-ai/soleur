@@ -11,7 +11,7 @@ Vercel's headless browser automation CLI designed for AI agents. Uses ref-based 
 
 ```bash
 # Check installation
-command -v agent-browser >/dev/null 2>&1 && echo "Installed" || echo "NOT INSTALLED - run: npm install -g agent-browser && agent-browser install"
+command -v agent-browser >/dev/null 2>&1 && echo "Installed" || echo "NOT INSTALLED - run: npm install -g agent-browser@0.21.4 && agent-browser install"
 ```
 
 ### Install if needed
