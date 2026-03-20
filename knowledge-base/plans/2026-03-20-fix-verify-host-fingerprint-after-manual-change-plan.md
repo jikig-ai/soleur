@@ -7,7 +7,7 @@ deepened: 2026-03-20
 
 # fix: verify WEB_PLATFORM_HOST_FINGERPRINT secret after manual change
 
-## Enhancement Summary
+## Summary
 
 **Deepened on:** 2026-03-20
 **Sections enhanced:** 4 (Technical Considerations, Proposed Solution, MVP, Test Scenarios)
@@ -102,7 +102,7 @@ The `publicKey` in the callback is whatever key the server presents during the S
 
 - **Incident timeline**: PR #834 broke deploys at 08:31 UTC by switching to `username: deploy` before server-side setup. The fingerprint was manually updated at 08:44 UTC during triage. PR #847 reverted to `username: root` at 09:40 UTC. PR #859 completed the proper deploy user migration at 09:54 UTC.
 - **Related learning**: `2026-03-20-premature-ssh-user-migration-breaks-ci-deploys.md` documents the full incident and notes the fingerprint mismatch as a secondary failure mode.
-- **Key algorithm note**: The learning states "appleboy/ssh-action negotiated ed25519 but the stored fingerprint was for a different algorithm" -- this suggests the manual update may have used the wrong key type's fingerprint.
+- **Key algorithm note**: The learning states "appleboy/ssh-action negotiated ed25519 but the stored fingerprint was for a different algorithm" -- this hypothesis was written during the incident before investigation. **Post-investigation correction:** ssh-action actually negotiates ECDSA, not ED25519. See `2026-03-20-ssh-action-negotiates-ecdsa-not-ed25519.md`.
 
 ## MVP
 

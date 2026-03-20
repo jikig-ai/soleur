@@ -18,7 +18,7 @@ done
 gh secret set WEB_PLATFORM_HOST_FINGERPRINT --body "SHA256:<ecdsa-hash>"
 ```
 
-### Server fingerprints (soleur-web-platform, 135.181.45.178)
+### Server fingerprints (soleur-web-platform, see WEB_PLATFORM_HOST secret)
 
 | Key Type | Fingerprint |
 |----------|------------|
