@@ -197,21 +197,21 @@ This works on all Node.js versions (including those without native fetch). Not n
 
 ## Acceptance Criteria
 
-- [ ] Production Docker image does NOT contain devDependencies (vitest, eslint, typescript, tailwindcss, postcss, tsx, type packages)
-- [ ] `npm run build` (Next.js) succeeds in the build stage
-- [ ] Custom server compiles to JavaScript via esbuild in the build stage
-- [ ] Production image starts successfully with `node dist/server/index.js`
+- [x] Production Docker image does NOT contain devDependencies (vitest, eslint, typescript, tailwindcss, postcss, tsx, type packages)
+- [x] `npm run build` (Next.js) succeeds in the build stage
+- [x] Custom server compiles to JavaScript via esbuild in the build stage
+- [x] Production image starts successfully with `node dist/server/index.js`
 - [ ] WebSocket connections work (server/ws-handler.ts functionality preserved)
 - [ ] Agent SDK sessions work (server/agent-runner.ts functionality preserved)
-- [ ] `/health` endpoint responds with 200
-- [ ] Healthcheck uses `node -e` instead of `curl`
-- [ ] `@anthropic-ai/claude-code` CLI available in production image
-- [ ] `git` available in production image
-- [ ] `NEXT_PUBLIC_*` build args still work for client-side inlining
+- [x] `/health` endpoint responds with 200
+- [x] Healthcheck uses `node -e` instead of `curl`
+- [x] `@anthropic-ai/claude-code` CLI available in production image
+- [x] `git` available in production image
+- [x] `NEXT_PUBLIC_*` build args still work for client-side inlining
 - [ ] CI workflow (`web-platform-release.yml`) builds and pushes successfully without changes
-- [ ] Image size is smaller than the current single-stage image
-- [ ] Container runs as non-root user (`node`, uid 1000)
-- [ ] `@/*` path aliases in server code are resolved in bundled output (no runtime import errors)
+- [x] Image size is smaller than the current single-stage image
+- [x] Container runs as non-root user (`node`, uid 1000)
+- [x] `@/*` path aliases in server code are resolved in bundled output (no runtime import errors)
 
 ## Test Scenarios
 

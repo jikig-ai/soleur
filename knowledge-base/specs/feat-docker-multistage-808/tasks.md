@@ -2,34 +2,34 @@
 
 ## Phase 1: Setup
 
-- [ ] 1.1 Verify current Docker build works (`docker build -t test-before apps/web-platform/`) to establish baseline
-- [ ] 1.2 Record current image size for comparison (`docker images test-before`)
+- [x] 1.1 Verify current Docker build works (`docker build -t test-before apps/web-platform/`) to establish baseline
+- [x] 1.2 Record current image size for comparison (`docker images test-before`)
 
 ## Phase 2: Core Implementation
 
-- [ ] 2.1 Rewrite `apps/web-platform/Dockerfile` as a 3-stage multi-stage build
-  - [ ] 2.1.1 Stage 1 (`deps`): `FROM node:22-slim`, copy `package.json` + `package-lock.json`, run `npm ci`
-  - [ ] 2.1.2 Stage 2 (`builder`): extend `deps`, copy source, accept `NEXT_PUBLIC_*` ARGs, run `npm run build`, run esbuild to compile `server/` to `dist/server/index.js` (esbuild resolves `@/*` path aliases automatically from `tsconfig.json`)
-  - [ ] 2.1.3 Stage 3 (`runner`): fresh `FROM node:22-slim`, install `@anthropic-ai/claude-code@2.1.79` globally, install `git` with `--no-install-recommends`, copy `package.json` + `package-lock.json`, run `npm ci --omit=dev`, copy `.next/`, `public/`, `dist/server/`, `next.config.ts` from builder, add `USER node` for non-root execution
-- [ ] 2.2 Update `apps/web-platform/package.json`
-  - [ ] 2.2.1 Add `build:server` script: `esbuild server/index.ts --bundle --platform=node --target=node22 --outfile=dist/server/index.js --external:next --external:react --external:react-dom --external:@supabase/supabase-js --external:@supabase/ssr --external:ws --external:stripe --external:@anthropic-ai/claude-agent-sdk` (explicit externals required -- esbuild reverted the `--packages=external` default)
-  - [ ] 2.2.2 Update `start` script from `NODE_ENV=production tsx server/index.ts` to `NODE_ENV=production node dist/server/index.js`
-  - [ ] 2.2.3 Add `esbuild` to devDependencies and run `npm install` to update lockfile
-- [ ] 2.3 Replace `curl`-based healthcheck with `node -e "fetch('http://localhost:3000/health').then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"`
-- [ ] 2.4 Update `CMD` from `["npm", "run", "start"]` to `["node", "dist/server/index.js"]` (ensures Node receives SIGTERM directly)
-- [ ] 2.5 Add `USER node` before `EXPOSE` in runner stage (non-root security hardening; `node:22-slim` includes built-in `node` user at uid 1000)
+- [x] 2.1 Rewrite `apps/web-platform/Dockerfile` as a 3-stage multi-stage build
+  - [x] 2.1.1 Stage 1 (`deps`): `FROM node:22-slim`, copy `package.json` + `package-lock.json`, run `npm ci`
+  - [x] 2.1.2 Stage 2 (`builder`): extend `deps`, copy source, accept `NEXT_PUBLIC_*` ARGs, run `npm run build`, run esbuild to compile `server/` to `dist/server/index.js`, compile `next.config.ts` to `.mjs`
+  - [x] 2.1.3 Stage 3 (`runner`): fresh `FROM node:22-slim`, install `@anthropic-ai/claude-code@2.1.79` globally, install `git` with `--no-install-recommends`, copy `package.json` + `package-lock.json`, run `npm ci --omit=dev`, copy `.next/`, `dist/server/`, `next.config.mjs` from builder, add `USER node` for non-root execution
+- [x] 2.2 Update `apps/web-platform/package.json`
+  - [x] 2.2.1 Add `build:server` script with explicit `--external:` flags
+  - [x] 2.2.2 Update `start` script from `NODE_ENV=production tsx server/index.ts` to `NODE_ENV=production node dist/server/index.js`
+  - [x] 2.2.3 Add `esbuild` to devDependencies and run `npm install` to update lockfile
+- [x] 2.3 Replace `curl`-based healthcheck with `node -e "fetch(...)"`
+- [x] 2.4 Update `CMD` from `["npm", "run", "start"]` to `["node", "dist/server/index.js"]`
+- [x] 2.5 Add `USER node` before `EXPOSE` in runner stage
 
 ## Phase 3: Testing
 
-- [ ] 3.1 Build the multi-stage image locally (`docker build -t test-after apps/web-platform/ --build-arg NEXT_PUBLIC_SUPABASE_URL=test --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=test`)
-- [ ] 3.2 Verify no devDependencies in production image (`docker run --rm test-after npm ls --omit=dev 2>&1`)
-- [ ] 3.3 Verify specific devDep binaries are absent (`docker run --rm test-after sh -c "which vitest tsc eslint 2>&1"`)
-- [ ] 3.4 Verify `claude` CLI is available (`docker run --rm test-after claude --version`)
-- [ ] 3.5 Verify `git` is available (`docker run --rm test-after git --version`)
-- [ ] 3.6 Compare image sizes (`docker images test-before` vs `docker images test-after`)
-- [ ] 3.7 Verify container runs as non-root (`docker run --rm test-after whoami` should output `node`)
-- [ ] 3.8 Verify esbuild output has no unresolved `@/` aliases (`docker run --rm test-after grep -c "@/" dist/server/index.js` should be 0 or only in string literals)
-- [ ] 3.9 Verify externals are not bundled (`docker run --rm test-after head -20 dist/server/index.js` should show `require("next")` etc.)
-- [ ] 3.10 Start container and verify `/health` endpoint responds
-- [ ] 3.11 Verify healthcheck passes inside container (`docker inspect --format='{{.State.Health.Status}}' <container>`)
-- [ ] 3.12 Verify signal handling: `docker stop` completes within 2 seconds (not 10s timeout)
+- [x] 3.1 Build the multi-stage image locally
+- [x] 3.2 Verify no devDependencies in production image (vitest, tsc, eslint absent)
+- [x] 3.3 Verify specific devDep binaries are absent
+- [x] 3.4 Verify `claude` CLI is available (v2.1.79)
+- [x] 3.5 Verify `git` is available
+- [x] 3.6 Image size: 1.29GB (production only)
+- [x] 3.7 Verify container runs as non-root (`whoami` → `node`)
+- [x] 3.8 Verify esbuild output has no unresolved `@/` aliases (0 matches)
+- [x] 3.9 Verify externals are not bundled (`require("next")` present)
+- [x] 3.10 Start container and verify `/health` endpoint responds `{"status":"ok"}`
+- [x] 3.11 Verify healthcheck passes (`healthy`)
+- [ ] 3.12 Signal handling: `docker stop` takes 10s (pre-existing — server lacks SIGTERM handler, out of scope for #808)
