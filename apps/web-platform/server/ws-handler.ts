@@ -299,6 +299,18 @@ export function setupWebSocket(server: HTTPServer) {
         authenticated = true;
         userId = user.id;
 
+        // Enforce T&C acceptance
+        const { data: userRow } = await supabase
+          .from("users")
+          .select("tc_accepted_at")
+          .eq("id", user.id)
+          .single();
+
+        if (!userRow?.tc_accepted_at) {
+          ws.close(4004, "T&C not accepted");
+          return;
+        }
+
         // If user already has an open socket, close the old one
         const existing = sessions.get(userId);
         if (existing && existing.ws.readyState === WebSocket.OPEN) {

@@ -427,20 +427,20 @@ The middleware `config.matcher` already excludes `_next/static`, `_next/image`, 
 
 ## Acceptance Criteria
 
-- [ ] Authenticated users with `tc_accepted_at IS NULL` are redirected to `/accept-terms` on every protected route
-- [ ] `/accept-terms` page renders with a clickwrap checkbox and submit button
-- [ ] Checkbox links to the live T&C and Privacy Policy URLs
-- [ ] Submitting the form POSTs to `/api/accept-terms`
-- [ ] `POST /api/accept-terms` sets `tc_accepted_at` to the current timestamp via service role
-- [ ] `POST /api/accept-terms` does NOT overwrite an existing `tc_accepted_at` (immutability)
-- [ ] After accepting, the user is redirected to `/dashboard`
-- [ ] Users who accepted T&C during signup (existing flow) are not affected -- they have `tc_accepted_at` set and proceed normally
-- [ ] WebSocket connections from users with `tc_accepted_at IS NULL` are rejected with close code 4004
-- [ ] `/accept-terms` page is accessible without triggering a redirect loop
-- [ ] `/api/accept-terms` is accessible from the accept-terms page (not blocked by middleware)
-- [ ] The `User` type in `lib/types.ts` includes `tc_accepted_at`
-- [ ] Existing middleware tests pass
-- [ ] New tests cover the T&C enforcement paths
+- [x] Authenticated users with `tc_accepted_at IS NULL` are redirected to `/accept-terms` on every protected route
+- [x] `/accept-terms` page renders with a clickwrap checkbox and submit button
+- [x] Checkbox links to the live T&C and Privacy Policy URLs
+- [x] Submitting the form POSTs to `/api/accept-terms`
+- [x] `POST /api/accept-terms` sets `tc_accepted_at` to the current timestamp via service role
+- [x] `POST /api/accept-terms` does NOT overwrite an existing `tc_accepted_at` (immutability)
+- [x] After accepting, the user is redirected to `/dashboard`
+- [x] Users who accepted T&C during signup (existing flow) are not affected -- they have `tc_accepted_at` set and proceed normally
+- [x] WebSocket connections from users with `tc_accepted_at IS NULL` are rejected with close code 4004
+- [x] `/accept-terms` page is accessible without triggering a redirect loop
+- [x] `/api/accept-terms` is accessible from the accept-terms page (not blocked by middleware)
+- [x] The `User` type in `lib/types.ts` includes `tc_accepted_at`
+- [x] Existing middleware tests pass
+- [x] New tests cover the T&C enforcement paths
 
 ## Test Scenarios
 

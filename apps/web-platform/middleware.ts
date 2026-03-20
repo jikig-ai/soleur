@@ -1,7 +1,7 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const PUBLIC_PATHS = ["/login", "/signup", "/callback", "/api/webhooks", "/ws"];
+const PUBLIC_PATHS = ["/login", "/signup", "/callback", "/api/webhooks", "/ws", "/accept-terms", "/api/accept-terms"];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -56,6 +56,19 @@ export async function middleware(request: NextRequest) {
   if (!user) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
+    return NextResponse.redirect(url);
+  }
+
+  // Enforce T&C acceptance — redirect to /accept-terms if not accepted
+  const { data: userRow } = await supabase
+    .from("users")
+    .select("tc_accepted_at")
+    .eq("id", user.id)
+    .single();
+
+  if (!userRow?.tc_accepted_at) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/accept-terms";
     return NextResponse.redirect(url);
   }
 
