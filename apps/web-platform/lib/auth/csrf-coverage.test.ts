@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "fs";
-import { resolve } from "path";
+import { readFileSync, readdirSync, statSync } from "fs";
+import { resolve, join } from "path";
 
 /**
  * Negative-space test: every POST route handler in app/api/ must either
@@ -25,7 +25,7 @@ describe("CSRF coverage", () => {
 
     for (const filePath of routeFiles) {
       const content = readFileSync(filePath, "utf-8");
-      if (!content.includes("export async function POST")) continue;
+      if (!/export\s+(async\s+)?function\s+POST/.test(content)) continue;
 
       const relativePath = filePath
         .split("/apps/web-platform/")[1];
@@ -45,8 +45,6 @@ describe("CSRF coverage", () => {
 });
 
 function findRouteFiles(dir: string): string[] {
-  const { readdirSync, statSync } = require("fs");
-  const { join } = require("path");
   const results: string[] = [];
 
   for (const entry of readdirSync(dir)) {

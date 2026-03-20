@@ -16,12 +16,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const appOrigin = process.env.NEXT_PUBLIC_APP_URL ?? "https://app.soleur.ai";
+
   const session = await getStripe().checkout.sessions.create({
     customer_email: user.email,
     mode: "subscription",
     line_items: [{ price: process.env.STRIPE_PRICE_ID!, quantity: 1 }],
-    success_url: `${new URL(request.url).origin}/dashboard?checkout=success`,
-    cancel_url: `${new URL(request.url).origin}/dashboard?checkout=cancelled`,
+    success_url: `${appOrigin}/dashboard?checkout=success`,
+    cancel_url: `${appOrigin}/dashboard?checkout=cancelled`,
     metadata: { supabase_user_id: user.id },
   });
 

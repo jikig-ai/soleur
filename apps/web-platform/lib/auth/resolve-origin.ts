@@ -1,4 +1,4 @@
-import { getAllowedOrigins } from "./allowed-origins";
+import { getAllowedOrigins } from "./validate-origin";
 
 export function resolveOrigin(
   forwardedHost: string | null,

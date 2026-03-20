@@ -7,7 +7,10 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ["@anthropic-ai/claude-agent-sdk", "ws"],
   // SECURITY: restrict Server Action origins for defense-in-depth
   serverActions: {
-    allowedOrigins: ["app.soleur.ai"],
+    allowedOrigins:
+      process.env.NODE_ENV === "development"
+        ? ["app.soleur.ai", "localhost:3000"]
+        : ["app.soleur.ai"],
   },
 };
 
