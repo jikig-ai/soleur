@@ -29,9 +29,9 @@ The web-platform Dockerfile uses `FROM node:22-slim AS base` without a digest pi
 
 ## Acceptance Criteria
 
-- [ ] `apps/web-platform/Dockerfile` line 1 uses `FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d AS base` instead of `FROM node:22-slim AS base`
-- [ ] No other lines in the Dockerfile are changed (single-line security fix)
-- [ ] Docker build succeeds locally with the pinned image (`docker build apps/web-platform/`)
+- [x] `apps/web-platform/Dockerfile` line 1 uses `FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d AS base` instead of `FROM node:22-slim AS base`
+- [x] No other lines in the Dockerfile are changed (single-line security fix)
+- [x] Docker build succeeds locally with the pinned image (`docker build apps/web-platform/`)
 - [ ] CI release workflow (`web-platform-release.yml` via `reusable-release.yml`) builds and pushes successfully with the pinned base image
 
 ### Research Insights
