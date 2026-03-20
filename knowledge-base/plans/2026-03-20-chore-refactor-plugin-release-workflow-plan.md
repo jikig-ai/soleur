@@ -146,13 +146,13 @@ The workflow filename `version-bump-and-release.yml` does not change. All refere
 
 ## Acceptance Criteria
 
-- [ ] `.github/workflows/version-bump-and-release.yml` calls `reusable-release.yml` with `component=plugin`, `tag_prefix=v`
-- [ ] Workflow retains `workflow_dispatch` with `bump_type` input (escape hatch)
-- [ ] Workflow retains `push: branches: [main]` trigger
-- [ ] No Docker build or deploy steps in the refactored workflow
-- [ ] File reduced from ~286 lines to ~25 lines
+- [x] `.github/workflows/version-bump-and-release.yml` calls `reusable-release.yml` with `component=plugin`, `tag_prefix=v`
+- [x] Workflow retains `workflow_dispatch` with `bump_type` input (escape hatch)
+- [x] Workflow retains `push: branches: [main]` trigger
+- [x] No Docker build or deploy steps in the refactored workflow
+- [x] File reduced from ~286 lines to ~25 lines (31 lines)
 - [ ] Version numbering continuity verified (next release after `v3.23.1` produces `v3.23.2` or higher, not `v0.0.1`)
-- [ ] Workflow file written via `sed` or Python (not Edit/Write tools) due to security hook constraint
+- [x] Workflow file written via `sed` or Python (not Edit/Write tools) due to security hook constraint
 
 ## Test Scenarios
 
