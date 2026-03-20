@@ -35,7 +35,7 @@ ENV PORT=3000
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-# Next.js build output
+# Next.js build output (add COPY --from=builder /app/public ./public when public/ exists)
 COPY --from=builder /app/.next ./.next
 
 # Compiled custom server
