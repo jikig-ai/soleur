@@ -8,6 +8,7 @@ import { KeyInvalidError } from "@/lib/types";
 import { decryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
 import { sanitizeErrorForClient } from "./error-sanitizer";
+import { containsSensitiveEnvAccess } from "./bash-sandbox";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -155,7 +156,29 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         maxTurns: 50,
         maxBudgetUsd: 5.0,
         systemPrompt,
-        env: { ...process.env, ANTHROPIC_API_KEY: apiKey },
+        env: {
+          ANTHROPIC_API_KEY: apiKey,
+          HOME: workspacePath,
+          PATH: process.env.PATH,
+          GIT_AUTHOR_NAME: "Soleur",
+          GIT_AUTHOR_EMAIL: "soleur@localhost",
+          GIT_COMMITTER_NAME: "Soleur",
+          GIT_COMMITTER_EMAIL: "soleur@localhost",
+        },
+        disallowedTools: ["WebSearch", "WebFetch"],
+        sandbox: {
+          enabled: true,
+          autoAllowBashIfSandboxed: true,
+          allowUnsandboxedCommands: false,
+          network: {
+            allowedDomains: [],
+            allowManagedDomainsOnly: true,
+          },
+          filesystem: {
+            allowWrite: [workspacePath],
+            denyRead: ["/workspaces"],
+          },
+        },
         plugins: [{ type: "local" as const, path: pluginPath }],
         canUseTool: async (
           toolName: string,
@@ -175,6 +198,18 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
                 message: "Access denied: outside workspace",
               };
             }
+          }
+
+          // Bash: sandbox handles OS-level isolation; check env var access as defense-in-depth
+          if (toolName === "Bash") {
+            const command = (toolInput.command as string) || "";
+            if (containsSensitiveEnvAccess(command)) {
+              return {
+                behavior: "deny" as const,
+                message: "Access denied: sensitive environment variable access",
+              };
+            }
+            return { behavior: "allow" as const };
           }
 
           // Review gates: intercept AskUserQuestion
@@ -210,7 +245,16 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             };
           }
 
-          return { behavior: "allow" as const };
+          // Agent tool: allow (subagents inherit sandbox)
+          if (toolName === "Agent") {
+            return { behavior: "allow" as const };
+          }
+
+          // Deny-by-default: block unrecognized tools
+          return {
+            behavior: "deny" as const,
+            message: "Tool not permitted in this environment",
+          };
         },
       },
     });

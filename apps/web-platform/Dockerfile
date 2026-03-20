@@ -24,8 +24,10 @@ FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9
 # Install Claude Code CLI (needed by Agent SDK)
 RUN npm install -g @anthropic-ai/claude-code@2.1.79
 
-# Install git (needed for workspace provisioning)
-RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+# Install git (workspace provisioning) + bubblewrap/socat (Agent SDK sandbox)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git bubblewrap socat \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 ENV NODE_ENV=production

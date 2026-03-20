@@ -309,20 +309,20 @@ env: {
 
 ## Acceptance Criteria
 
-- [ ] SDK sandbox enabled in `query()` options with `enabled: true`, `autoAllowBashIfSandboxed: true`, `allowUnsandboxedCommands: false` (`apps/web-platform/server/agent-runner.ts`)
-- [ ] Sandbox filesystem configured: `allowWrite: [workspacePath]`, `denyRead: ["/workspaces"]` with user workspace excepted
-- [ ] Sandbox network configured: `allowedDomains: []`, `allowManagedDomainsOnly: true` (no outbound network)
-- [ ] `canUseTool` has deny-by-default policy: unrecognized tools are denied
-- [ ] `canUseTool` Bash branch checks for sensitive env var access patterns via `containsSensitiveEnvAccess()`
-- [ ] `containsSensitiveEnvAccess()` extracted to `apps/web-platform/server/bash-sandbox.ts` for unit testing
-- [ ] `env` option in `query()` passes minimal env vars (not `...process.env`) to prevent secret leakage
-- [ ] `disallowedTools: ["WebSearch", "WebFetch"]` added to `query()` options
-- [ ] `.claude/settings.json` provisioned by `server/workspace.ts` has empty `permissions.allow` array
-- [ ] `.claude/settings.json` includes `sandbox.enabled: true`
-- [ ] `workspace.test.ts` updated to assert empty permissions and sandbox enabled
-- [ ] New `bash-sandbox.test.ts` covers `containsSensitiveEnvAccess()` patterns
-- [ ] Dockerfile updated: `apt-get install bubblewrap socat` alongside `git`
-- [ ] Existing file-system tool validation in `canUseTool` continues to work unchanged
+- [x] SDK sandbox enabled in `query()` options with `enabled: true`, `autoAllowBashIfSandboxed: true`, `allowUnsandboxedCommands: false` (`apps/web-platform/server/agent-runner.ts`)
+- [x] Sandbox filesystem configured: `allowWrite: [workspacePath]`, `denyRead: ["/workspaces"]` with user workspace excepted
+- [x] Sandbox network configured: `allowedDomains: []`, `allowManagedDomainsOnly: true` (no outbound network)
+- [x] `canUseTool` has deny-by-default policy: unrecognized tools are denied
+- [x] `canUseTool` Bash branch checks for sensitive env var access patterns via `containsSensitiveEnvAccess()`
+- [x] `containsSensitiveEnvAccess()` extracted to `apps/web-platform/server/bash-sandbox.ts` for unit testing
+- [x] `env` option in `query()` passes minimal env vars (not `...process.env`) to prevent secret leakage
+- [x] `disallowedTools: ["WebSearch", "WebFetch"]` added to `query()` options
+- [x] `.claude/settings.json` provisioned by `server/workspace.ts` has empty `permissions.allow` array
+- [x] `.claude/settings.json` includes `sandbox.enabled: true`
+- [x] `workspace.test.ts` updated to assert empty permissions and sandbox enabled
+- [x] New `bash-sandbox.test.ts` covers `containsSensitiveEnvAccess()` patterns
+- [x] Dockerfile updated: `apt-get install bubblewrap socat` alongside `git`
+- [x] Existing file-system tool validation in `canUseTool` continues to work unchanged
 - [ ] SDK sandbox tested in Docker environment (may need `enableWeakerNestedSandbox: true`)
 
 ## SpecFlow Analysis
