@@ -1,30 +1,32 @@
 ---
-last_updated: 2026-03-12
-last_reviewed: 2026-03-12
+last_updated: 2026-03-20
+last_reviewed: 2026-03-20
 review_cadence: quarterly
 depends_on:
-  - knowledge-base/overview/brand-guide.md
-  - knowledge-base/overview/marketing-strategy.md
-  - knowledge-base/overview/competitive-intelligence.md
-  - knowledge-base/audits/soleur-ai/2026-02-19-content-plan.md
-  - knowledge-base/audits/soleur-ai/2026-02-19-content-audit.md
+  - knowledge-base/marketing/brand-guide.md
+  - knowledge-base/marketing/marketing-strategy.md
+  - knowledge-base/product/competitive-intelligence.md
+  - knowledge-base/marketing/audits/soleur-ai/2026-03-17-content-plan.md
+  - knowledge-base/marketing/audits/soleur-ai/2026-03-17-content-audit.md
+  - knowledge-base/marketing/audits/soleur-ai/2026-03-17-aeo-audit.md
+  - knowledge-base/marketing/audits/soleur-ai/2026-03-17-seo-audit.md
 ---
 
 # Soleur Content Strategy
 
 ## Purpose
 
-This document defines what content Soleur needs, why, in what order, and how it connects to the marketing strategy. It synthesizes findings from the content audit (2026-02-19), keyword research (2026-02-19), and competitive intelligence (2026-03-12).
+This document defines what content Soleur needs, why, in what order, and how it connects to the marketing strategy. It synthesizes findings from the content audit (2026-03-17), AEO audit (2026-03-17), SEO audit (2026-03-17), keyword research (2026-03-17), and competitive intelligence (2026-03-12).
 
 ---
 
 ## Content Gap Analysis
 
-Five content gaps block Soleur's organic discovery and category authority. Ranked by strategic impact.
+Twelve content gaps block Soleur's organic discovery and category authority. Ranked by strategic impact. Gaps marked `[COMPLETED]` are addressed; their history is preserved for institutional context.
 
-### Gap 1: Cross-Domain Compounding Narrative (Critical)
+### Gap 1: Cross-Domain Compounding Narrative (Critical) [UPDATED 2026-03-20]
 
-**What is missing:** No content anywhere explains the compounding knowledge base -- Soleur's single strongest differentiator. The homepage mentions "knowledge compounds" as a tagline but never elaborates. A founder comparing Soleur to Cowork, Cursor, or Notion has no way to understand why cross-domain memory matters.
+**What is missing:** The "Why Most Agentic Engineering Tools Plateau" blog post (SAP 4.8/5.0) partially addresses this gap by explaining compound knowledge. However, no dedicated article exists that explains the compounding knowledge base as Soleur's core differentiator in depth. The homepage mentions "knowledge compounds" as a tagline but never elaborates.
 
 **Why it matters:** Tanka explicitly claims "memory compounding" as their moat. Anthropic will eventually add persistence to Cowork. The first platform to own this narrative in public content establishes the standard. That platform should be Soleur, which built the architecture.
 
@@ -33,70 +35,70 @@ Five content gaps block Soleur's organic discovery and category authority. Ranke
 - Homepage section expansion explaining the knowledge flow (brand guide informs marketing, competitive analysis shapes pricing, legal audit references privacy policy)
 - "Built with Soleur" case study demonstrating compounding over 420+ PRs
 
-### Gap 2: CaaS Category Definition (Critical)
+### Gap 2: CaaS Category Definition (Critical) [COMPLETED 2026-03-10]
 
-**What is missing:** Soleur coined "Company-as-a-Service" and uses it as a tagline. But there is no page defining the term, explaining the concept, or positioning it against SaaS, AIaaS, or BPaaS. Anyone searching "company as a service" finds nothing authoritative.
+**Status:** Published as "What Is Company-as-a-Service?" (`/blog/what-is-company-as-a-service/`). SAP score 5.0/5.0 (best on site). FAQ JSON-LD present. 10+ external citations (BLS, TechCrunch, CNBC, VentureBeat, Inc.com, Fortune). Internal linking from homepage badge active.
 
-**Why it matters:** Zero competition for this exact term. Category creation is the highest-leverage content play available. Once Soleur defines CaaS, every competitor entering the space must either adopt Soleur's framing or argue against it. Both outcomes benefit Soleur.
+**Original gap:** Soleur coined "Company-as-a-Service" and used it as a tagline but had no page defining the term. Zero competition for this exact term made category creation the highest-leverage content play.
 
-**Content needed:**
-- Pillar article: "What Is Company-as-a-Service?" (highest priority single piece)
-- FAQ schema on the article for AI engine citability
-- Internal linking from homepage badge to this article
+**Content delivered:**
+- ~~Pillar article: "What Is Company-as-a-Service?"~~ Published
+- ~~FAQ schema on the article~~ FAQPage JSON-LD with 5 questions
+- ~~Internal linking from homepage badge~~ Active
 
-### Gap 3: IDE Positioning (High)
+### Gap 3: IDE Positioning (High) [UPDATED 2026-03-20]
 
-**What is missing:** No content explains how Soleur relates to Cursor, Copilot, Windsurf, Devin, or Claude Code's native capabilities. Solo founders using these tools -- the exact target audience -- have no way to understand the "and" positioning (Soleur works with these tools, not instead of them).
+**What is missing:** Three comparison articles now address the "and" positioning directly: Soleur vs. Cowork (2026-03-16), Soleur vs. Cursor (2026-03-19), Soleur vs. Notion Custom Agents (2026-03-17). The remaining gap is a standalone position paper articulating why an agent platform is fundamentally different from an AI organization -- the conceptual argument, not a product comparison.
 
-**Why it matters:** The most common objection will be "I already use Cursor." Without comparison content, that objection has no answer in searchable form. Commercial-intent keywords like "best Claude Code plugins 2026" and "AI agent platform comparison" drive purchase decisions.
+**Why it matters:** Individual comparisons address specific competitors. The position paper captures the category-level argument that applies to all competitors and emerging entrants.
 
-**Content needed:**
-- Comparison article: "Soleur vs. Alternatives" (honest positioning, not FUD)
-- Individual comparison pages for highest-overlap competitors (Cowork, Cursor, Notion)
-- SEO refresh queue entries for new comparison pages
+**Content remaining:**
+- ~~Comparison article: "Soleur vs. Alternatives"~~ Addressed by 3 individual comparisons
+- ~~Individual comparison pages (Cowork, Cursor, Notion)~~ All published
+- Position paper: "Agent Platform vs. AI Organization" (audit P2 priority)
 
-### Gap 4: Engineering-in-Context Value Proposition (High)
+### Gap 4: Engineering-in-Context Value Proposition (High) [UPDATED 2026-03-20]
 
-**What is missing:** No content explains why engineering agents that share context with marketing, legal, and operations are more valuable than standalone engineering tools. The "agentic engineering" methodology -- brainstorm, plan, implement, review, compound -- is described nowhere outside the product itself.
+**What is missing:** "Why Most Agentic Engineering Tools Plateau" (SAP 4.8/5.0) partially covers this gap by explaining compound knowledge and the brainstorm-plan-implement-review-compound lifecycle. The remaining gap is a dedicated article targeting the trending search query "vibe coding vs agentic engineering" (audit P2-1, score 18/20) -- the highest-priority new content identified by the 2026-03-17 growth audit.
 
-**Why it matters:** "Agentic engineering" is an emerging search term (Zed, Glide publishing). "Compound engineering" has an existing audience (Every.to). Soleur's workflow is a textbook implementation of both concepts but the site never makes this connection.
+**Why it matters:** "Agentic engineering" is now mainstream (IBM, The New Stack, Addy Osmani all publishing). "Vibe coding vs agentic engineering" is a trending comparison query. No authoritative comparison exists that positions Soleur.
 
-**Content needed:**
-- Pillar article: "Agentic Engineering: Beyond Vibe Coding"
+**Content remaining:**
+- ~~Pillar article: "Agentic Engineering: Beyond Vibe Coding"~~ Renamed to "Vibe Coding vs Agentic Engineering: What Solo Founders Need to Know" to better target search query
 - Connection to Every.to's compound engineering methodology
 - Comparison table: vibe coding vs. agentic engineering vs. compound engineering
 
-### Gap 5: Autopilot vs. Decision-Maker Positioning Against Polsia (Critical) [NEW 2026-03-09, UPDATED 2026-03-12]
+### Gap 5: Autopilot vs. Decision-Maker Positioning Against Polsia (Critical) [NEW 2026-03-09, UPDATED 2026-03-20]
 
-**What is missing:** Polsia has accelerated to $1.5M ARR with 2,000+ autonomously managed companies (up from $1M ARR and 1,100+ companies at prior scan). Pricing shifted from flat $50/month to tiered $29-59/month. Polsia's founder Ben Broca's "80% AI, 20% taste" philosophy is gaining media presence (Solo Founders Podcast). No content anywhere articulates why Soleur's founder-in-the-loop philosophy produces better outcomes than full autonomy. This remains the most urgent content gap.
+**What is missing:** Polsia has accelerated to $1.5M ARR with 2,000+ autonomously managed companies. Pricing at $29-59/month. The "Soleur vs Polsia" comparison (audit P2-3, score 16/20) is the next priority comparison article. A standalone position paper on autonomy vs. founder-in-the-loop is still needed.
 
-**Why it matters:** Polsia's growth trajectory ($1M to $1.5M ARR in ~2 weeks) validates the CaaS market thesis aggressively. The tiered pricing ($29-59/month) now undercuts Soleur's hypothesized $49-99/month range at the low end. Solo founders evaluating both platforms need content that frames the trade-off clearly. Without it, Polsia's "AI runs your company while you sleep" narrative goes unchallenged and its pricing anchors expectations.
+**Why it matters:** Polsia's growth validates the CaaS market thesis aggressively. Solo founders evaluating both platforms need content that frames the trade-off clearly. Without it, Polsia's "AI runs your company while you sleep" narrative goes unchallenged.
 
 **Content needed:**
 - Pillar article: "Autopilot vs. Decision-Maker: Two Models for AI Company Operation"
-- Comparison page: "Soleur vs. Polsia" (honest positioning on philosophy, domain coverage, knowledge persistence)
-- Blog post: "Why Human Judgment Compounds Better Than Full Autonomy" (data-driven argument using Soleur's 420+ PR history as evidence)
+- Comparison page: "Soleur vs. Polsia" (audit P2-3, score 16/20)
+- Blog post: "Why Human Judgment Compounds Better Than Full Autonomy"
 
-### Gap 6: Cursor Agent Platform Positioning (Critical) [NEW 2026-03-12]
+### Gap 6: Cursor Agent Platform Positioning (Critical) [COMPLETED 2026-03-19]
 
-**What is missing:** Cursor shipped Automations (March 5, 2026) -- always-on agents triggered by GitHub, Slack, Linear, PagerDuty, and cron schedules -- plus 30+ new marketplace plugins from Atlassian, Datadog, GitLab, and others. Cursor is no longer just an IDE; it is becoming an agent platform with its own plugin ecosystem and built-in memory that learns across runs. No content anywhere addresses this shift or explains why Soleur's approach is fundamentally different.
+**Status:** Published as "Soleur vs Cursor (2026): Full AI Organization vs Code-Only Assistant" (`/blog/2026-03-19-soleur-vs-cursor/`). Addresses Automations, Marketplace, and the engineering-platform vs. company-platform distinction.
 
-**Why it matters:** The "I already use Cursor" objection just got harder to answer. Previously, the response was "Cursor is engineering-only." Now Cursor has a plugin marketplace, event-driven automations, and team marketplaces for private plugins. Third-party developers could build business-domain plugins for Cursor's marketplace, partially replicating Soleur's multi-domain coverage. The "and" positioning (Soleur works with Cursor, not instead of it) needs to be articulated with awareness of Cursor's expanded surface.
+**Original gap:** Cursor shipped Automations (March 5, 2026) with always-on agents and 30+ marketplace plugins. The "I already use Cursor" objection needed an answer that acknowledged Cursor's expanded surface.
 
-**Content needed:**
-- Updated comparison page: "Soleur vs. Cursor" (addressing Automations, marketplace, and the engineering-platform vs. company-platform distinction)
-- Blog post: "Why an Agent Platform Is Not an AI Organization" (distinction between event-driven automation and lifecycle orchestration with cross-domain knowledge compounding)
-- Update to the IDE Positioning gap (Gap 3) to reflect Cursor's March 2026 evolution
+**Content delivered:**
+- ~~Updated comparison page: "Soleur vs. Cursor"~~ Published 2026-03-19
+- Blog post: "Why an Agent Platform Is Not an AI Organization" -- folded into Gap 3 remaining work
+- ~~Update to IDE Positioning gap (Gap 3)~~ Done (Gap 3 updated 2026-03-20)
 
-### Gap 7: Microsoft Copilot Cowork + Anthropic Partnership Narrative (High) [NEW 2026-03-12]
+### Gap 7: Microsoft Copilot Cowork + Anthropic Partnership Narrative (Medium) [NEW 2026-03-12, UPDATED 2026-03-20]
 
 **What is missing:** Microsoft launched Copilot Cowork (March 9, 2026) powered by Anthropic Claude, bringing agentic task execution into Outlook, Teams, and Excel as part of a new E7 Frontier Suite. This extends Anthropic's technology into the 400M+ Microsoft 365 user base. No content addresses this development or frames Soleur's positioning relative to the enterprise-targeted normalization of agentic business automation.
 
 **Why it matters:** Even though Copilot Cowork targets enterprises (not solo founders), it validates and commoditizes the "agentic business automation" category at massive scale. Founders will increasingly expect AI to handle business tasks autonomously. The content opportunity is framing Soleur as the founder-controlled, local-first, open-source alternative to enterprise-locked cloud automation.
 
 **Content needed:**
-- Blog post: "Enterprise Agentic Automation vs. Founder-Controlled AI Organizations" (Microsoft/Anthropic partnership as validation, Soleur as the solo-founder answer)
-- Update to Cowork comparison page to note the Microsoft partnership and dual distribution surface
+- Blog post: "Enterprise Agentic Automation vs. Founder-Controlled AI Organizations" (P3 -- deprioritized; the Cowork comparison article partially addresses the Anthropic partnership context)
+- ~~Update to Cowork comparison page~~ Cowork comparison published 2026-03-16, includes partnership context
 
 ### Gap 8: Paperclip Orchestration Layer Differentiation (Medium) [NEW 2026-03-12]
 
@@ -119,6 +121,39 @@ Five content gaps block Soleur's organic discovery and category authority. Ranke
 - Pricing page with replacement-stack framing when pricing launches
 - Testimonials from validation participants on non-engineering domain value
 
+### Gap 10: Listicle Presence (Critical) [NEW 2026-03-20]
+
+**What is missing:** Soleur appears on **zero** third-party listicles for "best AI agents," "solo founder tools," or "AI agent platforms." This is the single largest discoverability gap identified by the 2026-03-17 growth audit (OS-1). 89% of site traffic is direct -- organic search discovery is near-zero.
+
+**Why it matters:** Listicle presence drives both direct traffic and backlink authority. Competitors appear on multiple lists (Arahi, Lindy, Make). Without listicle presence, even perfect on-page SEO produces minimal traffic.
+
+**Content needed:**
+- Listicle outreach to: TLDL, Entrepreneur.com, Taskade, o-mega.ai, AIMultiple
+- Product Hunt launch
+- Hacker News submission strategy
+- GitHub Awesome List submissions
+- Create own listicle: "Best Claude Code Plugins for Solo Founders (2026)" to capture the SERP and include Soleur
+
+### Gap 11: About/Founder Page (High) [NEW 2026-03-20]
+
+**What is missing:** No About page exists. Blog posts credit "Jean Jikig" but link only to the homepage. Both the AEO audit (C5) and SEO audit (recommendation 9) flag this as a significant E-E-A-T gap. AI models assessing authority need founder credentials, social profiles, and operating company details.
+
+**Why it matters:** Solo-founder positioning requires a visible, credible founder. Without an About page, the expertise signal caps how much trust content earns from both search engines and AI models.
+
+**Content needed:**
+- About/Founder page with credentials, social profiles (GitHub, X, LinkedIn, Bluesky), and operating company details (Jikigai, France)
+- `SameAs` addition to Organization JSON-LD schema in `base.njk`
+
+### Gap 12: External Citations on Non-Blog Pages (High) [NEW 2026-03-20]
+
+**What is missing:** 12 of 15 pages have zero external citations. The AEO audit (C1) identified a stark binary split: blog pillar content is citation-rich (5.0/5.0), everything else has none (1.0/5.0). Catalog pages (Agents, Skills, Vision, Community, Getting Started) contain no authoritative external references.
+
+**Why it matters:** AI models weight source citations heavily for citability (+30-40% per Princeton GEO research). Pages without citations are functionally invisible to AI engines regardless of their content quality.
+
+**Content needed:**
+- Add 1-2 authoritative external citations per catalog page (Agents, Skills, Vision, Getting Started, Community)
+- Add definition paragraphs with citations to Agents page ("Agentic engineering is...") and Skills page ("In Soleur, a skill is...")
+
 ---
 
 ## Content Pillars
@@ -132,13 +167,13 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 **Keywords:** company as a service, CaaS platform, agentic company, full-stack AI organization, agentic era.
 **Voice:** Maximum ambition, declarative. Brand guide "Marketing / Hero" tone.
 
-| Piece | Type | Words | Priority | Timeline |
-|-------|------|-------|----------|----------|
-| What Is Company-as-a-Service? | Pillar explainer | 2,500-3,000 | P1 | Week 2 |
-| The Billion-Dollar Solo Company | Thought leadership | 2,500-3,500 | P1 | Week 2-3 |
-| Autopilot vs. Decision-Maker: Two Models for AI Company Operation | Position paper | 2,000-2,500 | P1 | Week 2-3 |
-| The Agentic Era: What Changes When AI Runs Your Company | Essay | 2,000-2,500 | P3 | Week 9+ |
-| The Agentic Company Glossary | Reference | 2,000-3,000 | P3 | Week 9+ |
+| Piece | Type | Words | Priority | Status |
+|-------|------|-------|----------|--------|
+| What Is Company-as-a-Service? | Pillar explainer | 2,500-3,000 | P1 | **PUBLISHED** (SAP 5.0/5.0) |
+| One-Person Billion-Dollar Company: The Complete Guide | Thought leadership | 2,500-3,500 | P2 | Month 2 |
+| Autopilot vs. Decision-Maker: Two Models for AI Company Operation | Position paper | 2,000-2,500 | P2 | Month 2 |
+| Company-as-a-Service vs SaaS: How CaaS Changes Everything | Comparison | 2,000-2,500 | P3 | Month 3 |
+| The Agentic Company Glossary | Reference | 2,000-3,000 | P3 | Month 3+ |
 
 ### Pillar 2: Methodology
 
@@ -147,11 +182,12 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 **Keywords:** agentic engineering, compound engineering, vibe coding vs agentic engineering, AI coding workflow, knowledge compounding.
 **Voice:** Confident, concrete. Brand guide "Product announcements" tone.
 
-| Piece | Type | Words | Priority | Timeline |
-|-------|------|-------|----------|----------|
-| Agentic Engineering: Beyond Vibe Coding | Pillar explainer | 2,000-2,500 | P1 | Week 3-4 |
-| Knowledge Compounding in AI Development | Concept explainer | 1,500-2,000 | P2 | Week 7-8 |
-| Multi-Agent Code Review: Why One Reviewer Is Not Enough | Technical deep dive | 2,000 | P3 | Week 9+ |
+| Piece | Type | Words | Priority | Status |
+|-------|------|-------|----------|--------|
+| Why Most Agentic Engineering Tools Plateau | Pillar explainer | ~3,000 | P1 | **PUBLISHED** (SAP 4.8/5.0). Partially addresses Gaps 1 and 4. |
+| Vibe Coding vs Agentic Engineering: What Solo Founders Need to Know | Comparison | 2,000-2,500 | P1 | Month 1. Renamed from "Agentic Engineering: Beyond Vibe Coding" to target search query. Audit P2-1, score 18/20. |
+| Knowledge Compounding in AI Development | Concept explainer | 1,500-2,000 | P2 | Month 2-3. Addresses Gap 1. |
+| Compound Engineering: How Every Project Makes the Next One Easier | Concept explainer | 1,500-2,000 | P3 | Month 3+. Audit P3-4. |
 
 ### Pillar 3: Competitive Positioning
 
@@ -160,15 +196,16 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 **Keywords:** Claude Code plugins, AI agent comparison, Soleur vs CrewAI, best AI coding agents 2026, solopreneur AI stack.
 **Voice:** Direct, honest, data-driven. No FUD. Acknowledge competitor strengths.
 
-| Piece | Type | Words | Priority | Timeline |
-|-------|------|-------|----------|----------|
-| Soleur vs. Polsia | Comparison page | 1,500-2,000 | P1 | Week 2-3 |
-| Soleur vs. Cursor (updated for Automations + Marketplace) | Comparison page | 1,500-2,000 | P1 | Week 2-3 |
-| Agent Platform vs. AI Organization | Position paper | 1,500-2,000 | P1 | Week 3-4 |
-| Orchestration vs. Intelligence: Paperclip and Soleur | Blog post | 1,200-1,500 | P2 | Week 5-6 |
-| Soleur vs. Alternatives | Comparison page | 1,500-2,000 | P2 | Week 5-6 |
-| The Solopreneur AI Stack: Engineering Layer | Guide | 1,500-2,000 | P2 | Week 5-6 |
-| AI Agent Consumability Guide | Technical guide | 1,500 | P3 | Week 9+ |
+| Piece | Type | Words | Priority | Status |
+|-------|------|-------|----------|--------|
+| Soleur vs. Anthropic Cowork | Comparison page | ~2,500 | P1 | **PUBLISHED** (2026-03-16). FAQ JSON-LD present. |
+| Soleur vs. Cursor (2026) | Comparison page | ~2,000 | P1 | **PUBLISHED** (2026-03-19). Addresses Automations + Marketplace. |
+| Soleur vs. Notion Custom Agents | Comparison page | ~2,000 | P1 | **PUBLISHED** (2026-03-17). |
+| AI Agents for Solo Founders: The Definitive Guide (2026) | Pillar guide | 3,000-4,000 | P1 | Month 1-2. Audit P2-2, score 18/20. Captures "solopreneur AI tools 2026" high-volume keyword. |
+| Soleur vs. Polsia | Comparison page | 1,500-2,000 | P2 | Month 2. Audit P2-3, score 16/20. |
+| Best Claude Code Plugins for Solo Founders (2026) | Listicle | 2,000-2,500 | P2 | Month 3. Audit P3-2. |
+| Agent Platform vs. AI Organization | Position paper | 1,500-2,000 | P2 | Month 2-3. Remaining Gap 3 work. |
+| Orchestration vs. Intelligence: Paperclip and Soleur | Blog post | 1,200-1,500 | P3 | Month 3+. Gap 8. |
 
 ### Pillar 4: Proof and Tutorials
 
@@ -177,58 +214,51 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 **Keywords:** how to build SaaS with AI, solo founder workflow, built with Soleur.
 **Voice:** Clear, precise. Brand guide "Technical docs" tone.
 
-| Piece | Type | Words | Priority | Timeline |
-|-------|------|-------|----------|----------|
-| How to Build a SaaS as a Solo Founder | Tutorial | 2,500-3,000 | P2 | Week 7-8 |
-| Built with Soleur: soleur.ai | Case study | 800-1,200 | P3 | Week 9+ |
-| Built with Soleur: [Validation Participant] | Case study | 800-1,200 | P3 | Week 12+ |
+| Piece | Type | Words | Priority | Status |
+|-------|------|-------|----------|--------|
+| Case Study: Business Validation | Case study | ~1,500 | P1 | **PUBLISHED** (2026-03-10). Lacks FAQ section (P1 fix). |
+| Case Study: Legal Document Generation | Case study | ~1,500 | P1 | **PUBLISHED** (2026-03-10). Lacks FAQ section (P1 fix). |
+| Case Study: Operations Management | Case study | ~1,500 | P1 | **PUBLISHED** (2026-03-10). Lacks FAQ section (P1 fix). |
+| Case Study: Brand Guide Creation | Case study | ~1,500 | P1 | **PUBLISHED** (2026-03-10). Lacks FAQ section (P1 fix). |
+| Case Study: Competitive Intelligence | Case study | ~1,500 | P1 | **PUBLISHED** (2026-03-10). Lacks FAQ section (P1 fix). |
+| About/Founder Page | Authority page | 500-800 | P1 | Month 1. Gap 11. Low effort, high E-E-A-T impact. |
+| How to Build a SaaS as a Solo Founder | Tutorial | 2,500-3,000 | P3 | Month 3+. |
 
 ---
 
-## 4-Week Content Calendar
+## Rolling Quarterly Content Calendar (March - June 2026)
 
-This calendar covers Phase 0 and Phase 1 of the marketing strategy. It assumes the founder can dedicate 8-12 hours per week to content.
+This calendar replaces the completed 4-week calendar (Phase 0-1). It assumes 8-12 hours per week for content. Capacity constraint: one founder.
 
-### Week 1: Infrastructure
+### Month 1 (March 20 - April 20, 2026): Technical Fixes + First New Article
 
-| Day | Task | Hours | Output |
-|-----|------|-------|--------|
-| Mon-Tue | Build Eleventy articles collection, layout template, index page | 3-4 | Blog infrastructure |
-| Wed | Add JSON-LD Article schema, sitemap inclusion, OG/Twitter meta | 1-2 | SEO infrastructure |
-| Thu | Fix keyword vacuum: rewrite H1s, H2s, hero text on homepage, agents, skills, getting started | 2-3 | Updated copy on 4 pages |
-| Fri | Rewrite llms.txt. Add "What is Soleur?" paragraph to Getting Started. Add FAQ schema to homepage. | 1-2 | AEO improvements |
+| Week | Task | Hours | Output |
+|------|------|-------|--------|
+| Mar 20-26 | P1 technical fixes: FAQ JSON-LD on agents page + "Why Tools Plateau", FAQ sections on 5 case studies, remove "plugin" from meta descriptions, Vision page H1 rewrite, add `updated` frontmatter to blog posts, add "open source" + "solopreneur" to homepage | 6-8 | All P1 technical fixes deployed |
+| Mar 27-Apr 2 | Write "Vibe Coding vs Agentic Engineering" article (audit P2-1, score 18/20) | 6-8 | Draft + publish |
+| Apr 3-9 | Add external citations to 5+ catalog pages (Gap 12). Add FAQ sections to Skills, Getting Started, Community pages. | 4-6 | AEO score improvement |
+| Apr 10-16 | Write About/Founder page (Gap 11). Add definition paragraphs to Agents and Skills pages. | 3-4 | E-E-A-T + AEO improvements |
+| Apr 17-20 | Distribution: share Vibe Coding article on X, Discord, IndieHackers. Review analytics. | 2-3 | Distribution complete |
 
-**Week 1 total:** 7-11 hours.
+### Month 2 (April 21 - May 20, 2026): Pillar Content + Comparisons
 
-### Week 2: Category Definition
+| Week | Task | Hours | Output |
+|------|------|-------|--------|
+| Apr 21-27 | Write "AI Agents for Solo Founders: The Definitive Guide" (audit P2-2, score 18/20) | 8-10 | Pillar article draft |
+| Apr 28-May 4 | Publish AI Agents guide. Begin "Soleur vs Polsia" comparison (audit P2-3). | 6-8 | 1 pillar + 1 comparison draft |
+| May 5-11 | Publish Soleur vs Polsia. Add internal cross-links between case studies. | 4-6 | Comparison live, cross-links added |
+| May 12-18 | Write "One-Person Billion-Dollar Company" (high social distribution potential) | 6-8 | Draft |
+| May 19-20 | Distribution + analytics review | 2 | Status check |
 
-| Day | Task | Hours | Output |
-|-----|------|-------|--------|
-| Mon-Wed | Write and publish "What Is Company-as-a-Service?" | 6-8 | Pillar article live |
-| Thu | Share on X/Twitter, IndieHackers. Post in Claude Code Discord. | 1-2 | Distribution |
-| Fri | Begin drafting "Billion-Dollar Solo Company" | 2-3 | Draft in progress |
+### Month 3 (May 21 - June 20, 2026): Long-Tail + Off-Site
 
-**Week 2 total:** 9-13 hours.
-
-### Week 3: Thought Leadership
-
-| Day | Task | Hours | Output |
-|-----|------|-------|--------|
-| Mon-Wed | Finish and publish "The Billion-Dollar Solo Company" | 4-6 | Thought leadership article live |
-| Thu | Submit to Hacker News. Share on X/Twitter with thread format. | 1-2 | Distribution |
-| Fri | Begin validation outreach. Draft outreach message. Send first batch. | 2-3 | 5+ outreach messages sent |
-
-**Week 3 total:** 7-11 hours.
-
-### Week 4: Methodology + Validation
-
-| Day | Task | Hours | Output |
-|-----|------|-------|--------|
-| Mon-Wed | Write and publish "Agentic Engineering: Beyond Vibe Coding" | 6-8 | Methodology pillar article live |
-| Thu | Validation outreach follow-ups. Schedule first problem interviews. | 2-3 | Interviews scheduled |
-| Fri | Review Plausible analytics for first 2 articles. Document what worked. | 1-2 | Analytics notes |
-
-**Week 4 total:** 9-13 hours.
+| Week | Task | Hours | Output |
+|------|------|-------|--------|
+| May 21-27 | Publish "One-Person Billion-Dollar Company". Begin off-site listicle outreach (Gap 10). | 4-6 | Article live + outreach started |
+| May 28-Jun 3 | Write "Best Claude Code Plugins for Solo Founders" (audit P3-2). Continue outreach. | 6-8 | Listicle article draft |
+| Jun 4-10 | Write "Company-as-a-Service vs SaaS" (audit P3-3). | 6-8 | Draft |
+| Jun 11-17 | Add page-specific OG images for pillar blog posts. Publish remaining drafts. | 4-6 | OG images + articles live |
+| Jun 18-20 | Full SEO/AEO re-audit. Compare against 2026-03-17 baselines. Plan next quarter. | 3-4 | Q2 audit report |
 
 ---
 
@@ -263,6 +293,9 @@ All content must pass these checks before publication:
 - [ ] Machine-readable summary in first paragraph (what, who, why)
 - [ ] Definitions use "is" format ("Company-as-a-Service is...")
 - [ ] Article can be meaningfully excerpted by an AI agent from the first 3 paragraphs alone
+- [ ] `updated` frontmatter field set if content has been revised since initial publication
+- [ ] Visible "Last Updated" date displayed to users (if `updated` is set)
+- [ ] At least 1 external citation on every page (including catalog pages)
 
 ### Structure
 
@@ -331,4 +364,4 @@ All article URLs distributed via social-distribute use platform-specific UTM par
 
 ---
 
-_Updated: 2026-03-12. Sources: content-plan.md (2026-02-19), content-audit.md (2026-02-19), competitive-intelligence.md (2026-03-12), brand-guide.md (2026-02-21)._
+_Updated: 2026-03-20. Sources: content-plan.md (2026-03-17), content-audit.md (2026-03-17), aeo-audit.md (2026-03-17), seo-audit.md (2026-03-17), competitive-intelligence.md (2026-03-12), brand-guide.md (2026-02-21)._
