@@ -218,6 +218,19 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             matcher: "Read|Write|Edit|Glob|Grep|LS|NotebookRead|NotebookEdit|Bash",
             hooks: [createSandboxHook(workspacePath)],
           }],
+          // Defense-in-depth: log subagent spawns for audit visibility.
+          // If a future SDK version stops routing subagent tool calls
+          // through canUseTool, these logs provide evidence. See #910.
+          SubagentStart: [{
+            hooks: [async (input) => {
+              const subInput = input as Record<string, unknown>;
+              console.log(
+                `[sec] Subagent started: agent_id=${subInput.agent_id}, ` +
+                `type=${subInput.agent_type}`,
+              );
+              return {};
+            }],
+          }],
         },
         // File tools and Bash are resolved by PreToolUse hooks (step 1)
         // and SDK sandbox auto-approval (step 3) before reaching this
@@ -276,6 +289,16 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               behavior: "allow" as const,
               updatedInput: { ...toolInput, answer: selection },
             };
+          }
+
+          // Agent tool: spawns subagents that run within the same SDK
+          // sandbox (bubblewrap, filesystem restrictions, network policy).
+          // Both PreToolUse hooks and this canUseTool callback fire for
+          // subagent tool calls (SDK CanUseTool type confirms via
+          // options.agentID). Explicit allow replaces the prior SAFE_TOOLS
+          // auto-allow for auditability. See #910.
+          if (toolName === "Agent") {
+            return { behavior: "allow" as const };
           }
 
           // Safe SDK tools: no filesystem path inputs, allowed without checks.

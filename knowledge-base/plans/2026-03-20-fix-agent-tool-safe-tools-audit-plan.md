@@ -142,14 +142,14 @@ The analysis is based on `@anthropic-ai/claude-agent-sdk` ^0.2.80. The `CanUseTo
 
 ## Acceptance Criteria
 
-- [ ] `Agent` is NOT in the `SAFE_TOOLS` array (`apps/web-platform/server/tool-path-checker.ts`)
-- [ ] `SAFE_TOOLS` JSDoc updated to reference SDK `CanUseTool` type and explain why Agent is handled explicitly
-- [ ] `canUseTool` has an explicit `Agent` handler with documented rationale (`apps/web-platform/server/agent-runner.ts`)
-- [ ] `SubagentStart` hook is registered in the `hooks` config to log subagent spawns
-- [ ] Test: `SAFE_TOOLS` completeness guard updated to `["Skill", "TodoRead", "TodoWrite"]` (`apps/web-platform/test/tool-path-checker.test.ts`)
-- [ ] Test: `Agent` is NOT a safe tool (explicit negative test)
-- [ ] Test: `Agent` is NOT a file tool (existing test, verify preserved)
-- [ ] All existing tests pass
+- [x] `Agent` is NOT in the `SAFE_TOOLS` array (`apps/web-platform/server/tool-path-checker.ts`)
+- [x] `SAFE_TOOLS` JSDoc updated to reference SDK `CanUseTool` type and explain why Agent is handled explicitly
+- [x] `canUseTool` has an explicit `Agent` handler with documented rationale (`apps/web-platform/server/agent-runner.ts`)
+- [x] `SubagentStart` hook is registered in the `hooks` config to log subagent spawns
+- [x] Test: `SAFE_TOOLS` completeness guard updated to `["Skill", "TodoRead", "TodoWrite"]` (`apps/web-platform/test/tool-path-checker.test.ts`)
+- [x] Test: `Agent` is NOT a safe tool (explicit negative test)
+- [x] Test: `Agent` is NOT a file tool (existing test, verify preserved)
+- [x] All existing tests pass
 
 ## Test Scenarios
 
