@@ -44,8 +44,8 @@ command -v agent-browser >/dev/null 2>&1 && echo "Installed" || echo "NOT INSTAL
 
 **Install if needed:**
 ```bash
-npm install -g agent-browser
-agent-browser install  # Downloads Chromium (~160MB)
+npm install -g agent-browser@0.21.4
+agent-browser install  # Downloads Chrome for Testing (~300MB)
 ```
 
 See the `agent-browser` skill for detailed usage.
@@ -57,7 +57,7 @@ See the `agent-browser` skill for detailed usage.
 Before starting ANY browser testing, verify agent-browser is installed:
 
 ```bash
-command -v agent-browser >/dev/null 2>&1 && echo "Ready" || (echo "Installing..." && npm install -g agent-browser && agent-browser install)
+command -v agent-browser >/dev/null 2>&1 && echo "Ready" || (echo "Installing..." && npm install -g agent-browser@0.21.4 && agent-browser install)
 ```
 
 If installation fails, inform the user and stop.
