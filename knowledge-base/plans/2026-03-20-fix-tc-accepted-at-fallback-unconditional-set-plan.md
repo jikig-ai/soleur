@@ -85,12 +85,12 @@ This confirms the fallback INSERT only fires for users who came through the sign
 
 ## Acceptance Criteria
 
-- [ ] `ensureWorkspaceProvisioned` signature extended to accept `tcAccepted: boolean` as third parameter
-- [ ] Caller in `GET` handler extracts `tcAccepted` from `user.user_metadata` before calling `ensureWorkspaceProvisioned`
-- [ ] Fallback INSERT in `callback/route.ts` only sets `tc_accepted_at` when `tcAccepted` is `true`
-- [ ] When `tcAccepted` is `false`/absent, `tc_accepted_at` is set to `null` (not omitted -- explicit null matches trigger behavior)
-- [ ] No changes to the database trigger logic (it is already correct)
-- [ ] Comment updated to explain the conditional logic mirrors the trigger
+- [x] `ensureWorkspaceProvisioned` signature extended to accept `tcAccepted: boolean` as third parameter
+- [x] Caller in `GET` handler extracts `tcAccepted` from `user.user_metadata` before calling `ensureWorkspaceProvisioned`
+- [x] Fallback INSERT in `callback/route.ts` only sets `tc_accepted_at` when `tcAccepted` is `true`
+- [x] When `tcAccepted` is `false`/absent, `tc_accepted_at` is set to `null` (not omitted -- explicit null matches trigger behavior)
+- [x] No changes to the database trigger logic (it is already correct)
+- [x] Comment updated to explain the conditional logic mirrors the trigger
 
 ## Test Scenarios
 
