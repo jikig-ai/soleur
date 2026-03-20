@@ -8,7 +8,7 @@ permalink: pages/legal/gdpr-policy.html
 <section class="page-hero">
   <div class="container">
     <h1>GDPR Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated March 20, 2026 (added Web Platform data subject rights subsection (Section 5.3), renumbered Supervisory Authority to Section 5.4, added CDN/proxy dual legal basis to Section 3.7)</p>
+    <p>Effective February 20, 2026 | Last Updated March 20, 2026 (added Web Platform data subject rights subsection (Section 5.3), renumbered Supervisory Authority to Section 5.4, added CDN/proxy dual legal basis to Section 3.7, added Article 12(3) two-month extension provision to response timelines)</p>
   </div>
 </section>
 
@@ -19,7 +19,7 @@ permalink: pages/legal/gdpr-policy.html
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 20, 2026 (added Web Platform data subject rights subsection (Section 5.3), renumbered Supervisory Authority to Section 5.4, added CDN/proxy dual legal basis to Section 3.7)
+**Last Updated:** March 20, 2026 (added Web Platform data subject rights subsection (Section 5.3), renumbered Supervisory Authority to Section 5.4, added CDN/proxy dual legal basis to Section 3.7, added Article 12(3) two-month extension provision to response timelines)
 
 ---
 
@@ -183,7 +183,7 @@ For data processed through the Web Platform (app.soleur.ai) where Jikigai acts a
 - **Right to Data Portability (Article 20):** Request personal data in a structured, commonly used, machine-readable format.
 - **Right to Object (Article 21):** Object to processing of personal data. The legal basis for Web Platform processing is contract performance (Article 6(1)(b)), so this right applies primarily when processing extends beyond strict contractual necessity.
 
-Jikigai will acknowledge requests within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3).
+Jikigai will acknowledge requests within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3). This period may be extended by two further months where necessary, taking into account the complexity or volume of requests, in which case we will inform you of the extension and reasons within the initial one-month period.
 
 ### 5.4 Supervisory Authority
 
@@ -332,7 +332,7 @@ For questions about this GDPR Policy or data protection matters:
 - **Website:** [soleur.ai](https://soleur.ai)
 - **GDPR / Data Protection Inquiries:** legal@jikigai.com (include "GDPR" in the subject line)
 
-To exercise your data subject rights under GDPR, send a written request to legal@jikigai.com. We will acknowledge your request within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3).
+To exercise your data subject rights under GDPR, send a written request to legal@jikigai.com. We will acknowledge your request within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3). This period may be extended by two further months where necessary, taking into account the complexity or volume of requests, in which case we will inform you of the extension and reasons within the initial one-month period.
 
 Soleur is a source-available project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France.
 

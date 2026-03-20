@@ -13,6 +13,7 @@ import { isPathInWorkspace } from "./sandbox";
 import { UNVERIFIED_PARAM_TOOLS, extractToolPath, isFileTool, isSafeTool } from "./tool-path-checker";
 import { buildAgentEnv } from "./agent-env";
 import { createSandboxHook } from "./sandbox-hook";
+import { abortableReviewGate, type AgentSession } from "./review-gate";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -50,15 +51,19 @@ function patchWorkspacePermissions(workspacePath: string): void {
 // ---------------------------------------------------------------------------
 // Active session tracking
 // ---------------------------------------------------------------------------
-interface AgentSession {
-  abort: AbortController;
-  reviewGateResolvers: Map<string, (selection: string) => void>;
-}
-
 const activeSessions = new Map<string, AgentSession>();
 
 function sessionKey(userId: string, conversationId: string) {
   return `${userId}:${conversationId}`;
+}
+
+/** Abort a running agent session (called from ws-handler on disconnect). */
+export function abortSession(userId: string, conversationId: string): void {
+  const key = sessionKey(userId, conversationId);
+  const session = activeSessions.get(key);
+  if (session) {
+    session.abort.abort(new Error("Session aborted: user disconnected"));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +222,20 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             matcher: "Read|Write|Edit|Glob|Grep|LS|NotebookRead|NotebookEdit|Bash",
             hooks: [createSandboxHook(workspacePath)],
           }],
+          // Defense-in-depth: log subagent spawns for audit visibility.
+          // If a future SDK version stops routing subagent tool calls
+          // through canUseTool, these logs provide evidence. See #910.
+          SubagentStart: [{
+            hooks: [async (input) => {
+              const subInput = input as Record<string, unknown>;
+              const sanitize = (v: unknown) => String(v ?? '').replace(/[\r\n]/g, ' ').slice(0, 200);
+              console.log(
+                `[sec] Subagent started: agent_id=${sanitize(subInput.agent_id)}, ` +
+                `type=${sanitize(subInput.agent_type)}`,
+              );
+              return {};
+            }],
+          }],
         },
         // File tools and Bash are resolved by PreToolUse hooks (step 1)
         // and SDK sandbox auto-approval (step 3) before reaching this
@@ -225,7 +244,9 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         canUseTool: async (
           toolName: string,
           toolInput: Record<string, unknown>,
+          options: { signal: AbortSignal; agentID?: string },
         ) => {
+          const subagentCtx = options.agentID ? ` [subagent=${options.agentID}]` : '';
           // Defense-in-depth: catch any file tool that bypasses hooks.
           // PreToolUse hooks are the primary enforcement (layer 1).
           // This is layer 2 -- see #891 for the audit that added it.
@@ -234,7 +255,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             if (filePath && !isPathInWorkspace(filePath, workspacePath)) {
               return {
                 behavior: "deny" as const,
-                message: "Access denied: outside workspace",
+                message: `Access denied: outside workspace${subagentCtx}`,
               };
             }
             if (!filePath && (UNVERIFIED_PARAM_TOOLS as readonly string[]).includes(toolName) && Object.keys(toolInput).length > 0) {
@@ -252,7 +273,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             const gateId = randomUUID();
             const question =
               (toolInput.question as string) || "Agent needs your input";
-            const options = Array.isArray(toolInput.options)
+            const gateOptions = Array.isArray(toolInput.options)
               ? (toolInput.options as string[])
               : ["Approve", "Reject"];
 
@@ -260,14 +281,16 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               type: "review_gate",
               gateId,
               question,
-              options,
+              options: gateOptions,
             });
 
             await updateConversationStatus(conversationId, "waiting_for_user");
 
-            const selection = await new Promise<string>((resolve) => {
-              session.reviewGateResolvers.set(gateId, resolve);
-            });
+            const selection = await abortableReviewGate(
+              session,
+              gateId,
+              controller.signal,
+            );
 
             await updateConversationStatus(conversationId, "active");
 
@@ -275,6 +298,19 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               behavior: "allow" as const,
               updatedInput: { ...toolInput, answer: selection },
             };
+          }
+
+          // Agent tool: spawns subagents that run within the same SDK
+          // sandbox (bubblewrap, filesystem restrictions, network policy).
+          // Both PreToolUse hooks and this canUseTool callback fire for
+          // subagent tool calls (SDK CanUseTool type confirms via
+          // options.agentID). Explicit allow replaces the prior SAFE_TOOLS
+          // auto-allow for auditability. See #910.
+          if (toolName === "Agent") {
+            if (subagentCtx) {
+              console.log(`[sec] Agent tool invoked${subagentCtx}`);
+            }
+            return { behavior: "allow" as const };
           }
 
           // Safe SDK tools: no filesystem path inputs, allowed without checks.
@@ -345,7 +381,18 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
       }
     }
   } catch (err) {
-    if (!controller.signal.aborted) {
+    if (controller.signal.aborted) {
+      // Disconnect or abort -- mark conversation as failed so it does not
+      // stay stuck in "waiting_for_user" or "active" status forever.
+      await updateConversationStatus(conversationId, "failed").catch(
+        (statusErr) => {
+          console.error(
+            `[agent] Failed to mark aborted conversation ${conversationId} as failed:`,
+            statusErr,
+          );
+        },
+      );
+    } else {
       console.error(`[agent] Session error for ${userId}/${conversationId}:`, err);
       const message = sanitizeErrorForClient(err);
       sendToClient(userId, {

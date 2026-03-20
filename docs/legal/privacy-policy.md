@@ -8,7 +8,7 @@ generated-date: 2026-02-20
 # Privacy Policy
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 20, 2026 (added Web Platform to scope introduction, added Web Platform security measures to Section 11, removed infrastructure identifiers from processing descriptions, added Cloudflare dual legal basis to Section 6)
+**Last Updated:** March 20, 2026 (added Web Platform to scope introduction, added Web Platform security measures to Section 11, removed infrastructure identifiers from processing descriptions, added Cloudflare dual legal basis to Section 6, added Article 12(3) two-month extension provision to response timeline)
 
 ## 1. Introduction
 
@@ -286,7 +286,7 @@ If you have questions about this Privacy Policy or our data practices, you can r
 - **Website:** [soleur.ai](https://soleur.ai)
 - **GDPR / Data Protection Inquiries:** legal@jikigai.com (include "GDPR" in the subject line)
 
-To exercise your data subject rights under GDPR, send a written request to legal@jikigai.com. We will acknowledge your request within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3).
+To exercise your data subject rights under GDPR, send a written request to legal@jikigai.com. We will acknowledge your request within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3). This period may be extended by two further months where necessary, taking into account the complexity or volume of requests, in which case we will inform you of the extension and reasons within the initial one-month period.
 
 ---
 
