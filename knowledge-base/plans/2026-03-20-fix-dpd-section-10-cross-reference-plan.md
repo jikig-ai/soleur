@@ -2,9 +2,25 @@
 title: "fix: DPD Section 10.3 cross-reference error to T&C"
 type: fix
 date: 2026-03-20
+deepened: 2026-03-20
 ---
 
 # fix: DPD Section 10.3 cross-reference error to T&C
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-20
+**Sections enhanced:** 1 (cross-reference audit)
+**Research agents used:** None (two-line typo fix -- full agent battery not warranted)
+
+### Key Improvements
+1. Verified all internal DPD cross-references are correct (Sections 2.1, 2.1b, 2.3(a-h), 4.2, 6.4, 8.1(a) all match actual headings)
+2. Confirmed the only broken reference is the external T&C cross-reference at line 308/317 ("Section 13.1b" should be "Section 14.1b")
+3. Verified T&C internal references at Sections 5.2, 14.3 already correctly reference 14.1b, confirming the DPD reference is the outlier
+
+### New Considerations Discovered
+- No other cross-reference errors found in either DPD copy
+- The "Last Updated" header in both files already correctly mentions "added Section 10.3 Web Platform account deletion" -- no header update needed
 
 ## Overview
 
