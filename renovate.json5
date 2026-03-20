@@ -10,21 +10,21 @@
     "schedule:weekly"
   ],
   "timezone": "Europe/Paris",
-  "labels": ["dependencies"],
+  "platformAutomerge": true,
+  // Only manage the three target categories -- suppress npm/Terraform/other auto-detected managers
+  "enabledManagers": ["dockerfile", "github-actions", "custom.regex"],
   "packageRules": [
     {
       "description": "Group Docker digest updates into one PR",
       "matchDatasources": ["docker"],
-      "matchUpdateTypes": ["digest"],
-      "groupName": "docker-digests",
-      "automerge": true
+      "matchUpdateTypes": ["digest", "pin"],
+      "groupName": "docker-digests"
     },
     {
       "description": "Group GitHub Actions digest updates into one PR",
       "matchManagers": ["github-actions"],
-      "matchUpdateTypes": ["digest"],
-      "groupName": "github-actions-digests",
-      "automerge": true
+      "matchUpdateTypes": ["digest", "pin"],
+      "groupName": "github-actions-digests"
     },
     {
       "description": "Do not auto-merge version bumps (only digests)",
@@ -33,7 +33,7 @@
     }
   ],
   // Detect npm install -g @scope/package@version in Dockerfiles
-  // The built-in Dockerfile manager only handles FROM image references
+  // The built-in Dockerfile manager does not detect RUN command dependencies
   "customManagers": [
     {
       "customType": "regex",
