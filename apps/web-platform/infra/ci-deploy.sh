@@ -70,6 +70,8 @@ logger -t "$LOG_TAG" "ACCEPTED: deploy $COMPONENT $IMAGE:$TAG"
 # Component-specific deploy logic
 case "$COMPONENT" in
   web-platform)
+    echo "Pruning old Docker images (>48h)..."
+    docker system prune -f --filter "until=48h"
     docker pull "$IMAGE:$TAG"
     { docker stop soleur-web-platform || true; }
     { docker rm soleur-web-platform || true; }
@@ -96,6 +98,8 @@ case "$COMPONENT" in
     exit 1
     ;;
   telegram-bridge)
+    echo "Pruning old Docker images (>48h)..."
+    docker system prune -f --filter "until=48h"
     docker pull "$IMAGE:$TAG"
     { docker stop soleur-bridge || true; }
     { docker rm soleur-bridge || true; }

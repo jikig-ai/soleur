@@ -6,31 +6,97 @@
 AUTO_INSTALL=false
 [[ "${1:-}" == "--auto" ]] && AUTO_INSTALL=true
 
+# Ensure ~/.local/bin is in PATH for user-local installs
+[[ ":$PATH:" != *":$HOME/.local/bin:"* ]] && export PATH="$HOME/.local/bin:$PATH"
+
 # Detect OS for install commands
+_UNAME=$(uname -s)
 OS="unknown"
-[[ "$(uname -s)" == "Darwin" ]] && OS="macos"
-[[ -f /etc/debian_version ]] && OS="debian"
+[[ "$_UNAME" == "Darwin" ]] && OS="macos"
+[[ "$_UNAME" == "Linux" ]] && OS="linux"
+
+# Detect architecture for static binary downloads
+ARCH=$(uname -m)
+ARCH_SUFFIX=""
+case "$ARCH" in
+  x86_64)        ARCH_SUFFIX="amd64" ;;
+  aarch64|arm64) ARCH_SUFFIX="arm64" ;;
+esac
+
+install_ffmpeg_linux() {
+  local arch_suffix="$1"
+  if [[ -z "$arch_suffix" ]]; then
+    echo "  Unsupported architecture: $ARCH. Install ffmpeg manually." >&2
+    return 1
+  fi
+  local url="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${arch_suffix}-static.tar.xz"
+  echo "  Downloading ffmpeg static build (~80MB)..."
+  mkdir -p "$HOME/.local/bin"
+  if curl -sfL "$url" | tar -xJf - --strip-components=1 -C "$HOME/.local/bin" --wildcards '*/ffmpeg'; then
+    chmod +x "$HOME/.local/bin/ffmpeg"
+    return 0
+  else
+    echo "  Download failed. Install ffmpeg manually: https://johnvansickle.com/ffmpeg/" >&2
+    return 1
+  fi
+}
+
+install_rclone_linux() {
+  local arch_suffix="$1"
+  if [[ -z "$arch_suffix" ]]; then
+    echo "  Unsupported architecture: $ARCH. Install rclone manually." >&2
+    return 1
+  fi
+  if ! command -v unzip >/dev/null 2>&1; then
+    echo "  unzip is required to install rclone. Install unzip first." >&2
+    return 1
+  fi
+  local url="https://downloads.rclone.org/rclone-current-linux-${arch_suffix}.zip"
+  local tmpdir
+  tmpdir=$(mktemp -d)
+  echo "  Downloading rclone (~25MB)..."
+  mkdir -p "$HOME/.local/bin"
+  curl -sfL "$url" -o "$tmpdir/rclone.zip" && \
+    unzip -q "$tmpdir/rclone.zip" -d "$tmpdir" && \
+    cp "$tmpdir"/rclone-*/rclone "$HOME/.local/bin/rclone" && \
+    chmod +x "$HOME/.local/bin/rclone"
+  local rc=$?
+  rm -rf "$tmpdir"
+  if [[ $rc -ne 0 ]]; then
+    echo "  Download failed. Install rclone manually: https://rclone.org/install/" >&2
+    return 1
+  fi
+}
 
 install_tool() {
   local tool="$1"
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "  curl is required for auto-install. Install curl first." >&2
+    return 1
+  fi
   case "$OS" in
-    debian)
-      if sudo -n true 2>/dev/null; then
-        sudo apt-get update -qq && sudo apt-get install -y "$tool"
-      else
-        echo "  Run manually: sudo apt-get install -y $tool" >&2
-        return 1
-      fi ;;
+    linux)
+      case "$tool" in
+        ffmpeg) install_ffmpeg_linux "$ARCH_SUFFIX" ;;
+        rclone) install_rclone_linux "$ARCH_SUFFIX" ;;
+        *)
+          echo "  No installer for $tool. Install manually." >&2
+          return 1
+          ;;
+      esac
+      ;;
     macos)
       if command -v brew >/dev/null 2>&1; then
         brew install "$tool"
       else
         echo "  Install Homebrew first: https://brew.sh" >&2
         return 1
-      fi ;;
+      fi
+      ;;
     *)
       echo "  Unsupported OS. Install $tool manually." >&2
-      return 1 ;;
+      return 1
+      ;;
   esac
 }
 
