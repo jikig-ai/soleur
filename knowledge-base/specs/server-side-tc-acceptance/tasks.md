@@ -14,8 +14,9 @@ Issue: #931
 
 - [ ] 2.1 Create `apps/web-platform/app/api/accept-terms/route.ts`
   - [ ] 2.1.1 Validate auth session via `createClient()` + `getUser()`
-  - [ ] 2.1.2 UPDATE `users SET tc_accepted_at = now()` via service role with `AND tc_accepted_at IS NULL` guard
+  - [ ] 2.1.2 UPDATE `users SET tc_accepted_at = now()` via service role with `.is("tc_accepted_at", null)` idempotency guard
   - [ ] 2.1.3 Return 401 for unauthenticated, 500 for DB errors, 200 for success
+  - [ ] 2.1.4 Handle zero-row update (already accepted) as success, not error
 
 ## Phase 3: Accept Terms Page
 
@@ -39,12 +40,16 @@ Issue: #931
   - [ ] 5.1.1 Remove `data: { tc_accepted: tcAccepted }` from `signInWithOtp` options
   - [ ] 5.1.2 Keep checkbox UI as client-side UX hint (disabled submit button)
 
-## Phase 6: Middleware Enforcement
+## Phase 6: Middleware Enforcement (with getClaims migration)
 
 - [ ] 6.1 Modify `apps/web-platform/middleware.ts`
   - [ ] 6.1.1 Add `/accept-terms` and `/api/accept-terms` to `PUBLIC_PATHS`
-  - [ ] 6.1.2 For authenticated users on protected routes, query `users.tc_accepted_at`
-  - [ ] 6.1.3 Redirect to `/accept-terms` if `tc_accepted_at IS NULL`
+  - [ ] 6.1.2 Migrate auth check from `getUser()` to `getClaims()` for performance (local JWT verification vs network request)
+  - [ ] 6.1.3 Update user ID references from `user.id` to `user.sub` (getClaims returns JWT claims object)
+  - [ ] 6.1.4 For authenticated users on protected routes, query `users.tc_accepted_at` via session client
+  - [ ] 6.1.5 Redirect to `/accept-terms` if `tc_accepted_at IS NULL` or user row missing
+  - [ ] 6.1.6 Copy cookies from `supabaseResponse` to all redirect responses to prevent session desync
+  - [ ] 6.1.7 Ensure no code runs between `createServerClient` and `getClaims()` call
 
 ## Phase 7: Verification
 
@@ -53,3 +58,5 @@ Issue: #931
 - [ ] 7.3 Verify normal flow: signup -> magic link -> callback -> `/accept-terms` -> submit -> `/setup-key`
 - [ ] 7.4 Verify returning user: login -> magic link -> callback -> `/dashboard` (no `/accept-terms` redirect)
 - [ ] 7.5 Verify idempotency: double-submit on `/accept-terms` is safe
+- [ ] 7.6 Verify cookie preservation: redirect to `/accept-terms` does not cause session logout on next request
+- [ ] 7.7 Verify protected API routes (`/api/keys`, `/api/checkout`) are blocked for users without T&C acceptance

@@ -10,6 +10,24 @@ semver: patch
 
 # security: move T&C acceptance to server-side action
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-20
+**Sections enhanced:** 5 (Proposed Solution, Technical Considerations, Test Scenarios, Attack Surface, Edge Cases)
+**Research sources:** Supabase SSR docs (Context7), Supabase auth migration guide, codebase analysis (callback/route.ts, signup/page.tsx, middleware.ts, migrations 005-006), institutional learnings (trigger-fallback-parity, column-level-grant-override)
+
+### Key Improvements
+1. **getClaims() over getUser()**: Supabase docs now recommend `getClaims()` for middleware auth validation -- it verifies JWT locally via JWKS without a network request, unlike `getUser()` which always hits the auth server. The existing middleware should be migrated as part of this change.
+2. **Redirect loop prevention**: If the `users` row does not yet exist (race between trigger and first middleware hit), the middleware T&C check would redirect to `/accept-terms` infinitely. Added a guard: treat missing `users` row the same as `tc_accepted_at IS NULL` but without a redirect loop by allowing `/accept-terms` through unconditionally.
+3. **Cookie response preservation**: Supabase SSR docs emphasize that middleware MUST return the `supabaseResponse` object (not a fresh `NextResponse`). All redirect responses must copy cookies from the supabase response to prevent session desync and random logouts.
+4. **Service role client isolation**: SSR clients initialized with service role keys inherit user sessions from cookies, causing RLS errors. The plan correctly uses `createClient()` from `@supabase/supabase-js` (not `createServerClient` from `@supabase/ssr`) for service role operations.
+5. **Accept-terms redirect target**: The accept-terms page should check API key status after recording acceptance and redirect to `/setup-key` or `/dashboard` accordingly, rather than always routing to `/setup-key`.
+
+### New Considerations Discovered
+- The existing middleware uses `getUser()` which makes a network request on every request. Migrating to `getClaims()` is a performance improvement that should be bundled with this change since we're already modifying the middleware.
+- Next.js middleware cannot use `cookies()` from `next/headers` -- it must use the request/response cookie pattern. The plan's API route correctly uses `createClient()` (which uses `cookies()`) but the middleware must use the `createServerClient` pattern with request cookies.
+- The `supabase.from("users").select()` query in middleware uses the anon key client, which goes through RLS. The existing RLS SELECT policy must allow users to read their own row. This should be verified before implementation.
+
 ## Overview
 
 The `tc_accepted` field in Supabase `user_metadata` is set client-side during signup via `signInWithOtp({ options: { data: { tc_accepted: true } } })`. An attacker can call the Supabase auth endpoint directly with `tc_accepted: true` without ever rendering the signup form or checking the T&C checkbox. Both the SQL trigger (`005_add_tc_accepted_at.sql`) and the TypeScript fallback (`callback/route.ts`) trust this client-controlled field.
@@ -58,8 +76,11 @@ All code paths that read `tc_accepted_at`:
 
 **Bypass analysis:**
 - Direct Supabase auth API call: User gets authenticated but `tc_accepted_at` stays `NULL`. Middleware blocks access to any protected route until they visit `/accept-terms` and submit the form.
-- Direct call to `/api/accept-terms`: Requires valid auth session (middleware enforces this). The server route verifies the session and writes using service role. No client-controlled metadata involved.
+- Direct call to `/api/accept-terms`: Requires valid auth session (middleware enforces this). The server route verifies the session via `getUser()` and writes using service role. No client-controlled metadata involved.
 - RLS bypass: Migration `006_restrict_tc_accepted_at_update.sql` already prevents authenticated users from writing `tc_accepted_at` directly. The service role client bypasses RLS by design (it is a server-side trusted client).
+- CSRF on POST `/api/accept-terms`: Next.js API routes in App Router are same-origin by default (no CORS). The `fetch()` call from the accept-terms page includes the session cookie automatically. An attacker-controlled page cannot POST to `/api/accept-terms` with the victim's cookies because the request originates from a different origin (blocked by SameSite cookie attribute, which Supabase sets by default). No additional CSRF token needed.
+- Replay/re-stamp attack: The `AND tc_accepted_at IS NULL` guard in the UPDATE query prevents re-stamping. Once set, the timestamp is immutable from both the client side (RLS) and the server side (idempotency guard). Only a service role migration can reset it.
+- Session fixation: The auth session is validated via `getClaims()` / `getUser()` which verifies the JWT. A stolen or fixated session cannot bypass the T&C check -- the middleware still queries the `users` row for that session's user ID.
 
 ## Technical Considerations
 
@@ -77,14 +98,61 @@ All code paths that read `tc_accepted_at`:
 
 6. **`apps/web-platform/middleware.ts`** -- Add `/accept-terms` to `PUBLIC_PATHS` (it is accessible to authenticated users who haven't accepted T&C). For authenticated users on non-public paths, query `users.tc_accepted_at` and redirect to `/accept-terms` if `NULL`. This requires a lightweight DB query in middleware -- use the session's Supabase client (not service role) to read the user's own row.
 
+### Research Insights -- Supabase Auth Best Practices (Context7)
+
+**Use `getClaims()` instead of `getUser()` in middleware:**
+Supabase docs (2025+) recommend `getClaims()` for middleware auth validation. It verifies the JWT locally against the project's JWKS endpoint (`/.well-known/jwks.json`), which is cached, resulting in significantly faster responses than `getUser()` which always sends a network request to the auth server. The existing middleware uses `getUser()` -- this should be migrated to `getClaims()` as part of this change.
+
+```typescript
+// Before (current -- network request every time)
+const { data: { user } } = await supabase.auth.getUser();
+
+// After (recommended -- local JWT verification, often cached)
+const { data } = await supabase.auth.getClaims();
+const user = data?.claims;
+```
+
+**Critical: No code between client creation and auth check:**
+Supabase docs warn: "Do not run code between createServerClient and supabase.auth.getClaims(). A simple mistake could make it very hard to debug issues with users being randomly logged out." The middleware T&C query must happen AFTER the auth check, not between client creation and auth validation.
+
+**Cookie response preservation:**
+The middleware MUST return the `supabaseResponse` object as-is. When creating redirect responses, cookies must be copied from the supabase response to the redirect response to prevent session desynchronization:
+
+```typescript
+// When redirecting, copy cookies to prevent session desync
+const redirectUrl = request.nextUrl.clone();
+redirectUrl.pathname = "/accept-terms";
+const redirectResponse = NextResponse.redirect(redirectUrl);
+supabaseResponse.cookies.getAll().forEach(cookie =>
+  redirectResponse.cookies.set(cookie.name, cookie.value)
+);
+return redirectResponse;
+```
+
+**Service role client isolation:**
+SSR clients (`createServerClient`) initialized with a service role key will have the user session override the Authorization header from cookies, causing RLS errors. Always use `createClient` from `@supabase/supabase-js` directly for service role operations -- never the SSR wrapper. The plan's `createServiceClient()` correctly uses `createClient` from `@supabase/supabase-js`.
+
 ### Middleware Performance Consideration
 
 Adding a DB query to middleware on every request is a concern. Mitigation options:
 
-- **Option A (recommended):** Query `tc_accepted_at` from the `users` table using the session client. This goes through RLS (user can only read their own row). Cache the result in the session cookie or a short-lived header. Supabase reads from the `users` table are indexed by `id` (primary key) -- this is a single-row lookup, sub-millisecond in practice.
+- **Option A (recommended):** Query `tc_accepted_at` from the `users` table using the session client. This goes through RLS (user can only read their own row). Supabase reads from the `users` table are indexed by `id` (primary key) -- this is a single-row lookup, sub-millisecond in practice. Additionally, migrating from `getUser()` to `getClaims()` eliminates one network request per middleware invocation, partially offsetting the new DB query.
 - **Option B:** Store `tc_accepted` in a JWT custom claim via Supabase Auth hook. This avoids the DB query entirely but requires configuring a Supabase Auth hook (additional infrastructure complexity).
 
-Option A is preferred for simplicity. The DB query is fast (PK lookup) and the middleware already makes a `getUser()` call on every request.
+Option A is preferred for simplicity. The net performance impact is approximately neutral: `getClaims()` saves one network request (auth server round-trip), the `users` query adds one (Supabase PostgREST round-trip). Both are to the same Supabase instance, and the PK lookup is faster than JWT verification on the auth server.
+
+### Research Insights -- Edge Cases and Redirect Loops
+
+**Redirect loop when `users` row does not exist:**
+There is a race window between the auth trigger creating the `users` row and the first middleware check. If the trigger has not fired yet (or fails), the middleware query returns no row, which is indistinguishable from `tc_accepted_at IS NULL`. The middleware must handle this gracefully:
+- If `userRow` is `null` (no row at all), redirect to `/accept-terms` -- the accept-terms page will handle the "row not created yet" case by showing the form and relying on the API route to wait for the row to exist.
+- No infinite redirect loop risk because `/accept-terms` is in `PUBLIC_PATHS` and is not subject to the T&C check.
+
+**RLS SELECT policy prerequisite:**
+The middleware uses the anon-key session client to query `users.tc_accepted_at`. This query goes through RLS. Verify that the existing RLS SELECT policy allows authenticated users to read their own row. Check `001_initial_schema.sql` for the policy definition. If no SELECT policy exists for `tc_accepted_at`, the query will return empty results and trigger an unnecessary redirect.
+
+**API route paths and middleware:**
+Both `/api/accept-terms` and `/accept-terms` must be in `PUBLIC_PATHS`. However, other API routes (`/api/keys`, `/api/checkout`, `/api/workspace`) should NOT be in `PUBLIC_PATHS` -- they are gated by both auth AND T&C acceptance. A user who bypasses T&C should not be able to call these endpoints.
 
 ### Interaction with Existing Migrations
 
@@ -107,6 +175,9 @@ Option A is preferred for simplicity. The DB query is fast (PK lookup) and the m
 - [ ] Middleware redirects authenticated users with `tc_accepted_at IS NULL` to `/accept-terms` for all protected routes (`apps/web-platform/middleware.ts`)
 - [ ] `/accept-terms` and `/api/accept-terms` are in the middleware public paths list
 - [ ] Signup form still shows the T&C checkbox (disabled submit) as UX hint but does not transmit the value to Supabase
+- [ ] Middleware migrated from `getUser()` to `getClaims()` for auth validation performance
+- [ ] All middleware redirect responses copy cookies from `supabaseResponse` to prevent session desync
+- [ ] RLS SELECT policy on `public.users` verified to allow reading `tc_accepted_at` for authenticated users
 
 ## Test Scenarios
 
@@ -117,6 +188,15 @@ Option A is preferred for simplicity. The DB query is fast (PK lookup) and the m
 - Given a user on `/accept-terms` who submits the form twice, when the second POST fires, then the `AND tc_accepted_at IS NULL` guard makes it a no-op (idempotent)
 - Given an unauthenticated user who visits `/accept-terms` directly, when middleware runs, then they are redirected to `/login`
 - Given a user with `tc_accepted_at IS NULL` who tries to access `/api/keys` or any protected route, when middleware runs, then they are redirected to `/accept-terms`
+- Given a new user whose `users` row has not yet been created by the trigger (race condition), when middleware queries `tc_accepted_at`, then the query returns no row and the user is redirected to `/accept-terms` (no crash, no infinite loop)
+- Given a user on `/accept-terms` who has already accepted (navigated back), when the page loads, then they are redirected to `/dashboard` (or the page shows "already accepted" state)
+- Given a user who completes the accept-terms flow, when they are redirected, then the redirect goes to `/setup-key` if no valid API key exists, or `/dashboard` if one does
+
+### Research Insights -- Additional Edge Cases
+
+- **Middleware cookie preservation on redirect:** When the middleware redirects to `/accept-terms`, it must copy all cookies from the `supabaseResponse` to the redirect response. Failing to do this causes session desynchronization -- the browser and server go out of sync, leading to random logouts on subsequent requests. This is documented in Supabase's SSR migration guide.
+- **`getClaims()` returns `user_metadata`:** The claims object includes `user_metadata` which still contains the attacker-forged `tc_accepted: true`. This field is irrelevant after the fix (we never read it server-side), but it is worth noting that the metadata persists in the JWT. It does not affect security because the middleware checks the `users` table, not the JWT claims.
+- **Concurrent accept-terms submissions:** Two browser tabs open on `/accept-terms`, both submit simultaneously. The first UPDATE succeeds (sets `tc_accepted_at`). The second UPDATE matches zero rows (`tc_accepted_at IS NULL` is no longer true) and is a no-op. Both POST responses return 200. The Supabase `.update()` does not return an error when zero rows match -- it returns `data: null` with no error. The API route should not treat this as an error.
 
 ## Non-Goals
 
@@ -280,7 +360,7 @@ export async function POST() {
 
 ### apps/web-platform/middleware.ts
 
-Add T&C enforcement:
+Add T&C enforcement. Migrate from `getUser()` to `getClaims()` for performance. Preserve cookies on all redirect responses:
 
 ```typescript
 const PUBLIC_PATHS = [
@@ -293,23 +373,54 @@ const PUBLIC_PATHS = [
   "/ws",
 ];
 
-// ... after user auth check ...
+// ... inside middleware function, after creating supabase client ...
 
-if (user) {
-  // Check T&C acceptance for non-public paths
-  const { data: userRow } = await supabase
-    .from("users")
-    .select("tc_accepted_at")
-    .eq("id", user.id)
-    .single();
+// IMPORTANT: Do not run code between createServerClient and getClaims().
+const { data } = await supabase.auth.getClaims();
+const user = data?.claims;
 
-  if (!userRow?.tc_accepted_at) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/accept-terms";
-    return NextResponse.redirect(url);
-  }
+if (!user) {
+  const url = request.nextUrl.clone();
+  url.pathname = "/login";
+  const redirectResponse = NextResponse.redirect(url);
+  // Preserve cookies to prevent session desync
+  supabaseResponse.cookies.getAll().forEach(cookie =>
+    redirectResponse.cookies.set(cookie.name, cookie.value)
+  );
+  return redirectResponse;
 }
+
+// Check T&C acceptance for non-public paths
+const { data: userRow } = await supabase
+  .from("users")
+  .select("tc_accepted_at")
+  .eq("id", user.sub)  // getClaims() returns claims object; user ID is in 'sub'
+  .single();
+
+if (!userRow?.tc_accepted_at) {
+  const url = request.nextUrl.clone();
+  url.pathname = "/accept-terms";
+  const redirectResponse = NextResponse.redirect(url);
+  // CRITICAL: Copy cookies to redirect response to prevent session desync
+  supabaseResponse.cookies.getAll().forEach(cookie =>
+    redirectResponse.cookies.set(cookie.name, cookie.value)
+  );
+  return redirectResponse;
+}
+
+return supabaseResponse;
 ```
+
+### Research Insights -- Middleware Implementation Details
+
+**`getClaims()` vs `getUser()` migration:**
+The `getClaims()` method returns a `claims` object with standard JWT fields (`sub`, `email`, `aud`, `exp`, `user_metadata`, `app_metadata`). The user ID is in `claims.sub` (not `claims.id`). When migrating, replace `user.id` references in middleware with `user.sub`.
+
+**`supabaseResponse` must be returned:**
+Supabase SSR docs state: "You *must* return the supabaseResponse object as it is." When creating redirect responses, all cookies from the supabase response must be copied to the redirect. Failure to do this causes the browser and server to go out of sync, terminating the user's session prematurely.
+
+**RLS SELECT check (verified):**
+The `supabase.from("users").select("tc_accepted_at")` query uses the session's anon-key client with the user's JWT. The existing RLS SELECT policy in `001_initial_schema.sql` is: `"Users can read own profile" on public.users for select using (auth.uid() = id)`. This is a table-level policy covering all columns, including `tc_accepted_at`. No additional migration needed for the middleware query to work.
 
 ## References
 
