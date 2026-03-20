@@ -224,9 +224,10 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           SubagentStart: [{
             hooks: [async (input) => {
               const subInput = input as Record<string, unknown>;
+              const sanitize = (v: unknown) => String(v ?? '').replace(/[\r\n]/g, ' ').slice(0, 200);
               console.log(
-                `[sec] Subagent started: agent_id=${subInput.agent_id}, ` +
-                `type=${subInput.agent_type}`,
+                `[sec] Subagent started: agent_id=${sanitize(subInput.agent_id)}, ` +
+                `type=${sanitize(subInput.agent_type)}`,
               );
               return {};
             }],
@@ -239,7 +240,9 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         canUseTool: async (
           toolName: string,
           toolInput: Record<string, unknown>,
+          options: { signal: AbortSignal; agentID?: string },
         ) => {
+          const subagentCtx = options.agentID ? ` [subagent=${options.agentID}]` : '';
           // Defense-in-depth: catch any file tool that bypasses hooks.
           // PreToolUse hooks are the primary enforcement (layer 1).
           // This is layer 2 -- see #891 for the audit that added it.
@@ -248,7 +251,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             if (filePath && !isPathInWorkspace(filePath, workspacePath)) {
               return {
                 behavior: "deny" as const,
-                message: "Access denied: outside workspace",
+                message: `Access denied: outside workspace${subagentCtx}`,
               };
             }
             if (!filePath && (UNVERIFIED_PARAM_TOOLS as readonly string[]).includes(toolName) && Object.keys(toolInput).length > 0) {
@@ -266,7 +269,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             const gateId = randomUUID();
             const question =
               (toolInput.question as string) || "Agent needs your input";
-            const options = Array.isArray(toolInput.options)
+            const gateOptions = Array.isArray(toolInput.options)
               ? (toolInput.options as string[])
               : ["Approve", "Reject"];
 
@@ -274,7 +277,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               type: "review_gate",
               gateId,
               question,
-              options,
+              options: gateOptions,
             });
 
             await updateConversationStatus(conversationId, "waiting_for_user");
@@ -298,6 +301,9 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           // options.agentID). Explicit allow replaces the prior SAFE_TOOLS
           // auto-allow for auditability. See #910.
           if (toolName === "Agent") {
+            if (subagentCtx) {
+              console.log(`[sec] Agent tool invoked${subagentCtx}`);
+            }
             return { behavior: "allow" as const };
           }
 

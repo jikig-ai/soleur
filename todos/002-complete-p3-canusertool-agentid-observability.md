@@ -1,6 +1,6 @@
 ---
 title: Accept agentID in canUseTool options for observability
-status: pending
+status: complete
 priority: p3
 domain: engineering
 tags: [observability, audit]

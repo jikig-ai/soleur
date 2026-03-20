@@ -1,6 +1,6 @@
 ---
 title: Sanitize SubagentStart hook log values
-status: pending
+status: complete
 priority: p3
 domain: engineering
 tags: [security, defense-in-depth]
