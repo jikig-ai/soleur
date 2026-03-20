@@ -280,6 +280,12 @@ export function setupWebSocket(server: HTTPServer) {
           return;
         }
 
+        // Guard: if timeout fired during the await, socket is already closing
+        if (ws.readyState !== WebSocket.OPEN) {
+          clearTimeout(authTimer);
+          return;
+        }
+
         // Auth success
         clearTimeout(authTimer);
         authenticated = true;
