@@ -9,6 +9,7 @@ export default function SignupPage() {
   const [sent, setSent] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [tcAccepted, setTcAccepted] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -18,7 +19,10 @@ export default function SignupPage() {
     const supabase = createClient();
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: `${window.location.origin}/callback` },
+      options: {
+        emailRedirectTo: `${window.location.origin}/callback`,
+        data: { tc_accepted: true },
+      },
     });
 
     setLoading(false);
@@ -66,9 +70,41 @@ export default function SignupPage() {
 
           {error && <p className="text-sm text-red-400">{error}</p>}
 
+          <label className="flex items-start gap-3 text-sm text-neutral-400">
+            <input
+              type="checkbox"
+              required
+              checked={tcAccepted}
+              onChange={(e) => setTcAccepted(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-neutral-700 bg-neutral-900"
+            />
+            <span>
+              I agree to the{" "}
+              <a
+                href="https://soleur.ai/pages/legal/terms-and-conditions.html"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-white underline hover:text-neutral-300"
+                onClick={(e) => e.stopPropagation()}
+              >
+                Terms &amp; Conditions
+              </a>{" "}
+              and{" "}
+              <a
+                href="https://soleur.ai/pages/legal/privacy-policy.html"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-white underline hover:text-neutral-300"
+                onClick={(e) => e.stopPropagation()}
+              >
+                Privacy Policy
+              </a>
+            </span>
+          </label>
+
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || !tcAccepted}
             className="w-full rounded-lg bg-white px-4 py-3 text-sm font-medium text-black hover:bg-neutral-200 disabled:opacity-50"
           >
             {loading ? "Sending..." : "Sign up with magic link"}
