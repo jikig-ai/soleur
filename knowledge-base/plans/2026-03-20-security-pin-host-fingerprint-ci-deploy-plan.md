@@ -88,8 +88,8 @@ func FingerprintSHA256(pubKey PublicKey) string {
 ## Acceptance Criteria
 
 - [ ] `WEB_PLATFORM_HOST_FINGERPRINT` GitHub secret is set with the server's Ed25519 host key SHA256 fingerprint
-- [ ] `web-platform-release.yml` deploy step passes `fingerprint: ${{ secrets.WEB_PLATFORM_HOST_FINGERPRINT }}` to `appleboy/ssh-action`
-- [ ] `telegram-bridge-release.yml` both ssh-action steps pass `fingerprint: ${{ secrets.WEB_PLATFORM_HOST_FINGERPRINT }}` to `appleboy/ssh-action`
+- [x] `web-platform-release.yml` deploy step passes `fingerprint: ${{ secrets.WEB_PLATFORM_HOST_FINGERPRINT }}` to `appleboy/ssh-action`
+- [x] `telegram-bridge-release.yml` both ssh-action steps pass `fingerprint: ${{ secrets.WEB_PLATFORM_HOST_FINGERPRINT }}` to `appleboy/ssh-action`
 - [ ] Deploy succeeds end-to-end with fingerprint verification enabled (verified via workflow run)
 
 ## Test Scenarios

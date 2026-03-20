@@ -11,12 +11,12 @@
 
 ## Phase 2: Core Implementation
 
-- [ ] 2.1 Update `web-platform-release.yml` deploy step
-  - [ ] 2.1.1 Add `fingerprint: ${{ secrets.WEB_PLATFORM_HOST_FINGERPRINT }}` to the ssh-action `with:` block (line ~47)
-- [ ] 2.2 Update `telegram-bridge-release.yml` env setup step
-  - [ ] 2.2.1 Add `fingerprint: ${{ secrets.WEB_PLATFORM_HOST_FINGERPRINT }}` to the first ssh-action `with:` block (line ~42)
-- [ ] 2.3 Update `telegram-bridge-release.yml` deploy step
-  - [ ] 2.3.1 Add `fingerprint: ${{ secrets.WEB_PLATFORM_HOST_FINGERPRINT }}` to the second ssh-action `with:` block (line ~60)
+- [x] 2.1 Update `web-platform-release.yml` deploy step
+  - [x] 2.1.1 Add `fingerprint: ${{ secrets.WEB_PLATFORM_HOST_FINGERPRINT }}` to the ssh-action `with:` block (line ~47)
+- [x] 2.2 Update `telegram-bridge-release.yml` env setup step
+  - [x] 2.2.1 Add `fingerprint: ${{ secrets.WEB_PLATFORM_HOST_FINGERPRINT }}` to the first ssh-action `with:` block (line ~42)
+- [x] 2.3 Update `telegram-bridge-release.yml` deploy step
+  - [x] 2.3.1 Add `fingerprint: ${{ secrets.WEB_PLATFORM_HOST_FINGERPRINT }}` to the second ssh-action `with:` block (line ~60)
 
 ## Phase 3: Testing
 
