@@ -220,15 +220,15 @@ The `sendUserMessage` function (line 296) calls `startAgentSession` fire-and-for
 
 ## Acceptance Criteria
 
-- [ ] `apps/web-platform/server/agent-runner.ts` no longer spreads `process.env` into the agent subprocess `env` option
-- [ ] An exported `buildAgentEnv()` function constructs a minimal env object from an explicit allowlist
-- [ ] `ANTHROPIC_API_KEY` is set from the BYOK-decrypted key (unchanged behavior)
-- [ ] `HOME`, `PATH`, `NODE_ENV`, locale vars, `TMPDIR`, and proxy vars are forwarded when present (subprocess functionality preserved)
-- [ ] `DISABLE_AUTOUPDATER`, `DISABLE_TELEMETRY`, and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` are hardcoded to `"1"` (subprocess isolation hardening)
-- [ ] `SUPABASE_SERVICE_ROLE_KEY`, `BYOK_ENCRYPTION_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` are NOT present in the subprocess environment
-- [ ] Unit test verifies: `buildAgentEnv` output contains only allowlisted keys, override keys, and `ANTHROPIC_API_KEY`
-- [ ] Unit test verifies: `buildAgentEnv` output does NOT contain any known server secret, tested exhaustively against a deny list
-- [ ] No regression in agent session startup (existing test patterns in `apps/web-platform/test/` pass)
+- [x] `apps/web-platform/server/agent-runner.ts` no longer spreads `process.env` into the agent subprocess `env` option
+- [x] An exported `buildAgentEnv()` function constructs a minimal env object from an explicit allowlist
+- [x] `ANTHROPIC_API_KEY` is set from the BYOK-decrypted key (unchanged behavior)
+- [x] `HOME`, `PATH`, `NODE_ENV`, locale vars, `TMPDIR`, and proxy vars are forwarded when present (subprocess functionality preserved)
+- [x] `DISABLE_AUTOUPDATER`, `DISABLE_TELEMETRY`, and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` are hardcoded to `"1"` (subprocess isolation hardening)
+- [x] `SUPABASE_SERVICE_ROLE_KEY`, `BYOK_ENCRYPTION_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` are NOT present in the subprocess environment
+- [x] Unit test verifies: `buildAgentEnv` output contains only allowlisted keys, override keys, and `ANTHROPIC_API_KEY`
+- [x] Unit test verifies: `buildAgentEnv` output does NOT contain any known server secret, tested exhaustively against a deny list
+- [x] No regression in agent session startup (existing test patterns in `apps/web-platform/test/` pass)
 
 ## Test Scenarios
 
