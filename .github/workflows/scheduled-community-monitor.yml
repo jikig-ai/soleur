@@ -63,7 +63,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
           plugins: 'soleur@soleur'
-          claude_args: '--model claude-sonnet-4-6 --max-turns 30 --allowedTools Bash,Read,Write,Edit,Glob,Grep'
+          claude_args: '--model claude-sonnet-4-6 --max-turns 50 --allowedTools Bash,Read,Write,Edit,Glob,Grep'
           prompt: |
             You are a community monitoring agent. Your job is to generate a daily
             community digest and create a GitHub Issue summarizing the findings.
@@ -81,22 +81,19 @@ jobs:
                "[Scheduled] Community Monitor - FAILED" with label
                "scheduled-community-monitor" explaining the misconfiguration, then stop.
 
-            2. **Collect data** from enabled platforms using the router. Set:
-               ROUTER="plugins/soleur/skills/community/scripts/community-router.sh"
-               Then run:
-               - Discord (if enabled): $ROUTER discord guild-info, $ROUTER discord members,
-                 $ROUTER discord channels (to list channel IDs),
-                 then $ROUTER discord messages <channel_id> 100 for each channel.
-               - X/Twitter (if enabled): $ROUTER x fetch-metrics ONLY.
-                 Do NOT call fetch-mentions or fetch-timeline (they return 403 on
-                 Free tier and waste turns). TODO: re-enable when paid API tier is activated.
-               - LinkedIn (if enabled): Do NOT post or fetch data -- log as
-                 "enabled (posting only)" and skip.
-               - GitHub: $ROUTER github activity 1, $ROUTER github contributors 1,
-                 $ROUTER github discussions 1. Use a 1-day lookback window.
-               - Hacker News: $ROUTER hn mentions --query soleur --limit 20,
-                 $ROUTER hn trending --limit 30. No secrets needed (public API).
-               - If a script fails, log the error and continue with other platforms.
+            2. **Collect data** from enabled platforms. IMPORTANT: batch commands
+               into as few Bash calls as possible to conserve turns. Use `;` (not
+               `&&`) to chain commands so failures don't halt the batch.
+               Set: ROUTER="plugins/soleur/skills/community/scripts/community-router.sh"
+               Batch 1 (Discord + X — single Bash call):
+               - Discord (if enabled): `bash $ROUTER discord guild-info; bash $ROUTER discord members; bash $ROUTER discord channels`
+                 Then one more call to fetch messages for each channel ID from the output above.
+               - X/Twitter (if enabled): append `bash $ROUTER x fetch-metrics` to the same call.
+                 Do NOT call fetch-mentions or fetch-timeline (403 on Free tier).
+               - LinkedIn (if enabled): skip — log "enabled (posting only)".
+               Batch 2 (GitHub + HN — single Bash call):
+               - `bash $ROUTER github activity 1; bash $ROUTER github contributors 1; bash $ROUTER github discussions 1; bash $ROUTER hn mentions --query soleur --limit 20; bash $ROUTER hn trending --limit 30`
+               If any command in a batch fails, log the error and continue.
 
             3. **Read brand guide** at knowledge-base/marketing/brand-guide.md (section ## Voice)
                before writing any content. Match the brand voice in the digest.
