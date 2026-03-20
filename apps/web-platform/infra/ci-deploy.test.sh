@@ -107,7 +107,7 @@ assert_exit_contains() {
   local actual_exit
   output=$(run_deploy "$cmd" 2>&1) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq "$expected_exit" ]] && echo "$output" | grep -qF "$expected_text"; then
+  if [[ "$actual_exit" -eq "$expected_exit" ]] && printf '%s\n' "$output" | grep -qF "$expected_text"; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"
   else
@@ -175,6 +175,23 @@ assert_exit_contains "tag without v prefix rejected" 1 "invalid tag format" \
 
 assert_exit_contains "tag with extra suffix rejected" 1 "invalid tag format" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0-rc1"
+
+echo ""
+echo "--- Adversarial input (shell injection) ---"
+assert_exit_contains "command substitution in tag rejected" 1 "invalid tag format" \
+  'deploy web-platform ghcr.io/jikig-ai/soleur-web-platform $(whoami)'
+
+assert_exit_contains "semicolon injection in tag rejected" 1 "invalid tag format" \
+  'deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0;id'
+
+assert_exit_contains "backtick injection in tag rejected" 1 "invalid tag format" \
+  'deploy web-platform ghcr.io/jikig-ai/soleur-web-platform `whoami`'
+
+assert_exit_contains "newline injection rejected" 1 "expected 4 fields" \
+  $'deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0\nwhoami'
+
+assert_exit_contains "pipe injection in tag rejected" 1 "invalid tag format" \
+  'deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0|id'
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="

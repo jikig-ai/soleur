@@ -27,7 +27,7 @@ if [[ -z "${SSH_ORIGINAL_COMMAND:-}" ]]; then
 fi
 
 # Validate field count (exactly 4 fields expected: deploy <component> <image> <tag>)
-field_count=$(echo "$SSH_ORIGINAL_COMMAND" | wc -w)
+field_count=$(printf '%s\n' "$SSH_ORIGINAL_COMMAND" | wc -w)
 if [[ "$field_count" -ne 4 ]]; then
   logger -t "$LOG_TAG" "REJECTED: expected 4 fields, got $field_count"
   echo "Error: malformed command (expected 4 fields, got $field_count)" >&2
@@ -120,6 +120,11 @@ case "$COMPONENT" in
     done
     echo "Health check failed after 120s"
     docker logs soleur-bridge --tail 30
+    exit 1
+    ;;
+  *)
+    logger -t "$LOG_TAG" "ERROR: no deploy handler for '$COMPONENT'"
+    echo "Error: no deploy handler for '$COMPONENT'" >&2
     exit 1
     ;;
 esac
