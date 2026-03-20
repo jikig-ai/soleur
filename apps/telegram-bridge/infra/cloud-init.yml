@@ -201,9 +201,9 @@ runcmd:
   # (deploy user writes .env vars and manages containers via CI/CD)
   #
   # After provisioning, populate /mnt/data/.env with secrets.
-  # See apps/telegram-bridge/.env.example for required keys:
-  #   TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_ID, ANTHROPIC_API_KEY
-  # This file is shared with web-platform -- both containers read it.
+  # See apps/telegram-bridge/.env.example (bridge keys) and
+  #     apps/web-platform/.env.example (platform keys).
+  # Both containers read from this single shared file.
   - touch /mnt/data/.env
   - chmod 600 /mnt/data/.env
   - chown -R deploy:deploy /mnt/data
