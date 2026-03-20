@@ -8,7 +8,7 @@ permalink: pages/legal/data-protection-disclosure.html
 <section class="page-hero">
   <div class="container">
     <h1>Data Protection Disclosure</h1>
-    <p>Effective February 20, 2026 | Last Updated March 20, 2026 (added Web Platform email notification to Section 8.2(b), added Web Platform to Section 7.2 breach notification scope, renamed Section 3.1 heading, removed Buttondown from Section 4.3, updated Cloudflare legal basis to dual basis, added Section 10.3 Web Platform account deletion, added Section 5.3 Web Platform data subject rights, harmonized Cloudflare dual legal basis in Section 2.1b(d), added Article 12(3) two-month extension provision to response timeline)</p>
+    <p>Effective February 20, 2026 | Last Updated March 20, 2026 (added Web Platform notification channel to Section 13.2, added Web Platform email notification to Section 8.2(b), added Web Platform to Section 7.2 breach notification scope, renamed Section 3.1 heading, removed Buttondown from Section 4.3, updated Cloudflare legal basis to dual basis, added Section 10.3 Web Platform account deletion, added Section 5.3 Web Platform data subject rights, harmonized Cloudflare dual legal basis in Section 2.1b(d), added Article 12(3) two-month extension provision to response timeline)</p>
   </div>
 </section>
 
@@ -18,7 +18,7 @@ permalink: pages/legal/data-protection-disclosure.html
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 20, 2026 (added Web Platform email notification to Section 8.2(b), added Web Platform to Section 7.2 breach notification scope, renamed Section 3.1 heading, removed Buttondown from Section 4.3, updated Cloudflare legal basis to dual basis, added Section 10.3 Web Platform account deletion, added Section 5.3 Web Platform data subject rights, harmonized Cloudflare dual legal basis in Section 2.1b(d), added Article 12(3) two-month extension provision to response timeline)
+**Last Updated:** March 20, 2026 (added Web Platform notification channel to Section 13.2, added Web Platform email notification to Section 8.2(b), added Web Platform to Section 7.2 breach notification scope, renamed Section 3.1 heading, removed Buttondown from Section 4.3, updated Cloudflare legal basis to dual basis, added Section 10.3 Web Platform account deletion, added Section 5.3 Web Platform data subject rights, harmonized Cloudflare dual legal basis in Section 2.1b(d), added Article 12(3) two-month extension provision to response timeline)
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -342,7 +342,7 @@ For questions, concerns, or requests related to this DPD:
 
 **13.1** Soleur reserves the right to update this DPD to reflect changes in the Plugin's architecture, applicable law, or regulatory guidance.
 
-**13.2** Material changes will be communicated at least 30 days in advance through the Soleur GitHub repository and Docs Site.
+**13.2** Material changes will be communicated at least 30 days in advance through the Soleur GitHub repository, Docs Site, and Web Platform (app.soleur.ai) (including email notification for Web Platform users with an account on file).
 
 **13.3** Continued use of the Plugin after the effective date of changes constitutes acceptance of the updated DPD.
 

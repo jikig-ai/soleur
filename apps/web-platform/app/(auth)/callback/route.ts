@@ -1,14 +1,16 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { resolveOrigin } from "@/lib/auth/resolve-origin";
 import { provisionWorkspace } from "@/server/workspace";
 import { NextResponse } from "next/server";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
-  const forwardedHost = request.headers.get("x-forwarded-host");
-  const forwardedProto = request.headers.get("x-forwarded-proto") ?? "https";
-  const host = forwardedHost ?? request.headers.get("host") ?? "app.soleur.ai";
-  const origin = `${forwardedProto}://${host}`;
+  const origin = resolveOrigin(
+    request.headers.get("x-forwarded-host"),
+    request.headers.get("x-forwarded-proto"),
+    request.headers.get("host"),
+  );
 
   if (code) {
     const supabase = await createClient();
@@ -24,11 +26,11 @@ export async function GET(request: Request) {
       } = await supabase.auth.getUser();
 
       if (user) {
-        const tcAccepted =
-          user.user_metadata?.tc_accepted === true ||
-          user.user_metadata?.tc_accepted === "true";
+        const tcAcceptedAt = await ensureWorkspaceProvisioned(user.id, user.email ?? "");
 
-        await ensureWorkspaceProvisioned(user.id, user.email ?? "", tcAccepted);
+        if (!tcAcceptedAt) {
+          return NextResponse.redirect(`${origin}/accept-terms`);
+        }
 
         // Check if user has an API key set up
         const { data: keys } = await supabase
@@ -39,7 +41,6 @@ export async function GET(request: Request) {
           .eq("is_valid", true)
           .limit(1);
 
-        // Redirect to key setup if no valid key, otherwise dashboard
         if (!keys || keys.length === 0) {
           return NextResponse.redirect(`${origin}/setup-key`);
         }
@@ -56,24 +57,24 @@ export async function GET(request: Request) {
 async function ensureWorkspaceProvisioned(
   userId: string,
   email: string,
-  tcAccepted: boolean,
-): Promise<void> {
+): Promise<string | null> {
+  // Uses service role client (bypasses RLS) intentionally: during callback,
+  // the user row may still be mid-creation by the trigger, and the session
+  // client's RLS query could return empty. Middleware uses the session client
+  // (anon key + RLS) which is appropriate for established sessions.
   const serviceClient = createServiceClient();
 
-  // Upsert user row (first login creates it, subsequent logins are no-ops)
   const { data: existing } = await serviceClient
     .from("users")
-    .select("workspace_status")
+    .select("workspace_status, tc_accepted_at")
     .eq("id", userId)
     .single();
 
   if (!existing) {
-    // First-time user — create row and provision
-    // Note: this is a safety net path. The handle_new_user() trigger on
-    // auth.users INSERT is the primary mechanism for creating the users row
-    // (including tc_accepted_at). This fallback fires only if the trigger
-    // failed silently or was not present.
-    // Mirror the trigger logic: only set tc_accepted_at when metadata confirms acceptance.
+    // Safety net: the handle_new_user() trigger is the primary mechanism for
+    // creating the users row. This fallback fires only if the trigger failed.
+    // tc_accepted_at is always NULL — acceptance is recorded server-side via
+    // POST /api/accept-terms.
     const workspacePath = await provisionWorkspace(userId);
     const { error: insertError } = await serviceClient
       .from("users")
@@ -83,26 +84,26 @@ async function ensureWorkspaceProvisioned(
           email,
           workspace_path: workspacePath,
           workspace_status: "ready",
-          tc_accepted_at: tcAccepted ? new Date().toISOString() : null,
         },
         { onConflict: "id", ignoreDuplicates: true },
       );
     if (insertError) {
       console.error(`[callback] Fallback user upsert failed for ${userId}:`, insertError);
     }
-    return;
+    return null;
   }
 
-  if (existing.workspace_status === "ready") return;
-
-  // Workspace exists in DB but not provisioned on disk
-  try {
-    const workspacePath = await provisionWorkspace(userId);
-    await serviceClient
-      .from("users")
-      .update({ workspace_path: workspacePath, workspace_status: "ready" })
-      .eq("id", userId);
-  } catch (err) {
-    console.error(`[callback] Workspace provisioning failed for ${userId}:`, err);
+  if (existing.workspace_status !== "ready") {
+    try {
+      const workspacePath = await provisionWorkspace(userId);
+      await serviceClient
+        .from("users")
+        .update({ workspace_path: workspacePath, workspace_status: "ready" })
+        .eq("id", userId);
+    } catch (err) {
+      console.error(`[callback] Workspace provisioning failed for ${userId}:`, err);
+    }
   }
+
+  return existing.tc_accepted_at;
 }
