@@ -100,7 +100,6 @@ describe("isPathInWorkspace symlink defense", () => {
     const target = path.join(tmpWorkspace, "subdir");
     const linkPath = path.join(tmpWorkspace, "internal-link");
     fs.symlinkSync(target, linkPath);
-    fs.writeFileSync(path.join(target, "file.md"), "test");
     expect(
       isPathInWorkspace(path.join(linkPath, "file.md"), tmpWorkspace),
     ).toBe(true);
@@ -150,5 +149,21 @@ describe("isPathInWorkspace symlink defense", () => {
         tmpWorkspace,
       ),
     ).toBe(true);
+  });
+
+  test("resolves workspace path accessed through a symlink", () => {
+    const workspaceAlias = fs.mkdtempSync(path.join(os.tmpdir(), "ws-alias-"));
+    const aliasLink = path.join(workspaceAlias, "link");
+    fs.symlinkSync(tmpWorkspace, aliasLink);
+    try {
+      expect(
+        isPathInWorkspace(
+          path.join(tmpWorkspace, "subdir", "file.md"),
+          aliasLink,
+        ),
+      ).toBe(true);
+    } finally {
+      fs.rmSync(workspaceAlias, { recursive: true, force: true });
+    }
   });
 });

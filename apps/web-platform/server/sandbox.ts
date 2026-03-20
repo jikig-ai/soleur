@@ -50,7 +50,7 @@ function resolveParentRealPath(filePath: string): string | null {
     current = path.dirname(current);
     try {
       const realParent = fs.realpathSync(current);
-      return path.join(realParent, ...segments.reverse());
+      return path.join(realParent, ...segments.toReversed());
     } catch (err: unknown) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== "ENOENT") {
@@ -63,19 +63,24 @@ function resolveParentRealPath(filePath: string): string | null {
   }
 
   // Reached filesystem root without finding existing ancestor
-  return path.join(current, ...segments.reverse());
+  return path.join(current, ...segments.toReversed());
 }
 
 /**
  * Resolves a workspace path to its canonical form.
- * Falls back to path.resolve() if the workspace path does not exist
- * (e.g., in test environments with mock paths).
+ * Falls back to path.resolve() only on ENOENT (e.g., test environments
+ * with mock paths). Returns null on ELOOP, EACCES, or other errors
+ * to maintain fail-closed consistency with resolveRealPath.
  */
-function resolveWorkspacePath(workspacePath: string): string {
+function resolveWorkspacePath(workspacePath: string): string | null {
   try {
     return fs.realpathSync(path.resolve(workspacePath));
-  } catch {
-    return path.resolve(workspacePath);
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      return path.resolve(workspacePath);
+    }
+    return null;
   }
 }
 
@@ -99,6 +104,8 @@ export function isPathInWorkspace(
   if (realPath === null) return false;
 
   const resolvedWorkspace = resolveWorkspacePath(workspacePath);
+  if (resolvedWorkspace === null) return false;
+
   return (
     realPath === resolvedWorkspace ||
     realPath.startsWith(resolvedWorkspace + "/")
