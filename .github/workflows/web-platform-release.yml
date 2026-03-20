@@ -49,7 +49,4 @@ jobs:
           username: deploy
           key: ${{ secrets.WEB_PLATFORM_SSH_KEY }}
           fingerprint: ${{ secrets.WEB_PLATFORM_HOST_FINGERPRINT }}
-          script: |
-            TAG="v${{ needs.release.outputs.version }}"
-            [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ERROR: Invalid version format: $TAG"; exit 1; }
-            deploy web-platform ghcr.io/jikig-ai/soleur-web-platform "$TAG"
+          script: deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v${{ needs.release.outputs.version }}
