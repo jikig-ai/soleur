@@ -146,13 +146,13 @@ The gap is: no documentation tells the operator what to put in this file.
 
 ## Acceptance Criteria
 
-- [ ] `apps/web-platform/.env.example` exists with all required env vars, descriptions, failure modes, and grouping by service
-- [ ] `apps/telegram-bridge/.env.example` updated to include `ANTHROPIC_API_KEY`
-- [ ] Both `cloud-init.yml` files have inline comments next to the `.env` placeholder referencing the `.env.example` files and listing required keys
-- [ ] `apps/telegram-bridge/README.md` has a "Disaster Recovery" or "Reprovisioning" section that covers `.env` restoration
-- [ ] The shared nature of `/mnt/data/.env` (both components read it) is documented
-- [ ] `BYOK_ENCRYPTION_KEY` is flagged as critical with generation command and backup warning
-- [ ] `NEXT_PUBLIC_` build-time vs runtime distinction is documented in `.env.example`
+- [x] `apps/web-platform/.env.example` exists with all required env vars, descriptions, failure modes, and grouping by service
+- [x] `apps/telegram-bridge/.env.example` updated to include `ANTHROPIC_API_KEY`
+- [x] Both `cloud-init.yml` files have inline comments next to the `.env` placeholder referencing the `.env.example` files and listing required keys
+- [x] `apps/telegram-bridge/README.md` has a "Disaster Recovery" or "Reprovisioning" section that covers `.env` restoration
+- [x] The shared nature of `/mnt/data/.env` (both components read it) is documented
+- [x] `BYOK_ENCRYPTION_KEY` is flagged as critical with generation command and backup warning
+- [x] `NEXT_PUBLIC_` build-time vs runtime distinction is documented in `.env.example`
 
 ## Test Scenarios
 
