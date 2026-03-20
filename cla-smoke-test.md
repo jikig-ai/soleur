@@ -1,1 +1,0 @@
-# CLA Smoke Test

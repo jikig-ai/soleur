@@ -1,6 +1,0 @@
-[test]
-# Exclude git worktrees from test discovery (defense-in-depth).
-# Bun already skips dot-directories by default, but explicit exclusion
-# prevents segfaults if worktrees have missing node_modules.
-# See: knowledge-base/learnings/2026-03-18-bun-test-segfault-missing-deps.md
-pathIgnorePatterns = [".worktrees/**"]
