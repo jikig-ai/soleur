@@ -1,0 +1,26 @@
+node_modules
+.env*
+
+# Terraform configs, not needed at runtime
+infra/
+scripts/
+
+.git
+.gitignore
+*.md
+
+test/
+
+# Migrations/templates not needed at runtime
+supabase/
+
+.next/
+out/
+
+*.pem
+*.tsbuildinfo
+next-env.d.ts
+
+Dockerfile
+.dockerignore
+docker-compose*.yml

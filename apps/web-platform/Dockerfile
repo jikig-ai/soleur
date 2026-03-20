@@ -22,12 +22,18 @@ ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
 # Build Next.js
 RUN npm run build
 
+# Non-root user (UID 1001 avoids conflict with node:22-slim's built-in 'node' user at UID 1000)
+RUN useradd --no-log-init --uid 1001 -m soleur \
+    && chown -R soleur:soleur .next
+USER soleur
+RUN git config --global user.name "Soleur" && git config --global user.email "soleur@localhost"
+
 # Production
 ENV NODE_ENV=production
 ENV PORT=3000
 EXPOSE 3000
 
-# Health check
+# Health check (curl is pre-installed in node:22-slim)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD node -e "fetch('http://localhost:3000/health',{signal:AbortSignal.timeout(4_000)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
