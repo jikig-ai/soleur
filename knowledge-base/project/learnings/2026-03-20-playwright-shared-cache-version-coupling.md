@@ -1,8 +1,12 @@
 ---
-title: Playwright shared cache causes version coupling between independent tools
+title: "Playwright shared cache causes version coupling between independent tools"
 date: 2026-03-20
+category: dependency-management
 tags: [playwright, agent-browser, browser-automation, dependency-management]
+module: plugins/soleur/skills/agent-browser
 ---
+
+# Learning: Playwright shared cache causes version coupling between independent tools
 
 ## Problem
 
@@ -16,7 +20,7 @@ When two tools share `~/.cache/ms-playwright/`, their Playwright versions must m
 
 Upgraded to `agent-browser@0.21.4`, which is a Rust native CLI using Chrome for Testing instead of Playwright's Chromium. It stores browsers in `~/.agent-browser/browsers/`, completely decoupling from the Playwright cache.
 
-## Key Insights
+## Key Insight
 
 1. Self-contained packages that use Chrome for Testing (like agent-browser 0.21.1+) eliminate shared-cache coupling entirely
 2. Playwright's browser revision lookup is exact-match — there is no forward compatibility between revisions
