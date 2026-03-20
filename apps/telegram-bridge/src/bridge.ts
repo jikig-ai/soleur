@@ -290,6 +290,18 @@ export class Bridge {
     this.streamState = null;
   }
 
+  /** Clear all timers and reset state. Call in test afterEach to prevent leaks. */
+  destroy(): void {
+    this.clearTurnWatchdog();
+    if (this.turnStatus) {
+      clearInterval(this.turnStatus.typingTimer);
+      this.turnStatus = null;
+    }
+    this.streamState = null;
+    this.messageQueue = [];
+    this.processing = false;
+  }
+
   handleCliMessage(raw: string): void {
     let msg: Record<string, unknown>;
     try {
