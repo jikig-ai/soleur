@@ -104,12 +104,12 @@ sed -i '/TAG="v\${{ needs.release.outputs.version }}"/a\            [[ "$TAG" =~
 
 ## Acceptance Criteria
 
-- [ ] `web-platform-release.yml` validates version format matches `^v[0-9]+\.[0-9]+\.[0-9]+$` before any `docker` command in `.github/workflows/web-platform-release.yml`
-- [ ] `telegram-bridge-release.yml` validates version format matches `^v[0-9]+\.[0-9]+\.[0-9]+$` before any `docker` command in `.github/workflows/telegram-bridge-release.yml`
-- [ ] Both validations use plain `echo "ERROR: ..."` (NOT `::error::` -- workflow commands do not work inside ssh-action remote scripts)
-- [ ] Both validations abort with `exit 1` on mismatch
-- [ ] No functional change to the deploy flow when version format is valid (existing tests/deploys unaffected)
-- [ ] Indentation of the new line matches surrounding script lines (12 spaces for ssh-action script blocks)
+- [x] `web-platform-release.yml` validates version format matches `^v[0-9]+\.[0-9]+\.[0-9]+$` before any `docker` command in `.github/workflows/web-platform-release.yml`
+- [x] `telegram-bridge-release.yml` validates version format matches `^v[0-9]+\.[0-9]+\.[0-9]+$` before any `docker` command in `.github/workflows/telegram-bridge-release.yml`
+- [x] Both validations use plain `echo "ERROR: ..."` (NOT `::error::` -- workflow commands do not work inside ssh-action remote scripts)
+- [x] Both validations abort with `exit 1` on mismatch
+- [x] No functional change to the deploy flow when version format is valid (existing tests/deploys unaffected)
+- [x] Indentation of the new line matches surrounding script lines (12 spaces for ssh-action script blocks)
 
 ## Test Scenarios
 
