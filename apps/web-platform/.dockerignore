@@ -1,0 +1,39 @@
+# Dependencies (installed fresh via npm ci in Dockerfile)
+node_modules
+
+# Environment files (secrets)
+.env
+.env.example
+.env*.local
+
+# Infrastructure (Terraform configs)
+infra/
+
+# Version control
+.git
+.gitignore
+
+# Documentation
+*.md
+
+# Test files
+test/
+
+# Supabase (migrations/templates not needed at runtime)
+supabase/
+
+# Next.js build output (rebuilt in Docker)
+.next/
+out/
+
+# Security-sensitive files
+*.pem
+
+# TypeScript build artifacts
+*.tsbuildinfo
+next-env.d.ts
+
+# Docker meta-files (not needed inside the image)
+Dockerfile
+.dockerignore
+docker-compose*.yml

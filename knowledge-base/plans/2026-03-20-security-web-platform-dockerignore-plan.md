@@ -30,11 +30,11 @@ The web-platform Dockerfile uses `COPY . .` (line 12) but has no `.dockerignore`
 
 ## Acceptance Criteria
 
-- [ ] `apps/web-platform/.dockerignore` exists and excludes at minimum: `node_modules`, `.env`, `.env.example`, `.env*.local`, `infra/`, `.git`, `.gitignore`, `*.md`, `test/`, `supabase/`, `.next/`, `out/`, `*.pem`, `*.tsbuildinfo`, `next-env.d.ts`, `Dockerfile`, `.dockerignore`, `docker-compose*.yml`
-- [ ] The pattern mirrors `apps/telegram-bridge/.dockerignore` for consistency, extended with Next.js-specific entries
-- [ ] `tsconfig.json`, `next.config.ts`, `postcss.config.mjs`, and `middleware.ts` are NOT excluded (required at build time)
-- [ ] Docker build still succeeds: `docker build apps/web-platform/` produces a working image (Next.js build completes, health check passes)
-- [ ] No secrets or unnecessary files are present in the built image layers
+- [x] `apps/web-platform/.dockerignore` exists and excludes at minimum: `node_modules`, `.env`, `.env.example`, `.env*.local`, `infra/`, `.git`, `.gitignore`, `*.md`, `test/`, `supabase/`, `.next/`, `out/`, `*.pem`, `*.tsbuildinfo`, `next-env.d.ts`, `Dockerfile`, `.dockerignore`, `docker-compose*.yml`
+- [x] The pattern mirrors `apps/telegram-bridge/.dockerignore` for consistency, extended with Next.js-specific entries
+- [x] `tsconfig.json`, `next.config.ts`, `postcss.config.mjs`, and `middleware.ts` are NOT excluded (required at build time)
+- [x] Docker build still succeeds: `docker build apps/web-platform/` produces a working image (Next.js build completes, health check passes)
+- [x] No secrets or unnecessary files are present in the built image layers
 
 ## Test Scenarios
 
