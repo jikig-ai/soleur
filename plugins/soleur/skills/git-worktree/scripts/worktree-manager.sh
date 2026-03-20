@@ -701,6 +701,9 @@ sync_bare_files() {
     ".claude/settings.json"
     "plugins/soleur/AGENTS.md"
     "plugins/soleur/CLAUDE.md"
+    "plugins/soleur/hooks/hooks.json"
+    "plugins/soleur/hooks/stop-hook.sh"
+    "plugins/soleur/hooks/welcome-hook.sh"
     "plugins/soleur/scripts/resolve-git-root.sh"
     "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
   )
@@ -731,6 +734,7 @@ sync_bare_files() {
 
   # Restore execute permissions on scripts
   chmod +x "$GIT_ROOT/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh" 2>/dev/null || true
+  chmod +x "$GIT_ROOT/plugins/soleur/hooks/"*.sh 2>/dev/null || true
 
   # Sync hook scripts and restore execute permissions
   local hook_files

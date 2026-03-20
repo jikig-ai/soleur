@@ -156,9 +156,13 @@ bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh sync-bare-
 **What it syncs:**
 - `AGENTS.md`, `CLAUDE.md` (session-start instructions)
 - `plugins/soleur/AGENTS.md`, `plugins/soleur/CLAUDE.md`
+- `plugins/soleur/hooks/*` (plugin hooks: stop-hook, welcome-hook, hooks.json)
 - `.claude/settings.json` (permission rules)
 - `.claude/hooks/*.sh` (PreToolUse hooks)
+- `plugins/soleur/scripts/resolve-git-root.sh`
 - The `worktree-manager.sh` script itself
+
+**Important:** Any file that Claude Code executes at runtime from the bare repo root (via `${CLAUDE_PLUGIN_ROOT}` or direct path) must be added to the sync list in `worktree-manager.sh`. Stale on-disk files cause silent regressions.
 
 ## Workflow Examples
 
