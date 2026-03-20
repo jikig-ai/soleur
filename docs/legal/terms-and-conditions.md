@@ -75,7 +75,7 @@ When you create a Web Platform account:
 
 The Web Platform is hosted on Hetzner servers in Helsinki, Finland (EU) and uses Cloudflare as a CDN/proxy. Full data processing details are described in the [Privacy Policy](privacy-policy.md) Section 4.7.
 
-By creating a Web Platform account, you accept these Terms and acknowledge that your data will be processed as described in the Privacy Policy.
+By creating a Web Platform account, you accept these Terms and acknowledge that your data will be processed as described in the Privacy Policy. Acceptance requires checking the "I agree to the Terms & Conditions and Privacy Policy" checkbox on the signup page before account creation. The checkbox is unchecked by default; you must actively check it to proceed. Your acceptance is timestamped and recorded.
 
 ## 5. Subscriptions, Cancellation, and Refunds
 
