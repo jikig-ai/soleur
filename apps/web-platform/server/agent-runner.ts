@@ -192,7 +192,12 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               (toolInput.file_path as string) ||
               (toolInput.path as string) ||
               "";
-            if (filePath && !filePath.startsWith(workspacePath)) {
+            const normalizedPath = path.resolve(filePath);
+            if (
+              filePath &&
+              normalizedPath !== workspacePath &&
+              !normalizedPath.startsWith(workspacePath + "/")
+            ) {
               return {
                 behavior: "deny" as const,
                 message: "Access denied: outside workspace",
@@ -245,8 +250,16 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             };
           }
 
-          // Agent tool: allow (subagents inherit sandbox)
-          if (toolName === "Agent") {
+          // Safe SDK tools: no security-sensitive inputs, allowed without checks
+          const SAFE_TOOLS = [
+            "Agent",
+            "Skill",
+            "TodoRead",
+            "TodoWrite",
+            "LS",
+            "NotebookRead",
+          ];
+          if (SAFE_TOOLS.includes(toolName)) {
             return { behavior: "allow" as const };
           }
 

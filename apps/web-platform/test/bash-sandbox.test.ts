@@ -2,63 +2,46 @@ import { describe, test, expect } from "vitest";
 import { containsSensitiveEnvAccess } from "../server/bash-sandbox";
 
 describe("containsSensitiveEnvAccess", () => {
-  test("blocks `env` command", () => {
-    expect(containsSensitiveEnvAccess("env")).toBe(true);
+  describe("blocked commands", () => {
+    test.each([
+      ["env", "bare env command"],
+      ["printenv", "printenv command"],
+      ["set", "bare set (lists all vars)"],
+      ["declare -p", "declare -p dumps vars"],
+      ["export -p", "export -p dumps vars"],
+      ["compgen -v", "compgen -v lists var names"],
+      ["echo $SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_ var reference"],
+      ["echo ${ANTHROPIC_API_KEY}", "ANTHROPIC_ var reference (braces)"],
+      ["echo $BYOK_ENCRYPTION_KEY", "BYOK_ var reference"],
+      ["echo ${BYOK_ENCRYPTION_KEY}", "BYOK_ var reference (braces)"],
+      ["cat /proc/self/environ", "/proc/self/environ"],
+      ["cat /proc/1/environ", "/proc/<pid>/environ"],
+      ["dd if=/proc/$$/environ", "/proc/$$/environ"],
+      ["ls | env", "env in pipeline"],
+      ["echo ok && set", "set after &&"],
+      ["python3 -c 'import os; print(os.environ)'", "python os.environ"],
+      ["node -e 'console.log(process.env)'", "node process.env"],
+      ["ruby -e 'puts ENV.to_a'", "ruby ENV access"],
+    ])("blocks: %s (%s)", (cmd) => {
+      expect(containsSensitiveEnvAccess(cmd)).toBe(true);
+    });
   });
 
-  test("blocks `printenv` command", () => {
-    expect(containsSensitiveEnvAccess("printenv")).toBe(true);
-  });
-
-  test("blocks `set` without flags (lists all vars)", () => {
-    expect(containsSensitiveEnvAccess("set")).toBe(true);
-  });
-
-  test("blocks echo $SUPABASE_SERVICE_ROLE_KEY", () => {
-    expect(containsSensitiveEnvAccess("echo $SUPABASE_SERVICE_ROLE_KEY")).toBe(
-      true,
-    );
-  });
-
-  test("blocks echo ${ANTHROPIC_API_KEY}", () => {
-    expect(containsSensitiveEnvAccess("echo ${ANTHROPIC_API_KEY}")).toBe(true);
-  });
-
-  test("blocks cat /proc/self/environ", () => {
-    expect(containsSensitiveEnvAccess("cat /proc/self/environ")).toBe(true);
-  });
-
-  test("blocks echo $BYOK_ENCRYPTION_KEY", () => {
-    expect(containsSensitiveEnvAccess("echo $BYOK_ENCRYPTION_KEY")).toBe(true);
-  });
-
-  test("blocks echo ${BYOK_ENCRYPTION_KEY}", () => {
-    expect(containsSensitiveEnvAccess("echo ${BYOK_ENCRYPTION_KEY}")).toBe(
-      true,
-    );
-  });
-
-  test("allows ls -la", () => {
-    expect(containsSensitiveEnvAccess("ls -la")).toBe(false);
-  });
-
-  test("allows git status", () => {
-    expect(containsSensitiveEnvAccess("git status")).toBe(false);
-  });
-
-  test("allows set -euo pipefail (set with flags is not env listing)", () => {
-    expect(containsSensitiveEnvAccess("set -euo pipefail")).toBe(false);
-  });
-
-  test("allows set -e", () => {
-    expect(containsSensitiveEnvAccess("set -e")).toBe(false);
-  });
-
-  test("allows echo hello", () => {
-    expect(containsSensitiveEnvAccess("echo hello")).toBe(false);
-  });
-
-  test("allows npm install", () => {
-    expect(containsSensitiveEnvAccess("npm install")).toBe(false);
+  describe("allowed commands (no false positives)", () => {
+    test.each([
+      ["ls -la", "basic file listing"],
+      ["git status", "git command"],
+      ["set -euo pipefail", "set with flags"],
+      ["set -e", "set -e"],
+      ["echo hello", "simple echo"],
+      ["npm install", "npm install"],
+      ["python -m venv .venv", "venv is not env"],
+      ["source .env.local", ".env file is not env command"],
+      ["cat environment.txt", "environment is not env"],
+      ["NODE_ENV=test npm test", "env var assignment is not env command"],
+      ["export FOO=bar", "export with assignment is not export -p"],
+    ])("allows: %s (%s)", (cmd) => {
+      expect(containsSensitiveEnvAccess(cmd)).toBe(false);
+    });
   });
 });
