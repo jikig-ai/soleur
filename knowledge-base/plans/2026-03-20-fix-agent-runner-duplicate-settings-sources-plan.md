@@ -76,11 +76,11 @@ And once in the test file:
 
 ## Acceptance Criteria
 
-- [ ] `settingSources: []` appears exactly once in the `query()` options block
-- [ ] The remaining instance retains the defense-in-depth comment (lines 188-191)
+- [x] `settingSources: []` appears exactly once in the `query()` options block
+- [x] The remaining instance retains the defense-in-depth comment (lines 188-191)
 - [ ] Next.js build (`next build`) succeeds in Docker (CI pipeline)
 - [ ] Web Platform Release CI pipeline goes green on main
-- [ ] No other duplicate properties exist in the `query()` options block (spot-checked: none found)
+- [x] No other duplicate properties exist in the `query()` options block (spot-checked: none found)
 
 ## Test Scenarios
 
