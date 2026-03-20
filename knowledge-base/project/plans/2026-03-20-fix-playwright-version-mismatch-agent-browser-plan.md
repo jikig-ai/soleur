@@ -201,17 +201,17 @@ agent-browser@0.21.4 has a `postinstall` script (`scripts/postinstall.js`) that 
 
 ## Acceptance Criteria
 
-- [ ] `agent-browser` updated to 0.21.4 globally via `npm install -g agent-browser@0.21.4`
-- [ ] `agent-browser install` run successfully (downloads Chrome for Testing)
-- [ ] `agent-browser open https://example.com` succeeds without version mismatch error
-- [ ] `agent-browser snapshot -i` returns element refs in the `@e1` format
-- [ ] `agent-browser screenshot test.png` captures a screenshot
-- [ ] agent-browser SKILL.md updated: `--session` examples changed to `--session-name`
-- [ ] agent-browser SKILL.md updated: "vs Playwright MCP" table reflects Chrome for Testing backend
-- [ ] Playwright MCP tools (`browser_navigate`, `browser_snapshot`) continue to work independently
-- [ ] Old Chromium revision 1200 directory does not need to exist
-- [ ] `check_deps.sh` verified -- install instruction (`npm install -g agent-browser && agent-browser install`) is still correct
-- [ ] Linux `--with-deps` flag documented in check_deps.sh or SKILL.md
+- [x] `agent-browser` updated to 0.21.4 globally via `npm install -g agent-browser@0.21.4`
+- [x] `agent-browser install` run successfully (downloads Chrome for Testing)
+- [x] `agent-browser open https://example.com` succeeds without version mismatch error
+- [x] `agent-browser snapshot -i` returns element refs in the `@e1` format
+- [x] `agent-browser screenshot test.png` captures a screenshot
+- [x] agent-browser SKILL.md updated: `--session` examples changed to `--session-name`
+- [x] agent-browser SKILL.md updated: "vs Playwright MCP" table reflects Chrome for Testing backend
+- [x] Playwright MCP tools (`browser_navigate`, `browser_snapshot`) continue to work independently
+- [x] Old Chromium revision 1200 directory does not need to exist
+- [x] `check_deps.sh` verified -- install instruction (`npm install -g agent-browser && agent-browser install`) is still correct
+- [x] Linux `--with-deps` flag documented in check_deps.sh or SKILL.md
 
 ## Test Scenarios
 
