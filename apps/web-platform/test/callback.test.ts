@@ -63,10 +63,23 @@ describe("auth callback origin validation", () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  test("accepts localhost for development", () => {
+  test("rejects localhost outside development", () => {
     expect(resolveOrigin(null, "http", "localhost:3000")).toBe(
+      "https://app.soleur.ai",
+    );
+  });
+
+  test("accepts localhost for development", async () => {
+    const origEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "development";
+    vi.resetModules();
+    const { resolveOrigin: devResolve } = await import(
+      "../lib/auth/resolve-origin"
+    );
+    expect(devResolve(null, "http", "localhost:3000")).toBe(
       "http://localhost:3000",
     );
+    process.env.NODE_ENV = origEnv;
   });
 
   test("falls back to production when no headers present", () => {
