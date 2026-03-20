@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-02-16
+last_updated: 2026-03-20
 ---
 
 # Domains
@@ -27,4 +27,13 @@ last_updated: 2026-02-16
 | Always Use HTTPS | On |
 | Minimum TLS Version | 1.2 |
 | HSTS | max-age=31536000; includeSubDomains; preload |
+| HSTS Preload | Submitted 2026-03-20 — pending inclusion in Chromium preload list |
 | X-Content-Type-Options | nosniff |
+
+## HSTS Preload Commitment
+
+The domain `soleur.ai` was submitted to the [HSTS preload list](https://hstspreload.org) on 2026-03-20. This means:
+
+- All subdomains must serve HTTPS. Creating an HTTP-only subdomain will be unreachable for browsers using the preload list.
+- Removal from the list takes months (requires removing the `preload` directive from headers, submitting a removal request at hstspreload.org, and waiting for a Chromium release cycle).
+- New subdomains created via Terraform must have Cloudflare proxy enabled (`proxied = true`) with `Always Use HTTPS` active.
