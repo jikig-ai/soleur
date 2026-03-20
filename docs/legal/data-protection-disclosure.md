@@ -9,7 +9,7 @@ generated-date: 2026-02-20
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 20, 2026 (added Web Platform email notification to Section 8.2(b), added Web Platform to Section 7.2 breach notification scope, renamed Section 3.1 heading, removed Buttondown from Section 4.3, updated Cloudflare legal basis to dual basis, added Section 10.3 Web Platform account deletion, added Section 5.3 Web Platform data subject rights, harmonized Cloudflare dual legal basis in Section 2.1b(d))
+**Last Updated:** March 20, 2026 (added Web Platform email notification to Section 8.2(b), added Web Platform to Section 7.2 breach notification scope, renamed Section 3.1 heading, removed Buttondown from Section 4.3, updated Cloudflare legal basis to dual basis, added Section 10.3 Web Platform account deletion, added Section 5.3 Web Platform data subject rights, harmonized Cloudflare dual legal basis in Section 2.1b(d), added Article 12(3) two-month extension provision to response timeline)
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -191,7 +191,7 @@ For data processed through the Web Platform (app.soleur.ai) where Jikigai acts a
 - **(e)** **Right to Data Portability (Article 20):** Request personal data in a structured, commonly used, machine-readable format.
 - **(f)** **Right to Object (Article 21):** Object to processing of personal data. The legal basis for Web Platform processing is contract performance (Article 6(1)(b)), so this right applies primarily when processing extends beyond strict contractual necessity.
 
-Jikigai will acknowledge requests within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3). For full details on how each right applies, see the companion [GDPR Policy](gdpr-policy.md) Section 5.
+Jikigai will acknowledge requests within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3). This period may be extended by two further months where necessary, taking into account the complexity or volume of requests, in which case we will inform you of the extension and reasons within the initial one-month period. For full details on how each right applies, see the companion [GDPR Policy](gdpr-policy.md) Section 5.
 
 ---
 
