@@ -10,13 +10,15 @@ AUTO_INSTALL=false
 [[ ":$PATH:" != *":$HOME/.local/bin:"* ]] && export PATH="$HOME/.local/bin:$PATH"
 
 # Detect OS for install commands
+_UNAME=$(uname -s)
 OS="unknown"
-[[ "$(uname -s)" == "Darwin" ]] && OS="macos"
-[[ "$(uname -s)" == "Linux" ]] && OS="linux"
+[[ "$_UNAME" == "Darwin" ]] && OS="macos"
+[[ "$_UNAME" == "Linux" ]] && OS="linux"
 
 # Detect architecture for static binary downloads
+ARCH=$(uname -m)
 ARCH_SUFFIX=""
-case "$(uname -m)" in
+case "$ARCH" in
   x86_64)        ARCH_SUFFIX="amd64" ;;
   aarch64|arm64) ARCH_SUFFIX="arm64" ;;
 esac
@@ -24,13 +26,13 @@ esac
 install_ffmpeg_linux() {
   local arch_suffix="$1"
   if [[ -z "$arch_suffix" ]]; then
-    echo "  Unsupported architecture: $(uname -m). Install ffmpeg manually." >&2
+    echo "  Unsupported architecture: $ARCH. Install ffmpeg manually." >&2
     return 1
   fi
   local url="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${arch_suffix}-static.tar.xz"
   echo "  Downloading ffmpeg static build (~80MB)..."
   mkdir -p "$HOME/.local/bin"
-  if curl -sL "$url" | tar -xJf - --strip-components=1 -C "$HOME/.local/bin" --wildcards '*/ffmpeg'; then
+  if curl -sfL "$url" | tar -xJf - --strip-components=1 -C "$HOME/.local/bin" --wildcards '*/ffmpeg'; then
     chmod +x "$HOME/.local/bin/ffmpeg"
     return 0
   else
@@ -42,7 +44,7 @@ install_ffmpeg_linux() {
 install_rclone_linux() {
   local arch_suffix="$1"
   if [[ -z "$arch_suffix" ]]; then
-    echo "  Unsupported architecture: $(uname -m). Install rclone manually." >&2
+    echo "  Unsupported architecture: $ARCH. Install rclone manually." >&2
     return 1
   fi
   if ! command -v unzip >/dev/null 2>&1; then
@@ -52,20 +54,16 @@ install_rclone_linux() {
   local url="https://downloads.rclone.org/rclone-current-linux-${arch_suffix}.zip"
   local tmpdir
   tmpdir=$(mktemp -d)
-  trap 'rm -rf "$tmpdir"' EXIT
   echo "  Downloading rclone (~25MB)..."
   mkdir -p "$HOME/.local/bin"
-  if curl -sL "$url" -o "$tmpdir/rclone.zip" && \
-     unzip -q "$tmpdir/rclone.zip" -d "$tmpdir" && \
-     cp "$tmpdir"/rclone-*/rclone "$HOME/.local/bin/rclone" && \
-     chmod +x "$HOME/.local/bin/rclone"; then
-    rm -rf "$tmpdir"
-    trap - EXIT
-    return 0
-  else
+  curl -sfL "$url" -o "$tmpdir/rclone.zip" && \
+    unzip -q "$tmpdir/rclone.zip" -d "$tmpdir" && \
+    cp "$tmpdir"/rclone-*/rclone "$HOME/.local/bin/rclone" && \
+    chmod +x "$HOME/.local/bin/rclone"
+  local rc=$?
+  rm -rf "$tmpdir"
+  if [[ $rc -ne 0 ]]; then
     echo "  Download failed. Install rclone manually: https://rclone.org/install/" >&2
-    rm -rf "$tmpdir"
-    trap - EXIT
     return 1
   fi
 }

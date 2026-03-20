@@ -16,7 +16,8 @@ else
     echo
     echo "Install with:"
     echo "  macOS:  brew install rclone"
-    echo "  Linux:  mkdir -p ~/.local/bin && curl -sL https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /tmp/rclone.zip && unzip -q /tmp/rclone.zip -d /tmp && cp /tmp/rclone-*/rclone ~/.local/bin/ && chmod +x ~/.local/bin/rclone"
+    echo "  Linux:  mkdir -p ~/.local/bin && curl -sfL https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /tmp/rclone.zip && unzip -q /tmp/rclone.zip -d /tmp && cp /tmp/rclone-*/rclone ~/.local/bin/ && chmod +x ~/.local/bin/rclone"
+    echo "          (for arm64: replace amd64 with arm64 in the URL)"
     exit 1
 fi
 
