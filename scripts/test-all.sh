@@ -38,6 +38,24 @@ run_suite "apps/web-platform" apps/web-platform/
 run_suite "apps/telegram-bridge" apps/telegram-bridge/
 run_suite "plugins/soleur" plugins/soleur/
 
+# --- Bash Tests ---
+run_bash_suite() {
+  local label="$1"
+  suites=$((suites + 1))
+  echo "--- $label ---"
+  if bash "$label"; then
+    echo "[ok] $label"
+  else
+    echo "[FAIL] $label" >&2
+    failed=$((failed + 1))
+  fi
+}
+
+for f in plugins/soleur/test/*.test.sh; do
+  [[ -f "$f" ]] || continue
+  run_bash_suite "$f"
+done
+
 echo "=== $((suites - failed))/$suites suites passed ==="
 if [[ "$failed" -gt 0 ]]; then
   exit 1
