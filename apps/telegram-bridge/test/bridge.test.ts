@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, mock, type Mock } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, mock, type Mock } from "bun:test";
 import { Bridge } from "../src/bridge";
 import type { BotApi } from "../src/types";
 
@@ -37,6 +37,8 @@ describe("sendChunked", () => {
     api = createMockApi();
     bridge = new Bridge(api);
   });
+
+  afterEach(() => bridge.destroy());
 
   test("sends short HTML as single message", async () => {
     await bridge.sendChunked(1, "<b>hello</b>");
@@ -77,6 +79,8 @@ describe("startTurnStatus", () => {
     api = createMockApi();
     bridge = new Bridge(api, { statusEditIntervalMs: 100, typingIntervalMs: 100 });
   });
+
+  afterEach(() => bridge.destroy());
 
   test("sends typing action and status message", async () => {
     await bridge.startTurnStatus(1);
@@ -128,6 +132,8 @@ describe("recordToolUse", () => {
     api = createMockApi();
     bridge = new Bridge(api, { statusEditIntervalMs: 100, typingIntervalMs: 100 });
   });
+
+  afterEach(() => bridge.destroy());
 
   test("P2-014 regression: no-op when messageId is 0", async () => {
     api.sendMessage.mockRejectedValueOnce(new Error("fail"));
@@ -202,6 +208,8 @@ describe("flushStatusEdit", () => {
     bridge = new Bridge(api);
   });
 
+  afterEach(() => bridge.destroy());
+
   test("no-op when no turnStatus", () => {
     bridge.flushStatusEdit();
     expect(api.editMessageText).not.toHaveBeenCalled();
@@ -235,6 +243,8 @@ describe("cleanupTurnStatus", () => {
     api = createMockApi();
     bridge = new Bridge(api, { statusEditIntervalMs: 100, typingIntervalMs: 100 });
   });
+
+  afterEach(() => bridge.destroy());
 
   test("no-op when no turnStatus", async () => {
     await bridge.cleanupTurnStatus();
@@ -286,6 +296,8 @@ describe("handleCliMessage", () => {
     api = createMockApi();
     bridge = new Bridge(api, { statusEditIntervalMs: 100, typingIntervalMs: 100 });
   });
+
+  afterEach(() => bridge.destroy());
 
   test("ignores non-JSON input", () => {
     bridge.handleCliMessage("not json at all");
@@ -461,6 +473,8 @@ describe("sendUserMessage", () => {
     bridge.cliState = "ready";
   });
 
+  afterEach(() => bridge.destroy());
+
   test("writes JSON to stdin", () => {
     const writeMock = mock(() => 1);
     bridge.cliStdin = { write: writeMock };
@@ -529,6 +543,8 @@ describe("drainQueue", () => {
     bridge.cliState = "ready";
     bridge.cliStdin = { write: mock(() => 1) };
   });
+
+  afterEach(() => bridge.destroy());
 
   test("sends next queued message", () => {
     bridge.messageQueue = [{ chatId: 1, text: "first" }];
@@ -645,6 +661,8 @@ describe("streaming", () => {
     bridge.cliState = "ready";
     bridge.cliStdin = { write: mock(() => 1) };
   });
+
+  afterEach(() => bridge.destroy());
 
   test("happy path: deltas → progressive edits → final HTML edit", async () => {
     await bridge.startTurnStatus(1);
@@ -823,6 +841,7 @@ describe("streaming", () => {
 
     expect(bridge2.streamState).toBeNull();
     expect(bridge2.processing).toBe(false);
+    bridge2.destroy();
   });
 
   test("HTML parse failure on final edit → falls back to plain text", async () => {
