@@ -623,7 +623,145 @@ cleanup_merged_worktrees() {
     fi
   fi
 
+  # Always clean up stale Claude tmp files (RAM-backed, can be huge)
+  cleanup_claude_tmp
+
+  # Kill runaway processes that waste CPU (e.g., stuck gst-plugin-scanner)
+  cleanup_runaway_processes
+
   return 0
+}
+
+# Clean up stale Claude Code temp files to reclaim RAM.
+# Claude stores task output in /tmp/claude-<uid>/<project>/<session>/tasks/.
+# These files sit on tmpfs (RAM-backed). Runaway task outputs can consume tens
+# of GB and starve the system. This function identifies session directories that
+# no longer correspond to a running Claude process and removes their task output.
+cleanup_claude_tmp() {
+  local uid
+  uid=$(id -u)
+  local claude_tmp="/tmp/claude-$uid"
+
+  if [[ ! -d "$claude_tmp" ]]; then
+    return 0
+  fi
+
+  # Collect session IDs from running Claude processes (--resume <id> or conversation ID)
+  local active_sessions=()
+  while IFS= read -r pid; do
+    # Read /proc/<pid>/cmdline -- args are NUL-separated
+    local cmdline
+    cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null) || continue
+    # Extract --resume argument (session ID)
+    local session_id
+    session_id=$(echo "$cmdline" | grep -oP '(?<=--resume )[0-9a-f-]+' || true)
+    if [[ -n "$session_id" ]]; then
+      active_sessions+=("$session_id")
+    fi
+  done < <(pgrep -u "$uid" -x claude 2>/dev/null || true)
+
+  local total_freed=0
+  local files_removed=0
+
+  # Walk each project directory
+  for project_dir in "$claude_tmp"/*/; do
+    [[ -d "$project_dir" ]] || continue
+
+    for session_dir in "$project_dir"/*/; do
+      [[ -d "$session_dir" ]] || continue
+      local session_id
+      session_id=$(basename "$session_dir")
+
+      # Skip active sessions
+      local is_active=false
+      for active in "${active_sessions[@]+"${active_sessions[@]}"}"; do
+        if [[ "$active" == "$session_id" ]]; then
+          is_active=true
+          break
+        fi
+      done
+      if [[ "$is_active" == "true" ]]; then
+        continue
+      fi
+
+      # Remove task output files from stale sessions
+      local tasks_dir="$session_dir/tasks"
+      if [[ -d "$tasks_dir" ]]; then
+        for output_file in "$tasks_dir"/*.output; do
+          [[ -f "$output_file" ]] || continue
+          # Skip symlinks (they point to subagent logs and are tiny)
+          [[ -L "$output_file" ]] && continue
+          local size_kb
+          size_kb=$(stat -c%s "$output_file" 2>/dev/null || echo 0)
+          size_kb=$((size_kb / 1024))
+          # Only remove files > 1 MB to avoid removing small, harmless files
+          if [[ $size_kb -gt 1024 ]]; then
+            local size_mb=$((size_kb / 1024))
+            rm -f "$output_file"
+            total_freed=$((total_freed + size_mb))
+            files_removed=$((files_removed + 1))
+          fi
+        done
+      fi
+
+      # If the session directory is now empty (or only has empty subdirs), remove it
+      if [[ -z "$(find "$session_dir" -type f 2>/dev/null | head -1)" ]]; then
+        rm -rf "$session_dir" 2>/dev/null || true
+      fi
+    done
+
+    # Remove project dir if empty
+    if [[ -z "$(ls -A "$project_dir" 2>/dev/null)" ]]; then
+      rmdir "$project_dir" 2>/dev/null || true
+    fi
+  done
+
+  if [[ $files_removed -gt 0 ]]; then
+    echo -e "${GREEN}Cleaned $files_removed stale Claude task output(s), freed ~${total_freed} MB${NC}"
+  fi
+}
+
+# Kill runaway processes that waste CPU/memory during development sessions.
+# Known offenders:
+#   - gst-plugin-scanner: GStreamer media scanner spawned by GNOME's localsearch-3
+#     (Tracker file indexer). Gets stuck in infinite CPU loops scanning dev repos.
+#     Safe to kill -- GNOME re-indexes on next login if needed.
+# Only targets processes owned by the current user and running longer than the
+# CPU time threshold (avoids killing short-lived legitimate scans).
+cleanup_runaway_processes() {
+  local killed=0
+
+  # gst-plugin-scanner: kill instances using >5 min of CPU time
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local pid cputime
+    pid=$(echo "$line" | awk '{print $1}')
+    cputime=$(echo "$line" | awk '{print $2}')
+    # cputime format: [DD-]HH:MM:SS or MM:SS -- extract minutes
+    local minutes=0
+    if [[ "$cputime" == *-* ]]; then
+      # DD-HH:MM:SS format (days of CPU time -- definitely stuck)
+      minutes=9999
+    elif [[ "$cputime" =~ ^([0-9]+):([0-9]+):([0-9]+)$ ]]; then
+      # HH:MM:SS
+      minutes=$(( ${BASH_REMATCH[1]} * 60 + ${BASH_REMATCH[2]} ))
+    elif [[ "$cputime" =~ ^([0-9]+):([0-9]+)$ ]]; then
+      # MM:SS
+      minutes=${BASH_REMATCH[1]}
+    fi
+
+    if [[ $minutes -ge 5 ]]; then
+      kill "$pid" 2>/dev/null && killed=$((killed + 1))
+    fi
+  done < <(ps -u "$(id -u)" -o pid=,cputime=,comm= 2>/dev/null | grep 'gst-plugin-scan' || true)
+
+  # If we killed any gst-plugin-scanner, also stop localsearch to prevent respawn
+  if [[ $killed -gt 0 ]]; then
+    # Stop and mask the localsearch service so it doesn't respawn immediately
+    systemctl --user stop localsearch-3.service 2>/dev/null || true
+    systemctl --user mask localsearch-3.service 2>/dev/null || true
+    echo -e "${GREEN}Killed $killed runaway gst-plugin-scanner process(es), masked localsearch-3${NC}"
+  fi
 }
 
 # Create a draft PR for the current branch
@@ -798,6 +936,12 @@ main() {
     cleanup-merged)
       cleanup_merged_worktrees
       ;;
+    cleanup-tmp)
+      cleanup_claude_tmp
+      ;;
+    cleanup-procs)
+      cleanup_runaway_processes
+      ;;
     draft-pr)
       create_draft_pr
       ;;
@@ -836,7 +980,13 @@ Commands:
                                       (if name omitted, uses current worktree)
   cleanup | clean                     Clean up inactive worktrees
   cleanup-merged                      Clean up worktrees for merged branches
-                                      (detects [gone] branches, archives specs)
+                                      (detects [gone] branches, archives specs,
+                                      removes stale Claude tmp files, kills
+                                      runaway processes)
+  cleanup-tmp                         Remove stale Claude task output files
+                                      (reclaims RAM from /tmp/claude-<uid>/)
+  cleanup-procs                       Kill runaway processes wasting CPU
+                                      (e.g., stuck gst-plugin-scanner)
   draft-pr                            Create empty commit, push, and open draft PR
                                       (idempotent: skips if PR already exists)
   sync-bare | sync-bare-files | sync  Sync stale on-disk files from git HEAD

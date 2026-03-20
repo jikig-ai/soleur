@@ -23,7 +23,7 @@ run_suite() {
   local label="$1"; shift
   suites=$((suites + 1))
   echo "--- $label ---"
-  if bun test "$@"; then
+  if "$@"; then
     echo "[ok] $label"
   else
     echo "[FAIL] $label" >&2
@@ -31,12 +31,18 @@ run_suite() {
   fi
 }
 
-run_suite "test/content-publisher" test/content-publisher.test.ts
-run_suite "test/x-community" test/x-community.test.ts
-run_suite "test/pre-merge-rebase" test/pre-merge-rebase.test.ts
-run_suite "apps/web-platform" apps/web-platform/
-run_suite "apps/telegram-bridge" apps/telegram-bridge/
-run_suite "plugins/soleur" plugins/soleur/
+run_suite "test/content-publisher" bun test test/content-publisher.test.ts
+run_suite "test/x-community" bun test test/x-community.test.ts
+run_suite "test/pre-merge-rebase" bun test test/pre-merge-rebase.test.ts
+run_suite "apps/web-platform" bun test apps/web-platform/
+run_suite "apps/telegram-bridge" bun test apps/telegram-bridge/
+run_suite "plugins/soleur" bun test plugins/soleur/
+
+# Bash tests (not discovered by bun test; ci-deploy.test.sh runs in infra-validation.yml)
+for f in plugins/soleur/test/*.test.sh; do
+  [[ -f "$f" ]] || continue
+  run_suite "$f" bash "$f"
+done
 
 echo "=== $((suites - failed))/$suites suites passed ==="
 if [[ "$failed" -gt 0 ]]; then

@@ -65,6 +65,10 @@ jobs:
           OVERRIDE: ${{ inputs.pr_number }}
         run: |
           if [[ -n "$OVERRIDE" ]]; then
+            if [[ ! "$OVERRIDE" =~ ^[0-9]+$ ]]; then
+              echo "::error::pr_number must be a positive integer, got: $OVERRIDE"
+              exit 1
+            fi
             printf "pr_number=%s" "$OVERRIDE" | tr -d '\n\r' >> "$GITHUB_OUTPUT"
             echo "Override: shipping PR #$OVERRIDE"
             exit 0
