@@ -49,6 +49,11 @@ runcmd:
   # Apply SSH hardening immediately (drop-in written by write_files above)
   - systemctl restart sshd
 
+  # Install Doppler CLI (for secrets injection)
+  - curl -Ls --tlsv1.2 --proto "=https" --retry 3 https://cli.doppler.com/install.sh | sh
+  # Persist Doppler token for deploy user (read by SSH forced commands via /etc/environment)
+  - echo "DOPPLER_TOKEN=${doppler_token}" >> /etc/environment
+
   # Install Docker
   - curl -fsSL https://get.docker.com | sh
 
@@ -81,13 +86,26 @@ runcmd:
   - chmod 600 /mnt/data/.env
   - chown -R deploy:deploy /mnt/data
 
-  # Pull and run container
+  # Pull and run container (prefer Doppler secrets, fall back to /mnt/data/.env)
   - docker pull ${image_name}
   - |
+    ENV_FILE="/mnt/data/.env"
+    DOPPLER_TOKEN="${doppler_token}"
+    export DOPPLER_TOKEN
+    if command -v doppler >/dev/null 2>&1 && [ -n "$DOPPLER_TOKEN" ]; then
+      TMPENV=$(mktemp /tmp/doppler-env.XXXXXX)
+      chmod 600 "$TMPENV"
+      if doppler secrets download --no-file --format docker --project soleur --config prd > "$TMPENV" 2>/dev/null; then
+        ENV_FILE="$TMPENV"
+      else
+        rm -f "$TMPENV"
+      fi
+    fi
     docker run -d \
       --name soleur-bridge \
       --restart unless-stopped \
-      --env-file /mnt/data/.env \
+      --env-file "$ENV_FILE" \
       -v /mnt/data:/home/soleur/data \
       -p 127.0.0.1:8080:8080 \
       ${image_name}
+    if [ "$ENV_FILE" != "/mnt/data/.env" ]; then rm -f "$ENV_FILE"; fi

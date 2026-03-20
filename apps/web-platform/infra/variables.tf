@@ -78,3 +78,9 @@ variable "app_domain_base" {
   type        = string
   default     = "soleur.ai"
 }
+
+variable "doppler_token" {
+  description = "Doppler service token for production secrets injection"
+  type        = string
+  sensitive   = true
+}

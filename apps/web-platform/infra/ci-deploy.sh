@@ -11,6 +11,30 @@ set -euo pipefail
 
 readonly LOG_TAG="ci-deploy"
 
+# Resolve env file: prefer Doppler secrets download, fall back to /mnt/data/.env.
+# Writes secrets to a temp file (chmod 600) that the caller must clean up via cleanup_env_file.
+resolve_env_file() {
+  if command -v doppler >/dev/null 2>&1 && [[ -n "${DOPPLER_TOKEN:-}" ]]; then
+    local tmpenv
+    tmpenv=$(mktemp /tmp/doppler-env.XXXXXX)
+    chmod 600 "$tmpenv"
+    if doppler secrets download --no-file --format docker --project soleur --config prd > "$tmpenv" 2>/dev/null; then
+      echo "$tmpenv"
+      return 0
+    fi
+    rm -f "$tmpenv"
+    logger -t "$LOG_TAG" "WARNING: Doppler download failed, falling back to /mnt/data/.env"
+  fi
+  echo "/mnt/data/.env"
+}
+
+# Clean up temp env file after container starts (secrets are in container memory).
+cleanup_env_file() {
+  if [[ "$1" != "/mnt/data/.env" ]]; then
+    rm -f "$1"
+  fi
+}
+
 # Exact allowlist of valid images per component (not prefix match -- prevents suffix injection).
 declare -A ALLOWED_IMAGES=(
   [web-platform]="ghcr.io/jikig-ai/soleur-web-platform"
@@ -76,15 +100,17 @@ case "$COMPONENT" in
     { docker stop soleur-web-platform || true; }
     { docker rm soleur-web-platform || true; }
     sudo chown 1001:1001 /mnt/data/workspaces
+    ENV_FILE=$(resolve_env_file)
     docker run -d \
       --name soleur-web-platform \
       --restart unless-stopped \
-      --env-file /mnt/data/.env \
+      --env-file "$ENV_FILE" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
       -p 0.0.0.0:80:3000 \
       -p 0.0.0.0:3000:3000 \
       "$IMAGE:$TAG"
+    cleanup_env_file "$ENV_FILE"
     echo "Waiting for health check..."
     for i in $(seq 1 10); do
       if curl -sf http://localhost:3000/health; then
@@ -103,14 +129,16 @@ case "$COMPONENT" in
     docker pull "$IMAGE:$TAG"
     { docker stop soleur-bridge || true; }
     { docker rm soleur-bridge || true; }
+    ENV_FILE=$(resolve_env_file)
     docker run -d \
       --name soleur-bridge \
       --restart unless-stopped \
-      --env-file /mnt/data/.env \
+      --env-file "$ENV_FILE" \
       -v /mnt/data:/home/soleur/data \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
       -p 127.0.0.1:8080:8080 \
       "$IMAGE:$TAG"
+    cleanup_env_file "$ENV_FILE"
     echo "Waiting for health endpoint..."
     for i in $(seq 1 24); do
       STATUS=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/health 2>/dev/null) || STATUS="000"
