@@ -234,15 +234,15 @@ The WebSocket handler (from PR #940) rejects connections with close code 4004 if
 
 ## Acceptance Criteria
 
-- [ ] New migration `007_add_tc_accepted_version.sql` adds `tc_accepted_version text` column to `public.users`
-- [ ] `handle_new_user()` trigger records `tc_accepted_version` from signup metadata when `tc_accepted` is true
-- [ ] `TC_VERSION` constant exists in `apps/web-platform/lib/legal/tc-version.ts`
-- [ ] Auth callback fallback path records `tc_accepted_version` with trigger-fallback parity
-- [ ] Middleware redirects to `/accept-terms` when `tc_accepted_version !== TC_VERSION` (including NULL)
-- [ ] `POST /api/accept-terms` writes both `tc_accepted_at` and `tc_accepted_version`
-- [ ] Signup form includes `tc_version` in user metadata
-- [ ] `tc_accepted_version` column is NOT in the column-level GRANT (remains server-write-only)
-- [ ] All existing tests pass; new tests cover version check logic
+- [x] New migration `008_add_tc_accepted_version.sql` adds `tc_accepted_version text` column to `public.users` (numbered 008 since two 007s exist)
+- [x] `handle_new_user()` trigger updated to include `tc_accepted_version` column (always NULL — server-side acceptance pattern, no metadata trust)
+- [x] `TC_VERSION` constant exists in `apps/web-platform/lib/legal/tc-version.ts`
+- [x] Auth callback fallback path checks `tc_accepted_version` against `TC_VERSION` for redirect decision
+- [x] Middleware redirects to `/accept-terms` when `tc_accepted_version !== TC_VERSION` (including NULL)
+- [x] `POST /api/accept-terms` writes both `tc_accepted_at` and `tc_accepted_version`
+- [x] Signup form: N/A — server-side acceptance pattern (PR #940) means metadata is not used; version set by `/api/accept-terms`
+- [x] `tc_accepted_version` column is NOT in the column-level GRANT (remains server-write-only)
+- [x] All existing tests pass; new tests cover version check logic (10 new tests in `tc-version.test.ts`)
 
 ## Test Scenarios
 

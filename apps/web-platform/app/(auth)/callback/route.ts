@@ -1,6 +1,7 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { resolveOrigin } from "@/lib/auth/resolve-origin";
 import { provisionWorkspace } from "@/server/workspace";
+import { TC_VERSION } from "@/lib/legal/tc-version";
 import { NextResponse } from "next/server";
 
 export async function GET(request: Request) {
@@ -26,9 +27,9 @@ export async function GET(request: Request) {
       } = await supabase.auth.getUser();
 
       if (user) {
-        const tcAcceptedAt = await ensureWorkspaceProvisioned(user.id, user.email ?? "");
+        const tcAcceptedVersion = await ensureWorkspaceProvisioned(user.id, user.email ?? "");
 
-        if (!tcAcceptedAt) {
+        if (tcAcceptedVersion !== TC_VERSION) {
           return NextResponse.redirect(`${origin}/accept-terms`);
         }
 
@@ -66,7 +67,7 @@ async function ensureWorkspaceProvisioned(
 
   const { data: existing } = await serviceClient
     .from("users")
-    .select("workspace_status, tc_accepted_at")
+    .select("workspace_status, tc_accepted_version")
     .eq("id", userId)
     .single();
 
@@ -105,5 +106,5 @@ async function ensureWorkspaceProvisioned(
     }
   }
 
-  return existing.tc_accepted_at;
+  return existing.tc_accepted_version ?? null;
 }
