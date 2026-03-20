@@ -281,28 +281,28 @@ grep -n "Soleur does not" docs/legal/terms-and-conditions.md
 
 ## Acceptance Criteria
 
-- [ ] T&C Section 1 references "the Web Platform" in scope definition
-- [ ] T&C Section 2 defines "Web Platform," "Subscription," and "Account Data"
-- [ ] T&C Section 4.1 scoped to Plugin only, with cross-reference to Section 4.3
-- [ ] T&C Section 4.3 describes Web Platform service (account, payment, workspace, BYOK)
-- [ ] T&C Section 7.1 retains Plugin scoping, adds cross-reference to Section 7.1b
-- [ ] T&C Section 7.1b describes Web Platform data practices with processor summary
-- [ ] T&C Section 7.4 split into Plugin (local control) and Web Platform (exercisable via legal@jikigai.com) GDPR rights
-- [ ] T&C Section 9.1 covers both Plugin and Web Platform
-- [ ] T&C Section 10 liability language covers both Plugin and Web Platform
-- [ ] T&C Section 10.2 has EUR 100 floor for liability cap
-- [ ] T&C Section 13.1b covers Web Platform account termination and data deletion
-- [ ] T&C Section 13.3 updated for Web Platform data
-- [ ] T&C Section 15.1 references both Plugin and Web Platform
-- [ ] All "does not collect/operate/store" statements in T&C scoped to "the Plugin"
-- [ ] No "Soleur does not" blanket statements remain
-- [ ] Source and Eleventy copies consistent for T&C (link format differences only)
-- [ ] Privacy Policy, DPD, GDPR Policy verified complete (confirmed during deepening)
-- [ ] Source and Eleventy copies consistent for Privacy Policy, DPD, GDPR Policy (confirmed during deepening)
-- [ ] legal-compliance-auditor finds zero P1/P2 findings
-- [ ] grep verification shows no unscoped blanket statements across all four documents
-- [ ] `Last Updated` date reflects March 20, 2026 with change description
-- [ ] DPD Section 8.1(g) claim about T&C acceptance is satisfied by new Section 4.3
+- [x] T&C Section 1 references "the Web Platform" in scope definition
+- [x] T&C Section 2 defines "Web Platform," "Subscription," and "Account Data"
+- [x] T&C Section 4.1 scoped to Plugin only, with cross-reference to Section 4.3
+- [x] T&C Section 4.3 describes Web Platform service (account, payment, workspace, BYOK)
+- [x] T&C Section 7.1 retains Plugin scoping, adds cross-reference to Section 7.1b
+- [x] T&C Section 7.1b describes Web Platform data practices with processor summary
+- [x] T&C Section 7.4 split into Plugin (local control) and Web Platform (exercisable via legal@jikigai.com) GDPR rights
+- [x] T&C Section 9.1 covers both Plugin and Web Platform
+- [x] T&C Section 10 liability language covers both Plugin and Web Platform
+- [x] T&C Section 10.2 has EUR 100 floor for liability cap
+- [x] T&C Section 13.1b covers Web Platform account termination and data deletion
+- [x] T&C Section 13.3 updated for Web Platform data
+- [x] T&C Section 15.1 references both Plugin and Web Platform
+- [x] All "does not collect/operate/store" statements in T&C scoped to "the Plugin"
+- [x] No "Soleur does not" blanket statements remain
+- [x] Source and Eleventy copies consistent for T&C (link format differences only)
+- [x] Privacy Policy, DPD, GDPR Policy verified complete (confirmed during deepening)
+- [x] Source and Eleventy copies consistent for Privacy Policy, DPD, GDPR Policy (confirmed during deepening)
+- [x] legal-compliance-auditor finds zero P1/P2 findings in T&C (pre-existing P1s in other docs tracked in #888, #889)
+- [x] grep verification shows no unscoped blanket statements across all four documents
+- [x] `Last Updated` date reflects March 20, 2026 with change description
+- [x] DPD Section 8.1(g) claim about T&C acceptance is satisfied by new Section 4.3
 
 ## Test Scenarios
 
