@@ -1,0 +1,48 @@
+// Renovate configuration for automated dependency rotation
+// Manages: Docker digest pins, GitHub Actions SHA pins, npm version pins in Dockerfiles
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "docker:pinDigests",
+    "helpers:pinGitHubActionDigests",
+    "default:automergeDigest",
+    "schedule:weekly"
+  ],
+  "timezone": "Europe/Paris",
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "description": "Group Docker digest updates into one PR",
+      "matchDatasources": ["docker"],
+      "matchUpdateTypes": ["digest"],
+      "groupName": "docker-digests",
+      "automerge": true
+    },
+    {
+      "description": "Group GitHub Actions digest updates into one PR",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["digest"],
+      "groupName": "github-actions-digests",
+      "automerge": true
+    },
+    {
+      "description": "Do not auto-merge version bumps (only digests)",
+      "matchUpdateTypes": ["major", "minor", "patch"],
+      "automerge": false
+    }
+  ],
+  // Detect npm install -g @scope/package@version in Dockerfiles
+  // The built-in Dockerfile manager only handles FROM image references
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["(^|/)Dockerfile$"],
+      "matchStrings": [
+        "npm install -g (?<depName>@[\\w-]+/[\\w-]+)@(?<currentValue>[\\d.]+)"
+      ],
+      "datasourceTemplate": "npm",
+      "versioningTemplate": "npm"
+    }
+  ]
+}

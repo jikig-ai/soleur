@@ -231,15 +231,15 @@ These updates will NOT be auto-merged (they are version bumps, not digest rotati
 
 ## Acceptance Criteria
 
-- [ ] `renovate.json5` exists at repository root with Docker digest, GitHub Actions, custom npm regex, and auto-merge configuration
-- [ ] Configuration validates against Renovate JSON schema
+- [x] `renovate.json5` exists at repository root with Docker digest, GitHub Actions, custom npm regex, and auto-merge configuration
+- [x] Configuration validates against Renovate JSON schema
 - [ ] Renovate GitHub App is installed on `jikig-ai/soleur` (manual step by org admin -- post-merge)
-- [ ] Digest-only updates auto-merge after CI passes
-- [ ] Version bump PRs require manual review (not auto-merged)
-- [ ] Docker digest updates are grouped into a single PR per schedule window
-- [ ] GitHub Actions digest updates are grouped into a single PR per schedule window
-- [ ] CLA workflow does not block Renovate bot PRs (pre-verified: `renovate[bot]` in allowlist)
-- [ ] Custom regex manager detects `npm install -g @anthropic-ai/claude-code@X.Y.Z` patterns in both Dockerfiles
+- [x] Digest-only updates auto-merge after CI passes
+- [x] Version bump PRs require manual review (not auto-merged)
+- [x] Docker digest updates are grouped into a single PR per schedule window
+- [x] GitHub Actions digest updates are grouped into a single PR per schedule window
+- [x] CLA workflow does not block Renovate bot PRs (pre-verified: `renovate[bot]` in allowlist)
+- [x] Custom regex manager detects `npm install -g @anthropic-ai/claude-code@X.Y.Z` patterns in both Dockerfiles
 
 ## Test Scenarios
 
