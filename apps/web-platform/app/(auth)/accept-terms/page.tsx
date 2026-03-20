@@ -14,15 +14,20 @@ export default function AcceptTermsPage() {
     setLoading(true);
     setError("");
 
-    const res = await fetch("/api/accept-terms", { method: "POST" });
+    try {
+      const res = await fetch("/api/accept-terms", { method: "POST" });
 
-    if (!res.ok) {
-      setError("Something went wrong. Please try again.");
+      if (!res.ok) {
+        setError("Something went wrong. Please try again.");
+        return;
+      }
+
+      router.push("/dashboard");
+    } catch {
+      setError("Network error. Please check your connection and try again.");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    router.push("/dashboard");
   }
 
   return (

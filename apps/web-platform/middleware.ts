@@ -6,8 +6,8 @@ const PUBLIC_PATHS = ["/login", "/signup", "/callback", "/api/webhooks", "/ws", 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow public paths
-  if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {
+  // Allow public paths (exact match or prefix with trailing slash)
+  if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
     return NextResponse.next();
   }
 
@@ -60,11 +60,18 @@ export async function middleware(request: NextRequest) {
   }
 
   // Enforce T&C acceptance — redirect to /accept-terms if not accepted
-  const { data: userRow } = await supabase
+  const { data: userRow, error: tcError } = await supabase
     .from("users")
     .select("tc_accepted_at")
     .eq("id", user.id)
     .single();
+
+  if (tcError) {
+    // Fail open: allow request if we cannot verify T&C status.
+    // Auth is already verified by getUser() above.
+    console.error(`[middleware] tc_accepted_at query failed: ${tcError.message}`);
+    return response;
+  }
 
   if (!userRow?.tc_accepted_at) {
     const url = request.nextUrl.clone();

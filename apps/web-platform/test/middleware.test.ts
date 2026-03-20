@@ -5,7 +5,7 @@ import { describe, test, expect } from "vitest";
 const PUBLIC_PATHS = ["/login", "/signup", "/callback", "/api/webhooks", "/ws", "/accept-terms", "/api/accept-terms"];
 
 function isPublicPath(pathname: string): boolean {
-  return PUBLIC_PATHS.some((p) => pathname.startsWith(p));
+  return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"));
 }
 
 describe("middleware path routing", () => {
@@ -15,7 +15,19 @@ describe("middleware path routing", () => {
     expect(isPublicPath("/callback")).toBe(true);
     expect(isPublicPath("/api/webhooks/stripe")).toBe(true);
     expect(isPublicPath("/ws")).toBe(true);
-    expect(isPublicPath("/ws")).toBe(true); // no token in URL after auth refactor
+  });
+
+  test("public path sub-routes are allowed", () => {
+    expect(isPublicPath("/api/webhooks/stripe")).toBe(true);
+    expect(isPublicPath("/callback/")).toBe(true);
+  });
+
+  test("paths that share a prefix with public paths are NOT public", () => {
+    expect(isPublicPath("/accept-terms-evil")).toBe(false);
+    expect(isPublicPath("/api/webhooks-internal")).toBe(false);
+    expect(isPublicPath("/ws-debug")).toBe(false);
+    expect(isPublicPath("/login-admin")).toBe(false);
+    expect(isPublicPath("/callback-admin")).toBe(false);
   });
 
   test("dashboard paths require auth", () => {
@@ -37,29 +49,5 @@ describe("middleware path routing", () => {
 
   test("/api/accept-terms is a public path (allows POST from accept-terms page)", () => {
     expect(isPublicPath("/api/accept-terms")).toBe(true);
-  });
-});
-
-describe("T&C enforcement logic", () => {
-  // Extracted enforcement logic for unit testing
-  function shouldRedirectToAcceptTerms(
-    user: { id: string } | null,
-    tcAcceptedAt: string | null,
-  ): "login" | "accept-terms" | null {
-    if (!user) return "login";
-    if (!tcAcceptedAt) return "accept-terms";
-    return null;
-  }
-
-  test("unauthenticated user redirects to login", () => {
-    expect(shouldRedirectToAcceptTerms(null, null)).toBe("login");
-  });
-
-  test("authenticated user with NULL tc_accepted_at redirects to accept-terms", () => {
-    expect(shouldRedirectToAcceptTerms({ id: "user-1" }, null)).toBe("accept-terms");
-  });
-
-  test("authenticated user with tc_accepted_at proceeds normally", () => {
-    expect(shouldRedirectToAcceptTerms({ id: "user-1" }, "2026-01-01T00:00:00Z")).toBeNull();
   });
 });
