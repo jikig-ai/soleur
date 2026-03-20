@@ -161,18 +161,18 @@ All three documents have "Last Updated" lines that must reflect this change:
 
 ## Acceptance Criteria
 
-- [ ] DPD Section 2.1b(d) includes Cloudflare unauthenticated traffic qualifier with cross-reference to Section 4.2
-- [ ] GDPR Policy Section 3.7 has a fourth bullet for CDN/proxy processing with dual legal basis
-- [ ] GDPR Policy Section 3.7 closing sentence updated to scope "no balancing test" to contract performance bullets only, with inline balancing test for the legitimate interest portion
-- [ ] Privacy Policy Section 6 mentions Cloudflare technical data processing with dual legal basis and cross-references Section 5.8
-- [ ] All three edits are mirrored to `plugins/soleur/docs/pages/legal/` counterparts
-- [ ] `grep -c "legitimate interest" docs/legal/data-protection-disclosure.md` count increases by 1
-- [ ] `grep -c "legitimate interest" docs/legal/gdpr-policy.md` count increases by at least 1
-- [ ] `grep -c "legitimate interest" docs/legal/privacy-policy.md` count increases by 1
-- [ ] No conflict markers in any edited file
-- [ ] "Last Updated" lines updated on all three documents (source and mirror)
-- [ ] GDPR Policy CDN/proxy bullet includes balancing test consistent with Sections 3.3, 3.4, 3.6 pattern
-- [ ] Recital 49 cited in GDPR Policy CDN/proxy bullet
+- [x] DPD Section 2.1b(d) includes Cloudflare unauthenticated traffic qualifier with cross-reference to Section 4.2
+- [x] GDPR Policy Section 3.7 has a fourth bullet for CDN/proxy processing with dual legal basis
+- [x] GDPR Policy Section 3.7 closing sentence updated to scope "no balancing test" to contract performance bullets only, with inline balancing test for the legitimate interest portion
+- [x] Privacy Policy Section 6 mentions Cloudflare technical data processing with dual legal basis and cross-references Section 5.8
+- [x] All three edits are mirrored to `plugins/soleur/docs/pages/legal/` counterparts
+- [x] `grep -c "legitimate interest" docs/legal/data-protection-disclosure.md` count increases by 1
+- [x] `grep -c "legitimate interest" docs/legal/gdpr-policy.md` count increases by at least 1
+- [x] `grep -c "legitimate interest" docs/legal/privacy-policy.md` count increases by 1
+- [x] No conflict markers in any edited file
+- [x] "Last Updated" lines updated on all three documents (source and mirror)
+- [x] GDPR Policy CDN/proxy bullet includes balancing test consistent with Sections 3.3, 3.4, 3.6 pattern
+- [x] Recital 49 cited in GDPR Policy CDN/proxy bullet
 
 ## Test Scenarios
 

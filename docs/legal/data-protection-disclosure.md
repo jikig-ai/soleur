@@ -9,7 +9,7 @@ generated-date: 2026-02-20
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 20, 2026 (renamed Section 3.1 heading, removed Buttondown from Section 4.3, updated Cloudflare legal basis to dual basis, added Section 10.3 Web Platform account deletion, added Section 5.3 Web Platform data subject rights)
+**Last Updated:** March 20, 2026 (renamed Section 3.1 heading, removed Buttondown from Section 4.3, updated Cloudflare legal basis to dual basis, added Section 10.3 Web Platform account deletion, added Section 5.3 Web Platform data subject rights, harmonized Cloudflare dual legal basis in Section 2.1b(d))
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -69,7 +69,7 @@ For the Web Platform:
 - **(a)** Jikigai acts as the **data controller** for User account data, workspace data, and subscription data processed through the Web Platform.
 - **(b)** Jikigai engages the following **data processors** under Article 28 of the GDPR: Supabase (authentication and database), Stripe (payment processing), Hetzner (infrastructure hosting), and Cloudflare (CDN/proxy). See Section 4.2 for the full processor table.
 - **(c)** Data processed includes: email addresses, hashed passwords, authentication tokens, session data, encrypted API keys, subscription metadata, and technical data (IP addresses, request headers).
-- **(d)** The legal basis for this processing is **contract performance** (Article 6(1)(b) GDPR) -- processing is necessary to provide the Web Platform service the User signed up for.
+- **(d)** The legal basis for this processing is **contract performance** (Article 6(1)(b) GDPR) -- processing is necessary to provide the Web Platform service the User signed up for. For Cloudflare CDN/proxy processing of unauthenticated traffic (visitors who have not signed up), the legal basis is **legitimate interest** (Article 6(1)(f) GDPR) -- see Section 4.2 for the full dual-basis disclosure.
 
 This section fulfills the commitment made in Section 8.1(a) to update this DPD with Article 28-compliant terms when cloud features are introduced.
 
