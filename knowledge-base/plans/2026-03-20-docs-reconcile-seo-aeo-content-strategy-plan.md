@@ -37,13 +37,15 @@ None of these findings are reflected in the strategy documents that drive execut
 
 #### 1.1 Update frontmatter
 
+**Note:** The existing files have stale `depends_on` paths pointing to `knowledge-base/overview/`. Fix these to match actual filesystem paths:
+
 ```yaml
 last_updated: 2026-03-20
 last_reviewed: 2026-03-20
 depends_on:
-  - knowledge-base/overview/brand-guide.md
-  - knowledge-base/overview/marketing-strategy.md
-  - knowledge-base/overview/competitive-intelligence.md
+  - knowledge-base/marketing/brand-guide.md
+  - knowledge-base/marketing/marketing-strategy.md
+  - knowledge-base/product/competitive-intelligence.md
   - knowledge-base/marketing/audits/soleur-ai/2026-03-17-content-plan.md
   - knowledge-base/marketing/audits/soleur-ai/2026-03-17-content-audit.md
   - knowledge-base/marketing/audits/soleur-ai/2026-03-17-aeo-audit.md
@@ -91,8 +93,8 @@ Update the pillar tables to reflect what has been published vs. what remains:
 
 | Piece | Status | Notes |
 |-------|--------|-------|
-| Why Most Agentic Tools Plateau | **PUBLISHED** | SAP 4.8/5.0. Missing FAQ JSON-LD (P1 fix). |
-| Vibe Coding vs Agentic Engineering | Not started | **Highest audit priority for new content** (P2-1, score 18/20) |
+| Why Most Agentic Tools Plateau | **PUBLISHED** | SAP 4.8/5.0. Missing FAQ JSON-LD (P1 fix). Partially addresses Gaps 1 and 4. |
+| Vibe Coding vs Agentic Engineering | Not started | **Highest audit priority for new content** (P2-1, score 18/20). Renamed from "Agentic Engineering: Beyond Vibe Coding" to better target the search query "vibe coding vs agentic engineering". Same article, updated title. |
 | Knowledge Compounding in AI Development | Not started | Addresses Gap 1 |
 | Compound Engineering: How Every Project Makes the Next One Easier | Not started | Audit P3-4 |
 
@@ -166,10 +168,20 @@ Add sources consulted footer referencing the 2026-03-17 audit reports.
 
 #### 2.1 Update frontmatter
 
+**Note:** Fix stale `depends_on` paths (references `knowledge-base/overview/` which don't exist). Also fix 3 internal body text references to `knowledge-base/overview/content-strategy.md`.
+
 ```yaml
 last_updated: 2026-03-20
 last_reviewed: 2026-03-20
+depends_on:
+  - knowledge-base/marketing/brand-guide.md
+  - knowledge-base/product/competitive-intelligence.md
+  - knowledge-base/product/business-validation.md
+  - knowledge-base/marketing/content-strategy.md
+  - knowledge-base/product/pricing-strategy.md
 ```
+
+**Warning:** `scripts/weekly-analytics.sh` reads growth target phases from marketing-strategy.md lines 335-339. If structural changes shift these lines, the weekly analytics CI workflow will break. After editing, verify the WoW growth target table position or update the script's line references.
 
 #### 2.2 Refresh Executive Summary
 
@@ -242,12 +254,14 @@ Update the "Content Gaps (Ranked)" list and "Pillar Content (Priority Order)" ta
 
 #### 3.1 Update frontmatter
 
+**Note:** Fix stale `depends_on` paths (same issue as content-strategy.md):
+
 ```yaml
 last_updated: 2026-03-20
 last_reviewed: 2026-03-20
 depends_on:
-  - knowledge-base/overview/competitive-intelligence.md
-  - knowledge-base/overview/content-strategy.md
+  - knowledge-base/product/competitive-intelligence.md
+  - knowledge-base/marketing/content-strategy.md
   - knowledge-base/marketing/audits/soleur-ai/2026-03-17-content-audit.md
   - knowledge-base/marketing/audits/soleur-ai/2026-03-17-seo-audit.md
 ```
@@ -295,9 +309,7 @@ After all three documents are updated:
 - [ ] Cross-check quarterly calendar dates against campaign-calendar.md
 - [ ] Confirm pillar table status in content-strategy.md matches what marketing-strategy.md references
 - [ ] Verify no stale metrics remain in either document
-- [ ] Run `grep -r "0% informational" knowledge-base/marketing/` to catch any remaining stale claims
-- [ ] Run `grep -r "No blog" knowledge-base/marketing/` to catch remaining stale infrastructure claims
-- [ ] Run `grep -r "Zero executed" knowledge-base/marketing/` to catch remaining stale progress claims
+- [ ] Run `grep -rn "0% informational\|No blog\|Zero executed\|1\.6/10\|Content score 2/10\|Does not exist.*Cannot publish" knowledge-base/marketing/` — should return zero matches
 
 ## Acceptance Criteria
 
@@ -313,15 +325,14 @@ After all three documents are updated:
 - [ ] "What Exists" and "What Is Broken" tables updated
 - [ ] Phased plan shows Phase 0 complete, Phase 1 in progress
 - [ ] KPIs include current baseline values
+- [ ] `seo-refresh-queue.md` has `last_updated: 2026-03-20` and corrected `depends_on` paths
 - [ ] `seo-refresh-queue.md` marks completed items and adds audit findings
-- [ ] No stale claims remain (grep verification passes)
-
-## Test Scenarios
-
-- Given content-strategy.md has been updated, when reading the gap analysis, then completed gaps are clearly marked and no longer appear as unaddressed
-- Given marketing-strategy.md has been updated, when reading the executive summary, then the metrics match current reality (not pre-blog state)
-- Given all three docs are updated, when checking `depends_on` paths, then all referenced files exist
-- Given the quarterly calendar is in place, when comparing to campaign-calendar.md, then scheduled distributions align with planned publication dates
+- [ ] AEO checklist in content-strategy.md updated with `updated` frontmatter and external citation requirements
+- [ ] Sources footer in content-strategy.md references 2026-03-17 audit reports
+- [ ] Completed gaps use `[COMPLETED YYYY-MM-DD]` inline tags matching existing `[NEW/UPDATED]` convention
+- [ ] All `depends_on` paths across all 3 files point to actual filesystem locations (no `knowledge-base/overview/` references)
+- [ ] No stale claims remain: grep for "0% informational", "No blog", "Zero executed", "1.6/10", "Content score 2/10", "Does not exist" returns zero matches
+- [ ] `scripts/weekly-analytics.sh` growth target line references verified after marketing-strategy.md structural changes
 
 ## References
 

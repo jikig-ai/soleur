@@ -8,7 +8,7 @@
 
 ## Phase 1: Update content-strategy.md
 
-- [ ] 1.1 Update YAML frontmatter (`last_updated`, `last_reviewed`, `depends_on` with 2026-03-17 audit paths)
+- [ ] 1.1 Update YAML frontmatter (`last_updated`, `last_reviewed`, fix stale `depends_on` paths from `knowledge-base/overview/` to actual paths under `knowledge-base/marketing/` and `knowledge-base/product/`, add 2026-03-17 audit paths)
 - [ ] 1.2 Mark Gap 2 (CaaS Category Definition) as COMPLETED with publication note
 - [ ] 1.3 Mark Gap 6 (Cursor Agent Platform) as COMPLETED with publication note
 - [ ] 1.4 Update Gap 1 (Cross-Domain Compounding): narrow to dedicated pillar, note partial coverage
@@ -29,7 +29,7 @@
 
 ## Phase 2: Update marketing-strategy.md
 
-- [ ] 2.1 Update YAML frontmatter (`last_updated`, `last_reviewed`)
+- [ ] 2.1 Update YAML frontmatter (`last_updated`, `last_reviewed`, fix stale `depends_on` paths, fix 3 internal body text references to `knowledge-base/overview/content-strategy.md`). **Warning:** `scripts/weekly-analytics.sh` reads growth targets from lines 335-339 — verify line positions after structural changes.
 - [ ] 2.2 Refresh Executive Summary metrics (content score, AEO score, blog infra, comparisons)
 - [ ] 2.3 Update "What Exists and Works" table (content plan executed, blog live, AEO progress)
 - [ ] 2.4 Update "What Is Broken or Missing" table (resolve completed items, add new items)
@@ -42,7 +42,7 @@
 
 ## Phase 3: Update seo-refresh-queue.md
 
-- [ ] 3.1 Update YAML frontmatter (`last_updated`, `depends_on`)
+- [ ] 3.1 Update YAML frontmatter (`last_updated`, fix stale `depends_on` paths from `knowledge-base/overview/` to actual paths)
 - [ ] 3.2 Mark completed Priority 1 items (homepage FAQ, agents H1, skills H1, getting-started paragraph, llms.txt)
 - [ ] 3.3 Mark completed Priority 2 items (comparison pages, CaaS article, articles index)
 - [ ] 3.4 Add new Priority 1 items from audit (FAQ JSON-LD gaps, "plugin" removal, Vision H1, `updated` frontmatter)
@@ -54,5 +54,6 @@
 - [ ] 4.1 Verify all `depends_on` file paths exist
 - [ ] 4.2 Cross-check quarterly calendar against campaign-calendar.md
 - [ ] 4.3 Confirm pillar table status consistency between content-strategy.md and marketing-strategy.md
-- [ ] 4.4 Run grep for stale claims: "0% informational", "No blog", "Zero executed", "1.6/10"
-- [ ] 4.5 Final read-through of all three updated documents
+- [ ] 4.4 Run grep for stale claims: "0% informational", "No blog", "Zero executed", "1.6/10", "Content score 2/10", "Does not exist.*Cannot publish"
+- [ ] 4.5 Verify `scripts/weekly-analytics.sh` growth target line references still work after marketing-strategy.md changes
+- [ ] 4.6 Final read-through of all three updated documents
