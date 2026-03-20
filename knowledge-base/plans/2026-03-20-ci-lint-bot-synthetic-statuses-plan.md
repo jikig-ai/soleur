@@ -80,17 +80,17 @@ The lint runs `grep` on ~14 small YAML files (<300 lines each). Execution time i
 
 ## Acceptance Criteria
 
-- [ ] New script `scripts/lint-bot-synthetic-statuses.sh` exists and is executable
-- [ ] Script scans all `.github/workflows/scheduled-*.yml` files
-- [ ] Script passes when every file with `gh pr create` also has both `context=cla-check` and `context=test`
-- [ ] Script fails with clear error listing non-compliant files when a synthetic status is missing
-- [ ] Script exits 0 when no `scheduled-*.yml` files contain `gh pr create` (no false failures)
-- [ ] Script accepts `WORKFLOW_DIR` env var override for testability
-- [ ] New `lint-bot-statuses` job added to `.github/workflows/ci.yml`
-- [ ] Job runs on `ubuntu-latest`, checks out repo, and executes the lint script
-- [ ] Existing CI `test` job is unaffected
-- [ ] Bash test in `plugins/soleur/test/lint-bot-synthetic-statuses.test.sh` covers all 6 scenarios below
-- [ ] `scripts/test-all.sh` does NOT need updating (bash tests in `plugins/soleur/test/` are auto-discovered by the existing `for f in plugins/soleur/test/*.test.sh` loop)
+- [x] New script `scripts/lint-bot-synthetic-statuses.sh` exists and is executable
+- [x] Script scans all `.github/workflows/scheduled-*.yml` files
+- [x] Script passes when every file with `gh pr create` also has both `context=cla-check` and `context=test`
+- [x] Script fails with clear error listing non-compliant files when a synthetic status is missing
+- [x] Script exits 0 when no `scheduled-*.yml` files contain `gh pr create` (no false failures)
+- [x] Script accepts `WORKFLOW_DIR` env var override for testability
+- [x] New `lint-bot-statuses` job added to `.github/workflows/ci.yml`
+- [x] Job runs on `ubuntu-latest`, checks out repo, and executes the lint script
+- [x] Existing CI `test` job is unaffected
+- [x] Bash test in `plugins/soleur/test/lint-bot-synthetic-statuses.test.sh` covers all 6 scenarios below
+- [x] `scripts/test-all.sh` does NOT need updating (bash tests in `plugins/soleur/test/` are auto-discovered by the existing `for f in plugins/soleur/test/*.test.sh` loop)
 
 ## Test Scenarios
 
