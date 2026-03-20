@@ -1,0 +1,13 @@
+{
+  "type": "module",
+  "scripts": {
+    "docs:dev": "npx @11ty/eleventy --serve",
+    "docs:build": "npx @11ty/eleventy"
+  },
+  "devDependencies": {
+    "@11ty/eleventy": "^3.0.0",
+    "@11ty/eleventy-plugin-rss": "^2.0.4",
+    "markdown-it": "^14.1.1",
+    "yaml": "^2.8.2"
+  }
+}
