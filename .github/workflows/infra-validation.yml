@@ -79,30 +79,9 @@ jobs:
 
   deploy-script-tests:
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          fetch-depth: 0
-
-      - name: Check for deploy script changes
-        id: filter
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            CHANGED=$(git diff --name-only "origin/${BASE_REF}...HEAD" -- \
-              'apps/web-platform/infra/ci-deploy.sh' \
-              'apps/web-platform/infra/ci-deploy.test.sh')
-            if [[ -n "$CHANGED" ]]; then
-              echo "changed=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "changed=false" >> "$GITHUB_OUTPUT"
-            fi
-          fi
 
       - name: Run ci-deploy.sh tests
-        if: steps.filter.outputs.changed == 'true'
         run: bash apps/web-platform/infra/ci-deploy.test.sh
