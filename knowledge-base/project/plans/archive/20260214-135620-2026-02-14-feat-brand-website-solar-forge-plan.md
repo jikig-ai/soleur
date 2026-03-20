@@ -175,13 +175,13 @@ Mechanical changes: same header/footer/head across all remaining pages.
 ## References
 
 ### Internal
-- Spec: `knowledge-base/specs/feat-brand-website/spec.md`
-- Brainstorm: `knowledge-base/brainstorms/2026-02-14-brand-website-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-brand-website/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-14-brand-website-brainstorm.md`
 - Design source: `knowledge-base/design/brand/brand-visual-identity-brainstorm.pen` (frame `0Ja8a`)
 - Brand guide: `knowledge-base/overview/brand-guide.md`
 
 ### Learnings Applied
-- `knowledge-base/learnings/2026-02-13-base-href-breaks-local-dev-server.md`
-- `knowledge-base/learnings/2026-02-13-parallel-subagent-css-class-mismatch.md`
-- `knowledge-base/learnings/2026-02-13-version-bump-cascades-to-html-badges.md`
-- `knowledge-base/learnings/2026-02-13-static-docs-site-from-brand-guide.md`
+- `knowledge-base/project/learnings/2026-02-13-base-href-breaks-local-dev-server.md`
+- `knowledge-base/project/learnings/2026-02-13-parallel-subagent-css-class-mismatch.md`
+- `knowledge-base/project/learnings/2026-02-13-version-bump-cascades-to-html-badges.md`
+- `knowledge-base/project/learnings/2026-02-13-static-docs-site-from-brand-guide.md`

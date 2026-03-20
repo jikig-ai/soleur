@@ -146,7 +146,7 @@ Note: `bsky-community.sh` currently lacks a `BASH_SOURCE` guard (line 412 uses b
 
 - LinkedIn guard PR: #623
 - Pattern source: `plugins/soleur/skills/community/scripts/linkedin-community.sh:cmd_post_content()` (lines 225-229 in feat-linkedin-post-guard branch)
-- Learning: `knowledge-base/learnings/2026-03-15-env-var-post-guard-defense-in-depth.md`
+- Learning: `knowledge-base/project/learnings/2026-03-15-env-var-post-guard-defense-in-depth.md`
 - Files to modify:
   - `plugins/soleur/skills/community/scripts/x-community.sh` (line 563: `cmd_post_tweet()`)
   - `plugins/soleur/skills/community/scripts/bsky-community.sh` (line 230: `cmd_post()`, line 412: add `BASH_SOURCE` guard)

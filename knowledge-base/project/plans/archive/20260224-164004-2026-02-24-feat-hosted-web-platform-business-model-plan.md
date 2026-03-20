@@ -10,7 +10,7 @@ date: 2026-02-24
 
 Transition the Soleur project from Apache-2.0 to BSL 1.1 (Business Source License) to protect the intellectual property of the agent orchestration architecture, 60+ agent definitions, and skill system, while keeping the source available for individual use.
 
-**Brainstorm:** `knowledge-base/brainstorms/2026-02-24-business-model-brainstorm.md`
+**Brainstorm:** `knowledge-base/project/brainstorms/2026-02-24-business-model-brainstorm.md`
 **Issue:** #287
 **Follow-up:** #297 (Web Platform UX and Architecture)
 
@@ -122,5 +122,5 @@ None. This is a standalone change with no external dependencies.
 
 - BSL 1.1 template: mariadb.com/bsl11/
 - HashiCorp license FAQ (reference for communication): hashicorp.com/license-faq
-- Existing learning on API key security: `knowledge-base/learnings/2026-02-10-api-key-leaked-in-git-history-cleanup.md`
+- Existing learning on API key security: `knowledge-base/project/learnings/2026-02-10-api-key-leaked-in-git-history-cleanup.md`
 - Related issues: #297 (Web Platform), #286 (Open Source Strategy)

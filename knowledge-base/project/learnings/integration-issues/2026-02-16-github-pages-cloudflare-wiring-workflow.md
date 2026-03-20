@@ -106,6 +106,6 @@ The agent should only stop for user input when there's a genuine decision to mak
 
 ## Related
 
-- `knowledge-base/learnings/2026-02-13-base-href-breaks-local-dev-server.md` -- base href local testing workaround
-- `knowledge-base/learnings/2026-02-16-inline-only-output-for-security-agents.md` -- security agent output constraints
-- `knowledge-base/learnings/2026-02-13-static-docs-site-from-brand-guide.md` -- docs site build workflow
+- `knowledge-base/project/learnings/2026-02-13-base-href-breaks-local-dev-server.md` -- base href local testing workaround
+- `knowledge-base/project/learnings/2026-02-16-inline-only-output-for-security-agents.md` -- security agent output constraints
+- `knowledge-base/project/learnings/2026-02-13-static-docs-site-from-brand-guide.md` -- docs site build workflow

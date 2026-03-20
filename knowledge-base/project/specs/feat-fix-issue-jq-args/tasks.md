@@ -14,7 +14,7 @@
   - Fix the code example in section "3. Skip Issues With Open Bot-Fix PRs" to use `export OPEN_FIXES` + `$ENV.OPEN_FIXES`
   - Remove the `--arg skip` from the example
   - Add a note that `gh --jq` does not support jq flags like `--arg`; use `$ENV` instead
-  - File: `knowledge-base/learnings/2026-03-03-scheduled-bot-fix-workflow-patterns.md` lines 37-46
+  - File: `knowledge-base/project/learnings/2026-03-03-scheduled-bot-fix-workflow-patterns.md` lines 37-46
 
 ## Phase 3: Verification
 

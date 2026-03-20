@@ -1,6 +1,6 @@
 # Tasks: ops-research Agent
 
-**Plan:** `knowledge-base/plans/2026-02-16-feat-add-ops-research-agent-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-16-feat-add-ops-research-agent-plan.md`
 **Branch:** `feat-ops-research`
 
 ## Phase 1: Core Implementation

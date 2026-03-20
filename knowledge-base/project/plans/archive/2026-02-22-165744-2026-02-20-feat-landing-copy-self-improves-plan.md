@@ -55,7 +55,7 @@ Update the core value proposition copy across the website, brand guide, plugin d
 ## Out of Scope
 
 - Audit files (`knowledge-base/audits/`) -- these are historical snapshots, not source of truth
-- Brainstorm files (`knowledge-base/brainstorms/`) -- historical records
+- Brainstorm files (`knowledge-base/project/brainstorms/`) -- historical records
 - `.pen` design files -- separate design workflow
 
 ## Acceptance Criteria

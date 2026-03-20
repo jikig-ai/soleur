@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-linkedin-workflow-secrets/knowledge-base/plans/2026-03-14-feat-linkedin-workflow-secrets-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-linkedin-workflow-secrets/knowledge-base/project/plans/2026-03-14-feat-linkedin-workflow-secrets-plan.md
 - Status: complete
 
 ### Errors

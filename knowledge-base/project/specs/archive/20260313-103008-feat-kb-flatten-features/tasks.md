@@ -7,7 +7,7 @@
 - [x] 1.3 `git mv knowledge-base/features/learnings knowledge-base/project/learnings`
 - [x] 1.4 `git mv knowledge-base/features/plans knowledge-base/project/plans`
 - [x] 1.5 `git mv knowledge-base/features/specs knowledge-base/project/specs`
-- [x] 1.6 `git rm -r knowledge-base/specs/` (stale leftover)
+- [x] 1.6 `git rm -r knowledge-base/project/specs/` (stale leftover)
 - [x] 1.7 Commit: `refactor: move features/ contents into project/`
 
 ## Phase 2: Update Path References
@@ -55,4 +55,4 @@
 - [x] 3.1 Run comprehensive grep: zero hits for `knowledge-base/features/` across plugins/, scripts/, .github/, knowledge-base/
 - [x] 3.2 Verify `knowledge-base/project/` contains brainstorms/, components/, constitution.md, learnings/, plans/, README.md, specs/
 - [x] 3.3 Verify `knowledge-base/features/` no longer exists
-- [x] 3.4 Verify `knowledge-base/specs/` no longer exists
+- [x] 3.4 Verify `knowledge-base/project/specs/` no longer exists

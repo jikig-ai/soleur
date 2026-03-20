@@ -288,7 +288,7 @@ def check_quota(client, model: str = "gemini-2.5-flash-image") -> None:
 ### Internal References
 - Issue #494: This issue
 - PR #489: Docs-level fix (SKILL.md Phase 0 pre-flight, constitution rule)
-- `knowledge-base/learnings/2026-03-10-x-banner-session-error-prevention.md`: Error 3 documents the root cause
+- `knowledge-base/project/learnings/2026-03-10-x-banner-session-error-prevention.md`: Error 3 documents the root cause
 - `plugins/soleur/skills/gemini-imagegen/scripts/generate_image.py:82`: Current misleading error message
 - `plugins/soleur/skills/gemini-imagegen/scripts/gemini_images.py:107-113`: Silent failure in library class
 

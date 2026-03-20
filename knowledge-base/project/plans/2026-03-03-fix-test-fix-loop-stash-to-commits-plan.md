@@ -40,7 +40,7 @@ From `AGENTS.md`:
 From `knowledge-base/overview/constitution.md` (line 115):
 - "Never use `git stash` in a worktree to hold significant uncommitted work during merge operations"
 
-From `knowledge-base/learnings/2026-02-22-worktree-loss-stash-merge-pop.md`:
+From `knowledge-base/project/learnings/2026-02-22-worktree-loss-stash-merge-pop.md`:
 - A real incident where `git stash pop` conflict destroyed an entire worktree and branch, losing all uncommitted work. This is the documented catastrophic failure mode that the worktree stash prohibition was created to prevent.
 
 The issue was surfaced by Tier 0 parallel lifecycle work (#396/#408) because Tier 0 always operates in worktrees and delegates to test-fix-loop after integration.
@@ -208,10 +208,10 @@ The existing check (line 38: "Run `git status --porcelain`. If output is non-emp
 ## References
 
 - Issue: #409
-- Learning: `knowledge-base/learnings/2026-02-22-worktree-loss-stash-merge-pop.md` -- the catastrophic incident that motivated the stash prohibition
-- Learning: `knowledge-base/learnings/2026-03-03-tier-0-lifecycle-parallelism-design.md` -- Tier 0 invokes test-fix-loop in worktrees, making this fix a prerequisite
-- Learning: `knowledge-base/learnings/2026-02-22-plan-review-collapses-agent-architecture.md` -- precedent for inline instructions over agents for deterministic operations
-- Parallel lifecycle plan: `knowledge-base/plans/2026-03-03-feat-parallel-agent-lifecycle-plan.md` (line 158 documents the pre-existing conflict)
+- Learning: `knowledge-base/project/learnings/2026-02-22-worktree-loss-stash-merge-pop.md` -- the catastrophic incident that motivated the stash prohibition
+- Learning: `knowledge-base/project/learnings/2026-03-03-tier-0-lifecycle-parallelism-design.md` -- Tier 0 invokes test-fix-loop in worktrees, making this fix a prerequisite
+- Learning: `knowledge-base/project/learnings/2026-02-22-plan-review-collapses-agent-architecture.md` -- precedent for inline instructions over agents for deterministic operations
+- Parallel lifecycle plan: `knowledge-base/project/plans/2026-03-03-feat-parallel-agent-lifecycle-plan.md` (line 158 documents the pre-existing conflict)
 - Constitution: `knowledge-base/overview/constitution.md` (line 115 -- stash prohibition; "Never" section -- no `$()` in skill code blocks)
 - AGENTS.md: hard rule "Never `git stash` in worktrees"
 - Existing `git reset --hard` precedent: `plugins/soleur/skills/merge-pr/SKILL.md` (lines 286, 316, 326)

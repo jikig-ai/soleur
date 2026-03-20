@@ -263,7 +263,7 @@ fi
 
 #### 7. Documentation updates
 
-- Update the learning at `knowledge-base/learnings/2026-02-19-discord-bot-identity-and-webhook-behavior.md` to reference the multi-webhook channel architecture
+- Update the learning at `knowledge-base/project/learnings/2026-02-19-discord-bot-identity-and-webhook-behavior.md` to reference the multi-webhook channel architecture
 - Update `knowledge-base/overview/constitution.md` if any new conventions emerge (e.g., webhook naming pattern)
 
 ## Technical Considerations
@@ -414,14 +414,14 @@ This ordering avoids any window where the code expects secrets that don't exist 
 | `.github/workflows/scheduled-content-publisher.yml` | Pass `DISCORD_BLOG_WEBHOOK_URL` secret |
 | `plugins/soleur/skills/social-distribute/SKILL.md` | Reference `DISCORD_BLOG_WEBHOOK_URL` |
 | `plugins/soleur/skills/community/scripts/discord-setup.sh` | Optional new vars in `write-env` |
-| `knowledge-base/learnings/2026-02-19-discord-bot-identity-and-webhook-behavior.md` | Document multi-webhook pattern |
+| `knowledge-base/project/learnings/2026-02-19-discord-bot-identity-and-webhook-behavior.md` | Document multi-webhook pattern |
 | `test/content-publisher.test.ts` | Add tests for new env var fallback logic |
 
 ## References
 
-- `knowledge-base/learnings/2026-02-19-discord-bot-identity-and-webhook-behavior.md` -- Existing webhook identity patterns
-- `knowledge-base/learnings/2026-03-05-discord-allowed-mentions-for-webhook-sanitization.md` -- Webhook payload security
-- `knowledge-base/learnings/implementation-patterns/2026-02-12-ci-for-notifications-and-infrastructure-setup.md` -- CI secrets cannot be tested in job-level `if` conditions
-- `knowledge-base/learnings/2026-03-11-multi-platform-publisher-error-propagation.md` -- Error propagation and fallback issue patterns
-- `knowledge-base/learnings/2026-03-09-shell-api-wrapper-hardening-patterns.md` -- Shell API wrapper patterns (already applied)
+- `knowledge-base/project/learnings/2026-02-19-discord-bot-identity-and-webhook-behavior.md` -- Existing webhook identity patterns
+- `knowledge-base/project/learnings/2026-03-05-discord-allowed-mentions-for-webhook-sanitization.md` -- Webhook payload security
+- `knowledge-base/project/learnings/implementation-patterns/2026-02-12-ci-for-notifications-and-infrastructure-setup.md` -- CI secrets cannot be tested in job-level `if` conditions
+- `knowledge-base/project/learnings/2026-03-11-multi-platform-publisher-error-propagation.md` -- Error propagation and fallback issue patterns
+- `knowledge-base/project/learnings/2026-03-09-shell-api-wrapper-hardening-patterns.md` -- Shell API wrapper patterns (already applied)
 - Constitution rule: "All Discord webhook payloads must include explicit `username`, `avatar_url`, and `allowed_mentions: {parse: []}` fields"

@@ -94,8 +94,8 @@ Total edits: 3 (one for pricing-strategy.md, two for competitive-intelligence.md
 ## Non-goals
 
 - Fixing stale `knowledge-base/overview/` references outside the `knowledge-base/product/` directory. Deepening found 40+ additional stale refs in:
-  - `knowledge-base/plans/` (historical plan documents referencing old paths)
-  - `knowledge-base/specs/` (task files referencing old paths)
+  - `knowledge-base/project/plans/` (historical plan documents referencing old paths)
+  - `knowledge-base/project/specs/` (task files referencing old paths)
   - `plugins/soleur/skills/compound/SKILL.md` (references to constitution.md -- these are correct, constitution.md still lives in overview/)
   - `plugins/soleur/commands/sync.md` (references to overview/ structure -- partially correct, partially stale)
   - `AGENTS.md` (reference to constitution.md -- correct)

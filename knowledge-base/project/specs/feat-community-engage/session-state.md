@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-community-engage/knowledge-base/plans/2026-03-10-feat-community-engage-x-mention-replies-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-community-engage/knowledge-base/project/plans/2026-03-10-feat-community-engage-x-mention-replies-plan.md
 - Status: complete
 
 ### Errors

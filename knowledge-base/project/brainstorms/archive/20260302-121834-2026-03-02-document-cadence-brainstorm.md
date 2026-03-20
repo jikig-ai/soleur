@@ -14,7 +14,7 @@ Extend the existing `review-reminder.yml` GitHub Actions workflow to enforce per
 Knowledge-base documents like `business-validation.md` are point-in-time snapshots with no mechanism to enforce review cadence. When they go stale, downstream agents (CPO, CMO, brainstorm) consume them as ground truth and propagate errors. The Cowork Plugins incident (2026-02-25 learning) proved this: the team discovered a competitive threat 22 days late because `business-validation.md` was never re-reviewed.
 
 A `review-reminder.yml` workflow already exists and runs monthly, but has three gaps:
-1. Only scans `knowledge-base/learnings/` (misses strategic docs)
+1. Only scans `knowledge-base/project/learnings/` (misses strategic docs)
 2. Only 3 of ~237 files use `next_review`
 3. No cadence abstraction -- fixed dates require manual computation
 

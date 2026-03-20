@@ -152,8 +152,8 @@ Review the existing article at `plugins/soleur/docs/blog/what-is-company-as-a-se
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-03-12-agentic-engineering-blog-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-agentic-engineering-blog/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-12-agentic-engineering-blog-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-agentic-engineering-blog/spec.md`
 - Brand guide: `knowledge-base/overview/brand-guide.md`
 - Existing CaaS article: `plugins/soleur/docs/blog/what-is-company-as-a-service.md`
 - Blog data: `plugins/soleur/docs/blog/blog.json`

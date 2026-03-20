@@ -50,7 +50,7 @@ Hybrid approach: automated grep-based scan for primitive references, followed by
 
 ### TR2: Output Format
 
-Markdown document in `knowledge-base/specs/feat-codex-portability-inventory/` with:
+Markdown document in `knowledge-base/project/specs/feat-codex-portability-inventory/` with:
 - Summary statistics (green/yellow/red counts and percentages)
 - Full component inventory table
 - Gap analysis per non-portable primitive

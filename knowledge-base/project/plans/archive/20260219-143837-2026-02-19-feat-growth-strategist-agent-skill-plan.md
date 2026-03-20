@@ -115,7 +115,7 @@ Apply the tool to soleur.ai as the first real test case:
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-19-growth-strategist-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-growth-strategist/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-19-growth-strategist-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-growth-strategist/spec.md`
 - Issue: #148
 - Pattern to follow: `plugins/soleur/agents/marketing/seo-aeo-analyst.md` + `plugins/soleur/skills/seo-aeo/SKILL.md`

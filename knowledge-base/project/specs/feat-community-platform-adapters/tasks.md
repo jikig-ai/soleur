@@ -2,7 +2,7 @@
 
 **Issue:** #470
 **Branch:** feat/community-platform-adapters
-**Plan:** `knowledge-base/plans/2026-03-13-refactor-community-platform-adapter-interface-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-03-13-refactor-community-platform-adapter-interface-plan.md`
 
 [Updated 2026-03-13] Radically simplified. Single phase, 6 tasks.
 

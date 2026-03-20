@@ -151,9 +151,9 @@ Expected: 5 files returned. If fewer, a guard is missing.
 
 ### Institutional learnings applied
 
-- `knowledge-base/learnings/2026-03-05-verify-pretooluse-hooks-ci-deterministic-guard-testing.md` -- Direct parent: filed #447
-- `knowledge-base/learnings/2026-02-26-worktree-enforcement-pretooluse-hook.md` -- Hook > docs enforcement pattern
-- `knowledge-base/learnings/2026-02-24-guardrails-chained-commit-bypass.md` -- Guard pattern pitfalls (not applicable here but reviewed)
+- `knowledge-base/project/learnings/2026-03-05-verify-pretooluse-hooks-ci-deterministic-guard-testing.md` -- Direct parent: filed #447
+- `knowledge-base/project/learnings/2026-02-26-worktree-enforcement-pretooluse-hook.md` -- Hook > docs enforcement pattern
+- `knowledge-base/project/learnings/2026-02-24-guardrails-chained-commit-bypass.md` -- Guard pattern pitfalls (not applicable here but reviewed)
 
 ## Semver
 

@@ -356,6 +356,6 @@ If you previously invoked `/soleur:brainstorm`, `/soleur:plan`, `/soleur:work`, 
 ## References
 
 - Issue: #273
-- Brainstorm: `knowledge-base/brainstorms/2026-02-22-migrate-commands-to-skills-brainstorm.md`
-- Prior exploration: `knowledge-base/learnings/2026-02-22-simplify-workflow-command-routing.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-22-migrate-commands-to-skills-brainstorm.md`
+- Prior exploration: `knowledge-base/project/learnings/2026-02-22-simplify-workflow-command-routing.md`
 - Router PR: #267

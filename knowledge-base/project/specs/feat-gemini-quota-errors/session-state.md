@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-gemini-quota-errors/knowledge-base/plans/2026-03-10-fix-gemini-imagegen-quota-error-detection-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-gemini-quota-errors/knowledge-base/project/plans/2026-03-10-fix-gemini-imagegen-quota-error-detection-plan.md
 - Status: complete
 
 ### Errors

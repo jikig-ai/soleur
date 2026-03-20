@@ -92,8 +92,8 @@ No SEO or positioning loss.
 
 ### Relevant Learnings
 
-- **Landing page grid orphan regression** (`knowledge-base/learnings/2026-02-22-landing-page-grid-orphan-regression.md`): When modifying landing page layout, verify all responsive breakpoints. The hero section has no grid, but padding changes should be visually checked at mobile/tablet/desktop.
-- **Docs site CSS variable inconsistency** (`knowledge-base/learnings/2026-02-22-docs-site-css-variable-inconsistency.md`): Use `--color-accent` not `--accent`. Not directly relevant here but good to be aware of when touching the CSS file.
+- **Landing page grid orphan regression** (`knowledge-base/project/learnings/2026-02-22-landing-page-grid-orphan-regression.md`): When modifying landing page layout, verify all responsive breakpoints. The hero section has no grid, but padding changes should be visually checked at mobile/tablet/desktop.
+- **Docs site CSS variable inconsistency** (`knowledge-base/project/learnings/2026-02-22-docs-site-css-variable-inconsistency.md`): Use `--color-accent` not `--accent`. Not directly relevant here but good to be aware of when touching the CSS file.
 
 ### Research Insights
 

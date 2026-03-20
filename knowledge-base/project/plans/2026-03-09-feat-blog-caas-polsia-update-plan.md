@@ -38,7 +38,7 @@ Surgical edits to `plugins/soleur/docs/blog/what-is-company-as-a-service.md` add
 
 - Issue: #468
 - Draft PR: #467
-- Brainstorm: `knowledge-base/brainstorms/2026-03-09-blog-caas-polsia-update-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-blog-caas-polsia-update/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-09-blog-caas-polsia-update-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-blog-caas-polsia-update/spec.md`
 
 Closes #468

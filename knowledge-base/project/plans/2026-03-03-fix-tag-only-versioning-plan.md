@@ -156,13 +156,13 @@ Update references to "6 files at merge time" pattern (lines 65, 68, 165).
 
 ### Learnings files to delete (obsolete):
 
-1. `knowledge-base/learnings/plugin-versioning-requirements.md`
-2. `knowledge-base/learnings/2026-02-13-version-bump-cascades-to-html-badges.md`
-3. `knowledge-base/learnings/2026-02-26-version-bump-after-compound-ordering.md`
+1. `knowledge-base/project/learnings/plugin-versioning-requirements.md`
+2. `knowledge-base/project/learnings/2026-02-13-version-bump-cascades-to-html-badges.md`
+3. `knowledge-base/project/learnings/2026-02-26-version-bump-after-compound-ordering.md`
 
 ### Learnings file to rewrite:
 
-4. `knowledge-base/learnings/2026-03-03-serialize-version-bumps-to-merge-time.md` — Update to describe tag-only approach
+4. `knowledge-base/project/learnings/2026-03-03-serialize-version-bumps-to-merge-time.md` — Update to describe tag-only approach
 
 ### Pre-existing issue to file:
 

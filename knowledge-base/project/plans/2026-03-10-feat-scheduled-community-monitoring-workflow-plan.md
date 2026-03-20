@@ -104,8 +104,8 @@ Single-file feature. Existing community skill and community-manager agent invoke
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-03-10-continuous-community-agent-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-continuous-community-agent/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-10-continuous-community-agent-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-continuous-community-agent/spec.md`
 - Reference workflow: `.github/workflows/scheduled-competitive-analysis.yml`
 - Failure notification pattern: `.github/workflows/scheduled-bug-fixer.yml`
 - Community skill: `plugins/soleur/skills/community/SKILL.md`

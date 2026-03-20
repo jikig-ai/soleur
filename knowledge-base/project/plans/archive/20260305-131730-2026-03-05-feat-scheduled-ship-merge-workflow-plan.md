@@ -108,9 +108,9 @@ This defers CI gating to GitHub's own notion of "required checks" rather than re
 
 - Bug-fixer workflow (template): `.github/workflows/scheduled-bug-fixer.yml`
 - Ship skill: `plugins/soleur/skills/ship/SKILL.md`
-- Headless mode plan: `knowledge-base/plans/2026-03-03-feat-headless-mode-repeatable-workflows-plan.md`
-- Brainstorm: `knowledge-base/brainstorms/2026-03-05-scheduled-ship-merge-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-scheduled-ship-merge/spec.md`
+- Headless mode plan: `knowledge-base/project/plans/2026-03-03-feat-headless-mode-repeatable-workflows-plan.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-05-scheduled-ship-merge-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-scheduled-ship-merge/spec.md`
 - GITHUB_OUTPUT sanitization: commit `6f8a06f`
 
 ### Related Work

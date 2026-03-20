@@ -107,8 +107,8 @@ All changes are to markdown files (AGENTS.md, constitution.md, compound SKILL.md
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-03-05-rule-retirement-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-rule-retirement/spec.md`
-- Deviation Analyst scope reduction: `knowledge-base/learnings/2026-03-03-deviation-analyst-scope-reduction.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-05-rule-retirement-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-rule-retirement/spec.md`
+- Deviation Analyst scope reduction: `knowledge-base/project/learnings/2026-03-03-deviation-analyst-scope-reduction.md`
 - Plan review feedback: DHH, Kieran, and Simplicity reviewers unanimously recommended cutting CI automation
 - Related: #422, #397 / PR #416 (Deviation Analyst v1), PR #450

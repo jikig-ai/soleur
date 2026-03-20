@@ -194,11 +194,11 @@ The insertion order in the HTML matters for the stacking order: `footer-left` > 
 - Issue: #480
 - X provisioning PR: #474
 - Community skill: `plugins/soleur/skills/community/SKILL.md`
-- X provisioning learning: `knowledge-base/learnings/2026-03-09-x-provisioning-playwright-automation.md`
-- Grid orphan learning: `knowledge-base/learnings/2026-02-22-landing-page-grid-orphan-regression.md`
-- CSS variable learning: `knowledge-base/learnings/2026-02-22-docs-site-css-variable-inconsistency.md`
-- Adding pages learning: `knowledge-base/learnings/docs-site/2026-02-19-adding-docs-pages-pattern.md`
-- Eleventy build learning: `knowledge-base/learnings/build-errors/eleventy-v3-passthrough-and-nunjucks-gotchas.md`
+- X provisioning learning: `knowledge-base/project/learnings/2026-03-09-x-provisioning-playwright-automation.md`
+- Grid orphan learning: `knowledge-base/project/learnings/2026-02-22-landing-page-grid-orphan-regression.md`
+- CSS variable learning: `knowledge-base/project/learnings/2026-02-22-docs-site-css-variable-inconsistency.md`
+- Adding pages learning: `knowledge-base/project/learnings/docs-site/2026-02-19-adding-docs-pages-pattern.md`
+- Eleventy build learning: `knowledge-base/project/learnings/build-errors/eleventy-v3-passthrough-and-nunjucks-gotchas.md`
 - Brand guide: `knowledge-base/overview/brand-guide.md` (lines 150-163, X/Twitter section)
 - Site data: `plugins/soleur/docs/_data/site.json`
 - Community page: `plugins/soleur/docs/pages/community.njk`

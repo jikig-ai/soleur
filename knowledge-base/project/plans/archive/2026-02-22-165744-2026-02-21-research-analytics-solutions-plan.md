@@ -195,9 +195,9 @@ Remove the `<script>` tag from `base.njk` and revert legal document changes.
 - Issue #193: Marketing audit (deferred analytics)
 - Issue #188: Cookie consent banner
 - `plugins/soleur/docs/_includes/base.njk`: Base layout (script insertion point)
-- `knowledge-base/learnings/2026-02-21-gdpr-article-30-compliance-audit-pattern.md`: Article 30 requirements
-- `knowledge-base/learnings/2026-02-21-marketing-audit-brand-violation-cascade.md`: Legal-analytics conflict awareness
-- `knowledge-base/learnings/build-errors/eleventy-v3-passthrough-and-nunjucks-gotchas.md`: Eleventy template gotchas
+- `knowledge-base/project/learnings/2026-02-21-gdpr-article-30-compliance-audit-pattern.md`: Article 30 requirements
+- `knowledge-base/project/learnings/2026-02-21-marketing-audit-brand-violation-cascade.md`: Legal-analytics conflict awareness
+- `knowledge-base/project/learnings/build-errors/eleventy-v3-passthrough-and-nunjucks-gotchas.md`: Eleventy template gotchas
 
 ### External
 - [Plausible Analytics](https://plausible.io/)

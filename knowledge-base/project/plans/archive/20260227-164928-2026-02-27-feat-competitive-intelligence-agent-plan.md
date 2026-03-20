@@ -139,15 +139,15 @@ The new skill must be registered in `docs/_data/skills.js` under the **"Review &
 
 ### Internal References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-27-competitive-intelligence-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-competitive-intelligence/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-27-competitive-intelligence-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-competitive-intelligence/spec.md`
 - Business validation landscape: `knowledge-base/overview/business-validation.md`
 - Brand guide: `knowledge-base/overview/brand-guide.md`
-- Overlap matrix format: `knowledge-base/learnings/2026-02-20-marketingskills-overlap-analysis.md`
-- Platform risk learning: `knowledge-base/learnings/2026-02-25-platform-risk-cowork-plugins.md`
+- Overlap matrix format: `knowledge-base/project/learnings/2026-02-20-marketingskills-overlap-analysis.md`
+- Platform risk learning: `knowledge-base/project/learnings/2026-02-25-platform-risk-cowork-plugins.md`
 - Schedule skill: `plugins/soleur/skills/schedule/SKILL.md`
-- Agent context-blindness learning: `knowledge-base/learnings/2026-02-22-agent-context-blindness-vision-misalignment.md`
-- Schedule CI learning: `knowledge-base/learnings/2026-02-27-schedule-skill-ci-plugin-discovery-and-version-hygiene.md`
+- Agent context-blindness learning: `knowledge-base/project/learnings/2026-02-22-agent-context-blindness-vision-misalignment.md`
+- Schedule CI learning: `knowledge-base/project/learnings/2026-02-27-schedule-skill-ci-plugin-discovery-and-version-hygiene.md`
 
 ### Existing Agents with Competitive Analysis Fragments
 

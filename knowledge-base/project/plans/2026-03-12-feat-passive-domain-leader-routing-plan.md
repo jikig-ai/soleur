@@ -79,8 +79,8 @@ Four file edits, no new files:
 
 ## References & Research
 
-- Brainstorm: `knowledge-base/brainstorms/2026-03-12-passive-domain-routing-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-passive-domain-routing/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-12-passive-domain-routing-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-passive-domain-routing/spec.md`
 - Issue: #544
 - Domain config: `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md`
 - Brainstorm SKILL.md Phase 0.5: `plugins/soleur/skills/brainstorm/SKILL.md:60-85`

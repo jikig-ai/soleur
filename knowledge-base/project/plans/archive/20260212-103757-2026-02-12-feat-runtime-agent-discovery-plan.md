@@ -11,8 +11,8 @@ date: 2026-02-12
 Move Rails-specific agents (`kieran-rails-reviewer`, `dhh-rails-reviewer`) from the unconditional parallel agents section to the existing conditional agents section in the review command. Gate them on `Gemfile + config/routes.rb` file existence, using the same pattern already established for migration and test agents.
 
 **Issue:** #46
-**Brainstorm:** `knowledge-base/brainstorms/2026-02-12-runtime-agent-discovery-brainstorm.md`
-**Spec:** `knowledge-base/specs/feat-runtime-agent-discovery/spec.md`
+**Brainstorm:** `knowledge-base/project/brainstorms/2026-02-12-runtime-agent-discovery-brainstorm.md`
+**Spec:** `knowledge-base/project/specs/feat-runtime-agent-discovery/spec.md`
 **Version bump:** PATCH (behavior improvement, no new commands/agents/skills)
 
 ## Problem Statement

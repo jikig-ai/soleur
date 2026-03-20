@@ -43,8 +43,10 @@ export async function provisionWorkspace(userId: string): Promise<string> {
   // 2. Create knowledge-base subdirectories
   const kbRoot = join(workspacePath, "knowledge-base");
   ensureDir(kbRoot);
+  const projectDir = join(kbRoot, "project");
+  ensureDir(projectDir);
   for (const sub of KNOWLEDGE_BASE_DIRS) {
-    ensureDir(join(kbRoot, sub));
+    ensureDir(join(projectDir, sub));
   }
 
   // 3. Create .claude directory and settings

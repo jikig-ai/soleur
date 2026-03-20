@@ -458,12 +458,12 @@ Pushes made with `GITHUB_TOKEN` do NOT trigger `push` or `pull_request` events (
 - CLA workflow: `.github/workflows/cla.yml`
 - CI workflow: `.github/workflows/ci.yml`
 - Version bump workflow: `.github/workflows/version-bump-and-release.yml` (Discord pattern)
-- Phase 2 brainstorm: `knowledge-base/brainstorms/2026-03-02-supervised-bug-fix-agent-brainstorm.md`
-- Phase 2 plan: `knowledge-base/plans/2026-03-03-feat-supervised-bug-fix-agent-plan.md`
-- Learning -- bot-fix workflow patterns: `knowledge-base/learnings/2026-03-03-scheduled-bot-fix-workflow-patterns.md`
-- Learning -- auto-push vs PR: `knowledge-base/learnings/2026-03-02-github-actions-auto-push-vs-pr-for-bot-content.md`
-- Learning -- token revocation: `knowledge-base/learnings/2026-03-02-claude-code-action-token-revocation-breaks-persist-step.md`
-- Learning -- CLA implementation: `knowledge-base/learnings/2026-02-26-cla-system-implementation-and-gdpr-compliance.md`
+- Phase 2 brainstorm: `knowledge-base/project/brainstorms/2026-03-02-supervised-bug-fix-agent-brainstorm.md`
+- Phase 2 plan: `knowledge-base/project/plans/2026-03-03-feat-supervised-bug-fix-agent-plan.md`
+- Learning -- bot-fix workflow patterns: `knowledge-base/project/learnings/2026-03-03-scheduled-bot-fix-workflow-patterns.md`
+- Learning -- auto-push vs PR: `knowledge-base/project/learnings/2026-03-02-github-actions-auto-push-vs-pr-for-bot-content.md`
+- Learning -- token revocation: `knowledge-base/project/learnings/2026-03-02-claude-code-action-token-revocation-breaks-persist-step.md`
+- Learning -- CLA implementation: `knowledge-base/project/learnings/2026-02-26-cla-system-implementation-and-gdpr-compliance.md`
 - Constitution CI rules: `knowledge-base/overview/constitution.md` (lines 84-113)
 
 ### External References

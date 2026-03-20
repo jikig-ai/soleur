@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/plans/2026-03-17-feat-growth-audit-p1-faq-keyword-injection-plan.md
+- Plan file: knowledge-base/project/plans/2026-03-17-feat-growth-audit-p1-faq-keyword-injection-plan.md
 - Status: complete
 
 ### Errors

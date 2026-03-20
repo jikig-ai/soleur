@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-pull-latest-after-merge/knowledge-base/plans/2026-02-24-feat-pull-latest-after-merge-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-pull-latest-after-merge/knowledge-base/project/plans/2026-02-24-feat-pull-latest-after-merge-plan.md
 - Status: complete
 
 ### Errors

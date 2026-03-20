@@ -144,7 +144,7 @@ Pencil MCP tools (`batch_design`, `batch_get`) failed with "WebSocket not connec
 
 ### Prevention Strategy
 
-This is a documented constraint (see `knowledge-base/learnings/2026-02-27-pencil-editor-operational-requirements.md`). Before any Pencil MCP operation:
+This is a documented constraint (see `knowledge-base/project/learnings/2026-02-27-pencil-editor-operational-requirements.md`). Before any Pencil MCP operation:
 
 1. Ask the user to open and focus the `.pen` tab in Cursor
 2. Verify connection with `mcp__pencil__get_editor_state` before proceeding
@@ -260,7 +260,7 @@ Start with the proportional sizing table below and adjust from there (one iterat
 3. **Never use:** `fonts.google.com/download` (browser-only), direct CDN URLs from old documentation (may redirect)
 4. **Always validate:** Run `file <downloaded.ttf>` immediately after download; abort if not "TrueType Font data"
 5. **Cache locally:** Store validated font files in `tmp/` or `assets/fonts/` to avoid re-downloading on retry
-6. **Variable fonts:** Check if the CSS API returns the same URL for multiple weights -- if so, use one file with `font-weight: <min> <max>` range syntax (see `knowledge-base/learnings/2026-02-14-google-fonts-variable-font-deduplication.md`)
+6. **Variable fonts:** Check if the CSS API returns the same URL for multiple weights -- if so, use one file with `font-weight: <min> <max>` range syntax (see `knowledge-base/project/learnings/2026-02-14-google-fonts-variable-font-deduplication.md`)
 
 ### Pillow Banner/Image Generation Sizing Guidelines
 

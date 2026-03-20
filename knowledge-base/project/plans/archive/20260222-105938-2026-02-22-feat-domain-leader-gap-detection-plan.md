@@ -95,7 +95,7 @@ If the brainstorm document (loaded in Phase 0.5) contains a "## Capability Gaps"
 
 ### 4. Spec fix
 
-Update `knowledge-base/specs/feat-domain-gap-detection/spec.md` FR4 to reference only functional-discovery:
+Update `knowledge-base/project/specs/feat-domain-gap-detection/spec.md` FR4 to reference only functional-discovery:
 
 > FR4: `/plan` Phase 1.5b MUST read the brainstorm document's Capability Gaps section (if present) and use it to inform `functional-discovery` searches
 
@@ -108,4 +108,4 @@ Update `knowledge-base/specs/feat-domain-gap-detection/spec.md` FR4 to reference
 - Domain leaders: `plugins/soleur/agents/{engineering/cto,marketing/cmo,operations/coo,product/cpo,legal/clo}.md`
 - Functional-discovery: `plugins/soleur/agents/engineering/discovery/functional-discovery.md`
 - Constitution heading contract: `knowledge-base/overview/constitution.md` line 119
-- Token budget learning: `knowledge-base/learnings/performance-issues/2026-02-20-agent-description-token-budget-optimization.md`
+- Token budget learning: `knowledge-base/project/learnings/performance-issues/2026-02-20-agent-description-token-budget-optimization.md`

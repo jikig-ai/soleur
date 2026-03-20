@@ -181,4 +181,4 @@ Add to the audit issue body: `- Topic source: auto-discovered via growth plan` (
 - Growth skill: `plugins/soleur/skills/growth/SKILL.md`
 - Content writer skill: `plugins/soleur/skills/content-writer/SKILL.md`
 - SEO refresh queue: `knowledge-base/marketing/seo-refresh-queue.md`
-- Learning: `knowledge-base/learnings/2026-03-16-scheduled-skill-wrapping-pattern.md`
+- Learning: `knowledge-base/project/learnings/2026-03-16-scheduled-skill-wrapping-pattern.md`

@@ -2,7 +2,7 @@
 
 **Issue:** #593
 **Branch:** feat-linkedin-company-variant
-**Plan:** `knowledge-base/plans/2026-03-14-feat-linkedin-company-variant-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-03-14-feat-linkedin-company-variant-plan.md`
 
 ## Phase 0: Create LinkedIn Company Page (Playwright MCP)
 

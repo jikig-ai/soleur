@@ -49,7 +49,7 @@ Run these agents **in parallel** to gather context before dialogue:
 
 **What to look for:**
 - **Repo research:** existing patterns, similar features, CLAUDE.md guidance
-- **Learnings:** documented solutions in `knowledge-base/learnings/` -- past gotchas, patterns, lessons learned that might inform WHAT to build
+- **Learnings:** documented solutions in `knowledge-base/project/learnings/` -- past gotchas, patterns, lessons learned that might inform WHAT to build
 
 If either agent fails or returns empty, proceed with whatever results are available. Weave findings naturally into your first question rather than presenting a formal summary.
 ```
@@ -137,7 +137,7 @@ Check current version in `plugins/soleur/.claude-plugin/plugin.json` at implemen
 ## Test Scenarios
 
 - Given a feature description, when brainstorm runs, then both repo-research-analyst and learnings-researcher execute in parallel before dialogue begins
-- Given an empty knowledge-base/learnings/ directory, when brainstorm runs, then learnings-researcher returns empty and brainstorm proceeds normally with repo-research findings only
+- Given an empty knowledge-base/project/learnings/ directory, when brainstorm runs, then learnings-researcher returns empty and brainstorm proceeds normally with repo-research findings only
 - Given a feature with documented learnings, when brainstorm runs, then relevant gotchas are woven into the first question
 - Given the updated SKILL.md, when brainstorm enters dialogue, then questions are open-ended and exploratory rather than formulaic
 - Given a user proposes an approach with a clear flaw, when brainstorm is in dialogue, then the agent flags the flaw directly rather than validating the approach
@@ -153,7 +153,7 @@ Check current version in `plugins/soleur/.claude-plugin/plugin.json` at implemen
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-12-improve-brainstorm-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-improve-brainstorm/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-12-improve-brainstorm-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-improve-brainstorm/spec.md`
 - Issue: #52
 - Review feedback: DHH, Kieran, Simplicity reviewers (2026-02-12)

@@ -257,11 +257,11 @@ After this fix, the template achieves parity with all three reference workflows 
 ## References
 
 - Issue: #382
-- Learning: `knowledge-base/learnings/2026-02-27-schedule-skill-template-gaps-first-consumer.md`
-- Learning: `knowledge-base/learnings/2026-02-27-schedule-skill-ci-plugin-discovery-and-version-hygiene.md`
-- Learning: `knowledge-base/learnings/2026-03-02-claude-code-action-token-revocation-breaks-persist-step.md`
-- Learning: `knowledge-base/learnings/2026-03-03-scheduled-bot-fix-workflow-patterns.md`
-- Learning: `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
+- Learning: `knowledge-base/project/learnings/2026-02-27-schedule-skill-template-gaps-first-consumer.md`
+- Learning: `knowledge-base/project/learnings/2026-02-27-schedule-skill-ci-plugin-discovery-and-version-hygiene.md`
+- Learning: `knowledge-base/project/learnings/2026-03-02-claude-code-action-token-revocation-breaks-persist-step.md`
+- Learning: `knowledge-base/project/learnings/2026-03-03-scheduled-bot-fix-workflow-patterns.md`
+- Learning: `knowledge-base/project/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
 - Reference workflow: `.github/workflows/scheduled-daily-triage.yml`
 - Reference workflow: `.github/workflows/scheduled-bug-fixer.yml`
 - Reference workflow: `.github/workflows/scheduled-competitive-analysis.yml`

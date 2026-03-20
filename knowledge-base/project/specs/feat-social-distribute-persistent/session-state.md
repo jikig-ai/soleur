@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-social-distribute-persistent/knowledge-base/plans/2026-03-12-feat-social-distribute-persistent-output-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-social-distribute-persistent/knowledge-base/project/plans/2026-03-12-feat-social-distribute-persistent-output-plan.md
 - Status: complete
 
 ### Errors

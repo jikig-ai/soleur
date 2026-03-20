@@ -2,7 +2,7 @@
 
 Issue: #431
 Branch: feat-blog-infrastructure
-Plan: `knowledge-base/plans/2026-03-04-feat-blog-infrastructure-plan.md`
+Plan: `knowledge-base/project/plans/2026-03-04-feat-blog-infrastructure-plan.md`
 
 ## Phase 1: Foundation (Rename + Clean URLs)
 

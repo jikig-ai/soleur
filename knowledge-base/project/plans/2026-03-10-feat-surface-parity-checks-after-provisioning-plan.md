@@ -211,8 +211,8 @@ Per code-simplicity and YAGNI principles:
 
 ### Relevant Learnings
 
-- `knowledge-base/learnings/2026-02-22-ops-provisioner-worktree-gap.md` -- ops-provisioner previously had no branch safety check; same "missing guardrail" pattern applied here
-- `knowledge-base/learnings/2026-02-12-brand-guide-contract-and-inline-validation.md` -- inline validation beats separate agents for single-document checks; supports the inline checklist approach
-- `knowledge-base/learnings/2026-03-09-x-provisioning-playwright-automation.md` -- X provisioning context that exposed the gap
-- `knowledge-base/learnings/2026-02-13-agent-prompt-sharp-edges-only.md` -- agent prompts should contain only what the model would get wrong without them; surface check qualifies because the model would not spontaneously check docs site
-- `knowledge-base/learnings/2026-02-19-plan-review-catches-redundant-validation-gates.md` -- warns against adding redundant validation phases; this plan's checks are single-pass, not redundant
+- `knowledge-base/project/learnings/2026-02-22-ops-provisioner-worktree-gap.md` -- ops-provisioner previously had no branch safety check; same "missing guardrail" pattern applied here
+- `knowledge-base/project/learnings/2026-02-12-brand-guide-contract-and-inline-validation.md` -- inline validation beats separate agents for single-document checks; supports the inline checklist approach
+- `knowledge-base/project/learnings/2026-03-09-x-provisioning-playwright-automation.md` -- X provisioning context that exposed the gap
+- `knowledge-base/project/learnings/2026-02-13-agent-prompt-sharp-edges-only.md` -- agent prompts should contain only what the model would get wrong without them; surface check qualifies because the model would not spontaneously check docs site
+- `knowledge-base/project/learnings/2026-02-19-plan-review-catches-redundant-validation-gates.md` -- warns against adding redundant validation phases; this plan's checks are single-pass, not redundant

@@ -223,5 +223,5 @@ Phase 4: Write to Disk
 - Pattern: `plugins/soleur/skills/seo-aeo/SKILL.md` (audit/fix/validate flow)
 - Pattern: `plugins/soleur/agents/marketing/seo-aeo-analyst.md` (Step 4: Fix when requested)
 - Pattern: `plugins/soleur/skills/discord-content/SKILL.md` (brand pipeline + approval gate)
-- Brainstorm: `knowledge-base/brainstorms/2026-02-19-growth-execution-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-growth-execution/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-19-growth-execution-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-growth-execution/spec.md`

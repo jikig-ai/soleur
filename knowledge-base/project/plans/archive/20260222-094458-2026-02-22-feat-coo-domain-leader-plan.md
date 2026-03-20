@@ -57,8 +57,8 @@ Create COO agent following CTO's 3-phase pattern (Assess, Recommend/Delegate, Sh
 ## References
 
 - Issue: #182
-- Brainstorm: `knowledge-base/brainstorms/2026-02-22-coo-domain-leader-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-coo-domain-leader/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-22-coo-domain-leader-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-coo-domain-leader/spec.md`
 - CTO pattern: `plugins/soleur/agents/engineering/cto.md`
 - CMO pattern: `plugins/soleur/agents/marketing/cmo.md`
 - Brainstorm Phase 0.5: `plugins/soleur/commands/soleur/brainstorm.md`

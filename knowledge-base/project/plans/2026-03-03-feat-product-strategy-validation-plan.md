@@ -38,7 +38,7 @@ Fix the first-run experience so a stranger can install and use Soleur in 10 minu
 - [ ] Document the "first 5 minutes" flow: install -> sync -> one domain task -> see result
 - [ ] Fix any blockers found
 
-**Deliverable:** Onboarding audit report + fixes shipped (`knowledge-base/specs/feat-product-strategy/onboarding-audit.md`)
+**Deliverable:** Onboarding audit report + fixes shipped (`knowledge-base/project/specs/feat-product-strategy/onboarding-audit.md`)
 
 **Files to modify (if needed):**
 - `plugins/soleur/docs/pages/getting-started.md`
@@ -71,7 +71,7 @@ Write 5 case studies from Soleur's own non-engineering usage. Each follows a con
 
 One file with everything needed to conduct 10 interviews.
 
-**Contents of `knowledge-base/specs/feat-product-strategy/interview-guide.md`:**
+**Contents of `knowledge-base/project/specs/feat-product-strategy/interview-guide.md`:**
 
 1. **Questions (30 min):**
    - What are you building? How far along? Team size? (5 min)
@@ -101,7 +101,7 @@ Post case studies across channels. 1-2 per week through Weeks 1-4.
 3. IndieHackers (manual)
 4. Claude Code Discord (manual)
 
-**Inbound tracking:** Simple markdown file (`knowledge-base/specs/feat-product-strategy/inbound-tracker.md`). "Expression of interest" = Discord message, GitHub star from a non-creator, social reply asking to try it, or DM requesting access.
+**Inbound tracking:** Simple markdown file (`knowledge-base/project/specs/feat-product-strategy/inbound-tracker.md`). "Expression of interest" = Discord message, GitHub star from a non-creator, social reply asking to try it, or DM requesting access.
 
 ## Phase 2: Interviews + Product Test (Weeks 2-5)
 
@@ -157,7 +157,7 @@ After each founder's 2-week unassisted period, conduct a debrief call.
 - **2/3 validation gates pass:** Iterate on the failing dimension for 4 more weeks with 5 new people.
 - **0-1/3 validation gates pass:** CaaS thesis invalidated. Pivot or wind down non-engineering domains.
 
-**Deliverable:** Gate assessment report (`knowledge-base/specs/feat-product-strategy/gate-assessment.md`) with decision.
+**Deliverable:** Gate assessment report (`knowledge-base/project/specs/feat-product-strategy/gate-assessment.md`) with decision.
 
 ## Acceptance Criteria
 
@@ -191,8 +191,8 @@ Blog for soleur.ai is a separate initiative for ongoing SEO/AEO and regular comm
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-03-03-product-strategy-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-product-strategy/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-03-product-strategy-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-product-strategy/spec.md`
 - Business validation: `knowledge-base/overview/business-validation.md`
 - Competitive intelligence: `knowledge-base/overview/competitive-intelligence.md`
 - Brand guide: `knowledge-base/overview/brand-guide.md`

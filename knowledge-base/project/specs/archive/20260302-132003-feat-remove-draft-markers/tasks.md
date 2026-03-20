@@ -1,6 +1,6 @@
 ---
 title: "Remove DRAFT markers from legal documents"
-plan: knowledge-base/plans/2026-03-02-feat-remove-draft-markers-legal-docs-plan.md
+plan: knowledge-base/project/plans/2026-03-02-feat-remove-draft-markers-legal-docs-plan.md
 issue: "#189"
 ---
 

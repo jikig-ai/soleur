@@ -2,7 +2,7 @@
 
 **Issue:** #38
 **Branch:** feat-add-review-agents
-**Plan:** `knowledge-base/plans/2026-02-10-feat-add-review-agents-to-soleur-review-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-10-feat-add-review-agents-to-soleur-review-plan.md`
 
 ## Phase 1: Core Implementation
 

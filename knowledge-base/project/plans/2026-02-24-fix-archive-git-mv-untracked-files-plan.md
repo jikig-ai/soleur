@@ -32,8 +32,8 @@ The error from the issue:
 
 ```text
 fatal: not under version control,
-source=knowledge-base/plans/2026-02-24-fix-competitive-landscape-tables-and-tiers-plan.md,
-destination=knowledge-base/plans/archive/20260224-081609-2026-02-24-fix-competitive-landscape-tables-and-tiers-plan.md
+source=knowledge-base/project/plans/2026-02-24-fix-competitive-landscape-tables-and-tiers-plan.md,
+destination=knowledge-base/project/plans/archive/20260224-081609-2026-02-24-fix-competitive-landscape-tables-and-tiers-plan.md
 ```
 
 ## Root Cause
@@ -167,7 +167,7 @@ Revert the single commit. The `git mv` commands still work for tracked files; th
 ## References
 
 - Issue: #290
-- Learning: `knowledge-base/learnings/2026-02-22-archiving-slug-extraction-must-match-branch-conventions.md`
-- Learning: `knowledge-base/learnings/2026-02-22-command-substitution-in-plugin-markdown.md` (search scope pattern)
-- Learning: `knowledge-base/learnings/2026-02-22-cleanup-merged-path-mismatch.md` (worktree-manager context)
+- Learning: `knowledge-base/project/learnings/2026-02-22-archiving-slug-extraction-must-match-branch-conventions.md`
+- Learning: `knowledge-base/project/learnings/2026-02-22-command-substitution-in-plugin-markdown.md` (search scope pattern)
+- Learning: `knowledge-base/project/learnings/2026-02-22-cleanup-merged-path-mismatch.md` (worktree-manager context)
 - Constitution rule: "Operations that modify the knowledge-base or move files must use `git mv` to preserve history"

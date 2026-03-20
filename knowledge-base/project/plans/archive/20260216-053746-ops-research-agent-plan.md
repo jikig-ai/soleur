@@ -158,7 +158,7 @@ data files following the conventions documented above.
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-14-ops-research-agent-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-ops-research/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-14-ops-research-agent-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-ops-research/spec.md`
 - ops-advisor agent: `plugins/soleur/agents/operations/ops-advisor.md`
 - Learnings: `agent-prompt-sharp-edges-only.md`, `plan-review-agent-consolidation.md`

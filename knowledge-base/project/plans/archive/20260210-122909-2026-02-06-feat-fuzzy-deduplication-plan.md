@@ -137,6 +137,6 @@ Per reviewer feedback, these are deferred:
 ## References
 
 - GitHub Issue: #12
-- Brainstorm: `knowledge-base/brainstorms/2026-02-06-fuzzy-deduplication-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-fuzzy-dedup/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-06-fuzzy-deduplication-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-fuzzy-dedup/spec.md`
 - Current sync: `plugins/soleur/commands/soleur/sync.md:119-124`

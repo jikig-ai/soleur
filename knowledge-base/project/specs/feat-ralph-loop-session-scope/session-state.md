@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/plans/2026-03-17-fix-ralph-loop-session-scoped-state-file-plan.md
+- Plan file: knowledge-base/project/plans/2026-03-17-fix-ralph-loop-session-scoped-state-file-plan.md
 - Status: complete
 
 ### Errors

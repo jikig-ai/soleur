@@ -100,7 +100,7 @@ Three changes:
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-27-feature-video-deps-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-feature-video-deps/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-27-feature-video-deps-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-feature-video-deps/spec.md`
 - Reference pattern: `plugins/soleur/skills/rclone/scripts/check_setup.sh`
 - Related issue: #325

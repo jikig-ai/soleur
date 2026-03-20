@@ -217,10 +217,10 @@ Runs only when `.md` files under `plugins/soleur/` are staged. Sequential execut
 ## References
 
 - Issue: #62
-- Technical debt: `knowledge-base/learnings/technical-debt/2026-02-12-plugin-components-untested.md`
-- Pre-commit gap: `knowledge-base/learnings/technical-debt/2026-02-12-precommit-hooks-missing-test-execution.md`
-- Backtick violations: `knowledge-base/learnings/technical-debt/2026-02-12-backtick-references-in-skills.md`
-- Plugin loader recursion: `knowledge-base/learnings/2026-02-12-plugin-loader-agent-vs-skill-recursion.md`
+- Technical debt: `knowledge-base/project/learnings/technical-debt/2026-02-12-plugin-components-untested.md`
+- Pre-commit gap: `knowledge-base/project/learnings/technical-debt/2026-02-12-precommit-hooks-missing-test-execution.md`
+- Backtick violations: `knowledge-base/project/learnings/technical-debt/2026-02-12-backtick-references-in-skills.md`
+- Plugin loader recursion: `knowledge-base/project/learnings/2026-02-12-plugin-loader-agent-vs-skill-recursion.md`
 - Constitution testing section: `knowledge-base/overview/constitution.md:76-96`
 - Existing test patterns: `apps/telegram-bridge/test/helpers.test.ts`
 - Bun test runner: `https://bun.sh/docs/test`

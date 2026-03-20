@@ -225,6 +225,6 @@ Use Playwright MCP tools to navigate to the chosen provider's website:
 - `plugins/soleur/agents/operations/ops-provisioner.md` -- Primary target
 - `plugins/soleur/agents/operations/ops-research.md` -- Secondary target
 - `knowledge-base/overview/constitution.md:89` -- Infrastructure verification tools
-- `knowledge-base/learnings/2026-03-09-x-provisioning-playwright-automation.md` -- Learnings from the X provisioning
-- `knowledge-base/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md` -- MCP path resolution gotcha
+- `knowledge-base/project/learnings/2026-03-09-x-provisioning-playwright-automation.md` -- Learnings from the X provisioning
+- `knowledge-base/project/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md` -- MCP path resolution gotcha
 - `knowledge-base/overview/constitution.md` -- Architecture > Prefer section for new browser hierarchy rule

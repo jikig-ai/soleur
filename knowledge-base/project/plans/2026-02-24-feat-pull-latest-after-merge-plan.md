@@ -168,9 +168,9 @@ from the current state.
 ## References
 
 - Existing pattern: `worktree-manager.sh` lines 105-106 (`git checkout` + `git pull origin` with `|| true`)
-- Learning: `knowledge-base/learnings/2026-02-09-worktree-cleanup-gap-after-merge.md` -- original trigger gap identification
-- Learning: `knowledge-base/learnings/2026-02-21-stale-worktrees-accumulate-across-sessions.md` -- session boundary failure mode
-- Learning: `knowledge-base/learnings/2026-02-22-cleanup-merged-path-mismatch.md` -- path construction vs porcelain lookup
-- Learning: `knowledge-base/learnings/2026-02-12-ship-integration-pattern-for-post-merge-steps.md` -- thin conditional checks pattern
+- Learning: `knowledge-base/project/learnings/2026-02-09-worktree-cleanup-gap-after-merge.md` -- original trigger gap identification
+- Learning: `knowledge-base/project/learnings/2026-02-21-stale-worktrees-accumulate-across-sessions.md` -- session boundary failure mode
+- Learning: `knowledge-base/project/learnings/2026-02-22-cleanup-merged-path-mismatch.md` -- path construction vs porcelain lookup
+- Learning: `knowledge-base/project/learnings/2026-02-12-ship-integration-pattern-for-post-merge-steps.md` -- thin conditional checks pattern
 - Ship skill Phase 8: `plugins/soleur/skills/ship/SKILL.md:334-365`
 - Merge-pr skill Phase 7: `plugins/soleur/skills/merge-pr/SKILL.md:358-389`

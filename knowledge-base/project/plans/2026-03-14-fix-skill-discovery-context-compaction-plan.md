@@ -182,8 +182,8 @@ The agent budget ceiling is 2,500 words (currently at 2,501). The prior learning
 - Prior learning: `knowledge-base/project/learnings/2026-03-06-disambiguation-budget-compounds-with-domain-size.md` -- agent budget at ceiling (2,501/2,500), demonstrates word-level budget management
 - Prior learning: `knowledge-base/project/learnings/2026-02-22-context-compaction-command-optimization.md` -- commands reduced from 13,292 to 9,794 words (26%)
 - Prior learning: `knowledge-base/project/learnings/2026-02-25-plugin-command-double-namespace.md` -- plugin loader namespace behavior
-- Prior learning: `knowledge-base/learnings/2026-03-13-shell-script-defensive-patterns.md` -- defensive shell patterns for verify-skills.sh
-- Prior learning: `knowledge-base/learnings/2026-03-13-bash-arithmetic-and-test-sourcing-patterns.md` -- bash arithmetic pitfalls
+- Prior learning: `knowledge-base/project/learnings/2026-03-13-shell-script-defensive-patterns.md` -- defensive shell patterns for verify-skills.sh
+- Prior learning: `knowledge-base/project/learnings/2026-03-13-bash-arithmetic-and-test-sourcing-patterns.md` -- bash arithmetic pitfalls
 - Test infrastructure: `plugins/soleur/test/components.test.ts` and `plugins/soleur/test/helpers.ts`
 - Official spec reference: `plugins/soleur/skills/skill-creator/references/official-spec.md`
 - Constitution: `knowledge-base/project/constitution.md` -- "Heavy, conditionally-used content in command/skill bodies must be extracted to reference files"

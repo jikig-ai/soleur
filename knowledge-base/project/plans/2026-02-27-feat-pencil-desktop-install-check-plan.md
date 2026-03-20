@@ -383,14 +383,14 @@ Per Pencil's CLI docs: "Currently you need to have a desktop app installed to us
 - Existing skill: `plugins/soleur/skills/pencil-setup/SKILL.md`
 
 ### Institutional Learnings Applied
-- `knowledge-base/learnings/2026-02-27-pencil-mcp-auto-registration-via-skill.md` -- remove-then-add pattern, skills that are ~5 commands don't need script abstractions
-- `knowledge-base/learnings/2026-02-27-parameterized-shell-install-eliminates-duplication.md` -- parameterized functions over per-tool duplicates
-- `knowledge-base/learnings/2026-02-27-feature-video-graceful-degradation.md` -- hard vs soft dependency classification, output convention
-- `knowledge-base/learnings/2026-02-27-pencil-editor-operational-requirements.md` -- WebSocket requires visible editor, no programmatic save
-- `knowledge-base/learnings/2026-02-14-pencil-mcp-local-binary-constraint.md` -- Pencil MCP cannot be bundled, requires local install
-- `knowledge-base/learnings/2026-02-22-command-substitution-in-plugin-markdown.md` -- no `$()` in SKILL.md code blocks
-- `knowledge-base/learnings/2026-02-24-extract-command-substitution-into-scripts.md` -- extract shell logic into scripts
-- `knowledge-base/learnings/2026-02-22-shell-expansion-codebase-wide-fix.md` -- no `${VAR}` in plugin markdown
+- `knowledge-base/project/learnings/2026-02-27-pencil-mcp-auto-registration-via-skill.md` -- remove-then-add pattern, skills that are ~5 commands don't need script abstractions
+- `knowledge-base/project/learnings/2026-02-27-parameterized-shell-install-eliminates-duplication.md` -- parameterized functions over per-tool duplicates
+- `knowledge-base/project/learnings/2026-02-27-feature-video-graceful-degradation.md` -- hard vs soft dependency classification, output convention
+- `knowledge-base/project/learnings/2026-02-27-pencil-editor-operational-requirements.md` -- WebSocket requires visible editor, no programmatic save
+- `knowledge-base/project/learnings/2026-02-14-pencil-mcp-local-binary-constraint.md` -- Pencil MCP cannot be bundled, requires local install
+- `knowledge-base/project/learnings/2026-02-22-command-substitution-in-plugin-markdown.md` -- no `$()` in SKILL.md code blocks
+- `knowledge-base/project/learnings/2026-02-24-extract-command-substitution-into-scripts.md` -- extract shell logic into scripts
+- `knowledge-base/project/learnings/2026-02-22-shell-expansion-codebase-wide-fix.md` -- no `${VAR}` in plugin markdown
 
 ### External References
 - Pencil Desktop downloads: https://www.pencil.dev/downloads

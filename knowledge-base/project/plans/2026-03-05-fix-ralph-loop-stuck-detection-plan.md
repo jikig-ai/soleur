@@ -234,6 +234,6 @@ stuck_threshold: $STUCK_THRESHOLD
 - Hook: `plugins/soleur/hooks/stop-hook.sh`
 - Setup: `plugins/soleur/scripts/setup-ralph-loop.sh`
 - One-shot skill: `plugins/soleur/skills/one-shot/SKILL.md`
-- Bundling learning: `knowledge-base/learnings/implementation-patterns/2026-02-22-bundle-external-plugin-into-soleur.md`
-- Permission learning: `knowledge-base/learnings/2026-02-22-skill-code-fence-permission-flow.md`
-- Pipefail learning: `knowledge-base/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md`
+- Bundling learning: `knowledge-base/project/learnings/implementation-patterns/2026-02-22-bundle-external-plugin-into-soleur.md`
+- Permission learning: `knowledge-base/project/learnings/2026-02-22-skill-code-fence-permission-flow.md`
+- Pipefail learning: `knowledge-base/project/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md`

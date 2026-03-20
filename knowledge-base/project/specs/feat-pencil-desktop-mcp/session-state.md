@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-pencil-desktop-mcp/knowledge-base/plans/2026-03-10-feat-pencil-desktop-standalone-mcp-target-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-pencil-desktop-mcp/knowledge-base/project/plans/2026-03-10-feat-pencil-desktop-standalone-mcp-target-plan.md
 - Status: complete
 
 ### Errors

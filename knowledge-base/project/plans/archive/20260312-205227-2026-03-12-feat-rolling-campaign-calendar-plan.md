@@ -131,12 +131,12 @@ This plan implements `feat-unified-marketing-campaign/spec.md` FR4 ("CMO-maintai
 
 ### Internal References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-03-12-rolling-campaign-calendar-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-rolling-campaign-calendar/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-12-rolling-campaign-calendar-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-rolling-campaign-calendar/spec.md`
 - Content publisher script: `scripts/content-publisher.sh:37-47` (frontmatter parsing reference)
 - Content publisher workflow: `.github/workflows/scheduled-content-publisher.yml`
 - Schedule skill template: `plugins/soleur/skills/schedule/SKILL.md`
-- Unified campaign spec FR4: `knowledge-base/specs/feat-unified-marketing-campaign/spec.md`
+- Unified campaign spec FR4: `knowledge-base/project/specs/feat-unified-marketing-campaign/spec.md`
 
 ### Institutional Learnings
 

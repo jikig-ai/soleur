@@ -140,7 +140,7 @@ Then proceed to Phase 3: Quality Check.
 - Current work command: `plugins/soleur/commands/soleur/work.md`
 - Proven fan-out pattern: `plugins/soleur/commands/resolve_parallel.md`
 - Agent spawning pattern: `plugins/soleur/commands/soleur/review.md`
-- Plugin versioning: `knowledge-base/learnings/plugin-versioning-requirements.md`
-- Brainstorm: `knowledge-base/brainstorms/2026-02-09-agent-team-brainstorm.md`
+- Plugin versioning: `knowledge-base/project/learnings/plugin-versioning-requirements.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-09-agent-team-brainstorm.md`
 - Follow-up: #26 (Agent Teams integration)
 - Issue: #31

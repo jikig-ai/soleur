@@ -1,6 +1,6 @@
 ---
 feature: feat-geo-aeo-research
-plan: knowledge-base/plans/2026-02-20-feat-geo-aeo-methodology-plan.md
+plan: knowledge-base/project/plans/2026-02-20-feat-geo-aeo-methodology-plan.md
 issue: "#164"
 ---
 

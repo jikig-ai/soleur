@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-surface-parity-checks/knowledge-base/plans/2026-03-10-feat-surface-parity-checks-after-provisioning-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-surface-parity-checks/knowledge-base/project/plans/2026-03-10-feat-surface-parity-checks-after-provisioning-plan.md
 - Status: complete
 
 ### Errors

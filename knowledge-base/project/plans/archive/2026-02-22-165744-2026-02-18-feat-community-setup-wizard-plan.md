@@ -200,6 +200,6 @@ Check if DISCORD_BOT_TOKEN, DISCORD_GUILD_ID, and DISCORD_WEBHOOK_URL are all se
 - Discord API v10: https://discord.com/developers/docs
 - Permissions integer 536939520 = VIEW_CHANNEL (1<<10) + SEND_MESSAGES (1<<11) + READ_MESSAGE_HISTORY (1<<16) + MANAGE_WEBHOOKS (1<<29)
 - Existing: `plugins/soleur/skills/community/scripts/discord-community.sh`
-- Learning: `knowledge-base/learnings/runtime-errors/2026-02-13-bash-operator-precedence-ssh-deploy-fallback.md`
-- Learning: `knowledge-base/learnings/implementation-patterns/2026-02-18-skill-cannot-invoke-skill.md`
+- Learning: `knowledge-base/project/learnings/runtime-errors/2026-02-13-bash-operator-precedence-ssh-deploy-fallback.md`
+- Learning: `knowledge-base/project/learnings/implementation-patterns/2026-02-18-skill-cannot-invoke-skill.md`
 - Issue: #129

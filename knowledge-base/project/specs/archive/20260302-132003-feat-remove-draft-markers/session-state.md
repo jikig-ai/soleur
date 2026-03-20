@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-remove-draft-markers/knowledge-base/plans/2026-03-02-feat-remove-draft-markers-legal-docs-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-remove-draft-markers/knowledge-base/project/plans/2026-03-02-feat-remove-draft-markers-legal-docs-plan.md
 - Status: complete
 
 ### Errors
@@ -18,5 +18,5 @@ None
 - skill: soleur:plan -- initial plan creation with local research
 - skill: soleur:deepen-plan -- enhanced plan with learnings, preserve list, verification commands
 - gh issue view 189 -- fetched issue details
-- Grep/Read on docs/legal/, plugins/soleur/docs/pages/legal/, legal.njk, agents/legal/, skills/legal-generate/, knowledge-base/learnings/
+- Grep/Read on docs/legal/, plugins/soleur/docs/pages/legal/, legal.njk, agents/legal/, skills/legal-generate/, knowledge-base/project/learnings/
 - Git commit + push (2 commits: initial plan, deepened plan)

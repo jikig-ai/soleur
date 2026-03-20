@@ -14,7 +14,7 @@ Extend `/soleur:compound` with a new step after learning capture that routes the
 
 ## Problem Statement
 
-Compound captures learnings in `knowledge-base/learnings/` and optionally promotes to the constitution, but never updates the skill/agent instructions that directly govern behavior. Skills repeat mistakes because their definitions never improve.
+Compound captures learnings in `knowledge-base/project/learnings/` and optionally promotes to the constitution, but never updates the skill/agent instructions that directly govern behavior. Skills repeat mistakes because their definitions never improve.
 
 ## Proposed Solution
 
@@ -173,7 +173,7 @@ Solo developer. No external teams affected. The change modifies the compound wor
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-17-compound-skill-updates-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-compound-skill-updates/spec.md`
-- Learning: `knowledge-base/learnings/agent-prompt-sharp-edges-only.md` (sharp edges principle)
-- Learning: `knowledge-base/learnings/2026-02-12-review-compound-before-commit-workflow.md` (compound placement in workflow)
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-17-compound-skill-updates-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-compound-skill-updates/spec.md`
+- Learning: `knowledge-base/project/learnings/agent-prompt-sharp-edges-only.md` (sharp edges principle)
+- Learning: `knowledge-base/project/learnings/2026-02-12-review-compound-before-commit-workflow.md` (compound placement in workflow)

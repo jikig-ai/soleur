@@ -1,7 +1,7 @@
 # Tasks: Continuous Community Agent
 
 **Issue:** #145
-**Plan:** `knowledge-base/plans/2026-03-10-feat-scheduled-community-monitoring-workflow-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-03-10-feat-scheduled-community-monitoring-workflow-plan.md`
 
 ## Phase 1: Create Workflow
 

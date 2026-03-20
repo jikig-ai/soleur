@@ -1,6 +1,6 @@
 # Tasks: Regenerate X/Twitter Banner via Pencil MCP
 
-**Plan:** `knowledge-base/plans/2026-03-10-feat-x-twitter-banner-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-03-10-feat-x-twitter-banner-plan.md`
 **Issue:** #483
 **Branch:** feat/x-twitter-banner
 

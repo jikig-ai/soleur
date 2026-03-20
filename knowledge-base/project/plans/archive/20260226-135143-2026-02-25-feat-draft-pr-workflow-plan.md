@@ -143,7 +143,7 @@ draft-pr)
     After the brainstorm document (Phase 3.5) and spec (Phase 3.6) are both written, commit and push everything:
 
     ```bash
-    git add knowledge-base/brainstorms/ knowledge-base/specs/feat-<name>/
+    git add knowledge-base/project/brainstorms/ knowledge-base/project/specs/feat-<name>/
     git commit -m "docs: capture brainstorm and spec for feat-<name>"
     git push
     ```
@@ -215,7 +215,7 @@ If this fails (no network), print a warning but continue. The branch exists loca
    After both the plan file and tasks.md are written, commit and push everything:
 
    ```bash
-   git add knowledge-base/plans/ knowledge-base/specs/feat-<name>/tasks.md
+   git add knowledge-base/project/plans/ knowledge-base/project/specs/feat-<name>/tasks.md
    git commit -m "docs: create plan and tasks for feat-<name>"
    git push
    ```
@@ -318,11 +318,11 @@ The push section (lines 234-246) remains unchanged — it still runs before the 
 
 ## References & Research
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-25-draft-pr-workflow-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-draft-pr-workflow/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-25-draft-pr-workflow-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-draft-pr-workflow/spec.md`
 - Issue: #304
-- Learning: `knowledge-base/learnings/2026-02-22-worktree-loss-stash-merge-pop.md` (commit early, never stash)
-- Learning: `knowledge-base/learnings/runtime-errors/2026-02-13-bash-operator-precedence-ssh-deploy-fallback.md` (scope `|| true`)
-- Learning: `knowledge-base/learnings/2026-02-24-extract-command-substitution-into-scripts.md` (no `$()` in SKILL.md)
+- Learning: `knowledge-base/project/learnings/2026-02-22-worktree-loss-stash-merge-pop.md` (commit early, never stash)
+- Learning: `knowledge-base/project/learnings/runtime-errors/2026-02-13-bash-operator-precedence-ssh-deploy-fallback.md` (scope `|| true`)
+- Learning: `knowledge-base/project/learnings/2026-02-24-extract-command-substitution-into-scripts.md` (no `$()` in SKILL.md)
 - Ship SKILL.md Phase 7: `plugins/soleur/skills/ship/SKILL.md:214`
 - worktree-manager.sh: `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:127`

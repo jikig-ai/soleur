@@ -72,7 +72,7 @@ This is the only file change required.
 
 ### Why This Is Safe (Template Inheritance Analysis)
 
-The `blog-post.njk` template uses `layout: base.njk` and overrides `{% block content %}`. In `base.njk`, the newsletter include is at line 94-95, which is OUTSIDE the `{% block content %}` block (that block ends at line 91 with `</main>`). Per the Nunjucks block inheritance pattern documented in `knowledge-base/learnings/2026-03-04-nunjucks-block-inheritance-with-content-safe.md`, content outside blocks renders unconditionally from the parent layout. Removing the newsletter from inside `{% block content %}` in the child template cannot affect the parent's footer newsletter.
+The `blog-post.njk` template uses `layout: base.njk` and overrides `{% block content %}`. In `base.njk`, the newsletter include is at line 94-95, which is OUTSIDE the `{% block content %}` block (that block ends at line 91 with `</main>`). Per the Nunjucks block inheritance pattern documented in `knowledge-base/project/learnings/2026-03-04-nunjucks-block-inheritance-with-content-safe.md`, content outside blocks renders unconditionally from the parent layout. Removing the newsletter from inside `{% block content %}` in the child template cannot affect the parent's footer newsletter.
 
 ### Analytics Impact
 
@@ -105,7 +105,7 @@ The newsletter form was added in the `2026-03-10-feat-newsletter-email-capture-p
 
 ## References
 
-- Existing newsletter plan: `knowledge-base/plans/2026-03-10-feat-newsletter-email-capture-plan.md`
-- Learning: `knowledge-base/learnings/2026-03-10-first-pii-collection-legal-update-pattern.md`
-- Learning: `knowledge-base/learnings/2026-03-04-nunjucks-block-inheritance-with-content-safe.md` (confirms block inheritance safety)
-- Learning: `knowledge-base/learnings/2026-03-05-eleventy-blog-post-frontmatter-pattern.md` (blog template patterns)
+- Existing newsletter plan: `knowledge-base/project/plans/2026-03-10-feat-newsletter-email-capture-plan.md`
+- Learning: `knowledge-base/project/learnings/2026-03-10-first-pii-collection-legal-update-pattern.md`
+- Learning: `knowledge-base/project/learnings/2026-03-04-nunjucks-block-inheritance-with-content-safe.md` (confirms block inheritance safety)
+- Learning: `knowledge-base/project/learnings/2026-03-05-eleventy-blog-post-frontmatter-pattern.md` (blog template patterns)

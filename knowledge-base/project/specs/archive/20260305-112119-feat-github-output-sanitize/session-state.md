@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-github-output-sanitize/knowledge-base/plans/2026-03-05-fix-github-output-newline-injection-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-github-output-sanitize/knowledge-base/project/plans/2026-03-05-fix-github-output-newline-injection-plan.md
 - Status: complete
 
 ### Errors

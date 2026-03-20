@@ -48,8 +48,8 @@ A mix of **capacity constraints** (competing priorities consumed all bandwidth) 
 | Content plan | `knowledge-base/audits/soleur-ai/2026-02-19-content-plan.md` | Stale, 0% executed |
 | Content audit | `knowledge-base/audits/soleur-ai/2026-02-19-content-audit.md` | Stale, 0% applied |
 | AEO audit | `knowledge-base/audits/soleur-ai/2026-02-19-aeo-audit.md` | Stale, 1.6/10 score |
-| Cowork Plugins risk | `knowledge-base/learnings/2026-02-25-platform-risk-cowork-plugins.md` | Critical input |
-| marketingskills overlap | `knowledge-base/learnings/2026-02-20-marketingskills-overlap-analysis.md` | Quarterly review May 2026 |
+| Cowork Plugins risk | `knowledge-base/project/learnings/2026-02-25-platform-risk-cowork-plugins.md` | Critical input |
+| marketingskills overlap | `knowledge-base/project/learnings/2026-02-20-marketingskills-overlap-analysis.md` | Quarterly review May 2026 |
 
 ## Open Questions
 

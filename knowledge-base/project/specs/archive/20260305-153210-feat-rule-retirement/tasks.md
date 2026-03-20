@@ -1,6 +1,6 @@
 # Tasks: Rule Retirement
 
-**Plan:** `knowledge-base/plans/2026-03-05-feat-rule-retirement-audit-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-03-05-feat-rule-retirement-audit-plan.md`
 **Issue:** #422
 **Branch:** feat-rule-retirement
 

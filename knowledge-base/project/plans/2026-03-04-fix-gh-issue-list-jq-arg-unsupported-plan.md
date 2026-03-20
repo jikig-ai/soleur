@@ -36,7 +36,7 @@ unknown arguments ["skip" "" "\n ($skip | split(\",\") ..."]
 - [x] The `Select issue` step in `scheduled-bug-fixer.yml` no longer uses `--arg` with `--jq`
 - [x] The `OPEN_FIXES` shell variable is exported and accessed via `$ENV.OPEN_FIXES` in the jq expression
 - [x] The jq filter logic (split, tonumber, IN exclusion) remains functionally identical
-- [x] The learnings doc `knowledge-base/learnings/2026-03-03-scheduled-bot-fix-workflow-patterns.md` is updated to reflect the correct pattern (no `--arg`, use `$ENV`)
+- [x] The learnings doc `knowledge-base/project/learnings/2026-03-03-scheduled-bot-fix-workflow-patterns.md` is updated to reflect the correct pattern (no `--arg`, use `$ENV`)
 - [ ] Workflow runs successfully on `workflow_dispatch` trigger (or at next scheduled run)
 
 ## Test Scenarios
@@ -149,7 +149,7 @@ Key changes:
 ### Files to Change
 
 1. `.github/workflows/scheduled-bug-fixer.yml` (lines 67-84) -- add `export OPEN_FIXES`, remove `--arg`, use `$ENV.OPEN_FIXES`
-2. `knowledge-base/learnings/2026-03-03-scheduled-bot-fix-workflow-patterns.md` (lines 40-46) -- update code example to use `$ENV` pattern and add a note that `gh --jq` does not support `--arg`
+2. `knowledge-base/project/learnings/2026-03-03-scheduled-bot-fix-workflow-patterns.md` (lines 40-46) -- update code example to use `$ENV` pattern and add a note that `gh --jq` does not support `--arg`
 
 ### Relevant Learnings Applied
 
@@ -161,4 +161,4 @@ Key changes:
 - Failed CI run: https://github.com/jikig-ai/soleur/actions/runs/22657970844/job/65671713661
 - `gh issue list --help`: `--jq expression` accepts a single expression string, no extra jq flags
 - jq `$ENV` documentation: standard jq feature for reading environment variables
-- Existing learning: `knowledge-base/learnings/2026-03-03-scheduled-bot-fix-workflow-patterns.md`
+- Existing learning: `knowledge-base/project/learnings/2026-03-03-scheduled-bot-fix-workflow-patterns.md`

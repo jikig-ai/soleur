@@ -351,7 +351,7 @@ All changes are file additions/modifications in a single branch. Revert the merg
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-10-community-contributor-audit-brainstorm.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-10-community-contributor-audit-brainstorm.md`
 - Current plugin docs: `plugins/soleur/README.md`
 - Plugin dev guide: `plugins/soleur/AGENTS.md`
 - Contributor Covenant v2.1: https://www.contributor-covenant.org/version/2/1/code_of_conduct/

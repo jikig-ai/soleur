@@ -8,7 +8,7 @@ date: 2026-03-13
 
 ## Overview
 
-Merge `knowledge-base/features/{brainstorms,learnings,plans,specs}` into `knowledge-base/project/` and delete stale `knowledge-base/specs/`. This simplifies the top-level taxonomy from "6 domain dirs + features + project" to "6 domain dirs + project".
+Merge `knowledge-base/features/{brainstorms,learnings,plans,specs}` into `knowledge-base/project/` and delete stale `knowledge-base/project/specs/`. This simplifies the top-level taxonomy from "6 domain dirs + features + project" to "6 domain dirs + project".
 
 ## Problem Statement / Motivation
 
@@ -38,7 +38,7 @@ git mv knowledge-base/features/plans knowledge-base/project/plans
 git mv knowledge-base/features/specs knowledge-base/project/specs
 
 # Delete stale top-level specs
-git rm -r knowledge-base/specs/
+git rm -r knowledge-base/project/specs/
 
 # Remove empty features directory (git handles this automatically after mv)
 ```
@@ -84,13 +84,13 @@ ls knowledge-base/project/
 
 # Verify features/ and stale specs/ are gone
 ls knowledge-base/features/ 2>&1  # Expected: No such file or directory
-ls knowledge-base/specs/ 2>&1     # Expected: No such file or directory
+ls knowledge-base/project/specs/ 2>&1     # Expected: No such file or directory
 ```
 
 ## Acceptance Criteria
 
 - [ ] `knowledge-base/features/` no longer exists
-- [ ] `knowledge-base/specs/` (stale) no longer exists
+- [ ] `knowledge-base/project/specs/` (stale) no longer exists
 - [ ] `knowledge-base/project/` contains: brainstorms/, components/, constitution.md, learnings/, plans/, README.md, specs/
 - [ ] Zero grep hits for `knowledge-base/features/` in plugins/, scripts/, .github/, knowledge-base/ (excluding archive)
 - [ ] Zero bare `features/` hits in project doc tree diagrams

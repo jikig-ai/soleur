@@ -1,6 +1,6 @@
 # Tasks: infra-security agent
 
-**Plan:** `knowledge-base/plans/2026-02-16-feat-infra-security-agent-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-16-feat-infra-security-agent-plan.md`
 **Issue:** #100
 **Branch:** feat-infra-security
 

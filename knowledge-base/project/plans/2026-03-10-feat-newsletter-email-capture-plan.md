@@ -150,8 +150,8 @@ All done in a single pass — CSS, HTML partial, template includes, JS.
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-03-10-newsletter-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-newsletter/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-10-newsletter-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-newsletter/spec.md`
 - Issue: #501 | PR: #512 (draft)
 - Footer: `plugins/soleur/docs/_includes/base.njk` (between `</main>` and `<footer>`)
 - Homepage CTA: `plugins/soleur/docs/index.njk` (before `<!-- Final CTA -->`)

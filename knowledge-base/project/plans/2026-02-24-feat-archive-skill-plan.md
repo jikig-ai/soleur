@@ -24,7 +24,7 @@ version_bump: MINOR
 
 - The `!` code fence permission flow in skills fails silently -- the SKILL.md must NOT use `!` fences for the script invocation; use plain `bash` code blocks or prose instructions instead
 - Spec directories use a `feat-<slug>` naming convention (not just slug glob), requiring exact-match directory detection alongside glob-based file discovery
-- The compound learnings archival path (`knowledge-base/learnings/archive/`) takes an explicit file path (not slug), so extending the script to handle it would require a different interface (a `--file` flag for single-file archival)
+- The compound learnings archival path (`knowledge-base/project/learnings/archive/`) takes an explicit file path (not slug), so extending the script to handle it would require a different interface (a `--file` flag for single-file archival)
 
 ## Overview
 
@@ -55,7 +55,7 @@ Create an `archive-kb` skill containing:
 
 1. **`scripts/archive-kb.sh`** -- A bash script that:
    - Accepts a feature slug (or derives it from the current branch name)
-   - Discovers artifacts matching the slug in `knowledge-base/{brainstorms,plans}/` and `knowledge-base/specs/feat-<slug>/`
+   - Discovers artifacts matching the slug in `knowledge-base/{brainstorms,plans}/` and `knowledge-base/project/specs/feat-<slug>/`
    - Excludes `archive/` paths
    - Generates a `YYYYMMDD-HHMMSS` timestamp internally (no `$()` exposed to Claude)
    - Runs `git add` + `git mv` for each artifact to its `archive/` subdirectory with the timestamp prefix
@@ -113,9 +113,9 @@ Three independent discovery paths, all excluding `archive/` subdirectories:
 
 | Directory | Pattern | Match Type |
 |-----------|---------|------------|
-| `knowledge-base/brainstorms/` | `*<slug>*` glob | Filename contains slug |
-| `knowledge-base/plans/` | `*<slug>*` glob | Filename contains slug |
-| `knowledge-base/specs/` | `feat-<slug>` exact dir | Directory name matches exactly |
+| `knowledge-base/project/brainstorms/` | `*<slug>*` glob | Filename contains slug |
+| `knowledge-base/project/plans/` | `*<slug>*` glob | Filename contains slug |
+| `knowledge-base/project/specs/` | `feat-<slug>` exact dir | Directory name matches exactly |
 
 **Implementation detail:** Use bash glob expansion with a loop, filtering out `*/archive/*` paths. For specs, use `test -d` on the exact path rather than glob matching.
 
@@ -123,20 +123,20 @@ Three independent discovery paths, all excluding `archive/` subdirectories:
 # Pseudocode for discovery:
 artifacts = []
 
-for f in knowledge-base/brainstorms/*SLUG*; do
+for f in knowledge-base/project/brainstorms/*SLUG*; do
   if f is a file AND f does not contain /archive/; then
     append f to artifacts
   end
 done
 
-for f in knowledge-base/plans/*SLUG*; do
+for f in knowledge-base/project/plans/*SLUG*; do
   if f is a file AND f does not contain /archive/; then
     append f to artifacts
   end
 done
 
-if knowledge-base/specs/feat-SLUG is a directory; then
-  append knowledge-base/specs/feat-SLUG to artifacts
+if knowledge-base/project/specs/feat-SLUG is a directory; then
+  append knowledge-base/project/specs/feat-SLUG to artifacts
 end
 ```
 
@@ -158,7 +158,7 @@ for each artifact:
 done
 ```
 
-**Edge case -- spec directories:** `git mv` works on directories, moving the entire directory tree. `git add` on a directory stages all untracked files within it. Both operations are safe for the `knowledge-base/specs/feat-<slug>/` directory case.
+**Edge case -- spec directories:** `git mv` works on directories, moving the entire directory tree. `git add` on a directory stages all untracked files within it. Both operations are safe for the `knowledge-base/project/specs/feat-<slug>/` directory case.
 
 ### Output Format
 
@@ -167,24 +167,24 @@ Structured output suitable for inclusion in compound's consolidation report:
 ```text
 # On success with artifacts:
 Archived 3 artifact(s) for slug "archive-skill":
-  knowledge-base/brainstorms/archive/20260224-143000-archive-skill-brainstorm.md
-  knowledge-base/plans/archive/20260224-143000-feat-archive-skill-plan.md
-  knowledge-base/specs/archive/20260224-143000-feat-archive-skill/
+  knowledge-base/project/brainstorms/archive/20260224-143000-archive-skill-brainstorm.md
+  knowledge-base/project/plans/archive/20260224-143000-feat-archive-skill-plan.md
+  knowledge-base/project/specs/archive/20260224-143000-feat-archive-skill/
 
 # On success with no artifacts:
 No artifacts found for slug "archive-skill"
 
 # On --dry-run:
 Dry run -- would archive 3 artifact(s) for slug "archive-skill":
-  knowledge-base/brainstorms/archive-skill-brainstorm.md -> archive/20260224-143000-archive-skill-brainstorm.md
-  knowledge-base/plans/feat-archive-skill-plan.md -> archive/20260224-143000-feat-archive-skill-plan.md
-  knowledge-base/specs/feat-archive-skill/ -> archive/20260224-143000-feat-archive-skill/
+  knowledge-base/project/brainstorms/archive-skill-brainstorm.md -> archive/20260224-143000-archive-skill-brainstorm.md
+  knowledge-base/project/plans/feat-archive-skill-plan.md -> archive/20260224-143000-feat-archive-skill-plan.md
+  knowledge-base/project/specs/feat-archive-skill/ -> archive/20260224-143000-feat-archive-skill/
 
 # On --list:
 Found 3 artifact(s) for slug "archive-skill":
-  knowledge-base/brainstorms/archive-skill-brainstorm.md
-  knowledge-base/plans/feat-archive-skill-plan.md
-  knowledge-base/specs/feat-archive-skill/
+  knowledge-base/project/brainstorms/archive-skill-brainstorm.md
+  knowledge-base/project/plans/feat-archive-skill-plan.md
+  knowledge-base/project/specs/feat-archive-skill/
 ```
 
 ### Exit Codes
@@ -271,8 +271,8 @@ The script discovers artifacts matching the current branch's feature slug, creat
 **Brainstorm, plan, and compound** have shorter archival sections (1-3 lines each) that reference `git mv` inline. These change from:
 
 ```text
-Move completed or superseded brainstorms to `knowledge-base/brainstorms/archive/`:
-`mkdir -p knowledge-base/brainstorms/archive && git add ... && git mv ...`
+Move completed or superseded brainstorms to `knowledge-base/project/brainstorms/archive/`:
+`mkdir -p knowledge-base/project/brainstorms/archive && git add ... && git mv ...`
 ```
 
 To:
@@ -280,10 +280,10 @@ To:
 ```text
 Archive completed brainstorms by running:
 `bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh`
-This moves matching artifacts to `knowledge-base/brainstorms/archive/` with timestamp prefixes.
+This moves matching artifacts to `knowledge-base/project/brainstorms/archive/` with timestamp prefixes.
 ```
 
-**Note on compound learnings archival**: The `compound/SKILL.md` has a separate learnings archival path (`knowledge-base/learnings/archive/`) that handles individual learning files by explicit path (not slug). This is a different operation and should remain inline for now. The archive-kb script could be extended with a `--file <path>` flag for single-file archival in a follow-up.
+**Note on compound learnings archival**: The `compound/SKILL.md` has a separate learnings archival path (`knowledge-base/project/learnings/archive/`) that handles individual learning files by explicit path (not slug). This is a different operation and should remain inline for now. The archive-kb script could be extended with a `--file <path>` flag for single-file archival in a follow-up.
 
 ## Non-Goals
 
@@ -317,8 +317,8 @@ This moves matching artifacts to `knowledge-base/brainstorms/archive/` with time
 
 ### Core Functionality
 
-- Given a feature branch `feat/archive-skill` with a matching brainstorm file, when `archive-kb.sh` runs, then the brainstorm is moved to `knowledge-base/brainstorms/archive/YYYYMMDD-HHMMSS-<original-name>.md` and git tracks the move
-- Given a feature branch `feat/archive-skill` with a matching spec directory `knowledge-base/specs/feat-archive-skill/`, when `archive-kb.sh` runs, then the entire directory is moved to `knowledge-base/specs/archive/YYYYMMDD-HHMMSS-feat-archive-skill/`
+- Given a feature branch `feat/archive-skill` with a matching brainstorm file, when `archive-kb.sh` runs, then the brainstorm is moved to `knowledge-base/project/brainstorms/archive/YYYYMMDD-HHMMSS-<original-name>.md` and git tracks the move
+- Given a feature branch `feat/archive-skill` with a matching spec directory `knowledge-base/project/specs/feat-archive-skill/`, when `archive-kb.sh` runs, then the entire directory is moved to `knowledge-base/project/specs/archive/YYYYMMDD-HHMMSS-feat-archive-skill/`
 - Given artifacts in both brainstorms/ and specs/, when the script runs, then both are archived in a single invocation with the same timestamp
 
 ### Slug Derivation
@@ -338,7 +338,7 @@ This moves matching artifacts to `knowledge-base/brainstorms/archive/` with time
 ### Edge Cases
 
 - Given an untracked brainstorm file (created this session, never committed), when `archive-kb.sh` runs, then `git add` is called before `git mv` (preventing "not under version control" error)
-- Given an empty `knowledge-base/brainstorms/` directory, when the script runs, then it skips brainstorms silently (no error from empty glob)
+- Given an empty `knowledge-base/project/brainstorms/` directory, when the script runs, then it skips brainstorms silently (no error from empty glob)
 - Given the `knowledge-base/` directory does not exist, when the script runs, then it exits 0 with a "no knowledge-base directory found" message
 - Given the user is not in a git repository, when the script runs, then it exits 1 with a clear error message
 
@@ -357,7 +357,7 @@ This moves matching artifacts to `knowledge-base/brainstorms/archive/` with time
 
 ### Research Insight: nullglob Pitfall
 
-When `set -euo pipefail` is active and a glob like `knowledge-base/brainstorms/*slug*` matches nothing, bash will pass the literal glob string to the loop. The script must handle this by either:
+When `set -euo pipefail` is active and a glob like `knowledge-base/project/brainstorms/*slug*` matches nothing, bash will pass the literal glob string to the loop. The script must handle this by either:
 1. Enabling `shopt -s nullglob` before the glob and `shopt -u nullglob` after, or
 2. Checking `[[ -e "$f" ]]` inside the loop to skip non-existent paths
 

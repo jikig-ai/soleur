@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-bare-repo-hardening/knowledge-base/plans/2026-03-14-chore-harden-shell-scripts-bare-repo-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-bare-repo-hardening/knowledge-base/project/plans/2026-03-14-chore-harden-shell-scripts-bare-repo-plan.md
 - Status: complete
 
 ### Errors

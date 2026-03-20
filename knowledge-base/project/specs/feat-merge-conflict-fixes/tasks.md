@@ -1,7 +1,7 @@
 # Tasks: Merge Conflict Targeted Fixes
 
 **Issue:** #395
-**Plan:** `knowledge-base/plans/2026-03-03-fix-merge-conflict-gaps-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-03-03-fix-merge-conflict-gaps-plan.md`
 
 [Updated 2026-03-03] Scope reduced from 4 fixes to 2 after plan review.
 

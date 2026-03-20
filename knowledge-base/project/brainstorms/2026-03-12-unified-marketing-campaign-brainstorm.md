@@ -73,7 +73,7 @@ Five fields only: `title`, `type`, `publish_date`, `channels`, `status`. No prio
 
 ## Open Questions
 
-- **Content directory location:** Should `distribution-content/` stay under `knowledge-base/specs/feat-product-strategy/` or move to a top-level location like `knowledge-base/distribution-content/`?
+- **Content directory location:** Should `distribution-content/` stay under `knowledge-base/project/specs/feat-product-strategy/` or move to a top-level location like `knowledge-base/distribution-content/`?
 - **Reddit API setup:** Which Reddit API approach (OAuth app, script app)? Subreddit targeting per content type?
 - **Existing content migration:** Retrofit frontmatter onto all 6 existing content files in one batch, or incrementally as each is (re-)published?
 - **CMO calendar cadence:** Weekly refresh or event-driven (new content merged → CMO updates calendar)?

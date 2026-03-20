@@ -1,6 +1,6 @@
 # Tasks: Project-Aware Agent Filtering in Review Command
 
-**Plan:** `knowledge-base/plans/2026-02-12-feat-runtime-agent-discovery-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-12-feat-runtime-agent-discovery-plan.md`
 **Branch:** `feat-runtime-agent-discovery`
 
 ## 1. Move Rails agents to conditional section

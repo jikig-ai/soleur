@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-fix-archive-git-mv/knowledge-base/plans/2026-02-24-fix-archive-git-mv-untracked-files-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-fix-archive-git-mv/knowledge-base/project/plans/2026-02-24-fix-archive-git-mv-untracked-files-plan.md
 - Status: complete
 
 ### Errors

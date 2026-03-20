@@ -2,7 +2,7 @@
 
 **Feature:** feat-brand-marketing
 **Issue:** #71
-**Plan:** `knowledge-base/plans/2026-02-12-feat-brand-marketing-tools-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-12-feat-brand-marketing-tools-plan.md`
 
 ## Phase 1: Brand Architect Agent + Brand Guide
 

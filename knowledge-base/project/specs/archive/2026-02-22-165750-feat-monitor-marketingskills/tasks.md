@@ -24,6 +24,6 @@ date: 2026-02-20
 
 ## Phase 4: Write deliverables
 
-- [x] 4.1 Write learning document to `knowledge-base/learnings/2026-02-20-marketingskills-overlap-analysis.md`
+- [x] 4.1 Write learning document to `knowledge-base/project/learnings/2026-02-20-marketingskills-overlap-analysis.md`
 - [x] 4.2 Include quarterly monitoring cadence (next: May 2026)
 - [x] 4.3 Update issue #165 with artifact links

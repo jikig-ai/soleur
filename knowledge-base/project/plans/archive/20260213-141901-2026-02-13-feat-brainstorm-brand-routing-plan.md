@@ -153,8 +153,8 @@ Options:
 
 ## References
 
-- Spec: `knowledge-base/specs/feat-brainstorm-brand-routing/spec.md`
-- Brainstorm: `knowledge-base/brainstorms/2026-02-13-brainstorm-brand-routing-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-brainstorm-brand-routing/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-13-brainstorm-brand-routing-brainstorm.md`
 - Brand-architect agent: `plugins/soleur/agents/marketing/brand-architect.md`
 - Brainstorm command: `plugins/soleur/commands/soleur/brainstorm.md`
 - Issue: #76

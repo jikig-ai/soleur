@@ -4,8 +4,8 @@ type: feat
 date: 2026-02-06
 issue: 16
 branch: feat-project-overview
-spec: knowledge-base/specs/feat-project-overview/spec.md
-brainstorm: knowledge-base/brainstorms/2026-02-06-project-overview-brainstorm.md
+spec: knowledge-base/project/specs/feat-project-overview/spec.md
+brainstorm: knowledge-base/project/brainstorms/2026-02-06-project-overview-brainstorm.md
 ---
 
 # feat: Knowledge Base Project Overview System
@@ -255,11 +255,11 @@ Extend `/sync` command:
 - Sync command: `plugins/soleur/commands/soleur/sync.md`
 - Constitution: `knowledge-base/overview/constitution.md`
 - Spec templates: `plugins/soleur/skills/spec-templates/SKILL.md`
-- External spec example: `knowledge-base/specs/external/claude-code.md`
+- External spec example: `knowledge-base/project/specs/external/claude-code.md`
 
 ### Related Issues
 
 - Original request: #14
 - Feature issue: #16
-- Brainstorm: `knowledge-base/brainstorms/2026-02-06-project-overview-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-project-overview/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-06-project-overview-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-project-overview/spec.md`

@@ -28,7 +28,7 @@ date: 2026-03-10
 
 The `pencil-setup` skill currently requires Cursor or VS Code as a hard dependency. If no IDE is detected, `check_deps.sh` exits with error and setup fails entirely. This blocks Pencil MCP from working in Claude Code standalone terminal sessions, CI/CD pipelines, and environments where the user prefers a different editor.
 
-Pencil Desktop ships its own MCP server binary (confirmed in `knowledge-base/learnings/2026-02-27-pencil-desktop-ships-mcp-binary.md`). When Desktop is installed, the IDE should be optional -- the Desktop binary can serve as the MCP target with `--app pencil` (or whatever value Desktop accepts).
+Pencil Desktop ships its own MCP server binary (confirmed in `knowledge-base/project/learnings/2026-02-27-pencil-desktop-ships-mcp-binary.md`). When Desktop is installed, the IDE should be optional -- the Desktop binary can serve as the MCP target with `--app pencil` (or whatever value Desktop accepts).
 
 ### Research Insights
 
@@ -118,7 +118,7 @@ Four unknowns must be resolved before implementation:
 Test the `pencil` CLI path first (investigation item 1). If it works, items 3 becomes less critical since the CLI abstracts away the binary and `--app` flag. Item 2 (auto-registration) should be tested second -- if Desktop auto-registers, the entire skill simplifies to "verify Desktop is running."
 
 **Edge case: `pencil` CLI name collision:**
-Per `knowledge-base/learnings/2026-02-27-check-deps-pattern-for-gui-apps.md`, the `pencil` CLI binary name collides with evolus/pencil (a different tool). After `command -v pencil` succeeds, verify it is the correct pencil: `pencil --version 2>&1 | grep -qi "pencil.dev"` or similar.
+Per `knowledge-base/project/learnings/2026-02-27-check-deps-pattern-for-gui-apps.md`, the `pencil` CLI binary name collides with evolus/pencil (a different tool). After `command -v pencil` succeeds, verify it is the correct pencil: `pencil --version 2>&1 | grep -qi "pencil.dev"` or similar.
 
 ### Phase 2: `check_deps.sh` modifications
 
@@ -291,14 +291,14 @@ For CI/CD or terminal-only environments, Pencil Desktop requires a display serve
 
 ### Institutional Learnings
 
-- `knowledge-base/learnings/2026-02-27-pencil-desktop-ships-mcp-binary.md` -- Desktop binary confirmed at `resources/app.asar.unpacked/out/`, accepts `-app` flag, different build from extension
-- `knowledge-base/learnings/2026-02-27-pencil-editor-operational-requirements.md` -- WebSocket requires visible editor, no programmatic save, read before write
-- `knowledge-base/learnings/2026-02-14-pencil-mcp-local-binary-constraint.md` -- stdio binary cannot be bundled in plugin.json
-- `knowledge-base/learnings/2026-02-27-pencil-mcp-auto-registration-via-skill.md` -- remove-then-add pattern, `--app` always required, `-s user` scope
-- `knowledge-base/learnings/2026-02-27-check-deps-pattern-for-gui-apps.md` -- GUI app detection pattern, `pencil` CLI name collision with evolus/pencil
-- `knowledge-base/learnings/2026-02-27-pencil-desktop-not-required-for-mcp.md` -- documents inverse assumption (Desktop optional); this feature inverts that hierarchy
-- `knowledge-base/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md` -- do not upgrade check_deps.sh to strict mode
-- `knowledge-base/learnings/2026-02-22-skill-code-fence-permission-flow.md` -- ensure script paths are in allow list
+- `knowledge-base/project/learnings/2026-02-27-pencil-desktop-ships-mcp-binary.md` -- Desktop binary confirmed at `resources/app.asar.unpacked/out/`, accepts `-app` flag, different build from extension
+- `knowledge-base/project/learnings/2026-02-27-pencil-editor-operational-requirements.md` -- WebSocket requires visible editor, no programmatic save, read before write
+- `knowledge-base/project/learnings/2026-02-14-pencil-mcp-local-binary-constraint.md` -- stdio binary cannot be bundled in plugin.json
+- `knowledge-base/project/learnings/2026-02-27-pencil-mcp-auto-registration-via-skill.md` -- remove-then-add pattern, `--app` always required, `-s user` scope
+- `knowledge-base/project/learnings/2026-02-27-check-deps-pattern-for-gui-apps.md` -- GUI app detection pattern, `pencil` CLI name collision with evolus/pencil
+- `knowledge-base/project/learnings/2026-02-27-pencil-desktop-not-required-for-mcp.md` -- documents inverse assumption (Desktop optional); this feature inverts that hierarchy
+- `knowledge-base/project/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md` -- do not upgrade check_deps.sh to strict mode
+- `knowledge-base/project/learnings/2026-02-22-skill-code-fence-permission-flow.md` -- ensure script paths are in allow list
 
 ### External References
 

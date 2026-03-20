@@ -1,7 +1,7 @@
 # Tasks: Cloudflare MCP Integration
 
 **Issue:** #254
-**Plan:** `knowledge-base/plans/2026-02-22-feat-cloudflare-mcp-integration-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-22-feat-cloudflare-mcp-integration-plan.md`
 
 ## Phase 1: Plugin Configuration and OAuth Validation
 

@@ -1,6 +1,6 @@
 # Tasks: Telegram Streamed Responses
 
-**Plan:** `knowledge-base/plans/2026-03-02-feat-telegram-streamed-responses-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-03-02-feat-telegram-streamed-responses-plan.md`
 **Issue:** #372
 **Branch:** feat-telegram-streaming
 

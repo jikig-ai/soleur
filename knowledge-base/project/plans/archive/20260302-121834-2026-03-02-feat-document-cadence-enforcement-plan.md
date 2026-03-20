@@ -16,7 +16,7 @@ Extend `review-reminder.yml` to enforce periodic review of strategic knowledge-b
 Strategic documents (brand-guide, business-validation, constitution) go stale without anyone noticing. The Cowork Plugins incident proved this: a competitive threat went undetected for 22 days because `business-validation.md` was never re-reviewed. Downstream agents consume these docs as ground truth and propagate stale information.
 
 A `review-reminder.yml` workflow exists but has three problems:
-1. Only scans `knowledge-base/learnings/` (misses strategic docs)
+1. Only scans `knowledge-base/project/learnings/` (misses strategic docs)
 2. Only 3 files use the `next_review` field
 3. **Bug:** Silently skips all overdue documents (only flags docs due in 0-7 days)
 
@@ -137,8 +137,8 @@ Note: `last_reviewed` set to today (2026-03-02) since this change constitutes a 
 ## References
 
 - Existing workflow: `.github/workflows/review-reminder.yml`
-- Platform risk learning: `knowledge-base/learnings/2026-02-25-platform-risk-cowork-plugins.md`
-- Propagation risk: `knowledge-base/learnings/2026-02-22-agent-context-blindness-vision-misalignment.md`
-- Brainstorm: `knowledge-base/brainstorms/2026-03-02-document-cadence-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-document-cadence/spec.md`
+- Platform risk learning: `knowledge-base/project/learnings/2026-02-25-platform-risk-cowork-plugins.md`
+- Propagation risk: `knowledge-base/project/learnings/2026-02-22-agent-context-blindness-vision-misalignment.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-02-document-cadence-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-document-cadence/spec.md`
 - Issue: #334

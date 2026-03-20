@@ -149,7 +149,7 @@ Use the Edit tool for each file rather than batch sed -- the sed-silent-failure 
 
 - Issue: #189
 - Constitution learning on dual-location legal docs: `knowledge-base/overview/constitution.md` line 168
-- Governing law change pattern (dual-location sync precedent): `knowledge-base/learnings/2026-03-02-governing-law-jurisdiction-change-pattern.md`
-- Sed silent failure pattern: `knowledge-base/learnings/2026-02-14-sed-insertion-fails-silently-on-missing-pattern.md`
-- DPA rename history: `knowledge-base/learnings/2026-02-20-dogfood-legal-agents-cross-document-consistency.md`
+- Governing law change pattern (dual-location sync precedent): `knowledge-base/project/learnings/2026-03-02-governing-law-jurisdiction-change-pattern.md`
+- Sed silent failure pattern: `knowledge-base/project/learnings/2026-02-14-sed-insertion-fails-silently-on-missing-pattern.md`
+- DPA rename history: `knowledge-base/project/learnings/2026-02-20-dogfood-legal-agents-cross-document-consistency.md`
 - Legal document generator agent: `plugins/soleur/agents/legal/legal-document-generator.md`

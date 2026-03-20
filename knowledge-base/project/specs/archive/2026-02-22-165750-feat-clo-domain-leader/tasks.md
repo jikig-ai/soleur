@@ -2,7 +2,7 @@
 title: "CLO Domain Leader - Tasks"
 type: tasks
 date: 2026-02-22
-plan: ../../../knowledge-base/plans/2026-02-22-feat-clo-domain-leader-plan.md
+plan: ../../../knowledge-base/project/plans/2026-02-22-feat-clo-domain-leader-plan.md
 ---
 
 # Tasks

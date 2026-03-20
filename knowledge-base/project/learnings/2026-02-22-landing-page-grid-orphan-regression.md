@@ -91,8 +91,8 @@ For the landing page:
 
 ## Cross-References
 
-- Related learning: `knowledge-base/learnings/ui-bugs/2026-02-19-auto-fill-grid-loses-semantic-grouping-on-mobile.md` (CSS grid auto-fill breakpoint failures)
-- Related learning: `knowledge-base/learnings/2026-02-17-ux-review-gap-visual-polish-vs-information-architecture.md` (UX review process gap)
+- Related learning: `knowledge-base/project/learnings/ui-bugs/2026-02-19-auto-fill-grid-loses-semantic-grouping-on-mobile.md` (CSS grid auto-fill breakpoint failures)
+- Related learning: `knowledge-base/project/learnings/2026-02-17-ux-review-gap-visual-polish-vs-information-architecture.md` (UX review process gap)
 - PR #257 (v2.31.4): Original incomplete fix
 - PR #260 (v2.31.6): Complete fix with CMO consultation
 

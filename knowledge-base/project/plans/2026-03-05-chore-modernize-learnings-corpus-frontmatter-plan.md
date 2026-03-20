@@ -115,7 +115,7 @@ The `case` statement in `infer_category` uses first-match semantics, which creat
 
 A single bash script (`scripts/backfill-frontmatter.sh`) that:
 
-1. Iterates all `knowledge-base/learnings/*.md` files
+1. Iterates all `knowledge-base/project/learnings/*.md` files
 2. For each file, determines if frontmatter exists (`head -1` check for `---`)
 3. **No frontmatter:** Parses inline metadata, generates frontmatter, prepends it
 4. **Partial frontmatter:** Reads existing frontmatter, adds missing required fields
@@ -139,10 +139,10 @@ After the batch operation completes, run a verification pass that confirms every
 
 ```bash
 # Post-run verification (must return 0 files)
-failed=$(grep -rL '^---' knowledge-base/learnings/*.md | wc -l)
+failed=$(grep -rL '^---' knowledge-base/project/learnings/*.md | wc -l)
 if [[ "$failed" -gt 0 ]]; then
   echo "ERROR: $failed files still lack frontmatter" >&2
-  grep -rL '^---' knowledge-base/learnings/*.md >&2
+  grep -rL '^---' knowledge-base/project/learnings/*.md >&2
   exit 1
 fi
 ```
@@ -277,8 +277,8 @@ fi
 
 ### Files Affected
 
-- 85 files in `knowledge-base/learnings/` -- new frontmatter added
-- ~10 files in `knowledge-base/learnings/` -- existing frontmatter augmented
+- 85 files in `knowledge-base/project/learnings/` -- new frontmatter added
+- ~10 files in `knowledge-base/project/learnings/` -- existing frontmatter augmented
 - 1 file renamed: `agent-prompt-sharp-edges-only.md`
 
 ## MVP
@@ -469,7 +469,7 @@ rename_dateless_file() {
   if [[ -z "$creation_date" ]]; then
     creation_date="2026-02-13"  # fallback: approximate from git history
   fi
-  local new_name="knowledge-base/learnings/${creation_date}-$(basename "$file")"
+  local new_name="knowledge-base/project/learnings/${creation_date}-$(basename "$file")"
   git add "$file"  # ensure tracked before git mv
   git mv "$file" "$new_name"
   echo "Renamed: $file -> $new_name"

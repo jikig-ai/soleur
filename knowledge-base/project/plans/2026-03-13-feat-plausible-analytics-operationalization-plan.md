@@ -195,12 +195,12 @@ File two GitHub issues (not part of this PR, but tracked):
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-03-13-plausible-growth-targets-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-plausible-growth-targets/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-13-plausible-growth-targets-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-plausible-growth-targets/spec.md`
 - Marketing strategy: `knowledge-base/marketing/marketing-strategy.md` (lines 56, 297-330, 377-382)
 - Shell script pattern: `scripts/content-publisher.sh`
 - CI workflow pattern: `.github/workflows/scheduled-content-publisher.yml`
-- Learning: `knowledge-base/learnings/2026-03-02-github-actions-auto-push-vs-pr-for-bot-content.md`
-- Learning: `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
+- Learning: `knowledge-base/project/learnings/2026-03-02-github-actions-auto-push-vs-pr-for-bot-content.md`
+- Learning: `knowledge-base/project/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
 - [Plausible Stats API v1](https://plausible.io/docs/stats-api)
 - GitHub issue: #575 / Draft PR: #574

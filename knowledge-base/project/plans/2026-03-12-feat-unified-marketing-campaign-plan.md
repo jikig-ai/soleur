@@ -131,7 +131,7 @@ The scan loop in `main()`:
 
 ```bash
 today=$(date +%Y-%m-%d)
-content_dir="knowledge-base/specs/feat-product-strategy/distribution-content"
+content_dir="knowledge-base/project/specs/feat-product-strategy/distribution-content"
 failures=0
 
 for file in "$content_dir"/*.md; do
@@ -191,7 +191,7 @@ Modify `.github/workflows/scheduled-content-publisher.yml`:
   run: |
     git config user.name "github-actions[bot]"
     git config user.email "github-actions[bot]@users.noreply.github.com"
-    git add knowledge-base/specs/feat-product-strategy/distribution-content/
+    git add knowledge-base/project/specs/feat-product-strategy/distribution-content/
     git diff --cached --quiet && exit 0  # No changes = no commit
     git commit -m "ci: update content distribution status [skip ci]"
     git push
@@ -265,11 +265,11 @@ These were scoped out during review to keep this PR focused:
 ## References & Research
 
 ### Internal References
-- Brainstorm: `knowledge-base/brainstorms/2026-03-12-unified-marketing-campaign-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-unified-marketing-campaign/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-12-unified-marketing-campaign-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-unified-marketing-campaign/spec.md`
 - Current publisher: `scripts/content-publisher.sh` (resolve_content at case statement, extract_section at line 36)
 - Workflow: `.github/workflows/scheduled-content-publisher.yml`
-- Content files: `knowledge-base/specs/feat-product-strategy/distribution-content/*.md`
+- Content files: `knowledge-base/project/specs/feat-product-strategy/distribution-content/*.md`
 - Frontmatter parser pattern: `plugins/soleur/hooks/stop-hook.sh:43-47`
 - Community scripts: `plugins/soleur/skills/community/scripts/x-community.sh`
 
@@ -285,4 +285,4 @@ These were scoped out during review to keep this PR focused:
 ### Related Work
 - Issue: #549
 - PR: #556 (draft)
-- Current campaign plan: `knowledge-base/specs/feat-product-strategy/distribution-plan.md`
+- Current campaign plan: `knowledge-base/project/specs/feat-product-strategy/distribution-plan.md`

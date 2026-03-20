@@ -237,13 +237,13 @@ When the agent is asked to read a data file that does not exist:
 
 ### Internal
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-13-ops-directory-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-ops-directory/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-13-ops-directory-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-ops-directory/spec.md`
 - Constitution: `knowledge-base/overview/constitution.md`
 - Agent example: `plugins/soleur/agents/workflow/pr-comment-resolver.md`
-- Learnings: `knowledge-base/learnings/agent-prompt-sharp-edges-only.md`
-- Learnings: `knowledge-base/learnings/2026-02-12-plugin-loader-agent-vs-skill-recursion.md`
-- Learnings: `knowledge-base/learnings/plugin-versioning-requirements.md`
+- Learnings: `knowledge-base/project/learnings/agent-prompt-sharp-edges-only.md`
+- Learnings: `knowledge-base/project/learnings/2026-02-12-plugin-loader-agent-vs-skill-recursion.md`
+- Learnings: `knowledge-base/project/learnings/plugin-versioning-requirements.md`
 
 ### Related Issues
 

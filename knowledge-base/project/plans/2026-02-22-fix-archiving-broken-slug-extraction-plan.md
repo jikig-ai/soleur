@@ -47,7 +47,7 @@ But AGENTS.md specifies branches use `feat/<name>` convention (with slash, e.g.,
 
 - Branch `feat/domain-leaders` produces slug `feat/domain-leaders` instead of `domain-leaders`
 - Glob patterns `*feat/domain-leaders*` match nothing in the filesystem
-- Spec directory check `test -d knowledge-base/specs/feat-feat/domain-leaders` fails
+- Spec directory check `test -d knowledge-base/project/specs/feat-feat/domain-leaders` fails
 - Result: compound silently skips consolidation ("no artifacts found")
 
 The `ship` and `merge-pr` skills correctly document stripping `feat-`, `feature/`, `fix-`, `fix/` -- but `compound-capture` has the outdated single-prefix logic.
@@ -57,7 +57,7 @@ The `ship` and `merge-pr` skills correctly document stripping `feat-`, `feature/
 The `worktree-manager.sh cleanup-merged` function:
 
 1. Correctly converts `feat/` to `feat-` using `tr '/' '-'`
-2. Archives spec directories to `knowledge-base/specs/archive/`
+2. Archives spec directories to `knowledge-base/project/specs/archive/`
 3. Does NOT touch brainstorms or plans
 
 This means even when cleanup-merged runs successfully, brainstorms and plans remain as active artifacts forever.
@@ -83,9 +83,9 @@ There is no mechanism to retroactively archive artifacts whose feature branches 
 
 ### Related learnings
 
-- `knowledge-base/learnings/2026-02-22-cleanup-merged-path-mismatch.md` -- documents the branch-name-to-path mismatch pattern; key insight: "Never construct filesystem paths from git ref names"
-- `knowledge-base/learnings/2026-02-21-stale-worktrees-accumulate-across-sessions.md` -- the cleanup gap pattern; key insight: session boundaries are the most common point of workflow failure
-- `knowledge-base/learnings/2026-02-09-worktree-cleanup-gap-after-merge.md` -- original identification of post-merge cleanup gap
+- `knowledge-base/project/learnings/2026-02-22-cleanup-merged-path-mismatch.md` -- documents the branch-name-to-path mismatch pattern; key insight: "Never construct filesystem paths from git ref names"
+- `knowledge-base/project/learnings/2026-02-21-stale-worktrees-accumulate-across-sessions.md` -- the cleanup gap pattern; key insight: session boundaries are the most common point of workflow failure
+- `knowledge-base/project/learnings/2026-02-09-worktree-cleanup-gap-after-merge.md` -- original identification of post-merge cleanup gap
 
 ### Existing archiving mechanisms
 
@@ -222,15 +222,15 @@ Archive the 93 orphaned artifacts using `git mv` to preserve history. This is a 
 Generate a timestamp, then run `git mv` for each file:
 
 ```text
-For each file in knowledge-base/brainstorms/*.md:
-  git mv "knowledge-base/brainstorms/<filename>" "knowledge-base/brainstorms/archive/<timestamp>-<filename>"
+For each file in knowledge-base/project/brainstorms/*.md:
+  git mv "knowledge-base/project/brainstorms/<filename>" "knowledge-base/project/brainstorms/archive/<timestamp>-<filename>"
 ```
 
 **Step 3b: Archive plans (38 files)**
 
 ```text
-For each file in knowledge-base/plans/*.md:
-  git mv "knowledge-base/plans/<filename>" "knowledge-base/plans/archive/<timestamp>-<filename>"
+For each file in knowledge-base/project/plans/*.md:
+  git mv "knowledge-base/project/plans/<filename>" "knowledge-base/project/plans/archive/<timestamp>-<filename>"
 ```
 
 **Step 3c: Archive spec directories (41 directories)**
@@ -238,8 +238,8 @@ For each file in knowledge-base/plans/*.md:
 Exclude `external/` and `feat-fix-archiving/` (the current feature):
 
 ```text
-For each directory in knowledge-base/specs/feat-*/ (excluding feat-fix-archiving):
-  git mv "knowledge-base/specs/<dirname>" "knowledge-base/specs/archive/<timestamp>-<dirname>"
+For each directory in knowledge-base/project/specs/feat-*/ (excluding feat-fix-archiving):
+  git mv "knowledge-base/project/specs/<dirname>" "knowledge-base/project/specs/archive/<timestamp>-<dirname>"
 ```
 
 **Step 3d: Commit**
@@ -253,7 +253,7 @@ git commit -m "fix: archive 93 orphaned KB artifacts from completed features"
 
 ### Research Insights for Task 3
 
-**Exclusions:** Two directories in `knowledge-base/specs/` must NOT be archived:
+**Exclusions:** Two directories in `knowledge-base/project/specs/` must NOT be archived:
 - `external/` -- contains reference docs (claude-code.md, codex.md, opencode.md), not feature specs
 - `feat-fix-archiving/` -- the active feature branch for this issue
 
@@ -268,13 +268,13 @@ git commit -m "fix: archive 93 orphaned KB artifacts from completed features"
 Update line 198 from:
 
 ```text
-1. **Discovers artifacts** -- globs `knowledge-base/{brainstorms,plans}/*<slug>*` and `knowledge-base/specs/feat-<slug>/` (excluding `*/archive/`)
+1. **Discovers artifacts** -- globs `knowledge-base/{brainstorms,plans}/*<slug>*` and `knowledge-base/project/specs/feat-<slug>/` (excluding `*/archive/`)
 ```
 
 To:
 
 ```text
-1. **Discovers artifacts** -- extracts the feature slug by stripping `feat/`, `feat-`, `feature/`, `fix/`, or `fix-` prefix from the branch name, then globs `knowledge-base/{brainstorms,plans}/*<slug>*` and `knowledge-base/specs/feat-<slug>/` (excluding `*/archive/`)
+1. **Discovers artifacts** -- extracts the feature slug by stripping `feat/`, `feat-`, `feature/`, `fix/`, or `fix-` prefix from the branch name, then globs `knowledge-base/{brainstorms,plans}/*<slug>*` and `knowledge-base/project/specs/feat-<slug>/` (excluding `*/archive/`)
 ```
 
 ### Research Insights for Task 4
@@ -296,23 +296,23 @@ To:
 
 ### Given a branch named feat/domain-leaders, when compound runs
 - Then the slug extracted is `domain-leaders`
-- And `knowledge-base/brainstorms/*domain-leaders*` files are discovered
-- And `knowledge-base/plans/*domain-leaders*` files are discovered
-- And `knowledge-base/specs/feat-domain-leaders/` is discovered
+- And `knowledge-base/project/brainstorms/*domain-leaders*` files are discovered
+- And `knowledge-base/project/plans/*domain-leaders*` files are discovered
+- And `knowledge-base/project/specs/feat-domain-leaders/` is discovered
 
 ### Given a branch named feat-legacy-name (hyphenated), when compound runs
 - Then the slug extracted is `legacy-name`
 - And artifact discovery works the same as with slash convention
 
 ### Given a merged PR whose branch was feat/code-coverage, when cleanup-merged runs
-- Then spec directory `knowledge-base/specs/feat-code-coverage/` is archived
+- Then spec directory `knowledge-base/project/specs/feat-code-coverage/` is archived
 - And brainstorms matching `*code-coverage*` are archived
 - And plans matching `*code-coverage*` are archived
 
 ### Given orphaned artifacts with no feature branch, when one-time cleanup runs
-- Then all active brainstorms are moved to `knowledge-base/brainstorms/archive/`
-- And all active plans are moved to `knowledge-base/plans/archive/`
-- And all active specs (except external/ and feat-fix-archiving/) are moved to `knowledge-base/specs/archive/`
+- Then all active brainstorms are moved to `knowledge-base/project/brainstorms/archive/`
+- And all active plans are moved to `knowledge-base/project/plans/archive/`
+- And all active specs (except external/ and feat-fix-archiving/) are moved to `knowledge-base/project/specs/archive/`
 
 ## Non-Goals
 

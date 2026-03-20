@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-stale-kb-paths/knowledge-base/plans/2026-03-13-chore-clean-stale-kb-project-refs-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-stale-kb-paths/knowledge-base/project/plans/2026-03-13-chore-clean-stale-kb-project-refs-plan.md
 - Status: complete
 
 ### Errors
@@ -17,4 +17,4 @@ None
 ### Components Invoked
 - soleur:plan -- created initial plan from GitHub issue #604
 - soleur:deepen-plan -- enhanced plan with 5 additional missed files and verification strategy
-- Tasks file created at knowledge-base/specs/feat-stale-kb-paths/tasks.md
+- Tasks file created at knowledge-base/project/specs/feat-stale-kb-paths/tasks.md

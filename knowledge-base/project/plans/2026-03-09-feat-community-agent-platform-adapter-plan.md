@@ -12,8 +12,8 @@ semver: minor
 Add X/Twitter as a data source to the community-manager agent. Create the missing community SKILL.md entry point. Leave existing Discord and GitHub scripts untouched.
 
 **Issue:** #127
-**Brainstorm:** `knowledge-base/brainstorms/2026-03-09-community-agent-x-brainstorm.md`
-**Spec:** `knowledge-base/specs/feat-community-agent-x/spec.md`
+**Brainstorm:** `knowledge-base/project/brainstorms/2026-03-09-community-agent-x-brainstorm.md`
+**Spec:** `knowledge-base/project/specs/feat-community-agent-x/spec.md`
 
 ## Problem Statement
 
@@ -103,7 +103,7 @@ Create `x-community.sh` and `x-setup.sh`. Requires X Developer Portal credential
 - `plugins/soleur/skills/community/scripts/x-setup.sh`
 
 **Files modified:**
-- `knowledge-base/specs/feat-community-agent-x/spec.md` — update TR2 to include `openssl`
+- `knowledge-base/project/specs/feat-community-agent-x/spec.md` — update TR2 to include `openssl`
 - `.gitignore` — add any X-related local state files if needed
 
 **Tasks:**
@@ -266,8 +266,8 @@ All changes are additive:
 
 ### Internal
 
-- Brainstorm: `knowledge-base/brainstorms/2026-03-09-community-agent-x-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-community-agent-x/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-09-community-agent-x-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-community-agent-x/spec.md`
 - Community-manager agent: `plugins/soleur/agents/support/community-manager.md`
 - Discord adapter: `plugins/soleur/skills/community/scripts/discord-community.sh`
 - GitHub adapter: `plugins/soleur/skills/community/scripts/github-community.sh`

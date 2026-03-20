@@ -1,7 +1,7 @@
 # Tasks: Agent Teams in /soleur:work
 
 **Issue:** #26
-**Plan:** `knowledge-base/plans/2026-02-10-feat-agent-teams-work-integration-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-10-feat-agent-teams-work-integration-plan.md`
 
 ## Phase 1: Implementation
 

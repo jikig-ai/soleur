@@ -404,10 +404,10 @@ All five hardening layers (input validation, transport security, response parsin
 - Issue: #492
 - Parent feature: #471 (X monitoring commands, closed)
 - Deferred adapter refactor: #470 (platform adapter interface, open)
-- Learning: `knowledge-base/learnings/2026-03-09-shell-api-wrapper-hardening-patterns.md`
-- Learning: `knowledge-base/learnings/2026-03-10-x-api-oauth-get-query-params-in-signature.md`
-- Learning: `knowledge-base/learnings/2026-03-09-depth-limited-api-retry-pattern.md`
-- Learning: `knowledge-base/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md`
-- Learning: `knowledge-base/learnings/2026-03-10-jq-generator-silent-data-loss.md` (not directly applicable but confirms jq patterns in same file are correct)
+- Learning: `knowledge-base/project/learnings/2026-03-09-shell-api-wrapper-hardening-patterns.md`
+- Learning: `knowledge-base/project/learnings/2026-03-10-x-api-oauth-get-query-params-in-signature.md`
+- Learning: `knowledge-base/project/learnings/2026-03-09-depth-limited-api-retry-pattern.md`
+- Learning: `knowledge-base/project/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md`
+- Learning: `knowledge-base/project/learnings/2026-03-10-jq-generator-silent-data-loss.md` (not directly applicable but confirms jq patterns in same file are correct)
 - File: `plugins/soleur/skills/community/scripts/x-community.sh`
 - Tests: `test/x-community.test.ts`

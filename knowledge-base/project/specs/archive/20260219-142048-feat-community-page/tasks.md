@@ -1,6 +1,6 @@
 # Tasks: Community Hub Page
 
-**Plan:** `knowledge-base/plans/2026-02-19-feat-community-hub-page-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-19-feat-community-hub-page-plan.md`
 **Issue:** #149
 **Branch:** feat-community-page
 

@@ -32,7 +32,7 @@ Plus one additional capability:
 |  Worktree Layer (git isolation)           |
 |  Each feature gets isolated worktree (feat-<name>)
 +-------------------------------------------+
-|  Spec Layer (knowledge-base/specs/)       |
+|  Spec Layer (knowledge-base/project/specs/)       |
 |  Specs live in repo, evolve with code     |
 +-------------------------------------------+
 |  Constitution Layer                       |
@@ -78,13 +78,13 @@ The full workflow for significant features:
 **State Discovery:** Convention-based (no manifest file)
 
 - Commands look for files in known locations
-- Branch name `feat-<name>` maps to `knowledge-base/specs/feat-<name>/`
+- Branch name `feat-<name>` maps to `knowledge-base/project/specs/feat-<name>/`
 - Worktree location `.worktrees/feat-<name>/`
 
 **Artifact Locations:**
 
 ```text
-knowledge-base/specs/<feature-name>/
+knowledge-base/project/specs/<feature-name>/
   spec.md          # Requirements (FR/TR)
   tasks.md         # Implementation tasks
   brainstorm.md    # Optional: captured from brainstorm session
@@ -166,7 +166,7 @@ Session learnings (detailed, time-decaying)
     Constitution (concise, permanent)
 ```
 
-- **Session learnings:** Captured in `knowledge-base/learnings/`, decay over ~6 months
+- **Session learnings:** Captured in `knowledge-base/project/learnings/`, decay over ~6 months
 - **Patterns:** Auto-extracted to `knowledge-base/patterns/`
 - **Review memory:** Stored in `knowledge-base/reviews/`
 - **Constitution:** Most important principles promoted to `constitution.md`
@@ -184,7 +184,7 @@ Session learnings (detailed, time-decaying)
 
 **Cleanup Trigger:** During `soleur:compound`
 
-- Check all files in `knowledge-base/learnings/`
+- Check all files in `knowledge-base/project/learnings/`
 - Compare filename date to current date
 - Delete files older than 6 months
 
@@ -531,8 +531,8 @@ Keep git history of spec changes - allows seeing how requirements evolved during
 ## Success Criteria
 
 - [ ] Single `soleur:plan` or `soleur:brainstorm` command can scaffold spec + worktree
-- [ ] Specs in `knowledge-base/specs/` update when implementation diverges
-- [ ] Learnings from work sessions appear in `knowledge-base/learnings/`
+- [ ] Specs in `knowledge-base/project/specs/` update when implementation diverges
+- [ ] Learnings from work sessions appear in `knowledge-base/project/learnings/`
 - [ ] Important learnings promoted to `constitution.md` over time
 - [ ] Constitutional principles influence plan and review agents
 - [ ] Worktrees created with `feat-<name>` convention
@@ -541,7 +541,7 @@ Keep git history of spec changes - allows seeing how requirements evolved during
 
 | Question | Decision |
 |----------|----------|
-| Spec storage location | `knowledge-base/specs/` |
+| Spec storage location | `knowledge-base/project/specs/` |
 | Worktree naming | `feat-<name>` |
 | Agent adapter priority | Claude Code only, strategy pattern for later |
 | Learning persistence | Time-decaying (~6mo), key principles to constitution |

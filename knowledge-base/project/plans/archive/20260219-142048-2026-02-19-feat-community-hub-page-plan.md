@@ -31,8 +31,8 @@ Create a static community hub page on the Soleur docs site that consolidates Git
 
 ## Context
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-19-community-page-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-community-page/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-19-community-page-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-community-page/spec.md`
 - The docs site uses Eleventy with Nunjucks templates. All pages use `base.njk` layout.
 - `CONTRIBUTING.md` and `CODE_OF_CONDUCT.md` both exist in the repo root.
 

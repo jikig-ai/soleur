@@ -286,8 +286,8 @@ description: "This skill should be used when creating and posting community cont
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-12-brand-marketing-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-brand-marketing/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-12-brand-marketing-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-brand-marketing/spec.md`
 - Issue: [#71](https://github.com/jikig-ai/soleur/issues/71)
 - Related: Issue #59 (release-announce), Issue #43 (multi-platform adapters)
 - Pattern references:

@@ -19,7 +19,7 @@ updated: 2026-02-06
 ### 1.2 Implement cleanup logic
 - [x] Skip active worktree (PWD check)
 - [x] Skip worktrees with uncommitted changes (`git status --porcelain`)
-- [x] Archive spec directory with timestamp: `knowledge-base/specs/archive/YYYY-MM-DD-HHMMSS-<name>/`
+- [x] Archive spec directory with timestamp: `knowledge-base/project/specs/archive/YYYY-MM-DD-HHMMSS-<name>/`
 - [x] Sanitize branch names containing `/` for archive paths
 - [x] Remove worktree with `git worktree remove` (no --force)
 - [x] Delete branch with `git branch -d` (safe delete)

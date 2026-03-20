@@ -1,6 +1,6 @@
 ---
 feature: feat/env-constraints
-plan: knowledge-base/plans/2026-03-03-chore-document-environment-constraints-plan.md
+plan: knowledge-base/project/plans/2026-03-03-chore-document-environment-constraints-plan.md
 issue: "#394"
 deepened: 2026-03-03
 ---

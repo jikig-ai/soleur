@@ -156,8 +156,8 @@ Convert source agents into soleur format, trimming prompts to match existing con
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-09-add-engineering-skills-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-add-engineering-skills/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-09-add-engineering-skills-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-add-engineering-skills/spec.md`
 - Source repo: https://github.com/andlaf-ak/claude-code-agents
 - Issue: #27
 - Review feedback: DHH, Kieran, Simplicity reviewers (2026-02-09)

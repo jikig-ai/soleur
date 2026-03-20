@@ -42,4 +42,4 @@ soleur.ai has zero analytics visibility. There is no data on page views, referra
 
 ## Acceptance Criteria
 
-See plan: `knowledge-base/plans/2026-02-21-research-analytics-solutions-plan.md`
+See plan: `knowledge-base/project/plans/2026-02-21-research-analytics-solutions-plan.md`

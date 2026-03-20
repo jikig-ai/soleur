@@ -2,7 +2,7 @@
 
 ## Plan Phase
 
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-scheduled-content-publisher/knowledge-base/plans/2026-03-11-feat-scheduled-content-publisher-workflow-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-scheduled-content-publisher/knowledge-base/project/plans/2026-03-11-feat-scheduled-content-publisher-workflow-plan.md
 - Status: complete
 
 ### Errors

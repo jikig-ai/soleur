@@ -219,10 +219,10 @@ PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || PROJECT_ROOT="."
 - Setup script: `plugins/soleur/scripts/setup-ralph-loop.sh`
 - Welcome hook (reference pattern): `plugins/soleur/hooks/welcome-hook.sh`
 - Existing tests: `plugins/soleur/test/ralph-loop-stuck-detection.test.sh`
-- Learning: `knowledge-base/learnings/2026-03-05-awk-scoping-yaml-frontmatter-shell.md`
-- Learning: `knowledge-base/learnings/2026-03-05-ralph-loop-stuck-detection-shell-counter.md`
-- Learning: `knowledge-base/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md`
-- Learning: `knowledge-base/learnings/2026-02-22-cleanup-merged-path-mismatch.md`
-- Learning: `knowledge-base/learnings/2026-03-04-sessionstart-hook-api-contract.md`
+- Learning: `knowledge-base/project/learnings/2026-03-05-awk-scoping-yaml-frontmatter-shell.md`
+- Learning: `knowledge-base/project/learnings/2026-03-05-ralph-loop-stuck-detection-shell-counter.md`
+- Learning: `knowledge-base/project/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md`
+- Learning: `knowledge-base/project/learnings/2026-02-22-cleanup-merged-path-mismatch.md`
+- Learning: `knowledge-base/project/learnings/2026-03-04-sessionstart-hook-api-contract.md`
 - Prior PR: #456 (scoped frontmatter parser)
 - Prior PR: #454 (stuck detection)

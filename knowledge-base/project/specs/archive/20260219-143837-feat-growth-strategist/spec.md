@@ -2,7 +2,7 @@
 
 **Date:** 2026-02-19
 **Branch:** feat-growth-strategist
-**Brainstorm:** `knowledge-base/brainstorms/2026-02-19-growth-strategist-brainstorm.md`
+**Brainstorm:** `knowledge-base/project/brainstorms/2026-02-19-growth-strategist-brainstorm.md`
 
 ## Problem Statement
 

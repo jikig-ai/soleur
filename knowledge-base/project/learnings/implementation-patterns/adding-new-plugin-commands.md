@@ -80,7 +80,7 @@ Commands are instructions, not code. Test them by following the instructions man
 
 ## Related
 
-- Spec: `knowledge-base/specs/feat-sync-command/spec.md`
-- Plan: `knowledge-base/plans/2026-02-06-feat-sync-command-plan.md`
-- Versioning: `knowledge-base/learnings/plugin-versioning-requirements.md`
+- Spec: `knowledge-base/project/specs/feat-sync-command/spec.md`
+- Plan: `knowledge-base/project/plans/2026-02-06-feat-sync-command-plan.md`
+- Versioning: `knowledge-base/project/learnings/plugin-versioning-requirements.md`
 - Issue: #8

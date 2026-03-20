@@ -90,8 +90,8 @@ This allows tools to detect and migrate older constitution formats automatically
 ### Phase 3: Migration Guidance
 
 Document how existing artifacts can migrate:
-- `docs/solutions/` content → `knowledge-base/learnings/` (with date prefix)
-- `docs/specs/` content → `knowledge-base/specs/`
+- `docs/solutions/` content → `knowledge-base/project/learnings/` (with date prefix)
+- `docs/specs/` content → `knowledge-base/project/specs/`
 - Principles from `AGENTS.md` → `knowledge-base/overview/constitution.md`
 
 **Note:** Actual migration is optional and can be done incrementally.
@@ -106,19 +106,19 @@ import { $ } from "bun";
 import { readdirSync, statSync } from "fs";
 
 async function migrate() {
-  // 1. Migrate docs/solutions/ → knowledge-base/learnings/
+  // 1. Migrate docs/solutions/ → knowledge-base/project/learnings/
   const solutions = readdirSync("docs/solutions").filter(f => f.endsWith(".md"));
   for (const file of solutions) {
     const stat = statSync(`docs/solutions/${file}`);
     const date = stat.mtime.toISOString().slice(0, 10);
     const newName = file.startsWith("20") ? file : `${date}-${file}`;
-    await $`cp docs/solutions/${file} knowledge-base/learnings/${newName}`;
+    await $`cp docs/solutions/${file} knowledge-base/project/learnings/${newName}`;
   }
 
-  // 2. Migrate docs/specs/ → knowledge-base/specs/
+  // 2. Migrate docs/specs/ → knowledge-base/project/specs/
   // (preserve directory structure)
   if (await Bun.file("docs/specs").exists()) {
-    await $`cp -r docs/specs/* knowledge-base/specs/`;
+    await $`cp -r docs/specs/* knowledge-base/project/specs/`;
   }
 
   console.log("Migration complete. Review changes before committing.");
@@ -166,10 +166,10 @@ If knowledge-base/ needs to be removed:
 | File | Purpose |
 |------|---------|
 | `knowledge-base/README.md` | Overview of knowledge-base system |
-| `knowledge-base/specs/README.md` | Spec organization guide |
-| `knowledge-base/specs/.gitkeep` | Track empty directory |
-| `knowledge-base/learnings/README.md` | Learning format and decay policy |
-| `knowledge-base/learnings/.gitkeep` | Track empty directory |
+| `knowledge-base/project/specs/README.md` | Spec organization guide |
+| `knowledge-base/project/specs/.gitkeep` | Track empty directory |
+| `knowledge-base/project/learnings/README.md` | Learning format and decay policy |
+| `knowledge-base/project/learnings/.gitkeep` | Track empty directory |
 | `knowledge-base/patterns/README.md` | Pattern format and lifecycle |
 | `knowledge-base/patterns/.gitkeep` | Track empty directory |
 | `knowledge-base/reviews/README.md` | Review memory format |

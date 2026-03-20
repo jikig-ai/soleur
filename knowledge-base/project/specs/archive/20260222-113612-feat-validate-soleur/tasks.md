@@ -1,7 +1,7 @@
 # Tasks: Align Onboarding with Company-as-a-Service Vision
 
 Issue: #248
-Plan: `knowledge-base/plans/2026-02-22-feat-validate-soleur-vision-alignment-plan.md`
+Plan: `knowledge-base/project/plans/2026-02-22-feat-validate-soleur-vision-alignment-plan.md`
 
 ## Phase 1: Agent Fixes
 

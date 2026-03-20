@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-sync-landing-page-pen/knowledge-base/plans/2026-02-27-refactor-sync-landing-page-pen-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-sync-landing-page-pen/knowledge-base/project/plans/2026-02-27-refactor-sync-landing-page-pen-plan.md
 - Status: complete
 
 ### Errors

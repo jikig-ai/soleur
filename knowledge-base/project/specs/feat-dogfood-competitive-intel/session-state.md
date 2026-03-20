@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-dogfood-competitive-intel/knowledge-base/plans/2026-02-27-feat-dogfood-competitive-intel-schedule-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-dogfood-competitive-intel/knowledge-base/project/plans/2026-02-27-feat-dogfood-competitive-intel-schedule-plan.md
 - Status: complete
 
 ### Errors

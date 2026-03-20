@@ -43,7 +43,7 @@ Before implementing, verify the command loader does NOT recurse into subdirector
 
 In `one-shot.md`, spawn steps 1-2 (plan + deepen-plan) as a combined isolated Task subagent. The subagent produces the plan file on disk and returns a structured session summary. The parent writes this summary to `session-state.md`. Work (step 3) then starts with a fresher context, reading the plan from disk.
 
-**Session-state file:** `knowledge-base/specs/feat-<name>/session-state.md`
+**Session-state file:** `knowledge-base/project/specs/feat-<name>/session-state.md`
 
 - Append-only: each pipeline step appends a section
 - Consumed by compound for error inventory and route-to-definition
@@ -249,9 +249,9 @@ Update compound and compound-docs to read session-state.md.
 ## References & Research
 
 ### Internal References
-- Brainstorm: `knowledge-base/brainstorms/2026-02-22-context-compaction-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-context-compaction/spec.md`
-- Agent token budget learning: `knowledge-base/learnings/performance-issues/2026-02-20-agent-description-token-budget-optimization.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-22-context-compaction-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-context-compaction/spec.md`
+- Agent token budget learning: `knowledge-base/project/learnings/performance-issues/2026-02-20-agent-description-token-budget-optimization.md`
 - Skill reference pattern: `plugins/soleur/skills/skill-creator/references/` (14 files, well-established)
 - Constitution: `knowledge-base/overview/constitution.md` (3,219 words)
 

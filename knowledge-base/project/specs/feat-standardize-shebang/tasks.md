@@ -1,6 +1,6 @@
 # Tasks: standardize shebang to #!/usr/bin/env bash
 
-Source: `knowledge-base/plans/2026-03-03-chore-standardize-shebang-env-bash-plan.md`
+Source: `knowledge-base/project/plans/2026-03-03-chore-standardize-shebang-env-bash-plan.md`
 Issue: #403
 
 ## Phase 1: Shell Convention Fixes

@@ -26,7 +26,7 @@ Current workflow lacks:
 
 ### 1. Spec Artifact Format
 
-Two files per feature in `knowledge-base/specs/<feature-name>/`:
+Two files per feature in `knowledge-base/project/specs/<feature-name>/`:
 
 **spec.md** - Pure markdown with FR/TR split:
 - Context (optional)
@@ -137,7 +137,7 @@ argument-hint: "[feature-name]"
 **Behavior:**
 
 1. **Identify feature:** Use current branch name or argument
-2. **Load spec:** Read `knowledge-base/specs/<feature>/spec.md`
+2. **Load spec:** Read `knowledge-base/project/specs/<feature>/spec.md`
 3. **Analyze implementation:**
    - Scan files changed since spec was created
    - Identify new functions/classes not in spec

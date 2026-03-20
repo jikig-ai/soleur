@@ -116,6 +116,6 @@ Add to `<conditional_agents>` block after test-design-reviewer (agent #13):
 
 - security-sentinel: `plugins/soleur/agents/engineering/review/security-sentinel.md`
 - Review command: `plugins/soleur/commands/soleur/review.md`
-- Inline-only learning: `knowledge-base/learnings/2026-02-16-inline-only-output-for-security-agents.md`
-- Landscape audit: `knowledge-base/learnings/2026-02-19-full-landscape-discovery-audit.md`
+- Inline-only learning: `knowledge-base/project/learnings/2026-02-16-inline-only-output-for-security-agents.md`
+- Landscape audit: `knowledge-base/project/learnings/2026-02-19-full-landscape-discovery-audit.md`
 - Issue: #163

@@ -248,11 +248,11 @@ No Playwright dependency. No browser automation. Works in any terminal.
 - Pattern: `plugins/soleur/skills/community/scripts/x-community.sh` (642 lines, 10-section layout)
 - Setup pattern: `plugins/soleur/skills/community/scripts/x-setup.sh` (327 lines)
 - Router: `plugins/soleur/skills/community/scripts/community-router.sh` (PLATFORMS array)
-- Hardening: `knowledge-base/learnings/2026-03-09-shell-api-wrapper-hardening-patterns.md`
-- Retry pattern: `knowledge-base/learnings/2026-03-09-depth-limited-api-retry-pattern.md`
-- Token security: `knowledge-base/learnings/2026-02-18-token-env-var-not-cli-arg.md`
-- Brainstorm: `knowledge-base/brainstorms/2026-03-13-linkedin-api-scripts-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-linkedin-api-scripts/spec.md`
+- Hardening: `knowledge-base/project/learnings/2026-03-09-shell-api-wrapper-hardening-patterns.md`
+- Retry pattern: `knowledge-base/project/learnings/2026-03-09-depth-limited-api-retry-pattern.md`
+- Token security: `knowledge-base/project/learnings/2026-02-18-token-env-var-not-cli-arg.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-13-linkedin-api-scripts-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-linkedin-api-scripts/spec.md`
 
 ### External References
 - LinkedIn Posts API: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api

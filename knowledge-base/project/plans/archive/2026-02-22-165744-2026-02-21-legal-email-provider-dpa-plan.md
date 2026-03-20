@@ -55,7 +55,7 @@ dig TXT jikigai.com +short  # Check SPF for provider confirmation
 
 **Task 2.1: Update Article 30 register Treatment N.3**
 
-File: `knowledge-base/specs/archive/20260221-044654-feat-cnil-article-30/article-30-register-template.md`
+File: `knowledge-base/project/specs/archive/20260221-044654-feat-cnil-article-30/article-30-register-template.md`
 
 Replace placeholder values and fill `[DATE]` placeholders with `2026-02-21`:
 
@@ -71,7 +71,7 @@ In Section 11.2 (breach notification scenario) of both `docs/legal/gdpr-policy.m
 
 **Task 2.3: Mark audit recommendation as resolved**
 
-File: `knowledge-base/specs/archive/20260221-044654-feat-cnil-article-30/audit-report.md`
+File: `knowledge-base/project/specs/archive/20260221-044654-feat-cnil-article-30/audit-report.md`
 
 Update Recommendation 3 ("Clarify email provider") status to resolved with a reference to this PR.
 
@@ -106,4 +106,4 @@ PATCH bump (documentation update to existing legal files under `plugins/soleur/`
 - PR #200: GDPR Article 30 compliance fixes (v2.23.4)
 - Proton DPA: https://proton.me/legal/dpa
 - EU adequacy decision for Switzerland: Commission Decision 2000/518/EC
-- Article 30 register template: `knowledge-base/specs/archive/20260221-044654-feat-cnil-article-30/article-30-register-template.md`
+- Article 30 register template: `knowledge-base/project/specs/archive/20260221-044654-feat-cnil-article-30/article-30-register-template.md`

@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-no-post-guards/knowledge-base/plans/2026-03-15-feat-no-post-guards-x-bsky-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-no-post-guards/knowledge-base/project/plans/2026-03-15-feat-no-post-guards-x-bsky-plan.md
 - Status: complete
 
 ### Errors

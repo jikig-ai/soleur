@@ -359,7 +359,7 @@ The current TTL code uses `date -d "$STARTED_AT"` which is GNU date syntax. macO
 - `plugins/soleur/scripts/setup-ralph-loop.sh` -- loop setup script
 - `plugins/soleur/test/ralph-loop-stuck-detection.test.sh` -- test suite
 - `plugins/soleur/skills/one-shot/SKILL.md` -- one-shot skill (cancel instruction)
-- `knowledge-base/learnings/2026-03-13-bare-repo-git-rev-parse-failure.md` -- bare repo root resolution
-- `knowledge-base/learnings/2026-03-13-shell-script-defensive-patterns.md` -- defensive bash patterns (trap, validation)
-- `knowledge-base/learnings/2026-03-13-bash-arithmetic-and-test-sourcing-patterns.md` -- test sourcing, `BASH_SOURCE` guard
-- `knowledge-base/learnings/2026-03-14-bare-repo-helper-extraction-patterns.md` -- path arithmetic, sourceable helper design
+- `knowledge-base/project/learnings/2026-03-13-bare-repo-git-rev-parse-failure.md` -- bare repo root resolution
+- `knowledge-base/project/learnings/2026-03-13-shell-script-defensive-patterns.md` -- defensive bash patterns (trap, validation)
+- `knowledge-base/project/learnings/2026-03-13-bash-arithmetic-and-test-sourcing-patterns.md` -- test sourcing, `BASH_SOURCE` guard
+- `knowledge-base/project/learnings/2026-03-14-bare-repo-helper-extraction-patterns.md` -- path arithmetic, sourceable helper design

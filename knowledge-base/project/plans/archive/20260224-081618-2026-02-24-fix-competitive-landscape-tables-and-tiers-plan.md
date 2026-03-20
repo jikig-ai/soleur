@@ -139,8 +139,8 @@ After adding the new tier, update the "Structural advantages" and "Assessment" s
 
 - **File to modify:** `knowledge-base/overview/business-validation.md` (lines 44-86, expanding to approximately lines 44-120 after additions)
 - **Brand guide positioning:** "The Company-as-a-Service Platform" -- the competitive landscape must benchmark against this category
-- **Existing learning:** `knowledge-base/learnings/2026-02-19-full-landscape-discovery-audit.md` confirms that Soleur's differentiation is lifecycle integration and domain-specific tooling, not individual features. This aligns with the new tier's analysis: CaaS competitors each cover 1-3 domains, but none integrate 8 domains with a compounding knowledge base.
-- **Business validation agent pattern:** `knowledge-base/learnings/2026-02-22-business-validation-agent-pattern.md` documents the heading contract (`##` headings) used by the business-validator agent. Preserve all existing `##` headings to maintain parsing compatibility.
+- **Existing learning:** `knowledge-base/project/learnings/2026-02-19-full-landscape-discovery-audit.md` confirms that Soleur's differentiation is lifecycle integration and domain-specific tooling, not individual features. This aligns with the new tier's analysis: CaaS competitors each cover 1-3 domains, but none integrate 8 domains with a compounding knowledge base.
+- **Business validation agent pattern:** `knowledge-base/project/learnings/2026-02-22-business-validation-agent-pattern.md` documents the heading contract (`##` headings) used by the business-validator agent. Preserve all existing `##` headings to maintain parsing compatibility.
 
 ### Research sources
 
@@ -183,5 +183,5 @@ After adding the new tier, update the "Structural advantages" and "Assessment" s
 
 - `knowledge-base/overview/business-validation.md` -- the file to modify
 - `knowledge-base/overview/brand-guide.md` -- CaaS positioning reference ("The Company-as-a-Service Platform")
-- `knowledge-base/learnings/2026-02-19-full-landscape-discovery-audit.md` -- validates lifecycle integration as the moat
-- `knowledge-base/learnings/2026-02-22-business-validation-agent-pattern.md` -- heading contract to preserve
+- `knowledge-base/project/learnings/2026-02-19-full-landscape-discovery-audit.md` -- validates lifecycle integration as the moat
+- `knowledge-base/project/learnings/2026-02-22-business-validation-agent-pattern.md` -- heading contract to preserve

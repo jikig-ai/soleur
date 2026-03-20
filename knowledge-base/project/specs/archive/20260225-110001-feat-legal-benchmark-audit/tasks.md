@@ -1,6 +1,6 @@
 # Tasks: Legal Benchmark Audit Mode
 
-Plan: `knowledge-base/plans/2026-02-25-feat-legal-benchmark-audit-plan.md`
+Plan: `knowledge-base/project/plans/2026-02-25-feat-legal-benchmark-audit-plan.md`
 Issue: #303
 
 ## Phase 1: Agent Extension

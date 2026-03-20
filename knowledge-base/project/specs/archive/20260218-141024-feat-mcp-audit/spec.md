@@ -64,7 +64,7 @@ MCP integration for Cloudflare DNS management is **not viable** with current too
 - Even if it did, the OAuth requirement blocks auto-bundling
 - Building a custom MCP server requires hosting for marginal benefit over curl
 
-The infra-security agent's curl-based approach works when the agent follows the correct sequence. The autonomy gap from PR #108 is addressed by the learning document at `knowledge-base/learnings/integration-issues/2026-02-16-github-pages-cloudflare-wiring-workflow.md`.
+The infra-security agent's curl-based approach works when the agent follows the correct sequence. The autonomy gap from PR #108 is addressed by the learning document at `knowledge-base/project/learnings/integration-issues/2026-02-16-github-pages-cloudflare-wiring-workflow.md`.
 
 ### Future Triggers to Revisit
 

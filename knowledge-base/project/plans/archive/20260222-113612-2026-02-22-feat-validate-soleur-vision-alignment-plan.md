@@ -223,7 +223,7 @@ Files to update:
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-22-validate-soleur-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-validate-soleur/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-22-validate-soleur-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-validate-soleur/spec.md`
 - Issue: #248
 - Brand guide heading contract: `## Identity`, `## Voice`, `## Visual Direction`, `## Channel Notes`

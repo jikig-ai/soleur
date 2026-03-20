@@ -1,6 +1,6 @@
 # Tasks: Functional Overlap Detection
 
-**Plan:** `knowledge-base/plans/2026-02-19-feat-functional-overlap-detection-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-19-feat-functional-overlap-detection-plan.md`
 **Issue:** #155
 **Branch:** feat-functional-overlap-check
 

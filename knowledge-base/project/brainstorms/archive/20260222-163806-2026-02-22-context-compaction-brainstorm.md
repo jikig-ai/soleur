@@ -34,11 +34,11 @@ We explicitly chose NOT to compact between plan/work/compound because compound n
 
 - When one-shot (or any pipeline) runs plan after brainstorm, spawn plan as an isolated Task agent with spec/brainstorm paths as input
 - Plan subagent returns a structured summary: errors encountered, key decisions, components invoked
-- Parent writes this to `knowledge-base/specs/feat-<name>/session-state.md`
+- Parent writes this to `knowledge-base/project/specs/feat-<name>/session-state.md`
 
 ### 3. Session-state file design
 
-- **Location**: `knowledge-base/specs/feat-<name>/session-state.md` -- alongside spec.md and tasks.md
+- **Location**: `knowledge-base/project/specs/feat-<name>/session-state.md` -- alongside spec.md and tasks.md
 - **Mode**: Append-only (cumulative). Each pipeline step appends its section.
 - **Consumers**: Compound reads this file in addition to scanning conversation history
 - **Lifecycle**: Committed with feature artifacts. Cleaned up when worktree is removed.

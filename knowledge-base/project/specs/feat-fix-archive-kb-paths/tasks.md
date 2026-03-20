@@ -2,7 +2,7 @@
 title: "fix: archive-kb.sh searches stale knowledge-base/project/ paths"
 branch: feat/fix-archive-kb-paths
 issue: "#600"
-plan: knowledge-base/plans/2026-03-13-fix-archive-kb-stale-paths-plan.md
+plan: knowledge-base/project/plans/2026-03-13-fix-archive-kb-stale-paths-plan.md
 ---
 
 # Tasks: fix archive-kb.sh stale paths
@@ -10,19 +10,19 @@ plan: knowledge-base/plans/2026-03-13-fix-archive-kb-stale-paths-plan.md
 ## Phase 1: Core Fix -- archive-kb.sh
 
 - [x] 1.1 Update `discover_artifacts()` in `plugins/soleur/skills/archive-kb/scripts/archive-kb.sh`
-  - [x] 1.1.1 Add current brainstorm path: `knowledge-base/brainstorms/`
-  - [x] 1.1.2 Add current plans path: `knowledge-base/plans/`
-  - [x] 1.1.3 Add current specs path: `knowledge-base/specs/`
+  - [x] 1.1.1 Add current brainstorm path: `knowledge-base/project/brainstorms/`
+  - [x] 1.1.2 Add current plans path: `knowledge-base/project/plans/`
+  - [x] 1.1.3 Add current specs path: `knowledge-base/project/specs/`
   - [x] 1.1.4 Add alternate specs path: `knowledge-base/features/specs/`
   - [x] 1.1.5 Keep legacy paths: `knowledge-base/project/{brainstorms,plans,specs}/`
 
 ## Phase 2: Core Fix -- worktree-manager.sh
 
 - [x] 2.1 Update `create_for_feature()` in `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`
-  - [x] 2.1.1 Change spec_dir from `knowledge-base/project/specs/` to `knowledge-base/specs/` (line 152)
+  - [x] 2.1.1 Change spec_dir from `knowledge-base/project/specs/` to `knowledge-base/project/specs/` (line 152)
   - [x] 2.1.2 Update display message to show current path (line 194)
 - [x] 2.2 Update `cleanup_merged_worktrees()` spec archival (lines 426-427)
-  - [x] 2.2.1 Search all three spec locations: `knowledge-base/specs/`, `knowledge-base/features/specs/`, `knowledge-base/project/specs/`
+  - [x] 2.2.1 Search all three spec locations: `knowledge-base/project/specs/`, `knowledge-base/features/specs/`, `knowledge-base/project/specs/`
 - [x] 2.3 Update `cleanup_merged_worktrees()` brainstorm/plan archival (lines 465-466)
   - [x] 2.3.1 Add current brainstorm path: `knowledge-base/brainstorms`
   - [x] 2.3.2 Add current plans path: `knowledge-base/plans`

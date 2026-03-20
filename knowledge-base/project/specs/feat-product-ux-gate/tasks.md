@@ -1,6 +1,6 @@
 # Tasks: Product/UX Gate for Engineering Workflows
 
-**Plan:** `knowledge-base/plans/2026-03-19-feat-product-ux-gate-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-03-19-feat-product-ux-gate-plan.md`
 **Issue:** #671
 **Branch:** feat-product-ux-gate
 

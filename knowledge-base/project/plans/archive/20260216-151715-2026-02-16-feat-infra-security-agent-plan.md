@@ -60,8 +60,8 @@ Single agent matching the terraform-architect prompt structure (~100 lines) with
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-16-infra-security-agent-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-infra-security/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-16-infra-security-agent-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-infra-security/spec.md`
 - Sibling agent (structural reference): `plugins/soleur/agents/engineering/infra/terraform-architect.md`
 - Issue: #100
 - Cloudflare API v4: `https://api.cloudflare.com/client/v4/`

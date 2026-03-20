@@ -1,6 +1,6 @@
 # Tasks: Brainstorm Brand Routing
 
-**Plan:** `knowledge-base/plans/2026-02-13-feat-brainstorm-brand-routing-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-13-feat-brainstorm-brand-routing-plan.md`
 **Issue:** #76
 
 ## Phase 1: Core Implementation

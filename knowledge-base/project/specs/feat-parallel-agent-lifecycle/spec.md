@@ -35,7 +35,7 @@ The current feature lifecycle in the `one-shot` skill runs sequentially: plan, w
 ## Technical Requirements
 
 - **TR1:** New reference file `work-lifecycle-parallel.md` in `skills/work/references/` documenting the Tier 0 protocol (consistent with `work-agent-teams.md` and `work-subagent-fanout.md`).
-- **TR2:** Interface contract document written to `knowledge-base/specs/feat-<name>/interface-contract.md` for both agents to read.
+- **TR2:** Interface contract document written to `knowledge-base/project/specs/feat-<name>/interface-contract.md` for both agents to read.
 - **TR3:** Bounded fan-out -- two agents for Tier 0, within the existing max-5 subagent limit.
 - **TR4:** All agents share the same worktree. No multi-worktree or multi-branch coordination.
 - **TR5:** Agents must run `pwd` verification before every file write (worktree discipline).

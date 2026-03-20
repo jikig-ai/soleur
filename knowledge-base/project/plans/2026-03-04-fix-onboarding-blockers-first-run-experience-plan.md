@@ -166,7 +166,7 @@ The key change: "generate" intent signals are distinguished from "build" by chec
 - **Full PostInstall hook implementation** -- that requires upstream changes to Claude Code plugin spec (tracked in anthropics/claude-code#9394). The SessionStart hook is a pragmatic workaround.
 - **Rewriting brainstorm's domain detection** -- the existing Phase 0.5 detection works well. The fix is in `go.md` routing, not in brainstorm internals.
 - **Adding new skills for non-engineering domains** -- the existing domain leader agents (CLO, CMO, etc.) and brainstorm routing handle domain-specific work. No new skills needed.
-- **Redesigning the `/soleur:go` command architecture** -- per the learning in `knowledge-base/learnings/2026-02-22-simplify-workflow-command-routing.md`, the 3-intent model was deliberately reduced from 7. Adding one more intent (generate) is a minimal extension, not a redesign.
+- **Redesigning the `/soleur:go` command architecture** -- per the learning in `knowledge-base/project/learnings/2026-02-22-simplify-workflow-command-routing.md`, the 3-intent model was deliberately reduced from 7. Adding one more intent (generate) is a minimal extension, not a redesign.
 - **Adding "generate" intent support inside brainstorm itself** -- brainstorm's Phase 0.5 domain detection already handles all domain routing via its table-driven config. No changes to brainstorm needed.
 
 ## MVP
@@ -373,11 +373,11 @@ Add after the `.claude/settings.local.json` line:
 - Parent issue: #430
 - Claude Code hooks reference: https://code.claude.com/docs/en/hooks
 - PostInstall hook feature request: https://github.com/anthropics/claude-code/issues/9394
-- Learning: `knowledge-base/learnings/2026-02-22-simplify-workflow-command-routing.md` (go command routing design decisions)
-- Learning: `knowledge-base/learnings/2026-02-22-simplify-workflow-thin-router-over-migration.md` (thin router philosophy)
-- Learning: `knowledge-base/learnings/2026-02-13-brainstorm-domain-routing-pattern.md` (route through existing commands)
-- Learning: `knowledge-base/learnings/2026-02-22-domain-prerequisites-refactor-table-driven-routing.md` (table-driven domain config)
-- Learning: `knowledge-base/learnings/docs-site/2026-02-19-adding-docs-pages-pattern.md` (docs site conventions)
+- Learning: `knowledge-base/project/learnings/2026-02-22-simplify-workflow-command-routing.md` (go command routing design decisions)
+- Learning: `knowledge-base/project/learnings/2026-02-22-simplify-workflow-thin-router-over-migration.md` (thin router philosophy)
+- Learning: `knowledge-base/project/learnings/2026-02-13-brainstorm-domain-routing-pattern.md` (route through existing commands)
+- Learning: `knowledge-base/project/learnings/2026-02-22-domain-prerequisites-refactor-table-driven-routing.md` (table-driven domain config)
+- Learning: `knowledge-base/project/learnings/docs-site/2026-02-19-adding-docs-pages-pattern.md` (docs site conventions)
 - Current go.md: `plugins/soleur/commands/go.md`
 - Current hooks.json: `plugins/soleur/hooks/hooks.json`
 - Current getting-started.md: `plugins/soleur/docs/pages/getting-started.md`

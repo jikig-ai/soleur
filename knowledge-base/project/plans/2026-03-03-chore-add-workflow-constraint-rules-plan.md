@@ -176,17 +176,17 @@ Add to `## Architecture > ### Never`:
 
 ### Relevant Learnings
 
-- `knowledge-base/learnings/2026-02-10-parallel-feature-version-conflicts-and-flag-lifecycle.md` -- Documents version conflict friction from parallel PRs
-- `knowledge-base/learnings/2026-02-26-worktree-enforcement-pretooluse-hook.md` -- Documents the 4-guard progression
-- `knowledge-base/learnings/2026-02-24-guardrails-chained-commit-bypass.md` -- Guard 1 bypass and fix
-- `knowledge-base/learnings/2026-02-24-guardrails-grep-false-positive-worktree-text.md` -- Guard 2 false positive and fix
-- `knowledge-base/learnings/2026-02-25-lean-agents-md-gotchas-only.md` -- Lean AGENTS.md principle (keep under 40 lines)
-- `knowledge-base/learnings/2026-02-12-review-compound-before-commit-workflow.md` -- Compound before commit gate
-- `knowledge-base/learnings/2026-02-24-bsl-license-migration-pattern.md` -- 3 Edit rejections from compaction-erased reads
-- `knowledge-base/learnings/2026-02-22-context-compaction-command-optimization.md` -- Compaction frequency reduction strategy
-- `knowledge-base/learnings/2026-02-24-pull-latest-main-after-cleanup-merged.md` -- cleanup-merged already pulls latest main
-- `knowledge-base/learnings/2026-02-17-worktree-not-enforced-for-new-work.md` -- Dead rule pattern (rule exists but never triggers)
-- `knowledge-base/learnings/2026-02-22-worktree-loss-stash-merge-pop.md` -- Catastrophic stash loss in worktrees
+- `knowledge-base/project/learnings/2026-02-10-parallel-feature-version-conflicts-and-flag-lifecycle.md` -- Documents version conflict friction from parallel PRs
+- `knowledge-base/project/learnings/2026-02-26-worktree-enforcement-pretooluse-hook.md` -- Documents the 4-guard progression
+- `knowledge-base/project/learnings/2026-02-24-guardrails-chained-commit-bypass.md` -- Guard 1 bypass and fix
+- `knowledge-base/project/learnings/2026-02-24-guardrails-grep-false-positive-worktree-text.md` -- Guard 2 false positive and fix
+- `knowledge-base/project/learnings/2026-02-25-lean-agents-md-gotchas-only.md` -- Lean AGENTS.md principle (keep under 40 lines)
+- `knowledge-base/project/learnings/2026-02-12-review-compound-before-commit-workflow.md` -- Compound before commit gate
+- `knowledge-base/project/learnings/2026-02-24-bsl-license-migration-pattern.md` -- 3 Edit rejections from compaction-erased reads
+- `knowledge-base/project/learnings/2026-02-22-context-compaction-command-optimization.md` -- Compaction frequency reduction strategy
+- `knowledge-base/project/learnings/2026-02-24-pull-latest-main-after-cleanup-merged.md` -- cleanup-merged already pulls latest main
+- `knowledge-base/project/learnings/2026-02-17-worktree-not-enforced-for-new-work.md` -- Dead rule pattern (rule exists but never triggers)
+- `knowledge-base/project/learnings/2026-02-22-worktree-loss-stash-merge-pop.md` -- Catastrophic stash loss in worktrees
 
 ### Related Issues
 

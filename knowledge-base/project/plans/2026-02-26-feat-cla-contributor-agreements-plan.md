@@ -166,12 +166,12 @@ Note: Only the 3 substantively affected legal docs get CLA cross-references. No 
 ## References & Research
 
 ### Internal References
-- Brainstorm: `knowledge-base/brainstorms/2026-02-26-cla-contributor-agreements-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-cla-contributor-agreements/spec.md`
-- BSL migration learning: `knowledge-base/learnings/2026-02-24-bsl-license-migration-pattern.md`
-- Cross-doc consistency learning: `knowledge-base/learnings/2026-02-20-dogfood-legal-agents-cross-document-consistency.md`
-- GH Actions security learning: `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
-- Private doc generation: `knowledge-base/learnings/2026-02-21-private-document-generation-pattern.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-26-cla-contributor-agreements-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-cla-contributor-agreements/spec.md`
+- BSL migration learning: `knowledge-base/project/learnings/2026-02-24-bsl-license-migration-pattern.md`
+- Cross-doc consistency learning: `knowledge-base/project/learnings/2026-02-20-dogfood-legal-agents-cross-document-consistency.md`
+- GH Actions security learning: `knowledge-base/project/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
+- Private doc generation: `knowledge-base/project/learnings/2026-02-21-private-document-generation-pattern.md`
 
 ### External References
 - Apache ICLA template: https://www.apache.org/licenses/icla.pdf

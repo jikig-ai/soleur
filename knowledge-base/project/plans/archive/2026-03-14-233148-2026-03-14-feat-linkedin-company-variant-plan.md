@@ -11,8 +11,8 @@ semver: minor
 
 **Issue:** #593
 **Branch:** feat-linkedin-company-variant
-**Brainstorm:** `knowledge-base/brainstorms/2026-03-14-linkedin-company-variant-brainstorm.md`
-**Spec:** `knowledge-base/specs/feat-linkedin-company-variant/spec.md`
+**Brainstorm:** `knowledge-base/project/brainstorms/2026-03-14-linkedin-company-variant-brainstorm.md`
+**Spec:** `knowledge-base/project/specs/feat-linkedin-company-variant/spec.md`
 
 ## Summary
 

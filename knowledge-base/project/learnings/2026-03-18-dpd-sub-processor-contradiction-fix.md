@@ -22,7 +22,7 @@ GDPR terminology precision matters: Buttondown is a **processor** (not sub-proce
 
 ## Session Errors
 
-1. Merge conflict when merging origin/main — `knowledge-base/plans/` was renamed to `knowledge-base/project/plans/` on main, causing a file location conflict for the plan file created in a prior session. Resolved by staging at the new path.
+1. Merge conflict when merging origin/main — `knowledge-base/project/plans/` was renamed to `knowledge-base/project/plans/` on main, causing a file location conflict for the plan file created in a prior session. Resolved by staging at the new path.
 2. Eleventy docs build failure — pre-existing issue where `agents.js` resolves paths relative to docs dir. Unrelated to this change.
 
 ## Tags

@@ -96,8 +96,8 @@ The following were explored during brainstorming and deferred:
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-03-03-self-healing-workflow-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-self-healing-workflow/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-03-self-healing-workflow-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-self-healing-workflow/spec.md`
 - Compound skill: `plugins/soleur/skills/compound/SKILL.md`
 - Compound-capture schema: `plugins/soleur/skills/compound-capture/schema.yaml`
 - Hook examples: `.claude/hooks/guardrails.sh`, `.claude/hooks/worktree-write-guard.sh`

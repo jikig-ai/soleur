@@ -7,8 +7,8 @@ date: 2026-02-25
 # feat: Legal Benchmark Audit Mode
 
 Related: #303 | Branch: `feat-legal-benchmark-audit`
-Brainstorm: `knowledge-base/brainstorms/2026-02-25-legal-benchmark-audit-brainstorm.md`
-Spec: `knowledge-base/specs/feat-legal-benchmark-audit/spec.md`
+Brainstorm: `knowledge-base/project/brainstorms/2026-02-25-legal-benchmark-audit-brainstorm.md`
+Spec: `knowledge-base/project/specs/feat-legal-benchmark-audit/spec.md`
 
 ## Overview
 
@@ -174,9 +174,9 @@ Update the delegation table:
 - `plugins/soleur/agents/legal/legal-compliance-auditor.md` — agent being extended
 - `plugins/soleur/skills/legal-audit/SKILL.md` — skill being extended
 - `plugins/soleur/agents/legal/clo.md` — delegation table update
-- `knowledge-base/learnings/2026-02-20-dogfood-legal-agents-cross-document-consistency.md` — audit cycle patterns
-- `knowledge-base/learnings/2026-02-24-bsl-license-migration-pattern.md` — WebFetch limitations
-- `knowledge-base/learnings/agent-prompt-sharp-edges-only.md` — agent instruction design
+- `knowledge-base/project/learnings/2026-02-20-dogfood-legal-agents-cross-document-consistency.md` — audit cycle patterns
+- `knowledge-base/project/learnings/2026-02-24-bsl-license-migration-pattern.md` — WebFetch limitations
+- `knowledge-base/project/learnings/agent-prompt-sharp-edges-only.md` — agent instruction design
 
 ### External
 - GDPR Article 13: Information to be provided where personal data are collected from the data subject

@@ -1,7 +1,7 @@
 # Tasks: Model Selection Policy
 
 **Branch:** feat-model-policy
-**Plan:** `knowledge-base/plans/2026-02-24-docs-model-selection-policy-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-24-docs-model-selection-policy-plan.md`
 
 ## Phase 1: Core Changes
 

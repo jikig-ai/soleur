@@ -144,13 +144,13 @@ Revert the commit. The skill file and all registration changes (skills.js, READM
 
 ### Internal
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-22-test-fix-loop-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-test-fix-loop/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-22-test-fix-loop-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-test-fix-loop/spec.md`
 - Similar skill: `plugins/soleur/skills/atdd-developer/SKILL.md`
 - Work command loop: `plugins/soleur/commands/soleur/work.md:304-319`
 
 ### Learnings Applied
 
-- Skills cannot invoke other skills (`knowledge-base/learnings/implementation-patterns/2026-02-18-skill-cannot-invoke-skill.md`)
-- Token budget matters in iterative loops (`knowledge-base/learnings/performance-issues/2026-02-20-agent-description-token-budget-optimization.md`)
-- Worktree edit discipline (`knowledge-base/learnings/workflow-patterns/2026-02-11-worktree-edit-discipline.md`)
+- Skills cannot invoke other skills (`knowledge-base/project/learnings/implementation-patterns/2026-02-18-skill-cannot-invoke-skill.md`)
+- Token budget matters in iterative loops (`knowledge-base/project/learnings/performance-issues/2026-02-20-agent-description-token-budget-optimization.md`)
+- Worktree edit discipline (`knowledge-base/project/learnings/workflow-patterns/2026-02-11-worktree-edit-discipline.md`)

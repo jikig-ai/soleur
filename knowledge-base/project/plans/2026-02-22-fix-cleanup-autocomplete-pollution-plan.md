@@ -96,7 +96,7 @@ After moving, remove the empty `commands/soleur/references/` directory.
 
 ### Learning Update
 
-Update `knowledge-base/learnings/2026-02-22-context-compaction-command-optimization.md` to note that the references were subsequently moved from `commands/soleur/references/` to skill `references/` directories to prevent autocomplete pollution.
+Update `knowledge-base/project/learnings/2026-02-22-context-compaction-command-optimization.md` to note that the references were subsequently moved from `commands/soleur/references/` to skill `references/` directories to prevent autocomplete pollution.
 
 ## Acceptance Criteria
 

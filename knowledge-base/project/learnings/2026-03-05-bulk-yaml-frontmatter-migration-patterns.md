@@ -15,7 +15,7 @@ tags:
 
 ## Problem
 
-85 of 124 learnings files in `knowledge-base/learnings/` lacked structured YAML frontmatter with the required fields (`title`, `date`, `category`, `tags`). An additional 18 had partial frontmatter missing one or more fields. The corpus had grown organically over months with inconsistent metadata: some files used inline `## Tags` sections with `key: value` pairs, others had no metadata at all, and one file (`agent-prompt-sharp-edges-only.md`) lacked a date prefix in its filename.
+85 of 124 learnings files in `knowledge-base/project/learnings/` lacked structured YAML frontmatter with the required fields (`title`, `date`, `category`, `tags`). An additional 18 had partial frontmatter missing one or more fields. The corpus had grown organically over months with inconsistent metadata: some files used inline `## Tags` sections with `key: value` pairs, others had no metadata at all, and one file (`agent-prompt-sharp-edges-only.md`) lacked a date prefix in its filename.
 
 Without standardized frontmatter, downstream tooling (search, filtering by category/date, validation) could not operate on the learnings corpus reliably.
 

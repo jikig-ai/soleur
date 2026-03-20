@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-fix-archiving/knowledge-base/plans/2026-02-22-fix-archiving-broken-slug-extraction-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-fix-archiving/knowledge-base/project/plans/2026-02-22-fix-archiving-broken-slug-extraction-plan.md
 - Status: complete
 
 ### Errors

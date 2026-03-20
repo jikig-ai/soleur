@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/fix-discord-mention-injection/knowledge-base/plans/2026-03-05-fix-discord-mention-injection-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/fix-discord-mention-injection/knowledge-base/project/plans/2026-03-05-fix-discord-mention-injection-plan.md
 - Status: complete
 
 ### Errors

@@ -1,6 +1,6 @@
 # Tasks: fix Ralph Loop frontmatter scope
 
-Source: `knowledge-base/plans/2026-03-05-fix-ralph-frontmatter-scope-plan.md`
+Source: `knowledge-base/project/plans/2026-03-05-fix-ralph-frontmatter-scope-plan.md`
 Issue: #455
 
 ## Phase 1: Core Fix

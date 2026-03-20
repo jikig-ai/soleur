@@ -81,7 +81,7 @@ if (currentCode.similarity(pattern) > 0.7) {
 2. **Create worktree** (if knowledge-base/ exists):
    - Call: `worktree-manager.sh create-for-feature <name>`
    - Creates `.worktrees/feat-<name>/`
-   - Creates `knowledge-base/specs/feat-<name>/`
+   - Creates `knowledge-base/project/specs/feat-<name>/`
 3. **Announce:** "Created worktree and spec directory for feat-<name>"
 
 ### Phase 1-4: (existing brainstorm phases)
@@ -92,7 +92,7 @@ if (currentCode.similarity(pattern) > 0.7) {
 After brainstorm exploration is complete:
 
 1. **Generate spec.md** using spec-templates skill
-2. **Write to:** `knowledge-base/specs/feat-<name>/spec.md`
+2. **Write to:** `knowledge-base/project/specs/feat-<name>/spec.md`
 3. **Optionally save brainstorm.md** to same directory
 4. **Announce:** "Spec created. Ready to plan? Run soleur:plan"
 
@@ -118,7 +118,7 @@ If `knowledge-base/` doesn't exist:
 1. **Detect feature:** Check current branch for `feat-<name>` pattern
 2. **Load constitution:** Read `knowledge-base/overview/constitution.md`
    - Use principles to guide planning decisions
-3. **Load spec:** Read `knowledge-base/specs/feat-<name>/spec.md`
+3. **Load spec:** Read `knowledge-base/project/specs/feat-<name>/spec.md`
    - Use requirements as planning input
 4. **Load relevant reviews:** Search `knowledge-base/reviews/` for related topics
    - Surface past feedback that might apply
@@ -136,7 +136,7 @@ When planning, consider:
 ### Phase 3: Create Tasks (NEW)
 
 1. **Generate tasks.md** using spec-templates skill
-2. **Write to:** `knowledge-base/specs/feat-<name>/tasks.md`
+2. **Write to:** `knowledge-base/project/specs/feat-<name>/tasks.md`
 3. **Announce:** "Tasks created. Ready to work? Run soleur:work"
 
 ### Entry Point Behavior
@@ -169,7 +169,7 @@ If `knowledge-base/` doesn't exist:
    - If not, offer to switch: "Switch to feature worktree?"
 2. **Load constitution:** Read `knowledge-base/overview/constitution.md`
    - Apply principles during implementation
-3. **Load tasks:** Read `knowledge-base/specs/feat-<name>/tasks.md`
+3. **Load tasks:** Read `knowledge-base/project/specs/feat-<name>/tasks.md`
    - Use as work checklist
 4. **Load patterns:** Search `knowledge-base/patterns/` for relevant patterns
    - Suggest applicable patterns
@@ -215,14 +215,14 @@ If `knowledge-base/` doesn't exist:
 
 ### Phase 1: Spec Sync (NEW)
 
-1. **Check spec exists:** `knowledge-base/specs/feat-<name>/spec.md`
+1. **Check spec exists:** `knowledge-base/project/specs/feat-<name>/spec.md`
 2. **Detect divergence:** Compare spec to implementation
 3. **Auto-update spec:** Add new requirements, update changed ones
 4. **Commit:** "sync: spec updated to match implementation"
 
 ### Phase 2: Learning Capture (existing, enhanced)
 
-1. **Capture session learning** to `knowledge-base/learnings/YYYY-MM-DD-topic.md`
+1. **Capture session learning** to `knowledge-base/project/learnings/YYYY-MM-DD-topic.md`
 2. **Capture review feedback** (if any) to `knowledge-base/reviews/`
 3. **Check for patterns** across sessions
 
@@ -293,7 +293,7 @@ If `knowledge-base/` doesn't exist:
 
 ### soleur:compound
 - [ ] Syncs spec with implementation
-- [ ] Captures learning to knowledge-base/learnings/
+- [ ] Captures learning to knowledge-base/project/learnings/
 - [ ] Captures review feedback if applicable
 - [ ] Checks for patterns
 - [ ] Suggests constitution promotions

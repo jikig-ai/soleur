@@ -138,7 +138,7 @@ Add these capabilities:
 ```markdown
 ## Learning Capture
 
-Save learnings to `knowledge-base/learnings/YYYY-MM-DD-topic.md`:
+Save learnings to `knowledge-base/project/learnings/YYYY-MM-DD-topic.md`:
 
 ```markdown
 # Learning: <topic>
@@ -161,7 +161,7 @@ module: <module>
 
 During compound, check for old learnings:
 
-1. List files in `knowledge-base/learnings/`
+1. List files in `knowledge-base/project/learnings/`
 2. Extract date from filename (YYYY-MM-DD prefix)
 3. If date > 6 months ago, delete file
 4. Report: "Cleaned up N old learnings"
@@ -330,7 +330,7 @@ Full compound flow:
 
 1. **Capture Learning**
    - Summarize what was learned in this session
-   - Save to `knowledge-base/learnings/YYYY-MM-DD-topic.md`
+   - Save to `knowledge-base/project/learnings/YYYY-MM-DD-topic.md`
 
 2. **Capture Review Feedback** (if applicable)
    - Extract key review comments

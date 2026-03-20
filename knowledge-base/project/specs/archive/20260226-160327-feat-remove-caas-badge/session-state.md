@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-remove-caas-badge/knowledge-base/plans/2026-02-26-refactor-remove-caas-hero-badge-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-remove-caas-badge/knowledge-base/project/plans/2026-02-26-refactor-remove-caas-hero-badge-plan.md
 - Status: complete
 
 ### Errors

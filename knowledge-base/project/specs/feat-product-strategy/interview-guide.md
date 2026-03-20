@@ -266,7 +266,7 @@ No worries if the timing doesn't work.
 
 ---
 
-**File location:** `knowledge-base/specs/feat-product-strategy/interview-guide.md`
+**File location:** `knowledge-base/project/specs/feat-product-strategy/interview-guide.md`
 **Created:** 2026-03-03
 **Source:** Brainstorm (2026-03-03), Validation Plan (2026-03-03)
 **Gate dependency:** G1 (multi-domain pain), G3 (WTP signal)

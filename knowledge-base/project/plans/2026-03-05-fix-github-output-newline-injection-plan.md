@@ -222,8 +222,8 @@ OUTPUT=$(printf 'labels=%s\n' "$(echo "$PR_JSON" | jq -r '[.labels[].name] | joi
 ### Relevant files
 
 - `.github/workflows/version-bump-and-release.yml` -- the only file to modify
-- `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md` -- existing security patterns
-- `knowledge-base/learnings/2026-03-03-fix-release-notes-pr-extraction.md` -- recent workflow fixes
+- `knowledge-base/project/learnings/2026-02-21-github-actions-workflow-security-patterns.md` -- existing security patterns
+- `knowledge-base/project/learnings/2026-03-03-fix-release-notes-pr-extraction.md` -- recent workflow fixes
 
 ### Institutional learnings applied
 
@@ -264,11 +264,11 @@ Additionally, quote all `$GITHUB_OUTPUT` references throughout the file for cons
 
 - Issue: #425
 - PR #420 (where the vulnerability was found during review)
-- `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md` -- SHA pinning, input validation, exit code checks
-- `knowledge-base/learnings/2026-03-03-fix-release-notes-pr-extraction.md` -- recent workflow fix that consolidated API calls
-- `knowledge-base/learnings/2026-03-03-serialize-version-bumps-to-merge-time.md` -- version bump workflow design rationale
-- `knowledge-base/learnings/2026-02-27-github-actions-sha-pinning-workflow.md` -- action pinning patterns
-- `knowledge-base/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md` -- why not to casually add `set -euo pipefail`
+- `knowledge-base/project/learnings/2026-02-21-github-actions-workflow-security-patterns.md` -- SHA pinning, input validation, exit code checks
+- `knowledge-base/project/learnings/2026-03-03-fix-release-notes-pr-extraction.md` -- recent workflow fix that consolidated API calls
+- `knowledge-base/project/learnings/2026-03-03-serialize-version-bumps-to-merge-time.md` -- version bump workflow design rationale
+- `knowledge-base/project/learnings/2026-02-27-github-actions-sha-pinning-workflow.md` -- action pinning patterns
+- `knowledge-base/project/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md` -- why not to casually add `set -euo pipefail`
 
 ### External
 

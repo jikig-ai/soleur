@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-post-blog-social/knowledge-base/plans/2026-03-10-feat-post-blog-social-distribution-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-post-blog-social/knowledge-base/project/plans/2026-03-10-feat-post-blog-social-distribution-plan.md
 - Status: complete
 
 ### Errors

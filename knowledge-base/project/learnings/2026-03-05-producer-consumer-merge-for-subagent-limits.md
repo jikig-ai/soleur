@@ -13,7 +13,7 @@ Key verification steps:
 4. Updated Success Output example from 6 to 5 check-mark lines
 
 ## Key Insight
-When a parallel subagent's output feeds exclusively to one other subagent, merge the producer into the consumer rather than making it sequential or raising the limit. This preserves parallelism, reduces inter-agent data flow, and avoids weakening resource guardrails. Prior art: 3 documented cases in knowledge-base/learnings/ confirm "merge scope down" consistently outperforms "expand limits up."
+When a parallel subagent's output feeds exclusively to one other subagent, merge the producer into the consumer rather than making it sequential or raising the limit. This preserves parallelism, reduces inter-agent data flow, and avoids weakening resource guardrails. Prior art: 3 documented cases in knowledge-base/project/learnings/ confirm "merge scope down" consistently outperforms "expand limits up."
 
 ## Tags
 category: architecture

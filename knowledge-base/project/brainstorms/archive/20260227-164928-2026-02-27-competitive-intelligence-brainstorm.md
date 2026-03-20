@@ -45,7 +45,7 @@ Competitive analysis fragments already exist across 4+ agents (growth-strategist
 ## Related Artifacts
 
 - **Business validation:** `knowledge-base/overview/business-validation.md` (6-tier competitive landscape)
-- **Platform risk learning:** `knowledge-base/learnings/2026-02-25-platform-risk-cowork-plugins.md`
-- **Marketingskills overlap analysis:** `knowledge-base/learnings/2026-02-20-marketingskills-overlap-analysis.md` (overlap matrix format template)
+- **Platform risk learning:** `knowledge-base/project/learnings/2026-02-25-platform-risk-cowork-plugins.md`
+- **Marketingskills overlap analysis:** `knowledge-base/project/learnings/2026-02-20-marketingskills-overlap-analysis.md` (overlap matrix format template)
 - **Schedule skill:** `plugins/soleur/skills/schedule/SKILL.md` (v3.5.0, cron infrastructure)
-- **Cowork risk brainstorm:** `knowledge-base/brainstorms/archive/20260225-*-cowork-plugins-risk-analysis-brainstorm.md`
+- **Cowork risk brainstorm:** `knowledge-base/project/brainstorms/archive/20260225-*-cowork-plugins-risk-analysis-brainstorm.md`

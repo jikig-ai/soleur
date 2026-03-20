@@ -15,22 +15,22 @@ After the KB restructure sequence (PRs #566, #570, #573, #581, #602, #606), arti
 
 | Directory | File Count | Status |
 |-----------|------------|--------|
-| `knowledge-base/brainstorms/` | 5 + 2 archive | Root-level (should not exist) |
+| `knowledge-base/project/brainstorms/` | 5 + 2 archive | Root-level (should not exist) |
 | `knowledge-base/project/brainstorms/` | 28 + 82 archive | Canonical |
-| `knowledge-base/learnings/` | 18 flat files | Root-level (should not exist) |
+| `knowledge-base/project/learnings/` | 18 flat files | Root-level (should not exist) |
 | `knowledge-base/project/learnings/` | 180+ flat + 12 category subdirs | Canonical |
-| `knowledge-base/plans/` | 17 + 2 archive | Root-level (should not exist) |
+| `knowledge-base/project/plans/` | 17 + 2 archive | Root-level (should not exist) |
 | `knowledge-base/project/plans/` | 84 + 116 archive | Canonical |
-| `knowledge-base/specs/` | 18 dirs + 1 archive | Root-level (should not exist) |
+| `knowledge-base/project/specs/` | 18 dirs + 1 archive | Root-level (should not exist) |
 | `knowledge-base/project/specs/` | 84 dirs + 117 archive + external/ | Canonical |
 | `knowledge-base/features/specs/` | 2 dirs + 1 archive | Ghost from PR #573 |
 
 ### Target State
 
-- `knowledge-base/brainstorms/` — removed (merged into project/)
-- `knowledge-base/learnings/` — removed (merged into project/)
-- `knowledge-base/plans/` — removed (merged into project/)
-- `knowledge-base/specs/` — removed (merged into project/)
+- `knowledge-base/project/brainstorms/` — removed (merged into project/)
+- `knowledge-base/project/learnings/` — removed (merged into project/)
+- `knowledge-base/project/plans/` — removed (merged into project/)
+- `knowledge-base/project/specs/` — removed (merged into project/)
 - `knowledge-base/features/` — removed (merged into project/)
 - All skill, agent, and script references point to `knowledge-base/project/` paths
 
@@ -49,8 +49,8 @@ Two-phase approach: (A) merge files via `git mv`, then (B) update all references
 #### A1: Merge root brainstorms/ → project/brainstorms/
 
 ```text
-knowledge-base/brainstorms/*.md → knowledge-base/project/brainstorms/
-knowledge-base/brainstorms/archive/* → knowledge-base/project/brainstorms/archive/
+knowledge-base/project/brainstorms/*.md → knowledge-base/project/brainstorms/
+knowledge-base/project/brainstorms/archive/* → knowledge-base/project/brainstorms/archive/
 ```
 
 No filename collisions (different date ranges).
@@ -58,7 +58,7 @@ No filename collisions (different date ranges).
 #### A2: Merge root learnings/ → project/learnings/
 
 ```text
-knowledge-base/learnings/*.md → knowledge-base/project/learnings/
+knowledge-base/project/learnings/*.md → knowledge-base/project/learnings/
 ```
 
 Root learnings/ has no subdirectories. Project learnings/ has 12 category subdirs. No collisions.
@@ -66,8 +66,8 @@ Root learnings/ has no subdirectories. Project learnings/ has 12 category subdir
 #### A3: Merge root plans/ → project/plans/
 
 ```text
-knowledge-base/plans/*.md → knowledge-base/project/plans/
-knowledge-base/plans/archive/* → knowledge-base/project/plans/archive/
+knowledge-base/project/plans/*.md → knowledge-base/project/plans/
+knowledge-base/project/plans/archive/* → knowledge-base/project/plans/archive/
 ```
 
 No filename collisions.
@@ -78,10 +78,10 @@ Two directories overlap (`feat-plausible-goals` and `feat-weekly-analytics-impro
 - Root has `session-state.md`, project/ has `tasks.md` — complementary files, merge via individual file moves.
 
 ```text
-knowledge-base/specs/feat-*/ → knowledge-base/project/specs/ (non-overlapping: direct move)
-knowledge-base/specs/feat-plausible-goals/session-state.md → knowledge-base/project/specs/feat-plausible-goals/
-knowledge-base/specs/feat-weekly-analytics-improvements/session-state.md → knowledge-base/project/specs/feat-weekly-analytics-improvements/
-knowledge-base/specs/archive/* → knowledge-base/project/specs/archive/
+knowledge-base/project/specs/feat-*/ → knowledge-base/project/specs/ (non-overlapping: direct move)
+knowledge-base/project/specs/feat-plausible-goals/session-state.md → knowledge-base/project/specs/feat-plausible-goals/
+knowledge-base/project/specs/feat-weekly-analytics-improvements/session-state.md → knowledge-base/project/specs/feat-weekly-analytics-improvements/
+knowledge-base/project/specs/archive/* → knowledge-base/project/specs/archive/
 ```
 
 #### A5: Merge features/specs/ → project/specs/
@@ -100,7 +100,7 @@ All files outside `knowledge-base/` that reference root-level artifact paths mus
 
 | File | Changes |
 |------|---------|
-| `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` | Lines 196, 238, 494-495, 519, 521, 779: change `knowledge-base/specs/`, `knowledge-base/brainstorms/`, `knowledge-base/plans/` → `knowledge-base/project/specs/`, etc. Remove `knowledge-base/features/specs/` fallback (line 495). Remove `knowledge-base/project/` fallback entries that searched legacy paths (lines 496, 520, 522) — project/ IS the canonical path now. |
+| `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` | Lines 196, 238, 494-495, 519, 521, 779: change `knowledge-base/project/specs/`, `knowledge-base/project/brainstorms/`, `knowledge-base/project/plans/` → `knowledge-base/project/specs/`, etc. Remove `knowledge-base/features/specs/` fallback (line 495). Remove `knowledge-base/project/` fallback entries that searched legacy paths (lines 496, 520, 522) — project/ IS the canonical path now. |
 | `plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` | Lines 99, 101, 112-113: change `knowledge-base/brainstorms`, `knowledge-base/plans`, `knowledge-base/specs` → `knowledge-base/project/brainstorms`, etc. Remove `knowledge-base/features/specs` fallback (line 113). Remove `knowledge-base/project/` fallback entries (lines 100, 102, 114) — they become the primary paths. |
 
 #### B2: Skill Definitions (agent behavior)
@@ -109,24 +109,24 @@ Every SKILL.md that references root-level artifact paths. Full list:
 
 | File | Patterns to Replace |
 |------|-------------------|
-| `plugins/soleur/skills/plan/SKILL.md` | `knowledge-base/brainstorms/` → `knowledge-base/project/brainstorms/`, `knowledge-base/specs/` → `knowledge-base/project/specs/`, `knowledge-base/plans/` → `knowledge-base/project/plans/`, `knowledge-base/learnings/` → `knowledge-base/project/learnings/` |
+| `plugins/soleur/skills/plan/SKILL.md` | `knowledge-base/project/brainstorms/` → `knowledge-base/project/brainstorms/`, `knowledge-base/project/specs/` → `knowledge-base/project/specs/`, `knowledge-base/project/plans/` → `knowledge-base/project/plans/`, `knowledge-base/project/learnings/` → `knowledge-base/project/learnings/` |
 | `plugins/soleur/skills/brainstorm/SKILL.md` | Same four replacements |
-| `plugins/soleur/skills/brainstorm-techniques/SKILL.md` | `knowledge-base/brainstorms/` → `knowledge-base/project/brainstorms/` |
-| `plugins/soleur/skills/compound/SKILL.md` | `knowledge-base/learnings/`, `knowledge-base/specs/` |
+| `plugins/soleur/skills/brainstorm-techniques/SKILL.md` | `knowledge-base/project/brainstorms/` → `knowledge-base/project/brainstorms/` |
+| `plugins/soleur/skills/compound/SKILL.md` | `knowledge-base/project/learnings/`, `knowledge-base/project/specs/` |
 | `plugins/soleur/skills/compound-capture/SKILL.md` | All four artifact paths |
 | `plugins/soleur/skills/ship/SKILL.md` | All four artifact paths |
-| `plugins/soleur/skills/deepen-plan/SKILL.md` | `knowledge-base/plans/`, `knowledge-base/learnings/` |
-| `plugins/soleur/skills/merge-pr/SKILL.md` | `knowledge-base/brainstorms/`, `knowledge-base/plans/`, `knowledge-base/specs/` |
+| `plugins/soleur/skills/deepen-plan/SKILL.md` | `knowledge-base/project/plans/`, `knowledge-base/project/learnings/` |
+| `plugins/soleur/skills/merge-pr/SKILL.md` | `knowledge-base/project/brainstorms/`, `knowledge-base/project/plans/`, `knowledge-base/project/specs/` |
 | `plugins/soleur/skills/archive-kb/SKILL.md` | All artifact paths + remove features/ refs |
-| `plugins/soleur/skills/one-shot/SKILL.md` | `knowledge-base/specs/` |
-| `plugins/soleur/skills/spec-templates/SKILL.md` | `knowledge-base/specs/` |
-| `plugins/soleur/skills/work/SKILL.md` | `knowledge-base/specs/` |
+| `plugins/soleur/skills/one-shot/SKILL.md` | `knowledge-base/project/specs/` |
+| `plugins/soleur/skills/spec-templates/SKILL.md` | `knowledge-base/project/specs/` |
+| `plugins/soleur/skills/work/SKILL.md` | `knowledge-base/project/specs/` |
 
 #### B3: Agent Definitions
 
 | File | Patterns to Replace |
 |------|-------------------|
-| `plugins/soleur/agents/engineering/research/learnings-researcher.md` | `knowledge-base/learnings/` → `knowledge-base/project/learnings/` |
+| `plugins/soleur/agents/engineering/research/learnings-researcher.md` | `knowledge-base/project/learnings/` → `knowledge-base/project/learnings/` |
 | Any other agents referencing artifact paths (verify with grep) |
 
 #### B4: Other Files
@@ -141,10 +141,10 @@ Every SKILL.md that references root-level artifact paths. Full list:
 
 ### Phase C: Verification
 
-1. `knowledge-base/brainstorms/` does not exist
-2. `knowledge-base/learnings/` does not exist
-3. `knowledge-base/plans/` does not exist
-4. `knowledge-base/specs/` does not exist
+1. `knowledge-base/project/brainstorms/` does not exist
+2. `knowledge-base/project/learnings/` does not exist
+3. `knowledge-base/project/plans/` does not exist
+4. `knowledge-base/project/specs/` does not exist
 5. `knowledge-base/features/` does not exist
 6. `knowledge-base/project/brainstorms/` has all files (33+)
 7. `knowledge-base/project/learnings/` has all files (198+) including 12 category subdirs
@@ -168,12 +168,12 @@ Every SKILL.md that references root-level artifact paths. Full list:
 
 ## Test Scenarios
 
-- Given cleanup is complete, `ls knowledge-base/brainstorms/` fails (dir does not exist)
+- Given cleanup is complete, `ls knowledge-base/project/brainstorms/` fails (dir does not exist)
 - Given cleanup is complete, `ls knowledge-base/project/brainstorms/` lists 33+ files
 - Given cleanup is complete, `ls knowledge-base/project/learnings/bug-fixes/` lists category files
 - Given cleanup is complete, `ls knowledge-base/project/specs/feat-plausible-goals/` shows both `tasks.md` and `session-state.md`
-- Given cleanup is complete, `grep -rn 'knowledge-base/brainstorms/' plugins/` returns no matches
-- Given cleanup is complete, `grep -rn 'knowledge-base/specs/' plugins/` returns no matches (all say project/specs/)
+- Given cleanup is complete, `grep -rn 'knowledge-base/project/brainstorms/' plugins/` returns no matches
+- Given cleanup is complete, `grep -rn 'knowledge-base/project/specs/' plugins/` returns no matches (all say project/specs/)
 - Given cleanup is complete, archive-kb.sh discovers artifacts at `knowledge-base/project/` paths
 
 ## Rollback Plan

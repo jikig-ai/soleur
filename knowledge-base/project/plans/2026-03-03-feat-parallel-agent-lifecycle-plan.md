@@ -67,7 +67,7 @@ No keyword scanning or category detection algorithm. The LLM already reads the p
 
 ### Interface Contract
 
-The coordinator generates a markdown document at `knowledge-base/specs/feat-<name>/interface-contract.md` with two sections:
+The coordinator generates a markdown document at `knowledge-base/project/specs/feat-<name>/interface-contract.md` with two sections:
 
 ```markdown
 ## File Scopes
@@ -237,8 +237,8 @@ Changes:
 - test-fix-loop: `plugins/soleur/skills/test-fix-loop/SKILL.md`
 - One-shot: `plugins/soleur/skills/one-shot/SKILL.md`
 - Ship: `plugins/soleur/skills/ship/SKILL.md`
-- Brainstorm: `knowledge-base/brainstorms/2026-03-03-parallel-agent-lifecycle-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-parallel-agent-lifecycle/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-03-parallel-agent-lifecycle-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-parallel-agent-lifecycle/spec.md`
 
 ### Learnings Applied
 

@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-pre-merge-hooks/knowledge-base/plans/2026-03-03-feat-pre-merge-hooks-auto-rebase-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-pre-merge-hooks/knowledge-base/project/plans/2026-03-03-feat-pre-merge-hooks-auto-rebase-plan.md
 - Status: complete
 
 ### Errors

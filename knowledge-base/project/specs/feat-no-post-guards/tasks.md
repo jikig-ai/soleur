@@ -1,6 +1,6 @@
 # Tasks: feat/no-post-guards
 
-Source plan: `knowledge-base/plans/2026-03-15-feat-no-post-guards-x-bsky-plan.md`
+Source plan: `knowledge-base/project/plans/2026-03-15-feat-no-post-guards-x-bsky-plan.md`
 
 ## Phase 1: Setup
 

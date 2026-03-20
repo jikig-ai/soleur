@@ -209,12 +209,12 @@ The SKILL.md instructs the LLM to:
 - Cron workflow pattern: `.github/workflows/review-reminder.yml`
 - claude-code-action usage: `.github/workflows/claude-code-review.yml`
 - Discord webhook pattern: `.github/workflows/auto-release.yml`
-- Skill creation lifecycle: `knowledge-base/learnings/implementation-patterns/2026-02-22-new-skill-creation-lifecycle.md`
-- GitHub Actions security: `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
-- Workflow cascade limitation: `knowledge-base/learnings/integration-issues/github-actions-auto-release-permissions.md`
-- Merge-pr skill design lessons: `knowledge-base/learnings/2026-02-22-merge-pr-skill-design-lessons.md`
+- Skill creation lifecycle: `knowledge-base/project/learnings/implementation-patterns/2026-02-22-new-skill-creation-lifecycle.md`
+- GitHub Actions security: `knowledge-base/project/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
+- Workflow cascade limitation: `knowledge-base/project/learnings/integration-issues/github-actions-auto-release-permissions.md`
+- Merge-pr skill design lessons: `knowledge-base/project/learnings/2026-02-22-merge-pr-skill-design-lessons.md`
 
 ### Related Work
 - Issue: #312
-- Brainstorm: `knowledge-base/brainstorms/2026-02-26-agent-scheduling-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-agent-scheduling/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-26-agent-scheduling-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-agent-scheduling/spec.md`

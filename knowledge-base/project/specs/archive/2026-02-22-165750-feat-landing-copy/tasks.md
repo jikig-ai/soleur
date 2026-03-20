@@ -1,6 +1,6 @@
 ---
 feature: feat/landing-copy
-plan: knowledge-base/plans/2026-02-20-feat-landing-copy-self-improves-plan.md
+plan: knowledge-base/project/plans/2026-02-20-feat-landing-copy-self-improves-plan.md
 date: 2026-02-20
 ---
 

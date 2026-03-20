@@ -187,8 +187,8 @@ Each has a `<section class="content">` block. Add `<div class="prose">` wrapper 
 
 ## References & Research
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-21-ux-ui-review-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-ux-ui-review/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-21-ux-ui-review-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-ux-ui-review/spec.md`
 - GitHub issue: #201
 - Existing prose pattern: `.community-text { max-width: 65ch }` in `style.css`
 - CSS layers: `@layer reset, tokens, base, layout, components, utilities`

@@ -1,21 +1,21 @@
 # Tasks: Clean Up Stale KB Project References
 
 Issue: #604
-Plan: `knowledge-base/plans/2026-03-13-chore-clean-stale-kb-project-refs-plan.md`
+Plan: `knowledge-base/project/plans/2026-03-13-chore-clean-stale-kb-project-refs-plan.md`
 
 ## Phase 1: High-Priority Files (Executable Code Snippets)
 
 - [ ] 1.1 Update `plugins/soleur/skills/compound-capture/SKILL.md` (25 occurrences)
-  - [ ] 1.1.1 Replace `knowledge-base/project/learnings/` with `knowledge-base/learnings/` in all `find`, `grep -r`, `mkdir -p`, `cat >>`, and descriptive references
-  - [ ] 1.1.2 Replace `knowledge-base/project/brainstorms/` with `knowledge-base/brainstorms/`
-  - [ ] 1.1.3 Replace `knowledge-base/project/plans/` with `knowledge-base/plans/`
-  - [ ] 1.1.4 Replace `knowledge-base/project/specs/` with `knowledge-base/specs/`
+  - [ ] 1.1.1 Replace `knowledge-base/project/learnings/` with `knowledge-base/project/learnings/` in all `find`, `grep -r`, `mkdir -p`, `cat >>`, and descriptive references
+  - [ ] 1.1.2 Replace `knowledge-base/project/brainstorms/` with `knowledge-base/project/brainstorms/`
+  - [ ] 1.1.3 Replace `knowledge-base/project/plans/` with `knowledge-base/project/plans/`
+  - [ ] 1.1.4 Replace `knowledge-base/project/specs/` with `knowledge-base/project/specs/`
   - [ ] 1.1.5 Preserve any references to `knowledge-base/project/constitution.md` and `knowledge-base/project/components/`
 - [ ] 1.2 Update `plugins/soleur/skills/compound/SKILL.md` (16 occurrences)
   - [ ] 1.2.1 Replace all four stale path patterns
   - [ ] 1.2.2 Preserve `knowledge-base/project/constitution.md` references (grep -c command)
 - [ ] 1.3 Update `plugins/soleur/agents/engineering/research/learnings-researcher.md` (29 occurrences)
-  - [ ] 1.3.1 Replace all 13 category directory paths from `knowledge-base/project/learnings/<category>/` to `knowledge-base/learnings/<category>/`
+  - [ ] 1.3.1 Replace all 13 category directory paths from `knowledge-base/project/learnings/<category>/` to `knowledge-base/project/learnings/<category>/`
   - [ ] 1.3.2 Replace remaining learnings references
 - [ ] 1.4 Update `plugins/soleur/commands/sync.md` (5 occurrences)
   - [ ] 1.4.1 Update `mkdir -p` command to create at top-level paths (keep `knowledge-base/project/components`)
@@ -53,7 +53,7 @@ Plan: `knowledge-base/plans/2026-03-13-chore-clean-stale-kb-project-refs-plan.md
   - [ ] 2.14.2 Update `ls knowledge-base/project/specs/feat-*/` command
   - [ ] 2.14.3 Update convention path and directory listing
 - [ ] 2.15 Update `knowledge-base/project/constitution.md` (1 occurrence)
-  - [ ] 2.15.1 Update line 153: convention path `knowledge-base/project/specs/feat-<name>/` to `knowledge-base/specs/feat-<name>/`
+  - [ ] 2.15.1 Update line 153: convention path `knowledge-base/project/specs/feat-<name>/` to `knowledge-base/project/specs/feat-<name>/`
 - [ ] 2.16 Update `knowledge-base/project/README.md` (1 occurrence)
   - [ ] 2.16.1 Update specs path in directory description
 - [ ] 2.17 Update `knowledge-base/project/components/agents.md` (1 occurrence)

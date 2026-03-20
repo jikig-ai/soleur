@@ -10,7 +10,7 @@ date: 2026-03-03
 
 Create a daily automated agent that picks up the oldest open `priority/p3-low` + `type/bug` issue, attempts a single-file fix, runs tests, and opens a PR for human review. The fix logic lives in a skill (`soleur:fix-issue`) that works both in CI and locally.
 
-Ref #376. Brainstorm: `knowledge-base/brainstorms/2026-03-02-supervised-bug-fix-agent-brainstorm.md`
+Ref #376. Brainstorm: `knowledge-base/project/brainstorms/2026-03-02-supervised-bug-fix-agent-brainstorm.md`
 
 ## Problem Statement
 
@@ -112,11 +112,11 @@ No WebSearch/WebFetch (agent works from codebase + issue body only). No Task (no
 - Review reminder (label pre-creation pattern): `.github/workflows/review-reminder.yml`
 - Constitution CI rules: `knowledge-base/overview/constitution.md:84-98`
 - Reproduce-bug skill (investigation pattern): `plugins/soleur/skills/reproduce-bug/SKILL.md`
-- Plugin versioning: `knowledge-base/learnings/plugin-versioning-requirements.md`
-- Token revocation: `knowledge-base/learnings/2026-03-02-claude-code-action-token-revocation-breaks-persist-step.md`
-- Auto-close syntax: `knowledge-base/learnings/2026-02-22-github-issue-auto-close-syntax.md`
-- SHA pinning: `knowledge-base/learnings/2026-02-27-github-actions-sha-pinning-workflow.md`
-- Skill creation lifecycle: `knowledge-base/learnings/implementation-patterns/2026-02-22-new-skill-creation-lifecycle.md`
+- Plugin versioning: `knowledge-base/project/learnings/plugin-versioning-requirements.md`
+- Token revocation: `knowledge-base/project/learnings/2026-03-02-claude-code-action-token-revocation-breaks-persist-step.md`
+- Auto-close syntax: `knowledge-base/project/learnings/2026-02-22-github-issue-auto-close-syntax.md`
+- SHA pinning: `knowledge-base/project/learnings/2026-02-27-github-actions-sha-pinning-workflow.md`
+- Skill creation lifecycle: `knowledge-base/project/learnings/implementation-patterns/2026-02-22-new-skill-creation-lifecycle.md`
 
 ### Related Work
 

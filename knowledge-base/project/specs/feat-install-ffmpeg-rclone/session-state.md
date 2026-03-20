@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-install-ffmpeg-rclone/knowledge-base/plans/2026-02-27-feat-install-ffmpeg-rclone-on-demand-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-install-ffmpeg-rclone/knowledge-base/project/plans/2026-02-27-feat-install-ffmpeg-rclone-on-demand-plan.md
 - Status: complete
 
 ### Errors

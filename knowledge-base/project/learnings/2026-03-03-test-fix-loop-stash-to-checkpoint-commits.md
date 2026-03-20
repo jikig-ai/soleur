@@ -12,7 +12,7 @@ tags: [integration-issues, test-fix-loop]
 The test-fix-loop skill used `git stash push` to save working-tree state before each fix attempt and `git stash pop` / `git stash drop` to restore or discard it on iteration boundaries. This directly conflicts with two project hard rules:
 
 - AGENTS.md: "Never `git stash` in worktrees. Commit WIP first, then merge."
-- constitution.md: stash is prohibited in worktrees due to the catastrophic worktree loss incident documented in `knowledge-base/learnings/2026-02-22-worktree-loss-stash-merge-pop.md`.
+- constitution.md: stash is prohibited in worktrees due to the catastrophic worktree loss incident documented in `knowledge-base/project/learnings/2026-02-22-worktree-loss-stash-merge-pop.md`.
 
 The skill was written before the stash prohibition was established, so the violation was not caught at authoring time. Because the stash operations were embedded in SKILL.md prose (not executable scripts), no hook could block them at runtime -- the agent simply followed the documented instructions.
 

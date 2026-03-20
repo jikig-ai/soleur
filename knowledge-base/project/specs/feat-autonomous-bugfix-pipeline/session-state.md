@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-autonomous-bugfix-pipeline/knowledge-base/plans/2026-03-05-feat-autonomous-bugfix-pipeline-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-autonomous-bugfix-pipeline/knowledge-base/project/plans/2026-03-05-feat-autonomous-bugfix-pipeline-plan.md
 - Status: complete
 
 ### Errors

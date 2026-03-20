@@ -6,9 +6,9 @@ date: 2026-02-22
 
 # Add Support Domain
 
-**Issue:** #266 | **Brainstorm:** `knowledge-base/brainstorms/2026-02-22-support-domain-brainstorm.md`
+**Issue:** #266 | **Brainstorm:** `knowledge-base/project/brainstorms/2026-02-22-support-domain-brainstorm.md`
 
-Add the 7th business domain (Support) to complete the "Company-as-a-Service" roster. Follow the established domain checklist: `knowledge-base/learnings/integration-issues/adding-new-agent-domain-checklist.md`. Template: `agents/legal/clo.md` (canonical per checklist).
+Add the 7th business domain (Support) to complete the "Company-as-a-Service" roster. Follow the established domain checklist: `knowledge-base/project/learnings/integration-issues/adding-new-agent-domain-checklist.md`. Template: `agents/legal/clo.md` (canonical per checklist).
 
 ## Agents
 

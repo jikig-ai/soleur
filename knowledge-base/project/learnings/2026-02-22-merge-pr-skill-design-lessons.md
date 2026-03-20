@@ -82,7 +82,7 @@ When a skill needs behavior from another skill:
 When designing multi-step workflows, draw the invocation hierarchy before writing the
 plan. If an arrow points from one skill to another, it is wrong.
 
-See also: `knowledge-base/learnings/implementation-patterns/2026-02-18-skill-cannot-invoke-skill.md`
+See also: `knowledge-base/project/learnings/implementation-patterns/2026-02-18-skill-cannot-invoke-skill.md`
 
 ### Test scenario
 
@@ -200,7 +200,7 @@ Run `/soleur:plan_review` first. This step consistently reduces scope 30-90% and
 confirmed across at least four features (fuzzy deduplication, runtime agent discovery,
 brand marketing tools, merge-pr).
 
-See also: `knowledge-base/learnings/2026-02-06-parallel-plan-review-catches-overengineering.md`
+See also: `knowledge-base/project/learnings/2026-02-06-parallel-plan-review-catches-overengineering.md`
 
 ### Test scenario
 

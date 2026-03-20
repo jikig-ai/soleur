@@ -23,7 +23,7 @@ The spec-driven workflow foundation (completed Feb 6, 2026) established `knowled
 - **Why:** The 2 current Feb 6 plans (foundation + command integration) represent completed features - they should become feature specs. The 5 archived Feb 5 plans are historical reference only.
 
 ### 2. External Specs Location
-- **Decision:** `knowledge-base/specs/external/` for platform documentation
+- **Decision:** `knowledge-base/project/specs/external/` for platform documentation
 - **Why:** These describe target formats (Claude Code, Codex, OpenCode) - they're reference material, not feature specs, but still belong in the specs hierarchy.
 
 ### 3. OpenSpec Integration
@@ -31,11 +31,11 @@ The spec-driven workflow foundation (completed Feb 6, 2026) established `knowled
 - **Why:** The config.yaml has useful rules (proposal requirements, spec format, task sizing) that belong in the constitution. The empty specs/ and changes/ directories indicate we're not using the OpenSpec system.
 
 ### 4. Brainstorms Location
-- **Decision:** New `knowledge-base/brainstorms/` directory
+- **Decision:** New `knowledge-base/project/brainstorms/` directory
 - **Why:** Brainstorms inform specs and should live alongside them in the knowledge-base, not separately in docs/.
 
 ### 5. Solutions Migration
-- **Decision:** Move to `knowledge-base/learnings/`
+- **Decision:** Move to `knowledge-base/project/learnings/`
 - **Why:** Solutions are learnings - the plugin-versioning-requirements.md fits the learnings pattern.
 
 ## Migration Map
@@ -43,11 +43,11 @@ The spec-driven workflow foundation (completed Feb 6, 2026) established `knowled
 ```
 FROM                                          TO
 ────────────────────────────────────────────────────────────────────
-docs/plans/2026-02-06-*-plan.md          →   knowledge-base/specs/feat-*/spec.md
-docs/plans/archive/*.md                   →   knowledge-base/specs/archive/
-docs/specs/*.md                           →   knowledge-base/specs/external/
-docs/solutions/*.md                       →   knowledge-base/learnings/
-docs/brainstorms/*.md                     →   knowledge-base/brainstorms/
+docs/plans/2026-02-06-*-plan.md          →   knowledge-base/project/specs/feat-*/spec.md
+docs/plans/archive/*.md                   →   knowledge-base/project/specs/archive/
+docs/specs/*.md                           →   knowledge-base/project/specs/external/
+docs/solutions/*.md                       →   knowledge-base/project/learnings/
+docs/brainstorms/*.md                     →   knowledge-base/project/brainstorms/
 openspec/config.yaml (rules)              →   knowledge-base/overview/constitution.md (merged)
 openspec/                                 →   (deleted)
 docs/plans/, docs/specs/, etc.            →   (deleted after migration)
@@ -104,7 +104,7 @@ From `openspec/config.yaml`, these rules should be added to constitution.md:
 
 Document learnings from implementing issues #3 and #4:
 
-**File:** `knowledge-base/learnings/2026-02-06-spec-workflow-implementation.md`
+**File:** `knowledge-base/project/learnings/2026-02-06-spec-workflow-implementation.md`
 
 **Key learnings to capture:**
 1. Simplification approach: 8 domains → 3 domains worked well

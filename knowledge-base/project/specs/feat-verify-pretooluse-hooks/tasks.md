@@ -66,7 +66,7 @@
 ## Phase 3: Analysis and Documentation
 
 ### 3.1 Create learning file
-- Write `knowledge-base/learnings/2026-03-05-pretooluse-hooks-ci-verification.md`
+- Write `knowledge-base/project/learnings/2026-03-05-pretooluse-hooks-ci-verification.md`
 - Document which hooks fire and which don't
 - Document the `cwd` value from hook JSON input (runner workspace path)
 - Include the actual workflow run URL for evidence

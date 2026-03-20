@@ -24,10 +24,11 @@ describe("workspace provisioning", () => {
     expect(path).toBe(join(TEST_WORKSPACES, userId));
     expect(existsSync(path)).toBe(true);
     expect(existsSync(join(path, "knowledge-base"))).toBe(true);
-    expect(existsSync(join(path, "knowledge-base/brainstorms"))).toBe(true);
-    expect(existsSync(join(path, "knowledge-base/specs"))).toBe(true);
-    expect(existsSync(join(path, "knowledge-base/plans"))).toBe(true);
-    expect(existsSync(join(path, "knowledge-base/learnings"))).toBe(true);
+    expect(existsSync(join(path, "knowledge-base/project"))).toBe(true);
+    expect(existsSync(join(path, "knowledge-base/project/brainstorms"))).toBe(true);
+    expect(existsSync(join(path, "knowledge-base/project/specs"))).toBe(true);
+    expect(existsSync(join(path, "knowledge-base/project/plans"))).toBe(true);
+    expect(existsSync(join(path, "knowledge-base/project/learnings"))).toBe(true);
   });
 
   test("creates .claude/settings.json with empty permissions for canUseTool routing", async () => {

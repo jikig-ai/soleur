@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-secure-tmp-paths/knowledge-base/plans/2026-03-04-sec-secure-tmp-paths-in-release-workflow-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-secure-tmp-paths/knowledge-base/project/plans/2026-03-04-sec-secure-tmp-paths-in-release-workflow-plan.md
 - Status: complete
 
 ### Errors

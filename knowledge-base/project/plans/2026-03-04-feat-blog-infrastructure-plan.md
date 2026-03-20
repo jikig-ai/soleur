@@ -378,8 +378,8 @@ All changes are additive except the article→blog rename. To rollback:
 
 ### Internal References
 
-- Spec: `knowledge-base/specs/feat-blog-infrastructure/spec.md`
-- Brainstorm: `knowledge-base/brainstorms/2026-03-04-blog-infrastructure-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-blog-infrastructure/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-04-blog-infrastructure-brainstorm.md`
 - Existing articles: `plugins/soleur/docs/articles/articles.json`, `plugins/soleur/docs/pages/articles.njk`, `plugins/soleur/docs/_includes/article.njk`
 - Eleventy config: `eleventy.config.js`
 - CSS: `plugins/soleur/docs/css/style.css:779` (`.prose` class)
@@ -389,10 +389,10 @@ All changes are additive except the article→blog rename. To rollback:
 
 ### Learnings Applied
 
-- `knowledge-base/learnings/build-errors/eleventy-v3-passthrough-and-nunjucks-gotchas.md` — frontmatter variable resolution, page.url slash
-- `knowledge-base/learnings/build-errors/eleventy-seo-aeo-patterns.md` — build-time rendering mandatory
-- `knowledge-base/learnings/ui-bugs/2026-02-21-prose-utility-class-and-eleventy-build-patterns.md` — `.prose` class reuse
-- `knowledge-base/learnings/2026-02-22-docs-site-css-variable-inconsistency.md` — use `--color-accent` not `--accent`
+- `knowledge-base/project/learnings/build-errors/eleventy-v3-passthrough-and-nunjucks-gotchas.md` — frontmatter variable resolution, page.url slash
+- `knowledge-base/project/learnings/build-errors/eleventy-seo-aeo-patterns.md` — build-time rendering mandatory
+- `knowledge-base/project/learnings/ui-bugs/2026-02-21-prose-utility-class-and-eleventy-build-patterns.md` — `.prose` class reuse
+- `knowledge-base/project/learnings/2026-02-22-docs-site-css-variable-inconsistency.md` — use `--color-accent` not `--accent`
 
 ### Related Work
 

@@ -453,12 +453,12 @@ These findings emerged during dogfood execution and differ from the plan's assum
 - PR #498: fix(gemini-imagegen): add quota-specific error detection and actionable messages
 - PR #499: feat(pencil-setup): use Pencil Desktop as standalone MCP target (#493)
 - PR #493: Original issue for Pencil Desktop standalone MCP
-- Learning: `knowledge-base/learnings/2026-03-10-gemini-sdk-error-handling-patterns.md`
-- Learning: `knowledge-base/learnings/2026-03-10-pencil-desktop-standalone-mcp-three-tier-detection.md`
-- Learning: `knowledge-base/learnings/2026-02-27-pencil-mcp-auto-registration-via-skill.md`
-- Learning: `knowledge-base/learnings/2026-02-27-pencil-desktop-ships-mcp-binary.md`
-- Learning: `knowledge-base/learnings/2026-02-27-pencil-editor-operational-requirements.md`
-- Learning: `knowledge-base/learnings/2026-02-27-check-deps-pattern-for-gui-apps.md`
+- Learning: `knowledge-base/project/learnings/2026-03-10-gemini-sdk-error-handling-patterns.md`
+- Learning: `knowledge-base/project/learnings/2026-03-10-pencil-desktop-standalone-mcp-three-tier-detection.md`
+- Learning: `knowledge-base/project/learnings/2026-02-27-pencil-mcp-auto-registration-via-skill.md`
+- Learning: `knowledge-base/project/learnings/2026-02-27-pencil-desktop-ships-mcp-binary.md`
+- Learning: `knowledge-base/project/learnings/2026-02-27-pencil-editor-operational-requirements.md`
+- Learning: `knowledge-base/project/learnings/2026-02-27-check-deps-pattern-for-gui-apps.md`
 - Error handling module: `plugins/soleur/skills/gemini-imagegen/scripts/_error_handling.py`
 - Check deps script: `plugins/soleur/skills/pencil-setup/scripts/check_deps.sh`
 - Test file: `plugins/soleur/skills/gemini-imagegen/scripts/test_error_handling.py`

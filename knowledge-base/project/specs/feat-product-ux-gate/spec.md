@@ -3,7 +3,7 @@
 **Issue:** #671
 **Branch:** feat-product-ux-gate
 **Date:** 2026-03-19
-**Brainstorm:** `knowledge-base/brainstorms/2026-03-19-product-ux-gate-brainstorm.md`
+**Brainstorm:** `knowledge-base/project/brainstorms/2026-03-19-product-ux-gate-brainstorm.md`
 
 ## Problem Statement
 

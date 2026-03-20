@@ -1,6 +1,6 @@
 # Tasks: Domain Leader Pattern
 
-**Plan:** `knowledge-base/plans/2026-02-20-feat-domain-leaders-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-20-feat-domain-leaders-plan.md`
 **Issue:** #154
 
 ## Phase 1: CMO Agent

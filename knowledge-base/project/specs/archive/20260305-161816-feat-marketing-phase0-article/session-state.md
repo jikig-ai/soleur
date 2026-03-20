@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-marketing-phase0-article/knowledge-base/plans/2026-03-05-feat-marketing-phase0-article-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-marketing-phase0-article/knowledge-base/project/plans/2026-03-05-feat-marketing-phase0-article-plan.md
 - Status: complete
 
 ### Errors

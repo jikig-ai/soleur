@@ -31,7 +31,7 @@ Phase 3: Write inventory document (stats, table, gap analysis)
 Refresh the Codex capability baseline so classifications are accurate.
 
 - [x] 1.1 Fetch current Codex docs (skills, agents, MCP, hooks, config) via WebFetch
-- [x] 1.2 Create `knowledge-base/specs/feat-codex-portability-inventory/codex-baseline.md` with current capabilities and verification date
+- [x] 1.2 Create `knowledge-base/project/specs/feat-codex-portability-inventory/codex-baseline.md` with current capabilities and verification date
 - [x] 1.3 Create equivalence mapping table (each primitive → Codex equivalent or "none")
 
 **Primitives to scan** (10 categories, MEDIUM and HIGH risk only):
@@ -74,7 +74,7 @@ Grep all components in a single pass. Classify as you go using worst-primitive-w
 
 ### Phase 3: Write Inventory Document
 
-Compile into `knowledge-base/specs/feat-codex-portability-inventory/inventory.md`.
+Compile into `knowledge-base/project/specs/feat-codex-portability-inventory/inventory.md`.
 
 - [x] 3.1 Summary statistics: green/yellow/red/N/A counts and percentages
 - [x] 3.2 Full component inventory table: Name, Type, Domain, Classification, Primitives Found, Codex Equivalent
@@ -100,12 +100,12 @@ Compile into `knowledge-base/specs/feat-codex-portability-inventory/inventory.md
 
 ### Internal References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-03-10-codex-portability-inventory-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-codex-portability-inventory/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-10-codex-portability-inventory-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-codex-portability-inventory/spec.md`
 - Component discovery: `plugins/soleur/test/helpers.ts`
-- Staleness audit pattern: `knowledge-base/learnings/2026-02-09-plugin-staleness-audit-patterns.md`
-- Grep proximity: `knowledge-base/learnings/2026-02-24-guardrails-grep-false-positive-worktree-text.md`
-- Platform risk: `knowledge-base/learnings/2026-02-25-platform-risk-cowork-plugins.md`
+- Staleness audit pattern: `knowledge-base/project/learnings/2026-02-09-plugin-staleness-audit-patterns.md`
+- Grep proximity: `knowledge-base/project/learnings/2026-02-24-guardrails-grep-false-positive-worktree-text.md`
+- Platform risk: `knowledge-base/project/learnings/2026-02-25-platform-risk-cowork-plugins.md`
 
 ### External References
 

@@ -222,6 +222,6 @@ This adds files under `plugins/soleur/` but no new skills/commands/agents — PA
 - Deploy workflow: `.github/workflows/deploy-docs.yml`
 - Deploy-docs skill: `plugins/soleur/skills/deploy-docs/SKILL.md`
 - Release-docs skill: `plugins/soleur/skills/release-docs/SKILL.md`
-- Learning — docs staleness: `knowledge-base/learnings/technical-debt/2026-02-12-overview-docs-stale-after-restructure.md`
-- Learning — documentation system: `knowledge-base/learnings/implementation-patterns/project-overview-documentation-system.md`
-- Learning — plugin versioning: `knowledge-base/learnings/plugin-versioning-requirements.md`
+- Learning — docs staleness: `knowledge-base/project/learnings/technical-debt/2026-02-12-overview-docs-stale-after-restructure.md`
+- Learning — documentation system: `knowledge-base/project/learnings/implementation-patterns/project-overview-documentation-system.md`
+- Learning — plugin versioning: `knowledge-base/project/learnings/plugin-versioning-requirements.md`

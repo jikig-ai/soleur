@@ -159,13 +159,13 @@ The existing pins in `scheduled-competitive-analysis.yml` and `review-reminder.y
 
 ### Institutional knowledge
 
-- Learning: `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md` -- documents the SHA pinning pattern as pattern #1 of four GitHub Actions security patterns
+- Learning: `knowledge-base/project/learnings/2026-02-21-github-actions-workflow-security-patterns.md` -- documents the SHA pinning pattern as pattern #1 of four GitHub Actions security patterns
 - Constitution: `knowledge-base/overview/constitution.md` -- no explicit rule about SHA pinning, but the learning establishes it as a project convention
 
 ## References
 
 - Issue: #343
-- Learning: `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
+- Learning: `knowledge-base/project/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
 - GitHub docs: [Using third-party actions](https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions)
 - [GitHub Actions policy now supports SHA pinning enforcement (August 2025)](https://github.blog/changelog/2025-08-15-github-actions-policy-now-supports-blocking-and-sha-pinning-actions/)
 - [StepSecurity: Pinning GitHub Actions for Enhanced Security](https://www.stepsecurity.io/blog/pinning-github-actions-for-enhanced-security-a-complete-guide)

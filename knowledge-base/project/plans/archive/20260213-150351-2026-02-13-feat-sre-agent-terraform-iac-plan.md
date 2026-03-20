@@ -53,8 +53,8 @@ These are the non-obvious instructions worth embedding. Everything else Claude a
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-13-sre-agent-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-sre-agent/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-13-sre-agent-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-sre-agent/spec.md`
 - Issue: #39
 - Pattern: `plugins/soleur/agents/engineering/design/ddd-architect.md`
 - Pattern: `plugins/soleur/agents/engineering/review/security-sentinel.md`

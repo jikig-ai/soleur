@@ -10,7 +10,7 @@ date: 2026-03-02
 
 Add a shell step to `scheduled-competitive-analysis.yml` that pushes the agent-generated `competitive-intelligence.md` report directly to main. The report becomes a living document in `knowledge-base/overview/` alongside `brand-guide.md` and `business-validation.md`.
 
-Related: #353, brainstorm at `knowledge-base/brainstorms/2026-03-02-living-competitive-intel-brainstorm.md`
+Related: #353, brainstorm at `knowledge-base/project/brainstorms/2026-03-02-living-competitive-intel-brainstorm.md`
 
 ## Problem Statement
 
@@ -100,7 +100,7 @@ permissions:
 
 - Workflow: `.github/workflows/scheduled-competitive-analysis.yml`
 - Agent: `plugins/soleur/agents/product/competitive-intelligence.md`
-- Spec: `knowledge-base/specs/feat-living-competitive-intel/spec.md`
+- Spec: `knowledge-base/project/specs/feat-living-competitive-intel/spec.md`
 - SpecFlow analysis: auto-merge disabled, GITHUB_TOKEN cascade, no PR-blocking rulesets
-- Learning: `knowledge-base/learnings/2026-02-27-competitive-intelligence-agent-implementation.md`
-- Learning: `knowledge-base/learnings/integration-issues/github-actions-auto-release-permissions.md`
+- Learning: `knowledge-base/project/learnings/2026-02-27-competitive-intelligence-agent-implementation.md`
+- Learning: `knowledge-base/project/learnings/integration-issues/github-actions-auto-release-permissions.md`

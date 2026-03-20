@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-env-constraints/knowledge-base/plans/2026-03-03-chore-document-environment-constraints-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-env-constraints/knowledge-base/project/plans/2026-03-03-chore-document-environment-constraints-plan.md
 - Status: complete
 
 ### Errors

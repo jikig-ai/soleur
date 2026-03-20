@@ -195,16 +195,16 @@ Update ALL product domain agent descriptions for cross-referencing:
 - CTO domain leader: `plugins/soleur/agents/engineering/cto.md`
 - CMO domain leader: `plugins/soleur/agents/marketing/cmo.md`
 - Brainstorm Phase 0.5: `plugins/soleur/commands/soleur/brainstorm.md`
-- Spec: `knowledge-base/specs/feat-business-validation/spec.md`
-- Brainstorm: `knowledge-base/brainstorms/2026-02-22-business-validation-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-business-validation/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-22-business-validation-brainstorm.md`
 
 ### Learnings Applied
 
-- Agent description token budget optimization: `knowledge-base/learnings/performance-issues/2026-02-20-agent-description-token-budget-optimization.md`
-- Three-way agent disambiguation: `knowledge-base/learnings/2026-02-22-three-way-agent-disambiguation.md`
-- Domain leader pattern and LLM detection: `knowledge-base/learnings/2026-02-21-domain-leader-pattern-and-llm-detection.md`
-- Adding new agent domain checklist: `knowledge-base/learnings/integration-issues/adding-new-agent-domain-checklist.md`
-- Agent prompt sharp edges only: `knowledge-base/learnings/agent-prompt-sharp-edges-only.md`
+- Agent description token budget optimization: `knowledge-base/project/learnings/performance-issues/2026-02-20-agent-description-token-budget-optimization.md`
+- Three-way agent disambiguation: `knowledge-base/project/learnings/2026-02-22-three-way-agent-disambiguation.md`
+- Domain leader pattern and LLM detection: `knowledge-base/project/learnings/2026-02-21-domain-leader-pattern-and-llm-detection.md`
+- Adding new agent domain checklist: `knowledge-base/project/learnings/integration-issues/adding-new-agent-domain-checklist.md`
+- Agent prompt sharp edges only: `knowledge-base/project/learnings/agent-prompt-sharp-edges-only.md`
 
 ### Issues
 

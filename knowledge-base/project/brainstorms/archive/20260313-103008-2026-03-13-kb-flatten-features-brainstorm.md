@@ -5,7 +5,7 @@
 
 ## What We're Building
 
-Merge `knowledge-base/features/` contents (brainstorms, learnings, plans, specs) into `knowledge-base/project/` to simplify the top-level taxonomy. Also clean up the stale top-level `knowledge-base/specs/` leftover.
+Merge `knowledge-base/features/` contents (brainstorms, learnings, plans, specs) into `knowledge-base/project/` to simplify the top-level taxonomy. Also clean up the stale top-level `knowledge-base/project/specs/` leftover.
 
 ## Why This Approach
 
@@ -54,7 +54,7 @@ knowledge-base/
 ## Key Decisions
 
 1. **Merge features/ into project/** — brainstorms, learnings, plans, specs move under `project/`
-2. **Delete stale knowledge-base/specs/** — leftover from prior refactor, contents preserved in git history
+2. **Delete stale knowledge-base/project/specs/** — leftover from prior refactor, contents preserved in git history
 3. **Update all path references** — ~100+ references across 12 skills, 2 shell scripts, 1 agent
 
 ## Alternatives Considered

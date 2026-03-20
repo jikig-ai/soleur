@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/plans/2026-03-14-fix-skill-discovery-context-compaction-plan.md
+- Plan file: knowledge-base/project/plans/2026-03-14-fix-skill-discovery-context-compaction-plan.md
 - Status: complete
 
 ### Errors
