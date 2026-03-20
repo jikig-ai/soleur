@@ -95,6 +95,12 @@ to:
 if: needs.release.outputs.version != ''
 ```
 
+**Preserve `skip_deploy` on web-platform:** The web-platform caller has a compound condition that includes `skip_deploy`. The full new condition must be:
+```yaml
+if: needs.release.outputs.version != '' && (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
+```
+The telegram-bridge caller has no `skip_deploy` input, so its condition is simply `needs.release.outputs.version != ''`.
+
 **Why this works without changing `reusable-release.yml`:**
 - The `version` step (reusable-release.yml:181-215) runs when `check_changed.outputs.changed == 'true'`
 - The `idempotency` step (reusable-release.yml:217-229) runs after the `version` step
