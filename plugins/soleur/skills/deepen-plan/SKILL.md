@@ -275,6 +275,8 @@ mcp__plugin_soleur_context7__resolve-library-id: Find library ID for [framework]
 mcp__plugin_soleur_context7__query-docs: Query documentation for specific patterns
 ```
 
+**Verify API availability against installed SDK version:** Context7 docs may reference APIs not yet available in the project's pinned dependency version. After recommending a specific API (e.g., `getClaims()`), check `node_modules` or `Gemfile.lock` to confirm the method exists in the installed version before including it in the plan.
+
 **Use WebSearch for current best practices:**
 
 Search for recent (2024-2026) articles, blog posts, and documentation on topics in the plan.

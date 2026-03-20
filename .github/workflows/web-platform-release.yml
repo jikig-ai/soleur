@@ -3,6 +3,7 @@ name: Web Platform Release
 on:
   push:
     branches: [main]
+    paths: ['apps/web-platform/**']
   workflow_dispatch:
     inputs:
       bump_type:
@@ -39,8 +40,11 @@ jobs:
 
   deploy:
     needs: release
-    if: needs.release.outputs.released == 'true' && (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
+    if: needs.release.outputs.version != '' && (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
     runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
     steps:
       - name: Deploy to server
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
