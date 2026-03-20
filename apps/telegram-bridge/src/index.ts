@@ -13,7 +13,7 @@ import { Bot, type Context } from "grammy";
 import { hydrateReply, type ParseModeFlavor } from "@grammyjs/parse-mode";
 import type { BotApi } from "./types";
 import { Bridge } from "./bridge";
-import { createHealthServer } from "./health";
+import type { HealthState } from "./health";
 
 // ---------------------------------------------------------------------------
 // 1. Configuration
@@ -21,7 +21,6 @@ import { createHealthServer } from "./health";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_ALLOWED_USER_ID = process.env.TELEGRAM_ALLOWED_USER_ID;
-const HEALTH_PORT = 8080;
 const CLI_RESTART_BASE_MS = 5_000;
 const CLI_RESTART_MAX_MS = 5 * 60 * 1_000; // 5 minutes
 const PLUGIN_DIR = process.env.SOLEUR_PLUGIN_DIR ?? "";
@@ -73,7 +72,7 @@ const bridge = new Bridge(botApi, {
 
 // Process-level state (not part of Bridge)
 let cliProcess: ReturnType<typeof Bun.spawn> | null = null;
-const startTime = Date.now();
+let startTime = 0; // set in boot() from healthState.startTime
 
 // ---------------------------------------------------------------------------
 // 4. CLI process management (stdio transport)
@@ -338,65 +337,60 @@ bot.on("message:text", async (ctx) => {
 });
 
 // ---------------------------------------------------------------------------
-// 8. Health endpoint
+// 8. Boot (called by main.ts after health server is already listening)
 // ---------------------------------------------------------------------------
 
-const healthServer = createHealthServer(HEALTH_PORT, {
-  get cliProcess() { return cliProcess; },
-  get cliState() { return bridge.cliState; },
-  messageQueue: bridge.messageQueue,
-  startTime,
-  get messagesProcessed() { return bridge.messagesProcessed; },
-});
+export function boot(healthState: HealthState, healthServer: { stop(closeActiveConnections?: boolean): void }): void {
+  // Use the container start time for consistent uptime reporting
+  startTime = healthState.startTime;
 
-console.log(`Health endpoint listening on http://127.0.0.1:${HEALTH_PORT}/health`);
+  // Wire live getters so health endpoint always reflects current state.
+  // enumerable: true ensures JSON.stringify includes these properties if
+  // healthState is ever serialized directly (defensive practice).
+  Object.defineProperty(healthState, "cliProcess", {
+    get: () => cliProcess,
+    enumerable: true,
+    configurable: true,
+  });
+  Object.defineProperty(healthState, "cliState", {
+    get: () => bridge.cliState,
+    enumerable: true,
+    configurable: true,
+  });
+  Object.defineProperty(healthState, "messagesProcessed", {
+    get: () => bridge.messagesProcessed,
+    enumerable: true,
+    configurable: true,
+  });
+  Object.defineProperty(healthState, "messageQueue", {
+    get: () => bridge.messageQueue,
+    enumerable: true,
+    configurable: true,
+  });
 
-// ---------------------------------------------------------------------------
-// 9. Graceful shutdown
-// ---------------------------------------------------------------------------
+  // Graceful shutdown
+  async function shutdown(signal: string): Promise<void> {
+    console.log(`Received ${signal}, shutting down...`);
 
-async function shutdown(signal: string): Promise<void> {
-  console.log(`Received ${signal}, shutting down...`);
+    try { await bot.stop(); } catch { /* Already stopped */ }
+    try { await bridge.cleanupTurnStatus(); } catch { /* Best effort */ }
+    try { if (cliProcess) cliProcess.kill(); } catch { /* Already dead */ }
+    try { healthServer.stop(true); } catch { /* Best effort */ }
 
-  // Stop Telegram bot polling
-  try {
-    await bot.stop();
-  } catch {
-    // Already stopped
+    console.log("Shutdown complete.");
+    process.exit(0);
   }
 
-  // Clean up status message
-  await bridge.cleanupTurnStatus();
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-  // Kill CLI process
-  if (cliProcess) {
-    try {
-      cliProcess.kill();
-    } catch {
-      // Already dead
-    }
-  }
+  // Spawn CLI, then start Telegram bot.
+  spawnCli();
 
-  // Close health server
-  healthServer.stop(true);
-
-  console.log("Shutdown complete.");
-  process.exit(0);
+  bot.start({
+    onStart: () => {
+      console.log("Telegram bot started (long polling)");
+      console.log(`Allowed user ID: ${allowedUserId}`);
+    },
+  });
 }
-
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-
-// ---------------------------------------------------------------------------
-// 10. Startup
-// ---------------------------------------------------------------------------
-
-// Spawn CLI, then start Telegram bot.
-spawnCli();
-
-bot.start({
-  onStart: () => {
-    console.log("Telegram bot started (long polling)");
-    console.log(`Allowed user ID: ${allowedUserId}`);
-  },
-});

@@ -9,6 +9,7 @@ import { KeyInvalidError } from "@/lib/types";
 import { decryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
 import { sanitizeErrorForClient } from "./error-sanitizer";
+import { containsSensitiveEnvAccess } from "./bash-sandbox";
 import { isPathInWorkspace } from "./sandbox";
 import { buildAgentEnv } from "./agent-env";
 
@@ -185,6 +186,20 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         maxBudgetUsd: 5.0,
         systemPrompt,
         env: buildAgentEnv(apiKey),
+        disallowedTools: ["WebSearch", "WebFetch"],
+        sandbox: {
+          enabled: true,
+          autoAllowBashIfSandboxed: true,
+          allowUnsandboxedCommands: false,
+          network: {
+            allowedDomains: [],
+            allowManagedDomainsOnly: true,
+          },
+          filesystem: {
+            allowWrite: [workspacePath],
+            denyRead: ["/workspaces"],
+          },
+        },
         plugins: [{ type: "local" as const, path: pluginPath }],
         canUseTool: async (
           toolName: string,
@@ -204,6 +219,18 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
                 message: "Access denied: outside workspace",
               };
             }
+          }
+
+          // Bash: sandbox handles OS-level isolation; check env var access as defense-in-depth
+          if (toolName === "Bash") {
+            const command = (toolInput.command as string) || "";
+            if (containsSensitiveEnvAccess(command)) {
+              return {
+                behavior: "deny" as const,
+                message: "Access denied: sensitive environment variable access",
+              };
+            }
+            return { behavior: "allow" as const };
           }
 
           // Review gates: intercept AskUserQuestion
@@ -239,7 +266,24 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             };
           }
 
-          return { behavior: "allow" as const };
+          // Safe SDK tools: no security-sensitive inputs, allowed without checks
+          const SAFE_TOOLS = [
+            "Agent",
+            "Skill",
+            "TodoRead",
+            "TodoWrite",
+            "LS",
+            "NotebookRead",
+          ];
+          if (SAFE_TOOLS.includes(toolName)) {
+            return { behavior: "allow" as const };
+          }
+
+          // Deny-by-default: block unrecognized tools
+          return {
+            behavior: "deny" as const,
+            message: "Tool not permitted in this environment",
+          };
         },
       },
     });

@@ -97,6 +97,9 @@ echo ""
 echo "Test 9: GIT_COMMON_ROOT points to parent repo in worktree"
 TEST_DIR=$(mktemp -d)
 git -C "$TEST_DIR" init -q
+# CI runners may lack user identity; configure for this temp repo only
+git -C "$TEST_DIR" config user.email "test@test.local"
+git -C "$TEST_DIR" config user.name "Test"
 # Need an initial commit for worktree creation
 git -C "$TEST_DIR" commit --allow-empty -m "init" -q
 git -C "$TEST_DIR" worktree add -q "$TEST_DIR/wt" -b test-wt
