@@ -100,6 +100,15 @@ date: YYYY-MM-DD
 - Performance implications
 - Security considerations
 
+### Attack Surface Enumeration (for security fixes)
+
+List ALL code paths that touch the security surface being fixed:
+
+- What are ALL the ways an agent/user can [read files / access network / execute code]?
+- What allowlists or bypass mechanisms exist for this boundary?
+- Which of those paths are checked by the fix, and which are not?
+- For each unchecked path: is it safe (with justification) or a gap (file tracking issue)?
+
 ## Acceptance Criteria
 
 - [ ] Detailed requirement 1
