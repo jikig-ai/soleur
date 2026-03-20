@@ -38,11 +38,11 @@ The community monitor CI workflow (`scheduled-community-monitor.yml`) reports Bl
 
 ## Acceptance Criteria
 
-- [ ] `scheduled-community-monitor.yml` passes `BSKY_HANDLE` and `BSKY_APP_PASSWORD` secrets as env vars to the `claude-code-action` step
-- [ ] The monitor prompt instructs the agent to collect Bluesky metrics (batch with existing platform calls)
+- [x] `scheduled-community-monitor.yml` passes `BSKY_HANDLE` and `BSKY_APP_PASSWORD` secrets as env vars to the `claude-code-action` step
+- [x] The monitor prompt instructs the agent to collect Bluesky metrics (batch with existing platform calls)
 - [ ] The digest file contract section `## Bluesky Metrics` is populated when Bluesky is configured
 - [ ] `community platforms` shows Bluesky as `enabled` when secrets are set (already works locally -- this confirms CI behavior)
-- [ ] Verify the content publisher already passes Bluesky secrets (no change needed there)
+- [x] Verify the content publisher already passes Bluesky secrets (no change needed there)
 
 ## Test Scenarios
 
