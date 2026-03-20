@@ -626,6 +626,9 @@ cleanup_merged_worktrees() {
   # Always clean up stale Claude tmp files (RAM-backed, can be huge)
   cleanup_claude_tmp
 
+  # Kill runaway processes that waste CPU (e.g., stuck gst-plugin-scanner)
+  cleanup_runaway_processes
+
   return 0
 }
 
@@ -715,6 +718,49 @@ cleanup_claude_tmp() {
 
   if [[ $files_removed -gt 0 ]]; then
     echo -e "${GREEN}Cleaned $files_removed stale Claude task output(s), freed ~${total_freed} MB${NC}"
+  fi
+}
+
+# Kill runaway processes that waste CPU/memory during development sessions.
+# Known offenders:
+#   - gst-plugin-scanner: GStreamer media scanner spawned by GNOME's localsearch-3
+#     (Tracker file indexer). Gets stuck in infinite CPU loops scanning dev repos.
+#     Safe to kill -- GNOME re-indexes on next login if needed.
+# Only targets processes owned by the current user and running longer than the
+# CPU time threshold (avoids killing short-lived legitimate scans).
+cleanup_runaway_processes() {
+  local killed=0
+
+  # gst-plugin-scanner: kill instances using >5 min of CPU time
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local pid cputime
+    pid=$(echo "$line" | awk '{print $1}')
+    cputime=$(echo "$line" | awk '{print $2}')
+    # cputime format: [DD-]HH:MM:SS or MM:SS -- extract minutes
+    local minutes=0
+    if [[ "$cputime" == *-* ]]; then
+      # DD-HH:MM:SS format (days of CPU time -- definitely stuck)
+      minutes=9999
+    elif [[ "$cputime" =~ ^([0-9]+):([0-9]+):([0-9]+)$ ]]; then
+      # HH:MM:SS
+      minutes=$(( ${BASH_REMATCH[1]} * 60 + ${BASH_REMATCH[2]} ))
+    elif [[ "$cputime" =~ ^([0-9]+):([0-9]+)$ ]]; then
+      # MM:SS
+      minutes=${BASH_REMATCH[1]}
+    fi
+
+    if [[ $minutes -ge 5 ]]; then
+      kill "$pid" 2>/dev/null && killed=$((killed + 1))
+    fi
+  done < <(ps -u "$(id -u)" -o pid=,cputime=,comm= 2>/dev/null | grep 'gst-plugin-scan' || true)
+
+  # If we killed any gst-plugin-scanner, also stop localsearch to prevent respawn
+  if [[ $killed -gt 0 ]]; then
+    # Stop and mask the localsearch service so it doesn't respawn immediately
+    systemctl --user stop localsearch-3.service 2>/dev/null || true
+    systemctl --user mask localsearch-3.service 2>/dev/null || true
+    echo -e "${GREEN}Killed $killed runaway gst-plugin-scanner process(es), masked localsearch-3${NC}"
   fi
 }
 
@@ -893,6 +939,9 @@ main() {
     cleanup-tmp)
       cleanup_claude_tmp
       ;;
+    cleanup-procs)
+      cleanup_runaway_processes
+      ;;
     draft-pr)
       create_draft_pr
       ;;
@@ -932,9 +981,12 @@ Commands:
   cleanup | clean                     Clean up inactive worktrees
   cleanup-merged                      Clean up worktrees for merged branches
                                       (detects [gone] branches, archives specs,
-                                      removes stale Claude tmp files)
+                                      removes stale Claude tmp files, kills
+                                      runaway processes)
   cleanup-tmp                         Remove stale Claude task output files
                                       (reclaims RAM from /tmp/claude-<uid>/)
+  cleanup-procs                       Kill runaway processes wasting CPU
+                                      (e.g., stuck gst-plugin-scanner)
   draft-pr                            Create empty commit, push, and open draft PR
                                       (idempotent: skips if PR already exists)
   sync-bare | sync-bare-files | sync  Sync stale on-disk files from git HEAD
