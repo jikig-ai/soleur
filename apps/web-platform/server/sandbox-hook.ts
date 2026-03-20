@@ -7,7 +7,8 @@ import { containsSensitiveEnvAccess } from "./bash-sandbox";
 
 // File-accessing tools and the input fields that carry paths.
 // Read handles notebooks (.ipynb) natively -- no separate NotebookRead tool exists.
-const FILE_TOOLS = new Set(["Read", "Write", "Edit", "Glob", "Grep"]);
+// If NotebookEdit is ever enabled, add it here with notebook_path extraction.
+export const FILE_TOOLS = new Set(["Read", "Write", "Edit", "Glob", "Grep"]);
 
 export function createSandboxHook(workspacePath: string): HookCallback {
   return async (input, _toolUseID, _options) => {
@@ -22,6 +23,8 @@ export function createSandboxHook(workspacePath: string): HookCallback {
         (toolInput?.path as string) ||
         "";
 
+      // Empty path is allowed through -- Glob/Grep default to CWD (workspacePath),
+      // and Read/Write/Edit require file_path so the SDK rejects empty values.
       if (filePath && !isPathInWorkspace(filePath, workspacePath)) {
         return {
           systemMessage:

@@ -22,6 +22,10 @@ const PLUGIN_PATH =
 
 // ---------------------------------------------------------------------------
 // Workspace permissions migration (#725)
+// Defense-in-depth layer 2: settingSources: [] (layer 1) prevents the SDK
+// from loading settings files. This migration cleans stale pre-approvals
+// from disk -- relevant if settingSources is ever changed to ["project"]
+// for CLAUDE.md support.
 // ---------------------------------------------------------------------------
 const FILE_TOOLS_TO_REMOVE = new Set(["Read", "Glob", "Grep"]);
 
@@ -185,6 +189,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         maxBudgetUsd: 5.0,
         systemPrompt,
         env: buildAgentEnv(apiKey),
+        settingSources: [],
         disallowedTools: ["WebSearch", "WebFetch"],
         sandbox: {
           enabled: true,
@@ -206,6 +211,10 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             hooks: [createSandboxHook(workspacePath)],
           }],
         },
+        // File tools (Read/Write/Edit/Glob/Grep) and Bash are resolved by
+        // PreToolUse hooks (step 1) and SDK sandbox auto-approval (step 3)
+        // before reaching this callback. Only AskUserQuestion, safe tools,
+        // and unrecognized tools reach canUseTool (step 5).
         canUseTool: async (
           toolName: string,
           toolInput: Record<string, unknown>,
