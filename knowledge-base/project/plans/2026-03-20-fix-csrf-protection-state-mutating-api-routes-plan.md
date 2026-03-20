@@ -229,20 +229,20 @@ The attack surface table above was expanded to include ALL code paths, not just 
 
 ## Acceptance Criteria
 
-- [ ] All three mutating API routes (`/api/checkout`, `/api/keys`, `/api/workspace`) validate the Origin header and return 403 for cross-origin requests
-- [ ] Origin validation falls back to Referer header when Origin is absent
-- [ ] Requests with neither Origin nor Referer header are rejected with 403
-- [ ] `app/api/workspace/route.ts` POST handler accepts `request: Request` parameter
-- [ ] Stripe webhook route (`/api/webhooks/stripe`) is NOT affected by Origin validation
-- [ ] Auth callback route (`/callback`) is NOT affected (GET-only, already has origin validation)
-- [ ] Supabase cookie configuration explicitly sets `sameSite: "lax"` and `secure: true` (production) in both `middleware.ts` and `lib/supabase/server.ts`
-- [ ] Cookie options include inline `SECURITY:` comments explaining each setting's purpose
-- [ ] `next.config.ts` includes `serverActions.allowedOrigins` for defense-in-depth
-- [ ] Logged origin values are sanitized (truncated, control characters stripped)
-- [ ] Existing tests continue to pass
-- [ ] New tests cover Origin validation (valid origin, invalid origin, missing origin, Referer fallback)
-- [ ] New tests verify cookie options are set correctly
-- [ ] Negative-space test: every POST route is either origin-validated or documented as exempt
+- [x] All three mutating API routes (`/api/checkout`, `/api/keys`, `/api/workspace`) validate the Origin header and return 403 for cross-origin requests
+- [x] Origin validation falls back to Referer header when Origin is absent
+- [x] Requests with neither Origin nor Referer header are rejected with 403
+- [x] `app/api/workspace/route.ts` POST handler accepts `request: Request` parameter
+- [x] Stripe webhook route (`/api/webhooks/stripe`) is NOT affected by Origin validation
+- [x] Auth callback route (`/callback`) is NOT affected (GET-only, already has origin validation)
+- [x] Supabase cookie configuration explicitly sets `sameSite: "lax"` and `secure: true` (production) in both `middleware.ts` and `lib/supabase/server.ts`
+- [x] Cookie options include inline `SECURITY:` comments explaining each setting's purpose
+- [x] `next.config.ts` includes `serverActions.allowedOrigins` for defense-in-depth
+- [x] Logged origin values are sanitized (truncated, control characters stripped)
+- [x] Existing tests continue to pass
+- [x] New tests cover Origin validation (valid origin, invalid origin, missing origin, Referer fallback)
+- [x] New tests verify cookie options are set correctly
+- [x] Negative-space test: every POST route is either origin-validated or documented as exempt
 
 ## Test Scenarios
 

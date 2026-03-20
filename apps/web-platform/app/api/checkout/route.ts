@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getStripe } from "@/lib/stripe";
+import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 
 export async function POST(request: Request) {
+  const { valid, origin } = validateOrigin(request);
+  if (!valid) return rejectCsrf("api/checkout", origin);
+
   const supabase = await createClient();
   const {
     data: { user },

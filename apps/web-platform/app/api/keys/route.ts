@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { encryptKey, validateAnthropicKey } from "@/server/byok";
+import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 
 export async function POST(request: Request) {
+  const { valid: originValid, origin } = validateOrigin(request);
+  if (!originValid) return rejectCsrf("api/keys", origin);
+
   // Authenticate
   const supabase = await createClient();
   const {

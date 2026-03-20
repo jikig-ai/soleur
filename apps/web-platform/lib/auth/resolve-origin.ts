@@ -1,12 +1,11 @@
-const PRODUCTION_ORIGINS = new Set(["https://app.soleur.ai"]);
-const DEV_ORIGINS = new Set(["https://app.soleur.ai", "http://localhost:3000"]);
+import { getAllowedOrigins } from "./allowed-origins";
 
 export function resolveOrigin(
   forwardedHost: string | null,
   forwardedProto: string | null,
   host: string | null,
 ): string {
-  const allowed = process.env.NODE_ENV === "development" ? DEV_ORIGINS : PRODUCTION_ORIGINS;
+  const allowed = getAllowedOrigins();
   const proto = forwardedProto ?? "https";
   const resolvedHost = forwardedHost ?? host ?? "app.soleur.ai";
   const computed = `${proto}://${resolvedHost}`.toLowerCase();
