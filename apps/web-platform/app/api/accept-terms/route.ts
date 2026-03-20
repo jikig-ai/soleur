@@ -29,6 +29,19 @@ export async function POST() {
   }
 
   const serviceClient = createServiceClient();
+
+  // Idempotency: skip write if user already accepted the current version
+  const { data: existing } = await serviceClient
+    .from("users")
+    .select("tc_accepted_version")
+    .eq("id", user.id)
+    .single();
+
+  if (existing?.tc_accepted_version === TC_VERSION) {
+    const redirect = await getRedirectDestination(supabase, user.id);
+    return NextResponse.json({ ok: true, redirect });
+  }
+
   const { data, error } = await serviceClient
     .from("users")
     .update({
