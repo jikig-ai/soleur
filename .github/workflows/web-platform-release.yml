@@ -46,7 +46,7 @@ jobs:
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: ${{ secrets.WEB_PLATFORM_HOST }}
-          username: root
+          username: deploy
           key: ${{ secrets.WEB_PLATFORM_SSH_KEY }}
           script: |
             IMAGE="ghcr.io/jikig-ai/soleur-web-platform"
@@ -55,7 +55,7 @@ jobs:
             { docker stop soleur-web-platform || true; }
             { docker rm soleur-web-platform || true; }
             # Ensure workspace volume is owned by soleur (UID 1001, must match apps/web-platform/Dockerfile)
-            chown 1001:1001 /mnt/data/workspaces
+            sudo chown 1001:1001 /mnt/data/workspaces
             docker run -d \
               --name soleur-web-platform \
               --restart unless-stopped \

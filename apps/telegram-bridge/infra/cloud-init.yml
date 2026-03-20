@@ -4,6 +4,18 @@ packages:
   - curl
   - jq
 
+groups:
+  - docker
+
+users:
+  - default
+  - name: deploy
+    groups: docker
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ${deploy_ssh_public_key}
+
 write_files:
   - path: /etc/ssh/sshd_config.d/01-hardening.conf
     content: |
@@ -12,7 +24,7 @@ write_files:
       MaxAuthTries 3
       LoginGraceTime 30
       PermitRootLogin prohibit-password
-      AllowUsers root
+      AllowUsers root deploy
       ClientAliveInterval 300
       ClientAliveCountMax 2
     owner: root:root

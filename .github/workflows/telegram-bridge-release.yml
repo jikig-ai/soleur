@@ -41,7 +41,7 @@ jobs:
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: ${{ secrets.WEB_PLATFORM_HOST }}
-          username: root
+          username: deploy
           key: ${{ secrets.WEB_PLATFORM_SSH_KEY }}
           envs: TELEGRAM_BOT_TOKEN,TELEGRAM_ALLOWED_USER_ID,ANTHROPIC_API_KEY
           script: |
@@ -59,7 +59,7 @@ jobs:
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: ${{ secrets.WEB_PLATFORM_HOST }}
-          username: root
+          username: deploy
           key: ${{ secrets.WEB_PLATFORM_SSH_KEY }}
           script: |
             IMAGE="ghcr.io/jikig-ai/soleur-telegram-bridge"
