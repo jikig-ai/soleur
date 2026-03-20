@@ -15,6 +15,14 @@ set -euo pipefail
 REPO="jikig-ai/soleur"
 RULESET_NAME="CI Required"
 
+# Pre-flight: verify bot workflows on main already have synthetic test status
+main_content=$(gh api "repos/${REPO}/contents/.github/workflows/scheduled-weekly-analytics.yml" --jq '.content' 2>/dev/null || true)
+if [[ -n "$main_content" ]] && ! echo "$main_content" | base64 -d 2>/dev/null | grep -q 'context=test'; then
+  echo "ERROR: Bot workflows on main do not yet have the synthetic test status."
+  echo "Merge the workflow update PR first, then run this script."
+  exit 1
+fi
+
 # Check if ruleset already exists
 existing=$(gh api "repos/${REPO}/rulesets" --jq ".[] | select(.name == \"${RULESET_NAME}\") | .id" 2>/dev/null || true)
 if [[ -n "$existing" ]]; then
@@ -70,16 +78,5 @@ EOF
 echo "Creating '${RULESET_NAME}' ruleset on ${REPO}..."
 result=$(gh api "repos/${REPO}/rulesets" -X POST --input "$payload")
 
-ruleset_id=$(echo "$result" | jq -r '.id')
-echo "Ruleset created (ID: ${ruleset_id})"
-
-# Verify
-echo ""
-echo "Verification:"
-gh api "repos/${REPO}/rulesets" --jq ".[] | select(.name == \"${RULESET_NAME}\") | {id, name, enforcement}"
-echo ""
-echo "Required checks:"
-gh api "repos/${REPO}/rulesets" --jq ".[] | select(.name == \"${RULESET_NAME}\") | .rules[].parameters.required_status_checks[]"
-echo ""
-echo "Bypass actors:"
-gh api "repos/${REPO}/rulesets" --jq ".[] | select(.name == \"${RULESET_NAME}\") | .bypass_actors[] | {actor_type, bypass_mode}"
+echo "Ruleset created. Verification:"
+echo "$result" | jq '{id, name, enforcement, checks: .rules[0].parameters.required_status_checks, bypass_actors: [.bypass_actors[] | {actor_type, bypass_mode}]}'

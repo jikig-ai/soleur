@@ -127,7 +127,7 @@ jobs:
                  -f state=success \
                  -f context=cla-check \
                  -f description="CLA not required for automated PRs"
-               gh api "repos/${GITHUB_REPOSITORY}/statuses/$SHA" \
+               gh api repos/${GITHUB_REPOSITORY}/statuses/$SHA \
                  -f state=success \
                  -f context=test \
                  -f description="Bot commit - CI not required"
