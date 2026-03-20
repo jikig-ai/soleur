@@ -69,14 +69,10 @@ describe("auth callback origin validation", () => {
     );
   });
 
-  test("accepts localhost for development", async () => {
+  test("accepts localhost for development", () => {
     const origEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = "development";
-    vi.resetModules();
-    const { resolveOrigin: devResolve } = await import(
-      "../lib/auth/resolve-origin"
-    );
-    expect(devResolve(null, "http", "localhost:3000")).toBe(
+    expect(resolveOrigin(null, "http", "localhost:3000")).toBe(
       "http://localhost:3000",
     );
     process.env.NODE_ENV = origEnv;
