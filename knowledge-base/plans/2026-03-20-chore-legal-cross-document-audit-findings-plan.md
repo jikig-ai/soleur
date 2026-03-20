@@ -185,17 +185,17 @@ The original plan stated "The GDPR Policy Section 2.1 already mentions Cloudflar
 
 ## Acceptance Criteria
 
-- [ ] Privacy Policy Section 1 intro enumerates Plugin, Docs Site, and Web Platform
-- [ ] Privacy Policy Section 11 describes Web Platform security measures (AES-256-GCM, TLS, EU-only hosting, PCI SAQ-A, bcrypt)
-- [ ] DPD Section 3.1 heading reads "Plugin Architecture (Local-Only)"
-- [ ] GDPR Policy Section 1 second paragraph includes "Web Platform (app.soleur.ai)" in the scope list
-- [ ] DPD Section 4.3 table does not contain a Buttondown row
-- [ ] DPD Section 4.2 Cloudflare row uses dual legal basis (contract performance + legitimate interest)
-- [ ] DPD Section 10.3 exists with Web Platform account deletion procedure cross-referencing T&C Section 13.1b
-- [ ] All "Last Updated" dates bumped to today's date with change descriptions
-- [ ] No cross-document references are broken by the edits
-- [ ] Eleventy mirror files (`plugins/soleur/docs/pages/legal/`) updated with identical body content changes, adapted for Eleventy link format (`/pages/legal/*.html`)
-- [ ] Post-edit grep verification passes: zero unaddressed Buttondown rows in Section 4.3, zero "Local-Only Architecture" heading references, Cloudflare legal basis consistent across all documents
+- [x] Privacy Policy Section 1 intro enumerates Plugin, Docs Site, and Web Platform
+- [x] Privacy Policy Section 11 describes Web Platform security measures (AES-256-GCM, TLS, EU-only hosting, PCI SAQ-A, bcrypt)
+- [x] DPD Section 3.1 heading reads "Plugin Architecture (Local-Only)"
+- [x] GDPR Policy Section 1 second paragraph includes "Web Platform (app.soleur.ai)" in the scope list
+- [x] DPD Section 4.3 table does not contain a Buttondown row
+- [x] DPD Section 4.2 Cloudflare row uses dual legal basis (contract performance + legitimate interest)
+- [x] DPD Section 10.3 exists with Web Platform account deletion procedure cross-referencing T&C Section 13.1b
+- [x] All "Last Updated" dates bumped to today's date with change descriptions
+- [x] No cross-document references are broken by the edits
+- [x] Eleventy mirror files (`plugins/soleur/docs/pages/legal/`) updated with identical body content changes, adapted for Eleventy link format (`/pages/legal/*.html`)
+- [x] Post-edit grep verification passes: zero unaddressed Buttondown rows in Section 4.3, zero "Local-Only Architecture" heading references, Cloudflare legal basis consistent across all documents
 - [ ] Legal compliance auditor run confirms no P1/P2 findings remain
 
 ## Test Scenarios
