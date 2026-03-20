@@ -81,34 +81,33 @@ install_ffmpeg_linux() {
     echo "  Unsupported architecture: $ARCH. Install ffmpeg manually." >&2
     return 1
   fi
+  if ! tar --help >/dev/null 2>&1 || ! xz --help >/dev/null 2>&1; then
+    echo "  tar and xz are required to install ffmpeg. Install them first." >&2
+    return 1
+  fi
   local filename="ffmpeg-${FFMPEG_BUILD_ID}-${ffmpeg_arch}-gpl.tar.xz"
   local url="https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-${FFMPEG_AUTOBUILD}/${filename}"
   local expected
   case "$ffmpeg_arch" in
     linux64)    expected="$FFMPEG_SHA256_LINUX64" ;;
     linuxarm64) expected="$FFMPEG_SHA256_LINUXARM64" ;;
+    *) echo "  No checksum available for architecture: $ffmpeg_arch" >&2; return 1 ;;
   esac
   local tmpdir
   tmpdir=$(mktemp -d)
+  trap "rm -rf '$tmpdir'" RETURN
   echo "  Downloading ffmpeg (autobuild ${FFMPEG_AUTOBUILD})..."
   mkdir -p "$HOME/.local/bin"
-  if curl -sfL "$url" -o "$tmpdir/ffmpeg.tar.xz"; then
-    if verify_checksum "$tmpdir/ffmpeg.tar.xz" "$expected"; then
-      tar -xJf "$tmpdir/ffmpeg.tar.xz" -C "$tmpdir"
-      cp "$tmpdir"/ffmpeg-*/bin/ffmpeg "$HOME/.local/bin/ffmpeg"
-      chmod +x "$HOME/.local/bin/ffmpeg"
-      rm -rf "$tmpdir"
-      return 0
-    else
-      echo "  Aborting install due to checksum failure." >&2
-      rm -rf "$tmpdir"
-      return 1
-    fi
-  else
+  if ! curl -sfL "$url" -o "$tmpdir/ffmpeg.tar.xz"; then
     echo "  Download failed. Install ffmpeg manually: https://github.com/BtbN/FFmpeg-Builds/releases" >&2
-    rm -rf "$tmpdir"
     return 1
   fi
+  if ! verify_checksum "$tmpdir/ffmpeg.tar.xz" "$expected"; then
+    return 1
+  fi
+  tar -xJf "$tmpdir/ffmpeg.tar.xz" -C "$tmpdir"
+  cp "$tmpdir"/ffmpeg-*/bin/ffmpeg "$HOME/.local/bin/ffmpeg"
+  chmod +x "$HOME/.local/bin/ffmpeg"
 }
 
 install_rclone_linux() {
@@ -126,28 +125,23 @@ install_rclone_linux() {
   case "$arch_suffix" in
     amd64) expected="$RCLONE_SHA256_AMD64" ;;
     arm64) expected="$RCLONE_SHA256_ARM64" ;;
+    *) echo "  No checksum available for architecture: $arch_suffix" >&2; return 1 ;;
   esac
   local tmpdir
   tmpdir=$(mktemp -d)
+  trap "rm -rf '$tmpdir'" RETURN
   echo "  Downloading rclone v${RCLONE_VERSION}..."
   mkdir -p "$HOME/.local/bin"
-  if curl -sfL "$url" -o "$tmpdir/rclone.zip"; then
-    if verify_checksum "$tmpdir/rclone.zip" "$expected"; then
-      unzip -q "$tmpdir/rclone.zip" -d "$tmpdir"
-      cp "$tmpdir"/rclone-*/rclone "$HOME/.local/bin/rclone"
-      chmod +x "$HOME/.local/bin/rclone"
-      rm -rf "$tmpdir"
-      return 0
-    else
-      echo "  Aborting install due to checksum failure." >&2
-      rm -rf "$tmpdir"
-      return 1
-    fi
-  else
+  if ! curl -sfL "$url" -o "$tmpdir/rclone.zip"; then
     echo "  Download failed. Install rclone manually: https://rclone.org/install/" >&2
-    rm -rf "$tmpdir"
     return 1
   fi
+  if ! verify_checksum "$tmpdir/rclone.zip" "$expected"; then
+    return 1
+  fi
+  unzip -q "$tmpdir/rclone.zip" -d "$tmpdir"
+  cp "$tmpdir"/rclone-*/rclone "$HOME/.local/bin/rclone"
+  chmod +x "$HOME/.local/bin/rclone"
 }
 
 install_tool() {
@@ -168,6 +162,7 @@ install_tool() {
       esac
       ;;
     macos)
+      # Homebrew handles its own integrity verification (bottle SHA256)
       if command -v brew >/dev/null 2>&1; then
         brew install "$tool"
       else
