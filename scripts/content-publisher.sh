@@ -508,10 +508,12 @@ main() {
     # Skip non-scheduled content
     [[ "$status" == "scheduled" ]] || continue
 
-    # Stale content: scheduled but publish_date in the past
+    # Stale content: scheduled but publish_date in the past.
+    # Mark as stale to prevent duplicate warnings on subsequent runs.
     if [[ "$publish_date" < "$today" ]]; then
       echo "WARNING: Stale scheduled content: $(basename "$file") (publish_date: $publish_date)" >&2
       post_discord_warning "**Stale scheduled content detected**\n\nFile: $(basename "$file")\nPublish date: $publish_date\nStatus: scheduled\n\nThis content was scheduled for a past date and was not published. Update the publish_date or set status to draft."
+      sed -i 's/^status: scheduled/status: stale/' "$file"
       continue
     fi
 
