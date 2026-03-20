@@ -1,6 +1,6 @@
 # Tasks: Pre-Merge Hooks for Auto-Rebase
 
-Source plan: `knowledge-base/plans/2026-03-03-feat-pre-merge-hooks-auto-rebase-plan.md`
+Source plan: `knowledge-base/project/plans/2026-03-03-feat-pre-merge-hooks-auto-rebase-plan.md`
 
 ## Phase 1: Setup
 

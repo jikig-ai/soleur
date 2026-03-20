@@ -213,12 +213,12 @@ Revert the commit. The change is additive — `stream_event` handling and the `-
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-03-02-telegram-streaming-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-telegram-streaming/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-02-telegram-streaming-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-telegram-streaming/spec.md`
 - Issue: #372
 - Follow-up: `sendMessageDraft` native streaming (issue TBD)
 - Bridge source: `apps/telegram-bridge/src/bridge.ts`
-- Async lifecycle learning: `knowledge-base/learnings/runtime-errors/2026-02-11-async-status-message-lifecycle-telegram.md`
-- DI architecture learning: `knowledge-base/learnings/implementation-patterns/2026-02-11-testability-refactoring-dependency-injection.md`
+- Async lifecycle learning: `knowledge-base/project/learnings/runtime-errors/2026-02-11-async-status-message-lifecycle-telegram.md`
+- DI architecture learning: `knowledge-base/project/learnings/implementation-patterns/2026-02-11-testability-refactoring-dependency-injection.md`
 - Telegram Bot API: https://core.telegram.org/bots/api
 - grammY docs: https://grammy.dev/ref/core/api

@@ -2,7 +2,7 @@
 
 **Issue:** #753
 **Branch:** feat-plan-domain-gates-753
-**Brainstorm:** knowledge-base/brainstorms/2026-03-19-plan-domain-gates-brainstorm.md
+**Brainstorm:** knowledge-base/project/brainstorms/2026-03-19-plan-domain-gates-brainstorm.md
 
 ## Problem Statement
 

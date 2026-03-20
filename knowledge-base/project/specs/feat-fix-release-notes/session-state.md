@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-fix-release-notes/knowledge-base/plans/2026-03-03-fix-release-notes-empty-on-pr-merge-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-fix-release-notes/knowledge-base/project/plans/2026-03-03-fix-release-notes-empty-on-pr-merge-plan.md
 - Status: complete
 
 ### Errors

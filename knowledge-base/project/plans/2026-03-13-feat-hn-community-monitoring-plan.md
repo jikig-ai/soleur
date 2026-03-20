@@ -59,7 +59,7 @@ Create `hn-community.sh` following the existing standalone script convention (no
 ## References
 
 - Script template: `plugins/soleur/skills/community/scripts/github-community.sh` (auth model) + `x-community.sh` (retry pattern, BASH_SOURCE guard)
-- Spec: `knowledge-base/specs/feat-hn-presence/spec.md`
-- Brainstorm: `knowledge-base/brainstorms/2026-03-13-hn-presence-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-hn-presence/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-13-hn-presence-brainstorm.md`
 - HN Algolia API: `https://hn.algolia.com/api`
 - Issue: #140 | Draft PR: #597

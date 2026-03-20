@@ -124,8 +124,8 @@ Full end-to-end verification requires a real webhook URL and is best done post-m
 - GitHub Issue: #427
 - Found during review of PR #420
 - Bot fix was attempted but blocked by the `soleur:fix-issue` skill's infrastructure constraint (`.github/workflows/` is prohibited for automated fixes)
-- Related learning: `knowledge-base/learnings/2026-02-19-discord-bot-identity-and-webhook-behavior.md` (webhook payload conventions)
-- Related learning: `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md` (CI security patterns)
+- Related learning: `knowledge-base/project/learnings/2026-02-19-discord-bot-identity-and-webhook-behavior.md` (webhook payload conventions)
+- Related learning: `knowledge-base/project/learnings/2026-02-21-github-actions-workflow-security-patterns.md` (CI security patterns)
 - Constitution principle: "All Discord webhook payloads must include explicit `username` and `avatar_url` fields" (line 92) -- the existing code already follows this; this fix adds `allowed_mentions` as another required field
 
 ## MVP
@@ -155,6 +155,6 @@ Update the existing Discord webhook convention (line 92) to include `allowed_men
 - GitHub Issue: #427
 - PR #420 (where the vulnerability was found)
 - `.github/workflows/version-bump-and-release.yml:239-278` (the "Post to Discord" step)
-- Learning: `knowledge-base/learnings/2026-02-19-discord-bot-identity-and-webhook-behavior.md`
-- Learning: `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
-- Learning: `knowledge-base/learnings/2026-03-03-fix-release-notes-pr-extraction.md`
+- Learning: `knowledge-base/project/learnings/2026-02-19-discord-bot-identity-and-webhook-behavior.md`
+- Learning: `knowledge-base/project/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
+- Learning: `knowledge-base/project/learnings/2026-03-03-fix-release-notes-pr-extraction.md`

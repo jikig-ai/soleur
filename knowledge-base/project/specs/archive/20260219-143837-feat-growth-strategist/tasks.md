@@ -1,6 +1,6 @@
 # Tasks: Growth Strategist Agent & Skill
 
-**Plan:** `knowledge-base/plans/2026-02-19-feat-growth-strategist-agent-skill-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-19-feat-growth-strategist-agent-skill-plan.md`
 **Branch:** feat-growth-strategist
 **Issue:** #148
 

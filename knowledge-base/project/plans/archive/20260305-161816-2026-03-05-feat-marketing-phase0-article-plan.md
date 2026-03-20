@@ -137,7 +137,7 @@ Apply inline brand voice validation during content generation, not as a separate
 
 ### Princeton GEO/AEO Requirements
 
-From `knowledge-base/learnings/2026-02-20-geo-aeo-methodology-incorporation.md`:
+From `knowledge-base/project/learnings/2026-02-20-geo-aeo-methodology-incorporation.md`:
 - Cite sources: +30-40% visibility uplift
 - Add quotations: +30-40%
 - Add statistics: up to +40%
@@ -375,11 +375,11 @@ These are suggestions -- the implementer should refine for brand voice. The H2 s
 - Brand guide: `knowledge-base/overview/brand-guide.md` (voice, tone, prohibited terms)
 - SEO refresh queue: `knowledge-base/marketing/seo-refresh-queue.md` (Priority 1.1-1.3 stale pages)
 - Competitive intelligence: `knowledge-base/overview/competitive-intelligence.md` (source material)
-- GEO/AEO learning: `knowledge-base/learnings/2026-02-20-geo-aeo-methodology-incorporation.md`
-- Brand guide inline validation: `knowledge-base/learnings/2026-02-12-brand-guide-contract-and-inline-validation.md`
-- CSS class mismatch prevention: `knowledge-base/learnings/2026-02-13-parallel-subagent-css-class-mismatch.md`
-- Grid orphan checks: `knowledge-base/learnings/2026-02-22-landing-page-grid-orphan-regression.md`
-- UX review gap: `knowledge-base/learnings/2026-02-17-ux-review-gap-visual-polish-vs-information-architecture.md`
+- GEO/AEO learning: `knowledge-base/project/learnings/2026-02-20-geo-aeo-methodology-incorporation.md`
+- Brand guide inline validation: `knowledge-base/project/learnings/2026-02-12-brand-guide-contract-and-inline-validation.md`
+- CSS class mismatch prevention: `knowledge-base/project/learnings/2026-02-13-parallel-subagent-css-class-mismatch.md`
+- Grid orphan checks: `knowledge-base/project/learnings/2026-02-22-landing-page-grid-orphan-regression.md`
+- UX review gap: `knowledge-base/project/learnings/2026-02-17-ux-review-gap-visual-polish-vs-information-architecture.md`
 - Content-writer skill: `plugins/soleur/skills/content-writer/SKILL.md`
 
 ### File Paths

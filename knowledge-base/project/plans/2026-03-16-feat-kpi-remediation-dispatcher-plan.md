@@ -138,7 +138,7 @@ Append to the `MESSAGE` printf:
   - `.github/workflows/scheduled-seo-aeo-audit.yml`
   - `.github/workflows/scheduled-growth-execution.yml`
   - `.github/workflows/scheduled-content-generator.yml`
-- Learning: `knowledge-base/learnings/2026-03-13-shell-script-defensive-patterns.md` (independent operations, fallback patterns)
+- Learning: `knowledge-base/project/learnings/2026-03-13-shell-script-defensive-patterns.md` (independent operations, fallback patterns)
 
 ### External
 

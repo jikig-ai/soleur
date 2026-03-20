@@ -21,7 +21,7 @@ The current `git-worktree` skill provides basic worktree management, but the new
 - Easy switching between active worktrees via interactive picker
 - Automatic cleanup when PRs are merged
 - Consistent naming convention (`feat-<name>`)
-- Link between worktree and its spec in `knowledge-base/specs/`
+- Link between worktree and its spec in `knowledge-base/project/specs/`
 
 ## Proposed Solution
 
@@ -66,7 +66,7 @@ Creates a worktree for a new feature with corresponding spec directory.
 **Actions:**
 1. Creates branch `feat-<name>` from current HEAD
 2. Creates worktree at `.worktrees/feat-<name>/`
-3. Creates spec directory `knowledge-base/specs/feat-<name>/`
+3. Creates spec directory `knowledge-base/project/specs/feat-<name>/`
 4. Copies `.env` if exists
 
 ### list-with-specs
@@ -85,7 +85,7 @@ Removes worktrees for branches that have been merged to main.
 **Actions:**
 1. Check each worktree's branch against main
 2. If merged, remove worktree
-3. Optionally archive spec to `knowledge-base/specs/archive/`
+3. Optionally archive spec to `knowledge-base/project/specs/archive/`
 ```
 
 **Update:** `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`
@@ -103,7 +103,7 @@ import { $ } from "bun";
 export async function createForFeature(name: string) {
   const branchName = `feat-${name}`;
   const worktreePath = `.worktrees/${branchName}`;
-  const specPath = `knowledge-base/specs/${branchName}`;
+  const specPath = `knowledge-base/project/specs/${branchName}`;
 
   await $`git worktree add -b ${branchName} ${worktreePath}`;
   await $`mkdir -p ${specPath}`;
@@ -157,7 +157,7 @@ Add cleanup check at end of compound flow:
 - [ ] `worktree-manager.sh cleanup-merged` removes merged worktrees
 - [ ] `soleur:switch` command provides interactive worktree selection
 - [ ] Worktrees are created at `.worktrees/feat-<name>/`
-- [ ] Spec directories are created at `knowledge-base/specs/feat-<name>/`
+- [ ] Spec directories are created at `knowledge-base/project/specs/feat-<name>/`
 - [ ] `soleur:compound` checks for merged PRs and offers cleanup
 
 ## Success Metrics

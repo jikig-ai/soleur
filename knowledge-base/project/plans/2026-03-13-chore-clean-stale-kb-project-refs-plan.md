@@ -23,7 +23,7 @@ deepened: 2026-03-13
 ### New Considerations Discovered
 
 - `knowledge-base/project/components/knowledge-base.md` has 7 stale references including executable `grep` and `ls` commands with legacy paths -- same high-priority category as the plugin SKILL.md files
-- `knowledge-base/project/constitution.md` line 153 has a convention path `knowledge-base/project/specs/feat-<name>/` that should become `knowledge-base/specs/feat-<name>/`
+- `knowledge-base/project/constitution.md` line 153 has a convention path `knowledge-base/project/specs/feat-<name>/` that should become `knowledge-base/project/specs/feat-<name>/`
 - `knowledge-base/product/business-validation.md` references a brainstorm at the legacy path
 - The grep verification commands in acceptance criteria must search the ENTIRE repo (not just `plugins/soleur/`), excluding `knowledge-base/project/` subdirectories that contain actual legacy content files (plans, brainstorms, specs, learnings still stored there)
 
@@ -33,10 +33,10 @@ After the KB restructure (#566, #569), four artifact directories moved from `kno
 
 | Legacy Path | Current Canonical Path |
 |---|---|
-| `knowledge-base/project/learnings/` | `knowledge-base/learnings/` |
-| `knowledge-base/project/brainstorms/` | `knowledge-base/brainstorms/` |
-| `knowledge-base/project/plans/` | `knowledge-base/plans/` |
-| `knowledge-base/project/specs/` | `knowledge-base/specs/` |
+| `knowledge-base/project/learnings/` | `knowledge-base/project/learnings/` |
+| `knowledge-base/project/brainstorms/` | `knowledge-base/project/brainstorms/` |
+| `knowledge-base/project/plans/` | `knowledge-base/project/plans/` |
+| `knowledge-base/project/specs/` | `knowledge-base/project/specs/` |
 
 Three paths under `knowledge-base/project/` remain correct and must NOT be changed:
 
@@ -110,24 +110,24 @@ PR #602 fixed the two shell scripts (`archive-kb.sh`, `worktree-manager.sh`) tha
 - `knowledge-base/project/brainstorms/` content files -- same, actual content at legacy path
 - `knowledge-base/project/learnings/` content files -- same, actual content at legacy path
 - `knowledge-base/project/specs/` content files -- same, actual content at legacy path
-- `knowledge-base/specs/feat-fix-archive-kb-paths/` -- historical records describing what was done in #602
-- `knowledge-base/plans/2026-03-13-fix-archive-kb-stale-paths-plan.md` -- references legacy paths in context section (historical)
-- `knowledge-base/learnings/2026-03-13-archive-kb-stale-path-resolution.md` -- documents the problem (historical)
+- `knowledge-base/project/specs/feat-fix-archive-kb-paths/` -- historical records describing what was done in #602
+- `knowledge-base/project/plans/2026-03-13-fix-archive-kb-stale-paths-plan.md` -- references legacy paths in context section (historical)
+- `knowledge-base/project/learnings/2026-03-13-archive-kb-stale-path-resolution.md` -- documents the problem (historical)
 
 ## Replacement Rules
 
 Apply these four substitutions across all in-scope files:
 
-1. `knowledge-base/project/learnings/` -> `knowledge-base/learnings/`
-2. `knowledge-base/project/brainstorms/` -> `knowledge-base/brainstorms/`
-3. `knowledge-base/project/plans/` -> `knowledge-base/plans/`
-4. `knowledge-base/project/specs/` -> `knowledge-base/specs/`
+1. `knowledge-base/project/learnings/` -> `knowledge-base/project/learnings/`
+2. `knowledge-base/project/brainstorms/` -> `knowledge-base/project/brainstorms/`
+3. `knowledge-base/project/plans/` -> `knowledge-base/project/plans/`
+4. `knowledge-base/project/specs/` -> `knowledge-base/project/specs/`
 
 **Edge case -- `sync.md` mkdir:** The `mkdir -p knowledge-base/project/{learnings,brainstorms,specs,plans} knowledge-base/project/components` line needs to become `mkdir -p knowledge-base/{learnings,brainstorms,specs,plans} knowledge-base/project/components` (components stays under project/).
 
 **Edge case -- archive-kb SKILL.md table:** The legacy paths in the "What It Archives" table should be relabeled, not removed, since the shell scripts intentionally still search them as fallbacks.
 
-**Edge case -- constitution.md line 153:** The convention rule `feat-<name>` maps to `knowledge-base/project/specs/feat-<name>/` contains a specs path reference. This is a special case: the file itself lives at `knowledge-base/project/constitution.md` (correct), but the convention path it describes points to the legacy specs location. Update the specs path portion only: `knowledge-base/specs/feat-<name>/`.
+**Edge case -- constitution.md line 153:** The convention rule `feat-<name>` maps to `knowledge-base/project/specs/feat-<name>/` contains a specs path reference. This is a special case: the file itself lives at `knowledge-base/project/constitution.md` (correct), but the convention path it describes points to the legacy specs location. Update the specs path portion only: `knowledge-base/project/specs/feat-<name>/`.
 
 **Edge case -- business-validation.md line 54:** Contains a `See knowledge-base/project/brainstorms/...` cross-reference. The actual brainstorm may still be at the legacy path. Verify the file exists at the new path before updating; if not, leave as-is (the reference points to real content that hasn't been migrated).
 
@@ -169,16 +169,16 @@ grep -c 'knowledge-base/project/constitution.md' plugins/soleur/skills/compound/
 - Given all replacements are applied, when running the same grep against `knowledge-base/project/constitution.md`, `knowledge-base/project/README.md`, `knowledge-base/project/components/`, and `knowledge-base/product/`, then zero matches are returned
 - Given the `sync.md` mkdir command is updated, when the sync command creates KB directories, then directories are created at `knowledge-base/{learnings,brainstorms,specs,plans}` (not under `project/`)
 - Given `compound-capture/SKILL.md` executable code blocks are updated, when an agent copy-pastes the `find` or `grep -r` commands, then they search the correct current paths
-- Given `learnings-researcher.md` category paths are updated, when the agent searches for learnings, then it searches `knowledge-base/learnings/` subdirectories (not `knowledge-base/project/learnings/`)
+- Given `learnings-researcher.md` category paths are updated, when the agent searches for learnings, then it searches `knowledge-base/project/learnings/` subdirectories (not `knowledge-base/project/learnings/`)
 - Given `knowledge-base/project/components/knowledge-base.md` is updated, when an agent reads the component documentation, then directory listings and grep commands point to current paths
-- Given constitution.md convention path is updated, when the convention-over-configuration rule is applied, then `feat-<name>` maps to `knowledge-base/specs/feat-<name>/` (not the legacy path)
+- Given constitution.md convention path is updated, when the convention-over-configuration rule is applied, then `feat-<name>` maps to `knowledge-base/project/specs/feat-<name>/` (not the legacy path)
 - Given references to `knowledge-base/project/constitution.md` are preserved, when counted with `grep -c`, then the count matches the pre-change baseline
 
 ## Context
 
 - KB restructure: #566, #569
 - Bash script fix: #600, #602
-- Related learning: `knowledge-base/learnings/2026-03-13-archive-kb-stale-path-resolution.md`
+- Related learning: `knowledge-base/project/learnings/2026-03-13-archive-kb-stale-path-resolution.md`
 - Related learning: `knowledge-base/project/learnings/2026-03-13-stale-cross-references-after-kb-restructuring.md`
 - Constitution principle (line 104): "When fixing a pattern across plugin files, search ALL `.md` files under `plugins/soleur/` -- not just the category that triggered the report"
 

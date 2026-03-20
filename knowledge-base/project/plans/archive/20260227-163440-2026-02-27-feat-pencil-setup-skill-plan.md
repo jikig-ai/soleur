@@ -99,9 +99,9 @@ Replace prerequisite check (lines 9-11):
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-27-pencil-setup-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-pencil-setup/spec.md`
-- Pencil constraint learning: `knowledge-base/learnings/2026-02-14-pencil-mcp-local-binary-constraint.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-27-pencil-setup-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-pencil-setup/spec.md`
+- Pencil constraint learning: `knowledge-base/project/learnings/2026-02-14-pencil-mcp-local-binary-constraint.md`
 - Similar skill: `plugins/soleur/skills/agent-browser/SKILL.md`
 - Target agent: `plugins/soleur/agents/product/design/ux-design-lead.md:9-11`
 - [Pencil Installation Docs](https://docs.pencil.dev/getting-started/installation)

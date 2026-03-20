@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/plans/2026-03-16-feat-content-generator-queue-fallback-plan.md
+- Plan file: knowledge-base/project/plans/2026-03-16-feat-content-generator-queue-fallback-plan.md
 - Status: complete
 
 ### Errors

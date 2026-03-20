@@ -399,9 +399,9 @@ fi
 
 - PR #609: worktree-manager.sh bare repo hardening
 - GitHub Issue: #610
-- Learning: `knowledge-base/learnings/2026-03-13-bare-repo-stale-files-and-working-tree-guards.md`
-- Learning: `knowledge-base/learnings/2026-03-13-bare-repo-git-rev-parse-failure.md`
-- Learning: `knowledge-base/learnings/2026-03-13-shell-script-defensive-patterns.md`
-- Learning: `knowledge-base/learnings/2026-03-13-bash-arithmetic-and-test-sourcing-patterns.md`
+- Learning: `knowledge-base/project/learnings/2026-03-13-bare-repo-stale-files-and-working-tree-guards.md`
+- Learning: `knowledge-base/project/learnings/2026-03-13-bare-repo-git-rev-parse-failure.md`
+- Learning: `knowledge-base/project/learnings/2026-03-13-shell-script-defensive-patterns.md`
+- Learning: `knowledge-base/project/learnings/2026-03-13-bash-arithmetic-and-test-sourcing-patterns.md`
 - Existing pattern: `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` lines 27-38
 - Test file: `plugins/soleur/test/ralph-loop-stuck-detection.test.sh` (tests 16-17 exercise hook path resolution)

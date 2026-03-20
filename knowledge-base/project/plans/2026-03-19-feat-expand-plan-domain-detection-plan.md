@@ -12,7 +12,7 @@ Expand the plan skill's Phase 2.5 from a product/UX-only gate to a generalized d
 
 **Issue:** #753
 **Branch:** feat-plan-domain-gates-753
-**Brainstorm:** knowledge-base/brainstorms/2026-03-19-plan-domain-gates-brainstorm.md
+**Brainstorm:** knowledge-base/project/brainstorms/2026-03-19-plan-domain-gates-brainstorm.md
 **Spec:** knowledge-base/project/specs/feat-plan-domain-gates-753/spec.md
 **Draft PR:** #792
 

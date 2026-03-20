@@ -15,8 +15,8 @@ Run Soleur headlessly on a Hetzner VPS (~$4/mo), accessible through a Telegram b
 
 **Issue:** [#28](https://github.com/jikig-ai/soleur/issues/28)
 **Branch:** `feat-cloud-deploy`
-**Brainstorm:** `knowledge-base/brainstorms/2026-02-10-cloud-deploy-brainstorm.md`
-**Spec:** `knowledge-base/specs/feat-cloud-deploy/spec.md`
+**Brainstorm:** `knowledge-base/project/brainstorms/2026-02-10-cloud-deploy-brainstorm.md`
+**Spec:** `knowledge-base/project/specs/feat-cloud-deploy/spec.md`
 **Version bump intent:** None in v1 (no plugin components; bridge is a standalone app)
 
 ## Problem Statement
@@ -392,8 +392,8 @@ These items were in the original plan but cut during review. Each has a separate
 
 ### Internal
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-10-cloud-deploy-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-cloud-deploy/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-10-cloud-deploy-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-cloud-deploy/spec.md`
 - Constitution: `knowledge-base/overview/constitution.md`
 
 ### External

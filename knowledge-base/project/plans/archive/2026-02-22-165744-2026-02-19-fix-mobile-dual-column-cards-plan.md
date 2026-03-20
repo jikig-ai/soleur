@@ -115,5 +115,5 @@ The landing page feature grid uses `auto-fill` with `minmax(200px, 1fr)`, which 
 - CSS file: `plugins/soleur/docs/css/style.css:549-575` (feature grid styles)
 - CSS file: `plugins/soleur/docs/css/style.css:851-858` (existing mobile overrides)
 - HTML file: `plugins/soleur/docs/index.njk:77-134` (feature grid section)
-- Learning: `knowledge-base/learnings/2026-02-13-parallel-subagent-css-class-mismatch.md`
-- Learning: `knowledge-base/learnings/2026-02-13-static-docs-site-from-brand-guide.md`
+- Learning: `knowledge-base/project/learnings/2026-02-13-parallel-subagent-css-class-mismatch.md`
+- Learning: `knowledge-base/project/learnings/2026-02-13-static-docs-site-from-brand-guide.md`

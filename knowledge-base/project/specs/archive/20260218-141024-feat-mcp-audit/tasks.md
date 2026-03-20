@@ -1,6 +1,6 @@
 # Tasks: MCP Integration Audit
 
-**Plan:** `knowledge-base/plans/2026-02-18-feat-mcp-integration-audit-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-18-feat-mcp-integration-audit-plan.md`
 **Issue:** #116
 **Branch:** feat-mcp-audit
 

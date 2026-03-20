@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-version-bump-after-compound/knowledge-base/plans/2026-02-26-fix-version-bump-after-compound-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-version-bump-after-compound/knowledge-base/project/plans/2026-02-26-fix-version-bump-after-compound-plan.md
 - Status: complete
 
 ### Errors

@@ -282,9 +282,9 @@ Changes:
 ## References
 
 - Issue: [#391](https://github.com/jikig-ai/soleur/issues/391)
-- Brainstorm: `knowledge-base/brainstorms/2026-03-03-serialize-version-bumps-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-serialize-version-bumps/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-03-serialize-version-bumps-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-serialize-version-bumps/spec.md`
 - Current workflow: `.github/workflows/auto-release.yml`
-- Learnings: `knowledge-base/learnings/2026-02-10-parallel-feature-version-conflicts-and-flag-lifecycle.md`
-- Learnings: `knowledge-base/learnings/2026-02-26-version-bump-after-compound-ordering.md`
-- Learnings: `knowledge-base/learnings/integration-issues/github-actions-auto-release-permissions.md`
+- Learnings: `knowledge-base/project/learnings/2026-02-10-parallel-feature-version-conflicts-and-flag-lifecycle.md`
+- Learnings: `knowledge-base/project/learnings/2026-02-26-version-bump-after-compound-ordering.md`
+- Learnings: `knowledge-base/project/learnings/integration-issues/github-actions-auto-release-permissions.md`

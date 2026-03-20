@@ -2,7 +2,7 @@
 
 **Issue:** #330
 **Branch:** feat-competitive-intelligence
-**Plan:** `knowledge-base/plans/2026-02-27-feat-competitive-intelligence-agent-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-27-feat-competitive-intelligence-agent-plan.md`
 
 ## Phase 1: Core Components
 

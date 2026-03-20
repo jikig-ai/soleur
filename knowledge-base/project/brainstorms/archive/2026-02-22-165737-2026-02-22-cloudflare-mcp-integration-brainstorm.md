@@ -63,8 +63,8 @@ Key risk identified: `execute()` requires writing JavaScript to call `cloudflare
 - **PR #125:** MCP audit that identified the three blockers
 - **PR #108:** GitHub Pages + Cloudflare wiring learnings (the "agent autonomy gap")
 - **PR #103:** Original infra-security agent creation
-- **Learning:** `knowledge-base/learnings/integration-issues/2026-02-18-authenticated-mcp-servers-cannot-bundle-in-plugin-json.md`
-- **Learning:** `knowledge-base/learnings/integration-issues/2026-02-16-github-pages-cloudflare-wiring-workflow.md`
+- **Learning:** `knowledge-base/project/learnings/integration-issues/2026-02-18-authenticated-mcp-servers-cannot-bundle-in-plugin-json.md`
+- **Learning:** `knowledge-base/project/learnings/integration-issues/2026-02-16-github-pages-cloudflare-wiring-workflow.md`
 
 ## Sources
 

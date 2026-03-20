@@ -158,8 +158,8 @@ The new report will be: `2026-03-16-seo-audit.md`
 - seo-aeo skill: `plugins/soleur/skills/seo-aeo/SKILL.md`
 - growth-strategist agent: `plugins/soleur/agents/marketing/growth-strategist.md`
 - Existing audit reports: `knowledge-base/marketing/audits/soleur-ai/`
-- Related brainstorm: `knowledge-base/brainstorms/2026-03-16-cmo-autonomous-execution-brainstorm.md`
-- Learning -- skill wrapping pattern: `knowledge-base/learnings/2026-03-16-scheduled-skill-wrapping-pattern.md`
-- Learning -- linearize multi-step LLM prompts: `knowledge-base/learnings/2026-03-16-linearize-multi-step-llm-prompts.md`
-- Learning -- workflow dispatch permissions: `knowledge-base/learnings/2026-03-16-github-actions-workflow-dispatch-permissions.md`
+- Related brainstorm: `knowledge-base/project/brainstorms/2026-03-16-cmo-autonomous-execution-brainstorm.md`
+- Learning -- skill wrapping pattern: `knowledge-base/project/learnings/2026-03-16-scheduled-skill-wrapping-pattern.md`
+- Learning -- linearize multi-step LLM prompts: `knowledge-base/project/learnings/2026-03-16-linearize-multi-step-llm-prompts.md`
+- Learning -- workflow dispatch permissions: `knowledge-base/project/learnings/2026-03-16-github-actions-workflow-dispatch-permissions.md`
 - Commit that triggered this task: `e56b9e5` (docs: weekly growth audit 2026-03-16)

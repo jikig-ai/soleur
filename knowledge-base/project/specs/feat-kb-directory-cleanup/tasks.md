@@ -4,28 +4,28 @@
 
 ### A1: Merge root brainstorms/ → project/brainstorms/
 
-- [x] A1.1 `git add knowledge-base/brainstorms/` then move all `*.md` files to `knowledge-base/project/brainstorms/`
+- [x] A1.1 `git add knowledge-base/project/brainstorms/` then move all `*.md` files to `knowledge-base/project/brainstorms/`
 - [x] A1.2 Move all archive contents from `brainstorms/archive/` to `knowledge-base/project/brainstorms/archive/`
-- [x] A1.3 Verify `knowledge-base/brainstorms/` is empty
+- [x] A1.3 Verify `knowledge-base/project/brainstorms/` is empty
 
 ### A2: Merge root learnings/ → project/learnings/
 
-- [x] A2.1 `git add knowledge-base/learnings/` then move all flat `*.md` files to `knowledge-base/project/learnings/`
-- [x] A2.2 Verify `knowledge-base/learnings/` is empty
+- [x] A2.1 `git add knowledge-base/project/learnings/` then move all flat `*.md` files to `knowledge-base/project/learnings/`
+- [x] A2.2 Verify `knowledge-base/project/learnings/` is empty
 
 ### A3: Merge root plans/ → project/plans/
 
-- [x] A3.1 `git add knowledge-base/plans/` then move all `*.md` files to `knowledge-base/project/plans/`
+- [x] A3.1 `git add knowledge-base/project/plans/` then move all `*.md` files to `knowledge-base/project/plans/`
 - [x] A3.2 Move all archive contents from `plans/archive/` to `knowledge-base/project/plans/archive/`
-- [x] A3.3 Verify `knowledge-base/plans/` is empty
+- [x] A3.3 Verify `knowledge-base/project/plans/` is empty
 
 ### A4: Merge root specs/ → project/specs/
 
 - [x] A4.1 Move all non-overlapping `feat-*` directories from root `specs/` to `knowledge-base/project/specs/`
-- [x] A4.2 Move `knowledge-base/specs/feat-plausible-goals/session-state.md` into `knowledge-base/project/specs/feat-plausible-goals/`
-- [x] A4.3 Move `knowledge-base/specs/feat-weekly-analytics-improvements/session-state.md` into `knowledge-base/project/specs/feat-weekly-analytics-improvements/`
+- [x] A4.2 Move `knowledge-base/project/specs/feat-plausible-goals/session-state.md` into `knowledge-base/project/specs/feat-plausible-goals/`
+- [x] A4.3 Move `knowledge-base/project/specs/feat-weekly-analytics-improvements/session-state.md` into `knowledge-base/project/specs/feat-weekly-analytics-improvements/`
 - [x] A4.4 Move all archive contents from root `specs/archive/` to `knowledge-base/project/specs/archive/`
-- [x] A4.5 Verify `knowledge-base/specs/` is empty
+- [x] A4.5 Verify `knowledge-base/project/specs/` is empty
 
 ### A5: Merge features/specs/ → project/specs/
 
@@ -38,7 +38,7 @@
 
 ### B1: Shell Scripts
 
-- [x] B1.1 Update `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` — change all `knowledge-base/specs/`, `knowledge-base/brainstorms/`, `knowledge-base/plans/` to `knowledge-base/project/specs/`, etc. Remove `features/specs/` fallback. Consolidate legacy fallback arrays.
+- [x] B1.1 Update `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` — change all `knowledge-base/project/specs/`, `knowledge-base/project/brainstorms/`, `knowledge-base/project/plans/` to `knowledge-base/project/specs/`, etc. Remove `features/specs/` fallback. Consolidate legacy fallback arrays.
 - [x] B1.2 Update `plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` — change primary paths to `knowledge-base/project/brainstorms`, `knowledge-base/project/plans`, `knowledge-base/project/specs`. Remove `features/specs` and legacy fallback entries.
 
 ### B2: Skill Definitions (all already used `knowledge-base/project/` paths — no changes needed)
@@ -70,10 +70,10 @@
 
 ## Phase C: Verification
 
-- [x] C1 `knowledge-base/brainstorms/` does not exist
-- [x] C2 `knowledge-base/learnings/` does not exist
-- [x] C3 `knowledge-base/plans/` does not exist
-- [x] C4 `knowledge-base/specs/` does not exist
+- [x] C1 `knowledge-base/project/brainstorms/` does not exist
+- [x] C2 `knowledge-base/project/learnings/` does not exist
+- [x] C3 `knowledge-base/project/plans/` does not exist
+- [x] C4 `knowledge-base/project/specs/` does not exist
 - [x] C5 `knowledge-base/features/` does not exist
 - [x] C6 `knowledge-base/project/brainstorms/` has 33+ files
 - [x] C7 `knowledge-base/project/learnings/` has 198+ files including 12 category subdirs

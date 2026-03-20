@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Sequential test runner that isolates test suites to avoid Bun's FPE crash
 # when running all tests via recursive directory discovery.
-# See: knowledge-base/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md
+# See: knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md
 
 # --- Version Check ---
 if [[ -f .bun-version ]]; then

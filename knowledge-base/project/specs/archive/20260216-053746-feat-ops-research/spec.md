@@ -1,7 +1,7 @@
 # Spec: ops-research Agent
 
 **Date:** 2026-02-14
-**Brainstorm:** `knowledge-base/brainstorms/2026-02-14-ops-research-agent-brainstorm.md`
+**Brainstorm:** `knowledge-base/project/brainstorms/2026-02-14-ops-research-agent-brainstorm.md`
 **Branch:** `feat-ops-research`
 
 ## Problem Statement

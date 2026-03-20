@@ -80,7 +80,7 @@ Created 10 reference files loaded on-demand via Read tool. Originally placed in 
 ```markdown
 ### Check for session-state.md
 - Run: git branch --show-current
-- If on feat-* branch, check: knowledge-base/specs/feat-<name>/session-state.md
+- If on feat-* branch, check: knowledge-base/project/specs/feat-<name>/session-state.md
 - If exists, read it and include forwarded errors in inventory
 - Merge errors from: preceding phases, subagent isolation, compaction fallback
 ```

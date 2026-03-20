@@ -259,8 +259,8 @@ This is explicitly deferred from this PR. Track as a follow-up issue.
 
 ### Internal References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-03-16-cmo-autonomous-execution-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-cmo-autonomous-execution/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-16-cmo-autonomous-execution-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-cmo-autonomous-execution/spec.md`
 - Issue: #638
 - Existing workflow pattern: `.github/workflows/scheduled-competitive-analysis.yml`
 - SEO skill: `plugins/soleur/skills/seo-aeo/SKILL.md`

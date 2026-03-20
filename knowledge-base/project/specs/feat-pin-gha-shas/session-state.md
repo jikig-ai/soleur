@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-pin-gha-shas/knowledge-base/plans/2026-02-27-security-pin-gha-action-shas-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-pin-gha-shas/knowledge-base/project/plans/2026-02-27-security-pin-gha-action-shas-plan.md
 - Status: complete
 
 ### Errors

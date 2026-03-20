@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-fix-test-fix-loop-stash/knowledge-base/plans/2026-03-03-fix-test-fix-loop-stash-to-commits-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-fix-test-fix-loop-stash/knowledge-base/project/plans/2026-03-03-fix-test-fix-loop-stash-to-commits-plan.md
 - Status: complete
 
 ### Errors

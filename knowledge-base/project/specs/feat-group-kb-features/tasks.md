@@ -11,14 +11,14 @@
 
 ## Phase 2: Core Implementation -- Shell Scripts
 
-- [x] 2.1 Update `archive-kb.sh` discovery globs (lines 98-110): `knowledge-base/{brainstorms,plans}/*` -> `knowledge-base/features/{brainstorms,plans}/*`; `knowledge-base/specs/feat-` -> `knowledge-base/features/specs/feat-`
+- [x] 2.1 Update `archive-kb.sh` discovery globs (lines 98-110): `knowledge-base/{brainstorms,plans}/*` -> `knowledge-base/features/{brainstorms,plans}/*`; `knowledge-base/project/specs/feat-` -> `knowledge-base/features/specs/feat-`
 - [x] 2.2 Update `worktree-manager.sh` `create_for_feature()`: spec_dir path (line 152), spec dir creation (lines 181-184), help text (line 194), help examples (line 617)
 - [x] 2.3 Update `worktree-manager.sh` `cleanup_merged_worktrees()`: spec_dir (line 426), archive_dir (line 427), archive_kb_files calls for brainstorms/plans (lines 465-466)
 - [x] 2.4 Update `scripts/generate-article-30-register.sh` spec path reference
 
 ## Phase 3: Core Implementation -- Skills
 
-- [x] 3.1 Update `plan/SKILL.md`: all `knowledge-base/specs/`, `knowledge-base/plans/`, `knowledge-base/brainstorms/`, `knowledge-base/learnings/` references
+- [x] 3.1 Update `plan/SKILL.md`: all `knowledge-base/project/specs/`, `knowledge-base/project/plans/`, `knowledge-base/project/brainstorms/`, `knowledge-base/project/learnings/` references
 - [x] 3.2 Update `brainstorm/SKILL.md`: brainstorms/, learnings/, specs/ references
 - [x] 3.3 Update `brainstorm-techniques/SKILL.md`: brainstorms/ references
 - [x] 3.4 Update `compound/SKILL.md`: specs/, learnings/, brainstorms/, plans/ references (including brace expansion on line 269)
@@ -51,10 +51,10 @@
 
 ## Phase 6: Verification
 
-- [x] 6.1 Run `grep -r 'knowledge-base/specs/' plugins/ scripts/ .github/ AGENTS.md` -- must return zero
-- [x] 6.2 Run `grep -r 'knowledge-base/plans/' plugins/ scripts/ .github/ AGENTS.md` -- must return zero
-- [x] 6.3 Run `grep -r 'knowledge-base/brainstorms/' plugins/ scripts/ .github/ AGENTS.md` -- must return zero
-- [x] 6.4 Run `grep -r 'knowledge-base/learnings/' plugins/ scripts/ .github/ AGENTS.md` -- must return zero
+- [x] 6.1 Run `grep -r 'knowledge-base/project/specs/' plugins/ scripts/ .github/ AGENTS.md` -- must return zero
+- [x] 6.2 Run `grep -r 'knowledge-base/project/plans/' plugins/ scripts/ .github/ AGENTS.md` -- must return zero
+- [x] 6.3 Run `grep -r 'knowledge-base/project/brainstorms/' plugins/ scripts/ .github/ AGENTS.md` -- must return zero
+- [x] 6.4 Run `grep -r 'knowledge-base/project/learnings/' plugins/ scripts/ .github/ AGENTS.md` -- must return zero
 - [x] 6.5 Run `archive-kb.sh --dry-run` and verify artifacts discovered under new paths
 - [x] 6.6 Verify constitution.md has `knowledge-base/features/specs/feat-<name>/` convention
 - [x] 6.7 Verify learnings-researcher has all 13 categories updated

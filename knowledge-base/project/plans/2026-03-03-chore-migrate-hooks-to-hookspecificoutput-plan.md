@@ -89,7 +89,7 @@ All hooks already depend on `jq` for parsing input (`jq -r '.tool_input.command 
 
 **Edge Case -- stdout contamination:**
 
-Per `knowledge-base/learnings/2026-03-03-pre-merge-rebase-hook-implementation.md`: git commands that produce output to stdout corrupt JSON output from hooks. The migrated hooks do not run git commands between guard detection and JSON output, so this is not a risk here. However, `jq -n` is safer than `echo` because `jq` always produces valid JSON regardless of shell quoting context.
+Per `knowledge-base/project/learnings/2026-03-03-pre-merge-rebase-hook-implementation.md`: git commands that produce output to stdout corrupt JSON output from hooks. The migrated hooks do not run git commands between guard detection and JSON output, so this is not a risk here. However, `jq -n` is safer than `echo` because `jq` always produces valid JSON regardless of shell quoting context.
 
 ### guardrails.sh (3 changes)
 
@@ -211,7 +211,7 @@ echo '{"tool_input":{"command":"git commit -m test"}}' | bash .claude/hooks/guar
 - Issue: #402
 - Reference implementation: `.claude/hooks/pre-merge-rebase.sh` (PR #399)
 - API docs: `hookSpecificOutput` with `permissionDecision` (allow/deny/ask) and optional `permissionDecisionReason`
-- Learning: `knowledge-base/learnings/2026-03-03-pre-merge-rebase-hook-implementation.md`
+- Learning: `knowledge-base/project/learnings/2026-03-03-pre-merge-rebase-hook-implementation.md`
 - Version bump: PATCH (bug fix / consistency improvement, no new functionality)
 
 ## References

@@ -10,7 +10,7 @@ The `knowledge-base/` taxonomy uses top-level directories for domains (engineeri
 ## Goals
 
 - G1: Merge `features/{brainstorms,learnings,plans,specs}` into `project/`
-- G2: Delete stale top-level `knowledge-base/specs/` leftover
+- G2: Delete stale top-level `knowledge-base/project/specs/` leftover
 - G3: Update all path references across skills, scripts, and agents
 
 ## Non-Goals
@@ -23,7 +23,7 @@ The `knowledge-base/` taxonomy uses top-level directories for domains (engineeri
 
 - FR1: `git mv` all contents of `features/` subdirs into `project/` (preserving git history)
 - FR2: Remove empty `features/` directory
-- FR3: Delete stale `knowledge-base/specs/` directory
+- FR3: Delete stale `knowledge-base/project/specs/` directory
 - FR4: Update all path references in skill SKILL.md files (12 files)
 - FR5: Update hardcoded paths in shell scripts (worktree-manager.sh, archive-kb.sh)
 - FR6: Update path references in agent files (cpo.md)
@@ -67,4 +67,4 @@ The `knowledge-base/` taxonomy uses top-level directories for domains (engineeri
 
 ### Directories to Delete
 - `knowledge-base/features/` (after moves)
-- `knowledge-base/specs/` (stale leftover)
+- `knowledge-base/project/specs/` (stale leftover)

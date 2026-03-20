@@ -1,6 +1,6 @@
 # Tasks: Pin mutable GitHub Actions tags to commit SHAs
 
-Source plan: `knowledge-base/plans/2026-02-27-security-pin-gha-action-shas-plan.md`
+Source plan: `knowledge-base/project/plans/2026-02-27-security-pin-gha-action-shas-plan.md`
 
 ## Phase 1: Pin unpinned workflows
 

@@ -250,8 +250,8 @@ ls tmp/ 2>/dev/null || echo "tmp/ removed"
 
 ## References
 
-- Learning: `knowledge-base/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md`
-- Learning: `knowledge-base/learnings/2026-02-27-feature-video-graceful-degradation.md`
+- Learning: `knowledge-base/project/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md`
+- Learning: `knowledge-base/project/learnings/2026-02-27-feature-video-graceful-degradation.md`
 - Constitution: "Add test/temp build output directories to .gitignore when introducing new build commands"
 - AGENTS.md: "MCP tools resolve paths from the repo root, not the shell CWD"
 - `.gitignore` already has `.playwright-mcp/` rule (covers auto-named MCP screenshots)

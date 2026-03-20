@@ -285,7 +285,7 @@ No additional hardening is needed for this execution task.
 - Blog post: `plugins/soleur/docs/blog/what-is-company-as-a-service.md`
 - Brand guide: `knowledge-base/overview/brand-guide.md`
 - Site config: `plugins/soleur/docs/_data/site.json`
-- Original social-distribute plan: `knowledge-base/plans/2026-03-06-feat-social-distribute-plan.md`
+- Original social-distribute plan: `knowledge-base/project/plans/2026-03-06-feat-social-distribute-plan.md`
 
 ### Learnings Applied
 

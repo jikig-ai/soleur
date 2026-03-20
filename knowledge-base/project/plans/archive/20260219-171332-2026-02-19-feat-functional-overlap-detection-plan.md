@@ -186,6 +186,6 @@ Files:
 - Plan command Phase 1.5: `plugins/soleur/commands/soleur/plan.md:131-172`
 - Triggering issue: #155, triggered by #152 (growth-strategist)
 - Prior agent-finder work: PR #130, issue #55
-- Learning: skill-creator overlap (`knowledge-base/learnings/technical-debt/2026-02-12-skill-creator-overlap.md`)
-- Learning: plan review catches consolidation (`knowledge-base/learnings/workflow-patterns/2026-02-14-plan-review-agent-consolidation.md`)
-- Learning: external agent discovery patterns (`knowledge-base/learnings/implementation-patterns/2026-02-18-external-agent-discovery-plugin-loader-patterns.md`)
+- Learning: skill-creator overlap (`knowledge-base/project/learnings/technical-debt/2026-02-12-skill-creator-overlap.md`)
+- Learning: plan review catches consolidation (`knowledge-base/project/learnings/workflow-patterns/2026-02-14-plan-review-agent-consolidation.md`)
+- Learning: external agent discovery patterns (`knowledge-base/project/learnings/implementation-patterns/2026-02-18-external-agent-discovery-plugin-loader-patterns.md`)

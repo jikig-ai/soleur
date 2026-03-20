@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-discord-channel-reorg/knowledge-base/plans/2026-03-12-feat-discord-channel-reorg-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-discord-channel-reorg/knowledge-base/project/plans/2026-03-12-feat-discord-channel-reorg-plan.md
 - Status: complete
 
 ### Errors

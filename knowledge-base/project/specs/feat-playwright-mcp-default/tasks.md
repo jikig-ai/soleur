@@ -1,6 +1,6 @@
 # Tasks: Default to Playwright MCP for browser interactions
 
-Source: `knowledge-base/plans/2026-03-10-fix-default-playwright-mcp-browser-interactions-plan.md`
+Source: `knowledge-base/project/plans/2026-03-10-fix-default-playwright-mcp-browser-interactions-plan.md`
 Closes: #485
 
 ## Phase 1: constitution.md browser hierarchy rule

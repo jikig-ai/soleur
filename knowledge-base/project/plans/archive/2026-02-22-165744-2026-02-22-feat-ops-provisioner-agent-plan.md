@@ -91,8 +91,8 @@ Update descriptions in both sibling agents to mention ops-provisioner:
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-22-ops-provisioner-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-ops-provisioner/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-22-ops-provisioner-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-ops-provisioner/spec.md`
 - Sibling: `plugins/soleur/agents/operations/ops-research.md`
 - Sibling: `plugins/soleur/agents/operations/ops-advisor.md`
 - Pattern: `plugins/soleur/skills/community/SKILL.md` (Discord setup wizard)

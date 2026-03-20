@@ -239,12 +239,12 @@ This is forward-compatible. The content-publisher scans all `*.md` files in the 
 - Content publisher: `scripts/content-publisher.sh`
 - Content files: `knowledge-base/marketing/distribution-content/*.md`
 - Workflow: `.github/workflows/scheduled-content-publisher.yml`
-- Brainstorm: `knowledge-base/brainstorms/2026-03-12-unified-marketing-campaign-brainstorm.md`
-- Parent plan: `knowledge-base/plans/2026-03-12-feat-unified-marketing-campaign-plan.md` (Follow-Up Issues section)
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-12-unified-marketing-campaign-brainstorm.md`
+- Parent plan: `knowledge-base/project/plans/2026-03-12-feat-unified-marketing-campaign-plan.md` (Follow-Up Issues section)
 
 ### Institutional Learnings Applied
-- Directory-driven content discovery frontmatter parsing (`knowledge-base/learnings/2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md`) -- use established YAML frontmatter format
-- Multi-platform publisher error propagation (`knowledge-base/learnings/2026-03-11-multi-platform-publisher-error-propagation.md`) -- maintain per-file failure semantics
+- Directory-driven content discovery frontmatter parsing (`knowledge-base/project/learnings/2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md`) -- use established YAML frontmatter format
+- Multi-platform publisher error propagation (`knowledge-base/project/learnings/2026-03-11-multi-platform-publisher-error-propagation.md`) -- maintain per-file failure semantics
 - Discord allowed mentions sanitization -- webhooks must include `allowed_mentions: {parse: []}`
 
 ### Related Work

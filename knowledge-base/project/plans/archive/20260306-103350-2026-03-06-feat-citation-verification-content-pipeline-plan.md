@@ -40,7 +40,7 @@ The first published blog article ("What Is Company-as-a-Service?") contained 6 f
 5. Duplicate paragraph (WhatsApp section appeared twice)
 6. Wrong factual claim (Instagram "billion users" at acquisition -- actual was 30M users)
 
-All errors were LLM-generated content published without source verification. The LLM that generates content cannot reliably self-verify its own citations -- a separate verification step is needed. The learning at `knowledge-base/learnings/2026-03-06-blog-citation-verification-before-publish.md` documents this incident.
+All errors were LLM-generated content published without source verification. The LLM that generates content cannot reliably self-verify its own citations -- a separate verification step is needed. The learning at `knowledge-base/project/learnings/2026-03-06-blog-citation-verification-before-publish.md` documents this incident.
 
 ## Proposed Solution
 
@@ -330,11 +330,11 @@ Per the agent domain checklist learning, adding a new agent to an existing domai
 
 ### Internal References
 
-- Learning: `knowledge-base/learnings/2026-03-06-blog-citation-verification-before-publish.md`
-- Learning: `knowledge-base/learnings/performance-issues/2026-02-20-agent-description-token-budget-optimization.md`
-- Learning: `knowledge-base/learnings/implementation-patterns/2026-02-22-new-skill-creation-lifecycle.md`
-- Learning: `knowledge-base/learnings/integration-issues/adding-new-agent-domain-checklist.md`
-- Learning: `knowledge-base/learnings/2026-03-02-multi-agent-cascade-orchestration-checklist.md`
+- Learning: `knowledge-base/project/learnings/2026-03-06-blog-citation-verification-before-publish.md`
+- Learning: `knowledge-base/project/learnings/performance-issues/2026-02-20-agent-description-token-budget-optimization.md`
+- Learning: `knowledge-base/project/learnings/implementation-patterns/2026-02-22-new-skill-creation-lifecycle.md`
+- Learning: `knowledge-base/project/learnings/integration-issues/adding-new-agent-domain-checklist.md`
+- Learning: `knowledge-base/project/learnings/2026-03-02-multi-agent-cascade-orchestration-checklist.md`
 - Content-writer skill: `plugins/soleur/skills/content-writer/SKILL.md`
 - Copywriter agent (sibling): `plugins/soleur/agents/marketing/copywriter.md`
 - CMO agent (domain leader): `plugins/soleur/agents/marketing/cmo.md`

@@ -36,7 +36,7 @@ The brainstorm overestimated the blast radius. Key corrections:
 
 ## Test Scenarios
 
-- Given files at `knowledge-base/brainstorms/`, when migration runs, then files exist at `knowledge-base/project/brainstorms/` and old dir is gone
+- Given files at `knowledge-base/project/brainstorms/`, when migration runs, then files exist at `knowledge-base/project/brainstorms/` and old dir is gone
 - Given `workspace.ts` creates dirs, when a new user is provisioned, then dirs are created under `knowledge-base/project/`
 - Given archive dirs exist in both locations, when migration runs, then archive files merge without overwriting
 
@@ -97,7 +97,7 @@ If any `git mv` fails on a specific file, fall back to `git add <file> && git mv
    ```
 
 2. **`apps/web-platform/test/workspace.test.ts`**: Update assertions to expect `project/` subdirectories
-3. **`apps/web-platform/test/canusertool-sandbox.test.ts`** (line 23): `knowledge-base/plans/plan.md` → `knowledge-base/project/plans/plan.md`
+3. **`apps/web-platform/test/canusertool-sandbox.test.ts`** (line 23): `knowledge-base/project/plans/plan.md` → `knowledge-base/project/plans/plan.md`
 4. **`scripts/test-all.sh`** (line 6): Update comment path
 
 **Step 3: Best-effort sed on content cross-references (~139 files).**
@@ -114,7 +114,7 @@ for search_dir in brainstorms learnings plans specs; do
 done
 ```
 
-The sed pattern is double-prefix safe: `knowledge-base/plans/` is not a substring of `knowledge-base/project/plans/`, so already-correct paths survive untouched (verified by Kieran).
+The sed pattern is double-prefix safe: `knowledge-base/project/plans/` is not a substring of `knowledge-base/project/plans/`, so already-correct paths survive untouched (verified by Kieran).
 
 **Step 4: Verify and commit.**
 

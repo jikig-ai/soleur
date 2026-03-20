@@ -135,6 +135,6 @@ When a file exceeds ~200 lines and mixes state management with external API call
 
 ## Related
 
-- `knowledge-base/learnings/runtime-errors/2026-02-11-async-status-message-lifecycle-telegram.md` -- the P1-012 bug this testing catches
-- `knowledge-base/learnings/workflow-patterns/2026-02-11-worktree-edit-discipline.md` -- worktree discipline learned during this feature
+- `knowledge-base/project/learnings/runtime-errors/2026-02-11-async-status-message-lifecycle-telegram.md` -- the P1-012 bug this testing catches
+- `knowledge-base/project/learnings/workflow-patterns/2026-02-11-worktree-edit-discipline.md` -- worktree discipline learned during this feature
 - PR #47 on `feat/telegram-live-status` branch

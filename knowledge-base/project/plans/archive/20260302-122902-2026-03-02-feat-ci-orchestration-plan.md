@@ -11,8 +11,8 @@ date: 2026-03-02
 Extend the `competitive-intelligence` agent to cascade updates to 4 downstream specialist agents after producing its base CI report. Specialists update existing repo files with fresh competitive data. The CI agent appends a consolidated `## Cascade Results` section summarizing what changed.
 
 Issue: #333
-Brainstorm: `knowledge-base/brainstorms/2026-03-02-ci-orchestration-brainstorm.md`
-Spec: `knowledge-base/specs/feat-ci-orchestration/spec.md`
+Brainstorm: `knowledge-base/project/brainstorms/2026-03-02-ci-orchestration-brainstorm.md`
+Spec: `knowledge-base/project/specs/feat-ci-orchestration/spec.md`
 Branch: `feat-ci-orchestration`
 
 ## Non-Goals
@@ -24,7 +24,7 @@ Branch: `feat-ci-orchestration`
 - New agents or skills (orchestration added to existing CI agent body)
 - Delegating through CMO/CRO domain leaders (v2 if specialist count grows)
 
-See also: `knowledge-base/specs/feat-ci-orchestration/spec.md` Non-Goals section.
+See also: `knowledge-base/project/specs/feat-ci-orchestration/spec.md` Non-Goals section.
 
 ## Problem Statement / Motivation
 

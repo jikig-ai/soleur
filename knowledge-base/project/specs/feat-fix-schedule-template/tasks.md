@@ -1,7 +1,7 @@
 # Tasks: fix schedule skill template remaining gaps
 
 Issue: #382
-Plan: `knowledge-base/plans/2026-03-05-fix-schedule-template-remaining-gaps-plan.md`
+Plan: `knowledge-base/project/plans/2026-03-05-fix-schedule-template-remaining-gaps-plan.md`
 
 ## Phase 1: Template Updates (`plugins/soleur/skills/schedule/SKILL.md`)
 

@@ -39,5 +39,5 @@
 
 ## Phase 4: Documentation
 
-- [ ] 4.1 Update `knowledge-base/learnings/2026-02-19-discord-bot-identity-and-webhook-behavior.md` to document the multi-webhook channel architecture
+- [ ] 4.1 Update `knowledge-base/project/learnings/2026-02-19-discord-bot-identity-and-webhook-behavior.md` to document the multi-webhook channel architecture
 - [ ] 4.2 Verify webhook payloads in all modified files include `username`, `avatar_url`, and `allowed_mentions: {parse: []}`

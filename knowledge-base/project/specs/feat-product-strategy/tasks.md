@@ -15,7 +15,7 @@
 - [x] 1.1.4 Test 3 non-engineering domain tasks end-to-end -- PASS (legal, brand, competitive)
 - [x] 1.1.5 Document "first 5 minutes" flow -- FAIL (see audit report)
 - [x] 1.1.6 Fix blockers found -- 3 blockers identified, tracked in #432 (CLOSED 2026-03-04)
-- [x] 1.1.7 Write audit report to `knowledge-base/specs/feat-product-strategy/onboarding-audit.md`
+- [x] 1.1.7 Write audit report to `knowledge-base/project/specs/feat-product-strategy/onboarding-audit.md`
 
 ### 1.2 Write Case Studies [auto + human] -- DONE (drafts)
 - [x] 1.2.1 Write case study: Legal document generation (9 docs from scratch)
@@ -27,14 +27,14 @@
 
 ### 1.3 Interview Guide [auto] -- DONE
 - [x] 1.3.1 Write interview guide with questions, definitions, and response table
-- [x] 1.3.2 Save to `knowledge-base/specs/feat-product-strategy/interview-guide.md`
+- [x] 1.3.2 Save to `knowledge-base/project/specs/feat-product-strategy/interview-guide.md`
 
 ### 1.4 Publish Case Studies [human]
 - [ ] 1.4.1 Post to Discord (via discord-content skill)
 - [ ] 1.4.2 Post to Twitter/X
 - [ ] 1.4.3 Post to IndieHackers
 - [ ] 1.4.4 Post to Claude Code Discord
-- [ ] 1.4.5 Create inbound tracker at `knowledge-base/specs/feat-product-strategy/inbound-tracker.md`
+- [ ] 1.4.5 Create inbound tracker at `knowledge-base/project/specs/feat-product-strategy/inbound-tracker.md`
 
 ## Phase 2: Interviews + Product Test (Weeks 2-5)
 
@@ -69,7 +69,7 @@
 - [ ] 3.2.2 Compile G2: count founders with unprompted non-guided domain use
 - [ ] 3.2.3 Compile G3: count founders with WTP >= $25/month
 - [ ] 3.2.4 Check G4: any Cowork CaaS threat during weeks 1-6?
-- [ ] 3.2.5 Write gate assessment to `knowledge-base/specs/feat-product-strategy/gate-assessment.md`
+- [ ] 3.2.5 Write gate assessment to `knowledge-base/project/specs/feat-product-strategy/gate-assessment.md`
 - [ ] 3.2.6 Make decision: proceed / iterate / pivot
 
 ## Separate: Blog Infrastructure [auto] -- DONE

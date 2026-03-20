@@ -189,5 +189,5 @@ Discovered during review of #453 / PR #454. These are pre-existing bugs, not reg
 
 - Issue: #455
 - Related PR: #454 (stuck detection, introduced the combined sed pass)
-- Learning: `knowledge-base/learnings/2026-03-05-ralph-loop-stuck-detection-shell-counter.md`
+- Learning: `knowledge-base/project/learnings/2026-03-05-ralph-loop-stuck-detection-shell-counter.md`
 - State file created by: `plugins/soleur/scripts/setup-ralph-loop.sh` (lines 129-141)

@@ -95,5 +95,5 @@ Use **AskUserQuestion tool** to suggest: "Your requirements seem detailed enough
 - One-shot command: `plugins/soleur/commands/soleur/one-shot.md`
 - Brainstorm command: `plugins/soleur/commands/soleur/brainstorm.md`
 - Brainstorming skill: `plugins/soleur/skills/brainstorming/SKILL.md`
-- Learning: `knowledge-base/learnings/2026-02-06-parallel-plan-review-catches-overengineering.md`
-- Learning: `knowledge-base/learnings/2026-02-12-command-vs-skill-selection-criteria.md`
+- Learning: `knowledge-base/project/learnings/2026-02-06-parallel-plan-review-catches-overengineering.md`
+- Learning: `knowledge-base/project/learnings/2026-02-12-command-vs-skill-selection-criteria.md`

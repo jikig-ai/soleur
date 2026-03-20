@@ -68,8 +68,8 @@ Modify Phase 3.6 to add issue detection before creation:
 
    ---
    ## Artifacts
-   - Brainstorm: \`knowledge-base/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md\`
-   - Spec: \`knowledge-base/specs/feat-<name>/spec.md\`
+   - Brainstorm: \`knowledge-base/project/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md\`
+   - Spec: \`knowledge-base/project/specs/feat-<name>/spec.md\`
    - Branch: \`feat-<name>\`
    "
    gh issue edit "$existing_issue" --body "$new_body"
@@ -95,6 +95,6 @@ Issue: #N (using existing) | Issue: #N (created) | Issue: none
 ## References
 
 - Related issue: #18
-- Brainstorm: `knowledge-base/brainstorms/2026-02-06-fix-duplicate-issues-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-fix-duplicate-issues/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-06-fix-duplicate-issues-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-fix-duplicate-issues/spec.md`
 - Target file: `plugins/soleur/commands/soleur/brainstorm.md:114-148`

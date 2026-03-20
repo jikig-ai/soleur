@@ -44,8 +44,8 @@ The `--absolute-git-dir` returns the `.git` directory path. For repos with a `.g
 2. Cascading cancellation of parallel `gh issue view` call
 
 ## Related
-- `knowledge-base/learnings/2026-02-22-cleanup-merged-path-mismatch.md` — prior worktree path issues
-- `knowledge-base/learnings/2026-02-17-worktree-not-enforced-for-new-work.md` — worktree enforcement history
+- `knowledge-base/project/learnings/2026-02-22-cleanup-merged-path-mismatch.md` — prior worktree path issues
+- `knowledge-base/project/learnings/2026-02-17-worktree-not-enforced-for-new-work.md` — worktree enforcement history
 
 ## Tags
 category: build-errors

@@ -1,6 +1,6 @@
 # Tasks: Per-App Release Pipelines
 
-**Plan:** `knowledge-base/plans/2026-03-19-feat-per-app-release-pipelines-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-03-19-feat-per-app-release-pipelines-plan.md`
 **Issue:** #739
 **Branch:** feat-app-versioning
 

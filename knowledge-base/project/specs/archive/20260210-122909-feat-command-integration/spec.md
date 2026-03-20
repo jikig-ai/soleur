@@ -50,7 +50,7 @@ At the end of brainstorm:
    - Get feature name from user or derive from brainstorm topic
    - Run `worktree-manager.sh create-for-feature <name>`
    - Generate spec.md using template
-   - Save to `knowledge-base/specs/feat-<name>/spec.md`
+   - Save to `knowledge-base/project/specs/feat-<name>/spec.md`
    - Announce: "Spec saved. Run soleur:plan to create tasks."
 3. If no: Continue as current (save to docs/brainstorms/)
 ```
@@ -67,7 +67,7 @@ At the start of plan:
 1. Check if `knowledge-base/` directory exists
 2. If yes:
    - Detect feature from current branch (`feat-<name>` pattern)
-   - Read `knowledge-base/specs/feat-<name>/spec.md` if exists
+   - Read `knowledge-base/project/specs/feat-<name>/spec.md` if exists
    - Read `knowledge-base/overview/constitution.md`
    - Use as input for planning
 3. If no: Continue as current
@@ -76,7 +76,7 @@ At the start of plan:
 
 1. If `knowledge-base/` exists and spec was loaded:
    - Generate tasks.md using template
-   - Save to `knowledge-base/specs/feat-<name>/tasks.md`
+   - Save to `knowledge-base/project/specs/feat-<name>/tasks.md`
    - Announce: "Tasks saved. Run soleur:work to implement."
 2. If no: Continue as current (save to docs/plans/)
 ```
@@ -93,7 +93,7 @@ At the start of work:
 1. Check if `knowledge-base/` directory exists
 2. If yes:
    - Detect feature from current branch
-   - Read `knowledge-base/specs/feat-<name>/tasks.md` if exists
+   - Read `knowledge-base/project/specs/feat-<name>/tasks.md` if exists
    - Read `knowledge-base/overview/constitution.md`
    - Use tasks as work checklist (alongside TodoWrite)
 3. If no: Continue as current
@@ -108,7 +108,7 @@ Update `plugins/soleur/commands/soleur/compound.md`:
 
 1. Capture session learning as current
 2. If `knowledge-base/` exists:
-   - Save to `knowledge-base/learnings/YYYY-MM-DD-topic.md`
+   - Save to `knowledge-base/project/learnings/YYYY-MM-DD-topic.md`
 3. If no:
    - Save to `docs/solutions/` as current
 

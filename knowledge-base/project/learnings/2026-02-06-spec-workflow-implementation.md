@@ -48,7 +48,7 @@ All commands check for `knowledge-base/` existence before using it:
 ### 4. Convention Over Configuration
 
 Branch naming convention: `feat-<name>` automatically maps to:
-- Spec directory: `knowledge-base/specs/feat-<name>/`
+- Spec directory: `knowledge-base/project/specs/feat-<name>/`
 - Worktree path: `.worktrees/feat-<name>/`
 
 **Why it works:** No manifest files to maintain. Directory structure is the configuration. Branch name is the single source of truth for feature identity.
@@ -76,8 +76,8 @@ Created reusable skills:
 
 ## Related Files
 
-- knowledge-base/specs/feat-spec-workflow-foundation/spec.md
-- knowledge-base/specs/feat-command-integration/spec.md
+- knowledge-base/project/specs/feat-spec-workflow-foundation/spec.md
+- knowledge-base/project/specs/feat-command-integration/spec.md
 - plugins/soleur/commands/soleur/brainstorm.md
 - plugins/soleur/commands/soleur/plan.md
 - plugins/soleur/commands/soleur/work.md

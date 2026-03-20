@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-discord-hardening/knowledge-base/plans/2026-03-09-fix-discord-community-hardening-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-discord-hardening/knowledge-base/project/plans/2026-03-09-fix-discord-community-hardening-plan.md
 - Status: complete
 
 ### Errors

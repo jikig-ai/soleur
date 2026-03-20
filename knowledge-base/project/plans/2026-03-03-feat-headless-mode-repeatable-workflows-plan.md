@@ -115,7 +115,7 @@ all interactive prompts use sensible defaults. Skills must:
 - [x] `skill: soleur:ship --headless` runs to completion without any interactive prompts
 - [x] `skill: soleur:compound --headless` auto-promotes learnings without human approval
 - [x] `skill: soleur:compound --headless` aborts if on main/master branch
-- [x] `skill: soleur:work --headless knowledge-base/specs/feat-foo/tasks.md` strips `--headless` and processes the plan path correctly
+- [x] `skill: soleur:work --headless knowledge-base/project/specs/feat-foo/tasks.md` strips `--headless` and processes the plan path correctly
 - [x] `worktree-manager.sh create feat-foo --yes` completes without `read -r` prompt
 - [x] `worktree-manager.sh cleanup --yes` completes without `read -r` prompt
 - [x] Constitution.md updated with `--headless` convention
@@ -123,7 +123,7 @@ all interactive prompts use sensible defaults. Skills must:
 ## Test Scenarios
 
 - Given `--headless` ship invokes compound, which invokes compound-capture, then compound-capture also receives `--headless` and skips all prompts (full propagation chain)
-- Given `$ARGUMENTS` is `--headless knowledge-base/specs/feat-foo/tasks.md`, when work parses arguments, then `--headless` is stripped and the plan path is treated correctly
+- Given `$ARGUMENTS` is `--headless knowledge-base/project/specs/feat-foo/tasks.md`, when work parses arguments, then `--headless` is stripped and the plan path is treated correctly
 - Given headless compound runs on main branch, then compound aborts with error before any promotions
 - Given headless ship runs and tests fail, then pipeline aborts with clear error message
 - Given headless ship runs and CI is flaky, then pipeline aborts (does not auto-proceed)
@@ -164,8 +164,8 @@ The following items are descoped to follow-up GitHub issues:
 ### Related Work
 
 - Issue: #393
-- Brainstorm: `knowledge-base/brainstorms/2026-03-03-headless-mode-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-headless-mode/spec.md`
-- Learning (plugin headless auto-load failure): `knowledge-base/learnings/2026-02-25-plugin-command-double-namespace.md`
-- Learning (skill handoff contradicts pipeline): `knowledge-base/learnings/2026-03-03-skill-handoff-contradicts-pipeline-continuation.md`
-- Learning (skill code fence permission flow): `knowledge-base/learnings/2026-02-22-skill-code-fence-permission-flow.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-03-headless-mode-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-headless-mode/spec.md`
+- Learning (plugin headless auto-load failure): `knowledge-base/project/learnings/2026-02-25-plugin-command-double-namespace.md`
+- Learning (skill handoff contradicts pipeline): `knowledge-base/project/learnings/2026-03-03-skill-handoff-contradicts-pipeline-continuation.md`
+- Learning (skill code fence permission flow): `knowledge-base/project/learnings/2026-02-22-skill-code-fence-permission-flow.md`

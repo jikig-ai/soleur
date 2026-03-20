@@ -411,15 +411,15 @@ After presenting the first mention, add a 4th option: "Skip all remaining -- end
 - `plugins/soleur/skills/community/scripts/x-community.sh` -- existing X API wrapper with OAuth 1.0a (reference: `cmd_fetch_metrics` for query param signing pattern)
 - `plugins/soleur/agents/support/community-manager.md` -- existing community-manager agent
 - `knowledge-base/overview/brand-guide.md` `## Channel Notes > ### X/Twitter` -- brand voice for replies
-- `knowledge-base/learnings/2026-03-09-external-api-scope-calibration.md` -- X API tier constraints
-- `knowledge-base/learnings/2026-03-09-shell-api-wrapper-hardening-patterns.md` -- 5-layer error handling
-- `knowledge-base/learnings/2026-03-09-depth-limited-api-retry-pattern.md` -- retry depth limit
-- `knowledge-base/learnings/2026-03-03-headless-mode-skill-bypass-convention.md` -- headless flag convention
-- `knowledge-base/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md` -- strict mode guards
-- `knowledge-base/learnings/2026-02-18-token-env-var-not-cli-arg.md` -- secret handling patterns
-- `knowledge-base/learnings/2026-02-12-brand-guide-contract-and-inline-validation.md` -- inline brand validation
-- `knowledge-base/learnings/2026-02-22-command-substitution-in-plugin-markdown.md` -- no `$()` in markdown
-- `knowledge-base/learnings/2026-03-10-require-jq-startup-check-consistency.md` -- startup check parity
+- `knowledge-base/project/learnings/2026-03-09-external-api-scope-calibration.md` -- X API tier constraints
+- `knowledge-base/project/learnings/2026-03-09-shell-api-wrapper-hardening-patterns.md` -- 5-layer error handling
+- `knowledge-base/project/learnings/2026-03-09-depth-limited-api-retry-pattern.md` -- retry depth limit
+- `knowledge-base/project/learnings/2026-03-03-headless-mode-skill-bypass-convention.md` -- headless flag convention
+- `knowledge-base/project/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md` -- strict mode guards
+- `knowledge-base/project/learnings/2026-02-18-token-env-var-not-cli-arg.md` -- secret handling patterns
+- `knowledge-base/project/learnings/2026-02-12-brand-guide-contract-and-inline-validation.md` -- inline brand validation
+- `knowledge-base/project/learnings/2026-02-22-command-substitution-in-plugin-markdown.md` -- no `$()` in markdown
+- `knowledge-base/project/learnings/2026-03-10-require-jq-startup-check-consistency.md` -- startup check parity
 - X API docs: `GET /2/users/{id}/mentions` -- https://docs.x.com/x-api/users/get-mentions
 - X API timelines integration guide -- https://docs.x.com/x-api/posts/timelines/integrate
 - Issue: #469

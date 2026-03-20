@@ -81,8 +81,8 @@ Version triad + external references updated mechanically per plugin policy.
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-10-add-review-agents-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-add-review-agents/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-10-add-review-agents-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-add-review-agents/spec.md`
 - Issue: #38
 - Agent definitions: `plugins/soleur/agents/review/test-design-reviewer.md`, `plugins/soleur/agents/review/code-quality-analyst.md`
 - Modified file: `plugins/soleur/commands/soleur/review.md`

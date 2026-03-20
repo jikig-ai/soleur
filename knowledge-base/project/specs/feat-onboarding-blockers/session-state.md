@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-onboarding-blockers/knowledge-base/plans/2026-03-04-fix-onboarding-blockers-first-run-experience-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-onboarding-blockers/knowledge-base/project/plans/2026-03-04-fix-onboarding-blockers-first-run-experience-plan.md
 - Status: complete
 
 ### Errors

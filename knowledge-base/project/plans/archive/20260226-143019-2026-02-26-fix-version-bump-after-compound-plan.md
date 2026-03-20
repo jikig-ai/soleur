@@ -273,6 +273,6 @@ Tests run in Phase 4 (new numbering). If they fail, ship stops. Version bump nev
 - `plugins/soleur/skills/one-shot/SKILL.md:84-93` -- steps 3-9 ordering
 - `plugins/soleur/skills/compound-capture/SKILL.md:259-308` -- Step 8 route-to-definition ("Do NOT commit or version-bump")
 - `plugins/soleur/skills/compound/SKILL.md:142-173` -- constitution promotion and route-to-definition
-- `knowledge-base/learnings/2026-02-12-review-compound-before-commit-workflow.md` -- "the commit is the gate, not the PR"
-- `knowledge-base/learnings/2026-02-22-merge-pr-skill-design-lessons.md` -- Issue 4: compound after CI creates infinite loop
+- `knowledge-base/project/learnings/2026-02-12-review-compound-before-commit-workflow.md` -- "the commit is the gate, not the PR"
+- `knowledge-base/project/learnings/2026-02-22-merge-pr-skill-design-lessons.md` -- Issue 4: compound after CI creates infinite loop
 - Constitution line 63 -- compound before commit, compound produces commits

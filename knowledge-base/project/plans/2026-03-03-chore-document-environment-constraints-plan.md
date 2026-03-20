@@ -158,7 +158,7 @@ Add one principle to Architecture > Always:
 
 - Issue: #394
 - Source: Claude Code Insights report (2026-02-02 to 2026-03-03)
-- Related pattern: `knowledge-base/plans/2026-02-27-feat-install-ffmpeg-rclone-on-demand-plan.md` (sudo handling)
+- Related pattern: `knowledge-base/project/plans/2026-02-27-feat-install-ffmpeg-rclone-on-demand-plan.md` (sudo handling)
 - Files to modify:
   - `AGENTS.md`
   - `knowledge-base/overview/constitution.md`
@@ -175,8 +175,8 @@ Add one principle to Architecture > Always:
 
 ### Institutional Learnings Applied
 
-- `knowledge-base/learnings/2026-02-25-lean-agents-md-gotchas-only.md` -- Token budget and "gotchas-only" principle
-- `knowledge-base/learnings/agent-prompt-sharp-edges-only.md` -- Only document what the model would get wrong
-- `knowledge-base/learnings/2026-02-26-worktree-enforcement-pretooluse-hook.md` -- Documentation-then-hook progression pattern
-- `knowledge-base/learnings/2026-02-24-guardrails-chained-commit-bypass.md` -- Guard regex pattern for chained commands
-- `knowledge-base/learnings/2026-02-24-effortlevel-not-valid-settings-field.md` -- settings.json env field precedent
+- `knowledge-base/project/learnings/2026-02-25-lean-agents-md-gotchas-only.md` -- Token budget and "gotchas-only" principle
+- `knowledge-base/project/learnings/agent-prompt-sharp-edges-only.md` -- Only document what the model would get wrong
+- `knowledge-base/project/learnings/2026-02-26-worktree-enforcement-pretooluse-hook.md` -- Documentation-then-hook progression pattern
+- `knowledge-base/project/learnings/2026-02-24-guardrails-chained-commit-bypass.md` -- Guard regex pattern for chained commands
+- `knowledge-base/project/learnings/2026-02-24-effortlevel-not-valid-settings-field.md` -- settings.json env field precedent

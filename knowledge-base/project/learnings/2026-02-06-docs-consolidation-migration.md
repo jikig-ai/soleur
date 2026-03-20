@@ -45,7 +45,7 @@ knowledge-base/
 
 ## Key Insight
 
-**Convention over configuration makes navigation intuitive.** Branch names (`feat-<name>`) now map directly to spec directories (`knowledge-base/specs/feat-<name>/`). No lookup needed - if you're on `feat-auth`, your spec is at `knowledge-base/specs/feat-auth/spec.md`.
+**Convention over configuration makes navigation intuitive.** Branch names (`feat-<name>`) now map directly to spec directories (`knowledge-base/project/specs/feat-<name>/`). No lookup needed - if you're on `feat-auth`, your spec is at `knowledge-base/project/specs/feat-auth/spec.md`.
 
 **Secondary insight:** When migrating paths, grep is your friend. Run `grep -r "old/path" plugins/` to find all references before claiming migration is complete. We found 103 references that needed updating.
 

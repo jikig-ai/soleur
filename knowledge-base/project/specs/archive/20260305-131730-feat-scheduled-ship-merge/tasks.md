@@ -1,6 +1,6 @@
 # Tasks: Scheduled Ship-Merge Workflow
 
-**Plan:** `knowledge-base/plans/2026-03-05-feat-scheduled-ship-merge-workflow-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-03-05-feat-scheduled-ship-merge-workflow-plan.md`
 **Issue:** #417
 **Branch:** feat-scheduled-ship-merge
 

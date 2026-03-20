@@ -172,17 +172,17 @@ This is cheap (one `git show` + hash compare) and only triggers in bare contexts
 
 ### Research Insights: Institutional Learnings Applied
 
-From `knowledge-base/learnings/2026-03-13-shell-script-defensive-patterns.md`:
+From `knowledge-base/project/learnings/2026-03-13-shell-script-defensive-patterns.md`:
 
 1. **Always include a catch-all in dispatchers (Learning #5).** The `main()` case statement already has a `*` catch-all that calls `show_help`. A new `sync-bare-files` subcommand should be added to this dispatcher.
 
 2. **Validate parameters before operations (Learning #4).** The `IS_BARE` check is effectively a parameter validation at init time -- fail fast before attempting operations that require a working tree.
 
-From `knowledge-base/learnings/2026-03-13-archive-kb-stale-path-resolution.md`:
+From `knowledge-base/project/learnings/2026-03-13-archive-kb-stale-path-resolution.md`:
 
 3. **Silent failures are worse than loud failures.** The original bug caused a fatal error (loud), which is actually better than the path-staleness bugs that silently skipped artifacts. The fix should preserve loud failure for truly unexpected cases while gracefully skipping known-impossible operations (like updating a main checkout that doesn't exist).
 
-From `knowledge-base/learnings/2026-03-13-bash-arithmetic-and-test-sourcing-patterns.md`:
+From `knowledge-base/project/learnings/2026-03-13-bash-arithmetic-and-test-sourcing-patterns.md`:
 
 4. **Guard main() with BASH_SOURCE check** for testability. Currently worktree-manager.sh has no tests. While adding tests is out of scope for this fix, adding the `BASH_SOURCE` guard now makes future testing possible without refactoring:
 ```bash
@@ -242,10 +242,10 @@ These should be tracked as a separate issue for systematic bare-repo hardening a
 
 ### Related Learnings
 
-- `knowledge-base/learnings/2026-03-13-bare-repo-git-rev-parse-failure.md` -- documents the original problem
-- `knowledge-base/learnings/2026-03-13-shell-script-defensive-patterns.md` -- catch-all dispatchers, parameter validation at init
-- `knowledge-base/learnings/2026-03-13-archive-kb-stale-path-resolution.md` -- silent failures worse than loud failures
-- `knowledge-base/learnings/2026-03-13-bash-arithmetic-and-test-sourcing-patterns.md` -- BASH_SOURCE guard for testability
+- `knowledge-base/project/learnings/2026-03-13-bare-repo-git-rev-parse-failure.md` -- documents the original problem
+- `knowledge-base/project/learnings/2026-03-13-shell-script-defensive-patterns.md` -- catch-all dispatchers, parameter validation at init
+- `knowledge-base/project/learnings/2026-03-13-archive-kb-stale-path-resolution.md` -- silent failures worse than loud failures
+- `knowledge-base/project/learnings/2026-03-13-bash-arithmetic-and-test-sourcing-patterns.md` -- BASH_SOURCE guard for testability
 
 ### Related Commits
 
@@ -331,7 +331,7 @@ fi
 
 - Related commit: dc60e90 (handle bare repos in worktree-manager.sh GIT_ROOT detection)
 - Related PR: #607
-- Learning: `knowledge-base/learnings/2026-03-13-bare-repo-git-rev-parse-failure.md`
-- Learning: `knowledge-base/learnings/2026-03-13-shell-script-defensive-patterns.md`
-- Learning: `knowledge-base/learnings/2026-03-13-archive-kb-stale-path-resolution.md`
-- Learning: `knowledge-base/learnings/2026-03-13-bash-arithmetic-and-test-sourcing-patterns.md`
+- Learning: `knowledge-base/project/learnings/2026-03-13-bare-repo-git-rev-parse-failure.md`
+- Learning: `knowledge-base/project/learnings/2026-03-13-shell-script-defensive-patterns.md`
+- Learning: `knowledge-base/project/learnings/2026-03-13-archive-kb-stale-path-resolution.md`
+- Learning: `knowledge-base/project/learnings/2026-03-13-bash-arithmetic-and-test-sourcing-patterns.md`

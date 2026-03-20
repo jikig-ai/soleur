@@ -39,11 +39,11 @@ Insert after existing Phase 3 (Write) in `sync.md`.
 
 #### 4.1 Gate
 
-If area is `all` (or no area specified), and both `knowledge-base/learnings/` and `plugins/soleur/` exist, proceed with Phase 4. Otherwise skip with an info message.
+If area is `all` (or no area specified), and both `knowledge-base/project/learnings/` and `plugins/soleur/` exist, proceed with Phase 4. Otherwise skip with an info message.
 
 #### 4.2 Load
 
-- List all learning files from `knowledge-base/learnings/` recursively, excluding `archive/` and `patterns/` directories. Extract each learning's title and any tags or metadata present (regardless of format -- YAML frontmatter, ad-hoc tags sections, or title only). Also extract `synced_to` from frontmatter if present.
+- List all learning files from `knowledge-base/project/learnings/` recursively, excluding `archive/` and `patterns/` directories. Extract each learning's title and any tags or metadata present (regardless of format -- YAML frontmatter, ad-hoc tags sections, or title only). Also extract `synced_to` from frontmatter if present.
 - List all definitions by name: skills from `plugins/soleur/skills/*/SKILL.md`, agents from `plugins/soleur/agents/**/*.md`, commands from `plugins/soleur/commands/soleur/*.md`.
 
 #### 4.3 Match
@@ -162,8 +162,8 @@ Revert the sync.md and compound-docs SKILL.md changes. Learning files that gaine
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-17-sync-definitions-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-sync-definitions/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-17-sync-definitions-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-sync-definitions/spec.md`
 - Issue: #110
 - Compound routing: #104, #115 (v2.12.0)
 - Existing sync command: `plugins/soleur/commands/soleur/sync.md`

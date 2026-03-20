@@ -123,7 +123,7 @@ LINKEDIN_PERSON_URN: ${{ secrets.LINKEDIN_PERSON_URN }}
 
 - Pattern: `scripts/content-publisher.sh` X/Twitter posting logic (lines 222-302)
 - Pattern: `plugins/soleur/skills/community/scripts/linkedin-community.sh` post-content command (lines 223-278)
-- Learning: `knowledge-base/learnings/2026-03-13-platform-integration-scope-calibration.md`
+- Learning: `knowledge-base/project/learnings/2026-03-13-platform-integration-scope-calibration.md`
 - Parent issue: #590 (Content-publisher LinkedIn channel automation)
 - Prerequisite: #608 (LinkedIn API scripts -- merged 2026-03-14)
 - Related: #586 (LinkedIn manual-only -- merged 2026-03-13)

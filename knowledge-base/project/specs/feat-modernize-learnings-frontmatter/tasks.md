@@ -33,4 +33,4 @@
 - [ ] 3.4 Run markdownlint on all modified files
 - [ ] 3.5 Run `bun test` to verify no test regressions
 - [ ] 3.6 Check category distribution (target: 10-15 distinct values, no category with <3 or >25 files)
-- [ ] 3.7 Run post-run verification: `grep -rL '^---' knowledge-base/learnings/*.md` returns 0 files
+- [ ] 3.7 Run post-run verification: `grep -rL '^---' knowledge-base/project/learnings/*.md` returns 0 files

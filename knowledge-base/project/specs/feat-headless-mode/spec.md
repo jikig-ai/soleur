@@ -2,7 +2,7 @@
 
 **Issue:** #393
 **Branch:** feat-headless-mode
-**Brainstorm:** `knowledge-base/brainstorms/2026-03-03-headless-mode-brainstorm.md`
+**Brainstorm:** `knowledge-base/project/brainstorms/2026-03-03-headless-mode-brainstorm.md`
 
 ## Problem Statement
 

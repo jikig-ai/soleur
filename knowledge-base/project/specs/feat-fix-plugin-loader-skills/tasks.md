@@ -22,5 +22,5 @@
 - [ ] 3.2 Add changelog entry to `plugins/soleur/CHANGELOG.md` under `### Removed`
 - [ ] 3.3 Verify no remaining references: `grep -rn 'soleur:community\|soleur:report-bug' plugins/soleur/ --include='*.md' --include='*.js'` (expect only CHANGELOG hits)
 - [ ] 3.4 Verify skill count: `find plugins/soleur/skills -name "SKILL.md" -type f | wc -l` (expect 50)
-- [ ] 3.5 Verify all "52 skills" updated: `grep -rn '\b52 skills\b' .` (expect only knowledge-base/plans/ and CHANGELOG hits)
+- [ ] 3.5 Verify all "52 skills" updated: `grep -rn '\b52 skills\b' .` (expect only knowledge-base/project/plans/ and CHANGELOG hits)
 - [ ] 3.6 Run review, compound, commit, push, PR

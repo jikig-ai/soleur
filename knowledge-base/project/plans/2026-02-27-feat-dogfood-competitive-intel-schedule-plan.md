@@ -142,7 +142,7 @@ If missing, the workflow will fail with an auth error. This is a prerequisite, n
 
 ### Research Insights: Security Patterns (from institutional learnings)
 
-From `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md`:
+From `knowledge-base/project/learnings/2026-02-21-github-actions-workflow-security-patterns.md`:
 
 1. **SHA pinning** -- The schedule skill handles this via Step 2 (resolve action SHAs). Verify the generated workflow uses commit SHAs, not mutable tags. The existing `review-reminder.yml` uses `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2` as reference.
 
@@ -150,7 +150,7 @@ From `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patte
 
 3. **`gh issue create` exit code** -- The issue is created by `claude-code-action` via the prompt, not by a shell `run:` block. If the action fails to create the issue, the job will still show as successful (green checkmark). Monitor the first run manually and check that an issue was actually created.
 
-From `knowledge-base/learnings/2026-02-27-schedule-skill-ci-plugin-discovery-and-version-hygiene.md`:
+From `knowledge-base/project/learnings/2026-02-27-schedule-skill-ci-plugin-discovery-and-version-hygiene.md`:
 
 4. **`$(date)` in `with:` blocks is literal** -- The schedule skill correctly uses natural language ("today's date in YYYY-MM-DD format") in the prompt. Do not "fix" this by adding shell expansion.
 
@@ -236,9 +236,9 @@ From `knowledge-base/learnings/2026-02-27-schedule-skill-ci-plugin-discovery-and
 - Competitive analysis skill: `plugins/soleur/skills/competitive-analysis/SKILL.md`
 - Competitive intelligence agent: `plugins/soleur/agents/product/competitive-intelligence.md`
 - Marketplace manifest: `.claude-plugin/marketplace.json`
-- CI plugin discovery learning: `knowledge-base/learnings/2026-02-27-schedule-skill-ci-plugin-discovery-and-version-hygiene.md`
-- Competitive intel implementation learning: `knowledge-base/learnings/2026-02-27-competitive-intelligence-agent-implementation.md`
-- GitHub Actions security patterns: `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
+- CI plugin discovery learning: `knowledge-base/project/learnings/2026-02-27-schedule-skill-ci-plugin-discovery-and-version-hygiene.md`
+- Competitive intel implementation learning: `knowledge-base/project/learnings/2026-02-27-competitive-intelligence-agent-implementation.md`
+- GitHub Actions security patterns: `knowledge-base/project/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
 - Review reminder workflow (precedent): `.github/workflows/review-reminder.yml`
 - Claude Code review workflow (existing): `.github/workflows/claude-code-review.yml`
 

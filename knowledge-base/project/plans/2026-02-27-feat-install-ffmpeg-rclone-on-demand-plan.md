@@ -311,11 +311,11 @@ echo "=== Check Complete ==="
 
 - PR #331: Preflight dependency check (part 1) -- `plugins/soleur/skills/feature-video/scripts/check_deps.sh`
 - Issue #325: Original ffmpeg/rclone installation request
-- Learning: `knowledge-base/learnings/2026-02-27-feature-video-graceful-degradation.md`
-- Learning: `knowledge-base/learnings/2026-02-27-pencil-mcp-auto-registration-via-skill.md`
-- Learning: `knowledge-base/learnings/2026-02-22-command-substitution-in-plugin-markdown.md`
-- Learning: `knowledge-base/learnings/2026-02-24-extract-command-substitution-into-scripts.md`
-- Learning: `knowledge-base/learnings/2026-02-25-quoted-dash-strings-trigger-approval-prompts.md`
+- Learning: `knowledge-base/project/learnings/2026-02-27-feature-video-graceful-degradation.md`
+- Learning: `knowledge-base/project/learnings/2026-02-27-pencil-mcp-auto-registration-via-skill.md`
+- Learning: `knowledge-base/project/learnings/2026-02-22-command-substitution-in-plugin-markdown.md`
+- Learning: `knowledge-base/project/learnings/2026-02-24-extract-command-substitution-into-scripts.md`
+- Learning: `knowledge-base/project/learnings/2026-02-25-quoted-dash-strings-trigger-approval-prompts.md`
 - Pattern: `plugins/soleur/skills/pencil-setup/SKILL.md` -- auto-detection and installation pattern
 - Pattern: `plugins/soleur/skills/rclone/scripts/check_setup.sh` -- rclone check pattern
 - Pattern: `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:84` -- `read -r` interactive prompt pattern

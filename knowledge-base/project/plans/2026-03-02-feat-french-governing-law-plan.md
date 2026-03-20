@@ -94,8 +94,8 @@ Mirror the T&Cs structure, adapted for Disclaimer context:
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-03-02-french-governing-law-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-french-governing-law/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-02-french-governing-law-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-french-governing-law/spec.md`
 - CLA governing law clause (structural template): `docs/legal/individual-cla.md:66`
 - Issue: #360
 - Draft PR: #359

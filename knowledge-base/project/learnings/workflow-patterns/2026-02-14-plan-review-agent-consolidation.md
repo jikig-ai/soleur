@@ -29,4 +29,4 @@ When multiple agents perform the same operation type (read/update structured dat
 
 - Constitution: "plans consistently shrink by 30-50% after review"
 - Constitution: "design for v2, implement for v1"
-- `knowledge-base/plans/2026-02-14-feat-ops-directory-advisory-agents-plan.md`
+- `knowledge-base/project/plans/2026-02-14-feat-ops-directory-advisory-agents-plan.md`

@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-kpi-remediation-dispatcher/knowledge-base/plans/2026-03-16-feat-kpi-remediation-dispatcher-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-kpi-remediation-dispatcher/knowledge-base/project/plans/2026-03-16-feat-kpi-remediation-dispatcher-plan.md
 - Status: complete
 
 ### Errors

@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-modernize-learnings-frontmatter/knowledge-base/plans/2026-03-05-chore-modernize-learnings-corpus-frontmatter-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-modernize-learnings-frontmatter/knowledge-base/project/plans/2026-03-05-chore-modernize-learnings-corpus-frontmatter-plan.md
 - Status: complete
 
 ### Errors

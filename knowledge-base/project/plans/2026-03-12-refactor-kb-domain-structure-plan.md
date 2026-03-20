@@ -56,10 +56,10 @@ Move domain content into canonical department folders in a single atomic commit.
 ### Unchanged directories
 
 - `knowledge-base/overview/` — stays with constitution.md, README.md, components/
-- `knowledge-base/specs/` — stays at root (deferred to #568)
-- `knowledge-base/plans/` — stays at root (deferred to #568)
-- `knowledge-base/brainstorms/` — stays at root (deferred to #568)
-- `knowledge-base/learnings/` — stays at root (deferred to #568)
+- `knowledge-base/project/specs/` — stays at root (deferred to #568)
+- `knowledge-base/project/plans/` — stays at root (deferred to #568)
+- `knowledge-base/project/brainstorms/` — stays at root (deferred to #568)
+- `knowledge-base/project/learnings/` — stays at root (deferred to #568)
 - `knowledge-base/sales/` — already conforms to domain taxonomy
 
 ### Implementation Steps
@@ -177,7 +177,7 @@ grep -r 'knowledge-base/audits/' plugins/ scripts/ .github/
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-03-12-kb-domain-structure-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-kb-domain-structure/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-12-kb-domain-structure-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-kb-domain-structure/spec.md`
 - Issue: #567
 - Deferred: #568 (features/ grouping), #569 (overview/ rename)

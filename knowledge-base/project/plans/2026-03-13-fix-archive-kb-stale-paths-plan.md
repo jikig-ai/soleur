@@ -28,7 +28,7 @@ deepened: 2026-03-13
 
 ## Overview
 
-`archive-kb.sh` hardcodes legacy `knowledge-base/project/{brainstorms,plans,specs}` paths in its `discover_artifacts()` function. After the KB restructure (#566, #568), artifacts now live at `knowledge-base/brainstorms/`, `knowledge-base/plans/`, `knowledge-base/specs/`, and `knowledge-base/features/specs/`. The script reports "No artifacts found" even when artifacts exist at the current paths.
+`archive-kb.sh` hardcodes legacy `knowledge-base/project/{brainstorms,plans,specs}` paths in its `discover_artifacts()` function. After the KB restructure (#566, #568), artifacts now live at `knowledge-base/project/brainstorms/`, `knowledge-base/project/plans/`, `knowledge-base/project/specs/`, and `knowledge-base/features/specs/`. The script reports "No artifacts found" even when artifacts exist at the current paths.
 
 ## Problem Statement
 
@@ -46,9 +46,9 @@ if [[ -d "knowledge-base/project/specs/feat-${slug}" ]]; then
 ```
 
 The actual artifact locations are now:
-- `knowledge-base/brainstorms/` (new primary)
-- `knowledge-base/plans/` (new primary)
-- `knowledge-base/specs/feat-<slug>/` (new primary)
+- `knowledge-base/project/brainstorms/` (new primary)
+- `knowledge-base/project/plans/` (new primary)
+- `knowledge-base/project/specs/feat-<slug>/` (new primary)
 - `knowledge-base/features/specs/feat-<slug>/` (alternate new location)
 - `knowledge-base/project/brainstorms/` (legacy, still has content)
 - `knowledge-base/project/plans/` (legacy, still has content)
@@ -114,8 +114,8 @@ discover_artifacts() {
 ### Research Insights for `archive-kb.sh`
 
 **Correctness verification:**
-- The `archive_artifact()` function (lines 154-167) computes the archive destination using `dirname "$artifact"`, so it places each artifact's archive in the correct subdirectory (`knowledge-base/brainstorms/archive/`, `knowledge-base/project/brainstorms/archive/`, etc.) regardless of which base path the artifact came from. No changes needed to `archive_artifact()` or `print_archive_path()`.
-- The `nullglob` shell option ensures that globbing against a nonexistent directory (e.g., if `knowledge-base/brainstorms/` doesn't exist yet) expands to nothing rather than a literal glob string. This means the dir arrays are safe without explicit `-d` guards on each entry.
+- The `archive_artifact()` function (lines 154-167) computes the archive destination using `dirname "$artifact"`, so it places each artifact's archive in the correct subdirectory (`knowledge-base/project/brainstorms/archive/`, `knowledge-base/project/brainstorms/archive/`, etc.) regardless of which base path the artifact came from. No changes needed to `archive_artifact()` or `print_archive_path()`.
+- The `nullglob` shell option ensures that globbing against a nonexistent directory (e.g., if `knowledge-base/project/brainstorms/` doesn't exist yet) expands to nothing rather than a literal glob string. This means the dir arrays are safe without explicit `-d` guards on each entry.
 - The `printf '%s\n' "${artifacts[@]}"` with an empty array prints nothing (not even a newline in bash 4+), and the caller's `[[ -n "$line" ]]` guard handles empty lines. No risk of phantom artifacts.
 
 **Ordering consideration:**
@@ -131,7 +131,7 @@ The `worktree-manager.sh` has the same stale paths in three locations and must b
 local spec_dir="$GIT_ROOT/knowledge-base/project/specs/$branch_name"
 
 # Fixed:
-local spec_dir="$GIT_ROOT/knowledge-base/specs/$branch_name"
+local spec_dir="$GIT_ROOT/knowledge-base/project/specs/$branch_name"
 ```
 
 **2. `cleanup_merged_worktrees()` spec dir archival (lines 426-427):**
@@ -142,7 +142,7 @@ local archive_dir="$GIT_ROOT/knowledge-base/project/specs/archive"
 
 # Fixed -- search all spec locations:
 local spec_dirs=(
-  "$GIT_ROOT/knowledge-base/specs/$safe_branch"
+  "$GIT_ROOT/knowledge-base/project/specs/$safe_branch"
   "$GIT_ROOT/knowledge-base/features/specs/$safe_branch"
   "$GIT_ROOT/knowledge-base/project/specs/$safe_branch"
 )
@@ -176,7 +176,7 @@ Note: `archive_kb_files()` already has `[[ -d "$dir" ]] || return 0` as its firs
 echo -e "  2. Create spec: ${BLUE}knowledge-base/project/specs/$branch_name/spec.md${NC}"
 
 # Fixed:
-echo -e "  2. Create spec: ${BLUE}knowledge-base/specs/$branch_name/spec.md${NC}"
+echo -e "  2. Create spec: ${BLUE}knowledge-base/project/specs/$branch_name/spec.md${NC}"
 ```
 
 ### Update `SKILL.md` documentation
@@ -186,9 +186,9 @@ Update the "What It Archives" table in `plugins/soleur/skills/archive-kb/SKILL.m
 ## Acceptance Criteria
 
 ### archive-kb.sh
-- [x] `archive-kb.sh` discovers artifacts in `knowledge-base/brainstorms/` (current path)
-- [x] `archive-kb.sh` discovers artifacts in `knowledge-base/plans/` (current path)
-- [x] `archive-kb.sh` discovers artifacts in `knowledge-base/specs/feat-<slug>/` (current path)
+- [x] `archive-kb.sh` discovers artifacts in `knowledge-base/project/brainstorms/` (current path)
+- [x] `archive-kb.sh` discovers artifacts in `knowledge-base/project/plans/` (current path)
+- [x] `archive-kb.sh` discovers artifacts in `knowledge-base/project/specs/feat-<slug>/` (current path)
 - [x] `archive-kb.sh` discovers artifacts in `knowledge-base/features/specs/feat-<slug>/` (alternate current path)
 - [x] `archive-kb.sh` still discovers artifacts in `knowledge-base/project/brainstorms/` (legacy path)
 - [x] `archive-kb.sh` still discovers artifacts in `knowledge-base/project/plans/` (legacy path)
@@ -198,7 +198,7 @@ Update the "What It Archives" table in `plugins/soleur/skills/archive-kb/SKILL.m
 - [x] `SKILL.md` documentation reflects the updated search paths
 
 ### worktree-manager.sh
-- [x] `create_for_feature()` creates spec dirs at `knowledge-base/specs/` (not `knowledge-base/project/specs/`)
+- [x] `create_for_feature()` creates spec dirs at `knowledge-base/project/specs/` (not `knowledge-base/project/specs/`)
 - [x] `cleanup_merged_worktrees()` archives specs from all three spec locations
 - [x] `cleanup_merged_worktrees()` archives brainstorms from both current and legacy paths
 - [x] `cleanup_merged_worktrees()` archives plans from both current and legacy paths
@@ -208,21 +208,21 @@ Update the "What It Archives" table in `plugins/soleur/skills/archive-kb/SKILL.m
 
 ### archive-kb.sh
 
-- Given artifacts exist only in `knowledge-base/brainstorms/`, when `archive-kb.sh` runs, then they are discovered and archived to `knowledge-base/brainstorms/archive/`
+- Given artifacts exist only in `knowledge-base/project/brainstorms/`, when `archive-kb.sh` runs, then they are discovered and archived to `knowledge-base/project/brainstorms/archive/`
 - Given artifacts exist only in `knowledge-base/project/brainstorms/` (legacy), when `archive-kb.sh` runs, then they are still discovered and archived to `knowledge-base/project/brainstorms/archive/`
 - Given artifacts exist in both current and legacy paths, when `archive-kb.sh` runs, then all are discovered (no duplicates since paths differ)
 - Given artifacts exist in `knowledge-base/features/specs/feat-<slug>/`, when `archive-kb.sh` runs, then the spec directory is discovered and archived to `knowledge-base/features/specs/archive/`
-- Given artifacts exist in `knowledge-base/specs/feat-<slug>/`, when `archive-kb.sh` runs, then the spec directory is discovered and archived to `knowledge-base/specs/archive/`
+- Given artifacts exist in `knowledge-base/project/specs/feat-<slug>/`, when `archive-kb.sh` runs, then the spec directory is discovered and archived to `knowledge-base/project/specs/archive/`
 - Given no artifacts exist for the slug, when `archive-kb.sh` runs, then "No artifacts found" is printed and exit code is 0
 - Given `--dry-run` is passed with artifacts in current paths, when `archive-kb.sh` runs, then the correct archive destinations are displayed without executing
-- Given a directory in the search list does not exist (e.g., `knowledge-base/brainstorms/` missing), when `archive-kb.sh` runs, then no error is raised (nullglob handles gracefully)
+- Given a directory in the search list does not exist (e.g., `knowledge-base/project/brainstorms/` missing), when `archive-kb.sh` runs, then no error is raised (nullglob handles gracefully)
 
 ### worktree-manager.sh
 
-- Given a merged branch has specs at `knowledge-base/specs/feat-<slug>/`, when `cleanup-merged` runs, then the spec dir is archived
+- Given a merged branch has specs at `knowledge-base/project/specs/feat-<slug>/`, when `cleanup-merged` runs, then the spec dir is archived
 - Given a merged branch has specs at `knowledge-base/project/specs/feat-<slug>/` (legacy), when `cleanup-merged` runs, then the spec dir is still archived
-- Given a merged branch has brainstorms at `knowledge-base/brainstorms/`, when `cleanup-merged` runs, then they are archived
-- Given `create_for_feature` is called, then the spec dir is created at `knowledge-base/specs/feat-<name>/` (not the legacy path)
+- Given a merged branch has brainstorms at `knowledge-base/project/brainstorms/`, when `cleanup-merged` runs, then they are archived
+- Given `create_for_feature` is called, then the spec dir is created at `knowledge-base/project/specs/feat-<name>/` (not the legacy path)
 
 ## Context
 

@@ -141,8 +141,8 @@ grep -E '^description:' plugins/soleur/skills/*/SKILL.md | grep -v 'This skill' 
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-12-consolidate-commands-to-skills-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-consolidate-commands-to-skills/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-12-consolidate-commands-to-skills-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-consolidate-commands-to-skills/spec.md`
 - Issue: #58
 - Inspiration: [Amp - Slashing Custom Commands](https://ampcode.com/news/slashing-custom-commands)
-- Learning: `knowledge-base/learnings/plugin-versioning-requirements.md`
+- Learning: `knowledge-base/project/learnings/plugin-versioning-requirements.md`

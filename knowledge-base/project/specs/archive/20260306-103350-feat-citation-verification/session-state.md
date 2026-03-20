@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-citation-verification/knowledge-base/plans/2026-03-06-feat-citation-verification-content-pipeline-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-citation-verification/knowledge-base/project/plans/2026-03-06-feat-citation-verification-content-pipeline-plan.md
 - Status: complete
 
 ### Errors

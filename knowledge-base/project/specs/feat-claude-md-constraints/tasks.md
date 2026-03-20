@@ -1,5 +1,5 @@
 ---
-plan: knowledge-base/plans/2026-03-03-chore-add-workflow-constraint-rules-plan.md
+plan: knowledge-base/project/plans/2026-03-03-chore-add-workflow-constraint-rules-plan.md
 issue: "#389"
 branch: feat/claude-md-constraints
 ---

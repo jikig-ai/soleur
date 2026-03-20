@@ -45,4 +45,4 @@ issue: 470
 related:
   - knowledge-base/project/learnings/2026-02-22-simplify-workflow-thin-router-over-migration.md
   - knowledge-base/project/learnings/2026-03-12-plan-review-scope-reduction.md
-  - knowledge-base/learnings/2026-03-13-platform-integration-scope-calibration.md
+  - knowledge-base/project/learnings/2026-03-13-platform-integration-scope-calibration.md

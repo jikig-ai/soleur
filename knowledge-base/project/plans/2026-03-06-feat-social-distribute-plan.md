@@ -166,8 +166,8 @@ Solo founder only. No external dependencies. Discord webhook already exists and 
 - Content repurposing table: `knowledge-base/overview/content-strategy.md:234`
 - Stats data: `plugins/soleur/docs/_data/stats.js`
 - Site data: `plugins/soleur/docs/_data/site.json`
-- Brainstorm: `knowledge-base/brainstorms/2026-03-06-social-distribute-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-social-distribute/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-06-social-distribute-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-social-distribute/spec.md`
 
 ### Learnings Applied
 

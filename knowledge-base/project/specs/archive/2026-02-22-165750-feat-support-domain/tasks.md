@@ -1,7 +1,7 @@
 # Support Domain Tasks
 
 **Issue:** #266
-**Plan:** `knowledge-base/plans/2026-02-22-feat-add-support-domain-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-22-feat-add-support-domain-plan.md`
 
 ## Phase 1: Agent Files
 

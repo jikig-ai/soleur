@@ -26,8 +26,8 @@ Add the Vercel MCP server to Soleur's plugin.json, giving all agents access to V
 
 ## Context
 
-- **Issue:** #258 | **Brainstorm:** `knowledge-base/brainstorms/2026-02-22-vercel-mcp-brainstorm.md` | **Spec:** `knowledge-base/specs/feat-vercel-mcp/spec.md`
-- **Prior art:** MCP audit #116 ([learning](knowledge-base/learnings/integration-issues/2026-02-18-authenticated-mcp-servers-cannot-bundle-in-plugin-json.md)) -- header auth can't bundle, but Vercel uses OAuth (Claude Code native)
+- **Issue:** #258 | **Brainstorm:** `knowledge-base/project/brainstorms/2026-02-22-vercel-mcp-brainstorm.md` | **Spec:** `knowledge-base/project/specs/feat-vercel-mcp/spec.md`
+- **Prior art:** MCP audit #116 ([learning](knowledge-base/project/learnings/integration-issues/2026-02-18-authenticated-mcp-servers-cannot-bundle-in-plugin-json.md)) -- header auth can't bundle, but Vercel uses OAuth (Claude Code native)
 
 ## MVP
 

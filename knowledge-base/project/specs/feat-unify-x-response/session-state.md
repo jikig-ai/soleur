@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-unify-x-response/knowledge-base/plans/2026-03-10-refactor-unify-x-response-handling-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-unify-x-response/knowledge-base/project/plans/2026-03-10-refactor-unify-x-response-handling-plan.md
 - Status: complete
 
 ### Errors

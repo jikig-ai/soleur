@@ -147,4 +147,4 @@ discord_request() {
 - Issue: #472
 - Reference impl: `plugins/soleur/skills/community/scripts/x-community.sh:165` (`x_request`)
 - Related PR: #466 (community skill that introduced these scripts)
-- Learning: `knowledge-base/learnings/2026-03-09-external-api-scope-calibration.md`
+- Learning: `knowledge-base/project/learnings/2026-03-09-external-api-scope-calibration.md`

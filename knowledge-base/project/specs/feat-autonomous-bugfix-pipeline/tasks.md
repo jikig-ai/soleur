@@ -1,6 +1,6 @@
 # Tasks: Full Autonomous Bug-Fix Pipeline
 
-Ref: `knowledge-base/plans/2026-03-05-feat-autonomous-bugfix-pipeline-plan.md`
+Ref: `knowledge-base/project/plans/2026-03-05-feat-autonomous-bugfix-pipeline-plan.md`
 Issue: #377
 
 ## Phase 1: Auto-Merge Eligibility in fix-issue Skill

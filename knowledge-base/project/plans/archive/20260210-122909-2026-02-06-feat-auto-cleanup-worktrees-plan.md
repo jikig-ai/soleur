@@ -43,7 +43,7 @@ For each [gone] branch:
     |
     +---> Skip if worktree has uncommitted changes (safety check)
     |
-    +---> Archive spec: knowledge-base/specs/feat-<name>/ -> archive/YYYY-MM-DD-HHMMSS-feat-<name>/
+    +---> Archive spec: knowledge-base/project/specs/feat-<name>/ -> archive/YYYY-MM-DD-HHMMSS-feat-<name>/
     |
     +---> Remove worktree: git worktree remove .worktrees/feat-<name>
     |
@@ -91,8 +91,8 @@ cleanup_merged_worktrees() {
 
   for branch in $gone_branches; do
     local worktree_path="$WORKTREE_DIR/$branch"
-    local spec_dir="$GIT_ROOT/knowledge-base/specs/$branch"
-    local archive_dir="$GIT_ROOT/knowledge-base/specs/archive"
+    local spec_dir="$GIT_ROOT/knowledge-base/project/specs/$branch"
+    local archive_dir="$GIT_ROOT/knowledge-base/project/specs/archive"
 
     # Skip if active worktree
     if [[ "$PWD" == "$worktree_path"* ]]; then
@@ -185,7 +185,7 @@ Add to `.claude/settings.local.json` (or appropriate hooks config):
 
 - [x] `worktree-manager.sh cleanup-merged` detects branches with `[gone]` status using `git for-each-ref`
 - [x] TTY detection: verbose output in terminal, quiet otherwise
-- [x] Spec directories archived to `knowledge-base/specs/archive/YYYY-MM-DD-HHMMSS-<name>/`
+- [x] Spec directories archived to `knowledge-base/project/specs/archive/YYYY-MM-DD-HHMMSS-<name>/`
 - [x] Branch names with `/` are sanitized for archive paths
 - [x] Currently active worktrees are skipped with warning
 - [x] Worktrees with uncommitted changes are skipped (safety)
@@ -238,9 +238,9 @@ Add to `.claude/settings.local.json` (or appropriate hooks config):
 ### Internal References
 
 - Current cleanup function: `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:276`
-- Spec workflow learnings: `knowledge-base/learnings/2026-02-06-spec-workflow-implementation.md:68`
-- Brainstorm: `knowledge-base/brainstorms/2026-02-06-auto-cleanup-worktrees-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-auto-cleanup-worktrees/spec.md`
+- Spec workflow learnings: `knowledge-base/project/learnings/2026-02-06-spec-workflow-implementation.md:68`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-06-auto-cleanup-worktrees-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-auto-cleanup-worktrees/spec.md`
 
 ### Related Work
 

@@ -40,7 +40,7 @@ The 6 parallel subagents are:
 
 1. **Context Analyzer** -- extracts problem type, component, symptoms; returns YAML frontmatter skeleton
 2. **Solution Extractor** -- identifies root cause; returns solution content block
-3. **Related Docs Finder** -- searches knowledge-base/learnings/; returns links and relationships
+3. **Related Docs Finder** -- searches knowledge-base/project/learnings/; returns links and relationships
 4. **Prevention Strategist** -- develops prevention strategies and test cases
 5. **Category Classifier** -- determines optimal category and suggests filename
 6. **Documentation Writer** -- assembles complete markdown file, validates YAML, creates file
@@ -115,7 +115,7 @@ Change `### 6. **Documentation Writer** (Parallel)` to `### 5. **Documentation W
 ```markdown
 ### 5. **Documentation Writer** (Parallel)
 
-- Determines optimal `knowledge-base/learnings/` category
+- Determines optimal `knowledge-base/project/learnings/` category
 - Validates category against schema
 - Suggests filename based on slug
 - Assembles complete markdown file
@@ -155,8 +155,8 @@ Primary Subagent Results:
 - Constitution rule: `knowledge-base/overview/constitution.md` line 148
 - Compound skill: `plugins/soleur/skills/compound/SKILL.md` lines 68-122
 - Prior art: #416 (Deviation Analyst made sequential to respect limit)
-- Learning: `knowledge-base/learnings/2026-03-03-deviation-analyst-scope-reduction.md`
-- Learning: `knowledge-base/learnings/2026-02-09-parallel-subagent-fan-out-in-work-command.md`
+- Learning: `knowledge-base/project/learnings/2026-03-03-deviation-analyst-scope-reduction.md`
+- Learning: `knowledge-base/project/learnings/2026-02-09-parallel-subagent-fan-out-in-work-command.md`
 
 ## References
 

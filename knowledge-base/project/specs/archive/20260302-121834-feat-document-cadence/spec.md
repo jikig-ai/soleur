@@ -2,7 +2,7 @@
 
 ## Problem Statement
 
-Strategic knowledge-base documents (brand-guide.md, business-validation.md, constitution.md) are point-in-time snapshots with no review enforcement. When they go stale, downstream agents consume them as ground truth and propagate errors — the Cowork Plugins incident proved a 22-day detection gap. A `review-reminder.yml` workflow exists but only scans `knowledge-base/learnings/` with a fragile fixed-date `next_review` model that only 3 files use.
+Strategic knowledge-base documents (brand-guide.md, business-validation.md, constitution.md) are point-in-time snapshots with no review enforcement. When they go stale, downstream agents consume them as ground truth and propagate errors — the Cowork Plugins incident proved a 22-day detection gap. A `review-reminder.yml` workflow exists but only scans `knowledge-base/project/learnings/` with a fragile fixed-date `next_review` model that only 3 files use.
 
 ## Goals
 
@@ -28,7 +28,7 @@ Documents opt in to cadence enforcement by adding two YAML frontmatter fields:
 
 ### FR2: Workflow scan expansion
 
-`review-reminder.yml` scans all of `knowledge-base/` (recursive) instead of only `knowledge-base/learnings/`. Only files with `review_cadence` frontmatter are processed.
+`review-reminder.yml` scans all of `knowledge-base/` (recursive) instead of only `knowledge-base/project/learnings/`. Only files with `review_cadence` frontmatter are processed.
 
 ### FR3: Staleness computation
 

@@ -183,8 +183,8 @@ Discord messages cannot be edited for identity but the content can be corrected 
 - PR #415 -- The PR that triggered this bug
 - PR #412 -- `feat: tag-only versioning via GitHub Releases` (introduced the workflow)
 - Issue #393 -- The issue referenced in PR #415's title
-- Learning: `knowledge-base/learnings/2026-03-03-serialize-version-bumps-to-merge-time.md`
-- Learning: `knowledge-base/learnings/2026-02-19-discord-bot-identity-and-webhook-behavior.md`
+- Learning: `knowledge-base/project/learnings/2026-03-03-serialize-version-bumps-to-merge-time.md`
+- Learning: `knowledge-base/project/learnings/2026-02-19-discord-bot-identity-and-webhook-behavior.md`
 - Constitution line 89: Discord webhook `username` and `avatar_url` requirement
 
 ## MVP

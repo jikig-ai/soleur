@@ -1,6 +1,6 @@
 # Marketing Audit Tasks
 
-**Plan:** `knowledge-base/plans/2026-02-21-feat-marketing-audit-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-21-feat-marketing-audit-plan.md`
 **Issue:** #193
 
 ## Brand Guide and Voice Fixes

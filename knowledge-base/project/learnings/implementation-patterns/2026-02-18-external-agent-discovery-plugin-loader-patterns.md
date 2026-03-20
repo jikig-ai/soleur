@@ -60,9 +60,9 @@ Trust model: Anthropic repos (always), Verified publishers (always), Unverified 
 
 ## Cross-References
 
-- Plugin loader recursion: `knowledge-base/learnings/2026-02-12-plugin-loader-agent-vs-skill-recursion.md`
-- MCP bundling constraints: `knowledge-base/learnings/integration-issues/2026-02-18-authenticated-mcp-servers-cannot-bundle-in-plugin-json.md`
-- Adding plugin commands: `knowledge-base/learnings/implementation-patterns/adding-new-plugin-commands.md`
-- Spec: `knowledge-base/specs/feat-external-agent-discovery/spec.md`
-- Registry research: `knowledge-base/specs/feat-external-agent-discovery/registry-research.md`
+- Plugin loader recursion: `knowledge-base/project/learnings/2026-02-12-plugin-loader-agent-vs-skill-recursion.md`
+- MCP bundling constraints: `knowledge-base/project/learnings/integration-issues/2026-02-18-authenticated-mcp-servers-cannot-bundle-in-plugin-json.md`
+- Adding plugin commands: `knowledge-base/project/learnings/implementation-patterns/adding-new-plugin-commands.md`
+- Spec: `knowledge-base/project/specs/feat-external-agent-discovery/spec.md`
+- Registry research: `knowledge-base/project/specs/feat-external-agent-discovery/registry-research.md`
 - Issue: #55

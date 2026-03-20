@@ -1,6 +1,6 @@
 # Tasks: fix/articles-seo
 
-Source plan: `knowledge-base/plans/2026-03-05-fix-articles-seo-metadata-plan.md`
+Source plan: `knowledge-base/project/plans/2026-03-05-fix-articles-seo-metadata-plan.md`
 
 ## Phase 1: Core Fix
 

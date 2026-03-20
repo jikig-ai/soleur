@@ -87,6 +87,6 @@ MINOR (new command, no breaking changes). Ship workflow handles plugin.json, CHA
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-22-simplify-workflow-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-simplify-workflow/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-22-simplify-workflow-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-simplify-workflow/spec.md`
 - Issue: #267

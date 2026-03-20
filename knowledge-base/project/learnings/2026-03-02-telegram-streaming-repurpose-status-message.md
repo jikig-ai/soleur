@@ -23,8 +23,8 @@ Repurposed the "Thinking..." status message via `editMessageText` with accumulat
 Editing an existing message instead of delete+send eliminates flicker and halves API calls. When a message transitions roles (status → streaming content), cleanup logic must know about the transition to avoid destroying the repurposed message. The `streamState` field serves as both state tracker and cleanup guard.
 
 ## Related
-- `knowledge-base/learnings/runtime-errors/2026-02-11-async-status-message-lifecycle-telegram.md` (messageId sentinel, null-before-cleanup)
-- `knowledge-base/learnings/implementation-patterns/2026-02-11-testability-refactoring-dependency-injection.md` (BotApi interface for mocking)
+- `knowledge-base/project/learnings/runtime-errors/2026-02-11-async-status-message-lifecycle-telegram.md` (messageId sentinel, null-before-cleanup)
+- `knowledge-base/project/learnings/implementation-patterns/2026-02-11-testability-refactoring-dependency-injection.md` (BotApi interface for mocking)
 
 ## Tags
 category: implementation-patterns

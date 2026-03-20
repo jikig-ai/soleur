@@ -1,7 +1,7 @@
 # Tasks: Add Code Coverage
 
 **Issue:** #66
-**Plan:** `knowledge-base/plans/2026-02-12-feat-add-code-coverage-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-12-feat-add-code-coverage-plan.md`
 
 ## Phase 1: Setup
 

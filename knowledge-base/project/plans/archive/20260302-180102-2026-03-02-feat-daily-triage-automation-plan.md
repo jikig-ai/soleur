@@ -195,6 +195,6 @@ This is valuable but not a prerequisite for this feature.
 
 - Reference workflow: `.github/workflows/scheduled-competitive-analysis.yml`
 - Ticket-triage agent: `plugins/soleur/agents/support/ticket-triage.md`
-- Brainstorm: `knowledge-base/brainstorms/2026-03-02-daily-triage-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-daily-triage/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-02-daily-triage-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-daily-triage/spec.md`
 - #370 (this feature), #375 (PR), #376 (Phase 2), #377 (Phase 3)

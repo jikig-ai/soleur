@@ -12,8 +12,8 @@ Add a Sales domain to Soleur with a CRO (Chief Revenue Officer) domain leader an
 
 **Issue:** #247
 **Branch:** feat-sales-domain
-**Brainstorm:** `knowledge-base/brainstorms/2026-02-22-sales-domain-brainstorm.md`
-**Spec:** `knowledge-base/specs/feat-sales-domain/spec.md`
+**Brainstorm:** `knowledge-base/project/brainstorms/2026-02-22-sales-domain-brainstorm.md`
+**Spec:** `knowledge-base/project/specs/feat-sales-domain/spec.md`
 
 ## Problem Statement
 
@@ -128,8 +128,8 @@ Sales CSS color: `--cat-sales: #E06666` (coral). Visually distinct from existing
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-22-sales-domain-brainstorm.md`
-- Domain checklist: `knowledge-base/learnings/integration-issues/adding-new-agent-domain-checklist.md`
-- Domain leader pattern: `knowledge-base/learnings/2026-02-21-domain-leader-pattern-and-llm-detection.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-22-sales-domain-brainstorm.md`
+- Domain checklist: `knowledge-base/project/learnings/integration-issues/adding-new-agent-domain-checklist.md`
+- Domain leader pattern: `knowledge-base/project/learnings/2026-02-21-domain-leader-pattern-and-llm-detection.md`
 - CLO agent (template): `plugins/soleur/agents/legal/clo.md`
 - Brainstorm command: `plugins/soleur/commands/soleur/brainstorm.md` (lines 57-291)

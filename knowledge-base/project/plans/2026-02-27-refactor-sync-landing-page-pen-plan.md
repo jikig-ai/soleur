@@ -49,7 +49,7 @@ The Pencil desktop app must be running before any MCP tool calls. If it is not r
 All `filePath` parameters in Pencil MCP tools must use the absolute worktree path:
 `/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-sync-landing-page-pen/knowledge-base/design/brand/brand-visual-identity-brainstorm.pen`
 
-This is documented in `AGENTS.md` and confirmed by the Playwright screenshot learning (`knowledge-base/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md`): MCP servers resolve paths from their own process CWD (the repo root), not the shell CWD. Pencil MCP tools accept a `filePath` parameter that overrides this, but it must be absolute.
+This is documented in `AGENTS.md` and confirmed by the Playwright screenshot learning (`knowledge-base/project/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md`): MCP servers resolve paths from their own process CWD (the repo root), not the shell CWD. Pencil MCP tools accept a `filePath` parameter that overrides this, but it must be absolute.
 
 ## Implementation Steps
 
@@ -200,14 +200,14 @@ No plugin files, no version bump, no CHANGELOG entry. This is a design asset syn
 
 ### Relevant Learnings
 
-- **Pencil MCP local binary constraint** (`knowledge-base/learnings/2026-02-14-pencil-mcp-local-binary-constraint.md`): Pencil MCP is a local stdio binary bundled with the IDE extension. The `pencil-setup` skill (PR #335) handles registration.
-- **Pencil MCP auto-registration** (`knowledge-base/learnings/2026-02-27-pencil-mcp-auto-registration-via-skill.md`): The `pencil-setup` skill uses `claude mcp add -s user` for global scope. The remove-then-add pattern ensures idempotent registration.
+- **Pencil MCP local binary constraint** (`knowledge-base/project/learnings/2026-02-14-pencil-mcp-local-binary-constraint.md`): Pencil MCP is a local stdio binary bundled with the IDE extension. The `pencil-setup` skill (PR #335) handles registration.
+- **Pencil MCP auto-registration** (`knowledge-base/project/learnings/2026-02-27-pencil-mcp-auto-registration-via-skill.md`): The `pencil-setup` skill uses `claude mcp add -s user` for global scope. The remove-then-add pattern ensures idempotent registration.
 - **MCP paths resolve from repo root** (AGENTS.md): When in a worktree, always pass absolute paths to MCP tools. The .pen file path must be absolute.
-- **Playwright screenshots land in main repo** (`knowledge-base/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md`): MCP servers resolve relative paths from their own process CWD (main repo root), not the Bash session CWD. Pencil MCP tools accept a `filePath` parameter that overrides this, but it must be absolute.
+- **Playwright screenshots land in main repo** (`knowledge-base/project/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md`): MCP servers resolve relative paths from their own process CWD (main repo root), not the Bash session CWD. Pencil MCP tools accept a `filePath` parameter that overrides this, but it must be absolute.
 
 ### Prior Art
 
-- Plan for the code-side change: `knowledge-base/plans/2026-02-26-refactor-remove-caas-hero-badge-plan.md`
+- Plan for the code-side change: `knowledge-base/project/plans/2026-02-26-refactor-remove-caas-hero-badge-plan.md`
 - PR #317: `refactor(docs): remove CaaS hero badge from landing page (v3.3.7)` (merged)
 
 ### Pencil MCP Tool Reference

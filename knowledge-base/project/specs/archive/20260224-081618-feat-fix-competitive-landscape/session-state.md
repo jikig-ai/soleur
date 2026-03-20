@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/plans/2026-02-24-fix-competitive-landscape-tables-and-tiers-plan.md
+- Plan file: knowledge-base/project/plans/2026-02-24-fix-competitive-landscape-tables-and-tiers-plan.md
 - Status: complete
 
 ### Errors

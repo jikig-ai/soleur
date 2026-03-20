@@ -20,7 +20,7 @@ deepened: 2026-03-09
 3. Added three missing test scenarios for float, negative, and zero `retry_after` values.
 
 ### New Considerations Discovered
-- The `set -euo pipefail` float trap is documented in `knowledge-base/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md` -- same class of bug (arithmetic on values that may not be pure integers).
+- The `set -euo pipefail` float trap is documented in `knowledge-base/project/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md` -- same class of bug (arithmetic on values that may not be pure integers).
 - `sleep` accepts floats natively, so non-clamped float values like `1.5` work fine. Only the comparison/clamping code needs integer handling.
 
 ## Overview
@@ -189,10 +189,10 @@ Discord snowflake IDs are always numeric. Validating early prevents injection vi
 - Origin: #472 review, filed as #476
 - Prior fix: #475 addressed the recursive retry depth limit (item already resolved)
 - Reference patterns: Each fix already exists in at least one of the three scripts -- this is a cross-pollination task
-- Learning: `knowledge-base/learnings/2026-03-09-depth-limited-api-retry-pattern.md`
-- Learning: `knowledge-base/learnings/2026-03-09-external-api-scope-calibration.md`
-- Learning: `knowledge-base/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md` (float arithmetic trap in Fix 4)
-- Learning: `knowledge-base/learnings/2026-02-18-token-env-var-not-cli-arg.md` (curl stderr suppression rationale)
+- Learning: `knowledge-base/project/learnings/2026-03-09-depth-limited-api-retry-pattern.md`
+- Learning: `knowledge-base/project/learnings/2026-03-09-external-api-scope-calibration.md`
+- Learning: `knowledge-base/project/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md` (float arithmetic trap in Fix 4)
+- Learning: `knowledge-base/project/learnings/2026-02-18-token-env-var-not-cli-arg.md` (curl stderr suppression rationale)
 
 ## References
 

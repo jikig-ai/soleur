@@ -4,7 +4,7 @@
 **Updated:** 2026-02-18
 **Status:** Active
 **Issue:** #55
-**Prior work:** Archived brainstorm from #46 in `knowledge-base/brainstorms/archive/`
+**Prior work:** Archived brainstorm from #46 in `knowledge-base/project/brainstorms/archive/`
 
 ## What We're Building
 

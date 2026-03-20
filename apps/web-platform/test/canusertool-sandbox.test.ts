@@ -20,7 +20,7 @@ describe("isPathInWorkspace", () => {
   test("allows nested subdirectory", () => {
     expect(
       isPathInWorkspace(
-        "/workspaces/user1/knowledge-base/plans/plan.md",
+        "/workspaces/user1/knowledge-base/project/plans/plan.md",
         WORKSPACE,
       ),
     ).toBe(true);

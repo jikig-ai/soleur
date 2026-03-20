@@ -1,7 +1,7 @@
 # Tasks: Domain Prerequisites
 
 **Issue:** #251
-**Plan:** `knowledge-base/plans/2026-02-22-refactor-domain-prerequisites-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-22-refactor-domain-prerequisites-plan.md`
 **Branch:** `feat-domain-prerequisites`
 
 ## Phase 1: Token Budget Trim

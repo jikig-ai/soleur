@@ -16,7 +16,7 @@ When removing 2 skills from the plugin loader, the initial plan identified 3 fil
 When changing skill (or agent) counts, grep for the old count across the entire repo:
 
 ```bash
-grep -rn '\bNN skills\b' . --include='*.md' --include='*.js' --include='*.json' --include='*.yml' | grep -v CHANGELOG.md | grep -v node_modules | grep -v knowledge-base/plans/
+grep -rn '\bNN skills\b' . --include='*.md' --include='*.js' --include='*.json' --include='*.yml' | grep -v CHANGELOG.md | grep -v node_modules | grep -v knowledge-base/project/plans/
 ```
 
 The canonical list of files containing skill counts:

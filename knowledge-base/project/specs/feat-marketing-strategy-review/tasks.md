@@ -1,7 +1,7 @@
 # Tasks: Marketing Foundation
 
 **Issue:** #236
-**Plan:** `knowledge-base/plans/2026-03-03-feat-marketing-foundation-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-03-03-feat-marketing-foundation-plan.md`
 
 ## Phase 1: Blog Infrastructure
 

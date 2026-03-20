@@ -125,7 +125,7 @@ social-distribute SKILL.md line 103: "If a channel notes section is missing for 
 
 ### Related Work
 
-- Brainstorm: `knowledge-base/brainstorms/2026-03-13-linkedin-presence-brainstorm.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-13-linkedin-presence-brainstorm.md`
 - Spec: `knowledge-base/features/specs/feat-linkedin-presence/spec.md`
 - Issue #138: Extend Community Agent with LinkedIn Presence
 - Issue #96: Original community agent (established patterns)

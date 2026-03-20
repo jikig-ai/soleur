@@ -1,7 +1,7 @@
 # Tasks: Add X/Twitter Support to Community Agent
 
 **Issue:** #127
-**Plan:** `knowledge-base/plans/2026-03-09-feat-community-agent-platform-adapter-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-03-09-feat-community-agent-platform-adapter-plan.md`
 
 ## Phase 1: X/Twitter Integration
 

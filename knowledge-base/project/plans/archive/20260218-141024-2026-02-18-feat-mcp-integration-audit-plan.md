@@ -34,8 +34,8 @@ PR #108 (GitHub Pages + Cloudflare wiring) exposed an "agent autonomy gap." The 
 Commit the brainstorm and spec that document the full audit results. This is the primary deliverable for issue #116.
 
 **Files:**
-- `knowledge-base/brainstorms/2026-02-18-mcp-audit-brainstorm.md` (already written)
-- `knowledge-base/specs/feat-mcp-audit/spec.md` (update with research findings)
+- `knowledge-base/project/brainstorms/2026-02-18-mcp-audit-brainstorm.md` (already written)
+- `knowledge-base/project/specs/feat-mcp-audit/spec.md` (update with research findings)
 
 ### Phase 2: Minimal Agent Pointer
 
@@ -46,7 +46,7 @@ Add one line to the infra-security agent's GitHub Pages wire recipe referencing 
 Add after the existing wire recipe's "Post-wiring verification" paragraph:
 
 ```markdown
-**Detailed workflow:** For the complete 10-step autonomous sequence including cert provisioning, DNS proxy toggling, and common blockers, see `knowledge-base/learnings/integration-issues/2026-02-16-github-pages-cloudflare-wiring-workflow.md`.
+**Detailed workflow:** For the complete 10-step autonomous sequence including cert provisioning, DNS proxy toggling, and common blockers, see `knowledge-base/project/learnings/integration-issues/2026-02-16-github-pages-cloudflare-wiring-workflow.md`.
 ```
 
 ## Acceptance Criteria
@@ -62,8 +62,8 @@ PATCH bump (agent prompt change touches plugin files). Files: `plugin.json`, `CH
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-18-mcp-audit-brainstorm.md`
-- GitHub Pages learning: `knowledge-base/learnings/integration-issues/2026-02-16-github-pages-cloudflare-wiring-workflow.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-18-mcp-audit-brainstorm.md`
+- GitHub Pages learning: `knowledge-base/project/learnings/integration-issues/2026-02-16-github-pages-cloudflare-wiring-workflow.md`
 - Cloudflare MCP servers: https://github.com/cloudflare/mcp-server-cloudflare
 - Cloudflare MCP docs: https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/
 - Issue: #116

@@ -25,7 +25,7 @@ Compound routing (#104/#115) handles session-scoped learning-to-definition routi
 
 ## Functional Requirements
 
-- **FR1:** Phase 4 loads all learnings from `knowledge-base/learnings/` (recursive) and all definitions from `plugins/soleur/{skills,agents,commands}`
+- **FR1:** Phase 4 loads all learnings from `knowledge-base/project/learnings/` (recursive) and all definitions from `plugins/soleur/{skills,agents,commands}`
 - **FR2:** Learnings with the target definition already in `synced_to` or `skipped_for` frontmatter are excluded from evaluation
 - **FR3:** Metadata pre-filter matches learning tags/module/component against definition names and content keywords to generate candidate pairs
 - **FR4:** LLM evaluates each candidate pair and drafts a one-line bullet if relevant
@@ -40,7 +40,7 @@ Compound routing (#104/#115) handles session-scoped learning-to-definition routi
 - **TR2:** Frontmatter fields `synced_to` and `skipped_for` are optional arrays of strings (definition names)
 - **TR3:** Pre-filter must be fast enough to handle 100+ learnings x 50+ definitions without timeout
 - **TR4:** Definition file discovery must respect plugin loader conventions: skills flat at `skills/<name>/SKILL.md`, agents recursive at `agents/**/*.md`, commands flat at `commands/soleur/*.md`
-- **TR5:** Graceful degradation: skip Phase 4/5 if `knowledge-base/learnings/` or `plugins/soleur/` doesn't exist
+- **TR5:** Graceful degradation: skip Phase 4/5 if `knowledge-base/project/learnings/` or `plugins/soleur/` doesn't exist
 
 ## Acceptance Criteria
 

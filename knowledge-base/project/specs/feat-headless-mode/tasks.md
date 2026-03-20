@@ -1,6 +1,6 @@
 # Tasks: Headless Mode for Repeatable Workflows
 
-**Plan:** `knowledge-base/plans/2026-03-03-feat-headless-mode-repeatable-workflows-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-03-03-feat-headless-mode-repeatable-workflows-plan.md`
 **Issue:** #393
 **Branch:** feat-headless-mode
 

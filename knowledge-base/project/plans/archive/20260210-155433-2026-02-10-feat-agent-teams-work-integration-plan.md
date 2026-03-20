@@ -103,7 +103,7 @@ INSTRUCTIONS:
 
 ## References
 
-- Spec: `knowledge-base/specs/feat-agent-team/spec.md`
-- Brainstorm: `knowledge-base/brainstorms/2026-02-09-agent-team-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-agent-team/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-09-agent-team-brainstorm.md`
 - Existing subagent block: `plugins/soleur/commands/soleur/work.md:138-200`
 - Plugin version: `plugins/soleur/.claude-plugin/plugin.json` (1.12.0 -> 1.13.0)

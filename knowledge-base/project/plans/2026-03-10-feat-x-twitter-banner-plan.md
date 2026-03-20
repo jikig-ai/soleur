@@ -404,16 +404,16 @@ metrics=I("bannerId", {type:"text", name:"Metrics", content:"60+ Agents \u00B7 8
 - Existing .pen file: `knowledge-base/design/brand/brand-visual-identity-brainstorm.pen`
 - Pencil setup skill: `plugins/soleur/skills/pencil-setup/SKILL.md`
 - UX design lead agent: `plugins/soleur/agents/product/design/ux-design-lead.md`
-- Pencil MCP operational requirements: `knowledge-base/learnings/2026-02-27-pencil-editor-operational-requirements.md`
-- Pencil Desktop three-tier detection: `knowledge-base/learnings/2026-03-10-pencil-desktop-standalone-mcp-three-tier-detection.md`
-- Electron headless crash: `knowledge-base/learnings/2026-03-10-electron-appimage-crashes-in-headless-terminal.md`
-- X banner session errors: `knowledge-base/learnings/2026-03-10-x-banner-session-error-prevention.md`
-- X provisioning automation: `knowledge-base/learnings/2026-03-09-x-provisioning-playwright-automation.md`
-- Playwright screenshot path trap: `knowledge-base/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md`
-- Pencil MCP binary constraint: `knowledge-base/learnings/2026-02-14-pencil-mcp-local-binary-constraint.md`
-- Pencil MCP auto-registration: `knowledge-base/learnings/2026-02-27-pencil-mcp-auto-registration-via-skill.md`
-- Original spec: `knowledge-base/specs/feat-x-banner/spec.md`
-- Original tasks: `knowledge-base/specs/feat-x-banner/tasks.md`
+- Pencil MCP operational requirements: `knowledge-base/project/learnings/2026-02-27-pencil-editor-operational-requirements.md`
+- Pencil Desktop three-tier detection: `knowledge-base/project/learnings/2026-03-10-pencil-desktop-standalone-mcp-three-tier-detection.md`
+- Electron headless crash: `knowledge-base/project/learnings/2026-03-10-electron-appimage-crashes-in-headless-terminal.md`
+- X banner session errors: `knowledge-base/project/learnings/2026-03-10-x-banner-session-error-prevention.md`
+- X provisioning automation: `knowledge-base/project/learnings/2026-03-09-x-provisioning-playwright-automation.md`
+- Playwright screenshot path trap: `knowledge-base/project/learnings/2026-02-17-playwright-screenshots-land-in-main-repo.md`
+- Pencil MCP binary constraint: `knowledge-base/project/learnings/2026-02-14-pencil-mcp-local-binary-constraint.md`
+- Pencil MCP auto-registration: `knowledge-base/project/learnings/2026-02-27-pencil-mcp-auto-registration-via-skill.md`
+- Original spec: `knowledge-base/project/specs/feat-x-banner/spec.md`
+- Original tasks: `knowledge-base/project/specs/feat-x-banner/tasks.md`
 
 ### Related
 

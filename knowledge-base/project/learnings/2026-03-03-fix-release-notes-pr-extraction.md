@@ -83,7 +83,7 @@ Secondary insight: `jq '.[0].number'` returns the literal string `null` (not emp
 
 ## Related
 
-- `knowledge-base/learnings/integration-issues/github-actions-auto-release-permissions.md` -- companion issue: workflow permissions and cascade limitations that motivated the release workflow design
-- `knowledge-base/learnings/2026-02-19-discord-bot-identity-and-webhook-behavior.md` -- Discord webhook `username`/`avatar_url` identity convention
+- `knowledge-base/project/learnings/integration-issues/github-actions-auto-release-permissions.md` -- companion issue: workflow permissions and cascade limitations that motivated the release workflow design
+- `knowledge-base/project/learnings/2026-02-19-discord-bot-identity-and-webhook-behavior.md` -- Discord webhook `username`/`avatar_url` identity convention
 - `.github/workflows/version-bump-and-release.yml` -- the fixed workflow
 - Commit: `17ad7a2` (the squash that exposed the bug, `feat: add --headless mode (#393) (#415)`)

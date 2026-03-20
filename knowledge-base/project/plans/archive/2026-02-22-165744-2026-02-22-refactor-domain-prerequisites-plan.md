@@ -119,6 +119,6 @@ grep -ri "five domains\|engineering, marketing, legal, operations, and product" 
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-22-domain-prerequisites-brainstorm.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-22-domain-prerequisites-brainstorm.md`
 - Brainstorm source: `plugins/soleur/commands/soleur/brainstorm.md` lines 57-314
 - Issue: #251

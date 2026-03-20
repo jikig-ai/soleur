@@ -8,7 +8,7 @@ tags:
   - disambiguation
   - marketing
 module: plugins/soleur/agents
-synced_to: knowledge-base/learnings/performance-issues/2026-02-20-agent-description-token-budget-optimization.md
+synced_to: knowledge-base/project/learnings/performance-issues/2026-02-20-agent-description-token-budget-optimization.md
 ---
 
 # Learning: Disambiguation budget compounds with domain size

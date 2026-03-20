@@ -2,7 +2,7 @@
 
 **Date:** 2026-02-21
 **Branch:** feat-marketing-audit
-**Brainstorm:** knowledge-base/brainstorms/2026-02-21-marketing-audit-brainstorm.md
+**Brainstorm:** knowledge-base/project/brainstorms/2026-02-21-marketing-audit-brainstorm.md
 
 ## Problem Statement
 

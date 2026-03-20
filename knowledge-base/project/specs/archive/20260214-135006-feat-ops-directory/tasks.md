@@ -1,6 +1,6 @@
 # Tasks: Ops Directory with Ops Advisor Agent
 
-**Plan**: `knowledge-base/plans/2026-02-14-feat-ops-directory-advisory-agents-plan.md`
+**Plan**: `knowledge-base/project/plans/2026-02-14-feat-ops-directory-advisory-agents-plan.md`
 **Branch**: `feat-ops-directory`
 **Issue**: #81
 

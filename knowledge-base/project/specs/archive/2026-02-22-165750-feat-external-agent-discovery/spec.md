@@ -51,7 +51,7 @@ Note: Caching was originally FR8 but is deferred to v2. Re-detection uses the `s
 - **TR2:** Data sources queried via Bash `curl` (unauthenticated JSON REST APIs). WebFetch avoided for JSON endpoints (designed for HTML).
 - **TR3:** Trust allowlist hardcoded in agent instructions for v1. Configurable allowlist deferred to v2.
 - **TR4:** Community directories are backward-compatible -- plugin works identically if `community/` is empty or absent.
-- **TR5:** Registry research document maintained at `knowledge-base/specs/feat-external-agent-discovery/registry-research.md`.
+- **TR5:** Registry research document maintained at `knowledge-base/project/specs/feat-external-agent-discovery/registry-research.md`.
 - **TR6:** Version bump: MINOR (new agent + new directory + new behavior in `/plan`).
 
 ## Success Criteria

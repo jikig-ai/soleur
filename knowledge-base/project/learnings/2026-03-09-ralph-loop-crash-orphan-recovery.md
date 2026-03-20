@@ -39,8 +39,8 @@ Filesystem-based semaphores (state files) are not crash-safe. Any system that us
 
 ## Cross-References
 
-- `knowledge-base/learnings/2026-03-05-ralph-loop-stuck-detection-shell-counter.md` — stuck detection mechanism
-- `knowledge-base/learnings/2026-03-05-awk-scoping-yaml-frontmatter-shell.md` — frontmatter parsing in stop hook
+- `knowledge-base/project/learnings/2026-03-05-ralph-loop-stuck-detection-shell-counter.md` — stuck detection mechanism
+- `knowledge-base/project/learnings/2026-03-05-awk-scoping-yaml-frontmatter-shell.md` — frontmatter parsing in stop hook
 - PR #465 (`feat/fix-ralph-loop-stop-hook`) — planned stop hook fixes
 
 ## Tags

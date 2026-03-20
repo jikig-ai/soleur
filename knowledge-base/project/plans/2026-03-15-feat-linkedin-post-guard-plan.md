@@ -16,7 +16,7 @@ deepened: 2026-03-15
 
 1. Corrected content-publisher workflow scope -- `content-publisher.sh` has no LinkedIn channel support yet, so adding `LINKEDIN_ALLOW_POST` to its workflow YAML is premature. Deferred to the LinkedIn content-publisher integration issue (#590).
 2. Added `BASH_SOURCE` guard verification -- the guard depends on `linkedin-community.sh` having the source guard pattern (task 2.10 in feat-linkedin-api-scripts), which is confirmed in the tasks.
-3. Applied institutional learning: shell script defensive patterns (return code 1, guard-first placement) align with documented prevention strategies from `knowledge-base/learnings/2026-03-13-shell-script-defensive-patterns.md`.
+3. Applied institutional learning: shell script defensive patterns (return code 1, guard-first placement) align with documented prevention strategies from `knowledge-base/project/learnings/2026-03-13-shell-script-defensive-patterns.md`.
 
 ## Overview
 
@@ -69,7 +69,7 @@ The guard returns 1 (not 0). Per constitution rule: "functions that create fallb
 
 ### Implementation strategy
 
-The `linkedin-community.sh` script is being implemented in the `feat-linkedin-api-scripts` branch (issue #589, task 2.6). This guard should be integrated directly into `cmd_post_content()` during that implementation -- amend task 2.6 in `knowledge-base/specs/feat-linkedin-api-scripts/tasks.md` to include the guard as a sub-task. This plan is a specification amendment to that plan, not a standalone deliverable requiring a separate PR.
+The `linkedin-community.sh` script is being implemented in the `feat-linkedin-api-scripts` branch (issue #589, task 2.6). This guard should be integrated directly into `cmd_post_content()` during that implementation -- amend task 2.6 in `knowledge-base/project/specs/feat-linkedin-api-scripts/tasks.md` to include the guard as a sub-task. This plan is a specification amendment to that plan, not a standalone deliverable requiring a separate PR.
 
 ## Non-goals
 
@@ -99,9 +99,9 @@ The `linkedin-community.sh` script is being implemented in the `feat-linkedin-ap
 
 ## Applicable Institutional Learnings
 
-- **Shell script defensive patterns** (`knowledge-base/learnings/2026-03-13-shell-script-defensive-patterns.md`): Prevention strategy #5 (always include an `else`/default case) applies -- the guard's `return 1` path is the catch-all for all non-`"true"` values.
-- **Platform integration scope calibration** (`knowledge-base/learnings/2026-03-13-platform-integration-scope-calibration.md`): "Match scope to what can be validated on day one." The content-publisher workflow env change cannot be validated until #590 ships, so it is deferred.
-- **Community router deduplication** (`knowledge-base/learnings/2026-03-13-community-router-deduplication.md`): The guard lives in `linkedin-community.sh` (the platform script), not in the router or caller. This follows the pattern where platform-specific behavior belongs in platform scripts.
+- **Shell script defensive patterns** (`knowledge-base/project/learnings/2026-03-13-shell-script-defensive-patterns.md`): Prevention strategy #5 (always include an `else`/default case) applies -- the guard's `return 1` path is the catch-all for all non-`"true"` values.
+- **Platform integration scope calibration** (`knowledge-base/project/learnings/2026-03-13-platform-integration-scope-calibration.md`): "Match scope to what can be validated on day one." The content-publisher workflow env change cannot be validated until #590 ships, so it is deferred.
+- **Community router deduplication** (`knowledge-base/project/learnings/2026-03-13-community-router-deduplication.md`): The guard lives in `linkedin-community.sh` (the platform script), not in the router or caller. This follows the pattern where platform-specific behavior belongs in platform scripts.
 
 ## Dependencies & Risks
 

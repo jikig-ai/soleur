@@ -39,7 +39,7 @@ Our growth-related components operate in the same space as marketingskills. Our 
 
 ### Phase 3: Write learning document
 
-1. Write `knowledge-base/learnings/2026-02-20-marketingskills-overlap-analysis.md` with YAML frontmatter, overlap matrix, technique findings, and a suggested quarterly monitoring cadence
+1. Write `knowledge-base/project/learnings/2026-02-20-marketingskills-overlap-analysis.md` with YAML frontmatter, overlap matrix, technique findings, and a suggested quarterly monitoring cadence
 2. Update issue #165 with artifact links
 
 ## Acceptance Criteria
@@ -49,7 +49,7 @@ Our growth-related components operate in the same space as marketingskills. Our 
 - [x] 5 representative skills reviewed (code/prompts read, not executed)
 - [x] 3 borrowable techniques documented with attribution
 - [x] Quarterly monitoring cadence noted in learning document
-- [x] Learning document written to `knowledge-base/learnings/`
+- [x] Learning document written to `knowledge-base/project/learnings/`
 
 ## Non-Goals
 
@@ -60,7 +60,7 @@ Our growth-related components operate in the same space as marketingskills. Our 
 
 ## Output Artifacts
 
-1. **Learning document:** `knowledge-base/learnings/2026-02-20-marketingskills-overlap-analysis.md`
+1. **Learning document:** `knowledge-base/project/learnings/2026-02-20-marketingskills-overlap-analysis.md`
 2. **Issue #165 updated** with completion status
 
 ## Version Bump
@@ -70,5 +70,5 @@ No plugin files modified. No version bump needed.
 ## References
 
 - coreyhaines31/marketingskills: https://github.com/coreyhaines31/marketingskills
-- Landscape audit: `knowledge-base/learnings/2026-02-19-full-landscape-discovery-audit.md`
+- Landscape audit: `knowledge-base/project/learnings/2026-02-19-full-landscape-discovery-audit.md`
 - Related: #154 (CMO agent exploration), #165 (this issue)

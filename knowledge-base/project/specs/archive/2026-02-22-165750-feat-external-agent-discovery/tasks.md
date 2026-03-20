@@ -1,6 +1,6 @@
 # Tasks: External Agent Discovery
 
-**Plan:** `knowledge-base/plans/2026-02-12-feat-external-agent-discovery-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-12-feat-external-agent-discovery-plan.md`
 **Branch:** `feat-external-agent-discovery`
 
 ## Research Spike (Complete)
@@ -22,7 +22,7 @@
 
 ### 3. Write research document
 
-- [x] Create `knowledge-base/specs/feat-external-agent-discovery/registry-research.md`
+- [x] Create `knowledge-base/project/specs/feat-external-agent-discovery/registry-research.md`
 - [x] For each registry: API type, endpoint URLs, authentication requirements, response schema, sample response
 - [x] Summary: which registries are viable, which access methods work
 - [x] Recommendation: proceed with implementation or park the feature

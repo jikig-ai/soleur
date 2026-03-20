@@ -89,5 +89,5 @@ knowledge-base/overview/
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-06-project-overview-brainstorm.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-06-project-overview-brainstorm.md`
 - Related issue: #14

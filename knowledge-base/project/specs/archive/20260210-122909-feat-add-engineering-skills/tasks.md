@@ -1,6 +1,6 @@
 # Tasks: Add Engineering Skills
 
-**Plan:** `knowledge-base/plans/2026-02-09-feat-add-engineering-skills-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-09-feat-add-engineering-skills-plan.md`
 **Branch:** feat-add-engineering-skills
 
 [Updated 2026-02-09 after plan review]

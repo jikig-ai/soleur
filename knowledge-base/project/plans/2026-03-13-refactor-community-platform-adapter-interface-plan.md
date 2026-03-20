@@ -96,9 +96,9 @@ Single phase, single commit target:
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-03-13-community-platform-adapters-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-community-platform-adapters/spec.md`
-- Learning — scope calibration: `knowledge-base/learnings/2026-03-09-external-api-scope-calibration.md`
-- Learning — thin router: `knowledge-base/learnings/2026-02-22-simplify-workflow-thin-router-over-migration.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-13-community-platform-adapters-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-community-platform-adapters/spec.md`
+- Learning — scope calibration: `knowledge-base/project/learnings/2026-03-09-external-api-scope-calibration.md`
+- Learning — thin router: `knowledge-base/project/learnings/2026-02-22-simplify-workflow-thin-router-over-migration.md`
 - X API contract: `plugins/soleur/skills/community/scripts/x-community.sh:201`
 - Parent issue: #127 | This issue: #470 | Draft PR: #605

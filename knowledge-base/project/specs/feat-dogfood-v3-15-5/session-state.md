@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-dogfood-v3-15-5/knowledge-base/plans/2026-03-10-dogfood-v3-15-5-quota-errors-pencil-setup-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-dogfood-v3-15-5/knowledge-base/project/plans/2026-03-10-dogfood-v3-15-5-quota-errors-pencil-setup-plan.md
 - Status: complete
 
 ### Errors

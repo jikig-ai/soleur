@@ -1,6 +1,6 @@
 # Tasks: Feature Video Dependency Check
 
-**Plan:** `knowledge-base/plans/2026-02-27-fix-feature-video-silent-failure-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-27-fix-feature-video-silent-failure-plan.md`
 **Issue:** #325
 **Branch:** feat-feature-video-deps
 

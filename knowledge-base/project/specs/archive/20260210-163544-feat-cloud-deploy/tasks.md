@@ -1,6 +1,6 @@
 # Tasks: Cloud Deploy -- Run Soleur on Hetzner via Telegram
 
-**Plan:** `knowledge-base/plans/2026-02-10-feat-cloud-deploy-telegram-bridge-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-10-feat-cloud-deploy-telegram-bridge-plan.md`
 **Issue:** [#28](https://github.com/jikig-ai/soleur/issues/28)
 
 [Updated 2026-02-10] Simplified to 2 phases after plan review.

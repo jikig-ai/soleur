@@ -8,7 +8,7 @@ issue: "#10"
 
 ## What We're Building
 
-Automatic cleanup of worktrees and associated spec directories when a PR is merged. The system will detect merged branches, remove the corresponding worktree from `.worktrees/`, archive the spec directory to `knowledge-base/specs/archive/`, and optionally delete the local branch.
+Automatic cleanup of worktrees and associated spec directories when a PR is merged. The system will detect merged branches, remove the corresponding worktree from `.worktrees/`, archive the spec directory to `knowledge-base/project/specs/archive/`, and optionally delete the local branch.
 
 Cleanup is triggered in two scenarios:
 1. **Session start** - catches PRs merged via GitHub UI while user was away
@@ -33,7 +33,7 @@ We considered three approaches:
 ## Key Decisions
 
 - **Detection method**: Git's `[gone]` marker via `git branch -vv` after fetch
-- **Spec handling**: Archive to `knowledge-base/specs/archive/YYYY-MM-DD-<name>/` (matches OpenSpec pattern)
+- **Spec handling**: Archive to `knowledge-base/project/specs/archive/YYYY-MM-DD-<name>/` (matches OpenSpec pattern)
 - **User interaction**: Auto cleanup with notification summary (no confirmation prompts)
 - **Branch deletion**: Delete local branch after worktree removal
 - **Trigger 1**: Claude Code `SessionStart` hook runs `cleanup-merged --auto`
@@ -54,7 +54,7 @@ Logic:
 1. Run `git fetch --prune` to update remote tracking
 2. Find branches with `[gone]` status: `git branch -vv | grep '\[gone\]'`
 3. For each gone branch with matching worktree:
-   - Archive `knowledge-base/specs/feat-<name>/` -> `knowledge-base/specs/archive/YYYY-MM-DD-feat-<name>/`
+   - Archive `knowledge-base/project/specs/feat-<name>/` -> `knowledge-base/project/specs/archive/YYYY-MM-DD-feat-<name>/`
    - Run `git worktree remove .worktrees/feat-<name>`
    - Run `git branch -d feat-<name>`
 4. Output summary of cleaned items

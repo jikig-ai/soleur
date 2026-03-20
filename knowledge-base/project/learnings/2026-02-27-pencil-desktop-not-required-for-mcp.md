@@ -42,9 +42,9 @@ Always verify dependency claims by dogfooding on a real machine. The original sc
 
 ## Cross-References
 
-- Original pattern doc: `knowledge-base/learnings/2026-02-27-check-deps-pattern-for-gui-apps.md`
-- Pencil MCP registration: `knowledge-base/learnings/2026-02-27-pencil-mcp-auto-registration-via-skill.md`
-- Pencil editor requirements: `knowledge-base/learnings/2026-02-27-pencil-editor-operational-requirements.md`
+- Original pattern doc: `knowledge-base/project/learnings/2026-02-27-check-deps-pattern-for-gui-apps.md`
+- Pencil MCP registration: `knowledge-base/project/learnings/2026-02-27-pencil-mcp-auto-registration-via-skill.md`
+- Pencil editor requirements: `knowledge-base/project/learnings/2026-02-27-pencil-editor-operational-requirements.md`
 - PR #340 (original script): merged to main as v3.7.5
 - This fix: v3.7.7
 

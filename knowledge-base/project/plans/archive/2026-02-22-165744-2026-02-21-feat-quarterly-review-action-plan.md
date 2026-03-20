@@ -10,7 +10,7 @@ parent_issue: "#165"
 
 ## Overview
 
-A GitHub Actions cron workflow that scans `knowledge-base/learnings/` for YAML frontmatter with `next_review` dates and auto-creates GitHub issues when a review is due. The immediate use case is the quarterly marketingskills overlap review (next: May 2026), but the workflow is generic -- any learning document with a `next_review` field gets a reminder.
+A GitHub Actions cron workflow that scans `knowledge-base/project/learnings/` for YAML frontmatter with `next_review` dates and auto-creates GitHub issues when a review is due. The immediate use case is the quarterly marketingskills overlap review (next: May 2026), but the workflow is generic -- any learning document with a `next_review` field gets a reminder.
 
 ## Problem Statement
 
@@ -28,7 +28,7 @@ A single workflow file `.github/workflows/review-reminder.yml` that:
 
 1. Runs monthly on a cron schedule (`0 0 1 * *`)
 2. Supports `workflow_dispatch` with a `date_override` input for testing
-3. Recursively scans `knowledge-base/learnings/**/*.md` for `next_review` frontmatter
+3. Recursively scans `knowledge-base/project/learnings/**/*.md` for `next_review` frontmatter
 4. Creates a GitHub issue for each file whose `next_review` date is within 7 days of today
 5. Skips creation if an open issue with a matching title already exists (duplicate prevention)
 
@@ -108,7 +108,7 @@ _Auto-created by the review-reminder workflow._
 - [x] Workflow file exists at `.github/workflows/review-reminder.yml`
 - [x] Monthly cron fires on the 1st of each month
 - [x] `workflow_dispatch` trigger works with optional `date_override` input
-- [x] Recursively scans `knowledge-base/learnings/**/*.md`
+- [x] Recursively scans `knowledge-base/project/learnings/**/*.md`
 - [x] Creates issue when `next_review` is within 0-7 days
 - [x] Skips creation when open issue with matching title already exists
 - [x] Issue body includes source link and "update next_review" instruction
@@ -123,7 +123,7 @@ _Auto-created by the review-reminder workflow._
 
 ## References
 
-- Overlap analysis: `knowledge-base/learnings/2026-02-20-marketingskills-overlap-analysis.md`
+- Overlap analysis: `knowledge-base/project/learnings/2026-02-20-marketingskills-overlap-analysis.md`
 - Parent issue: #165
 - Feature issue: #172
 - Existing workflow patterns: `.github/workflows/auto-release.yml`

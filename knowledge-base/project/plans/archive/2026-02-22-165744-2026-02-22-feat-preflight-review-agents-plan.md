@@ -117,6 +117,6 @@ In Phase 1's "Read Plan and Clarify" step, add: "Before proceeding, verify the p
 - Issue: #215
 - Target file: `plugins/soleur/commands/soleur/work.md` (insertion between lines 54-56)
 - Worktree validation instructions: `AGENTS.md` "Worktree Awareness" section
-- Learnings on duplicate validation gates: `knowledge-base/learnings/2026-02-19-plan-review-catches-redundant-validation-gates.md`
-- Learnings on worktree discipline: `knowledge-base/learnings/workflow-patterns/2026-02-11-worktree-edit-discipline.md`
+- Learnings on duplicate validation gates: `knowledge-base/project/learnings/2026-02-19-plan-review-catches-redundant-validation-gates.md`
+- Learnings on worktree discipline: `knowledge-base/project/learnings/workflow-patterns/2026-02-11-worktree-edit-discipline.md`
 - Plan review feedback: DHH, Kieran, and simplicity reviewers all converged on inline checks over agents

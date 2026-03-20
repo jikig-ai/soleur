@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-standardize-shebang/knowledge-base/plans/2026-03-03-chore-standardize-shebang-env-bash-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-standardize-shebang/knowledge-base/project/plans/2026-03-03-chore-standardize-shebang-env-bash-plan.md
 - Status: complete
 
 ### Errors

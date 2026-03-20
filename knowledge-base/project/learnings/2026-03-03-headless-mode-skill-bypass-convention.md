@@ -25,7 +25,7 @@ Safety constraints (branch checks, deduplication) still run in headless mode. On
 ## Cross-References
 - Schedule skill flag pattern: `plugins/soleur/skills/schedule/SKILL.md` (reference implementation)
 - Constitution `$ARGUMENTS` bypass rule: `knowledge-base/overview/constitution.md:71-72`
-- Plugin auto-load failure: `knowledge-base/learnings/2026-02-25-plugin-command-double-namespace.md`
+- Plugin auto-load failure: `knowledge-base/project/learnings/2026-02-25-plugin-command-double-namespace.md`
 
 ## Tags
 category: integration-issues

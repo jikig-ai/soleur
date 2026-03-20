@@ -78,7 +78,7 @@ All code uses a fallback pattern `${DISCORD_<PURPOSE>_WEBHOOK_URL:-$DISCORD_WEBH
 
 ## Related
 
-- `knowledge-base/learnings/2026-02-18-token-env-var-not-cli-arg.md` -- token security
-- `knowledge-base/learnings/implementation-patterns/2026-02-12-ci-for-notifications-and-infrastructure-setup.md` -- CI webhook patterns
-- `knowledge-base/learnings/2026-02-12-brand-guide-contract-and-inline-validation.md` -- brand guide contract
+- `knowledge-base/project/learnings/2026-02-18-token-env-var-not-cli-arg.md` -- token security
+- `knowledge-base/project/learnings/implementation-patterns/2026-02-12-ci-for-notifications-and-infrastructure-setup.md` -- CI webhook patterns
+- `knowledge-base/project/learnings/2026-02-12-brand-guide-contract-and-inline-validation.md` -- brand guide contract
 - GitHub Issue #142 -- brand assets directory research

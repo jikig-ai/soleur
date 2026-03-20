@@ -32,7 +32,7 @@ Worktrees persist after PR merge, requiring manual cleanup. Users must remember 
 |----|-------------|
 | FR1 | `cleanup-merged` command detects branches with `[gone]` status |
 | FR2 | Command removes worktree directory from `.worktrees/` |
-| FR3 | Command archives spec to `knowledge-base/specs/archive/YYYY-MM-DD-<name>/` |
+| FR3 | Command archives spec to `knowledge-base/project/specs/archive/YYYY-MM-DD-<name>/` |
 | FR4 | Command deletes local branch after worktree removal |
 | FR5 | `--auto` flag enables silent mode with summary output only |
 | FR6 | SessionStart hook triggers cleanup on Claude Code session start |

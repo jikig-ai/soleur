@@ -36,9 +36,9 @@ Test 13 initially asserted that a bare `---` line in the prompt body would appea
 
 ## Related
 
-- `knowledge-base/learnings/2026-03-05-ralph-loop-stuck-detection-shell-counter.md`
-- `knowledge-base/learnings/2026-02-14-sed-insertion-fails-silently-on-missing-pattern.md`
-- `knowledge-base/learnings/2026-03-05-bulk-yaml-frontmatter-migration-patterns.md`
+- `knowledge-base/project/learnings/2026-03-05-ralph-loop-stuck-detection-shell-counter.md`
+- `knowledge-base/project/learnings/2026-02-14-sed-insertion-fails-silently-on-missing-pattern.md`
+- `knowledge-base/project/learnings/2026-03-05-bulk-yaml-frontmatter-migration-patterns.md`
 
 ## Tags
 category: logic-errors

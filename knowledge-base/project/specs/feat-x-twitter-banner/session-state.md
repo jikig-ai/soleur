@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-x-twitter-banner/knowledge-base/plans/2026-03-10-feat-x-twitter-banner-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-x-twitter-banner/knowledge-base/project/plans/2026-03-10-feat-x-twitter-banner-plan.md
 - Status: complete
 
 ### Errors

@@ -131,10 +131,10 @@ Target keywords to weave into existing pages (from content audit):
 
 ### Learnings Applied
 
-- `knowledge-base/learnings/build-errors/eleventy-v3-passthrough-and-nunjucks-gotchas.md`
-- `knowledge-base/learnings/build-errors/eleventy-seo-aeo-patterns.md`
-- `knowledge-base/learnings/docs-site/2026-02-19-adding-docs-pages-pattern.md`
-- `knowledge-base/learnings/2026-02-20-geo-aeo-methodology-incorporation.md`
+- `knowledge-base/project/learnings/build-errors/eleventy-v3-passthrough-and-nunjucks-gotchas.md`
+- `knowledge-base/project/learnings/build-errors/eleventy-seo-aeo-patterns.md`
+- `knowledge-base/project/learnings/docs-site/2026-02-19-adding-docs-pages-pattern.md`
+- `knowledge-base/project/learnings/2026-02-20-geo-aeo-methodology-incorporation.md`
 
 ### Related Issues
 

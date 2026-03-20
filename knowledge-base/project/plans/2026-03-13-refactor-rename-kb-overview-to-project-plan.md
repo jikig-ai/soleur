@@ -74,12 +74,12 @@ The deepening phase discovered references the initial plan missed:
 
 **Out of scope (historical documents -- not updated):**
 
-- `knowledge-base/brainstorms/` -- 30 references across archived brainstorm docs
-- `knowledge-base/brainstorms/archive/` -- 25 references
-- `knowledge-base/learnings/` -- 21 references across learning docs
-- `knowledge-base/plans/` -- 197 references across plan docs
+- `knowledge-base/project/brainstorms/` -- 30 references across archived brainstorm docs
+- `knowledge-base/project/brainstorms/archive/` -- 25 references
+- `knowledge-base/project/learnings/` -- 21 references across learning docs
+- `knowledge-base/project/plans/` -- 197 references across plan docs
 - `knowledge-base/marketing/` -- 14 references
-- `knowledge-base/specs/` -- 72 references
+- `knowledge-base/project/specs/` -- 72 references
 
 These are historical records. Updating them would inflate the diff with no runtime benefit. They reference paths that existed at the time they were written.
 

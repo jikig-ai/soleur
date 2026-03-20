@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-fix-bare-repo-worktree-manager/knowledge-base/plans/2026-03-13-fix-bare-repo-worktree-manager-stale-files-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-fix-bare-repo-worktree-manager/knowledge-base/project/plans/2026-03-13-fix-bare-repo-worktree-manager-stale-files-plan.md
 - Status: complete
 
 ### Errors

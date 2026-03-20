@@ -182,8 +182,8 @@ This is ~5 lines added to an existing phase. Minimal change.
 
 ## References
 
-- Spec: `knowledge-base/specs/feat-release-announce/spec.md`
-- Brainstorm: `knowledge-base/brainstorms/2026-02-12-release-announce-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-release-announce/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-12-release-announce-brainstorm.md`
 - Ship skill: `plugins/soleur/skills/ship/SKILL.md` (Phase 8 integration point)
 - Changelog skill: `plugins/soleur/skills/changelog/SKILL.md` (Discord webhook pattern)
 - Issue: #59

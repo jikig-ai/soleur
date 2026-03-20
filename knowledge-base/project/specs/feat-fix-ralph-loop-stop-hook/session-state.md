@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-fix-ralph-loop-stop-hook/knowledge-base/plans/2026-03-09-fix-ralph-loop-stop-hook-awk-error-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-fix-ralph-loop-stop-hook/knowledge-base/project/plans/2026-03-09-fix-ralph-loop-stop-hook-awk-error-plan.md
 - Status: complete
 
 ### Errors

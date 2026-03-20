@@ -167,9 +167,9 @@ Agent prompt Step 2 addition:
 
 ### Institutional Learnings
 
-- `knowledge-base/learnings/2026-03-13-platform-integration-scope-calibration.md` -- keep scope tight, match what can be validated on day one
-- `knowledge-base/learnings/2026-03-13-community-router-deduplication.md` -- router is single source of truth for platform detection; adding platform requires only env vars + prompt
-- `knowledge-base/learnings/2026-03-13-shell-script-defensive-patterns.md` -- 5-point checklist already satisfied by linkedin-community.sh
+- `knowledge-base/project/learnings/2026-03-13-platform-integration-scope-calibration.md` -- keep scope tight, match what can be validated on day one
+- `knowledge-base/project/learnings/2026-03-13-community-router-deduplication.md` -- router is single source of truth for platform detection; adding platform requires only env vars + prompt
+- `knowledge-base/project/learnings/2026-03-13-shell-script-defensive-patterns.md` -- 5-point checklist already satisfied by linkedin-community.sh
 
 ### External References
 
@@ -182,4 +182,4 @@ Agent prompt Step 2 addition:
 - Issue #592: feat: Scheduled workflow LinkedIn secrets
 - Issue #589 / PR #608: LinkedIn API scripts (merged)
 - Issue #138: Parent LinkedIn Presence tracking issue
-- Brainstorm: `knowledge-base/brainstorms/2026-03-13-linkedin-presence-brainstorm.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-03-13-linkedin-presence-brainstorm.md`

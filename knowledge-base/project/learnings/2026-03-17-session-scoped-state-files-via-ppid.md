@@ -49,8 +49,8 @@ This is preferable to lock files or advisory locks because lock files have the s
 
 - `knowledge-base/project/learnings/2026-03-09-ralph-loop-crash-orphan-recovery.md` -- Original single-file TTL fix that this feature extends to per-session files
 - `knowledge-base/project/learnings/bug-fixes/2026-03-13-ralph-loop-idle-detection-and-repetition.md` -- Idle/repetition detection that runs after the session-scoped state file is loaded
-- `knowledge-base/learnings/2026-03-15-env-var-post-guard-defense-in-depth.md` -- Same environment-variable injection pattern used for testability
-- `knowledge-base/learnings/2026-03-13-bare-repo-stale-files-and-working-tree-guards.md` -- Bare repo context that causes the shared project root
+- `knowledge-base/project/learnings/2026-03-15-env-var-post-guard-defense-in-depth.md` -- Same environment-variable injection pattern used for testability
+- `knowledge-base/project/learnings/2026-03-13-bare-repo-stale-files-and-working-tree-guards.md` -- Bare repo context that causes the shared project root
 - GitHub issue #650 -- The bug report for parallel session blocking
 
 ## Tags

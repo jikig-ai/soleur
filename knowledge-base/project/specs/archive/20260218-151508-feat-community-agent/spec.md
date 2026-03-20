@@ -3,7 +3,7 @@
 **Issue:** #96
 **Date:** 2026-02-18
 **Branch:** feat-community-agent
-**Brainstorm:** `knowledge-base/brainstorms/2026-02-18-community-agent-brainstorm.md`
+**Brainstorm:** `knowledge-base/project/brainstorms/2026-02-18-community-agent-brainstorm.md`
 
 ## Problem Statement
 

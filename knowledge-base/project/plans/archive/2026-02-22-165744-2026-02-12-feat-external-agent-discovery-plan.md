@@ -294,12 +294,12 @@ To list all community-installed artifacts: `ls agents/community/ skills/communit
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-12-external-agent-discovery-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-external-agent-discovery/spec.md`
-- Registry research: `knowledge-base/specs/feat-external-agent-discovery/registry-research.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-12-external-agent-discovery-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-external-agent-discovery/spec.md`
+- Registry research: `knowledge-base/project/specs/feat-external-agent-discovery/registry-research.md`
 - Conditional agents pattern: `plugins/soleur/commands/soleur/review.md:81-138`
 - Constitution: `knowledge-base/overview/constitution.md`
 - Issue: #55
 - MCP audit: #116, PR #125
-- Plugin loader learning: `knowledge-base/learnings/2026-02-12-plugin-loader-agent-vs-skill-recursion.md`
-- MCP bundling learning: `knowledge-base/learnings/integration-issues/2026-02-18-authenticated-mcp-servers-cannot-bundle-in-plugin-json.md`
+- Plugin loader learning: `knowledge-base/project/learnings/2026-02-12-plugin-loader-agent-vs-skill-recursion.md`
+- MCP bundling learning: `knowledge-base/project/learnings/integration-issues/2026-02-18-authenticated-mcp-servers-cannot-bundle-in-plugin-json.md`

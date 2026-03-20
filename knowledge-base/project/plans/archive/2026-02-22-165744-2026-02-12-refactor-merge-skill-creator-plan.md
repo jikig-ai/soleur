@@ -147,7 +147,7 @@ Update `.github/ISSUE_TEMPLATE/bug_report.yml`:
 ## References
 
 - Issue: #63
-- Learning: `knowledge-base/learnings/technical-debt/2026-02-12-skill-creator-overlap.md`
-- Learning: `knowledge-base/learnings/technical-debt/2026-02-12-backtick-references-in-skills.md`
-- Learning: `knowledge-base/learnings/plugin-versioning-requirements.md`
+- Learning: `knowledge-base/project/learnings/technical-debt/2026-02-12-skill-creator-overlap.md`
+- Learning: `knowledge-base/project/learnings/technical-debt/2026-02-12-backtick-references-in-skills.md`
+- Learning: `knowledge-base/project/learnings/plugin-versioning-requirements.md`
 - Constitution: `knowledge-base/overview/constitution.md` (line 70: "When merging or consolidating duplicate functionality, prefer a single inline implementation")

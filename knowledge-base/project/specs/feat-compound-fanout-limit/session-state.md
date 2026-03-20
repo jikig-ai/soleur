@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-compound-fanout-limit/knowledge-base/plans/2026-03-05-fix-compound-fanout-exceeds-max-5-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-compound-fanout-limit/knowledge-base/project/plans/2026-03-05-fix-compound-fanout-exceeds-max-5-plan.md
 - Status: complete
 
 ### Errors

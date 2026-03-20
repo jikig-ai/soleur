@@ -52,7 +52,7 @@ The brainstorm for #393 (headless mode) explicitly flagged this as a risk: "PreT
 
 ### Research Insights: Institutional Learnings
 
-**Applicable learnings from knowledge-base/learnings/:**
+**Applicable learnings from knowledge-base/project/learnings/:**
 
 - **Guardrails chained commit bypass** (`2026-02-24`): Guard 1 was previously bypassed by `&&`-chained commands. The fix uses `(^|&&|\|\||;)` pattern. In CI, the agent may chain commands the same way -- the fix already handles this.
 - **Guardrails grep false positive** (`2026-02-24`): Guard 2 had false positives when `.worktrees/` appeared in comment text (e.g., `gh issue comment`). The single-pattern fix enforces proximity. In CI, agents may include `.worktrees/` in issue bodies -- the fix already handles this.
@@ -330,7 +330,7 @@ Two hooks match the `Bash` tool (guardrails.sh and pre-merge-rebase.sh). The tes
 - [ ] worktree-write-guard.sh behavior documented for claude-code-action
 - [x] If hooks don't fire: inline fallback branch guards added to ship, compound, and work skills
 - [ ] If hooks do fire: learning file documenting confirmation created
-- [ ] Results documented in knowledge-base/learnings/ regardless of outcome
+- [ ] Results documented in knowledge-base/project/learnings/ regardless of outcome
 
 ## Test Scenarios
 
@@ -378,17 +378,17 @@ Two hooks match the `Bash` tool (guardrails.sh and pre-merge-rebase.sh). The tes
 - guardrails.sh: `.claude/hooks/guardrails.sh`
 - pre-merge-rebase.sh: `.claude/hooks/pre-merge-rebase.sh`
 - worktree-write-guard.sh: `.claude/hooks/worktree-write-guard.sh`
-- Headless mode plan: `knowledge-base/plans/2026-03-03-feat-headless-mode-repeatable-workflows-plan.md`
-- Headless mode brainstorm: `knowledge-base/brainstorms/2026-03-03-headless-mode-brainstorm.md`
+- Headless mode plan: `knowledge-base/project/plans/2026-03-03-feat-headless-mode-repeatable-workflows-plan.md`
+- Headless mode brainstorm: `knowledge-base/project/brainstorms/2026-03-03-headless-mode-brainstorm.md`
 - Existing claude-code-action workflows: `.github/workflows/scheduled-bug-fixer.yml`, `.github/workflows/scheduled-daily-triage.yml`, `.github/workflows/scheduled-competitive-analysis.yml`, `.github/workflows/claude-code-review.yml`
-- Hook learning (worktree write guard): `knowledge-base/learnings/2026-02-26-worktree-enforcement-pretooluse-hook.md`
-- Hook learning (pre-merge rebase): `knowledge-base/learnings/2026-03-03-pre-merge-rebase-hook-implementation.md`
-- Hook learning (SessionStart contract): `knowledge-base/learnings/2026-03-04-sessionstart-hook-api-contract.md`
-- Guardrails chained commit bypass: `knowledge-base/learnings/2026-02-24-guardrails-chained-commit-bypass.md`
-- Guardrails grep false positive: `knowledge-base/learnings/2026-02-24-guardrails-grep-false-positive-worktree-text.md`
-- Token revocation in claude-code-action: `knowledge-base/learnings/2026-03-02-claude-code-action-token-revocation-breaks-persist-step.md`
-- CI plugin discovery: `knowledge-base/learnings/2026-02-27-schedule-skill-ci-plugin-discovery-and-version-hygiene.md`
-- GitHub Actions security patterns: `knowledge-base/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
+- Hook learning (worktree write guard): `knowledge-base/project/learnings/2026-02-26-worktree-enforcement-pretooluse-hook.md`
+- Hook learning (pre-merge rebase): `knowledge-base/project/learnings/2026-03-03-pre-merge-rebase-hook-implementation.md`
+- Hook learning (SessionStart contract): `knowledge-base/project/learnings/2026-03-04-sessionstart-hook-api-contract.md`
+- Guardrails chained commit bypass: `knowledge-base/project/learnings/2026-02-24-guardrails-chained-commit-bypass.md`
+- Guardrails grep false positive: `knowledge-base/project/learnings/2026-02-24-guardrails-grep-false-positive-worktree-text.md`
+- Token revocation in claude-code-action: `knowledge-base/project/learnings/2026-03-02-claude-code-action-token-revocation-breaks-persist-step.md`
+- CI plugin discovery: `knowledge-base/project/learnings/2026-02-27-schedule-skill-ci-plugin-discovery-and-version-hygiene.md`
+- GitHub Actions security patterns: `knowledge-base/project/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
 
 ### External References
 

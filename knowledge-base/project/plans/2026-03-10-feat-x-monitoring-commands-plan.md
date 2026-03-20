@@ -269,8 +269,8 @@ No new files created.
 - Existing script: `plugins/soleur/skills/community/scripts/x-community.sh`
 - Community-manager agent: `plugins/soleur/agents/support/community-manager.md`
 - Community SKILL.md: `plugins/soleur/skills/community/SKILL.md`
-- Parent plan: `knowledge-base/plans/2026-03-09-feat-community-agent-platform-adapter-plan.md`
-- Spec: `knowledge-base/specs/feat-community-agent-x/spec.md`
+- Parent plan: `knowledge-base/project/plans/2026-03-09-feat-community-agent-platform-adapter-plan.md`
+- Spec: `knowledge-base/project/specs/feat-community-agent-x/spec.md`
 
 ### Learnings Applied
 

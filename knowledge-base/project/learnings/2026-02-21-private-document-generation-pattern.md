@@ -17,7 +17,7 @@ GDPR Article 30 requires maintaining a processing register that must NOT be in a
 
 Separate the template (versioned, public) from the generated output (gitignored, private):
 
-1. Template lives in `knowledge-base/specs/archive/` -- versioned, reviewable
+1. Template lives in `knowledge-base/project/specs/archive/` -- versioned, reviewable
 2. Shell script in `scripts/` reads template, fills placeholders with `sed`, writes to repo root
 3. `.gitignore` entry prevents accidental commits of the output
 4. Script prints private storage instructions after generation

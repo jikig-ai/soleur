@@ -235,5 +235,5 @@ The model already knows GDPR/CCPA/UK GDPR requirements, standard audit methodolo
 ### Related
 
 - Issue: #114
-- Brainstorm: `knowledge-base/brainstorms/2026-02-19-legal-agents-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-legal-agents/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-19-legal-agents-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-legal-agents/spec.md`

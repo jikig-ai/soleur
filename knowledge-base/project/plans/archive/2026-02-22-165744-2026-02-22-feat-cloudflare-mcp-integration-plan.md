@@ -73,7 +73,7 @@ The infra-security agent uses manual curl commands against the Cloudflare REST A
 
 5. **Update stale learning** -- Add "[Updated 2026-02-22]" section explaining that Cloudflare's new "Code Mode" MCP server (distinct from the older 15 managed servers) resolves all three blockers via OAuth 2.1 + unified HTTP endpoint. Reference the working plugin.json integration.
 
-   **File:** `knowledge-base/learnings/integration-issues/2026-02-18-authenticated-mcp-servers-cannot-bundle-in-plugin-json.md`
+   **File:** `knowledge-base/project/learnings/integration-issues/2026-02-18-authenticated-mcp-servers-cannot-bundle-in-plugin-json.md`
 
 ## Technical Considerations
 
@@ -114,8 +114,8 @@ MINOR bump -- capability expansion of existing agent + new MCP server entry.
 
 - [Cloudflare Code Mode MCP Blog Post](https://blog.cloudflare.com/code-mode-mcp/)
 - [Claude Code MCP Documentation](https://code.claude.com/docs/en/mcp)
-- Brainstorm: `knowledge-base/brainstorms/2026-02-22-cloudflare-mcp-integration-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-cloudflare-mcp/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-22-cloudflare-mcp-integration-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-cloudflare-mcp/spec.md`
 - Current agent: `plugins/soleur/agents/engineering/infra/infra-security.md`
-- Stale learning: `knowledge-base/learnings/integration-issues/2026-02-18-authenticated-mcp-servers-cannot-bundle-in-plugin-json.md`
-- Wiring workflow: `knowledge-base/learnings/integration-issues/2026-02-16-github-pages-cloudflare-wiring-workflow.md`
+- Stale learning: `knowledge-base/project/learnings/integration-issues/2026-02-18-authenticated-mcp-servers-cannot-bundle-in-plugin-json.md`
+- Wiring workflow: `knowledge-base/project/learnings/integration-issues/2026-02-16-github-pages-cloudflare-wiring-workflow.md`

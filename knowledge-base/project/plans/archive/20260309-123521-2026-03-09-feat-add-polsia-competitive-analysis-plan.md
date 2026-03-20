@@ -31,7 +31,7 @@ Add polsia.com to the 6-tier competitive landscape in `knowledge-base/overview/b
 
 ## Problem Statement / Motivation
 
-The competitive intelligence brainstorm (`knowledge-base/brainstorms/archive/20260227-164928-2026-02-27-competitive-intelligence-brainstorm.md`) explicitly listed "Polsia.com tier classification" as an open question. The competitive-intelligence agent dynamically reads `business-validation.md` on each scan -- if Polsia is not listed there, it will never be scanned.
+The competitive intelligence brainstorm (`knowledge-base/project/brainstorms/archive/20260227-164928-2026-02-27-competitive-intelligence-brainstorm.md`) explicitly listed "Polsia.com tier classification" as an open question. The competitive-intelligence agent dynamically reads `business-validation.md` on each scan -- if Polsia is not listed there, it will never be scanned.
 
 Polsia is a direct CaaS competitor: autonomous AI agents (CEO, Engineer, Growth Manager) that plan, code, market, and operate a company 24/7 for $49/month. It covers engineering, marketing, operations, customer support, and outbound sales domains with a nightly autonomous execution cycle. 1,100+ companies managed simultaneously. $1M ARR crossed within one month of launch. This makes it the closest competitor to Soleur's Company-as-a-Service thesis -- closer than SoloCEO (advisory-only) or Tanka (communication-centric).
 
@@ -159,14 +159,14 @@ Confirm that `knowledge-base/overview/competitive-intelligence.md` contains a Po
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/archive/20260227-164928-2026-02-27-competitive-intelligence-brainstorm.md` (open question: "Polsia.com tier classification")
+- Brainstorm: `knowledge-base/project/brainstorms/archive/20260227-164928-2026-02-27-competitive-intelligence-brainstorm.md` (open question: "Polsia.com tier classification")
 - Business validation: `knowledge-base/overview/business-validation.md` (target file, Tier 3 table)
 - Competitive intelligence report: `knowledge-base/overview/competitive-intelligence.md` (scan output)
 - Competitive analysis skill: `plugins/soleur/skills/competitive-analysis/SKILL.md`
 - Competitive intelligence agent: `plugins/soleur/agents/product/competitive-intelligence.md`
-- Learning: `knowledge-base/learnings/2026-02-27-competitive-intelligence-agent-implementation.md`
-- Learning: `knowledge-base/learnings/2026-02-25-platform-risk-cowork-plugins.md`
-- Learning: `knowledge-base/learnings/2026-03-02-multi-agent-cascade-orchestration-checklist.md`
+- Learning: `knowledge-base/project/learnings/2026-02-27-competitive-intelligence-agent-implementation.md`
+- Learning: `knowledge-base/project/learnings/2026-02-25-platform-risk-cowork-plugins.md`
+- Learning: `knowledge-base/project/learnings/2026-03-02-multi-agent-cascade-orchestration-checklist.md`
 - Polsia Product Hunt: https://www.producthunt.com/products/polsia
 - Polsia website: https://polsia.com
 - TeamDay interview ($1M ARR): https://www.teamday.ai/ai/polsia-solo-founder-million-arr-self-running-companies

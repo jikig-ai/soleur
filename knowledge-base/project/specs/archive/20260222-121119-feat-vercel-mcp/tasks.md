@@ -1,7 +1,7 @@
 # Tasks: Integrate Vercel MCP
 
 **Issue:** #258
-**Plan:** `knowledge-base/plans/2026-02-22-feat-integrate-vercel-mcp-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-02-22-feat-integrate-vercel-mcp-plan.md`
 
 ## Phase 1: Core Implementation
 

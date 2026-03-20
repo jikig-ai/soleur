@@ -28,5 +28,5 @@ category: integration-issues
 module: community-monitor
 issue: 592
 related:
-  - knowledge-base/learnings/2026-03-13-platform-integration-scope-calibration.md
-  - knowledge-base/learnings/2026-03-13-community-router-deduplication.md
+  - knowledge-base/project/learnings/2026-03-13-platform-integration-scope-calibration.md
+  - knowledge-base/project/learnings/2026-03-13-community-router-deduplication.md

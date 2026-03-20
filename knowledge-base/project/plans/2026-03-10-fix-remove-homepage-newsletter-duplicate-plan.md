@@ -13,7 +13,7 @@ deepened: 2026-03-10
 **Research sources:** Nunjucks block inheritance learning, Eleventy worktree build learning, base.njk template verification
 
 ### Key Improvements
-1. Added worktree-safe verification alternative -- Eleventy build fails in worktrees due to relative path bug in `agents.js` (documented in `knowledge-base/learnings/2026-03-10-eleventy-build-fails-in-worktree.md`); added grep-based source file verification as primary method
+1. Added worktree-safe verification alternative -- Eleventy build fails in worktrees due to relative path bug in `agents.js` (documented in `knowledge-base/project/learnings/2026-03-10-eleventy-build-fails-in-worktree.md`); added grep-based source file verification as primary method
 2. Verified template inheritance claim against actual `base.njk` source: `{% block content %}` ends at line 91, footer newsletter is at lines 94-95 -- confirmed outside the block
 3. Confirmed `index.njk` does NOT use `{% block content %}` override -- its content flows through the default `{{ content | safe }}` rendering in the parent block, meaning the in-page newsletter is injected as body content while the footer newsletter renders independently
 
@@ -43,7 +43,7 @@ The homepage (`index.njk`) renders two newsletter signup forms: one inline at li
 
 ### Build Verification
 
-**Primary method (worktree-safe):** Verify source templates directly, since the Eleventy build fails in worktrees due to relative path resolution in `agents.js` (see `knowledge-base/learnings/2026-03-10-eleventy-build-fails-in-worktree.md`):
+**Primary method (worktree-safe):** Verify source templates directly, since the Eleventy build fails in worktrees due to relative path resolution in `agents.js` (see `knowledge-base/project/learnings/2026-03-10-eleventy-build-fails-in-worktree.md`):
 
 ```bash
 # Verify index.njk no longer includes newsletter-form
@@ -82,7 +82,7 @@ This is the only file change required.
 
 ### Why This Is Safe (Template Inheritance Analysis)
 
-The `index.njk` template uses `layout: base.njk`. In `base.njk`, the newsletter include is at lines 94-95, which is OUTSIDE the `{% block content %}` block (that block ends at line 91 with `</main>`). Per the Nunjucks block inheritance pattern documented in `knowledge-base/learnings/2026-03-04-nunjucks-block-inheritance-with-content-safe.md`, content outside blocks renders unconditionally from the parent layout. Removing the newsletter from within the page content cannot affect the parent's footer newsletter.
+The `index.njk` template uses `layout: base.njk`. In `base.njk`, the newsletter include is at lines 94-95, which is OUTSIDE the `{% block content %}` block (that block ends at line 91 with `</main>`). Per the Nunjucks block inheritance pattern documented in `knowledge-base/project/learnings/2026-03-04-nunjucks-block-inheritance-with-content-safe.md`, content outside blocks renders unconditionally from the parent layout. Removing the newsletter from within the page content cannot affect the parent's footer newsletter.
 
 ### Analytics Impact
 
@@ -120,7 +120,7 @@ This follows the same pattern as PR #525, which removed the duplicate newsletter
 ## References
 
 - PR #525: Removed duplicate newsletter from blog post pages (same pattern)
-- Existing blog newsletter plan: `knowledge-base/plans/2026-03-10-feat-remove-blog-newsletter-duplicate-plan.md`
-- Newsletter implementation plan: `knowledge-base/plans/2026-03-10-feat-newsletter-email-capture-plan.md`
-- Learning: `knowledge-base/learnings/2026-03-04-nunjucks-block-inheritance-with-content-safe.md` (confirms block inheritance safety)
-- Learning: `knowledge-base/learnings/2026-03-10-eleventy-build-fails-in-worktree.md` (worktree build limitation -- use source grep instead)
+- Existing blog newsletter plan: `knowledge-base/project/plans/2026-03-10-feat-remove-blog-newsletter-duplicate-plan.md`
+- Newsletter implementation plan: `knowledge-base/project/plans/2026-03-10-feat-newsletter-email-capture-plan.md`
+- Learning: `knowledge-base/project/learnings/2026-03-04-nunjucks-block-inheritance-with-content-safe.md` (confirms block inheritance safety)
+- Learning: `knowledge-base/project/learnings/2026-03-10-eleventy-build-fails-in-worktree.md` (worktree build limitation -- use source grep instead)

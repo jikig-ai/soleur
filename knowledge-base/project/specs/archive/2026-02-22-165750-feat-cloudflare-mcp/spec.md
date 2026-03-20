@@ -2,7 +2,7 @@
 
 **Issue:** #254
 **Date:** 2026-02-22
-**Brainstorm:** `knowledge-base/brainstorms/2026-02-22-cloudflare-mcp-integration-brainstorm.md`
+**Brainstorm:** `knowledge-base/project/brainstorms/2026-02-22-cloudflare-mcp-integration-brainstorm.md`
 
 ## Problem Statement
 

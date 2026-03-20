@@ -358,8 +358,8 @@ git revert <commit-sha>  # Single atomic commit
 
 ## References
 
-- Brainstorm: `knowledge-base/brainstorms/2026-02-12-domain-directory-restructure-brainstorm.md`
-- Spec: `knowledge-base/specs/feat-domain-directory-restructure/spec.md`
+- Brainstorm: `knowledge-base/project/brainstorms/2026-02-12-domain-directory-restructure-brainstorm.md`
+- Spec: `knowledge-base/project/specs/feat-domain-directory-restructure/spec.md`
 - Issue: [#53](https://github.com/jikig-ai/soleur/issues/53)
 - PR #60: Commands consolidated into skills (changes component counts)
 - Plan review: DHH, Kieran, Simplicity -- drop `shared/`, drop placeholders, root = shared

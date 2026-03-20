@@ -6,46 +6,46 @@
 
 ## Phase 1: Setup
 
-- [x] **1.1** Create `knowledge-base/specs/external/` directory
-- [x] **1.2** Create `knowledge-base/specs/archive/` directory
-- [x] **1.3** Create `knowledge-base/brainstorms/` directory
-- [x] **1.4** Create `knowledge-base/specs/feat-spec-workflow-foundation/` directory
-- [x] **1.5** Create `knowledge-base/specs/feat-command-integration/` directory
+- [x] **1.1** Create `knowledge-base/project/specs/external/` directory
+- [x] **1.2** Create `knowledge-base/project/specs/archive/` directory
+- [x] **1.3** Create `knowledge-base/project/brainstorms/` directory
+- [x] **1.4** Create `knowledge-base/project/specs/feat-spec-workflow-foundation/` directory
+- [x] **1.5** Create `knowledge-base/project/specs/feat-command-integration/` directory
 
 ## Phase 2: File Migrations
 
 ### 2.1 Plans Migration (FR1)
 
-- [x] **2.1.1** Convert `docs/plans/2026-02-06-feat-spec-workflow-foundation-plan.md` to `knowledge-base/specs/feat-spec-workflow-foundation/spec.md`
+- [x] **2.1.1** Convert `docs/plans/2026-02-06-feat-spec-workflow-foundation-plan.md` to `knowledge-base/project/specs/feat-spec-workflow-foundation/spec.md`
   - Use `git mv` to preserve history
   - Update frontmatter to spec format
-- [x] **2.1.2** Convert `docs/plans/2026-02-06-feat-command-integration-plan.md` to `knowledge-base/specs/feat-command-integration/spec.md`
+- [x] **2.1.2** Convert `docs/plans/2026-02-06-feat-command-integration-plan.md` to `knowledge-base/project/specs/feat-command-integration/spec.md`
   - Use `git mv` to preserve history
   - Update frontmatter to spec format
-- [x] **2.1.3** Move archived plans to `knowledge-base/specs/archive/`
-  - `git mv docs/plans/archive/2026-02-05-feat-command-integration-plan.md knowledge-base/specs/archive/`
-  - `git mv docs/plans/archive/2026-02-05-feat-knowledge-base-foundation-plan.md knowledge-base/specs/archive/`
-  - `git mv docs/plans/archive/2026-02-05-feat-knowledge-layer-compounding-plan.md knowledge-base/specs/archive/`
-  - `git mv docs/plans/archive/2026-02-05-feat-spec-layer-artifacts-plan.md knowledge-base/specs/archive/`
-  - `git mv docs/plans/archive/2026-02-05-feat-worktree-layer-enhancements-plan.md knowledge-base/specs/archive/`
+- [x] **2.1.3** Move archived plans to `knowledge-base/project/specs/archive/`
+  - `git mv docs/plans/archive/2026-02-05-feat-command-integration-plan.md knowledge-base/project/specs/archive/`
+  - `git mv docs/plans/archive/2026-02-05-feat-knowledge-base-foundation-plan.md knowledge-base/project/specs/archive/`
+  - `git mv docs/plans/archive/2026-02-05-feat-knowledge-layer-compounding-plan.md knowledge-base/project/specs/archive/`
+  - `git mv docs/plans/archive/2026-02-05-feat-spec-layer-artifacts-plan.md knowledge-base/project/specs/archive/`
+  - `git mv docs/plans/archive/2026-02-05-feat-worktree-layer-enhancements-plan.md knowledge-base/project/specs/archive/`
 
 ### 2.2 External Specs Migration (FR2)
 
-- [x] **2.2.1** Move external specs to `knowledge-base/specs/external/`
-  - `git mv docs/specs/claude-code.md knowledge-base/specs/external/`
-  - `git mv docs/specs/codex.md knowledge-base/specs/external/`
-  - `git mv docs/specs/opencode.md knowledge-base/specs/external/`
+- [x] **2.2.1** Move external specs to `knowledge-base/project/specs/external/`
+  - `git mv docs/specs/claude-code.md knowledge-base/project/specs/external/`
+  - `git mv docs/specs/codex.md knowledge-base/project/specs/external/`
+  - `git mv docs/specs/opencode.md knowledge-base/project/specs/external/`
 
 ### 2.3 Solutions Migration (FR3)
 
-- [x] **2.3.1** Move solutions to `knowledge-base/learnings/`
-  - `git mv docs/solutions/plugin-versioning-requirements.md knowledge-base/learnings/`
+- [x] **2.3.1** Move solutions to `knowledge-base/project/learnings/`
+  - `git mv docs/solutions/plugin-versioning-requirements.md knowledge-base/project/learnings/`
 
 ### 2.4 Brainstorms Migration (FR4)
 
-- [x] **2.4.1** Move brainstorm documents to `knowledge-base/brainstorms/`
-  - `git mv docs/brainstorms/2026-02-05-unified-spec-workflow-brainstorm.md knowledge-base/brainstorms/`
-  - `git mv docs/brainstorms/2026-02-06-docs-cleanup-and-archive-brainstorm.md knowledge-base/brainstorms/`
+- [x] **2.4.1** Move brainstorm documents to `knowledge-base/project/brainstorms/`
+  - `git mv docs/brainstorms/2026-02-05-unified-spec-workflow-brainstorm.md knowledge-base/project/brainstorms/`
+  - `git mv docs/brainstorms/2026-02-06-docs-cleanup-and-archive-brainstorm.md knowledge-base/project/brainstorms/`
 
 ## Phase 3: Content Updates
 
@@ -60,7 +60,7 @@
 
 ### 3.2 Learnings Documentation (FR6)
 
-- [x] **3.2.1** Create `knowledge-base/learnings/2026-02-06-spec-workflow-implementation.md`
+- [x] **3.2.1** Create `knowledge-base/project/learnings/2026-02-06-spec-workflow-implementation.md`
   - Document: 8 domains -> 3 domains simplification
   - Document: Human-in-the-loop v1 decision
   - Document: Fall-back patterns for backward compatibility
@@ -78,33 +78,33 @@
 ### 4.1 Command Files
 
 - [ ] **4.1.1** Update `plugins/soleur/commands/soleur/brainstorm.md`
-  - Change `docs/brainstorms/` references to `knowledge-base/brainstorms/`
+  - Change `docs/brainstorms/` references to `knowledge-base/project/brainstorms/`
 - [ ] **4.1.2** Update `plugins/soleur/commands/soleur/plan.md`
-  - Change `docs/brainstorms/` references to `knowledge-base/brainstorms/`
-  - Change `docs/solutions/` references to `knowledge-base/learnings/`
-  - Change `docs/plans/` references to `knowledge-base/specs/`
+  - Change `docs/brainstorms/` references to `knowledge-base/project/brainstorms/`
+  - Change `docs/solutions/` references to `knowledge-base/project/learnings/`
+  - Change `docs/plans/` references to `knowledge-base/project/specs/`
 - [ ] **4.1.3** Update `plugins/soleur/commands/soleur/compound.md`
-  - Change `docs/solutions/` references to `knowledge-base/learnings/`
+  - Change `docs/solutions/` references to `knowledge-base/project/learnings/`
 - [ ] **4.1.4** Update `plugins/soleur/commands/deepen-plan.md`
   - Verify and update any docs/ references
 
 ### 4.2 Skill Files
 
 - [ ] **4.2.1** Update `plugins/soleur/skills/compound-docs/SKILL.md`
-  - Change `docs/solutions/` references to `knowledge-base/learnings/`
+  - Change `docs/solutions/` references to `knowledge-base/project/learnings/`
 - [ ] **4.2.2** Update `plugins/soleur/skills/compound-docs/references/yaml-schema.md`
-  - Update all category->path mappings from `docs/solutions/` to `knowledge-base/learnings/`
+  - Update all category->path mappings from `docs/solutions/` to `knowledge-base/project/learnings/`
 - [ ] **4.2.3** Update `plugins/soleur/skills/compound-docs/assets/critical-pattern-template.md`
-  - Change `docs/solutions/patterns/` to `knowledge-base/learnings/patterns/`
+  - Change `docs/solutions/patterns/` to `knowledge-base/project/learnings/patterns/`
 - [ ] **4.2.4** Update `plugins/soleur/skills/compound-docs/assets/resolution-template.md`
-  - Change `docs/solutions/` references to `knowledge-base/learnings/`
+  - Change `docs/solutions/` references to `knowledge-base/project/learnings/`
 - [ ] **4.2.5** Update `plugins/soleur/skills/brainstorming/SKILL.md`
   - Change brainstorm output path references
 
 ### 4.3 Plugin Documentation
 
 - [ ] **4.3.1** Update `plugins/soleur/AGENTS.md`
-  - Change `docs/solutions/plugin-versioning-requirements.md` to `knowledge-base/learnings/plugin-versioning-requirements.md`
+  - Change `docs/solutions/plugin-versioning-requirements.md` to `knowledge-base/project/learnings/plugin-versioning-requirements.md`
 
 ## Phase 5: Cleanup
 

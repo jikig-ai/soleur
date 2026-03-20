@@ -32,8 +32,8 @@ semver: patch
 Build a `scheduled-content-publisher.yml` GitHub Actions workflow that automates the 3-week case study distribution campaign (2026-03-12 to 2026-03-30). The workflow fires on 5 scheduled dates, posting pre-generated content to Discord (fully automated via webhook) and X/Twitter (fully automated via `x-community.sh post-tweet` with `--reply-to` chaining). For manual platforms (IndieHackers, Reddit, HN), it creates a GitHub issue with copy-paste-ready content tagged `action-required`.
 
 **Parent issue:** #530
-**Content source:** `knowledge-base/specs/feat-product-strategy/distribution-content/` (5 files, one per case study)
-**Distribution plan:** `knowledge-base/specs/feat-product-strategy/distribution-plan.md`
+**Content source:** `knowledge-base/project/specs/feat-product-strategy/distribution-content/` (5 files, one per case study)
+**Distribution plan:** `knowledge-base/project/specs/feat-product-strategy/distribution-plan.md`
 
 ## Problem Statement
 
@@ -146,7 +146,7 @@ The workflow needs a mapping from date to content file and platform set:
 Implement as a bash `case` statement on the `workflow_dispatch` input:
 
 ```bash
-CONTENT_DIR="knowledge-base/specs/feat-product-strategy/distribution-content"
+CONTENT_DIR="knowledge-base/project/specs/feat-product-strategy/distribution-content"
 
 case "$CASE_STUDY_NUM" in
   1) CONTENT_FILE="$CONTENT_DIR/01-legal-document-generation.md"
@@ -406,7 +406,7 @@ Per constitution: scheduled workflows must set `timeout-minutes`. This workflow 
 
 ### Content File Location
 
-The content files are in `knowledge-base/specs/feat-product-strategy/distribution-content/`. This directory currently exists only in the `feat-product-strategy` worktree. Before this workflow can run, the content must be merged to main. The workflow should reference the files at this path and fail clearly if they are not found.
+The content files are in `knowledge-base/project/specs/feat-product-strategy/distribution-content/`. This directory currently exists only in the `feat-product-strategy` worktree. Before this workflow can run, the content must be merged to main. The workflow should reference the files at this path and fail clearly if they are not found.
 
 ### Issue Deduplication
 
@@ -528,7 +528,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-CONTENT_DIR="$REPO_ROOT/knowledge-base/specs/feat-product-strategy/distribution-content"
+CONTENT_DIR="$REPO_ROOT/knowledge-base/project/specs/feat-product-strategy/distribution-content"
 X_SCRIPT="$REPO_ROOT/plugins/soleur/skills/community/scripts/x-community.sh"
 AVATAR_URL="https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png"
 
@@ -882,9 +882,9 @@ jobs:
 - `.github/workflows/scheduled-community-monitor.yml` -- cron/dispatch pattern, concurrency, permissions, Discord failure notification
 - `plugins/soleur/skills/community/scripts/x-community.sh` -- X API v2 OAuth 1.0a posting with `--reply-to`
 - `plugins/soleur/skills/discord-content/SKILL.md` -- Discord webhook posting pattern
-- `knowledge-base/specs/feat-product-strategy/distribution-plan.md` -- campaign schedule and platform matrix
-- `knowledge-base/specs/feat-product-strategy/distribution-content/*.md` -- pre-written content
-- `knowledge-base/plans/2026-03-10-feat-post-blog-social-distribution-plan.md` -- prior social distribution plan with thread posting pattern
+- `knowledge-base/project/specs/feat-product-strategy/distribution-plan.md` -- campaign schedule and platform matrix
+- `knowledge-base/project/specs/feat-product-strategy/distribution-content/*.md` -- pre-written content
+- `knowledge-base/project/plans/2026-03-10-feat-post-blog-social-distribution-plan.md` -- prior social distribution plan with thread posting pattern
 
 ### Learnings Applied
 

@@ -12,9 +12,9 @@ module: plugins/soleur/skills/archive-kb, plugins/soleur/skills/git-worktree
 
 After the knowledge-base restructure (#566, #568), artifacts moved from `knowledge-base/project/` subdirectories to top-level paths:
 
-- `knowledge-base/project/brainstorms/` -> `knowledge-base/brainstorms/`
-- `knowledge-base/project/plans/` -> `knowledge-base/plans/`
-- `knowledge-base/project/specs/` -> `knowledge-base/specs/` and `knowledge-base/features/specs/`
+- `knowledge-base/project/brainstorms/` -> `knowledge-base/project/brainstorms/`
+- `knowledge-base/project/plans/` -> `knowledge-base/project/plans/`
+- `knowledge-base/project/specs/` -> `knowledge-base/project/specs/` and `knowledge-base/features/specs/`
 
 Two shell scripts still hardcoded the legacy `knowledge-base/project/` prefixes:
 
@@ -59,7 +59,7 @@ done
 - `archive_kb_files()` calls doubled: each legacy path call paired with the equivalent current path call.
 
 **worktree-manager.sh `create_for_feature()`:**
-- Updated to create new specs at `knowledge-base/specs/` only (the current canonical path). No reason to create at the legacy path.
+- Updated to create new specs at `knowledge-base/project/specs/` only (the current canonical path). No reason to create at the legacy path.
 
 `nullglob` (already set in `discover_artifacts()`) handles nonexistent directories gracefully -- empty globs expand to nothing rather than producing literal glob strings.
 

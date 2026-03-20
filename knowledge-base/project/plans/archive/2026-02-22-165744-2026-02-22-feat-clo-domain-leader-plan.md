@@ -109,5 +109,5 @@ Existing disambiguation between the two specialists is preserved. The CLO refere
 - CMO agent (full orchestration pattern): `plugins/soleur/agents/marketing/cmo.md`
 - Brainstorm Phase 0.5: `plugins/soleur/commands/soleur/brainstorm.md:57-199`
 - Domain leader interface: `plugins/soleur/AGENTS.md` (Domain Leader Interface section)
-- Learnings: `knowledge-base/learnings/2026-02-21-domain-leader-pattern-and-llm-detection.md`
-- Learnings: `knowledge-base/learnings/integration-issues/adding-new-agent-domain-checklist.md`
+- Learnings: `knowledge-base/project/learnings/2026-02-21-domain-leader-pattern-and-llm-detection.md`
+- Learnings: `knowledge-base/project/learnings/integration-issues/adding-new-agent-domain-checklist.md`

@@ -84,4 +84,4 @@ The CTO assessment confirmed that `github-actions[bot]` cannot be added as a rul
 
 2. **Does Claude Code require the `version` field in `plugin.json`?** If it does, we set it to `"0.0.0-dev"`. If not, we can remove it entirely.
 
-3. **Existing learnings that reference the old workflow.** Several files in `knowledge-base/learnings/` reference the 6-file version bump pattern. These should be updated or archived.
+3. **Existing learnings that reference the old workflow.** Several files in `knowledge-base/project/learnings/` reference the 6-file version bump pattern. These should be updated or archived.

@@ -230,12 +230,12 @@ This is a documentation-only change. The guardrails become effective through the
 - `knowledge-base/overview/brand-guide.md` -- target file, current `### X/Twitter` section at lines 150-165
 - `plugins/soleur/agents/support/community-manager.md` -- Capability 4 reads `### X/Twitter` for engagement
 - `plugins/soleur/skills/community/SKILL.md` -- `engage` sub-command, `--max-results` default of 10
-- `knowledge-base/learnings/2026-02-12-brand-guide-contract-and-inline-validation.md` -- heading contract pattern
-- `knowledge-base/learnings/2026-02-21-marketing-audit-brand-violation-cascade.md` -- term bans need exception rules
-- `knowledge-base/learnings/2026-02-22-agent-context-blindness-vision-misalignment.md` -- agents must read canonical sources
-- `knowledge-base/learnings/2026-03-10-x-api-pay-per-use-billing-and-web-fallback.md` -- Free tier manual mode applicability
-- `knowledge-base/learnings/2026-03-09-external-api-scope-calibration.md` -- X API credit conservation
-- `knowledge-base/plans/2026-03-10-feat-x-engage-dogfood-graceful-degradation-plan.md` -- split source (Task 3 removed, filed as #503)
+- `knowledge-base/project/learnings/2026-02-12-brand-guide-contract-and-inline-validation.md` -- heading contract pattern
+- `knowledge-base/project/learnings/2026-02-21-marketing-audit-brand-violation-cascade.md` -- term bans need exception rules
+- `knowledge-base/project/learnings/2026-02-22-agent-context-blindness-vision-misalignment.md` -- agents must read canonical sources
+- `knowledge-base/project/learnings/2026-03-10-x-api-pay-per-use-billing-and-web-fallback.md` -- Free tier manual mode applicability
+- `knowledge-base/project/learnings/2026-03-09-external-api-scope-calibration.md` -- X API credit conservation
+- `knowledge-base/project/plans/2026-03-10-feat-x-engage-dogfood-graceful-degradation-plan.md` -- split source (Task 3 removed, filed as #503)
 - [Hootsuite: 6 brand safety best practices](https://blog.hootsuite.com/brand-safety/)
 - [Willow: 6 Essential Rules for Brands on X](https://www.willow.co/blog/6-rules-for-brands-on-twitter)
 - [Avenue Z: 2025/2026 X Organic Social Media Guide for Brands](https://avenuez.com/blog/2025-2026-x-twitter-organic-social-media-guide-for-brands/)

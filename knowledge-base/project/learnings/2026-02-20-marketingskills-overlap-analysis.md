@@ -148,6 +148,6 @@ No automated tooling needed -- manual review of their GitHub repository is suffi
 
 ## Related
 
-- Landscape audit: `knowledge-base/learnings/2026-02-19-full-landscape-discovery-audit.md`
+- Landscape audit: `knowledge-base/project/learnings/2026-02-19-full-landscape-discovery-audit.md`
 - CMO agent exploration: issue #154
 - This monitoring task: issue #165

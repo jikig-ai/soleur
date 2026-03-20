@@ -96,9 +96,9 @@ File moves must use `git mv` to preserve history, in a single atomic commit that
 
 ### Critical Dependencies
 
-- **Archiving system** (`compound-capture`, `worktree-manager.sh cleanup-merged`): hardcoded `knowledge-base/{brainstorms,plans}/*<slug>*` and `knowledge-base/specs/feat-<slug>/` — must update to `knowledge-base/features/{brainstorms,plans,specs}`
-- **learnings-researcher**: hardcoded routing table with 13 subdirectory paths under `knowledge-base/learnings/` — must update to `knowledge-base/features/learnings/`
-- **Feature-spec convention**: `feat-<name>` → `knowledge-base/specs/feat-<name>/` — becomes `knowledge-base/features/specs/feat-<name>/`
+- **Archiving system** (`compound-capture`, `worktree-manager.sh cleanup-merged`): hardcoded `knowledge-base/{brainstorms,plans}/*<slug>*` and `knowledge-base/project/specs/feat-<slug>/` — must update to `knowledge-base/features/{brainstorms,plans,specs}`
+- **learnings-researcher**: hardcoded routing table with 13 subdirectory paths under `knowledge-base/project/learnings/` — must update to `knowledge-base/features/learnings/`
+- **Feature-spec convention**: `feat-<name>` → `knowledge-base/project/specs/feat-<name>/` — becomes `knowledge-base/features/specs/feat-<name>/`
 - **Brand-guide reads**: ~15 agents read `knowledge-base/overview/brand-guide.md` — becomes `knowledge-base/marketing/brand-guide.md`
 
 ### Execution Steps

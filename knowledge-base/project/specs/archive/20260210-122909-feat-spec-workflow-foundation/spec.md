@@ -146,7 +146,7 @@ create_for_feature() {
 
   local branch="feat-$name"
   local worktree=".worktrees/$branch"
-  local spec_dir="knowledge-base/specs/$branch"
+  local spec_dir="knowledge-base/project/specs/$branch"
 
   git worktree add -b "$branch" "$worktree" || return 1
   mkdir -p "$spec_dir"
@@ -176,8 +176,8 @@ create_for_feature() {
 
 | File | Purpose |
 | ---- | ------- |
-| `knowledge-base/specs/.gitkeep` | Track empty specs directory |
-| `knowledge-base/learnings/.gitkeep` | Track empty learnings directory |
+| `knowledge-base/project/specs/.gitkeep` | Track empty specs directory |
+| `knowledge-base/project/learnings/.gitkeep` | Track empty learnings directory |
 | `knowledge-base/overview/constitution.md` | Project principles (3 domains) |
 | `plugins/soleur/skills/spec-templates/SKILL.md` | Templates for spec.md and tasks.md |
 

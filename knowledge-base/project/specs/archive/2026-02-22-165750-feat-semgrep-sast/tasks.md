@@ -1,6 +1,6 @@
 ---
 feature: feat-semgrep-sast
-plan: knowledge-base/plans/2026-02-20-feat-semgrep-sast-coverage-plan.md
+plan: knowledge-base/project/plans/2026-02-20-feat-semgrep-sast-coverage-plan.md
 issue: "#163"
 ---
 
