@@ -29,5 +29,6 @@ try {
   const app = await import("./index");
   app.boot(healthState, healthServer);
 } catch (err) {
+  healthState.cliState = "error";
   console.error("FATAL: Failed to load application:", err);
 }

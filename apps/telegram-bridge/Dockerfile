@@ -25,7 +25,7 @@ USER soleur
 VOLUME /home/soleur/data
 
 # Health check (long-polling bot, no inbound ports needed except internal health)
-HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD curl -f http://localhost:8080/health || exit 1
 
 CMD ["bun", "run", "src/main.ts"]

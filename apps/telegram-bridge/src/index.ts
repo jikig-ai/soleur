@@ -72,7 +72,7 @@ const bridge = new Bridge(botApi, {
 
 // Process-level state (not part of Bridge)
 let cliProcess: ReturnType<typeof Bun.spawn> | null = null;
-const startTime = Date.now();
+let startTime = Date.now(); // overwritten in boot() with healthState.startTime
 
 // ---------------------------------------------------------------------------
 // 4. CLI process management (stdio transport)
@@ -341,6 +341,9 @@ bot.on("message:text", async (ctx) => {
 // ---------------------------------------------------------------------------
 
 export function boot(healthState: HealthState, healthServer: { stop(closeActiveConnections?: boolean): void }): void {
+  // Use the container start time for consistent uptime reporting
+  startTime = healthState.startTime;
+
   // Wire live getters so health endpoint always reflects current state.
   // enumerable: true ensures JSON.stringify includes these properties if
   // healthState is ever serialized directly (defensive practice).
