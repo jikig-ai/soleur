@@ -12,6 +12,8 @@ export class KeyInvalidError extends Error {
 
 // WebSocket message protocol
 export type WSMessage =
+  | { type: "auth"; token: string }
+  | { type: "auth_ok" }
   | { type: "chat"; content: string }
   | { type: "start_session"; leaderId: DomainLeaderId }
   | { type: "review_gate_response"; gateId: string; selection: string }

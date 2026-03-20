@@ -15,11 +15,12 @@ function parseMessage(raw: string): WSMessage | null {
 }
 
 function isClientMessage(msg: WSMessage): boolean {
-  return ["chat", "start_session", "review_gate_response"].includes(msg.type);
+  return ["auth", "chat", "start_session", "review_gate_response"].includes(msg.type);
 }
 
 function isServerMessage(msg: WSMessage): boolean {
   return [
+    "auth_ok",
     "stream",
     "review_gate",
     "session_started",
@@ -125,18 +126,45 @@ describe("key invalidation error handling", () => {
 });
 
 describe("WebSocket URL construction", () => {
-  test("wss URL includes token parameter", () => {
-    const token = "eyJhbGciOi...test";
-    const url = `wss://app.soleur.ai/ws?token=${token}`;
+  test("wss URL does not include token parameter", () => {
+    const url = "wss://app.soleur.ai/ws";
     const parsed = new URL(url);
     expect(parsed.protocol).toBe("wss:");
     expect(parsed.pathname).toBe("/ws");
-    expect(parsed.searchParams.get("token")).toBe(token);
+    expect(parsed.searchParams.get("token")).toBeNull();
+  });
+});
+
+describe("auth handshake protocol", () => {
+  test("auth message is valid client message", () => {
+    const msg = parseMessage('{"type":"auth","token":"eyJhbGciOi...test"}');
+    expect(msg).not.toBeNull();
+    expect(msg!.type).toBe("auth");
+    expect(isClientMessage(msg!)).toBe(true);
+    expect(isServerMessage(msg!)).toBe(false);
   });
 
-  test("URL without token has empty token param", () => {
-    const url = "wss://app.soleur.ai/ws?token=";
-    const parsed = new URL(url);
-    expect(parsed.searchParams.get("token")).toBe("");
+  test("auth_ok message is valid server message", () => {
+    const msg = parseMessage('{"type":"auth_ok"}');
+    expect(msg).not.toBeNull();
+    expect(msg!.type).toBe("auth_ok");
+    expect(isServerMessage(msg!)).toBe(true);
+    expect(isClientMessage(msg!)).toBe(false);
+  });
+
+  test("auth message contains token field", () => {
+    const msg = parseMessage('{"type":"auth","token":"test-token-123"}');
+    expect(msg).not.toBeNull();
+    if (msg!.type === "auth") {
+      expect(msg!.token).toBe("test-token-123");
+    }
+  });
+
+  test("auth message with empty token is parseable", () => {
+    const msg = parseMessage('{"type":"auth","token":""}');
+    expect(msg).not.toBeNull();
+    if (msg!.type === "auth") {
+      expect(msg!.token).toBe("");
+    }
   });
 });

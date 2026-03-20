@@ -37,25 +37,6 @@ jobs:
     if: needs.release.outputs.released == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Ensure telegram env vars on server
-        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
-        with:
-          host: ${{ secrets.WEB_PLATFORM_HOST }}
-          username: root
-          key: ${{ secrets.WEB_PLATFORM_SSH_KEY }}
-          fingerprint: ${{ secrets.WEB_PLATFORM_HOST_FINGERPRINT }}
-          envs: TELEGRAM_BOT_TOKEN,TELEGRAM_ALLOWED_USER_ID,ANTHROPIC_API_KEY
-          script: |
-            ENV_FILE="/mnt/data/.env"
-            grep -q "^TELEGRAM_BOT_TOKEN=" "$ENV_FILE" || echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN" >> "$ENV_FILE"
-            grep -q "^TELEGRAM_ALLOWED_USER_ID=" "$ENV_FILE" || echo "TELEGRAM_ALLOWED_USER_ID=$TELEGRAM_ALLOWED_USER_ID" >> "$ENV_FILE"
-            grep -q "^ANTHROPIC_API_KEY=" "$ENV_FILE" || echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" >> "$ENV_FILE"
-            grep -q "^SOLEUR_PLUGIN_DIR=" "$ENV_FILE" || echo "SOLEUR_PLUGIN_DIR=/app/shared/plugins/soleur" >> "$ENV_FILE"
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_ALLOWED_USER_ID: ${{ secrets.TELEGRAM_ALLOWED_USER_ID }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-
       - name: Deploy to server
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
@@ -64,31 +45,6 @@ jobs:
           key: ${{ secrets.WEB_PLATFORM_SSH_KEY }}
           fingerprint: ${{ secrets.WEB_PLATFORM_HOST_FINGERPRINT }}
           script: |
-            IMAGE="ghcr.io/jikig-ai/soleur-telegram-bridge"
             TAG="v${{ needs.release.outputs.version }}"
             [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ERROR: Invalid version format: $TAG"; exit 1; }
-            docker pull "$IMAGE:$TAG"
-            { docker stop soleur-bridge || true; }
-            { docker rm soleur-bridge || true; }
-            docker run -d \
-              --name soleur-bridge \
-              --restart unless-stopped \
-              --env-file /mnt/data/.env \
-              -v /mnt/data:/home/soleur/data \
-              -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
-              -p 127.0.0.1:8080:8080 \
-              "$IMAGE:$TAG"
-            echo "Waiting for health endpoint (container liveness)..."
-            for i in $(seq 1 24); do
-              STATUS=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/health 2>/dev/null) || STATUS="000"
-              if [ "$STATUS" = "200" ] || [ "$STATUS" = "503" ]; then
-                BODY=$(curl -s http://localhost:8080/health)
-                echo "Health endpoint responded: HTTP $STATUS - $BODY"
-                exit 0
-              fi
-              echo "Attempt $i/24: HTTP $STATUS (waiting for health endpoint...)"
-              sleep 5
-            done
-            echo "Health check failed - endpoint not responding after 120s"
-            docker logs soleur-bridge --tail 30
-            exit 1
+            deploy telegram-bridge ghcr.io/jikig-ai/soleur-telegram-bridge "$TAG"

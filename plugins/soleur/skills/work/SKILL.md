@@ -98,27 +98,19 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - **Interactive mode only:** Ask: "Continue working on `[current_branch]`, or create a new branch?"
    - **Pipeline mode:** Continue on current branch without asking.
    - If continuing, proceed to step 3
-   - If creating new, follow Option A or B below
+   - If creating new, follow the worktree creation instructions below
 
-   **If on the default branch**, you MUST create a branch before proceeding. Never edit files on the default branch -- parallel agents cause silent merge conflicts.
+   **If on the default branch**, you MUST create a worktree before proceeding. Never edit files on the default branch -- parallel agents cause silent merge conflicts, and this repo uses `core.bare=true` where `git pull` and `git checkout` are unavailable.
 
-   **Option A: Create a new branch (default)**
-
-   ```bash
-   git pull origin [default_branch]
-   git checkout -b feature-branch-name
-   ```
-
-   Use a meaningful name based on the work (e.g., `feat/user-authentication`, `fix/email-validation`).
-
-   **Option B: Use a worktree (recommended for parallel development)**
+   Create a worktree for the new feature:
 
    ```bash
-   skill: git-worktree
-   # The skill will create a new branch from the default branch in an isolated worktree
+   bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create feature-branch-name
    ```
 
-   Prefer worktree if other worktrees already exist or multiple features are in-flight.
+   Then `cd` into the worktree path printed by the script. The worktree manager handles bare-repo detection, branch creation from latest origin/main, .env copying, and dependency installation.
+
+   Use a meaningful name based on the work (e.g., `feat-user-authentication`, `fix-email-validation`).
 
 3. **Create Todo List**
    - Use TodoWrite to break plan into actionable tasks
