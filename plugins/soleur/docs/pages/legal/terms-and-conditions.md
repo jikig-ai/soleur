@@ -20,7 +20,7 @@ permalink: pages/legal/terms-and-conditions.html
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 20, 2026 -- added Web Platform service terms, scoped local-only statements to Plugin, updated data practices and GDPR rights sections for Web Platform.
+**Last Updated:** March 20, 2026 -- added Web Platform service terms, scoped local-only statements to Plugin, updated data practices and GDPR rights sections for Web Platform; added subscription cancellation, refund, and EU withdrawal policy (Section 5).
 
 ---
 
@@ -86,13 +86,33 @@ The Web Platform is hosted on Hetzner servers in Helsinki, Finland (EU) and uses
 
 By creating a Web Platform account, you accept these Terms and acknowledge that your data will be processed as described in the Privacy Policy. Acceptance requires checking the "I agree to the Terms & Conditions and Privacy Policy" checkbox on the signup page before account creation. The checkbox is unchecked by default; you must actively check it to proceed. Your acceptance is timestamped and recorded.
 
-## 5. License and Intellectual Property
+## 5. Subscriptions, Cancellation, and Refunds
 
-### 5.1 License Grant
+Subscriptions renew automatically at the end of each billing period (monthly or annually, as selected at checkout) unless cancelled.
+
+### 5.1 Cancellation
+
+You may cancel your Subscription at any time. Cancellation takes effect at the end of the current billing period. You will retain access to paid features until the end of the period for which you have already paid.
+
+### 5.2 Account Deletion with Active Subscription
+
+If you delete your Web Platform account while a Subscription is active, the deletion triggers cancellation of your Subscription effective at the end of the current billing period. Account data is deleted as described in Section 14.1b.
+
+### 5.3 EU Right of Withdrawal
+
+If you are a consumer in the EU/EEA, you have a 14-day right of withdrawal under Directive 2011/83/EU. However, by subscribing and requesting immediate access to the Web Platform's paid features, you expressly consent to the performance of the digital service beginning immediately and acknowledge that you thereby waive your right of withdrawal in accordance with Article 16(m) of Directive 2011/83/EU. If you do not consent to immediate access, your access to paid features will begin after the 14-day withdrawal period has expired, during which you may withdraw and receive a full refund. To exercise your right of withdrawal, contact legal@jikigai.com or use the model withdrawal form available upon request.
+
+### 5.4 Refunds
+
+Except as required by applicable law (including the EU right of withdrawal described in Section 5.3), all Subscription fees are non-refundable. Jikigai may, at its sole discretion, issue refunds or credits on a case-by-case basis. Any discretionary refund does not entitle you to future refunds in similar circumstances.
+
+## 6. License and Intellectual Property
+
+### 6.1 License Grant
 
 The Plugin is licensed under the Business Source License 1.1 (BSL 1.1). Subject to your compliance with these Terms and the BSL 1.1 license, you may copy, modify, create derivative works, redistribute, and make production use of the Plugin for your personal or internal business purposes.
 
-### 5.2 Restrictions
+### 6.2 Restrictions
 
 You shall not:
 
@@ -103,21 +123,21 @@ You shall not:
 
 Each version of the Plugin converts to the Apache License 2.0 four years after its publication date. Prior versions (v3.0.10 and earlier) remain under the Apache License 2.0.
 
-### 5.3 User Content Ownership
+### 6.3 User Content Ownership
 
 You retain all rights, title, and interest in your User Content. We claim no ownership over any files, knowledge-base entries, code, or artifacts generated or stored on your local machine through use of the Plugin. For the Web Platform, you retain all rights to data you store in your workspaces, including encrypted API keys and workspace configurations.
 
-### 5.4 Our Intellectual Property
+### 6.4 Our Intellectual Property
 
 All rights, title, and interest in and to the Plugin (including agent definitions, skill configurations, command logic, and documentation) remain with us. These Terms do not grant you any rights to our trademarks, service marks, or trade names.
 
-### 5.5 Contributor Intellectual Property
+### 6.5 Contributor Intellectual Property
 
 If you contribute code or other materials to the Soleur project via pull requests, you must sign a Contributor License Agreement (CLA) before your contribution can be accepted. The CLA grants Jikigai a perpetual, irrevocable license to use, modify, sublicense, and relicense your contribution, while you retain your copyright. The CLA includes an express patent grant covering contributed code. Full terms are set out in the [Individual Contributor License Agreement](/pages/legal/individual-cla.html) and [Corporate Contributor License Agreement](/pages/legal/corporate-cla.html).
 
-## 6. AI-Generated Output
+## 7. AI-Generated Output
 
-### 6.1 Nature of AI Output
+### 7.1 Nature of AI Output
 
 Soleur leverages AI models to generate code, documentation, legal document drafts, plans, reviews, and other content. All AI-generated output is provided on an "as-is" basis and:
 
@@ -125,23 +145,23 @@ Soleur leverages AI models to generate code, documentation, legal document draft
 - Does not constitute professional advice (legal, financial, technical, or otherwise)
 - Requires human review and validation before use in production or business-critical contexts
 
-### 6.2 Legal Document Generation
+### 7.2 Legal Document Generation
 
 The Plugin includes a legal document generation capability. Documents generated by this feature are explicitly marked as drafts requiring professional legal review. These generated documents do not constitute legal advice and should not be relied upon without review by a qualified legal professional.
 
-### 6.3 Responsibility for Output
+### 7.3 Responsibility for Output
 
 You are solely responsible for reviewing, validating, and assuming liability for any AI-generated output you choose to use, publish, deploy, or distribute.
 
-## 7. Data Practices and Privacy
+## 8. Data Practices and Privacy
 
-### 7.1 Local Data Storage
+### 8.1 Local Data Storage
 
 Soleur operates on a local-first model. The Plugin itself does not collect, transmit, or store personal data on external servers. All User Content, configuration files, and knowledge-base entries remain on your local machine under your control.
 
-This section applies to the Plugin only. For Web Platform data practices, see Section 7.1b and the [Privacy Policy](/pages/legal/privacy-policy.html) Section 4.7.
+This section applies to the Plugin only. For Web Platform data practices, see Section 8.1b and the [Privacy Policy](/pages/legal/privacy-policy.html) Section 4.7.
 
-### 7.1b Web Platform Data Practices
+### 8.1b Web Platform Data Practices
 
 The Soleur Web Platform collects and processes personal data as necessary to provide the service. This includes:
 
@@ -152,15 +172,15 @@ The Soleur Web Platform collects and processes personal data as necessary to pro
 
 For comprehensive data processing details, legal bases, retention periods, and your rights, see the [Privacy Policy](/pages/legal/privacy-policy.html) and [GDPR Policy](/pages/legal/gdpr-policy.html).
 
-### 7.2 Documentation Site
+### 8.2 Documentation Site
 
 The Soleur documentation site (soleur.ai) is hosted on GitHub Pages. GitHub, as the hosting provider, may collect certain data such as IP addresses and browser metadata in accordance with GitHub's own privacy practices. We do not control GitHub's data collection. Please refer to GitHub's Privacy Statement for details.
 
-### 7.3 Third-Party Data Processing
+### 8.3 Third-Party Data Processing
 
 When the Plugin facilitates interactions with the Anthropic Claude API or other third-party services, data transmitted to those services is governed by their respective privacy policies and terms of service. We are not responsible for the data practices of third-party service providers.
 
-### 7.4 EU/EEA Users -- GDPR Rights
+### 8.4 EU/EEA Users -- GDPR Rights
 
 If you are located in the EU/EEA, you have rights under the GDPR including the right of access, rectification, erasure, restriction of processing, data portability, and objection.
 
@@ -168,9 +188,9 @@ For the Plugin, these rights are inherently satisfied by your local control over
 
 For the Web Platform, you may exercise these rights against Jikigai by contacting legal@jikigai.com. See the [GDPR Policy](/pages/legal/gdpr-policy.html) Section 5 for full details on how to exercise each right.
 
-For any GDPR-related inquiries concerning the documentation site or third-party integrations, please contact us through the channels listed in Section 16.
+For any GDPR-related inquiries concerning the documentation site or third-party integrations, please contact us through the channels listed in Section 17.
 
-## 8. Acceptable Use
+## 9. Acceptable Use
 
 You agree to use the Plugin and the Web Platform only for lawful purposes and in accordance with these Terms. You shall not use the Plugin or the Web Platform to:
 
@@ -182,31 +202,31 @@ You agree to use the Plugin and the Web Platform only for lawful purposes and in
 - Circumvent, disable, or interfere with security features of the Plugin or connected services
 - Use the Plugin for automated decision-making that produces legal effects on individuals without appropriate human oversight, as required under GDPR Article 22
 
-## 9. Disclaimer of Warranties
+## 10. Disclaimer of Warranties
 
-### 9.1 "As Is" Provision
+### 10.1 "As Is" Provision
 
 THE PLUGIN AND THE WEB PLATFORM ARE PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTIES OF ANY KIND, WHETHER EXPRESS, IMPLIED, OR STATUTORY, INCLUDING BUT NOT LIMITED TO IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, AND ACCURACY.
 
-### 9.2 No Guarantee of Availability or Accuracy
+### 10.2 No Guarantee of Availability or Accuracy
 
 We do not warrant that the Plugin or the Web Platform will be uninterrupted, error-free, secure, or free of harmful components. We do not warrant the accuracy, completeness, or reliability of any output generated by the Plugin's AI capabilities. The Web Platform does not include a Service Level Agreement (SLA). No specific uptime, response time, or availability guarantees are provided.
 
-### 9.3 EU Consumer Rights
+### 10.3 EU Consumer Rights
 
 Nothing in this section limits or excludes any warranty rights that you may have under mandatory applicable law, including EU consumer protection legislation. If you are a consumer in the EU/EEA, you benefit from mandatory statutory warranty rights that cannot be waived or limited by contract.
 
-## 10. Limitation of Liability
+## 11. Limitation of Liability
 
-### 10.1 General Limitation
+### 11.1 General Limitation
 
 TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL WE BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, INCLUDING BUT NOT LIMITED TO LOSS OF PROFITS, DATA, BUSINESS OPPORTUNITIES, OR GOODWILL, ARISING OUT OF OR IN CONNECTION WITH YOUR USE OF THE PLUGIN OR THE WEB PLATFORM.
 
-### 10.2 Aggregate Liability Cap
+### 11.2 Aggregate Liability Cap
 
 OUR TOTAL AGGREGATE LIABILITY TO YOU FOR ALL CLAIMS ARISING OUT OF OR RELATING TO THESE TERMS OR YOUR USE OF THE PLUGIN OR THE WEB PLATFORM SHALL NOT EXCEED THE GREATER OF (A) THE AMOUNT YOU PAID US (IF ANY) IN THE TWELVE (12) MONTHS PRECEDING THE CLAIM, OR (B) ONE HUNDRED EUROS (EUR 100).
 
-### 10.3 EU/EEA Limitations
+### 11.3 EU/EEA Limitations
 
 For Users in the EU/EEA, the limitations in this section apply only to the extent permitted by applicable law. Nothing in these Terms excludes or limits liability for:
 
@@ -214,7 +234,7 @@ For Users in the EU/EEA, the limitations in this section apply only to the exten
 - Fraud or fraudulent misrepresentation
 - Any liability that cannot be excluded or limited under applicable EU or member state law
 
-## 11. Indemnification
+## 12. Indemnification
 
 You agree to indemnify, defend, and hold harmless Jikigai and its affiliates, contributors, and licensors from and against any claims, damages, losses, liabilities, costs, and expenses (including reasonable attorneys' fees) arising out of or relating to:
 
@@ -226,7 +246,7 @@ You agree to indemnify, defend, and hold harmless Jikigai and its affiliates, co
 
 For EU/EEA Users, this indemnification obligation applies only to the extent permissible under applicable law and does not require you to indemnify us for losses caused by our own negligence or breach.
 
-## 12. Modifications to the Terms
+## 13. Modifications to the Terms
 
 We reserve the right to modify these Terms at any time. Changes will be posted to the Soleur GitHub repository (jikig-ai/soleur) and/or the documentation site (soleur.ai). Material changes will be communicated through the repository's release notes or changelog.
 
@@ -234,13 +254,13 @@ Your continued use of the Plugin or the Web Platform after changes take effect c
 
 For EU/EEA Users, we will provide reasonable advance notice of material changes (at least 30 days where practicable) and you may terminate your use of the Plugin or the Web Platform if you do not accept the modified Terms.
 
-## 13. Termination
+## 14. Termination
 
-### 13.1 Termination by You
+### 14.1 Termination by You
 
 You may stop using the Plugin at any time by uninstalling it from your Claude Code environment. No notice to us is required.
 
-### 13.1b Termination of Web Platform Account
+### 14.1b Termination of Web Platform Account
 
 You may delete your Web Platform account at any time. Upon account deletion:
 
@@ -248,59 +268,61 @@ You may delete your Web Platform account at any time. Upon account deletion:
 - Workspace data and encrypted API keys are deleted from Hetzner.
 - Payment records (subscription metadata, invoices) are retained for 10 years per French tax law (Code de commerce Art. L123-22).
 
+If a Subscription is active at the time of account deletion, it is handled as described in Section 5.2.
+
 For details on data retention after account deletion, see the [Privacy Policy](/pages/legal/privacy-policy.html) Section 7.
 
-### 13.2 Termination by Us
+### 14.2 Termination by Us
 
 We may suspend or terminate your right to use the Plugin or the Web Platform for cause, including but not limited to violation of these Terms. For EU/EEA Users, we will provide at least 30 days' notice before termination takes effect, except where termination is necessitated by a legal obligation or where the User has repeatedly or materially breached these Terms.
 
-### 13.3 Effect of Termination
+### 14.3 Effect of Termination
 
-Upon termination, your license to use the Plugin ceases. Plugin-generated User Content remains on your local machine under your control. For the Web Platform, account termination triggers data deletion as described in Section 13.1b.
+Upon termination, your license to use the Plugin ceases. Plugin-generated User Content remains on your local machine under your control. For the Web Platform, account termination triggers data deletion as described in Section 14.1b.
 
-Sections 5.4, 6, 7, 9, 10, 11, 14, and 15 survive termination.
+Sections 5.4, 6.4, 7, 8, 10, 11, 12, 15, and 16 survive termination.
 
-## 14. Governing Law and Dispute Resolution
+## 15. Governing Law and Dispute Resolution
 
-### 14.1 Governing Law
+### 15.1 Governing Law
 
 These Terms shall be governed by and construed in accordance with the laws of France, without regard to its conflict of laws provisions.
 
-### 14.2 Jurisdiction
+### 15.2 Jurisdiction
 
 Any disputes arising under or in connection with these Terms shall be subject to the exclusive jurisdiction of the courts of Paris, France.
 
-### 14.3 EU/EEA Consumers
+### 15.3 EU/EEA Consumers
 
 If you are a consumer in the EU/EEA, nothing in these Terms affects your rights under mandatory EU or member state consumer protection laws, including your right to bring proceedings in the courts of your country of habitual residence. The European Commission provides an Online Dispute Resolution (ODR) platform at https://ec.europa.eu/consumers/odr. We are not obligated to participate in ODR procedures but will consider doing so on a case-by-case basis.
 
-## 15. General Provisions
+## 16. General Provisions
 
-### 15.1 Entire Agreement
+### 16.1 Entire Agreement
 
 These Terms, together with any referenced policies (including our Privacy Policy and Acceptable Use Policy), constitute the entire agreement between you and us regarding your use of the Plugin and the Web Platform.
 
-### 15.2 Severability
+### 16.2 Severability
 
 If any provision of these Terms is found to be unenforceable or invalid, that provision shall be limited or eliminated to the minimum extent necessary, and the remaining provisions shall remain in full force and effect.
 
-### 15.3 Waiver
+### 16.3 Waiver
 
 Our failure to enforce any right or provision of these Terms shall not constitute a waiver of that right or provision.
 
-### 15.4 Assignment
+### 16.4 Assignment
 
 You may not assign or transfer these Terms or your rights hereunder without our prior written consent. We may assign these Terms without restriction.
 
-### 15.5 Force Majeure
+### 16.5 Force Majeure
 
 We shall not be liable for any failure or delay in performance resulting from causes beyond our reasonable control, including but not limited to natural disasters, war, terrorism, pandemics, government actions, or failures of third-party services.
 
-### 15.6 No Third-Party Beneficiaries
+### 16.6 No Third-Party Beneficiaries
 
 These Terms do not confer any rights on any third party unless expressly stated.
 
-## 16. Legal Entity and Contact Information
+## 17. Legal Entity and Contact Information
 
 Soleur is a source-available project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France. These Terms are offered by Jikigai on behalf of the Soleur project.
 
@@ -317,8 +339,8 @@ To exercise your data subject rights under GDPR, send a written request to legal
 ---
 
 > **Related documents:** This Terms & Conditions document references privacy practices, data handling, cookies, acceptable use policies, and contributor agreements. Please review the companion documents:
-> - [Privacy Policy](/pages/legal/privacy-policy.html) -- details data practices referenced in Section 7
-> - [Acceptable Use Policy](/pages/legal/acceptable-use-policy.html) -- expands on the acceptable use provisions in Section 8
+> - [Privacy Policy](/pages/legal/privacy-policy.html) -- details data practices referenced in Section 8
+> - [Acceptable Use Policy](/pages/legal/acceptable-use-policy.html) -- expands on the acceptable use provisions in Section 9
 > - [Cookie Policy](/pages/legal/cookie-policy.html) -- covers cookies used by the documentation site
 > - [Disclaimer](/pages/legal/disclaimer.html) -- standalone version of warranty and liability provisions
 > - [Data Protection Disclosure](/pages/legal/data-protection-disclosure.html) -- sub-processor details and data processing transparency
