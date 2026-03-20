@@ -3,34 +3,44 @@
 ## Phase 1: Setup
 
 - [ ] 1.1 Read current `plugins/soleur/skills/feature-video/scripts/check_deps.sh`
-- [ ] 1.2 Fetch rclone SHA256SUMS from `https://downloads.rclone.org/v1.69.1/SHA256SUMS` to extract checksums for `rclone-v1.69.1-linux-amd64.zip` and `rclone-v1.69.1-linux-arm64.zip`
-- [ ] 1.3 Fetch BtbN ffmpeg checksums from `https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-03-20-13-06/checksums.sha256` to extract checksums for `ffmpeg-master-latest-linux64-gpl.tar.xz` and `ffmpeg-master-latest-linuxarm64-gpl.tar.xz`
+- [ ] 1.2 Checksums already fetched and verified during plan deepening (embedded in plan):
+  - rclone v1.73.2 amd64: `00a1d8cb85552b7b07bb0416559b2e78fcf9c6926662a52682d81b5f20c90535`
+  - rclone v1.73.2 arm64: `2f7d8b807e6ea638855129052c834ca23aa538d3ad7786e30b8ad1e97c5db47b`
+  - ffmpeg linux64: `f550cd5fad7bc9045f9e6b4370204ddd245b8120f6bc193e0c09c58569e3cb32`
+  - ffmpeg linuxarm64: `89b959bed4b6d63bad2d85870468a9a52cf84efd216a12fbf577a011ef391644`
 
 ## Phase 2: Core Implementation
 
 - [ ] 2.1 Add version and checksum constants at script top
-  - [ ] 2.1.1 `RCLONE_VERSION="1.69.1"` with SHA256 per architecture
-  - [ ] 2.1.2 `FFMPEG_AUTOBUILD="2026-03-20-13-06"` with SHA256 per architecture
-  - [ ] 2.1.3 Add update procedure comment block
-- [ ] 2.2 Add `verify_checksum` helper function
-  - [ ] 2.2.1 Accept file path and expected hash
-  - [ ] 2.2.2 Compute SHA256 with `sha256sum`
-  - [ ] 2.2.3 Compare and return 1 on mismatch with diagnostic output to stderr
-  - [ ] 2.2.4 Remove corrupt file on mismatch
-- [ ] 2.3 Update `install_ffmpeg_linux` function
-  - [ ] 2.3.1 Add BtbN architecture mapping (`x86_64` -> `linux64`, `aarch64`/`arm64` -> `linuxarm64`)
-  - [ ] 2.3.2 Switch URL to BtbN GitHub releases with pinned autobuild tag
-  - [ ] 2.3.3 Change from `curl | tar` pipe to download-to-tmpfile flow
-  - [ ] 2.3.4 Call `verify_checksum` before extraction
-  - [ ] 2.3.5 Extract ffmpeg binary from tar after verification
-  - [ ] 2.3.6 Clean up temp files on both success and failure
-- [ ] 2.4 Update `install_rclone_linux` function
-  - [ ] 2.4.1 Switch URL from `rclone-current-` to `rclone-v<VERSION>-` versioned path
-  - [ ] 2.4.2 Call `verify_checksum` on downloaded zip before extraction
-  - [ ] 2.4.3 Ensure temp directory cleanup on both paths
+  - [ ] 2.1.1 `RCLONE_VERSION="1.73.2"` with SHA256 per architecture
+  - [ ] 2.1.2 `FFMPEG_AUTOBUILD="2026-03-20-13-06"` and `FFMPEG_BUILD_ID="N-123570-gf72f692afa"` with SHA256 per architecture
+  - [ ] 2.1.3 Add update procedure comment block (including how to extract `FFMPEG_BUILD_ID` from checksums file)
+- [ ] 2.2 Add `FFMPEG_ARCH` mapping alongside existing `ARCH_SUFFIX`
+  - [ ] 2.2.1 `x86_64` -> `linux64`, `aarch64`/`arm64` -> `linuxarm64`
+- [ ] 2.3 Add `verify_checksum` helper function
+  - [ ] 2.3.1 Accept file path and expected hash as arguments
+  - [ ] 2.3.2 Compute SHA256 with `sha256sum` and `cut -d' ' -f1`
+  - [ ] 2.3.3 Compare and return 1 on mismatch with diagnostic output to stderr
+  - [ ] 2.3.4 Do NOT rm the file inside verify_checksum (caller handles cleanup)
+- [ ] 2.4 Update `install_ffmpeg_linux` function
+  - [ ] 2.4.1 Accept `FFMPEG_ARCH` instead of `ARCH_SUFFIX` (BtbN uses `linux64`/`linuxarm64`)
+  - [ ] 2.4.2 Construct URL: `https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-<FFMPEG_AUTOBUILD>/ffmpeg-<FFMPEG_BUILD_ID>-<FFMPEG_ARCH>-gpl.tar.xz`
+  - [ ] 2.4.3 Change from `curl | tar` pipe to download-to-tmpdir flow
+  - [ ] 2.4.4 Select correct checksum constant via case on `FFMPEG_ARCH`
+  - [ ] 2.4.5 Call `verify_checksum` before extraction
+  - [ ] 2.4.6 Extract: `tar -xJf` then `cp */bin/ffmpeg` (BtbN layout: `ffmpeg-*/bin/ffmpeg`)
+  - [ ] 2.4.7 Explicit temp dir cleanup in both success and failure branches
+- [ ] 2.5 Update `install_rclone_linux` function
+  - [ ] 2.5.1 Switch URL from `rclone-current-linux-` to `rclone-v<RCLONE_VERSION>-linux-` versioned path
+  - [ ] 2.5.2 Select correct checksum constant via case on `ARCH_SUFFIX`
+  - [ ] 2.5.3 Call `verify_checksum` on downloaded zip before unzip extraction
+  - [ ] 2.5.4 Ensure temp directory cleanup on both paths
+- [ ] 2.6 Update echo messages to print pinned version during install
+  - [ ] 2.6.1 ffmpeg: "Downloading ffmpeg (autobuild <date>)..."
+  - [ ] 2.6.2 rclone: "Downloading rclone v<version>..."
 
 ## Phase 3: Testing
 
 - [ ] 3.1 Run `bash -n plugins/soleur/skills/feature-video/scripts/check_deps.sh` for syntax check
-- [ ] 3.2 Verify the script prints pinned versions in output when installing
+- [ ] 3.2 Verify the script prints pinned versions in output
 - [ ] 3.3 Run compound (`skill: soleur:compound`) before commit
