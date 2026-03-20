@@ -6,7 +6,7 @@ import path from "path";
 
 import { DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { KeyInvalidError } from "@/lib/types";
-import { decryptKey } from "./byok";
+import { decryptKey, decryptKeyLegacy, encryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 import { isPathInWorkspace } from "./sandbox";
@@ -72,7 +72,7 @@ export function abortSession(userId: string, conversationId: string): void {
 async function getUserApiKey(userId: string): Promise<string> {
   const { data, error } = await supabase
     .from("api_keys")
-    .select("encrypted_key, iv, auth_tag")
+    .select("id, encrypted_key, iv, auth_tag, key_version")
     .eq("user_id", userId)
     .eq("is_valid", true)
     .eq("provider", "anthropic")
@@ -83,11 +83,28 @@ async function getUserApiKey(userId: string): Promise<string> {
     throw new KeyInvalidError();
   }
 
-  return decryptKey(
-    Buffer.from(data.encrypted_key, "base64"),
-    Buffer.from(data.iv, "base64"),
-    Buffer.from(data.auth_tag, "base64"),
-  );
+  const encrypted = Buffer.from(data.encrypted_key, "base64");
+  const iv = Buffer.from(data.iv, "base64");
+  const authTag = Buffer.from(data.auth_tag, "base64");
+
+  if (data.key_version === 1) {
+    // Lazy migration: decrypt with raw key, re-encrypt with HKDF-derived key
+    const plaintext = decryptKeyLegacy(encrypted, iv, authTag);
+    const reEncrypted = encryptKey(plaintext, userId);
+    await supabase
+      .from("api_keys")
+      .update({
+        encrypted_key: reEncrypted.encrypted.toString("base64"),
+        iv: reEncrypted.iv.toString("base64"),
+        auth_tag: reEncrypted.tag.toString("base64"),
+        key_version: 2,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", data.id);
+    return plaintext;
+  }
+
+  return decryptKey(encrypted, iv, authTag, userId);
 }
 
 // ---------------------------------------------------------------------------

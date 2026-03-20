@@ -68,6 +68,8 @@ Project principles organized by domain. Add principles as you learn them.
 ### Always
 
 - Verify the root cause before implementing any fix -- reproduce the error or run the simplest diagnostic first; do not change code based on a guess
+- When implementing HKDF key derivation, put user identity in `info` (Expand phase) not `salt` (Extract phase) per RFC 5869 -- swapping them produces valid but wrong keys with no error, causing silent data corruption; empty salt is correct when IKM is already high-entropy
+- Before building on a Supabase extension, verify its deprecation status at supabase.com/docs -- pgsodium is pending deprecation (discovered during #676 evaluation); evaluate secrets management holistically rather than per-secret
 - When a plan involves directional ambiguity (merge A into B vs B into A, move files from X to Y), confirm the direction with the user before proceeding -- code evidence can be wrong (e.g., a prior PR may have moved references in the wrong direction); the cost of one clarifying question is trivial compared to executing an entire wrong plan
 - Core workflow stages (brainstorm, plan, work, review, compound, one-shot) are skills invoked via the Skill tool; only three commands remain (`go`, `sync`, `help`) using the `soleur:` prefix to avoid collisions with built-in commands
 - Never edit version fields in `plugin.json` or `marketplace.json` (frozen sentinels). Version is derived from git tags -- `version-bump-and-release.yml` creates GitHub Releases with `vX.Y.Z` tags at merge time via semver labels set by `/ship`

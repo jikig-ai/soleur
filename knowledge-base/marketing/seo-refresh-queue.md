@@ -1,11 +1,12 @@
 ---
-last_updated: 2026-03-12
-last_reviewed: 2026-03-12
+last_updated: 2026-03-20
+last_reviewed: 2026-03-20
 review_cadence: monthly
 depends_on:
-  - knowledge-base/overview/competitive-intelligence.md
-  - knowledge-base/overview/content-strategy.md
-  - knowledge-base/audits/soleur-ai/2026-02-19-content-audit.md
+  - knowledge-base/product/competitive-intelligence.md
+  - knowledge-base/marketing/content-strategy.md
+  - knowledge-base/marketing/audits/soleur-ai/2026-03-17-content-audit.md
+  - knowledge-base/marketing/audits/soleur-ai/2026-03-17-seo-audit.md
 ---
 
 # SEO Refresh Queue
@@ -18,54 +19,80 @@ This document tracks pages that need SEO updates, new pages that should be creat
 
 Pages that exist on soleur.ai but have SEO deficiencies identified in the content audit (2026-02-19).
 
-### 1.1 Homepage (soleur.ai/)
+### 1.1 Homepage (soleur.ai/) [PARTIALLY DONE]
 
-| Issue | Current State | Action | Effort |
-|-------|--------------|--------|--------|
-| H1 targets no searchable query | "Build a Billion-Dollar Company. Alone." | Keep as brand statement but add keyword-rich H2 or subtitle containing "Company-as-a-Service" and "solo founders" | Low |
-| Zero target keywords in body copy | "agentic company", "agentic engineering", "company as a service", "solo founder" all absent | Rewrite section labels, H2s, and body paragraphs to include target keywords naturally. See content-audit.md Section 4 for specific rewrites. | Low |
-| Badge is only instance of "Company-as-a-Service" | Badge text, low SEO weight | Add "Company-as-a-Service" to at least one H2 and one body paragraph | Low |
-| No FAQ schema | Absent | Add FAQ section with 3-5 questions. Add FAQPage JSON-LD schema. | Medium |
-| No internal links with keyword-rich anchor text | CTAs say "Start Building", "Read the Docs" | Change to "See the 61 AI agents", "Start building your AI organization" | Low |
+| Issue | Current State | Action | Effort | Status |
+|-------|--------------|--------|--------|--------|
+| H1 targets no searchable query | "Build a Billion-Dollar Company. Alone." | Keep as brand statement but add keyword-rich H2 or subtitle | Low | **Done** -- keyword-rich H2 added |
+| Zero target keywords in body copy | Keywords added to H2s and body paragraphs | — | — | **Done** |
+| Badge is only instance of "Company-as-a-Service" | Now in H2 and body text | — | — | **Done** |
+| No FAQ schema | 6 FAQ items with FAQPage JSON-LD | — | — | **Done** |
+| No internal links with keyword-rich anchor text | CTAs updated | — | — | **Done** |
+| "Plugin" in meta description and FAQ texts | Meta description and 3 FAQ answers use "plugin" | Remove "plugin" per brand guide. Rewrite meta to: "Soleur is the open-source company-as-a-service platform..." | Low | **NEW -- from 2026-03-17 audit** |
+| Missing "open source" and "solopreneur" | Not present on homepage | Add to hero section or body text | Low | **NEW -- from 2026-03-17 audit** |
 
-**Combined effort:** 3-4 hours.
+**Remaining effort:** 1-2 hours (new items only).
 
-### 1.2 Agents Page (soleur.ai/pages/agents.html)
+### 1.2 Agents Page (soleur.ai/pages/agents.html) [PARTIALLY DONE]
 
-| Issue | Current State | Action | Effort |
-|-------|--------------|--------|--------|
-| H1 is bare "Agents" | No modifier | Change to "AI Agents" or "AI Engineering Agents" | Low |
-| No introductory prose | One-sentence hero | Add 2-3 paragraph intro explaining what agentic engineering means, why 61 agents across 8 domains, and how they share context | Low |
-| No FAQ section | Absent | Add FAQ: "What are AI agents?", "How many agents does Soleur have?", "What domains do the agents cover?" | Low |
+| Issue | Current State | Action | Effort | Status |
+|-------|--------------|--------|--------|--------|
+| H1 is bare "Agents" | Now "Soleur AI Agents" | — | — | **Done** |
+| No introductory prose | Intro paragraph added | — | — | **Done** |
+| No FAQ section | 3 FAQ items exist but no JSON-LD FAQPage schema | Add FAQPage JSON-LD to match existing HTML FAQ | Low | **NEW -- from 2026-03-17 audit** |
+| Missing "open source AI agents" keyword | Not mentioned | Add note that agents are open source and inspectable | Low | **NEW -- from 2026-03-17 audit** |
+| No definition of "agentic engineering" | Term used without definition | Add one-sentence definition near first usage | Low | **NEW -- from 2026-03-17 audit** |
+
+**Remaining effort:** 1 hour (new items only).
+
+### 1.3 Skills Page (soleur.ai/pages/skills.html) [PARTIALLY DONE]
+
+| Issue | Current State | Action | Effort | Status |
+|-------|--------------|--------|--------|--------|
+| H1 is bare "Skills" | Now "Agentic Engineering Skills" | — | — | **Done** |
+| No introductory prose | Lifecycle explanation added | — | — | **Done** |
+| No FAQ section | Absent | Add FAQ with JSON-LD: "What is a skill in Soleur?", "How do skills differ from agents?" | Low | **NEW -- from 2026-03-17 audit** |
+| Missing "AI workflow automation" keyword | Not present | Add commercially-searched term naturally | Low | **NEW -- from 2026-03-17 audit** |
+
+**Remaining effort:** 1 hour (new items only).
+
+### 1.4 Getting Started Page (soleur.ai/pages/getting-started.html) [PARTIALLY DONE]
+
+| Issue | Current State | Action | Effort | Status |
+|-------|--------------|--------|--------|--------|
+| No "What is Soleur?" context | Context paragraph added | — | — | **Done** |
+| "Plugin" in meta description | "Install the Soleur Claude Code plugin..." | Rewrite meta to: "Get started with Soleur in one command..." | Low | **NEW -- from 2026-03-17 audit** |
+| No FAQ section | Absent | Add FAQ: installation, pricing, prerequisites | Low | **NEW -- from 2026-03-17 audit** |
+
+**Remaining effort:** 30 minutes (new items only).
+
+### 1.5 llms.txt [DONE]
+
+| Issue | Current State | Action | Effort | Status |
+|-------|--------------|--------|--------|--------|
+| Generic description | Rewritten with platform positioning | — | — | **Done** |
+| Agent/skill counts outdated | Updated to current counts | — | — | **Done** |
+
+### 1.6 Vision Page (soleur.ai/pages/vision.html) [NEW -- from 2026-03-17 audit]
+
+| Issue | Current State | Action | Effort | Status |
+|-------|--------------|--------|--------|--------|
+| H1 is "Vision" -- zero keyword value | Single generic word | Rewrite to "The Soleur Vision: Building the Company-as-a-Service Platform" | Low | NEW |
+| Uses "synthetic labor," "soloentrepreneurs" | Not in brand guide vocabulary | Align with brand voice | Low | NEW |
+| No FAQ section | Absent | Add FAQ: roadmap, model-agnostic, CaaS | Low | NEW |
+| No external citations | Zero | Add 1-2 authoritative citations | Low | NEW |
 
 **Combined effort:** 1-2 hours.
 
-### 1.3 Skills Page (soleur.ai/pages/skills.html)
+### 1.7 Blog Posts -- dateModified Signals [NEW -- from 2026-03-17 SEO audit]
 
-| Issue | Current State | Action | Effort |
-|-------|--------------|--------|--------|
-| H1 is bare "Skills" | No modifier | Change to "Agentic Engineering Skills" or "AI Workflow Skills" | Low |
-| No introductory prose | One-sentence hero | Add 2-3 paragraphs explaining the brainstorm-plan-implement-review-compound lifecycle | Low |
+| Issue | Current State | Action | Effort | Status |
+|-------|--------------|--------|--------|--------|
+| No `updated` frontmatter on any blog post | `dateModified` always equals `datePublished` in BlogPosting JSON-LD | Add `updated` field to blog posts that have been revised | Low | NEW |
+| No visible "Last Updated" display | Only `datePublished` shown | Add conditional "Last Updated" display to `blog-post.njk` template | Low | NEW |
+| "Why Tools Plateau" FAQ missing JSON-LD | 3 FAQ items formatted as H3 headings, no FAQPage schema | Convert to `<details>/<summary>` + add JSON-LD | Low | NEW |
 
-**Combined effort:** 1 hour.
-
-### 1.4 Getting Started Page (soleur.ai/pages/getting-started.html)
-
-| Issue | Current State | Action | Effort |
-|-------|--------------|--------|--------|
-| No "What is Soleur?" context | Jumps to install command | Add paragraph before install: "Soleur is a Company-as-a-Service platform for solo founders..." with all 5 target keywords | Low |
-| "Claude Code" never mentioned | Assumed knowledge | Add one sentence: "Soleur runs as a Claude Code plugin..." (permitted per brand guide technical docs exception) | Low |
-
-**Combined effort:** 30 minutes.
-
-### 1.5 llms.txt
-
-| Issue | Current State | Action | Effort |
-|-------|--------------|--------|--------|
-| Generic description | "Claude Code plugin providing 32 AI agents..." | Rewrite with platform positioning and target keywords (see content-audit.md Section 4.9) | Low |
-| Agent/skill counts outdated | States 32 agents, 41 skills | Update to 61 agents, 56 skills, 3 commands | Low |
-
-**Combined effort:** 15 minutes.
+**Combined effort:** 1-2 hours.
 
 ---
 
@@ -75,12 +102,12 @@ Pages that do not exist but should, based on keyword research and competitive po
 
 ### 2.1 Comparison Pages
 
-| Page | Target Keywords | Search Intent | Priority | Reason |
+| Page | Target Keywords | Search Intent | Priority | Status |
 |------|----------------|---------------|----------|--------|
-| **Soleur vs. Anthropic Cowork** | soleur vs cowork, claude code plugin vs cowork, AI agent platform comparison | Commercial | P1 | Cowork is the #1 competitive threat. Founders choosing between Soleur and free Cowork plugins need a clear comparison. | generated_date: 2026-03-16 |
-| **Soleur vs. Notion Custom Agents** | soleur vs notion ai, AI agents for solo founders vs notion, company as a service vs notion | Commercial | P1 | Notion 3.3 Custom Agents (Feb 24, 2026) is the highest Tier 3 convergence risk. 35M+ Notion users may see Custom Agents as CaaS. | generated_date: 2026-03-17 |
-| **Soleur vs. Cursor** | soleur vs cursor, AI coding agents comparison, claude code plugin vs cursor, cursor automations vs soleur | Commercial | **P1** (upgraded from P2) | Cursor shipped Automations + Marketplace (March 5, 2026). Now an agent platform, not just an IDE. "I already use Cursor" objection harder to answer. Must address automations, marketplace, and built-in memory. | generated_date: 2026-03-19 |
-| **Soleur vs. Polsia** | soleur vs polsia, autonomous AI company, AI runs your company, autopilot vs decision-maker | Commercial | **P1** | Polsia at $1.5M ARR, 2,000+ companies. Most direct CaaS competitor. Philosophy split: autonomous vs. human-in-the-loop. Pricing comparison: $29-59 + revenue share vs. $49 flat. |
+| **Soleur vs. Anthropic Cowork** | soleur vs cowork, AI agent platform comparison | Commercial | P1 | **PUBLISHED** (2026-03-16). FAQ JSON-LD present. |
+| **Soleur vs. Notion Custom Agents** | soleur vs notion ai, company as a service vs notion | Commercial | P1 | **PUBLISHED** (2026-03-17). |
+| **Soleur vs. Cursor** | soleur vs cursor, cursor automations vs soleur | Commercial | P1 | **PUBLISHED** (2026-03-19). Addresses Automations + Marketplace. |
+| **Soleur vs. Polsia** | soleur vs polsia, autonomous AI company, autopilot vs decision-maker | Commercial | P1 | Not started. Month 2 in quarterly calendar. Audit P2-3, score 16/20. |
 | **Soleur vs. Paperclip** | soleur vs paperclip, AI company orchestration, zero-human company, company orchestration open source | Commercial | **P2** (new) | Paperclip at 14.6k GitHub stars. Infrastructure-layer orchestration vs. domain intelligence. Complementary positioning opportunity. Clipmart upcoming. |
 | **Soleur vs. Devin** | soleur vs devin, AI software engineer vs AI organization, autonomous coding comparison | Commercial | P2 | Devin at $20/month is the price anchor for autonomous agents. Differentiation: engineering-only vs. 8-domain organization. |
 | **Soleur vs. Tanka** | soleur vs tanka, AI co-founder comparison, memory AI platform comparison | Commercial | P3 | Tanka claims memory compounding. Need to differentiate: communication-scoped memory vs. cross-domain business memory. |
@@ -89,20 +116,23 @@ Pages that do not exist but should, based on keyword research and competitive po
 
 ### 2.2 Pillar Content Pages
 
-| Page | Target Keywords | Search Intent | Priority | Timeline |
-|------|----------------|---------------|----------|----------|
-| **What Is Company-as-a-Service?** | company as a service, CaaS platform, full-stack AI organization | Informational | P1 | Week 2 |
-| **The Billion-Dollar Solo Company** | one person billion dollar company, solo founder AI, billion dollar solo company 2026 | Informational | P1 | Week 2-3 |
-| **Agentic Engineering: Beyond Vibe Coding** | agentic engineering, compound engineering, vibe coding vs agentic engineering | Informational | P1 | Week 3-4 |
-| **Knowledge Compounding in AI Development** | knowledge compounding AI, AI agent memory, compound engineering methodology | Informational | P2 | Week 7-8 |
-| **The Solopreneur AI Stack** | solopreneur AI stack 2026, solo founder AI tools, one person SaaS AI | Commercial | P2 | Week 5-6 |
+| Page | Target Keywords | Search Intent | Priority | Status |
+|------|----------------|---------------|----------|--------|
+| **What Is Company-as-a-Service?** | company as a service, CaaS platform | Informational | P1 | **PUBLISHED** (SAP 5.0/5.0) |
+| **Why Most Agentic Tools Plateau** | agentic engineering, compound knowledge | Informational | P1 | **PUBLISHED** (SAP 4.8/5.0) |
+| **Vibe Coding vs Agentic Engineering** | vibe coding vs agentic engineering, agentic coding | Informational | P1 | Month 1. Audit P2-1, score 18/20. |
+| **AI Agents for Solo Founders: The Definitive Guide** | AI agents for solo founders, solopreneur AI tools 2026 | Commercial | P1 | Month 1-2. Audit P2-2, score 18/20. |
+| **One-Person Billion-Dollar Company** | one person billion dollar company, solo founder AI | Informational | P2 | Month 2. |
+| **Knowledge Compounding in AI Development** | knowledge compounding AI, compound engineering | Informational | P2 | Month 2-3. |
 
 ### 2.3 Infrastructure Pages
 
-| Page | Purpose | Priority |
-|------|---------|----------|
-| **Articles index** (/articles/) | Blog listing page. Required before any articles can be published. | P0 (Week 1) |
-| **FAQ page** (or FAQ sections on existing pages) | Structured FAQ content for AI engine consumability | P1 |
+| Page | Purpose | Priority | Status |
+|------|---------|----------|--------|
+| **Blog index** (/blog/) | Blog listing page | P0 | **DONE** |
+| **About/Founder page** | E-E-A-T authority page with credentials, social links, company details | P1 | NEW -- Gap 11. Month 1. |
+| **FAQ sections on all pages** | Structured FAQ content for AI engine consumability. Target: 15/15 pages (currently 3/15). | P1 | In progress (3/15 done) |
+| **Page-specific OG images** | Unique social share images per blog post for improved CTR | P2 | NEW -- from 2026-03-17 SEO audit. Month 3. |
 
 ---
 
@@ -181,4 +211,4 @@ Based on competitive intelligence scan of 2026-03-12, the following comparison p
 
 ---
 
-_Updated: 2026-03-12. Sources: content-audit.md (2026-02-19), content-plan.md (2026-02-19), competitive-intelligence.md (2026-03-12)._
+_Updated: 2026-03-20. Sources: content-audit.md (2026-03-17), aeo-audit.md (2026-03-17), seo-audit.md (2026-03-17), content-plan.md (2026-03-17), competitive-intelligence.md (2026-03-12)._

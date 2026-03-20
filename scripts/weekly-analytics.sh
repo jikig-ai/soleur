@@ -25,7 +25,7 @@ OUTPUT_DIR="$REPO_ROOT/knowledge-base/marketing/analytics"
 PLAUSIBLE_BASE_URL="${PLAUSIBLE_BASE_URL:-https://plausible.io}"
 
 # --- Phase Configuration ---
-# Source of truth: knowledge-base/marketing/marketing-strategy.md lines 335-339
+# Source of truth: knowledge-base/marketing/marketing-strategy.md lines 343-347
 # Update this file and the strategy doc in the same PR when phases change.
 PHASE1_START="2026-03-13"
 PHASE1_END="2026-04-10"

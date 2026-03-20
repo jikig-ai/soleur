@@ -7,6 +7,17 @@ resource "cloudflare_record" "app" {
   ttl     = 1 # Auto when proxied
 }
 
+# Deploy webhook endpoint routed through Cloudflare Tunnel (see #749).
+# Protected by CF Access service token + HMAC signature validation.
+resource "cloudflare_record" "deploy" {
+  zone_id = var.cloudflare_zone_id
+  name    = "deploy"
+  content = "${cloudflare_zero_trust_tunnel_cloudflared.web.id}.cfargotunnel.com"
+  type    = "CNAME"
+  proxied = true
+  ttl     = 1
+}
+
 # Email authentication records for Resend SMTP (sends via Amazon SES, eu-west-1)
 
 resource "cloudflare_record" "dkim_resend" {

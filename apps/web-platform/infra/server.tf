@@ -13,8 +13,9 @@ resource "hcloud_server" "web" {
 
   user_data = templatefile("${path.module}/cloud-init.yml", {
     image_name            = var.image_name
-    deploy_ssh_public_key = var.deploy_ssh_public_key
     ci_deploy_script_b64  = base64encode(file("${path.module}/ci-deploy.sh"))
+    tunnel_token          = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
+    webhook_deploy_secret = var.webhook_deploy_secret
     doppler_token         = var.doppler_token
   })
 
