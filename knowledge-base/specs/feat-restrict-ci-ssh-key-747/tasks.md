@@ -2,27 +2,27 @@
 
 ## Phase 1: Create deploy script
 
-- [ ] 1.1 Create `apps/web-platform/infra/ci-deploy.sh` with deploy logic for both web-platform and telegram-bridge
-  - [ ] 1.1.1 Parse `SSH_ORIGINAL_COMMAND` for structured `deploy <component> <image> <tag>` format
-  - [ ] 1.1.2 Validate action, component, image pattern (`ghcr.io/jikig-ai/soleur-*`), and tag format (`vX.Y.Z`)
-  - [ ] 1.1.3 Implement web-platform deploy case (docker pull/stop/rm/run + health check)
-  - [ ] 1.1.4 Implement telegram-bridge deploy case (docker pull/stop/rm/run + health check)
-  - [ ] 1.1.5 Log all attempts (accepted and rejected) via `logger -t ci-deploy`
-  - [ ] 1.1.6 Reject unrecognized commands with error message and exit 1
+- [x] 1.1 Create `apps/web-platform/infra/ci-deploy.sh` with deploy logic for both web-platform and telegram-bridge
+  - [x] 1.1.1 Parse `SSH_ORIGINAL_COMMAND` for structured `deploy <component> <image> <tag>` format
+  - [x] 1.1.2 Validate action, component, image pattern (`ghcr.io/jikig-ai/soleur-*`), and tag format (`vX.Y.Z`)
+  - [x] 1.1.3 Implement web-platform deploy case (docker pull/stop/rm/run + health check)
+  - [x] 1.1.4 Implement telegram-bridge deploy case (docker pull/stop/rm/run + health check)
+  - [x] 1.1.5 Log all attempts (accepted and rejected) via `logger -t ci-deploy`
+  - [x] 1.1.6 Reject unrecognized commands with error message and exit 1
 
 ## Phase 2: Update cloud-init
 
-- [ ] 2.1 Update `apps/web-platform/infra/cloud-init.yml`
-  - [ ] 2.1.1 Add `write_files` entry for `/usr/local/bin/ci-deploy.sh` with mode 0755
-  - [ ] 2.1.2 Add comments documenting the `authorized_keys` `restrict,command=` format for the CI key
+- [x] 2.1 Update `apps/web-platform/infra/cloud-init.yml`
+  - [x] 2.1.1 Add `write_files` entry for `/usr/local/bin/ci-deploy.sh` with mode 0755
+  - [x] 2.1.2 Add comments documenting the `authorized_keys` `restrict,command=` format for the CI key
 
 ## Phase 3: Update CI workflows
 
-- [ ] 3.1 Update `.github/workflows/web-platform-release.yml` deploy step
-  - [ ] 3.1.1 Replace inline multi-line script with single-line `deploy web-platform <image> <tag>` command
-- [ ] 3.2 Update `.github/workflows/telegram-bridge-release.yml` deploy steps
-  - [ ] 3.2.1 Remove "Ensure telegram env vars on server" SSH step (env managed separately)
-  - [ ] 3.2.2 Replace inline multi-line script with single-line `deploy telegram-bridge <image> <tag>` command
+- [x] 3.1 Update `.github/workflows/web-platform-release.yml` deploy step
+  - [x] 3.1.1 Replace inline multi-line script with single-line `deploy web-platform <image> <tag>` command
+- [x] 3.2 Update `.github/workflows/telegram-bridge-release.yml` deploy steps
+  - [x] 3.2.1 Remove "Ensure telegram env vars on server" SSH step (env managed separately)
+  - [x] 3.2.2 Replace inline multi-line script with single-line `deploy telegram-bridge <image> <tag>` command
 
 ## Phase 4: Server-side provisioning (manual)
 
