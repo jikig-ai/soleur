@@ -22,7 +22,6 @@
 - [ ] 3.3 Handle `auth_ok` message in `ws.onmessage`: set status to `connected`, reset backoff
 - [ ] 3.4 Set initial status to `connecting` (not `connected`) until `auth_ok` is received
 - [ ] 3.5 Add `auth` and `auth_ok` to message type handling in `ws.onmessage` switch
-- [ ] 3.6 Update `send` function or `startSession`/`sendMessage` to queue messages until `auth_ok` is received (prevent race)
 
 ## Phase 4: Tests
 

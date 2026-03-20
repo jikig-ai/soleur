@@ -41,7 +41,7 @@ Replace query-string auth with a first-message auth handshake:
 
 1. **Client connects without token in URL** -- just `wss://host/ws`
 2. **Client sends `{ type: "auth", token: "..." }` as the first message** after `onopen`
-3. **Server buffers all non-auth messages** until auth completes (or closes the connection after a timeout)
+3. **Server rejects non-auth messages** with close(4003) until auth completes (or closes the connection after a timeout)
 4. **Server validates token**, then transitions to authenticated state for that connection
 5. **Server sends `{ type: "auth_ok" }` or closes with `4001 Unauthorized`**
 
@@ -58,7 +58,7 @@ Add two new message types to `WSMessage` union in `types.ts`:
 CONNECTED (unauthenticated)
   |
   |-- receives { type: "auth", token } --> validate token
-  |     |-- valid   --> AUTHENTICATED, send { type: "auth_ok" }, process queued messages
+  |     |-- valid   --> AUTHENTICATED, send { type: "auth_ok" }
   |     |-- invalid --> close(4001, "Unauthorized")
   |
   |-- receives non-auth message --> close(4003, "Auth required")
@@ -73,8 +73,8 @@ CONNECTED (unauthenticated)
 | File | Change |
 |------|--------|
 | `apps/web-platform/lib/types.ts` | Add `auth` and `auth_ok` message types to `WSMessage` union |
-| `apps/web-platform/lib/ws-client.ts` | Remove token from URL; send `auth` message in `onopen`; wait for `auth_ok` before setting status to `connected` |
-| `apps/web-platform/server/ws-handler.ts` | Move auth from `authenticateConnection` (upgrade-time) to message handler; add pending-auth state with timeout |
+| `apps/web-platform/lib/ws-client.ts` | Remove token from URL; rename `getWsUrl` to reflect it also retrieves the token; send `auth` message in `onopen`; wait for `auth_ok` before setting status to `connected` |
+| `apps/web-platform/server/ws-handler.ts` | Move auth from `authenticateConnection` (upgrade-time) to message handler; add pending-auth state with timeout; update exhaustive switch for `auth` (client-to-server) and `auth_ok` (server-only list) |
 | `apps/web-platform/test/ws-protocol.test.ts` | Update URL construction tests; add auth message tests; add auth timeout test |
 | `apps/web-platform/test/middleware.test.ts` | Update `/ws?token=abc` test case (query param no longer expected) |
 
