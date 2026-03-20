@@ -6,9 +6,44 @@ date: 2026-03-20
 
 # fix: Replace git pull with Bare-Repo-Safe Alternatives in Session Startup Scripts
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-20
+**Sections enhanced:** 5
+**Research sources:** live bare-repo command verification, 4 institutional learnings, repo-wide grep audit, git-worktree SKILL.md analysis
+
+### Key Improvements
+1. **Critical bug found in original plan:** `git checkout -b ... origin/main` also fails from bare repo root -- the proposed MVP would not have worked
+2. Discovered that the correct approach from bare repo root is `git worktree add` via worktree-manager.sh, not `git checkout -b`
+3. Work SKILL.md Option A should be removed entirely (not patched) since this repo always uses worktrees -- Option B is the only valid path
+4. Expanded the constitution rule to cover both `git pull` AND `git checkout` from bare context
+5. Added a bare-repo command compatibility table for implementers to reference
+
+### New Considerations Discovered
+- `git branch --show-current` returns `main` from bare repo root, which triggers the "on default branch, must create branch" logic in both work and one-shot skills
+- The one-shot skill's `git checkout -b` replacement also needs to use `git worktree add` for bare-repo safety
+- The work SKILL.md already has Option B (worktree) as the correct path -- Option A is dead code in this repo
+
 ## Overview
 
 Sessions frequently fail with `fatal: this operation must be run in a work tree` when the LLM agent runs `git pull origin main` from the bare repo root. The worktree-manager.sh script has been hardened (IS_BARE guards, sync-bare-files, fetch-with-refspec), but several skill SKILL.md files still contain `git pull` instructions that the LLM follows verbatim. These instructions need to be replaced with bare-repo-safe alternatives.
+
+### Research Insights
+
+**Verified git command behavior from bare repo root (live testing 2026-03-20):**
+
+| Command | Works in bare repo? | Notes |
+|---------|---------------------|-------|
+| `git fetch origin main` | Yes | Updates FETCH_HEAD and origin/main |
+| `git fetch origin main:main` | Yes | Also advances local main ref |
+| `git rev-parse origin/main` | Yes | Returns commit SHA |
+| `git branch --show-current` | Yes | Returns `main` (the HEAD ref) |
+| `git worktree add -b <name> <path> origin/main` | Yes | Creates worktree + branch |
+| `git pull origin main` | **No** | Requires working tree (exit 128) |
+| `git checkout -b <name> origin/main` | **No** | Requires working tree (exit 128) |
+| `git checkout <branch>` | **No** | Requires working tree (exit 128) |
+
+**Critical finding:** The original plan proposed replacing `git pull` with `git checkout -b ... origin/main`, but `git checkout` also requires a working tree. The only way to create a branch from a bare repo root is `git worktree add`.
 
 ## Problem Statement
 
@@ -39,77 +74,102 @@ This is a recurring failure that happens at the start of sessions when:
 
 ## Proposed Solution
 
-### Change 1: Update work SKILL.md Option A (Primary Fix)
+### Change 1: Remove work SKILL.md Option A, Make Worktree the Default (Primary Fix)
 
-Replace the `git pull origin [default_branch]` instruction with a bare-repo-safe pattern.
+Option A (`git pull` + `git checkout -b`) is entirely non-functional in bare repos -- both commands require a working tree. Rather than patching it with another working-tree command (`git checkout -b ... origin/main` also fails), remove Option A and make the worktree path (current Option B) the sole branch creation method.
 
-**File:** `plugins/soleur/skills/work/SKILL.md` (lines 105-110)
+**File:** `plugins/soleur/skills/work/SKILL.md` (lines 103-121)
 
 **Current:**
 ```markdown
-**Option A: Create a new branch (default)**
+   **If on the default branch**, you MUST create a branch before proceeding. Never edit files on the default branch -- parallel agents cause silent merge conflicts.
 
-\`\`\`bash
-git pull origin [default_branch]
-git checkout -b feature-branch-name
-\`\`\`
+   **Option A: Create a new branch (default)**
+
+   \`\`\`bash
+   git pull origin [default_branch]
+   git checkout -b feature-branch-name
+   \`\`\`
+
+   Use a meaningful name based on the work (e.g., `feat/user-authentication`, `fix/email-validation`).
+
+   **Option B: Use a worktree (recommended for parallel development)**
+
+   \`\`\`bash
+   skill: git-worktree
+   # The skill will create a new branch from the default branch in an isolated worktree
+   \`\`\`
+
+   Prefer worktree if other worktrees already exist or multiple features are in-flight.
 ```
 
 **Proposed:**
 ```markdown
-**Option A: Create a new branch (default)**
+   **If on the default branch**, you MUST create a worktree before proceeding. Never edit files on the default branch -- parallel agents cause silent merge conflicts, and this repo uses `core.bare=true` where `git pull` and `git checkout` are unavailable.
 
-First, update the local branch ref (bare-repo-safe):
+   Create a worktree for the new feature:
 
-\`\`\`bash
-git fetch origin [default_branch]
-git checkout -b feature-branch-name origin/[default_branch]
-\`\`\`
+   \`\`\`bash
+   bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create feature-branch-name
+   \`\`\`
 
-Note: Use `git fetch` + `origin/[default_branch]` ref, not `git pull`. This repo may use `core.bare=true` where `git pull` is unavailable.
+   Then `cd` into the worktree path printed by the script. The worktree manager handles bare-repo detection, branch creation from latest origin/main, .env copying, and dependency installation.
+
+   Use a meaningful name based on the work (e.g., `feat-user-authentication`, `fix-email-validation`).
 ```
 
-**Rationale:** `git fetch` works in both bare and non-bare repos. Creating the branch from `origin/[default_branch]` instead of the local ref ensures it's based on the latest remote state without needing `git pull`.
+**Rationale:** Option A uses two commands that both fail in bare repos (`git pull`, `git checkout -b`). Option B (worktree via worktree-manager.sh) is the only path that works. The worktree-manager.sh already has bare-repo detection via `IS_BARE` and uses `git fetch origin main:main` internally. Since this repo always uses worktrees (AGENTS.md Hard Rule 1: "Create a worktree"), having two options where one is broken is worse than having one correct path.
+
+### Research Insights
+
+**Why removing Option A is safe:** AGENTS.md Hard Rule 1 already mandates worktrees for all work: "Never commit directly to main. Create a worktree." The `go.md` command routes to worktrees. The `one-shot` skill creates worktrees. Option A existed for non-bare repos that use Soleur -- but the worktree path works correctly in both bare and non-bare repos, making Option A redundant even in non-bare contexts.
 
 ### Change 2: Update one-shot SKILL.md Step 0b
 
-Replace the "pull latest" instruction with explicit bare-repo-safe commands.
+Replace the "pull latest" instruction with worktree-manager.sh (the only bare-repo-safe branch creation method).
 
 **File:** `plugins/soleur/skills/one-shot/SKILL.md` (line 14)
 
 **Current:**
 ```markdown
-**Step 0b: Ensure branch isolation.** Check the current branch with `git branch --show-current`. If on the default branch (main or master), pull latest and create a feature branch named `feat/one-shot-<slugified-arguments>` before proceeding.
+**Step 0b: Ensure branch isolation.** Check the current branch with `git branch --show-current`. If on the default branch (main or master), pull latest and create a feature branch named `feat/one-shot-<slugified-arguments>` before proceeding. Parallel agents on the same repo cause silent merge conflicts when both work on main.
 ```
 
 **Proposed:**
 ```markdown
-**Step 0b: Ensure branch isolation.** Check the current branch with `git branch --show-current`. If on the default branch (main or master), update refs and create a feature branch:
+**Step 0b: Ensure branch isolation.** Check the current branch with `git branch --show-current`. If on the default branch (main or master), create a worktree for the feature branch. Do NOT use `git pull` or `git checkout -b` -- both fail on bare repos (`core.bare=true`).
 
 \`\`\`bash
-git fetch origin main
-git checkout -b feat/one-shot-<slugified-arguments> origin/main
+bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create feat-one-shot-<slugified-arguments>
 \`\`\`
 
-Do NOT use `git pull` -- it fails on bare repos. Use `git fetch` + branch from `origin/main`.
+Then `cd` into the worktree path. Parallel agents on the same repo cause silent merge conflicts when both work on main.
 ```
 
-**Rationale:** The instruction "pull latest" is ambiguous and the LLM consistently interprets it as `git pull origin main`. Replacing with explicit commands eliminates the ambiguity.
+**Rationale:** The instruction "pull latest" is ambiguous and the LLM consistently interprets it as `git pull origin main`. The original plan proposed `git checkout -b ... origin/main` as a replacement, but live testing confirmed `git checkout -b` also fails from bare repo root. `git worktree add` (via worktree-manager.sh) is the only command that creates a branch from bare context.
+
+### Research Insights
+
+**Edge case: one-shot invoked from an existing worktree.** When one-shot runs from a worktree (not bare root), `git branch --show-current` won't return `main` (it returns the worktree's branch), so Step 0b is skipped entirely. The fix only affects the bare-root entry path, which is the failure scenario.
 
 ### Change 3: Add Constitution Rule (Prevention)
 
-Add a rule to `knowledge-base/project/constitution.md` under `## Architecture > ### Never` to prevent `git pull` in scripts/instructions that may run from bare repo context.
+Add a rule to `knowledge-base/project/constitution.md` under `## Architecture > ### Never` to prevent `git pull` and `git checkout` in scripts/instructions that may run from bare repo context.
 
 **File:** `knowledge-base/project/constitution.md`
 
 **New rule in Architecture > Never section:**
 ```markdown
-- Never use `git pull` in skill instructions, agent prompts, or shell scripts -- this repo uses `core.bare=true` where `git pull` is unavailable; use `git fetch origin <branch>` to update refs, then branch from `origin/<branch>` or merge `origin/<branch>` as needed
+- Never use `git pull` or `git checkout` in skill instructions, agent prompts, or shell scripts -- this repo uses `core.bare=true` where both commands are unavailable (they require a working tree); use `git fetch origin <branch>` to update refs and `git worktree add` (via worktree-manager.sh) to create branches; within an existing worktree, `git merge origin/<branch>` is safe
 ```
+
+### Research Insights
+
+**Why include `git checkout`:** The original plan only banned `git pull`, but live testing on the bare repo root confirmed `git checkout -b` also returns `fatal: this operation must be run in a work tree`. The constitution rule must cover both commands to prevent the same class of error from being reintroduced via `git checkout`.
 
 ### Change 4: Update AGENTS.md Session-Start Instruction (Defense-in-Depth)
 
-The current session-start instruction handles the "from worktree" case well but doesn't explicitly cover the "bare root, no worktree for this task" case. Add a bare-root fallback.
+The current session-start instruction handles the "from worktree" case well but doesn't explicitly cover the "bare root, no worktree for this task" case. Add a bare-root fallback with explicit prohibition of working-tree commands.
 
 **File:** `AGENTS.md` (line 31)
 
@@ -120,8 +180,12 @@ The current session-start instruction handles the "from worktree" case well but 
 
 **Proposed:**
 ```markdown
-- At session start, from any active worktree (not the bare repo root): run `bash ../../plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged && git worktree list`. If no worktree exists for the current task, run `git worktree list` from the bare root to verify, then create a worktree before doing any work. Never run `git pull` from the bare repo root -- use `git fetch origin main:main` to update refs if needed.
+- At session start, from any active worktree (not the bare repo root): run `bash ../../plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged && git worktree list`. If no worktree exists for the current task, run `git worktree list` from the bare root, then create a worktree with `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create <name>` before doing any work. The repo root is a bare repository -- never run `git pull`, `git checkout`, or other working-tree commands from the bare root.
 ```
+
+### Research Insights
+
+**Why be explicit about `git checkout` too:** `git branch --show-current` returns `main` from the bare root. The LLM sees this, concludes it needs to create a feature branch, and its default instinct is `git checkout -b`. This is a strong LLM prior that requires explicit prohibition in the AGENTS.md instruction, not just implicit prohibition via "use worktree-manager.sh."
 
 ### Change 5: Audit campaign-calendar SKILL.md (Secondary)
 
@@ -139,24 +203,27 @@ Contains `git pull --rebase origin main` in a CI push-retry block. This runs in 
 
 ## Acceptance Criteria
 
-- [ ] `work` SKILL.md no longer contains `git pull` -- uses `git fetch` + `origin/<branch>` instead (`plugins/soleur/skills/work/SKILL.md`)
-- [ ] `one-shot` SKILL.md Step 0b uses explicit `git fetch` + `git checkout -b ... origin/main` instead of "pull latest" (`plugins/soleur/skills/one-shot/SKILL.md`)
-- [ ] Constitution has a "Never use git pull" rule in Architecture > Never section (`knowledge-base/project/constitution.md`)
-- [ ] AGENTS.md session-start instruction includes bare-root fallback guidance (`AGENTS.md`)
-- [ ] No `git pull` instructions remain in any skill SKILL.md file (verified by grep)
-- [ ] Existing `git fetch` usages in `merge-pr/SKILL.md` and `ship/SKILL.md` remain unchanged (they're already correct)
+- [ ] `work` SKILL.md no longer contains `git pull` or `git checkout -b` -- uses `worktree-manager.sh create` instead (`plugins/soleur/skills/work/SKILL.md`)
+- [ ] `work` SKILL.md Option A is removed; the worktree path is the only branch creation method
+- [ ] `one-shot` SKILL.md Step 0b uses `worktree-manager.sh --yes create` instead of "pull latest" (`plugins/soleur/skills/one-shot/SKILL.md`)
+- [ ] Constitution has a "Never use git pull or git checkout" rule in Architecture > Never section (`knowledge-base/project/constitution.md`)
+- [ ] AGENTS.md session-start instruction includes bare-root fallback with explicit prohibition of `git pull` and `git checkout` (`AGENTS.md`)
+- [ ] No `git pull` instructions remain in any skill SKILL.md file except campaign-calendar CI-only path (verified by grep)
+- [ ] Existing `git fetch` usages in `merge-pr/SKILL.md` and `ship/SKILL.md` remain unchanged (they're already correct and run from worktree context)
 
 ## Test Scenarios
 
-- Given a session starting from the bare repo root with no active worktree, when the LLM follows work SKILL.md Option A, then it runs `git fetch origin main` + `git checkout -b ... origin/main` (no `git pull`)
-- Given a session running one-shot from the bare repo root, when Step 0b executes, then it runs `git fetch origin main` + `git checkout -b ... origin/main` (no `git pull`)
-- Given a session starting from an active worktree, when the LLM follows work SKILL.md, then behavior is unchanged (already on a feature branch, Option A is skipped)
-- Given a non-bare repo using Soleur, when the LLM follows work SKILL.md Option A, then `git fetch` + `origin/<branch>` works identically to the old `git pull` flow (no regression)
+- Given a session starting from the bare repo root with no active worktree, when the LLM follows work SKILL.md, then it runs `worktree-manager.sh --yes create <name>` (no `git pull` or `git checkout`)
+- Given a session running one-shot from the bare repo root, when Step 0b executes, then it runs `worktree-manager.sh --yes create <name>` and `cd`s into the worktree
+- Given a session starting from an active worktree, when the LLM follows work SKILL.md, then behavior is unchanged (already on a feature branch, worktree creation is skipped)
+- Given a non-bare repo using Soleur, when the LLM follows work SKILL.md, then `worktree-manager.sh create` works correctly (it handles both bare and non-bare contexts via IS_BARE detection)
 
 ### Edge Cases
 
-- **No network:** `git fetch origin main` fails gracefully (same as `git pull` would). The LLM can proceed with the local ref.
-- **Detached HEAD in bare repo:** `git branch --show-current` returns empty, which the LLM should handle by creating a worktree rather than trying to pull.
+- **No network:** `git fetch` inside worktree-manager.sh fails gracefully (the `update_branch_ref` function has `|| true` fallback). The worktree is still created from the local main ref.
+- **Detached HEAD in bare repo:** `git branch --show-current` returns empty string. Work SKILL.md should detect this as "not on a feature branch" and proceed to create a worktree.
+- **Worktree already exists for the branch name:** `worktree-manager.sh` detects this and offers to switch instead -- no crash.
+- **worktree-manager.sh is stale on disk (bare root):** The `sync_bare_files` function in `cleanup-merged` auto-updates it. If stale, the session-start `cleanup-merged` call refreshes it before the work skill runs.
 
 ## Context
 
@@ -188,21 +255,20 @@ Contains `git pull --rebase origin main` in a CI push-retry block. This runs in 
 
 ### plugins/soleur/skills/work/SKILL.md
 
-Replace lines 105-110:
+Replace lines 103-121 (remove Option A/B structure, make worktree the single path):
 
 ```markdown
-   **Option A: Create a new branch (default)**
+   **If on the default branch**, you MUST create a worktree before proceeding. Never edit files on the default branch -- parallel agents cause silent merge conflicts, and this repo uses `core.bare=true` where `git pull` and `git checkout` are unavailable.
 
-   First, update refs from remote (bare-repo-safe):
+   Create a worktree for the new feature:
 
    ```bash
-   git fetch origin <default_branch>
-   git checkout -b feature-branch-name origin/<default_branch>
+   bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create feature-branch-name
    ```
 
-   Do NOT use `git pull` -- it fails on bare repos (`core.bare=true`). Use `git fetch` + branch from `origin/<default_branch>`.
+   Then `cd` into the worktree path printed by the script. The worktree manager handles bare-repo detection, branch creation from latest origin/main, .env copying, and dependency installation.
 
-   Use a meaningful name based on the work (e.g., `feat/user-authentication`, `fix/email-validation`).
+   Use a meaningful name based on the work (e.g., `feat-user-authentication`, `fix-email-validation`).
 ```
 
 ### plugins/soleur/skills/one-shot/SKILL.md
@@ -210,14 +276,13 @@ Replace lines 105-110:
 Replace line 14:
 
 ```markdown
-**Step 0b: Ensure branch isolation.** Check the current branch with `git branch --show-current`. If on the default branch (main or master), fetch latest and create a feature branch. Do NOT use `git pull` -- it fails on bare repos.
+**Step 0b: Ensure branch isolation.** Check the current branch with `git branch --show-current`. If on the default branch (main or master), create a worktree for the feature branch. Do NOT use `git pull` or `git checkout -b` -- both fail on bare repos (`core.bare=true`).
 
 ```bash
-git fetch origin main
-git checkout -b feat/one-shot-<slugified-arguments> origin/main
+bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create feat-one-shot-<slugified-arguments>
 ```
 
-Parallel agents on the same repo cause silent merge conflicts when both work on main.
+Then `cd` into the worktree path printed by the script. Parallel agents on the same repo cause silent merge conflicts when both work on main.
 ```
 
 ### knowledge-base/project/constitution.md
@@ -225,7 +290,7 @@ Parallel agents on the same repo cause silent merge conflicts when both work on 
 Add to `## Architecture > ### Never` section:
 
 ```markdown
-- Never use `git pull` in skill instructions, agent prompts, or shell scripts -- this repo uses `core.bare=true` where `git pull` is unavailable; use `git fetch origin <branch>` to update refs, then branch from `origin/<branch>` or merge `origin/<branch>` as needed
+- Never use `git pull` or `git checkout` in skill instructions, agent prompts, or shell scripts -- this repo uses `core.bare=true` where both commands are unavailable (they require a working tree); use `git fetch origin <branch>` to update refs and `git worktree add` (via worktree-manager.sh) to create branches; within an existing worktree, `git merge origin/<branch>` is safe
 ```
 
 ### AGENTS.md
@@ -233,7 +298,7 @@ Add to `## Architecture > ### Never` section:
 Update line 31 session-start instruction to add bare-root guidance:
 
 ```markdown
-- At session start, from any active worktree (not the bare repo root): run `bash ../../plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged && git worktree list`. If no worktree exists for the current task, run `git worktree list` from the bare root, then create a worktree before doing any work. Never run `git pull` from the bare repo root -- use `git fetch origin main:main` to update refs if needed.
+- At session start, from any active worktree (not the bare repo root): run `bash ../../plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged && git worktree list`. If no worktree exists for the current task, run `git worktree list` from the bare root, then create a worktree with `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create <name>` before doing any work. The repo root is a bare repository -- never run `git pull`, `git checkout`, or other working-tree commands from the bare root.
 ```
 
 ## References

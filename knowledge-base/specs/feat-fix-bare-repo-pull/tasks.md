@@ -2,17 +2,16 @@
 
 ## Phase 1: Core Fixes
 
-- [ ] 1.1 Update `plugins/soleur/skills/work/SKILL.md` Option A -- replace `git pull origin [default_branch]` with `git fetch origin <default_branch>` + `git checkout -b ... origin/<default_branch>`
-- [ ] 1.2 Update `plugins/soleur/skills/one-shot/SKILL.md` Step 0b -- replace "pull latest" prose with explicit `git fetch` + `git checkout -b ... origin/main` commands
-- [ ] 1.3 Verify no other skill SKILL.md files contain `git pull` instructions (grep check)
+- [ ] 1.1 Update `plugins/soleur/skills/work/SKILL.md` -- remove Option A (`git pull` + `git checkout -b`), make worktree-manager.sh the sole branch creation method (current Option B becomes the only path)
+- [ ] 1.2 Update `plugins/soleur/skills/one-shot/SKILL.md` Step 0b -- replace "pull latest" + implicit `git checkout -b` with `worktree-manager.sh --yes create`
+- [ ] 1.3 Verify no other skill SKILL.md files contain `git pull` or `git checkout -b` instructions that run from bare context (grep check -- campaign-calendar CI path is acceptable)
 
 ## Phase 2: Prevention
 
-- [ ] 2.1 Add "Never use git pull" rule to `knowledge-base/project/constitution.md` Architecture > Never section
-- [ ] 2.2 Update AGENTS.md session-start instruction (line 31) to add bare-root fallback and explicit "never git pull" guidance
+- [ ] 2.1 Add "Never use git pull or git checkout" rule to `knowledge-base/project/constitution.md` Architecture > Never section -- covers both commands since both require a working tree
+- [ ] 2.2 Update AGENTS.md session-start instruction (line 31) to add bare-root worktree creation guidance and explicit prohibition of `git pull`/`git checkout` from bare root
 
 ## Phase 3: Verification
 
-- [ ] 3.1 Grep all `plugins/soleur/` for remaining `git pull` usage -- verify only campaign-calendar CI path remains
-- [ ] 3.2 Verify `git fetch origin main` + `origin/main` branching works from bare repo root context
-- [ ] 3.3 Run compound (`skill: soleur:compound`)
+- [ ] 3.1 Grep all `plugins/soleur/` for remaining `git pull` and `git checkout -b` usage -- verify only campaign-calendar CI path and worktree-manager.sh internal (IS_BARE-guarded) paths remain
+- [ ] 3.2 Run compound (`skill: soleur:compound`)
