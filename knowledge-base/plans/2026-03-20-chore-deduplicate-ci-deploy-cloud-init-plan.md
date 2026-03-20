@@ -2,7 +2,26 @@
 title: "chore: deduplicate ci-deploy.sh between standalone file and cloud-init.yml"
 type: refactor
 date: 2026-03-20
+deepened: 2026-03-20
 ---
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-20
+**Sections enhanced:** 4 (Proposed Solution, MVP, YAML indentation, Test Scenarios)
+**Research sources:** Terraform docs, HashiCorp Discuss threads, GitHub issues
+
+### Key Improvements
+
+1. **Critical bug fix in plan:** `indent()` does NOT indent the first line -- the original plan incorrectly stated it does. The recommended approach is now `base64encode()` which completely avoids indentation issues.
+2. **Added `base64encode()` as the recommended approach** -- simpler, no indentation pitfalls, cloud-init natively supports `encoding: b64`.
+3. **Corrected `indent()` usage** as a fallback -- the first line gets its indentation from the template position, not from `indent()`.
+4. **Added `cloud-init schema` validation edge case** -- the raw template with `${ci_deploy_script}` may fail schema validation in CI since it is not valid YAML until Terraform renders it.
+
+### New Considerations Discovered
+
+- The existing inline `ci-deploy.sh` in both `cloud-init.yml` files contains unescaped bash `${...}` expressions that would fail `terraform plan` if the server were reprovisioned -- this is a latent bug, not just a maintenance concern.
+- `cloud-init schema -c cloud-init.yml` in CI validates the raw template before Terraform rendering, so Terraform template variables in content fields may cause validation failures.
 
 # chore: deduplicate ci-deploy.sh between standalone file and cloud-init.yml
 
@@ -41,6 +60,16 @@ Terraform's `templatefile()` would try to interpret these as HCL expressions and
 
 An alternative is keeping the inline script but escaping all bash `${...}` as `$${...}` for Terraform. This trades one maintenance burden (duplicate content) for another (remembering to double-escape every new bash variable). It also makes the standalone `ci-deploy.sh` and the cloud-init version structurally different, defeating the purpose of deduplication.
 
+### Research Insights [Updated 2026-03-20]
+
+**Latent bug in current code:** The existing inline `ci-deploy.sh` in both `cloud-init.yml` files contains unescaped bash `${...}` expressions (e.g., `${SSH_ORIGINAL_COMMAND:0:200}`, `${ALLOWED_IMAGES[$COMPONENT]+x}`). These are inside a `templatefile()` call in `server.tf`. Terraform should fail on these during `terraform plan` because they are not valid HCL expressions. This means either: (a) the server has never been reprovisioned since the script was inlined, or (b) Terraform's parser is lenient about `${...}` expressions it cannot parse inside YAML block scalars. Either way, the deduplication fixes a latent correctness issue, not just a maintenance concern.
+
+**Three viable approaches exist (ranked):**
+
+1. **`base64encode()` (recommended):** Encode the script content as base64 and use cloud-init's `encoding: b64` field. Completely avoids YAML indentation issues. Zero risk of template interpolation conflicts. Cloud-init decodes at write time.
+2. **`indent()` with correct placement:** Use `${indent(N, var)}` at the correct column offset in the template. Requires understanding that `indent()` does NOT indent the first line -- the first line gets its indentation from its position in the template file.
+3. **`jsonencode()`:** Wrap the content in `jsonencode()` to produce a quoted YAML string. Valid since YAML is a JSON superset. Adds escape characters that make the template harder to read.
+
 ### Architecture
 
 ```text
@@ -61,21 +90,36 @@ Both cloud-init files reference the same single `ci-deploy.sh` file, so edits pr
 
 - [ ] `apps/web-platform/infra/cloud-init.yml` no longer contains an inline copy of the deploy script
 - [ ] `apps/telegram-bridge/infra/cloud-init.yml` no longer contains an inline copy of the deploy script
-- [ ] Both `cloud-init.yml` files use `${ci_deploy_script}` in the `write_files` entry for `/usr/local/bin/ci-deploy.sh`
-- [ ] Both `server.tf` files pass `ci_deploy_script` via `file()` into `templatefile()`
+- [ ] Both `cloud-init.yml` files use `${ci_deploy_script_b64}` (or `${ci_deploy_script}` with `indent()`) in the `write_files` entry for `/usr/local/bin/ci-deploy.sh`
+- [ ] Both `server.tf` files pass the script content via `base64encode(file(...))` (or `file()`) into `templatefile()`
 - [ ] `terraform validate` passes for both `apps/web-platform/infra/` and `apps/telegram-bridge/infra/`
+- [ ] `terraform fmt -check` passes for both infra directories
 - [ ] `ci-deploy.test.sh` continues to pass (standalone script unchanged)
-- [ ] `cloud-init schema` validation passes for the raw template file (CI step in `infra-validation.yml`)
-- [ ] The YAML indentation of the injected script content is correct for cloud-init `write_files` (content under `|` block scalar)
+- [ ] `cloud-init schema -c cloud-init.yml` in CI either passes or the CI step is updated to handle templates (see edge case below)
+- [ ] The rendered cloud-init (after Terraform processing) produces a valid script at `/usr/local/bin/ci-deploy.sh` with correct content and permissions
+
+### Research Insight: cloud-init schema validation edge case [Updated 2026-03-20]
+
+The CI workflow (`infra-validation.yml`) runs `cloud-init schema -c cloud-init.yml` on the raw template file. After this change, the file will contain `${ci_deploy_script_b64}` (a Terraform template variable), which is not valid YAML content until Terraform renders it. The schema validator may reject this.
+
+**Mitigation options:**
+1. **Accept the limitation:** `cloud-init schema` validates structure (keys, types), not content values. A base64 string placeholder may still pass since the `content:` field accepts any string.
+2. **Skip schema validation for template files:** Update the CI step to detect Terraform template variables and skip validation, or render the template first with dummy values.
+3. **Test during implementation:** Run `cloud-init schema` on the modified template to determine actual behavior before deciding.
 
 ## Test Scenarios
 
 - Given the standalone `ci-deploy.sh` is modified, when `terraform plan` runs, then the `user_data` of the server resource shows the updated script content (single source of truth).
-- Given `terraform validate -backend=false`, when run in `apps/web-platform/infra/`, then validation passes with the new `ci_deploy_script` variable in the `templatefile()` call.
-- Given `terraform validate -backend=false`, when run in `apps/telegram-bridge/infra/`, then validation passes with the cross-directory `file()` path.
-- Given `bash ci-deploy.test.sh`, when run after the change, then all tests pass (standalone script is unchanged).
-- Given `cloud-init schema -c cloud-init.yml`, when run on the raw template file containing `${ci_deploy_script}`, then the schema validator does not reject the file (it validates YAML structure, not content values).
-- Given the `ci-deploy.sh` content contains `${...}` bash expressions, when Terraform processes the template, then those expressions appear verbatim in the rendered cloud-init (no interpolation errors).
+- Given `terraform init -backend=false && terraform validate`, when run in `apps/web-platform/infra/`, then validation passes with the new template variable.
+- Given `terraform init -backend=false && terraform validate`, when run in `apps/telegram-bridge/infra/`, then validation passes with the cross-directory `file()` path.
+- Given `terraform fmt -check`, when run in both infra directories, then formatting is correct.
+- Given `bash ci-deploy.test.sh`, when run after the change, then all 21 tests pass (standalone script is unchanged).
+- Given the `ci-deploy.sh` content contains bash `${...}` expressions, when Terraform processes the template via `base64encode(file(...))`, then those expressions survive encoding/decoding verbatim (base64 is a transparent encoding).
+- Given `cloud-init schema -c cloud-init.yml`, when run on the raw template, then determine if the `${ci_deploy_script_b64}` placeholder causes validation failure. If yes, update CI to handle this.
+
+### Research Insight: base64 round-trip verification [Updated 2026-03-20]
+
+With the `base64encode()` approach, bash `${...}` expressions in the script never enter the Terraform template parser. The data flow is: `file()` reads raw bytes, `base64encode()` converts to a safe ASCII string, `templatefile()` inserts the ASCII string (no `${...}` to misinterpret), cloud-init decodes base64 back to the original bytes. This is inherently safe -- no escaping or indentation logic needed.
 
 ## Context
 
@@ -83,7 +127,9 @@ Both cloud-init files reference the same single `ci-deploy.sh` file, so edits pr
 - Related: #825 (restrict CI deploy SSH key), #747 (original forced command implementation)
 - Learning: `knowledge-base/learnings/2026-03-20-ci-deploy-reliability-and-mock-trace-testing.md` (documents the `docker system prune` addition that caused the current drift)
 
-## MVP
+## MVP -- Approach A: `base64encode()` (Recommended)
+
+This approach encodes the script as base64 and lets cloud-init decode it at write time. It completely avoids YAML indentation issues and template interpolation conflicts.
 
 ### apps/web-platform/infra/server.tf
 
@@ -92,9 +138,9 @@ resource "hcloud_server" "web" {
   # ... existing fields ...
 
   user_data = templatefile("${path.module}/cloud-init.yml", {
-    image_name            = var.image_name
-    deploy_ssh_public_key = var.deploy_ssh_public_key
-    ci_deploy_script      = file("${path.module}/ci-deploy.sh")
+    image_name                = var.image_name
+    deploy_ssh_public_key     = var.deploy_ssh_public_key
+    ci_deploy_script_b64      = base64encode(file("${path.module}/ci-deploy.sh"))
   })
 }
 ```
@@ -106,80 +152,111 @@ resource "hcloud_server" "bridge" {
   # ... existing fields ...
 
   user_data = templatefile("${path.module}/cloud-init.yml", {
-    image_name            = var.image_name
-    deploy_ssh_public_key = var.deploy_ssh_public_key
-    ci_deploy_script      = file("${path.module}/../../../apps/web-platform/infra/ci-deploy.sh")
+    image_name                = var.image_name
+    deploy_ssh_public_key     = var.deploy_ssh_public_key
+    ci_deploy_script_b64      = base64encode(file("${path.module}/../../web-platform/infra/ci-deploy.sh"))
   })
 }
 ```
 
-**Note on path:** The telegram-bridge `server.tf` uses a relative path from its own module to the web-platform infra directory. The `${path.module}` prefix ensures Terraform resolves from the correct base. Trace: `apps/telegram-bridge/infra/` + `../../../` = repo root, then `apps/web-platform/infra/ci-deploy.sh`. Wait -- that is wrong. `apps/telegram-bridge/infra/` + `../../../` goes three levels up from `infra/` which is `apps/telegram-bridge/infra/ -> apps/telegram-bridge/ -> apps/ -> repo-root`. Then `apps/web-platform/infra/ci-deploy.sh` appended gives `repo-root/apps/web-platform/infra/ci-deploy.sh`. That is correct but overly deep. A simpler relative path: `${path.module}/../../web-platform/infra/ci-deploy.sh` -- trace: `apps/telegram-bridge/infra/` + `../../` = `apps/`, then `web-platform/infra/ci-deploy.sh`. This is the correct and shorter path.
-
-Corrected:
-
-```hcl
-ci_deploy_script = file("${path.module}/../../web-platform/infra/ci-deploy.sh")
-```
+**Path trace for telegram-bridge:** `apps/telegram-bridge/infra/` + `../../` = `apps/`, then `web-platform/infra/ci-deploy.sh`. Verified correct.
 
 ### apps/web-platform/infra/cloud-init.yml (write_files entry replacement)
 
-Replace the 129-line inline script block with:
+Replace the 129-line inline script block (lines 39-174) with:
 
 ```yaml
   # CI deploy forced command script. The CI SSH key in authorized_keys uses:
   #   restrict,command="/usr/local/bin/ci-deploy.sh" ssh-ed25519 AAAA... ci-deploy-2026@soleur-web-platform
   # This restricts the CI key to only execute deploy commands (see #747).
-  # Content injected from ci-deploy.sh via Terraform file() -- do not inline.
+  # Content injected from ci-deploy.sh via Terraform base64encode(file()) -- do not inline.
   - path: /usr/local/bin/ci-deploy.sh
-    content: |
-      ${ci_deploy_script}
+    encoding: b64
+    content: ${ci_deploy_script_b64}
     owner: root:root
     permissions: '0755'
 ```
 
 ### apps/telegram-bridge/infra/cloud-init.yml (write_files entry replacement)
 
-Same pattern, with the bridge-specific comment updated:
+Same pattern, with the bridge-specific comment:
 
 ```yaml
   # CI deploy forced command script. The CI SSH key in authorized_keys uses:
   #   restrict,command="/usr/local/bin/ci-deploy.sh" ssh-ed25519 AAAA... ci-deploy-2026@soleur-bridge
   # This restricts the CI key to only execute deploy commands (see #747).
-  # Content injected from ci-deploy.sh via Terraform file() -- do not inline.
+  # Content injected from ci-deploy.sh via Terraform base64encode(file()) -- do not inline.
   - path: /usr/local/bin/ci-deploy.sh
-    content: |
-      ${ci_deploy_script}
+    encoding: b64
+    content: ${ci_deploy_script_b64}
     owner: root:root
     permissions: '0755'
 ```
 
-### YAML indentation concern
+### Why base64encode() is better than indent()
 
-When `templatefile()` substitutes `${ci_deploy_script}`, the multi-line script content will be inserted at the indentation level of the `${ci_deploy_script}` placeholder. Cloud-init's `content: |` block scalar requires consistent indentation. Terraform's `templatefile()` does NOT automatically indent multi-line substitutions to match the surrounding YAML context.
+- **No indentation pitfalls.** The base64 string is a single line -- no multi-line YAML alignment needed.
+- **No template interpolation risk.** The base64 encoding happens in HCL before the string enters the template, so bash `${...}` expressions in the script never touch the template parser.
+- **cloud-init native support.** The `encoding: b64` field is a first-class cloud-init feature ([write_files documentation](https://docs.cloud-init.io/en/latest/reference/yaml_examples/write_files.html)).
+- **Simpler template.** One line instead of a multi-line block scalar with indentation rules.
 
-Two approaches to handle this:
+## MVP -- Approach B: `indent()` (Fallback)
 
-1. **`indent()` function:** Use `${indent(6, ci_deploy_script)}` to add 6 spaces of indentation to every line of the script content, matching the YAML block scalar indentation level. This is the cleanest approach.
+If base64 is undesirable (e.g., for readability of `terraform plan` output), use `indent()` with correct placement.
 
-2. **Place the placeholder at column 0:** Restructure the YAML so the placeholder is at the start of the line, avoiding indentation issues. This is awkward and breaks YAML readability.
+**Critical: `indent(N, str)` does NOT indent the first line.** The first line gets its indentation from its position in the template file. Subsequent lines get N spaces prepended.
 
-Approach 1 is recommended. The cloud-init `write_files` `content: |` block uses 6-space indentation (2 for list item + 4 for content level). The corrected template becomes:
+([Source: Terraform docs](https://developer.hashicorp.com/terraform/language/functions/indent) -- "adds a given number of spaces to the beginnings of all lines in a given multi-line string, **except the first line**")
+
+### Correct template pattern
 
 ```yaml
   - path: /usr/local/bin/ci-deploy.sh
     content: |
-${indent(6, ci_deploy_script)}
+      ${indent(6, ci_deploy_script)}
     owner: root:root
     permissions: '0755'
 ```
 
-Note: `${indent(6, ...)}` adds 6 spaces to the beginning of each line, including the first. The placeholder must be at column 0 (no leading whitespace) to avoid double-indentation.
+How this works:
+- The `${indent(6, ci_deploy_script)}` placeholder is at column 6 (6 spaces from left margin).
+- The **first line** of `ci_deploy_script` (e.g., `#!/usr/bin/env bash`) inherits the 6-space indentation from the placeholder's position in the template.
+- **All subsequent lines** get 6 spaces prepended by `indent()`.
+- Result: every line of the script is at 6-space indentation, which is correct for YAML `content: |` at this nesting level.
+
+### server.tf for indent approach
+
+Same as Approach A but pass the raw string without base64:
+
+```hcl
+ci_deploy_script = file("${path.module}/ci-deploy.sh")
+```
+
+### Edge case: trailing newline
+
+`file()` reads the file including its trailing newline. In a YAML block scalar (`|`), a trailing newline is preserved. This matches the current behavior of the inline script (which also has a trailing newline before `owner:`). No special handling needed.
 
 ## References
 
+### Terraform documentation
+
 - [Terraform `file()` function](https://developer.hashicorp.com/terraform/language/functions/file)
 - [Terraform `templatefile()` function](https://developer.hashicorp.com/terraform/language/functions/templatefile)
-- [Terraform `indent()` function](https://developer.hashicorp.com/terraform/language/functions/indent)
-- [cloud-init `write_files` module](https://cloudinit.readthedocs.io/en/latest/reference/modules/write_files.html)
-- Related issue: #843
-- Related PR: #825
+- [Terraform `indent()` function](https://developer.hashicorp.com/terraform/language/functions/indent) -- "adds spaces to all lines except the first"
+- [Terraform `base64encode()` function](https://developer.hashicorp.com/terraform/language/functions/base64encode)
+
+### cloud-init documentation
+
+- [cloud-init `write_files` with encoding](https://docs.cloud-init.io/en/latest/reference/yaml_examples/write_files.html) -- `encoding: b64` support
+
+### Community discussions (informed approach selection)
+
+- [Wrong indent with multiline content in cloud-init write_files](https://discuss.hashicorp.com/t/wrong-indent-with-multiline-content-to-cloud-init-write-files-content-directives/35011) -- recommends `base64encode()` or `yamlencode()` over manual indentation
+- [templatefile should keep consistent indentation for multiline strings](https://github.com/hashicorp/terraform/issues/29824) -- confirms `indent()` is the official workaround, documents first-line behavior
+- [Wrong indentation in YAML inserted into terraform template](https://discuss.hashicorp.com/t/wrong-indentation-in-yaml-file-inserted-into-terraform-template/31450)
+
+### Project context
+
+- Issue: #843
+- Related: #825 (restrict CI deploy SSH key), #747 (original forced command implementation)
+- Learning: `knowledge-base/learnings/2026-03-20-ci-deploy-reliability-and-mock-trace-testing.md`
