@@ -11,14 +11,16 @@ Vercel's headless browser automation CLI designed for AI agents. Uses ref-based 
 
 ```bash
 # Check installation
-command -v agent-browser >/dev/null 2>&1 && echo "Installed" || echo "NOT INSTALLED - run: npm install -g agent-browser && agent-browser install"
+command -v agent-browser >/dev/null 2>&1 && echo "Installed" || echo "NOT INSTALLED - run: npm install -g agent-browser@0.21.4 && agent-browser install"
 ```
 
 ### Install if needed
 
 ```bash
-npm install -g agent-browser
-agent-browser install  # Downloads Chromium
+npm install -g agent-browser@0.21.4
+agent-browser install  # Downloads Chrome for Testing (~300MB)
+# On Linux if system deps missing:
+# agent-browser install --with-deps
 ```
 
 ## Core Workflow
@@ -126,11 +128,11 @@ agent-browser find placeholder "Search..." fill "query"
 
 ```bash
 # Run multiple independent browser sessions
-agent-browser --session browser1 open https://site1.com
-agent-browser --session browser2 open https://site2.com
+agent-browser --session-name browser1 open https://site1.com
+agent-browser --session-name browser2 open https://site2.com
 
-# List active sessions
-agent-browser session list
+# List saved states
+agent-browser state list
 ```
 
 ## Examples
@@ -209,7 +211,9 @@ Returns:
 | Interface | Bash commands | MCP tools |
 | Selection | Refs (@e1) | Refs (e1) |
 | Output | Text/JSON | Tool responses |
-| Parallel | Sessions | Tabs |
+| Parallel | Session names | Tabs |
+| Browser | Chrome for Testing | Chromium |
+| Runtime | Rust native | Node.js |
 | Best for | Quick automation | Tool integration |
 
 Use agent-browser when:
