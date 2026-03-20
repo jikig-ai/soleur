@@ -18,6 +18,18 @@ const HANDLE_RESPONSE_HELPER = join(
   "test-handle-response.sh"
 );
 
+const HAS_JQ =
+  Bun.spawnSync(["jq", "--version"], {
+    env: { PATH: process.env.PATH ?? "/usr/bin:/bin:/usr/local/bin" },
+  }).exitCode === 0;
+
+if (!HAS_JQ) {
+  console.warn(
+    "WARNING: jq is not installed. Skipping jq-dependent tests in x-community.test.ts. " +
+      "Install jq for full test coverage: https://jqlang.github.io/jq/download/"
+  );
+}
+
 /**
  * Minimal env with no X API credentials.
  * Includes PATH so bash, jq, and openssl can be found.
@@ -47,7 +59,7 @@ function decode(buf: Buffer | Uint8Array): string {
 // Credential validation
 // ---------------------------------------------------------------------------
 
-describe("x-community.sh fetch-mentions -- credential validation", () => {
+(HAS_JQ ? describe : describe.skip)("x-community.sh fetch-mentions -- credential validation", () => {
   test("missing credentials exits 1 with descriptive error", () => {
     const result = Bun.spawnSync(["bash", SCRIPT_PATH, "fetch-mentions"], {
       env: NO_CREDS_ENV,
@@ -63,7 +75,7 @@ describe("x-community.sh fetch-mentions -- credential validation", () => {
 // Argument validation (--max-results)
 // ---------------------------------------------------------------------------
 
-describe("x-community.sh fetch-mentions -- --max-results validation", () => {
+(HAS_JQ ? describe : describe.skip)("x-community.sh fetch-mentions -- --max-results validation", () => {
   test("non-numeric --max-results exits 1 with error", () => {
     const result = Bun.spawnSync(
       ["bash", SCRIPT_PATH, "fetch-mentions", "--max-results", "abc"],
@@ -113,7 +125,7 @@ describe("x-community.sh fetch-mentions -- --max-results validation", () => {
 // Argument validation (--since-id)
 // ---------------------------------------------------------------------------
 
-describe("x-community.sh fetch-mentions -- --since-id validation", () => {
+(HAS_JQ ? describe : describe.skip)("x-community.sh fetch-mentions -- --since-id validation", () => {
   test("non-numeric --since-id exits 1 with error", () => {
     const result = Bun.spawnSync(
       ["bash", SCRIPT_PATH, "fetch-mentions", "--since-id", "abc"],
@@ -141,7 +153,7 @@ describe("x-community.sh fetch-mentions -- --since-id validation", () => {
 // Unknown flag
 // ---------------------------------------------------------------------------
 
-describe("x-community.sh fetch-mentions -- unknown flag", () => {
+(HAS_JQ ? describe : describe.skip)("x-community.sh fetch-mentions -- unknown flag", () => {
   test("unknown flag exits 1 with error", () => {
     const result = Bun.spawnSync(
       ["bash", SCRIPT_PATH, "fetch-mentions", "--unknown"],
@@ -158,7 +170,7 @@ describe("x-community.sh fetch-mentions -- unknown flag", () => {
 // jq transform (unit test using jq directly)
 // ---------------------------------------------------------------------------
 
-describe("x-community.sh fetch-mentions -- jq transform", () => {
+(HAS_JQ ? describe : describe.skip)("x-community.sh fetch-mentions -- jq transform", () => {
   const JQ_TRANSFORM = `
     ((.includes.users // []) | INDEX(.id)) as $users |
     {
@@ -405,7 +417,7 @@ describe("x-community.sh fetch-mentions -- jq transform", () => {
 // handle_response -- unified response handler
 // ---------------------------------------------------------------------------
 
-describe("x-community.sh handle_response -- 2xx", () => {
+(HAS_JQ ? describe : describe.skip)("x-community.sh handle_response -- 2xx", () => {
   test("2xx with valid JSON echoes body to stdout", () => {
     const body = JSON.stringify({ data: { id: "1" } });
     const result = Bun.spawnSync(
@@ -432,7 +444,7 @@ describe("x-community.sh handle_response -- 2xx", () => {
   });
 });
 
-describe("x-community.sh handle_response -- 401", () => {
+(HAS_JQ ? describe : describe.skip)("x-community.sh handle_response -- 401", () => {
   test("401 exits 1 with credential instructions", () => {
     const result = Bun.spawnSync(
       ["bash", HANDLE_RESPONSE_HELPER, "401", "{}", "/2/users/me", "0", "echo", "noop"],
@@ -447,7 +459,7 @@ describe("x-community.sh handle_response -- 401", () => {
   });
 });
 
-describe("x-community.sh handle_response -- 403", () => {
+(HAS_JQ ? describe : describe.skip)("x-community.sh handle_response -- 403", () => {
   test("403 with reason client-not-enrolled gives paid API guidance", () => {
     const body = JSON.stringify({ reason: "client-not-enrolled" });
     const result = Bun.spawnSync(
@@ -489,7 +501,7 @@ describe("x-community.sh handle_response -- 403", () => {
   });
 });
 
-describe("x-community.sh handle_response -- default error", () => {
+(HAS_JQ ? describe : describe.skip)("x-community.sh handle_response -- default error", () => {
   test("500 exits 1 with parsed detail", () => {
     const body = JSON.stringify({ detail: "Internal server error" });
     const result = Bun.spawnSync(
@@ -521,7 +533,7 @@ describe("x-community.sh handle_response -- default error", () => {
 // fetch-user-timeline -- argument validation
 // ---------------------------------------------------------------------------
 
-describe("x-community.sh fetch-user-timeline -- argument validation", () => {
+(HAS_JQ ? describe : describe.skip)("x-community.sh fetch-user-timeline -- argument validation", () => {
   test("missing user_id exits 1 with usage error", () => {
     const result = Bun.spawnSync(
       ["bash", SCRIPT_PATH, "fetch-user-timeline"],
