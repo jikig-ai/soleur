@@ -4,7 +4,7 @@ import { parse } from "url";
 import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
 
-import type { WSMessage, Conversation } from "@/lib/types";
+import { KeyInvalidError, type WSMessage, type Conversation } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
 // Agent runner stubs -- will be implemented in server/agent-runner.ts
@@ -108,7 +108,19 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
         console.log(`[ws] Conversation ${conversationId} created, booting agent`);
 
         // Boot the agent runner (async -- streams will flow via sendToClient)
-        startAgentSession(userId, conversationId, msg.leaderId);
+        startAgentSession(userId, conversationId, msg.leaderId).catch(
+          (err) => {
+            console.error(`[ws] startAgentSession error:`, err);
+            const message =
+              err instanceof Error ? err.message : "Failed to start session";
+            sendToClient(userId, {
+              type: "error",
+              message,
+              errorCode:
+                err instanceof KeyInvalidError ? "key_invalid" : undefined,
+            });
+          },
+        );
 
         sendToClient(userId, { type: "session_started", conversationId });
         console.log(`[ws] session_started sent to client`);
