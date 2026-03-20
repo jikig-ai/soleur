@@ -9,7 +9,7 @@ generated-date: 2026-02-20
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 20, 2026 (renamed Section 3.1 heading, removed Buttondown from Section 4.3, updated Cloudflare legal basis to dual basis, added Section 10.3 Web Platform account deletion, added Section 5.3 Web Platform data subject rights)
+**Last Updated:** March 20, 2026 (added Web Platform to Section 7.2 breach notification scope, renamed Section 3.1 heading, removed Buttondown from Section 4.3, updated Cloudflare legal basis to dual basis, added Section 10.3 Web Platform account deletion, added Section 5.3 Web Platform data subject rights)
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -234,10 +234,10 @@ Soleur has no visibility into the User's local environment and therefore cannot 
 
 ### 7.2 Platform Breaches
 
-In the unlikely event that a breach affects the Soleur GitHub repository, Docs Site, or distribution channels:
+In the unlikely event that a breach affects the Soleur GitHub repository, Docs Site, Web Platform (app.soleur.ai), or distribution channels:
 
 - **(a)** We will notify affected Users without undue delay, and in any event within 72 hours of becoming aware of the breach, where feasible.
-- **(b)** Notification will be provided via the [Soleur GitHub repository](https://github.com/jikig-ai/soleur) and, where possible, through direct communication.
+- **(b)** Notification will be provided via the [Soleur GitHub repository](https://github.com/jikig-ai/soleur) and, where possible, through direct communication (including email notification for Web Platform users with an account on file).
 - **(c)** The notification will include the nature of the breach, likely consequences, and measures taken or proposed to address it.
 
 ---

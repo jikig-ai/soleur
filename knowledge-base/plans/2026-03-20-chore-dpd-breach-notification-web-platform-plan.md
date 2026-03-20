@@ -104,12 +104,12 @@ Both files must receive identical content changes. The Eleventy copy has differe
 
 ## Acceptance Criteria
 
-- [ ] Section 7.2 platform list includes "Web Platform (app.soleur.ai)" in `docs/legal/data-protection-disclosure.md`
-- [ ] Section 7.2(b) specifies email notification for Web Platform users in `docs/legal/data-protection-disclosure.md`
-- [ ] Identical changes applied to `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`
-- [ ] "Last Updated" date updated in both files
-- [ ] `diff` between root and Eleventy copies shows only expected frontmatter/link differences (no content drift)
-- [ ] Grep for "distribution channels" across all legal docs confirms no other sections need updating
+- [x] Section 7.2 platform list includes "Web Platform (app.soleur.ai)" in `docs/legal/data-protection-disclosure.md`
+- [x] Section 7.2(b) specifies email notification for Web Platform users in `docs/legal/data-protection-disclosure.md`
+- [x] Identical changes applied to `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`
+- [x] "Last Updated" date updated in both files
+- [x] `diff` between root and Eleventy copies shows only expected frontmatter/link differences (no content drift)
+- [x] Grep for "distribution channels" across all legal docs confirms no other sections need updating
 
 ## Test Scenarios
 
