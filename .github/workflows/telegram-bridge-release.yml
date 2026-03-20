@@ -3,6 +3,7 @@ name: Telegram Bridge Release
 on:
   push:
     branches: [main]
+    paths: ['apps/telegram-bridge/**']
   workflow_dispatch:
     inputs:
       bump_type:
@@ -34,8 +35,11 @@ jobs:
 
   deploy:
     needs: release
-    if: needs.release.outputs.released == 'true'
+    if: needs.release.outputs.version != ''
     runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
     steps:
       - name: Deploy to server
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5

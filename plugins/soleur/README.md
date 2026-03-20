@@ -307,8 +307,8 @@ MCP servers start automatically when the plugin is enabled.
 This plugin uses **agent-browser CLI** for browser automation tasks. Install it globally:
 
 ```bash
-npm install -g agent-browser
-agent-browser install  # Downloads Chromium
+npm install -g agent-browser@0.21.4
+agent-browser install  # Downloads Chrome for Testing
 ```
 
 The `agent-browser` skill provides comprehensive documentation on usage.
