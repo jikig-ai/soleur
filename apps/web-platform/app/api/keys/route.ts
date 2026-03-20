@@ -35,7 +35,7 @@ export async function POST(request: Request) {
   }
 
   // Encrypt and store
-  const { encrypted, iv, tag } = encryptKey(apiKey);
+  const { encrypted, iv, tag } = encryptKey(apiKey, user.id);
 
   const service = createServiceClient();
   const { error: dbError } = await service
@@ -48,6 +48,7 @@ export async function POST(request: Request) {
         iv: iv.toString("base64"),
         auth_tag: tag.toString("base64"),
         is_valid: true,
+        key_version: 2,
         updated_at: new Date().toISOString(),
       },
       { onConflict: "user_id,provider" },
