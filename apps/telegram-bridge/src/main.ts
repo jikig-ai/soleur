@@ -29,6 +29,6 @@ try {
   const app = await import("./index");
   app.boot(healthState, healthServer);
 } catch (err) {
-  healthState.cliState = "error";
+  try { healthState.cliState = "error"; } catch { /* getter-only after partial boot */ }
   console.error("FATAL: Failed to load application:", err);
 }

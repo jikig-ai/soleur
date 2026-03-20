@@ -72,7 +72,7 @@ const bridge = new Bridge(botApi, {
 
 // Process-level state (not part of Bridge)
 let cliProcess: ReturnType<typeof Bun.spawn> | null = null;
-let startTime = Date.now(); // overwritten in boot() with healthState.startTime
+let startTime = 0; // set in boot() from healthState.startTime
 
 // ---------------------------------------------------------------------------
 // 4. CLI process management (stdio transport)
@@ -372,23 +372,10 @@ export function boot(healthState: HealthState, healthServer: { stop(closeActiveC
   async function shutdown(signal: string): Promise<void> {
     console.log(`Received ${signal}, shutting down...`);
 
-    try {
-      await bot.stop();
-    } catch {
-      // Already stopped
-    }
-
-    await bridge.cleanupTurnStatus();
-
-    if (cliProcess) {
-      try {
-        cliProcess.kill();
-      } catch {
-        // Already dead
-      }
-    }
-
-    healthServer.stop(true);
+    try { await bot.stop(); } catch { /* Already stopped */ }
+    try { await bridge.cleanupTurnStatus(); } catch { /* Best effort */ }
+    try { if (cliProcess) cliProcess.kill(); } catch { /* Already dead */ }
+    try { healthServer.stop(true); } catch { /* Best effort */ }
 
     console.log("Shutdown complete.");
     process.exit(0);
