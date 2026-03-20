@@ -156,4 +156,24 @@ assert_contains "$output" "ok:" "reports passing file"
 assert_contains "$output" "scheduled-bad.yml" "names the failing file"
 echo ""
 
+# Test 8: File using shared post-bot-statuses.sh script passes
+echo "Test 8: File using shared post-bot-statuses.sh passes"
+WF=$(setup_wf_dir "test8")
+cat > "$WF/scheduled-shared.yml" << 'YAML'
+name: Shared
+on: schedule
+jobs:
+  run:
+    steps:
+      - run: |
+          SHA=$(git rev-parse HEAD)
+          bash scripts/post-bot-statuses.sh "$SHA"
+          gh pr create --title "test" --base main
+YAML
+output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
+rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
+assert_eq "0" "$rc" "exits 0 when using shared script"
+assert_contains "$output" "ok:" "reports passing file"
+echo ""
+
 print_results

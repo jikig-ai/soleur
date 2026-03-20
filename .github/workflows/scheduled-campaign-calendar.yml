@@ -69,14 +69,7 @@ jobs:
             git commit -m "ci: update campaign calendar [skip ci]"
             git push -u origin "$BRANCH"
             SHA=$(git rev-parse HEAD)
-            gh api repos/${GITHUB_REPOSITORY}/statuses/$SHA \
-              -f state=success \
-              -f context=cla-check \
-              -f description="CLA not required for automated PRs"
-            gh api repos/${GITHUB_REPOSITORY}/statuses/$SHA \
-              -f state=success \
-              -f context=test \
-              -f description="Bot commit - CI not required"
+            bash scripts/post-bot-statuses.sh "$SHA"
             gh pr create \
               --title "ci: update campaign calendar $(date -u +%Y-%m-%d)" \
               --body "Automated commit from campaign calendar workflow." \

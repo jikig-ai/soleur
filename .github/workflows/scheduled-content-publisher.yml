@@ -86,18 +86,9 @@ jobs:
           git checkout -b "$BRANCH"
           git commit -m "ci: update content distribution status [skip ci]"
           git push -u origin "$BRANCH"
-          # Set CLA check status to success -- bot PRs have no human
-          # contributor to sign a CLA, and the CLA Required ruleset
-          # blocks auto-merge without this status.
+          # Post synthetic statuses for branch protection (see scripts/post-bot-statuses.sh)
           SHA=$(git rev-parse HEAD)
-          gh api "repos/${{ github.repository }}/statuses/$SHA" \
-            -f state=success \
-            -f context=cla-check \
-            -f description="CLA not required for automated PRs"
-          gh api "repos/${{ github.repository }}/statuses/$SHA" \
-            -f state=success \
-            -f context=test \
-            -f description="Bot commit - CI not required"
+          bash scripts/post-bot-statuses.sh "$SHA"
           gh pr create \
             --title "ci: update content distribution status $(date -u +%Y-%m-%d)" \
             --body "Automated status update from content publisher workflow." \
