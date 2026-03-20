@@ -40,7 +40,7 @@ Use the **AskUserQuestion tool** to gather missing inputs one at a time:
 
 5. **Timeout (minutes)** — Job-level timeout to prevent runaway billing. Default: 30. Validate: positive integer, minimum 5 minutes.
 
-6. **Max turns** — Maximum number of agent turns before stopping. Default: 30. Validate: positive integer, minimum 5 turns.
+6. **Max turns** — Maximum number of agent turns before stopping. Default: 30. Validate: positive integer, minimum 5 turns. Budget formula: plugin overhead (~10 turns) + task tool calls + error buffer (~5). Multi-platform data collection or PR-based persist workflows typically need 40-50 turns.
 
 **Step 2: Resolve action SHAs**
 
