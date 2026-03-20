@@ -26,13 +26,13 @@ The web-platform Dockerfile (`apps/web-platform/Dockerfile`) runs the production
 
 ## Acceptance Criteria
 
-- [ ] `apps/web-platform/Dockerfile` creates a non-root `soleur` user and switches to it before `CMD`
-- [ ] The `.next/` build output (created by `npm run build` as root) is owned by `soleur` at runtime -- both readable (static assets, server bundles) and writable (`.next/cache/` for ISR)
-- [ ] Volume mounts (`/workspaces`, `/app/shared/plugins/soleur:ro`) remain accessible -- deployment script (`web-platform-release.yml`) must `chown` host directories or the Dockerfile must set ownership on mountpoints
-- [ ] HEALTHCHECK continues to work (`curl` is pre-installed in `node:22-slim` and accessible to all users)
-- [ ] `npm run start` succeeds as non-root (Next.js binds to port 3000, which is > 1024 so no capability needed)
-- [ ] No regression in workspace provisioning (`server/workspace.ts` writes to `/workspaces/<userId>/`)
-- [ ] `git init` in workspace provisioning works correctly (`HOME` is `/home/soleur`, git uses `HOME` for `.gitconfig`)
+- [x] `apps/web-platform/Dockerfile` creates a non-root `soleur` user and switches to it before `CMD`
+- [x] The `.next/` build output (created by `npm run build` as root) is owned by `soleur` at runtime -- both readable (static assets, server bundles) and writable (`.next/cache/` for ISR)
+- [x] Volume mounts (`/workspaces`, `/app/shared/plugins/soleur:ro`) remain accessible -- deployment script (`web-platform-release.yml`) must `chown` host directories or the Dockerfile must set ownership on mountpoints
+- [x] HEALTHCHECK continues to work (`curl` is pre-installed in `node:22-slim` and accessible to all users)
+- [x] `npm run start` succeeds as non-root (Next.js binds to port 3000, which is > 1024 so no capability needed)
+- [x] No regression in workspace provisioning (`server/workspace.ts` writes to `/workspaces/<userId>/`)
+- [x] `git init` in workspace provisioning works correctly (`HOME` is `/home/soleur`, git uses `HOME` for `.gitconfig`)
 
 ### Research Insights -- Acceptance Criteria
 
