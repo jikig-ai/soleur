@@ -8,7 +8,7 @@ permalink: pages/legal/data-protection-disclosure.html
 <section class="page-hero">
   <div class="container">
     <h1>Data Protection Disclosure</h1>
-    <p>Effective February 20, 2026 | Last Updated March 19, 2026 (corrected Supabase region to EU (eu-west-1), updated DPA execution status, added DPA verification dates)</p>
+    <p>Effective February 20, 2026 | Last Updated March 20, 2026 (renamed Section 3.1 heading, removed Buttondown from Section 4.3, updated Cloudflare legal basis to dual basis, added Section 10.3 Web Platform account deletion, added Section 5.3 Web Platform data subject rights)</p>
   </div>
 </section>
 
@@ -18,7 +18,7 @@ permalink: pages/legal/data-protection-disclosure.html
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 19, 2026 (corrected Supabase region to EU (eu-west-1), updated DPA execution status for all web platform processors, added DPA verification dates)
+**Last Updated:** March 20, 2026 (renamed Section 3.1 heading, removed Buttondown from Section 4.3, updated Cloudflare legal basis to dual basis, added Section 10.3 Web Platform account deletion, added Section 5.3 Web Platform data subject rights)
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -112,7 +112,7 @@ For these activities, Jikigai acts as a Controller with respect to data it direc
 
 ## 3. Technical and Organizational Measures
 
-### 3.1 Local-Only Architecture
+### 3.1 Plugin Architecture (Local-Only)
 
 Soleur's architecture is designed to minimize data processing concerns:
 
@@ -158,7 +158,7 @@ For processing activities where Jikigai acts as Controller (see Sections 2.1b an
 | Supabase Inc ([supabase.com](https://supabase.com)) | Web Platform auth + database | Email addresses, hashed passwords, auth tokens, session data | Contract performance (Article 6(1)(b)) | [Supabase DPA](https://supabase.com/legal/dpa) |
 | Stripe Inc ([stripe.com](https://stripe.com)) | Web Platform payment processing (Stripe Checkout, PCI SAQ-A) | Customer email, subscription metadata (card data handled exclusively by Stripe) | Contract performance (Article 6(1)(b)) | [Stripe Sub-processors](https://stripe.com/legal/service-providers) |
 | Hetzner Online GmbH ([hetzner.com](https://hetzner.com)) | Web Platform infrastructure hosting (Helsinki, EU-only) | User workspaces, encrypted API keys, Docker containers | Contract performance (Article 6(1)(b)) | [Hetzner DPA](https://www.hetzner.com/legal/terms-and-conditions/) |
-| Cloudflare Inc ([cloudflare.com](https://cloudflare.com)) | Web Platform CDN/proxy (`app.soleur.ai`, extending existing `soleur.ai` zone) | IP addresses, request headers, TLS termination data | Contract performance (Article 6(1)(b)) | [Cloudflare DPA](https://www.cloudflare.com/cloudflare-customer-dpa/) |
+| Cloudflare Inc ([cloudflare.com](https://cloudflare.com)) | Web Platform CDN/proxy (`app.soleur.ai`, extending existing `soleur.ai` zone) | IP addresses, request headers, TLS termination data | Contract performance (Article 6(1)(b)) for authenticated users; legitimate interest (Article 6(1)(f)) for unauthenticated traffic | [Cloudflare DPA](https://www.cloudflare.com/cloudflare-customer-dpa/) |
 
 This disclosure is consistent with Sections 2.1b, 2.3(a), 2.3(e), 2.3(f), 2.3(g), and 2.3(h).
 
@@ -171,7 +171,6 @@ Users may interact with the following third-party services through the Plugin's 
 | Anthropic (Claude API) | AI model inference | Direct customer of Anthropic |
 | GitHub | Code hosting, issue tracking | Direct customer of GitHub |
 | npm | Package distribution | Direct customer of npm |
-| Buttondown | Newsletter subscription management (email, IP, referrer URL, subscription timestamp, browser/device metadata) | Buttondown acts as data processor on behalf of Jikigai. International transfers governed by EU SCCs (Implementing Decision (EU) 2021/914, Module 2: Controller-to-Processor). DPA covers all plan tiers including free. [Sub-processor list](https://buttondown.com/legal/subprocessors) |
 
 Users are responsible for reviewing and complying with the data processing terms of any third-party service they use in conjunction with the Plugin.
 
@@ -189,6 +188,19 @@ For data processed through the Docs Site or GitHub repository:
 
 - **(a)** Users may exercise their data subject rights by contacting us through the [Soleur GitHub repository](https://github.com/jikig-ai/soleur).
 - **(b)** For data processed by GitHub as a platform, Users should refer to [GitHub's data subject request process](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
+
+### 5.3 Web Platform Data
+
+For data processed through the Web Platform (app.soleur.ai) where Jikigai acts as controller (see Section 2.1b), data subjects may exercise the following rights by contacting legal@jikigai.com:
+
+- **(a)** **Right of Access (Article 15):** Request confirmation of whether personal data is being processed and obtain a copy of the data (account data, workspace data, subscription metadata).
+- **(b)** **Right to Rectification (Article 16):** Request correction of inaccurate personal data held by Jikigai.
+- **(c)** **Right to Erasure (Article 17):** Request deletion of personal data under applicable conditions. Note: subscription records subject to French tax law retention (Code de commerce Art. L123-22) may be retained for up to 10 years (see Section 2.3(g)).
+- **(d)** **Right to Restriction of Processing (Article 18):** Request that Jikigai restrict processing of personal data.
+- **(e)** **Right to Data Portability (Article 20):** Request personal data in a structured, commonly used, machine-readable format.
+- **(f)** **Right to Object (Article 21):** Object to processing of personal data. The legal basis for Web Platform processing is contract performance (Article 6(1)(b)), so this right applies primarily when processing extends beyond strict contractual necessity.
+
+Jikigai will acknowledge requests within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3). For full details on how each right applies, see the companion [GDPR Policy](/pages/legal/gdpr-policy.html) Section 5.
 
 ---
 
@@ -251,7 +263,7 @@ The Soleur Web Platform (app.soleur.ai) represents the introduction of cloud-hos
 - **(d)** Processor list maintained in Section 4.2. **FULFILLED.**
 - **(e)** Transfer mechanisms documented: EU-only for Supabase (eu-west-1, Ireland) and Hetzner (Helsinki, Finland), DPF + SCCs for Stripe (see Section 6.4). **FULFILLED.**
 - **(f)** DPIA evaluation: The Web Platform processes user PII (email, auth tokens, encrypted API keys, subscription metadata) but does not involve special categories (Article 9), systematic monitoring, or automated decision-making. Processing remains below the high-risk thresholds of Article 35(3). **Evaluated -- DPIA not required.** See the companion GDPR Policy Section 9 for the full analysis.
-- **(g)** Users accept the updated Terms and Conditions when creating a Web Platform account. **FULFILLED.**
+- **(g)** Users accept the updated Terms and Conditions via a clickwrap checkbox on the Web Platform signup page (app.soleur.ai/signup). The checkbox is unchecked by default and must be actively checked before account creation. Acceptance is timestamped and recorded in the user database. **FULFILLED.**
 
 ### 8.2 Future Changes
 
@@ -292,6 +304,17 @@ Users may uninstall the Plugin at any time. Upon removal:
 ### 10.2 Docs Site and Repository Data
 
 Users who wish to have their data removed from the Soleur GitHub repository (e.g., issue comments, pull request contributions) should follow GitHub's standard data deletion procedures or contact us through the repository.
+
+### 10.3 Web Platform Account Deletion
+
+Users may delete their Web Platform account at any time via account settings. Upon account deletion:
+
+- **(a)** Account data (email, authentication tokens, session data) is deleted from Supabase.
+- **(b)** Encrypted API keys and workspace data are deleted from Hetzner infrastructure.
+- **(c)** Stripe retains payment records (subscription metadata, invoices) for 10 years per French tax law (Code de commerce Art. L123-22).
+- **(d)** Cloudflare cache entries expire per standard TTL; no persistent user data is stored by Cloudflare.
+
+See the [Terms and Conditions](/pages/legal/terms-and-conditions.html) Section 13.1b for the full account termination procedure.
 
 ---
 

@@ -9,10 +9,10 @@ import { KeyInvalidError } from "@/lib/types";
 import { decryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
 import { sanitizeErrorForClient } from "./error-sanitizer";
-import { containsSensitiveEnvAccess } from "./bash-sandbox";
 import { isPathInWorkspace } from "./sandbox";
 import { UNVERIFIED_PARAM_TOOLS, extractToolPath, isFileTool, isSafeTool } from "./tool-path-checker";
 import { buildAgentEnv } from "./agent-env";
+import { createSandboxHook } from "./sandbox-hook";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -24,6 +24,10 @@ const PLUGIN_PATH =
 
 // ---------------------------------------------------------------------------
 // Workspace permissions migration (#725)
+// Defense-in-depth layer 2: settingSources: [] (layer 1) prevents the SDK
+// from loading settings files. This migration cleans stale pre-approvals
+// from disk -- relevant if settingSources is ever changed to ["project"]
+// for CLAUDE.md support.
 // ---------------------------------------------------------------------------
 const FILE_TOOLS_TO_REMOVE = new Set(["Read", "Glob", "Grep"]);
 
@@ -181,12 +185,17 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         cwd: workspacePath,
         model: "claude-sonnet-4-6",
         permissionMode: "default",
+        // Prevent SDK from loading .claude/settings.json -- permissions.allow
+        // entries bypass canUseTool entirely (permission chain step 4 before
+        // step 5). Default is [] since SDK v0.1.0; explicit for defense-in-depth.
+        settingSources: [],
         includePartialMessages: true,
         persistSession: false,
         maxTurns: 50,
         maxBudgetUsd: 5.0,
         systemPrompt,
         env: buildAgentEnv(apiKey),
+        settingSources: [],
         disallowedTools: ["WebSearch", "WebFetch"],
         sandbox: {
           enabled: true,
@@ -202,13 +211,25 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           },
         },
         plugins: [{ type: "local" as const, path: pluginPath }],
+        hooks: {
+          PreToolUse: [{
+            // LS and NotebookEdit added for #891 path validation.
+            // NotebookRead included defensively (SDK may route via Read).
+            matcher: "Read|Write|Edit|Glob|Grep|LS|NotebookRead|NotebookEdit|Bash",
+            hooks: [createSandboxHook(workspacePath)],
+          }],
+        },
+        // File tools and Bash are resolved by PreToolUse hooks (step 1)
+        // and SDK sandbox auto-approval (step 3) before reaching this
+        // callback. The canUseTool file-tool check is defense-in-depth
+        // for tools that somehow bypass hooks. See #891.
         canUseTool: async (
           toolName: string,
           toolInput: Record<string, unknown>,
         ) => {
-          // Workspace sandbox: block file access outside workspace.
-          // All file-accessing tools route through isPathInWorkspace.
-          // See #891 for audit that added LS/NotebookRead/NotebookEdit.
+          // Defense-in-depth: catch any file tool that bypasses hooks.
+          // PreToolUse hooks are the primary enforcement (layer 1).
+          // This is layer 2 -- see #891 for the audit that added it.
           if (isFileTool(toolName)) {
             const filePath = extractToolPath(toolInput);
             if (filePath && !isPathInWorkspace(filePath, workspacePath)) {
@@ -217,26 +238,12 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
                 message: "Access denied: outside workspace",
               };
             }
-            // Warn if a file tool has no recognized path parameter.
-            // SDK version may have changed parameter names. See #891.
             if (!filePath && (UNVERIFIED_PARAM_TOOLS as readonly string[]).includes(toolName) && Object.keys(toolInput).length > 0) {
               console.warn(
                 `[sec] ${toolName} invoked without recognized path parameter. ` +
                 `Keys: ${Object.keys(toolInput).join(", ")}. ` +
                 `SDK version may have changed parameter names. See #891.`,
               );
-            }
-            return { behavior: "allow" as const };
-          }
-
-          // Bash: sandbox handles OS-level isolation; check env var access as defense-in-depth
-          if (toolName === "Bash") {
-            const command = (toolInput.command as string) || "";
-            if (containsSensitiveEnvAccess(command)) {
-              return {
-                behavior: "deny" as const,
-                message: "Access denied: sensitive environment variable access",
-              };
             }
             return { behavior: "allow" as const };
           }
@@ -250,7 +257,6 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               ? (toolInput.options as string[])
               : ["Approve", "Reject"];
 
-            // Send review gate to client
             sendToClient(userId, {
               type: "review_gate",
               gateId,
@@ -258,10 +264,8 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               options,
             });
 
-            // Update conversation status
             await updateConversationStatus(conversationId, "waiting_for_user");
 
-            // Wait for user response
             const selection = await new Promise<string>((resolve) => {
               session.reviewGateResolvers.set(gateId, resolve);
             });
@@ -276,6 +280,8 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
 
           // Safe SDK tools: no filesystem path inputs, allowed without checks.
           // See tool-path-checker.ts for rationale on each tool.
+          // LS removed (#891) -- it accepts path inputs and routes through
+          // isPathInWorkspace. NotebookRead removed -- SDK reads via Read tool.
           if (isSafeTool(toolName)) {
             return { behavior: "allow" as const };
           }

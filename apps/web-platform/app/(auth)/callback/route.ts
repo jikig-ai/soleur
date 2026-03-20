@@ -65,12 +65,17 @@ async function ensureWorkspaceProvisioned(
 
   if (!existing) {
     // First-time user — create row and provision
+    // Note: this is a safety net path. The handle_new_user() trigger on
+    // auth.users INSERT is the primary mechanism for creating the users row
+    // (including tc_accepted_at). This fallback fires only if the trigger
+    // failed silently or was not present.
     const workspacePath = await provisionWorkspace(userId);
     await serviceClient.from("users").insert({
       id: userId,
       email,
       workspace_path: workspacePath,
       workspace_status: "ready",
+      tc_accepted_at: new Date().toISOString(),
     });
     return;
   }
