@@ -37,3 +37,9 @@ variable "deploy_ssh_public_key" {
   description = "SSH public key for the deploy user (used by CI/CD)"
   type        = string
 }
+
+variable "doppler_token" {
+  description = "Doppler service token for production secrets injection"
+  type        = string
+  sensitive   = true
+}

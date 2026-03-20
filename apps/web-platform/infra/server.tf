@@ -15,6 +15,7 @@ resource "hcloud_server" "web" {
     image_name            = var.image_name
     deploy_ssh_public_key = var.deploy_ssh_public_key
     ci_deploy_script_b64  = base64encode(file("${path.module}/ci-deploy.sh"))
+    doppler_token         = var.doppler_token
   })
 
   labels = {
