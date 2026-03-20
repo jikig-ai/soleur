@@ -8,6 +8,7 @@ import { KeyInvalidError } from "@/lib/types";
 import { decryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
 import { sanitizeErrorForClient } from "./error-sanitizer";
+import { buildAgentEnv } from "./agent-env";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -155,7 +156,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         maxTurns: 50,
         maxBudgetUsd: 5.0,
         systemPrompt,
-        env: { ...process.env, ANTHROPIC_API_KEY: apiKey },
+        env: buildAgentEnv(apiKey),
         plugins: [{ type: "local" as const, path: pluginPath }],
         canUseTool: async (
           toolName: string,
