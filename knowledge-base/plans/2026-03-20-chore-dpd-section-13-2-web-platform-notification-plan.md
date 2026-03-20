@@ -29,11 +29,11 @@ DPD Section 13.2 (Amendments) lists notification channels as "the Soleur GitHub 
 
 ## Acceptance Criteria
 
-- [ ] Section 13.2 includes "Web Platform (app.soleur.ai)" and "(including email notification for Web Platform users with an account on file)" in both DPD copies
-- [ ] "Last Updated" header reflects the new change description prepended to existing entries in both DPD copies (root markdown and Eleventy HTML hero)
-- [ ] `diff` between root and Eleventy DPD copies shows only expected differences (frontmatter, HTML wrapper, link paths)
-- [ ] No other sections are modified beyond 13.2 and the Last Updated header
-- [ ] Parenthetical wording matches the pattern from PR #928 / PR #919: "Web Platform users with an account on file"
+- [x] Section 13.2 includes "Web Platform (app.soleur.ai)" and "(including email notification for Web Platform users with an account on file)" in both DPD copies
+- [x] "Last Updated" header reflects the new change description prepended to existing entries in both DPD copies (root markdown and Eleventy HTML hero)
+- [x] `diff` between root and Eleventy DPD copies shows only expected differences (frontmatter, HTML wrapper, link paths)
+- [x] No other sections are modified beyond 13.2 and the Last Updated header
+- [x] Parenthetical wording matches the pattern from PR #928 / PR #919: "Web Platform users with an account on file"
 
 ## Proposed Changes
 
