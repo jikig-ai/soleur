@@ -55,8 +55,10 @@ runcmd:
   - mount /dev/disk/by-id/scsi-0HC_Volume_* /mnt/data || true
   - echo '/dev/disk/by-id/scsi-0HC_Volume_* /mnt/data ext4 defaults 0 2' >> /etc/fstab
 
-  # Create .env placeholder
+  # Create .env placeholder and grant deploy user ownership of /mnt/data
+  # (deploy user writes .env vars and manages containers via CI/CD)
   - touch /mnt/data/.env
+  - chown -R deploy:deploy /mnt/data
 
   # Pull and run container
   - docker pull ${image_name}
