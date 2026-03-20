@@ -21,7 +21,6 @@ export default function SignupPage() {
       email,
       options: {
         emailRedirectTo: `${window.location.origin}/callback`,
-        data: { tc_accepted: tcAccepted },
       },
     });
 

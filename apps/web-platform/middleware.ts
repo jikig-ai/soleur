@@ -1,7 +1,15 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const PUBLIC_PATHS = ["/login", "/signup", "/callback", "/api/webhooks", "/ws"];
+const PUBLIC_PATHS = [
+  "/login",
+  "/signup",
+  "/callback",
+  "/accept-terms",
+  "/api/accept-terms",
+  "/api/webhooks",
+  "/ws",
+];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -56,7 +64,28 @@ export async function middleware(request: NextRequest) {
   if (!user) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
-    return NextResponse.redirect(url);
+    const redirectResponse = NextResponse.redirect(url);
+    response.cookies.getAll().forEach((cookie) =>
+      redirectResponse.cookies.set(cookie.name, cookie.value),
+    );
+    return redirectResponse;
+  }
+
+  // Check T&C acceptance — redirect to /accept-terms if not yet accepted
+  const { data: userRow } = await supabase
+    .from("users")
+    .select("tc_accepted_at")
+    .eq("id", user.id)
+    .single();
+
+  if (!userRow?.tc_accepted_at) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/accept-terms";
+    const redirectResponse = NextResponse.redirect(url);
+    response.cookies.getAll().forEach((cookie) =>
+      redirectResponse.cookies.set(cookie.name, cookie.value),
+    );
+    return redirectResponse;
   }
 
   return response;

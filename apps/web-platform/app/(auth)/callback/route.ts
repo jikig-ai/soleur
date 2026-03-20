@@ -24,11 +24,19 @@ export async function GET(request: Request) {
       } = await supabase.auth.getUser();
 
       if (user) {
-        const tcAccepted =
-          user.user_metadata?.tc_accepted === true ||
-          user.user_metadata?.tc_accepted === "true";
+        await ensureWorkspaceProvisioned(user.id, user.email ?? "");
 
-        await ensureWorkspaceProvisioned(user.id, user.email ?? "", tcAccepted);
+        // Check T&C acceptance — redirect to accept-terms if not yet accepted
+        const serviceClient = createServiceClient();
+        const { data: userRow } = await serviceClient
+          .from("users")
+          .select("tc_accepted_at")
+          .eq("id", user.id)
+          .single();
+
+        if (!userRow?.tc_accepted_at) {
+          return NextResponse.redirect(`${origin}/accept-terms`);
+        }
 
         // Check if user has an API key set up
         const { data: keys } = await supabase
@@ -39,7 +47,6 @@ export async function GET(request: Request) {
           .eq("is_valid", true)
           .limit(1);
 
-        // Redirect to key setup if no valid key, otherwise dashboard
         if (!keys || keys.length === 0) {
           return NextResponse.redirect(`${origin}/setup-key`);
         }
@@ -56,7 +63,6 @@ export async function GET(request: Request) {
 async function ensureWorkspaceProvisioned(
   userId: string,
   email: string,
-  tcAccepted: boolean,
 ): Promise<void> {
   const serviceClient = createServiceClient();
 
@@ -68,12 +74,10 @@ async function ensureWorkspaceProvisioned(
     .single();
 
   if (!existing) {
-    // First-time user — create row and provision
-    // Note: this is a safety net path. The handle_new_user() trigger on
-    // auth.users INSERT is the primary mechanism for creating the users row
-    // (including tc_accepted_at). This fallback fires only if the trigger
-    // failed silently or was not present.
-    // Mirror the trigger logic: only set tc_accepted_at when metadata confirms acceptance.
+    // Safety net: the handle_new_user() trigger is the primary mechanism for
+    // creating the users row. This fallback fires only if the trigger failed.
+    // tc_accepted_at is always NULL — acceptance is recorded server-side via
+    // POST /api/accept-terms.
     const workspacePath = await provisionWorkspace(userId);
     const { error: insertError } = await serviceClient
       .from("users")
@@ -83,7 +87,7 @@ async function ensureWorkspaceProvisioned(
           email,
           workspace_path: workspacePath,
           workspace_status: "ready",
-          tc_accepted_at: tcAccepted ? new Date().toISOString() : null,
+          tc_accepted_at: null,
         },
         { onConflict: "id", ignoreDuplicates: true },
       );

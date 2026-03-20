@@ -166,18 +166,18 @@ Both `/api/accept-terms` and `/accept-terms` must be in `PUBLIC_PATHS`. However,
 
 ## Acceptance Criteria
 
-- [ ] `signInWithOtp` in signup page no longer sends `tc_accepted` in metadata (`apps/web-platform/app/(auth)/signup/page.tsx`)
-- [ ] New migration `007_remove_tc_accepted_metadata_trust.sql` updates `handle_new_user()` to always set `tc_accepted_at = NULL`
-- [ ] Callback route no longer reads `user_metadata.tc_accepted`; fallback INSERT always sets `tc_accepted_at: null` (`apps/web-platform/app/(auth)/callback/route.ts`)
-- [ ] New `/accept-terms` page renders T&C checkbox with links to Terms & Conditions and Privacy Policy (`apps/web-platform/app/(auth)/accept-terms/page.tsx`)
-- [ ] New `POST /api/accept-terms` route writes `tc_accepted_at` via service role client with `AND tc_accepted_at IS NULL` idempotency guard (`apps/web-platform/app/api/accept-terms/route.ts`)
-- [ ] Callback route redirects to `/accept-terms` when `tc_accepted_at IS NULL` on the user row
-- [ ] Middleware redirects authenticated users with `tc_accepted_at IS NULL` to `/accept-terms` for all protected routes (`apps/web-platform/middleware.ts`)
-- [ ] `/accept-terms` and `/api/accept-terms` are in the middleware public paths list
-- [ ] Signup form still shows the T&C checkbox (disabled submit) as UX hint but does not transmit the value to Supabase
-- [ ] Middleware migrated from `getUser()` to `getClaims()` for auth validation performance
-- [ ] All middleware redirect responses copy cookies from `supabaseResponse` to prevent session desync
-- [ ] RLS SELECT policy on `public.users` verified to allow reading `tc_accepted_at` for authenticated users
+- [x] `signInWithOtp` in signup page no longer sends `tc_accepted` in metadata (`apps/web-platform/app/(auth)/signup/page.tsx`)
+- [x] New migration `007_remove_tc_accepted_metadata_trust.sql` updates `handle_new_user()` to always set `tc_accepted_at = NULL`
+- [x] Callback route no longer reads `user_metadata.tc_accepted`; fallback INSERT always sets `tc_accepted_at: null` (`apps/web-platform/app/(auth)/callback/route.ts`)
+- [x] New `/accept-terms` page renders T&C checkbox with links to Terms & Conditions and Privacy Policy (`apps/web-platform/app/(auth)/accept-terms/page.tsx`)
+- [x] New `POST /api/accept-terms` route writes `tc_accepted_at` via service role client with `AND tc_accepted_at IS NULL` idempotency guard (`apps/web-platform/app/api/accept-terms/route.ts`)
+- [x] Callback route redirects to `/accept-terms` when `tc_accepted_at IS NULL` on the user row
+- [x] Middleware redirects authenticated users with `tc_accepted_at IS NULL` to `/accept-terms` for all protected routes (`apps/web-platform/middleware.ts`)
+- [x] `/accept-terms` and `/api/accept-terms` are in the middleware public paths list
+- [x] Signup form still shows the T&C checkbox (disabled submit) as UX hint but does not transmit the value to Supabase
+- [ ] ~~Middleware migrated from `getUser()` to `getClaims()`~~ — skipped: `getClaims()` not available in @supabase/supabase-js v2.49 / @supabase/ssr v0.6
+- [x] All middleware redirect responses copy cookies from `supabaseResponse` to prevent session desync
+- [x] RLS SELECT policy on `public.users` verified to allow reading `tc_accepted_at` for authenticated users
 
 ## Test Scenarios
 
