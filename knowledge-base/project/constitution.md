@@ -158,6 +158,7 @@ When a PR adds external services (terraform resources, account signups, API key 
 - Never construct filesystem paths from git ref names -- use `git worktree list --porcelain` to resolve actual worktree paths; refs use `/` separators (e.g., `feat/fix-x`) but worktree directories may use `-` (e.g., `feat-fix-x`), causing silent path mismatches
 - Never attempt to edit a file that has not been read in the current conversation context -- the Edit tool will reject it, and context compaction erases prior reads; re-read after compaction
 - Never use `bytea` columns for data that will be stored and read as strings through PostgREST/Supabase -- PostgREST returns `bytea` in hex format (`\x...`) which silently corrupts string round-trips; use `text` columns for base64-encoded data; if migrating from `bytea` to `text`, use `convert_from(col, 'UTF8')` not `encode(col, 'base64')` to avoid double-encoding
+- Never use `git pull` or `git checkout` for branch operations (switching, creating) in skill instructions, agent prompts, or shell scripts -- this repo uses `core.bare=true` where both commands are unavailable (they require a working tree); use `git fetch origin <branch>` to update refs and `git worktree add` (via worktree-manager.sh) to create branches; within an existing worktree, `git merge origin/<branch>` is safe; note: `git checkout --ours`/`--theirs` and `git checkout -- <file>` for file-level operations inside worktrees are permitted
 
 ### Prefer
 
