@@ -302,8 +302,7 @@ export async function sendUserMessage(
       `[agent] sendUserMessage session error for ${userId}/${conversationId}:`,
       err,
     );
-    const message =
-      err instanceof Error ? err.message : "Agent session failed";
+    const message = sanitizeErrorForClient(err);
     sendToClient(userId, {
       type: "error",
       message,

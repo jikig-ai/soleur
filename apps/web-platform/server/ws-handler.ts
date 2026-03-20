@@ -111,12 +111,10 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
         // Boot the agent runner (async -- streams will flow via sendToClient)
         startAgentSession(userId, conversationId, msg.leaderId).catch(
           (err) => {
-            console.error(`[ws] startAgentSession error:`, err);
-            const message =
-              err instanceof Error ? err.message : "Failed to start session";
+            console.error(`[ws] startAgentSession error for user ${userId}:`, err);
             sendToClient(userId, {
               type: "error",
-              message,
+              message: sanitizeErrorForClient(err),
               errorCode:
                 err instanceof KeyInvalidError ? "key_invalid" : undefined,
             });
