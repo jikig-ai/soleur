@@ -210,10 +210,10 @@ After replacement, verify:
 
 ## Acceptance Criteria
 
-- [ ] All 12 workflow files reference `anthropics/claude-code-action@df37d2f0760a4b5683a6e617c9325bc1a36443f6 # v1.0.75`
-- [ ] Zero workflow files reference either `64c7a0ef71df67b14cb4471f4d9c8565c61042bf` or `1dd74842e568f373608605d9e45c9e854f65f543` in `uses:` lines
-- [ ] All modified YAML files pass syntax validation
-- [ ] `git diff --stat` shows exactly 12 files changed, 1 insertion + 1 deletion each
+- [x] All 12 workflow files reference `anthropics/claude-code-action@df37d2f0760a4b5683a6e617c9325bc1a36443f6 # v1.0.75`
+- [x] Zero workflow files reference either `64c7a0ef71df67b14cb4471f4d9c8565c61042bf` or `1dd74842e568f373608605d9e45c9e854f65f543` in `uses:` lines
+- [x] All modified YAML files pass syntax validation
+- [x] `git diff --stat` shows exactly 12 files changed, 1 insertion + 1 deletion each
 - [ ] PR body includes `Closes #809`
 
 ## Test Scenarios
