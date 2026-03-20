@@ -157,10 +157,10 @@ The preload list is updated in Chromium approximately every 6-8 weeks. After sub
 
 ## Acceptance Criteria
 
-- [ ] `soleur.ai` is submitted to hstspreload.org
-- [ ] hstspreload.org API returns status other than `unknown` for `soleur.ai` (e.g., `pending`)
-- [ ] `knowledge-base/operations/domains.md` is updated with preload submission status and date
-- [ ] `knowledge-base/learnings/2026-03-20-nextjs-static-csp-security-headers.md` HSTS table entry updated to include `preload`
+- [x] `soleur.ai` is submitted to hstspreload.org
+- [x] hstspreload.org API returns status other than `unknown` for `soleur.ai` (e.g., `pending`)
+- [x] `knowledge-base/operations/domains.md` is updated with preload submission status and date
+- [x] `knowledge-base/learnings/2026-03-20-nextjs-static-csp-security-headers.md` HSTS table entry updated to include `preload`
 
 ## Test Scenarios
 
