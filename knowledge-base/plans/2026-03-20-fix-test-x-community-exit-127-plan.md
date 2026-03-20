@@ -73,12 +73,12 @@ The bash tests depend on `jq` (ralph-loop.test.sh line 79: `jq -n --arg msg "$me
 
 ## Acceptance Criteria
 
-- [ ] `test/x-community.test.ts` gracefully handles missing `jq` (skip jq-dependent tests, not exit 127)
-- [ ] `plugins/soleur/test/ralph-loop.test.sh` runs in CI
-- [ ] `plugins/soleur/test/resolve-git-root.test.sh` runs in CI
-- [ ] Pre-push hook works without blocking for ALL branches when deps are present
-- [ ] No regression in existing test pass rate
-- [ ] Console warning emitted when jq tests are skipped locally
+- [x] `test/x-community.test.ts` gracefully handles missing `jq` (skip jq-dependent tests, not exit 127)
+- [x] `plugins/soleur/test/ralph-loop.test.sh` runs in CI
+- [x] `plugins/soleur/test/resolve-git-root.test.sh` runs in CI
+- [x] Pre-push hook works without blocking for ALL branches when deps are present
+- [x] No regression in existing test pass rate
+- [x] Console warning emitted when jq tests are skipped locally
 
 ## Test Scenarios
 
