@@ -11,15 +11,15 @@ generated-date: 2026-02-20
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 2, 2026
+**Last Updated:** March 20, 2026 -- added Web Platform service terms, scoped local-only statements to Plugin, updated data practices and GDPR rights sections for Web Platform.
 
 ---
 
 ## 1. Introduction and Acceptance
 
-These Terms & Conditions ("Terms") govern your access to and use of the Soleur platform ("Soleur," "the Plugin," "the Service"), a Company-as-a-Service product developed and maintained by Jikigai ("we," "us," "our"), a company incorporated in France with its registered office at 25 rue de Ponthieu, 75008 Paris, France. Soleur is a Claude Code plugin that provides AI-powered agents, skills, commands, and a compounding knowledge base for structured software development workflows.
+These Terms & Conditions ("Terms") govern your access to and use of the Soleur platform ("Soleur," "the Plugin," "the Service") and the Soleur Web Platform at app.soleur.ai ("the Web Platform"), Company-as-a-Service products developed and maintained by Jikigai ("we," "us," "our"), a company incorporated in France with its registered office at 25 rue de Ponthieu, 75008 Paris, France. Soleur is a Claude Code plugin that provides AI-powered agents, skills, commands, and a compounding knowledge base for structured software development workflows. The Web Platform is a cloud-hosted companion service providing account management, workspace environments, and subscription services.
 
-By installing, accessing, or using Soleur, you ("User," "you," "your") agree to be bound by these Terms. If you do not agree to these Terms, do not install or use the Plugin.
+By installing, accessing, or using Soleur (whether the Plugin or the Web Platform), you ("User," "you," "your") agree to be bound by these Terms. If you do not agree to these Terms, do not install or use the Plugin or the Web Platform.
 
 These Terms apply to all Users globally, with specific provisions for Users in the European Union / European Economic Area (EU/EEA) under the General Data Protection Regulation (GDPR) and Users in the United States.
 
@@ -29,13 +29,16 @@ These Terms apply to all Users globally, with specific provisions for Users in t
 - **"Knowledge Base"** refers to the locally stored collection of brainstorms, plans, specs, learnings, and other artifacts generated during use.
 - **"Documentation Site"** refers to the website hosted at soleur.ai on GitHub Pages.
 - **"Third-Party Services"** refers to external services accessed through or in connection with the Plugin, including but not limited to the Anthropic Claude API, GitHub, and GitHub Pages.
+- **"Account Data"** refers to email address, authentication tokens, session data, and other information provided during Web Platform registration and use.
+- **"Subscription"** refers to a paid plan for Web Platform access, managed through Stripe Checkout.
 - **"User Content"** refers to all data, files, configurations, and artifacts created, modified, or stored by the User through the Plugin.
+- **"Web Platform"** refers to the Soleur cloud-hosted service at app.soleur.ai, including account management, workspace environments, and subscription services.
 
 ## 3. Eligibility
 
-You must be at least 18 years of age (or the age of majority in your jurisdiction) to use the Plugin. By using Soleur, you represent and warrant that you meet this requirement.
+You must be at least 18 years of age (or the age of majority in your jurisdiction) to use the Plugin or the Web Platform. By using Soleur, you represent and warrant that you meet this requirement.
 
-If you are using the Plugin on behalf of an organization, you represent and warrant that you have the authority to bind that organization to these Terms.
+If you are using the Plugin or the Web Platform on behalf of an organization, you represent and warrant that you have the authority to bind that organization to these Terms.
 
 ## 4. Description of the Service
 
@@ -48,7 +51,9 @@ Soleur is a locally installed Claude Code plugin that provides:
 
 ### 4.1 Local-First Architecture
 
-The Plugin is installed and operates locally on your machine via the Claude Code CLI. All knowledge-base files, configuration data, and User Content are stored exclusively on your local file system. Soleur does not operate cloud servers and does not collect, transmit, or store your data on remote infrastructure controlled by us.
+The Plugin is installed and operates locally on your machine via the Claude Code CLI. All knowledge-base files, configuration data, and Plugin-generated User Content are stored exclusively on your local file system. The Plugin does not collect, transmit, or store your data on remote infrastructure controlled by us.
+
+This section applies to the Plugin only. For the Web Platform, see Section 4.3 below.
 
 ### 4.2 Third-Party API Interactions
 
@@ -57,6 +62,20 @@ The Plugin facilitates interactions with the Anthropic Claude API and other thir
 - Maintaining the security of your API keys and credentials
 - Complying with the terms of service of all third-party providers
 - Any costs or charges incurred through third-party API usage
+
+### 4.3 Web Platform Service
+
+The Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) is a cloud-hosted service operated by Jikigai. Unlike the Plugin (Section 4.1), the Web Platform processes data on Jikigai-operated infrastructure.
+
+When you create a Web Platform account:
+
+- You provide an email address and create authentication credentials managed by Supabase.
+- You may store encrypted API keys (BYOK -- bring your own key) in your workspace.
+- If you subscribe to a paid plan, payment is processed by Stripe via Stripe Checkout. Card data is handled exclusively by Stripe and never reaches Jikigai servers.
+
+The Web Platform is hosted on Hetzner servers in Helsinki, Finland (EU) and uses Cloudflare as a CDN/proxy. Full data processing details are described in the [Privacy Policy](privacy-policy.md) Section 4.7.
+
+By creating a Web Platform account, you accept these Terms and acknowledge that your data will be processed as described in the Privacy Policy.
 
 ## 5. License and Intellectual Property
 
@@ -77,7 +96,7 @@ Each version of the Plugin converts to the Apache License 2.0 four years after i
 
 ### 5.3 User Content Ownership
 
-You retain all rights, title, and interest in your User Content. We claim no ownership over any files, knowledge-base entries, code, or artifacts generated or stored on your local machine through use of the Plugin.
+You retain all rights, title, and interest in your User Content. We claim no ownership over any files, knowledge-base entries, code, or artifacts generated or stored on your local machine through use of the Plugin. For the Web Platform, you retain all rights to data you store in your workspaces, including encrypted API keys and workspace configurations.
 
 ### 5.4 Our Intellectual Property
 
@@ -111,6 +130,19 @@ You are solely responsible for reviewing, validating, and assuming liability for
 
 Soleur operates on a local-first model. The Plugin itself does not collect, transmit, or store personal data on external servers. All User Content, configuration files, and knowledge-base entries remain on your local machine under your control.
 
+This section applies to the Plugin only. For Web Platform data practices, see Section 7.1b and the [Privacy Policy](privacy-policy.md) Section 4.7.
+
+### 7.1b Web Platform Data Practices
+
+The Soleur Web Platform collects and processes personal data as necessary to provide the service. This includes:
+
+- **Account data** (email, authentication tokens) processed by Supabase (EU-hosted, AWS eu-west-1, Ireland).
+- **Payment data** processed by Stripe (PCI SAQ-A -- card data handled exclusively by Stripe).
+- **Workspace data** (encrypted API keys, workspace configurations) hosted on Hetzner (Helsinki, Finland, EU).
+- **Technical data** (IP addresses, request headers) processed by Cloudflare CDN/proxy.
+
+For comprehensive data processing details, legal bases, retention periods, and your rights, see the [Privacy Policy](privacy-policy.md) and [GDPR Policy](gdpr-policy.md).
+
 ### 7.2 Documentation Site
 
 The Soleur documentation site (soleur.ai) is hosted on GitHub Pages. GitHub, as the hosting provider, may collect certain data such as IP addresses and browser metadata in accordance with GitHub's own privacy practices. We do not control GitHub's data collection. Please refer to GitHub's Privacy Statement for details.
@@ -121,11 +153,17 @@ When the Plugin facilitates interactions with the Anthropic Claude API or other 
 
 ### 7.4 EU/EEA Users -- GDPR Rights
 
-If you are located in the EU/EEA, you have rights under the GDPR including the right of access, rectification, erasure, restriction of processing, data portability, and objection. Because Soleur stores data locally and does not collect personal data on our servers, these rights are inherently satisfied by your local control over the data. For any GDPR-related inquiries concerning the documentation site or third-party integrations, please contact us through the channels listed in Section 16.
+If you are located in the EU/EEA, you have rights under the GDPR including the right of access, rectification, erasure, restriction of processing, data portability, and objection.
+
+For the Plugin, these rights are inherently satisfied by your local control over Plugin-generated data.
+
+For the Web Platform, you may exercise these rights against Jikigai by contacting legal@jikigai.com. See the [GDPR Policy](gdpr-policy.md) Section 5 for full details on how to exercise each right.
+
+For any GDPR-related inquiries concerning the documentation site or third-party integrations, please contact us through the channels listed in Section 16.
 
 ## 8. Acceptable Use
 
-You agree to use the Plugin only for lawful purposes and in accordance with these Terms. You shall not use the Plugin to:
+You agree to use the Plugin and the Web Platform only for lawful purposes and in accordance with these Terms. You shall not use the Plugin or the Web Platform to:
 
 - Violate any applicable local, national, or international law or regulation
 - Generate, store, or distribute content that is illegal, harmful, threatening, abusive, defamatory, or otherwise objectionable
@@ -139,11 +177,11 @@ You agree to use the Plugin only for lawful purposes and in accordance with thes
 
 ### 9.1 "As Is" Provision
 
-THE PLUGIN IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTIES OF ANY KIND, WHETHER EXPRESS, IMPLIED, OR STATUTORY, INCLUDING BUT NOT LIMITED TO IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, AND ACCURACY.
+THE PLUGIN AND THE WEB PLATFORM ARE PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTIES OF ANY KIND, WHETHER EXPRESS, IMPLIED, OR STATUTORY, INCLUDING BUT NOT LIMITED TO IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, AND ACCURACY.
 
 ### 9.2 No Guarantee of Availability or Accuracy
 
-We do not warrant that the Plugin will be uninterrupted, error-free, secure, or free of harmful components. We do not warrant the accuracy, completeness, or reliability of any output generated by the Plugin's AI capabilities.
+We do not warrant that the Plugin or the Web Platform will be uninterrupted, error-free, secure, or free of harmful components. We do not warrant the accuracy, completeness, or reliability of any output generated by the Plugin's AI capabilities. The Web Platform does not include a Service Level Agreement (SLA). No specific uptime, response time, or availability guarantees are provided.
 
 ### 9.3 EU Consumer Rights
 
@@ -153,11 +191,11 @@ Nothing in this section limits or excludes any warranty rights that you may have
 
 ### 10.1 General Limitation
 
-TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL WE BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, INCLUDING BUT NOT LIMITED TO LOSS OF PROFITS, DATA, BUSINESS OPPORTUNITIES, OR GOODWILL, ARISING OUT OF OR IN CONNECTION WITH YOUR USE OF THE PLUGIN.
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL WE BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, INCLUDING BUT NOT LIMITED TO LOSS OF PROFITS, DATA, BUSINESS OPPORTUNITIES, OR GOODWILL, ARISING OUT OF OR IN CONNECTION WITH YOUR USE OF THE PLUGIN OR THE WEB PLATFORM.
 
 ### 10.2 Aggregate Liability Cap
 
-OUR TOTAL AGGREGATE LIABILITY TO YOU FOR ALL CLAIMS ARISING OUT OF OR RELATING TO THESE TERMS OR YOUR USE OF THE PLUGIN SHALL NOT EXCEED THE AMOUNT YOU PAID US (IF ANY) IN THE TWELVE (12) MONTHS PRECEDING THE CLAIM.
+OUR TOTAL AGGREGATE LIABILITY TO YOU FOR ALL CLAIMS ARISING OUT OF OR RELATING TO THESE TERMS OR YOUR USE OF THE PLUGIN OR THE WEB PLATFORM SHALL NOT EXCEED THE GREATER OF (A) THE AMOUNT YOU PAID US (IF ANY) IN THE TWELVE (12) MONTHS PRECEDING THE CLAIM, OR (B) ONE HUNDRED EUROS (EUR 100).
 
 ### 10.3 EU/EEA Limitations
 
@@ -171,7 +209,7 @@ For Users in the EU/EEA, the limitations in this section apply only to the exten
 
 You agree to indemnify, defend, and hold harmless Jikigai and its affiliates, contributors, and licensors from and against any claims, damages, losses, liabilities, costs, and expenses (including reasonable attorneys' fees) arising out of or relating to:
 
-- Your use of the Plugin
+- Your use of the Plugin or the Web Platform
 - Your violation of these Terms
 - Your violation of any applicable law or regulation
 - Your User Content
@@ -183,9 +221,9 @@ For EU/EEA Users, this indemnification obligation applies only to the extent per
 
 We reserve the right to modify these Terms at any time. Changes will be posted to the Soleur GitHub repository (jikig-ai/soleur) and/or the documentation site (soleur.ai). Material changes will be communicated through the repository's release notes or changelog.
 
-Your continued use of the Plugin after changes take effect constitutes acceptance of the modified Terms. If you do not agree to the modified Terms, you must stop using the Plugin.
+Your continued use of the Plugin or the Web Platform after changes take effect constitutes acceptance of the modified Terms. If you do not agree to the modified Terms, you must stop using the Plugin and the Web Platform.
 
-For EU/EEA Users, we will provide reasonable advance notice of material changes (at least 30 days where practicable) and you may terminate your use of the Plugin if you do not accept the modified Terms.
+For EU/EEA Users, we will provide reasonable advance notice of material changes (at least 30 days where practicable) and you may terminate your use of the Plugin or the Web Platform if you do not accept the modified Terms.
 
 ## 13. Termination
 
@@ -193,15 +231,25 @@ For EU/EEA Users, we will provide reasonable advance notice of material changes 
 
 You may stop using the Plugin at any time by uninstalling it from your Claude Code environment. No notice to us is required.
 
+### 13.1b Termination of Web Platform Account
+
+You may delete your Web Platform account at any time. Upon account deletion:
+
+- Account data (email, authentication tokens) is deleted from Supabase.
+- Workspace data and encrypted API keys are deleted from Hetzner.
+- Payment records (subscription metadata, invoices) are retained for 10 years per French tax law (Code de commerce Art. L123-22).
+
+For details on data retention after account deletion, see the [Privacy Policy](privacy-policy.md) Section 7.
+
 ### 13.2 Termination by Us
 
-We may suspend or terminate your right to use the Plugin for cause, including but not limited to violation of these Terms. For EU/EEA Users, we will provide at least 30 days' notice before termination takes effect, except where termination is necessitated by a legal obligation or where the User has repeatedly or materially breached these Terms.
+We may suspend or terminate your right to use the Plugin or the Web Platform for cause, including but not limited to violation of these Terms. For EU/EEA Users, we will provide at least 30 days' notice before termination takes effect, except where termination is necessitated by a legal obligation or where the User has repeatedly or materially breached these Terms.
 
 ### 13.3 Effect of Termination
 
-Upon termination, your license to use the Plugin ceases. Because all data is stored locally on your machine, termination does not affect your User Content -- you retain full control of your local files.
+Upon termination, your license to use the Plugin ceases. Plugin-generated User Content remains on your local machine under your control. For the Web Platform, account termination triggers data deletion as described in Section 13.1b.
 
-Sections 5.4, 6, 9, 10, 11, 14, and 15 survive termination.
+Sections 5.4, 6, 7, 9, 10, 11, 14, and 15 survive termination.
 
 ## 14. Governing Law and Dispute Resolution
 
@@ -221,7 +269,7 @@ If you are a consumer in the EU/EEA, nothing in these Terms affects your rights 
 
 ### 15.1 Entire Agreement
 
-These Terms, together with any referenced policies (including our Privacy Policy and Acceptable Use Policy), constitute the entire agreement between you and us regarding your use of the Plugin.
+These Terms, together with any referenced policies (including our Privacy Policy and Acceptable Use Policy), constitute the entire agreement between you and us regarding your use of the Plugin and the Web Platform.
 
 ### 15.2 Severability
 
@@ -264,6 +312,7 @@ To exercise your data subject rights under GDPR, send a written request to legal
 > - [Acceptable Use Policy](acceptable-use-policy.md) -- expands on the acceptable use provisions in Section 8
 > - [Cookie Policy](cookie-policy.md) -- covers cookies used by the documentation site
 > - [Disclaimer](disclaimer.md) -- standalone version of warranty and liability provisions
+> - [Data Protection Disclosure](data-protection-disclosure.md) -- sub-processor details and data processing transparency
 > - [GDPR Policy](gdpr-policy.md) -- detailed GDPR-specific policy for EU/EEA users
 > - [Individual CLA](individual-cla.md) -- contributor license agreement for individuals
 > - [Corporate CLA](corporate-cla.md) -- contributor license agreement for organizations
