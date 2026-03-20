@@ -1,0 +1,38 @@
+# Tasks: Add Security Headers (CSP, X-Frame-Options, HSTS)
+
+## Phase 1: Setup
+
+- [ ] 1.1 Read existing `apps/web-platform/next.config.ts`
+- [ ] 1.2 Read existing `apps/web-platform/middleware.ts` to confirm no header conflicts
+- [ ] 1.3 Verify `NEXT_PUBLIC_SUPABASE_URL` is available at build time in `next.config.ts`
+
+## Phase 2: Core Implementation
+
+- [ ] 2.1 Extract CSP directives into a typed array in `apps/web-platform/next.config.ts`
+  - [ ] 2.1.1 Build `connect-src` dynamically from `NEXT_PUBLIC_SUPABASE_URL` env var
+  - [ ] 2.1.2 Conditionally include `'unsafe-eval'` in `script-src` for development only
+- [ ] 2.2 Add `securityHeaders` array with all 7 headers (CSP, X-Frame-Options, X-Content-Type-Options, HSTS, Referrer-Policy, Permissions-Policy, X-DNS-Prefetch-Control)
+- [ ] 2.3 Add `async headers()` function to `nextConfig` returning headers for `source: '/(.*)'`
+- [ ] 2.4 Verify CSP does not break WebSocket connections (WebSocket upgrade is handled by custom server, not Next.js routes)
+
+## Phase 3: Testing
+
+- [ ] 3.1 Create `apps/web-platform/test/security-headers.test.ts`
+  - [ ] 3.1.1 Test CSP contains `frame-ancestors 'none'`
+  - [ ] 3.1.2 Test CSP contains `default-src 'self'`
+  - [ ] 3.1.3 Test CSP does not contain `unsafe-eval` when `NODE_ENV=production`
+  - [ ] 3.1.4 Test CSP contains `unsafe-eval` when `NODE_ENV=development`
+  - [ ] 3.1.5 Test `connect-src` includes Supabase host from env var
+  - [ ] 3.1.6 Test `connect-src` falls back to `*.supabase.co` when env var missing
+  - [ ] 3.1.7 Test `X-Frame-Options` value is `DENY`
+  - [ ] 3.1.8 Test `Strict-Transport-Security` value contains `max-age=63072000`
+  - [ ] 3.1.9 Test `X-Content-Type-Options` value is `nosniff`
+  - [ ] 3.1.10 Test `Referrer-Policy` value is `strict-origin-when-cross-origin`
+- [ ] 3.2 Run existing tests (`vitest`) to verify no regressions
+- [ ] 3.3 Run `next build` to verify config compiles without errors
+
+## Phase 4: Verification
+
+- [ ] 4.1 Run `skill: soleur:compound` before commit
+- [ ] 4.2 Commit and push
+- [ ] 4.3 Create PR with `Closes #946` in body
