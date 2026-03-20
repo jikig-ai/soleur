@@ -21,6 +21,9 @@ const DEFAULT_SETTINGS = {
   permissions: {
     allow: [] as string[],
   },
+  sandbox: {
+    enabled: true,
+  },
 };
 
 /**

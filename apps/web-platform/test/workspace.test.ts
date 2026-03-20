@@ -41,6 +41,15 @@ describe("workspace provisioning", () => {
     expect(settings.permissions.allow).toEqual([]);
   });
 
+  test("creates .claude/settings.json with sandbox enabled", async () => {
+    const userId = randomUUID();
+    const path = await provisionWorkspace(userId);
+
+    const settingsPath = join(path, ".claude/settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    expect(settings.sandbox.enabled).toBe(true);
+  });
+
   // Git init test skipped: Bun's test runner inherits the parent git
   // context, causing `git init` in /tmp to reference the worktree repo.
   // Git init works in production (Docker container has no parent repo).
