@@ -203,13 +203,14 @@ Contains `git pull --rebase origin main` in a CI push-retry block. This runs in 
 
 ## Acceptance Criteria
 
-- [ ] `work` SKILL.md no longer contains `git pull` or `git checkout -b` -- uses `worktree-manager.sh create` instead (`plugins/soleur/skills/work/SKILL.md`)
-- [ ] `work` SKILL.md Option A is removed; the worktree path is the only branch creation method
-- [ ] `one-shot` SKILL.md Step 0b uses `worktree-manager.sh --yes create` instead of "pull latest" (`plugins/soleur/skills/one-shot/SKILL.md`)
-- [ ] Constitution has a "Never use git pull or git checkout" rule in Architecture > Never section (`knowledge-base/project/constitution.md`)
-- [ ] AGENTS.md session-start instruction includes bare-root fallback with explicit prohibition of `git pull` and `git checkout` (`AGENTS.md`)
-- [ ] No `git pull` instructions remain in any skill SKILL.md file except campaign-calendar CI-only path (verified by grep)
-- [ ] Existing `git fetch` usages in `merge-pr/SKILL.md` and `ship/SKILL.md` remain unchanged (they're already correct and run from worktree context)
+- [x] `work` SKILL.md no longer contains `git pull` or `git checkout -b` -- uses `worktree-manager.sh create` instead (`plugins/soleur/skills/work/SKILL.md`)
+- [x] `work` SKILL.md Option A is removed; the worktree path is the only branch creation method
+- [x] `one-shot` SKILL.md Step 0b uses `worktree-manager.sh --yes create` instead of "pull latest" (`plugins/soleur/skills/one-shot/SKILL.md`)
+- [x] Constitution has a "Never use git pull or git checkout" rule in Architecture > Never section (`knowledge-base/project/constitution.md`)
+- [x] AGENTS.md session-start instruction includes bare-root fallback with explicit prohibition of `git pull` and `git checkout` (`AGENTS.md`)
+- [x] No `git pull` instructions remain in any skill SKILL.md file except campaign-calendar CI-only path (verified by grep)
+- [x] Existing `git fetch` usages in `merge-pr/SKILL.md` and `ship/SKILL.md` remain unchanged (they're already correct and run from worktree context)
+- [x] `fix-issue` SKILL.md `git checkout -b` replaced with `worktree-manager.sh --yes create` (bonus fix not in original plan)
 
 ## Test Scenarios
 
