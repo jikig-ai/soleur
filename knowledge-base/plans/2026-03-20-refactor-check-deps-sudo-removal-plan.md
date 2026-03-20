@@ -196,20 +196,20 @@ This is a one-liner that can be copy-pasted. It avoids sudo entirely.
 
 ## Acceptance Criteria
 
-- [ ] `install_tool()` in `check_deps.sh` no longer uses `sudo` in any code path
-- [ ] ffmpeg installs via static binary to `$HOME/.local/bin` on Linux, `brew install` on macOS
-- [ ] rclone installs via static binary to `$HOME/.local/bin` on Linux, `brew install` on macOS
-- [ ] Architecture detection (amd64 vs arm64) selects the correct binary URL
-- [ ] `$HOME/.local/bin` is added to PATH within the script if not already present
-- [ ] `verify_install()` confirms the tool is in PATH after installation
-- [ ] `check_setup.sh` install instructions no longer reference `sudo`
-- [ ] `--auto` flag behavior preserved (auto-install without prompting)
-- [ ] Graceful degradation preserved: network failure or download failure prints manual instructions and returns 1
-- [ ] No `set -euo pipefail` added (existing design decision documented in script header: soft checks must not abort)
-- [ ] Temp directories cleaned via `trap ... EXIT` pattern (not scattered `rm -rf`)
-- [ ] Inner `case` dispatchers include catch-all `*)` branch
-- [ ] `curl` availability checked before download attempts
-- [ ] `unzip` availability checked before rclone extraction
+- [x] `install_tool()` in `check_deps.sh` no longer uses `sudo` in any code path
+- [x] ffmpeg installs via static binary to `$HOME/.local/bin` on Linux, `brew install` on macOS
+- [x] rclone installs via static binary to `$HOME/.local/bin` on Linux, `brew install` on macOS
+- [x] Architecture detection (amd64 vs arm64) selects the correct binary URL
+- [x] `$HOME/.local/bin` is added to PATH within the script if not already present
+- [x] `verify_install()` confirms the tool is in PATH after installation
+- [x] `check_setup.sh` install instructions no longer reference `sudo`
+- [x] `--auto` flag behavior preserved (auto-install without prompting)
+- [x] Graceful degradation preserved: network failure or download failure prints manual instructions and returns 1
+- [x] No `set -euo pipefail` added (existing design decision documented in script header: soft checks must not abort)
+- [x] Temp directories cleaned via `trap ... EXIT` pattern (not scattered `rm -rf`)
+- [x] Inner `case` dispatchers include catch-all `*)` branch
+- [x] `curl` availability checked before download attempts
+- [x] `unzip` availability checked before rclone extraction
 
 ## Test Scenarios
 
