@@ -57,6 +57,24 @@ variable "app_domain" {
 }
 
 variable "deploy_ssh_public_key" {
-  description = "SSH public key for the deploy user (used by CI/CD)"
+  description = "SSH public key for the deploy user (legacy, kept for migration period)"
   type        = string
+  default     = ""
+}
+
+variable "cloudflare_account_id" {
+  description = "Cloudflare account ID (required for Zero Trust tunnel resources)"
+  type        = string
+}
+
+variable "webhook_deploy_secret" {
+  description = "HMAC shared secret for webhook deploy authentication"
+  type        = string
+  sensitive   = true
+}
+
+variable "app_domain_base" {
+  description = "Base domain for the application (e.g., soleur.ai)"
+  type        = string
+  default     = "soleur.ai"
 }

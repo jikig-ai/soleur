@@ -14,8 +14,8 @@ users:
     groups: docker
     shell: /bin/bash
     lock_passwd: true
-    ssh_authorized_keys:
-      - restrict,command="/usr/local/bin/ci-deploy.sh" ${deploy_ssh_public_key}
+    # No SSH key -- deploys now arrive via webhook through Cloudflare Tunnel (#749).
+    # The deploy user is kept for Docker group membership and sudoers.
 
 write_files:
   - path: /etc/ssh/sshd_config.d/01-hardening.conf
@@ -25,7 +25,7 @@ write_files:
       MaxAuthTries 3
       LoginGraceTime 30
       PermitRootLogin prohibit-password
-      AllowUsers root deploy
+      AllowUsers root
       ClientAliveInterval 300
       ClientAliveCountMax 2
     owner: root:root
@@ -36,15 +36,81 @@ write_files:
     owner: root:root
     permissions: '0440'
 
-  # CI deploy forced command script. The CI SSH key in authorized_keys uses:
-  #   restrict,command="/usr/local/bin/ci-deploy.sh" ssh-ed25519 AAAA... ci-deploy-2026@soleur-web-platform
-  # This restricts the CI key to only execute deploy commands (see #747).
-  # Content injected from ci-deploy.sh via Terraform base64encode(file()) -- do not inline.
+  # CI deploy script invoked by the webhook listener.
+  # Content injected from ci-deploy.sh via Terraform base64encode(file()).
   - path: /usr/local/bin/ci-deploy.sh
     encoding: b64
     content: ${ci_deploy_script_b64}
     owner: root:root
     permissions: '0755'
+
+  # Webhook configuration for adnanh/webhook.
+  # Validates HMAC-SHA256 signature, sets SSH_ORIGINAL_COMMAND from payload,
+  # and invokes ci-deploy.sh synchronously (#749).
+  - path: /etc/webhook/hooks.json
+    content: |
+      [
+        {
+          "id": "deploy",
+          "execute-command": "/usr/local/bin/ci-deploy.sh",
+          "command-working-directory": "/",
+          "include-command-output-in-response": true,
+          "http-methods": ["POST"],
+          "trigger-rule-mismatch-http-response-code": 403,
+          "pass-environment-to-command": [
+            {
+              "source": "payload",
+              "name": "command",
+              "envname": "SSH_ORIGINAL_COMMAND"
+            }
+          ],
+          "trigger-rule": {
+            "match": {
+              "type": "payload-hmac-sha256",
+              "secret": "${webhook_deploy_secret}",
+              "parameter": {
+                "source": "header",
+                "name": "X-Signature-256"
+              }
+            }
+          }
+        }
+      ]
+    owner: root:root
+    permissions: '0600'
+
+  # Hardened systemd unit for the webhook listener.
+  # Runs as deploy user (docker group) on localhost:9000.
+  - path: /etc/systemd/system/webhook.service
+    content: |
+      [Unit]
+      Description=Webhook deploy listener
+      After=network.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/local/bin/webhook -hooks /etc/webhook/hooks.json -port 9000 -ip 127.0.0.1
+      Restart=on-failure
+      RestartSec=5
+      User=deploy
+      Group=deploy
+      NoNewPrivileges=true
+      ProtectSystem=strict
+      ProtectHome=true
+      ReadOnlyPaths=/etc/webhook /usr/local/bin
+      TimeoutStopSec=180
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
+  # Cloudflare apt repository source list for cloudflared.
+  - path: /etc/apt/sources.list.d/cloudflare-main.list
+    content: |
+      deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared noble main
+    owner: root:root
+    permissions: '0644'
 
 runcmd:
   # Apply SSH hardening immediately (drop-in written by write_files above)
@@ -76,7 +142,7 @@ runcmd:
   - mkdir -p /mnt/data/plugins/soleur
 
   # Create .env placeholder and grant deploy user ownership of /mnt/data
-  # (deploy user writes .env vars and manages containers via CI/CD)
+  # (deploy user manages containers via webhook/ci-deploy.sh)
   #
   # After provisioning, populate /mnt/data/.env with secrets.
   # See apps/web-platform/.env.example for required keys:
@@ -91,6 +157,28 @@ runcmd:
   # Workspace dir must be owned by soleur UID 1001 (must match apps/web-platform/Dockerfile)
   # Set after recursive chown so it isn't overridden
   - chown 1001:1001 /mnt/data/workspaces
+
+  # Install cloudflared from Cloudflare apt repository.
+  # GPG key downloaded at provision time (rotated Oct 2025).
+  - curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
+  - apt-get update
+  - apt-get install -y cloudflared
+
+  # Register cloudflared as a systemd service with the tunnel token.
+  # The token encodes tunnel configuration managed remotely via Terraform.
+  - cloudflared service install ${tunnel_token}
+
+  # Install webhook binary (adnanh/webhook v2.8.2) with checksum verification
+  - |
+    WEBHOOK_VERSION="2.8.2"
+    WEBHOOK_SHA256="4e41966a498b92d3e7a645968e0d55589f1a03d8bb327b0ccaadc3ea9a3a12ee"
+    curl -fsSL "https://github.com/adnanh/webhook/releases/download/$${WEBHOOK_VERSION}/webhook-linux-amd64.tar.gz" -o /tmp/webhook.tar.gz
+    echo "$${WEBHOOK_SHA256}  /tmp/webhook.tar.gz" | sha256sum -c -
+    tar xzf /tmp/webhook.tar.gz -C /usr/local/bin --strip-components=1 webhook-linux-amd64/webhook
+    chmod +x /usr/local/bin/webhook
+    rm /tmp/webhook.tar.gz
+  - systemctl daemon-reload
+  - systemctl enable --now webhook
 
   # Pull and run container
   - docker pull ${image_name}
