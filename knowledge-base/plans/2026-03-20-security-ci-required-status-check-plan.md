@@ -204,7 +204,7 @@ AGENTS.md mandates Terraform for infrastructure provisioning. However:
 ## Acceptance Criteria
 
 - [ ] New "CI Required" ruleset exists on `main` requiring the `test` status check with `integration_id: 15368`
-- [ ] All 9 bot workflows post synthetic `test` status alongside existing synthetic `cla-check` status
+- [x] All 9 bot workflows post synthetic `test` status alongside existing synthetic `cla-check` status
 - [ ] Human PRs with passing CI can still merge via auto-merge
 - [ ] Human PRs with failing CI are blocked from auto-merge
 - [ ] Bot PRs with synthetic statuses can still merge via auto-merge
