@@ -242,14 +242,14 @@ With the health endpoint available within seconds of container start, the 24-att
 
 ## Acceptance Criteria
 
-- [ ] Health endpoint responds within 5 seconds of container start (before grammY/CLI initialization)
-- [ ] Health endpoint returns HTTP 503 with `{"status":"degraded","cli":"connecting"}` during app initialization
-- [ ] Health endpoint returns HTTP 200 with `{"status":"ok","cli":"ready"}` after CLI is ready
-- [ ] `/readyz` endpoint continues to work correctly (200 when ready, 503 otherwise)
-- [ ] CI deploy health check passes on first or second attempt (HTTP 503 accepted)
-- [ ] All existing health tests pass unchanged
-- [ ] All existing bridge tests pass unchanged
-- [ ] Graceful shutdown closes both the health server and the bot/CLI
+- [x] Health endpoint responds within 5 seconds of container start (before grammY/CLI initialization)
+- [x] Health endpoint returns HTTP 503 with `{"status":"degraded","cli":"connecting"}` during app initialization
+- [x] Health endpoint returns HTTP 200 with `{"status":"ok","cli":"ready"}` after CLI is ready
+- [x] `/readyz` endpoint continues to work correctly (200 when ready, 503 otherwise)
+- [x] CI deploy health check passes on first or second attempt (HTTP 503 accepted)
+- [x] All existing health tests pass unchanged
+- [x] All existing bridge tests pass unchanged
+- [x] Graceful shutdown closes both the health server and the bot/CLI
 
 ## Test Scenarios
 
