@@ -176,16 +176,16 @@ All code paths that touch `script-src` or inline script execution:
 
 ## Acceptance Criteria
 
-- [ ] `script-src` in production CSP contains `'nonce-<value>'` and `'strict-dynamic'`, does NOT contain `'unsafe-inline'` as effective policy (may be present as CSP2 fallback but ignored by CSP3 browsers)
-- [ ] `script-src` in development CSP additionally contains development-only directives
-- [ ] Every response (including redirects and public pages) carries the CSP header with a fresh nonce
-- [ ] Nonce is available to server components via `(await headers()).get('x-nonce')` (even though no components currently need it)
-- [ ] `style-src` retains `'unsafe-inline'` (no change)
-- [ ] `connect-src` retains Supabase host allowlist (no change)
-- [ ] All other security headers (HSTS, X-Frame-Options, etc.) still present on responses
-- [ ] CSP header removed from `next.config.ts` `headers()` (only set in middleware)
-- [ ] Existing auth and T&C middleware behavior unchanged
-- [ ] All existing tests pass; new tests cover nonce generation and CSP content
+- [x] `script-src` in production CSP contains `'nonce-<value>'` and `'strict-dynamic'`, does NOT contain `'unsafe-inline'` as effective policy (may be present as CSP2 fallback but ignored by CSP3 browsers)
+- [x] `script-src` in development CSP additionally contains development-only directives
+- [x] Every response (including redirects and public pages) carries the CSP header with a fresh nonce
+- [x] Nonce is available to server components via `(await headers()).get('x-nonce')` (even though no components currently need it)
+- [x] `style-src` retains `'unsafe-inline'` (no change)
+- [x] `connect-src` retains Supabase host allowlist (no change)
+- [x] All other security headers (HSTS, X-Frame-Options, etc.) still present on responses
+- [x] CSP header removed from `next.config.ts` `headers()` (only set in middleware)
+- [x] Existing auth and T&C middleware behavior unchanged
+- [x] All existing tests pass; new tests cover nonce generation and CSP content
 - [ ] No CSP violations in browser console on login, signup, dashboard, chat, billing pages
 
 ## Test Scenarios

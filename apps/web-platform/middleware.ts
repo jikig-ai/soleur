@@ -1,6 +1,7 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { TC_VERSION } from "@/lib/legal/tc-version";
+import { buildCspHeader } from "@/lib/csp";
 
 // No auth required — middleware returns early
 const PUBLIC_PATHS = ["/login", "/signup", "/callback", "/api/webhooks", "/ws"];
@@ -8,21 +9,44 @@ const PUBLIC_PATHS = ["/login", "/signup", "/callback", "/api/webhooks", "/ws"];
 // Auth required, but T&C check skipped (user must reach these to accept terms)
 const TC_EXEMPT_PATHS = ["/accept-terms", "/api/accept-terms"];
 
+function withCspHeaders(response: NextResponse, cspValue: string): NextResponse {
+  response.headers.set("Content-Security-Policy", cspValue);
+  return response;
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow public paths (exact match or sub-path only, not prefix collisions)
-  if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
-    return NextResponse.next();
-  }
-
-  // Allow health check
+  // Health check: no HTML rendered, CSP unnecessary
   if (pathname === "/health") {
     return NextResponse.next();
   }
 
+  // Generate per-request nonce for CSP
+  const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
+  const cspValue = buildCspHeader({
+    nonce,
+    isDev: process.env.NODE_ENV === "development",
+    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
+  });
+
+  // Set nonce and CSP on request headers for Next.js SSR nonce extraction.
+  // SECURITY: x-nonce is a request-only header for server-side rendering.
+  // Never render it into HTML output or expose it in API responses.
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-nonce", nonce);
+  requestHeaders.set("Content-Security-Policy", cspValue);
+
+  // Allow public paths (exact match or sub-path only, not prefix collisions)
+  if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
+    return withCspHeaders(
+      NextResponse.next({ request: { headers: requestHeaders } }),
+      cspValue,
+    );
+  }
+
   let response = NextResponse.next({
-    request: { headers: request.headers },
+    request: { headers: requestHeaders },
   });
 
   const supabase = createServerClient(
@@ -49,7 +73,7 @@ export async function middleware(request: NextRequest) {
             request.cookies.set(name, value),
           );
           response = NextResponse.next({
-            request: { headers: request.headers },
+            request: { headers: requestHeaders },
           });
           cookiesToSet.forEach(({ name, value, options }) =>
             response.cookies.set(name, value, options),
@@ -70,7 +94,7 @@ export async function middleware(request: NextRequest) {
     response.cookies.getAll().forEach((cookie) =>
       redirectResponse.cookies.set(cookie.name, cookie.value),
     );
-    return redirectResponse;
+    return withCspHeaders(redirectResponse, cspValue);
   }
 
   if (!user) {
@@ -89,7 +113,7 @@ export async function middleware(request: NextRequest) {
       // Fail open: allow request if we cannot verify T&C status.
       // Auth is already verified by getUser() above.
       console.error(`[middleware] tc_accepted_version query failed: ${tcError.message}`);
-      return response;
+      return withCspHeaders(response, cspValue);
     }
 
     if (userRow?.tc_accepted_version !== TC_VERSION) {
@@ -97,7 +121,7 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  return response;
+  return withCspHeaders(response, cspValue);
 }
 
 export const config = {

@@ -1,3 +1,5 @@
+import { readFileSync } from "fs";
+import { resolve } from "path";
 import { describe, test, expect } from "vitest";
 
 // Test the middleware path routing logic directly (middleware uses Next.js
@@ -68,5 +70,53 @@ describe("middleware path routing", () => {
     test("paths that share a prefix with T&C exempt paths are NOT exempt", () => {
       expect(isTcExemptPath("/accept-terms-evil")).toBe(false);
     });
+  });
+});
+
+describe("CSP coverage invariant", () => {
+  const middlewareSrc = readFileSync(
+    resolve(__dirname, "../middleware.ts"),
+    "utf-8",
+  );
+
+  // Extract the middleware function body (between first { and the config export)
+  const funcBody = middlewareSrc.slice(
+    middlewareSrc.indexOf("export async function middleware"),
+    middlewareSrc.indexOf("export const config"),
+  );
+
+  // Extract only middleware-level return statements (indented with exactly
+  // 2 or 4 spaces), excluding returns inside nested callbacks like cookies.getAll()
+  const middlewareReturns = funcBody
+    .split("\n")
+    .filter((line) => /^ {2,4}return /.test(line))
+    .map((line) => line.trim());
+
+  test("every return statement uses withCspHeaders or redirectWithCookies (except /health)", () => {
+    expect(middlewareReturns.length).toBeGreaterThanOrEqual(4);
+
+    for (const stmt of middlewareReturns) {
+      const hasCsp =
+        stmt.includes("withCspHeaders") ||
+        stmt.includes("redirectWithCookies");
+      const isHealthCheck = stmt.includes("NextResponse.next()");
+
+      expect(
+        hasCsp || isHealthCheck,
+        `Return statement missing CSP coverage: ${stmt}`,
+      ).toBe(true);
+    }
+  });
+
+  test("/health is the only exit path without CSP", () => {
+    const noCspReturns = middlewareReturns.filter(
+      (stmt) =>
+        !stmt.includes("withCspHeaders") &&
+        !stmt.includes("redirectWithCookies"),
+    );
+
+    // Only the health check should lack CSP
+    expect(noCspReturns.length).toBe(1);
+    expect(noCspReturns[0]).toContain("NextResponse.next()");
   });
 });
