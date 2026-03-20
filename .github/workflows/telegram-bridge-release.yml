@@ -41,11 +41,31 @@ jobs:
       group: deploy-production
       cancel-in-progress: false
     steps:
-      - name: Deploy to server
-        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
-        with:
-          host: ${{ secrets.WEB_PLATFORM_HOST }}
-          username: deploy
-          key: ${{ secrets.WEB_PLATFORM_SSH_KEY }}
-          fingerprint: ${{ secrets.WEB_PLATFORM_HOST_FINGERPRINT }}
-          script: deploy telegram-bridge ghcr.io/jikig-ai/soleur-telegram-bridge v${{ needs.release.outputs.version }}
+      - name: Deploy via webhook
+        env:
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          PAYLOAD=$(printf '{"command":"deploy telegram-bridge ghcr.io/jikig-ai/soleur-telegram-bridge v%s"}' "$VERSION")
+          SIGNATURE=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
+          RESPONSE=$(mktemp)
+          HTTP_CODE=$(curl -s -o "$RESPONSE" -w '%{http_code}' \
+            --max-time 150 \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Signature-256: sha256=$SIGNATURE" \
+            -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+            -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+            -d "$PAYLOAD" \
+            "https://deploy.soleur.ai/hooks/deploy")
+          if [[ ! "$HTTP_CODE" =~ ^2 ]]; then
+            echo "::error::Deploy webhook failed (HTTP $HTTP_CODE)"
+            cat "$RESPONSE"
+            rm -f "$RESPONSE"
+            exit 1
+          fi
+          echo "Deploy completed (HTTP $HTTP_CODE)"
+          cat "$RESPONSE"
+          rm -f "$RESPONSE"
