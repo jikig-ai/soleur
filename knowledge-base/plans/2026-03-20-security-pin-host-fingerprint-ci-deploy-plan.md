@@ -3,9 +3,27 @@ title: "security: pin server host key fingerprint in CI deploy workflow"
 type: feat
 date: 2026-03-20
 semver: patch
+deepened: 2026-03-20
 ---
 
 # security: pin server host key fingerprint in CI deploy workflow
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-20
+**Sections enhanced:** 4 (Technical Considerations, SpecFlow Analysis, Fingerprint Verification Internals, Obtaining the Fingerprint)
+**Research sources:** appleboy/ssh-action action.yml, appleboy/drone-ssh plugin.go, appleboy/easyssh-proxy easyssh.go (fingerprint verification implementation), golang.org/x/crypto/ssh FingerprintSHA256 source code
+
+### Key Improvements
+1. Traced fingerprint verification through the full call chain (ssh-action -> drone-ssh -> easyssh-proxy -> golang.org/x/crypto/ssh) and documented the exact comparison logic and format requirement
+2. Confirmed the `SHA256:<base64>` format requirement from Go source code -- the `ssh.FingerprintSHA256()` function prepends `SHA256:` to unpadded base64
+3. Added `ssh-keyscan` alternative for obtaining the fingerprint remotely (no server SSH access needed)
+4. Documented the silent fallback behavior when the fingerprint secret is empty -- the action defaults to `ssh.InsecureIgnoreHostKey()`, providing zero protection
+
+### New Considerations Discovered
+- The fingerprint comparison in easyssh-proxy is an exact string match against `ssh.FingerprintSHA256(publicKey)` return value -- no normalization, no case folding, no prefix stripping
+- `ssh-keyscan -t ed25519 <host>` can obtain the host key remotely, which is then piped to `ssh-keygen -lf -` to get the SHA256 fingerprint -- this avoids needing SSH access to the server
+- The `telegram-bridge-release.yml` env setup step (line 41) passes sensitive env vars (`TELEGRAM_BOT_TOKEN`, `ANTHROPIC_API_KEY`) via the `envs` input -- without fingerprint verification, these secrets could be intercepted by a MITM attacker
 
 ## Overview
 
@@ -32,6 +50,41 @@ This is a defense-in-depth gap identified as a follow-up to #738 (CI deploy SSH 
 - **Fingerprint rotation**: If the server is reprovisioned, the host key changes and the secret must be updated. This is a manual step but is acceptable -- server reprovisioning is rare and already requires updating `WEB_PLATFORM_HOST` and `WEB_PLATFORM_SSH_KEY`.
 - **No Terraform involvement**: The fingerprint is a read-only property of the existing server's SSH host key. It does not require infrastructure changes.
 
+### Fingerprint Verification Internals (from source code review)
+
+The `fingerprint` input flows through three layers:
+
+1. **appleboy/ssh-action** (`action.yml`) -- passes `INPUT_FINGERPRINT` env var to `entrypoint.sh`, which downloads and runs the `drone-ssh` binary
+2. **appleboy/drone-ssh** (`plugin.go`) -- maps `Config.Fingerprint` to `easyssh.MakeConfig.Fingerprint`
+3. **appleboy/easyssh-proxy** (`easyssh.go`) -- the actual verification:
+
+```go
+// From easyssh.go - getSSHConfig function
+hostKeyCallback := ssh.InsecureIgnoreHostKey()
+if config.Fingerprint != "" {
+    hostKeyCallback = func(hostname string, remote net.Addr, publicKey ssh.PublicKey) error {
+        if ssh.FingerprintSHA256(publicKey) != config.Fingerprint {
+            return fmt.Errorf("ssh: host key fingerprint mismatch")
+        }
+        return nil
+    }
+}
+```
+
+4. **golang.org/x/crypto/ssh** (`keys.go`) -- `FingerprintSHA256` implementation:
+
+```go
+func FingerprintSHA256(pubKey PublicKey) string {
+    sha256sum := sha256.Sum256(pubKey.Marshal())
+    hash := base64.RawStdEncoding.EncodeToString(sha256sum[:])
+    return "SHA256:" + hash
+}
+```
+
+**Critical format detail**: The comparison is an exact string match (`!=`). The secret value must include the `SHA256:` prefix and use unpadded base64 (no trailing `=`). This matches the output of `ssh-keygen -l -f <keyfile> | cut -d ' ' -f2`.
+
+**Empty fingerprint behavior**: When the secret is empty or missing, `config.Fingerprint` is `""`, the `if` branch is skipped, and `ssh.InsecureIgnoreHostKey()` is used -- equivalent to `StrictHostKeyChecking=no`. The workflow will succeed but with zero MITM protection.
+
 ## Acceptance Criteria
 
 - [ ] `WEB_PLATFORM_HOST_FINGERPRINT` GitHub secret is set with the server's Ed25519 host key SHA256 fingerprint
@@ -49,9 +102,11 @@ This is a defense-in-depth gap identified as a follow-up to #738 (CI deploy SSH 
 
 **Edge cases identified:**
 
-1. **Secret not set before first deploy**: If the workflow runs before the secret is created, `${{ secrets.WEB_PLATFORM_HOST_FINGERPRINT }}` resolves to empty string. `appleboy/ssh-action` with an empty `fingerprint` input skips verification (same as omitting it). This means the change is backward-compatible -- deploys will not break if the secret is not yet set. However, the security benefit is absent until the secret is populated.
-2. **Server reprovisioning**: A new server gets a new host key. The deploy will fail with a fingerprint mismatch. This is the desired behavior -- it prevents deploying to the wrong server. The operator must update the secret.
-3. **Key type mismatch**: If the server presents an RSA key but the fingerprint is from Ed25519, verification fails. The server's `sshd_config` should present Ed25519 preferentially (standard on modern Ubuntu).
+1. **Secret not set before first deploy**: If the workflow runs before the secret is created, `${{ secrets.WEB_PLATFORM_HOST_FINGERPRINT }}` resolves to empty string. The easyssh-proxy library skips verification when `Fingerprint` is empty (falls through to `ssh.InsecureIgnoreHostKey()`). This means the change is backward-compatible -- deploys will not break if the secret is not yet set. However, the security benefit is absent until the secret is populated.
+2. **Server reprovisioning**: A new server gets a new host key. The deploy will fail with `ssh: host key fingerprint mismatch`. This is the desired behavior -- it prevents deploying to the wrong server. The operator must update the secret.
+3. **Key type mismatch**: If the server presents an RSA key but the fingerprint is from Ed25519, verification fails because `ssh.FingerprintSHA256()` is called on whatever key the server presents during the handshake. The server's `sshd_config` should present Ed25519 preferentially (standard on modern Ubuntu). The `HostKeyAlgorithms` directive or client-side key type preference is not configurable via `appleboy/ssh-action`.
+4. **Fingerprint format sensitivity**: The comparison is an exact string match with no normalization. A fingerprint with trailing padding (`SHA256:abc123==`) will not match the Go output (`SHA256:abc123`). The `ssh-keygen -l` output uses the same unpadded format, so this is only a concern if the fingerprint is obtained from a different tool.
+5. **Env var exposure in telegram-bridge**: The first ssh-action step in `telegram-bridge-release.yml` passes `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`, and `ANTHROPIC_API_KEY` via the `envs` input. Without fingerprint verification, a MITM attacker could capture these secrets. This makes the telegram-bridge workflow the higher-risk target of the two.
 
 ## MVP
 
@@ -91,19 +146,40 @@ This is a defense-in-depth gap identified as a follow-up to #738 (CI deploy SSH 
           # ... rest unchanged ...
 ```
 
-### Obtaining the fingerprint (one-time manual step)
+### Obtaining the fingerprint (one-time step)
+
+**Option A: Via SSH (requires existing server access)**
 
 ```bash
 ssh <server> ssh-keygen -l -f /etc/ssh/ssh_host_ed25519_key.pub | cut -d ' ' -f2
 # Output: SHA256:AAAA...
-# Then: gh secret set WEB_PLATFORM_HOST_FINGERPRINT --body "<fingerprint>"
 ```
+
+**Option B: Via ssh-keyscan (remote, no server login needed)**
+
+```bash
+ssh-keyscan -t ed25519 <server> 2>/dev/null | ssh-keygen -lf - | cut -d ' ' -f2
+# Output: SHA256:AAAA...
+```
+
+Note: Option B fetches the key over the network. If the first fetch is already MITM'd, the pinned fingerprint would be the attacker's. Option A is more trustworthy since it reads the key file directly on the server. Given the server is already deployed and in use, Option A is preferred.
+
+**Store the secret:**
+
+```bash
+gh secret set WEB_PLATFORM_HOST_FINGERPRINT --body "SHA256:AAAA..."
+```
+
+**Verify format**: The value must include the `SHA256:` prefix and use unpadded base64 (no trailing `=`). The `ssh-keygen -l` output matches this format.
 
 ## References
 
 - Issue: #748
 - Parent issue: #738 (CI deploy SSH key fix)
 - [appleboy/ssh-action README](https://github.com/appleboy/ssh-action) -- `fingerprint` input documentation
+- [appleboy/easyssh-proxy easyssh.go](https://github.com/appleboy/easyssh-proxy/blob/master/easyssh.go) -- fingerprint verification implementation (`getSSHConfig` function)
+- [golang.org/x/crypto/ssh keys.go](https://github.com/golang/crypto/blob/master/ssh/keys.go) -- `FingerprintSHA256` returns `"SHA256:" + unpadded_base64`
 - Learning: [CI SSH deploy firewall hidden dependency](../learnings/2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md)
+- Learning: [Docker base image digest pinning](../learnings/2026-03-19-docker-base-image-digest-pinning.md) -- analogous supply-chain pinning pattern
 - Workflow: `.github/workflows/web-platform-release.yml:45-78`
 - Workflow: `.github/workflows/telegram-bridge-release.yml:40-91`
