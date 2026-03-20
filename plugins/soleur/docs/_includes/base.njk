@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="{{ description }}">
+  <link rel="canonical" href="{{ site.url }}{{ page.url }}">
+  <meta property="og:title" content="{{ title }}{% if title != site.name %} - {{ site.name }}{% endif %}">
+  <meta property="og:description" content="{{ description }}">
+  <meta property="og:url" content="{{ site.url }}{{ page.url }}">
+  <meta property="og:type" content="{{ ogType | default('website') }}">
+  <meta property="og:site_name" content="{{ site.name }}">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:image" content="{{ site.url }}/images/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="{{ site.name }} - {{ site.tagline }}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ title }}{% if title != site.name %} - {{ site.name }}{% endif %}">
+  <meta name="twitter:description" content="{{ description }}">
+  <meta name="twitter:image" content="{{ site.url }}/images/og-image.png">
+  <meta name="twitter:site" content="@soleur_ai">
+  <meta name="twitter:creator" content="@soleur_ai">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "name": "{{ site.name }}",
+        "url": "{{ site.url }}",
+        "description": "{{ site.description }}"
+      },
+      {
+        "@type": "WebPage",
+        "name": "{{ title }}",
+        "description": "{{ description }}",
+        "url": "{{ site.url }}{{ page.url }}"
+      }{% if page.url == "/" or page.url == "/index.html" %},
+      {
+        "@type": "SoftwareApplication",
+        "name": "{{ site.name }}",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "macOS, Linux, Windows",
+        "softwareVersion": "{{ plugin.version }}",
+        "softwareRequirements": "Claude Code CLI",
+        "downloadUrl": "{{ site.github }}",
+        "releaseNotes": "{{ site.url }}/pages/changelog.html",
+        "featureList": "AI Agents, Skills, Commands, Knowledge Compounding, Code Review, Planning, Deployment",
+        "author": {
+          "@type": "Organization",
+          "name": "{{ site.name }}",
+          "url": "{{ site.url }}"
+        },
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        }
+      }{% endif %}
+    ]
+  }
+  </script>
+  <base href="/">
+  <link rel="icon" type="image/png" href="images/favicon.png">
+  <title>{% if title == site.name %}{{ site.name }} - {{ site.tagline }}{% else %}{{ title }} - {{ site.name }}{% endif %}</title>
+  <link rel="stylesheet" href="css/style.css">
+  <!-- Privacy-friendly analytics by Plausible -->
+  <script async src="https://plausible.io/js/pa-unmpBTT7YXW_UsDCGRfHH.js"></script>
+  <script>window.plausible=window.plausible||function(){(plausible.q=plausible.q||[]).push(arguments)},plausible.init=plausible.init||function(i){plausible.o=i||{}}; plausible.init()</script>
+  <link rel="alternate" type="application/atom+xml" title="Soleur Blog" href="/blog/feed.xml" />
+  {% block extraHead %}{% endblock %}
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+  <header class="site-header">
+    <a href="index.html" class="logo">
+      <div class="header-mark">S</div>
+      <span class="header-name">{{ site.name }}</span>
+    </a>
+    <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-hidden="true">
+    <label for="nav-toggle" class="nav-toggle-label" aria-label="Toggle navigation">&#9776;</label>
+    <ul class="nav-links">
+      {%- for item in site.nav %}
+      <li><a href="{{ item.url }}"{% if page.url == ('/' + item.url) or (item.url == 'blog/' and page.url.startsWith('/blog')) %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
+      {%- endfor %}
+    </ul>
+  </header>
+
+  <main id="main-content"{% if mainClass %} class="{{ mainClass }}"{% endif %}>
+    {% block content %}{{ content | safe }}{% endblock %}
+  </main>
+
+  {% set location = "footer" %}
+  {% include "newsletter-form.njk" %}
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-left">
+        <div class="footer-mark">S</div>
+        <span class="footer-name">{{ site.name }}</span>
+      </div>
+      <ul class="footer-links">
+        {%- for link in site.footerLinks %}
+        <li><a href="{{ link.url }}"{% if link.external %} target="_blank" rel="noopener"{% endif %}>{{ link.label }}</a></li>
+        {%- endfor %}
+      </ul>
+      <div class="footer-social">
+        <a href="{{ site.discord }}" target="_blank" rel="noopener" aria-label="Discord">Discord</a>
+        <a href="{{ site.github }}" target="_blank" rel="noopener" aria-label="GitHub">GitHub</a>
+        <a href="{{ site.x }}" target="_blank" rel="noopener" aria-label="X / Twitter">X</a>
+        <a href="{{ site.linkedinCompany }}" target="_blank" rel="noopener" aria-label="LinkedIn">LinkedIn</a>
+        <a href="{{ site.bluesky }}" target="_blank" rel="noopener" aria-label="Bluesky">Bluesky</a>
+      </div>
+      <span class="footer-tagline">Designed, built, and shipped by {{ site.name }} &mdash; using {{ site.name }}.</span>
+    </div>
+  </footer>
+
+  <script>
+  document.querySelectorAll('.newsletter-form').forEach(function(form) {
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+      var btn = form.querySelector('button[type="submit"]');
+      var status = form.querySelector('.newsletter-status');
+      var location = form.id.replace('newsletter-', '');
+      btn.disabled = true;
+      fetch(form.action, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(new FormData(form))
+      }).then(function(res) {
+        if (res.ok) {
+          status.textContent = 'Check your email to confirm your subscription.';
+          status.className = 'newsletter-status newsletter-success';
+          form.querySelector('input[type="email"]').value = '';
+          if (window.plausible) plausible('Newsletter Signup', { props: { location: location } });
+        } else {
+          status.textContent = 'Something went wrong. Please try again.';
+          status.className = 'newsletter-status newsletter-error';
+        }
+      }).catch(function(err) {
+        status.textContent = 'Something went wrong. Please try again.';
+        status.className = 'newsletter-status newsletter-error';
+      }).finally(function() {
+        btn.disabled = false;
+      });
+    });
+  });
+  </script>
+</body>
+</html>

@@ -1,0 +1,223 @@
+---
+title: Soleur
+description: "Soleur is the company-as-a-service platform — a Claude Code plugin that gives solo founders a full AI organization across every business department."
+layout: base.njk
+permalink: index.html
+---
+
+    <!-- Hero -->
+    <section class="landing-hero">
+      <h1>Build a Billion-Dollar Company. Alone.</h1>
+      <p class="hero-sub">The company-as-a-service platform for solo founders. {{ stats.agents }} AI agents across {{ stats.departments }} departments &mdash; engineering, marketing, legal, finance, sales, and more &mdash; orchestrated from a single Claude Code plugin.</p>
+      <div class="hero-cta">
+        <a href="pages/getting-started.html" class="btn btn-primary">Start building your AI organization</a>
+        <a href="pages/agents.html" class="btn btn-secondary">See the {{ stats.agents }} AI agents</a>
+      </div>
+    </section>
+
+    <!-- Stats Strip -->
+    <section class="landing-stats" aria-label="Platform statistics">
+      <div class="landing-stat">
+        <div class="landing-stat-value">{{ stats.departments }}</div>
+        <div class="landing-stat-label">Departments</div>
+      </div>
+      <div class="landing-stat">
+        <div class="landing-stat-value">{{ stats.agents }}</div>
+        <div class="landing-stat-label">AI Agents</div>
+      </div>
+      <div class="landing-stat">
+        <div class="landing-stat-value">{{ stats.skills }}</div>
+        <div class="landing-stat-label">Skills</div>
+      </div>
+      <div class="landing-stat">
+        <div class="landing-stat-value">&infin;</div>
+        <div class="landing-stat-label">Compounding Knowledge</div>
+      </div>
+    </section>
+
+    <!-- Problem Section -->
+    <section class="landing-section">
+      <div class="landing-section-inner">
+        <p class="section-label">This Is the Way</p>
+        <h2 class="section-title">The company-as-a-service platform &mdash; one founder, one AI organization, every department.</h2>
+        <p class="section-desc">Not a copilot. Not an assistant. A full AI organization that reviews, plans, builds, remembers, and self-improves. Every decision you make teaches the system. Every feature or project gets better and faster than the last.</p>
+        <div class="problem-cards">
+          <div class="problem-card">
+            <div class="problem-card-icon" aria-hidden="true">&#x1F9E0;</div>
+            <h3>You Decide</h3>
+            <p>Taste, vision, and timing. The things no machine can replace. You set the direction &mdash; everything else follows.</p>
+          </div>
+          <div class="problem-card">
+            <div class="problem-card-icon" aria-hidden="true">&#x26A1;</div>
+            <h3>Agents Execute</h3>
+            <p>{{ agents.departmentList | lower }} &mdash; every department, running autonomously on your command.</p>
+          </div>
+          <div class="problem-card">
+            <div class="problem-card-icon" aria-hidden="true">&#x1F504;</div>
+            <h3>Knowledge Compounds</h3>
+            <p>Solutions compound into patterns. Patterns compound into playbooks. Your AI organization gets smarter with every project &mdash; permanently.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Quote Section -->
+    <section class="landing-quote">
+      <blockquote>
+        &ldquo;The first billion-dollar company run by one person isn&rsquo;t science fiction. It&rsquo;s an engineering problem. We&rsquo;re solving it.&rdquo;
+      </blockquote>
+      <cite>&mdash; The Soleur Thesis</cite>
+    </section>
+
+    <!-- Mid-page CTA -->
+    <section class="landing-cta-mid">
+      <a href="pages/getting-started.html" class="btn btn-primary">Start building your AI organization</a>
+    </section>
+
+    <!-- Features Section -->
+    <section class="landing-section">
+      <div class="landing-section-inner">
+        <p class="section-label">Your AI Organization</p>
+        <h2 class="section-title">Agentic engineering from idea to shipped &mdash; every department, one workflow.</h2>
+        <div class="feature-grid-departments">
+          {%- for domain in agents.domains %}
+          <div class="feature-card">
+            <div class="feature-card-icon" aria-hidden="true">{{ domain.icon | safe }}</div>
+            <h3>{{ domain.name }}</h3>
+            <p>{{ domain.cardDescription | safe }}</p>
+          </div>
+          {%- endfor %}
+        </div>
+        <h3 class="feature-grid-sublabel">The Workflow</h3>
+        <div class="feature-grid-workflow">
+          <div class="feature-card">
+            <div class="feature-card-icon" aria-hidden="true">&#x1F4A1;</div>
+            <h3>Think</h3>
+            <p>Brainstorm, explore, challenge assumptions. Structured dialogue before any commitment.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-card-icon" aria-hidden="true">&#x1F9ED;</div>
+            <h3>Plan</h3>
+            <p>Specs, architecture, task breakdowns. Every detail mapped before execution begins.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-card-icon" aria-hidden="true">&#x1F528;</div>
+            <h3>Build</h3>
+            <p>Parallel agents writing, reviewing, and refining code. Production-grade engineering on your command.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-card-icon" aria-hidden="true">&#x1F50D;</div>
+            <h3>Review</h3>
+            <p>Multi-agent code review catches what humans miss. Security, performance, and style &mdash; checked in parallel.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-card-icon" aria-hidden="true">&#x1F680;</div>
+            <h3>Ship</h3>
+            <p>One command. Tests, version bump, commit, deploy, announce. Done.</p>
+          </div>
+          <div class="feature-card">
+            <div class="feature-card-icon" aria-hidden="true">&#x1F4C8;</div>
+            <h3>Compound</h3>
+            <p>Every decision captured, every pattern compounded. Your organization gets smarter with every project &mdash; permanently.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FAQ Section -->
+    <section class="landing-section">
+      <div class="landing-section-inner">
+        <p class="section-label">Common Questions</p>
+        <h2 class="section-title">Frequently Asked Questions</h2>
+        <div class="faq-list">
+          <details class="faq-item">
+            <summary class="faq-question">What is Soleur?</summary>
+            <p class="faq-answer">Soleur is a company-as-a-service platform delivered as a Claude Code plugin. It deploys {{ stats.agents }} AI agents across {{ stats.departments }} business departments &mdash; engineering, marketing, legal, finance, operations, product, sales, and support &mdash; giving a single founder the operational capacity of a full organization. Every problem solved compounds into patterns that accelerate future work.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">What is company-as-a-service?</summary>
+            <p class="faq-answer">Company-as-a-service means running every business function through a unified platform of AI agents instead of hiring individual employees or contractors for each department. You provide the taste, vision, and decisions &mdash; the agents handle execution across engineering, marketing, legal, sales, and every other department.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">How does Soleur differ from Cursor or GitHub Copilot?</summary>
+            <p class="faq-answer">Cursor and Copilot are code editors. Soleur operates across every business department, not only engineering. It includes agents for marketing strategy, legal compliance, financial planning, sales pipeline analysis, and more. It also compounds knowledge over time &mdash; every decision and pattern is captured and reused, making your organization smarter with each project.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">Is Soleur free?</summary>
+            <p class="faq-answer">The Soleur plugin is open source and free to install. It runs on Claude Code, which requires an Anthropic API key or a Claude subscription. Your costs depend on your Claude usage.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">Who is Soleur for?</summary>
+            <p class="faq-answer">Soleur is built for solo founders and small teams who want to operate at the scale of a full organization. Among solo founder AI tools, Soleur is the only platform that spans every department and compounds institutional knowledge across sessions.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">How do I get started?</summary>
+            <p class="faq-answer">Install the plugin with <code>claude plugin install soleur</code>, then run <code>/soleur:go</code> and describe what you want to do. Soleur routes your request to the right workflow &mdash; whether that is building a feature, validating a business idea, generating legal documents, or running a competitive analysis.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "What is Soleur?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Soleur is a company-as-a-service platform delivered as a Claude Code plugin. It deploys AI agents across business departments — engineering, marketing, legal, finance, operations, product, sales, and support — giving a single founder the operational capacity of a full organization."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What is company-as-a-service?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Company-as-a-service means running every business function through a unified platform of AI agents instead of hiring individual employees or contractors for each department. You provide the taste, vision, and decisions — the agents handle execution across engineering, marketing, legal, sales, and every other department."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How does Soleur differ from Cursor or GitHub Copilot?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Cursor and Copilot are code editors. Soleur operates across every business department, not only engineering. It includes agents for marketing strategy, legal compliance, financial planning, sales pipeline analysis, and more. It also compounds knowledge over time — every decision and pattern is captured and reused."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is Soleur free?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "The Soleur plugin is open source and free to install. It runs on Claude Code, which requires an Anthropic API key or a Claude subscription. Your costs depend on your Claude usage."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Who is Soleur for?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Soleur is built for solo founders and small teams who want to operate at the scale of a full organization. Among solo founder AI tools, Soleur is the only platform that spans every department and compounds institutional knowledge across sessions."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How do I get started?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Install the plugin with 'claude plugin install soleur', then run /soleur:go and describe what you want to do. Soleur routes your request to the right workflow."
+          }
+        }
+      ]
+    }
+    </script>
+
+    <!-- Final CTA -->
+    <section class="landing-cta">
+      <h2>Ready to build at scale?</h2>
+      <p>Your AI organization is ready. Are you?</p>
+      <a href="pages/getting-started.html" class="btn btn-primary">Start building your AI organization</a>
+    </section>

@@ -1,0 +1,79 @@
+---
+title: Changelog
+description: "Changelog - All notable changes to Soleur."
+layout: base.njk
+permalink: pages/changelog.html
+---
+
+    <section class="page-hero">
+      <div class="container">
+        <h1>Changelog</h1>
+        <p>All notable changes to Soleur.</p>
+      </div>
+    </section>
+
+    <section class="page-section">
+      <div class="container">
+        <div id="changelog-content" class="prose">
+          {{ changelog.html | safe }}
+        </div>
+        <p style="margin-top: 2rem;">
+          <a href="https://github.com/jikig-ai/soleur/releases">View all releases on GitHub &rarr;</a>
+        </p>
+      </div>
+    </section>
+
+    <!-- FAQ Section -->
+    <section class="landing-section">
+      <div class="landing-section-inner">
+        <p class="section-label">Common Questions</p>
+        <h2 class="section-title">Frequently Asked Questions</h2>
+        <div class="faq-list">
+          <details class="faq-item">
+            <summary class="faq-question">How often is Soleur updated?</summary>
+            <p class="faq-answer">Soleur ships continuously &mdash; updates are released when ready and tagged with semantic versioning. There is no fixed release schedule. Changes range from new agents and skills to bug fixes and documentation improvements.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">How do I upgrade Soleur?</summary>
+            <p class="faq-answer">Run <code>claude plugin install soleur</code> to get the latest version. The plugin manager handles the update automatically. Check the changelog or GitHub releases page for details on what changed.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">Does Soleur use semantic versioning?</summary>
+            <p class="faq-answer">Yes. Soleur follows semantic versioning &mdash; major versions for breaking changes, minor versions for new agents or skills, and patch versions for bug fixes and documentation updates. Version labels are set during PR review and applied automatically at merge.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "How often is Soleur updated?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Soleur ships continuously — updates are released when ready and tagged with semantic versioning. There is no fixed release schedule. Changes range from new agents and skills to bug fixes and documentation improvements."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How do I upgrade Soleur?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Run 'claude plugin install soleur' to get the latest version. The plugin manager handles the update automatically. Check the changelog or GitHub releases page for details on what changed."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does Soleur use semantic versioning?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. Soleur follows semantic versioning — major versions for breaking changes, minor versions for new agents or skills, and patch versions for bug fixes and documentation updates. Version labels are set during PR review and applied automatically at merge."
+          }
+        }
+      ]
+    }
+    </script>

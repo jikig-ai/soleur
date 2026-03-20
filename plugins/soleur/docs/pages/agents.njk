@@ -1,0 +1,154 @@
+---
+title: Soleur AI Agents
+description: "AI agents for business — engineering, marketing, legal, finance, operations, product, sales, and support. Each agent is a specialist in the Soleur company-as-a-service platform."
+layout: base.njk
+permalink: pages/agents.html
+---
+
+    <section class="page-hero">
+      <div class="container">
+        <h1>Soleur AI Agents</h1>
+        <p>{{ stats.agents }} AI agents across {{ stats.departments }} business departments — from code review and architecture to marketing strategy, legal compliance, and financial planning.</p>
+      </div>
+    </section>
+
+    <section class="content">
+      <div class="container">
+        <div class="prose">
+
+Agentic engineering treats AI agents as specialist team members, not generic assistants. Each Soleur agent is trained for a specific business function &mdash; code review, brand strategy, legal compliance, financial reporting, competitive intelligence, and more. Together, they form a company-as-a-service organization that operates across {{ stats.departments }} departments with the depth of dedicated specialists.
+
+What separates this from running {{ stats.departments }} disconnected tools is cross-domain coherence. Every agent shares context through a compounding knowledge base. The brand guide informs marketing copy. Competitive analysis shapes product positioning. Legal audits reference the privacy policy. A decision in one domain propagates to every other domain that depends on it.
+
+The result: {{ stats.agents }} agents that function as a unified AI organization, not a collection of isolated capabilities. Explore the departments below to see what each agent does.
+
+        </div>
+      </div>
+    </section>
+
+    <div class="container">
+      <nav class="category-nav" aria-label="Agent categories">
+        {%- for domain in agents.domains %}
+        <a href="pages/agents.html#{{ domain.key }}" class="category-pill">{{ domain.name }}</a>
+        {%- endfor %}
+      </nav>
+
+      {%- for domain in agents.domains %}
+      <section id="{{ domain.key }}" class="category-section">
+        <div class="category-header">
+          <h2 class="category-title">{{ domain.name }}</h2>
+          <span class="category-count">{{ domain.count }} agent{{ "s" if domain.count != 1 }}</span>
+        </div>
+
+        {%- if domain.subcategories.length > 0 %}
+          {%- for sub in domain.subcategories %}
+        <h3 style="font-size: var(--text-base); color: var(--color-text-secondary); margin-bottom: var(--space-4);">{{ sub.name }}</h3>
+        <div class="catalog-grid">
+            {%- for agent in sub.agents %}
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: {{ domain.cssVar }}"></span>
+              <span class="card-category">{{ domain.name }} / {{ sub.name }}</span>
+            </div>
+            <h3 class="card-title">{{ agent.name }}</h3>
+            <p class="card-description">{{ agent.description }}</p>
+          </article>
+            {%- endfor %}
+        </div>
+          {%- endfor %}
+        {%- else %}
+        <div class="catalog-grid">
+          {%- for agent in domain.agents %}
+          <article class="component-card">
+            <div class="card-header">
+              <span class="card-dot" style="background: {{ domain.cssVar }}"></span>
+              <span class="card-category">{{ domain.name }}</span>
+            </div>
+            <h3 class="card-title">{{ agent.name }}</h3>
+            <p class="card-description">{{ agent.description }}</p>
+          </article>
+          {%- endfor %}
+        </div>
+        {%- endif %}
+      </section>
+      {%- endfor %}
+    </div>
+
+    <!-- FAQ Section -->
+    <section class="landing-section">
+      <div class="landing-section-inner">
+        <p class="section-label">Common Questions</p>
+        <h2 class="section-title">Frequently Asked Questions</h2>
+        <div class="faq-list">
+          <details class="faq-item">
+            <summary class="faq-question">What are Soleur agents?</summary>
+            <p class="faq-answer">Soleur agents are specialized AI personas with domain expertise that execute business tasks within Claude Code. Each agent is trained for a specific function &mdash; code review, brand strategy, legal compliance, financial reporting &mdash; not a generic chatbot that attempts everything.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">How many agents does Soleur have?</summary>
+            <p class="faq-answer">Soleur deploys {{ stats.agents }} agents across {{ stats.departments }} business departments, covering engineering, marketing, legal, finance, operations, product, sales, and support. The count updates automatically as new agents are added.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">Can I customize Soleur agents?</summary>
+            <p class="faq-answer">Agents read from a shared knowledge base that includes your brand guide, project constitution, and institutional learnings. Customization happens through documentation &mdash; update your knowledge base and every agent adapts to your context automatically.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">Do all Soleur agents run at once?</summary>
+            <p class="faq-answer">Agents activate only when relevant to the current task. Skills and workflows invoke the specific agents needed &mdash; a code review activates engineering reviewers, a competitive scan activates the marketing domain. Unused agents consume zero resources.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">What departments do Soleur agents cover?</summary>
+            <p class="faq-answer">Soleur provides the most comprehensive set of solo founder AI tools across {{ stats.departments }} departments: engineering, marketing, legal, finance, operations, product, sales, and support. Each department has a domain leader that orchestrates specialist agents.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "What are Soleur agents?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Soleur agents are specialized AI personas with domain expertise that execute business tasks within Claude Code. Each agent is trained for a specific function — code review, brand strategy, legal compliance, financial reporting — not a generic chatbot that attempts everything."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How many agents does Soleur have?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Soleur deploys {{ stats.agents }} agents across {{ stats.departments }} business departments, covering engineering, marketing, legal, finance, operations, product, sales, and support. The count updates automatically as new agents are added."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can I customize Soleur agents?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Agents read from a shared knowledge base that includes your brand guide, project constitution, and institutional learnings. Customization happens through documentation — update your knowledge base and every agent adapts to your context automatically."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Do all Soleur agents run at once?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Agents activate only when relevant to the current task. Skills and workflows invoke the specific agents needed — a code review activates engineering reviewers, a competitive scan activates the marketing domain. Unused agents consume zero resources."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What departments do Soleur agents cover?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Soleur provides the most comprehensive set of solo founder AI tools across {{ stats.departments }} departments: engineering, marketing, legal, finance, operations, product, sales, and support. Each department has a domain leader that orchestrates specialist agents."
+          }
+        }
+      ]
+    }
+    </script>

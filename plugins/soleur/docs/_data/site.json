@@ -1,0 +1,35 @@
+{
+  "name": "Soleur",
+  "url": "https://soleur.ai",
+  "tagline": "The Company-as-a-Service Platform",
+  "description": "The company-as-a-service platform. A Claude Code plugin that gives solo founders a full AI organization across every business department.",
+  "github": "https://github.com/jikig-ai/soleur",
+  "discord": "https://discord.gg/PYZbPBKMUY",
+  "x": "https://x.com/soleur_ai",
+  "linkedin": "https://linkedin.com/company/soleur",
+  "linkedinCompany": "https://www.linkedin.com/company/jikigai/",
+  "bluesky": "https://bsky.app/profile/soleur.bsky.social",
+  "newsletter": {
+    "username": "soleur"
+  },
+  "nav": [
+    { "label": "Get Started", "url": "pages/getting-started.html" },
+    { "label": "Agents", "url": "pages/agents.html" },
+    { "label": "Skills", "url": "pages/skills.html" },
+    { "label": "Community", "url": "pages/community.html" },
+    { "label": "Blog", "url": "blog/" },
+    { "label": "Vision", "url": "pages/vision.html" },
+    { "label": "Changelog", "url": "pages/changelog.html" }
+  ],
+  "author": {
+    "name": "Jean Jikig",
+    "url": "https://soleur.ai"
+  },
+  "footerLinks": [
+    { "label": "Get Started", "url": "pages/getting-started.html" },
+    { "label": "Blog", "url": "blog/" },
+    { "label": "Community", "url": "pages/community.html" },
+    { "label": "Vision", "url": "pages/vision.html" },
+    { "label": "Legal", "url": "pages/legal.html" }
+  ]
+}
