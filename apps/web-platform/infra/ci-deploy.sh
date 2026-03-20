@@ -73,7 +73,7 @@ case "$COMPONENT" in
     docker pull "$IMAGE:$TAG"
     { docker stop soleur-web-platform || true; }
     { docker rm soleur-web-platform || true; }
-    chown 1001:1001 /mnt/data/workspaces
+    sudo chown 1001:1001 /mnt/data/workspaces
     docker run -d \
       --name soleur-web-platform \
       --restart unless-stopped \
