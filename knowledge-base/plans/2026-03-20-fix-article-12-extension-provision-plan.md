@@ -3,6 +3,26 @@ title: "fix: add Article 12(3) two-month extension provision to response timelin
 type: fix
 date: 2026-03-20
 semver: patch
+deepened: 2026-03-20
+---
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-20
+**Sections enhanced:** 4 (Proposed Fix, Implementation, "Last Updated" headers, Acceptance Criteria)
+**Research sources:** GDPR Article 12(3) full text (gdpr-info.eu), institutional learning (`eleventy-mirror-dual-date-locations`)
+
+### Key Improvements
+
+1. **Corrected proposed text** to include both statutory extension grounds ("complexity or volume of requests") instead of only "complexity" -- the regulation says "taking into account the complexity and number of the requests"
+2. **Added dual date location warning** for Eleventy mirror files -- each mirror file has TWO "Last Updated" locations (hero HTML `<p>` tag + body markdown line) that must both be updated (from learning: `2026-03-20-eleventy-mirror-dual-date-locations`)
+3. **Verified proposed language** against the verbatim GDPR Article 12(3) text from EUR-Lex -- confirmed the notification obligation requires informing "within one month of receipt of the request, together with the reasons for the delay"
+
+### New Considerations Discovered
+
+- The DPD plugin mirror file uses Eleventy HTML link format (`/pages/legal/gdpr-policy.html`) -- verified this difference is already noted in the plan
+- Article 12(4) (refusal notification) is out of scope and does not need the extension language
+
 ---
 
 # Add Article 12(3) Two-Month Extension Provision
@@ -24,7 +44,11 @@ All four existing response timeline sentences quote only the first guarantee. If
 
 Append the following sentence immediately after each existing response timeline statement:
 
-> This period may be extended by two further months where necessary due to request complexity, in which case we will inform you of the extension and reasons within the initial one-month period.
+> This period may be extended by two further months where necessary, taking into account the complexity or volume of requests, in which case we will inform you of the extension and reasons within the initial one-month period.
+
+### Research Insight: Statutory Fidelity
+
+The original issue proposed text mentioning only "request complexity." The actual GDPR Article 12(3) reads: "That period may be extended by two further months where necessary, **taking into account the complexity and number of the requests.**" Both grounds must be included. The proposed text above uses "complexity or volume of requests" as a plain-language paraphrase that preserves both statutory grounds while remaining readable for non-legal audiences. Using "or" rather than "and" avoids implying both conditions must be met simultaneously (the regulation uses "and" in the sense of listing two independent considerations, not requiring both).
 
 ## Affected Files (8 total -- 4 source, 4 mirror)
 
@@ -66,7 +90,7 @@ For each of the 8 files listed above, append the extension sentence to the exist
 
 **After:**
 ```text
-...within one month of receipt, as required by GDPR Article 12(3). This period may be extended by two further months where necessary due to request complexity, in which case we will inform you of the extension and reasons within the initial one-month period.
+...within one month of receipt, as required by GDPR Article 12(3). This period may be extended by two further months where necessary, taking into account the complexity or volume of requests, in which case we will inform you of the extension and reasons within the initial one-month period.
 ```
 
 ### Pattern for DPD (`data-protection-disclosure.md`, both locations)
@@ -78,7 +102,7 @@ Jikigai will acknowledge requests within 5 business days and respond substantive
 
 **After:**
 ```text
-Jikigai will acknowledge requests within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3). This period may be extended by two further months where necessary due to request complexity, in which case we will inform you of the extension and reasons within the initial one-month period. For full details on how each right applies, see the companion [GDPR Policy](gdpr-policy.md) Section 5.
+Jikigai will acknowledge requests within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3). This period may be extended by two further months where necessary, taking into account the complexity or volume of requests, in which case we will inform you of the extension and reasons within the initial one-month period. For full details on how each right applies, see the companion [GDPR Policy](gdpr-policy.md) Section 5.
 ```
 
 (Note: the plugin mirror copy uses Eleventy link format `/pages/legal/gdpr-policy.html` instead of `gdpr-policy.md`.)
@@ -86,6 +110,23 @@ Jikigai will acknowledge requests within 5 business days and respond substantive
 ### "Last Updated" headers
 
 Update the "Last Updated" line in each of the 8 files to include today's date and a brief description of the change (e.g., "added Article 12(3) two-month extension provision").
+
+**Institutional Learning (from `2026-03-20-eleventy-mirror-dual-date-locations`):** The 4 Eleventy mirror files in `plugins/soleur/docs/pages/legal/` each contain TWO "Last Updated" locations that must both be updated:
+
+1. A **hero `<p>` tag** in the HTML wrapper near the top of the file (inside `<section class="page-hero">`):
+   ```html
+   <p>Effective February 20, 2026 | Last Updated March 20, 2026 (...)</p>
+   ```
+2. A **body markdown line** further down in the document content:
+   ```markdown
+   **Last Updated:** March 20, 2026 (...)
+   ```
+
+The source files in `docs/legal/` have only one "Last Updated" location (the body markdown line). Before editing each mirror file, grep for all date occurrences:
+
+```bash
+grep -n "Last Updated" plugins/soleur/docs/pages/legal/<file>.md
+```
 
 ## Section Number Discrepancy
 

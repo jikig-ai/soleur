@@ -20,7 +20,7 @@ permalink: pages/legal/terms-and-conditions.html
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 20, 2026 -- added Web Platform service terms, scoped local-only statements to Plugin, updated data practices and GDPR rights sections for Web Platform; added subscription cancellation, refund, and EU withdrawal policy (Section 5).
+**Last Updated:** March 20, 2026 -- added Web Platform service terms, scoped local-only statements to Plugin, updated data practices and GDPR rights sections for Web Platform; added subscription cancellation, refund, and EU withdrawal policy (Section 5); added Article 12(3) two-month extension provision to response timeline.
 
 ---
 
@@ -334,7 +334,7 @@ For questions or concerns regarding these Terms, please contact us through:
 - **Issues:** [github.com/jikig-ai/soleur/issues](https://github.com/jikig-ai/soleur/issues)
 - **GDPR / Data Protection Inquiries:** legal@jikigai.com (include "GDPR" in the subject line)
 
-To exercise your data subject rights under GDPR, send a written request to legal@jikigai.com. We will acknowledge your request within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3).
+To exercise your data subject rights under GDPR, send a written request to legal@jikigai.com. We will acknowledge your request within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3). This period may be extended by two further months where necessary, taking into account the complexity or volume of requests, in which case we will inform you of the extension and reasons within the initial one-month period.
 
 ---
 
