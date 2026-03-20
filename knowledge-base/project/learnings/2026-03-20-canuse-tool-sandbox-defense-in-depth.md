@@ -20,6 +20,7 @@ Three-tier defense-in-depth, where each layer independently blocks the most crit
 Supporting changes:
 - **Minimal env allowlist** — only 6 variables (`NODE_ENV`, `HOME`, `PATH`, `LANG`, `TERM`, `USER`) are passed to the subprocess instead of the full `process.env`. This eliminates the entire class of env-var exfiltration attacks.
 - **Empty permissions.allow** — `settings.json` uses `"allow": []` so every tool invocation flows through `canUseTool`.
+- **`settingSources: []` in query() options** — explicitly prevents the SDK from loading `.claude/settings.json`, which could contain `permissions.allow` entries that bypass `canUseTool` (permission chain step 4 before step 5). The SDK defaults to `[]` since v0.1.0, but the explicit setting is defense-in-depth against SDK regression or someone adding `settingSources: ["project"]` for CLAUDE.md support. If CLAUDE.md support is ever needed, inject content via `systemPrompt` instead of changing `settingSources`.
 - **bubblewrap + socat in Dockerfile** — runtime dependencies for the SDK sandbox.
 
 ## Key Insight
