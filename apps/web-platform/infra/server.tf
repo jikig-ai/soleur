@@ -12,7 +12,8 @@ resource "hcloud_server" "web" {
   ssh_keys    = [hcloud_ssh_key.default.id]
 
   user_data = templatefile("${path.module}/cloud-init.yml", {
-    image_name = var.image_name
+    image_name            = var.image_name
+    deploy_ssh_public_key = var.deploy_ssh_public_key
   })
 
   labels = {
