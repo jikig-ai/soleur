@@ -48,13 +48,15 @@ If the test command itself is not available (bun not installed, no test config),
 
 ## Phase 3: Branch and Fix
 
-Create a branch:
+Create a worktree for the fix. Do NOT use `git checkout -b` -- it fails on bare repos (`core.bare=true`).
 
 ```bash
-git checkout -b bot-fix/$ISSUE_NUMBER-$SLUG
+bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create bot-fix-<ISSUE_NUMBER>-<SLUG>
 ```
 
-Derive `$SLUG` from the issue title: lowercase, spaces to hyphens, strip non-alphanumeric characters, truncate to 40 characters.
+Then `cd` into the worktree path printed by the script.
+
+Derive `<SLUG>` from the issue title: lowercase, spaces to hyphens, strip non-alphanumeric characters, truncate to 40 characters.
 
 Read the issue body, understand the bug, locate the relevant file, and make the fix. Apply the single-file constraint -- if the root cause spans multiple files, abort and go to Phase 6.
 
@@ -154,11 +156,12 @@ This issue may need a human developer. The bot will not retry this issue."
 gh issue edit $ISSUE_NUMBER --add-label "bot-fix/attempted"
 ```
 
-3. If a branch was created, clean up:
+3. If a worktree was created, clean up:
 
 ```bash
-git checkout main
-git branch -D bot-fix/$ISSUE_NUMBER-$SLUG 2>/dev/null
+cd /path/to/bare/repo/root
+git worktree remove .worktrees/bot-fix-<ISSUE_NUMBER>-<SLUG> --force 2>/dev/null
+git branch -D bot-fix-<ISSUE_NUMBER>-<SLUG> 2>/dev/null
 ```
 
 4. Exit without creating a PR.

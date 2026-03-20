@@ -11,7 +11,13 @@ Run these steps in order. Do not do anything else.
 bash ./plugins/soleur/scripts/setup-ralph-loop.sh "finish all slash commands" --completion-promise "DONE"
 ```
 
-**Step 0b: Ensure branch isolation.** Check the current branch with `git branch --show-current`. If on the default branch (main or master), pull latest and create a feature branch named `feat/one-shot-<slugified-arguments>` before proceeding. Parallel agents on the same repo cause silent merge conflicts when both work on main.
+**Step 0b: Ensure branch isolation.** Check the current branch with `git branch --show-current`. If on the default branch (main or master), create a worktree for the feature branch. Do NOT use `git pull` or `git checkout -b` -- both fail on bare repos (`core.bare=true`).
+
+```bash
+bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create feat-one-shot-<slugified-arguments>
+```
+
+Then `cd` into the worktree path printed by the script. Parallel agents on the same repo cause silent merge conflicts when both work on main.
 
 **Step 0c: Create draft PR.** After creating the feature branch, create a draft PR:
 
