@@ -1,8 +1,3 @@
-interface SecurityHeader {
-  key: string;
-  value: string;
-}
-
 function parseSupabaseHost(url: string): string {
   if (!url) return "";
   try {
@@ -15,9 +10,17 @@ function parseSupabaseHost(url: string): string {
 export function buildSecurityHeaders(options: {
   isDev: boolean;
   supabaseUrl: string;
-}): SecurityHeader[] {
+}) {
   const { isDev, supabaseUrl } = options;
   const supabaseHost = parseSupabaseHost(supabaseUrl);
+
+  // In production, require an explicit Supabase URL to avoid a permissive
+  // wildcard in connect-src. Fall back to *.supabase.co only in development.
+  if (!supabaseHost && !isDev) {
+    throw new Error(
+      "NEXT_PUBLIC_SUPABASE_URL must be set in production builds",
+    );
+  }
 
   const supabaseConnect = supabaseHost
     ? `https://${supabaseHost} wss://${supabaseHost}`
@@ -26,11 +29,14 @@ export function buildSecurityHeaders(options: {
   const cspDirectives = [
     "default-src 'self'",
     `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+    // unsafe-inline required for Tailwind/Next.js inline style injection
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' blob: data:",
     "font-src 'self'",
     `connect-src 'self' ${supabaseConnect}`,
     "object-src 'none'",
+    "frame-src 'none'",
+    "worker-src 'self'",
     "base-uri 'self'",
     "form-action 'self'",
     "frame-ancestors 'none'",
@@ -50,7 +56,11 @@ export function buildSecurityHeaders(options: {
       key: "Permissions-Policy",
       value: "camera=(), microphone=(), geolocation=(), browsing-topics=()",
     },
+    { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+    { key: "Cross-Origin-Resource-Policy", value: "same-origin" },
     { key: "X-DNS-Prefetch-Control", value: "on" },
+    // Explicitly disable the legacy XSS filter -- OWASP recommends 0 (not
+    // omission) because the filter itself can introduce vulnerabilities.
     { key: "X-XSS-Protection", value: "0" },
   ];
 }

@@ -19,12 +19,13 @@ describe("buildSecurityHeaders", () => {
     isDev: true,
     supabaseUrl: "https://abc.supabase.co",
   });
+  // Wildcard fallback only allowed in dev mode
   const noUrlHeaders = buildSecurityHeaders({
-    isDev: false,
+    isDev: true,
     supabaseUrl: "",
   });
   const badUrlHeaders = buildSecurityHeaders({
-    isDev: false,
+    isDev: true,
     supabaseUrl: "not-a-url",
   });
 
@@ -50,17 +51,30 @@ describe("buildSecurityHeaders", () => {
     expect(connectSrc).toContain("wss://abc.supabase.co");
   });
 
-  test("connect-src falls back to wildcard when URL is empty", () => {
+  test("connect-src falls back to wildcard when URL is empty in dev", () => {
     const csp = findHeader(noUrlHeaders, "Content-Security-Policy");
     const connectSrc = parseCspDirective(csp, "connect-src");
     expect(connectSrc).toContain("https://*.supabase.co");
     expect(connectSrc).toContain("wss://*.supabase.co");
   });
 
-  test("does not throw on malformed Supabase URL", () => {
+  test("throws when Supabase URL is missing in production", () => {
+    expect(() =>
+      buildSecurityHeaders({ isDev: false, supabaseUrl: "" }),
+    ).toThrow("NEXT_PUBLIC_SUPABASE_URL must be set in production");
+  });
+
+  test("throws when Supabase URL is malformed in production", () => {
+    expect(() =>
+      buildSecurityHeaders({ isDev: false, supabaseUrl: "not-a-url" }),
+    ).toThrow("NEXT_PUBLIC_SUPABASE_URL must be set in production");
+  });
+
+  test("does not throw on malformed Supabase URL in dev", () => {
     expect(badUrlHeaders.length).toBeGreaterThan(0);
     const csp = findHeader(badUrlHeaders, "Content-Security-Policy");
     expect(csp).toContain("*.supabase.co");
+    expect(csp).not.toContain("not-a-url");
   });
 
   test("X-Frame-Options is DENY", () => {
@@ -94,6 +108,28 @@ describe("buildSecurityHeaders", () => {
     expect(pp).toContain("geolocation=()");
   });
 
+  test("Cross-Origin-Opener-Policy is same-origin", () => {
+    expect(findHeader(prodHeaders, "Cross-Origin-Opener-Policy")).toBe(
+      "same-origin",
+    );
+  });
+
+  test("Cross-Origin-Resource-Policy is same-origin", () => {
+    expect(findHeader(prodHeaders, "Cross-Origin-Resource-Policy")).toBe(
+      "same-origin",
+    );
+  });
+
+  test("CSP contains frame-src 'none'", () => {
+    const csp = findHeader(prodHeaders, "Content-Security-Policy");
+    expect(csp).toContain("frame-src 'none'");
+  });
+
+  test("CSP contains worker-src 'self'", () => {
+    const csp = findHeader(prodHeaders, "Content-Security-Policy");
+    expect(csp).toContain("worker-src 'self'");
+  });
+
   test("returns all required headers", () => {
     const keys = prodHeaders.map((h) => h.key);
     expect(keys).toContain("Content-Security-Policy");
@@ -102,6 +138,8 @@ describe("buildSecurityHeaders", () => {
     expect(keys).toContain("Strict-Transport-Security");
     expect(keys).toContain("Referrer-Policy");
     expect(keys).toContain("Permissions-Policy");
+    expect(keys).toContain("Cross-Origin-Opener-Policy");
+    expect(keys).toContain("Cross-Origin-Resource-Policy");
     expect(keys).toContain("X-DNS-Prefetch-Control");
     expect(keys).toContain("X-XSS-Protection");
   });
@@ -116,6 +154,8 @@ describe("buildSecurityHeaders", () => {
       "font-src",
       "connect-src",
       "object-src",
+      "frame-src",
+      "worker-src",
       "base-uri",
       "form-action",
       "frame-ancestors",
