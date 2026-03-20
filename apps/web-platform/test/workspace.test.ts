@@ -30,7 +30,7 @@ describe("workspace provisioning", () => {
     expect(existsSync(join(path, "knowledge-base/learnings"))).toBe(true);
   });
 
-  test("creates .claude/settings.json with default permissions", async () => {
+  test("creates .claude/settings.json with empty permissions for canUseTool routing", async () => {
     const userId = randomUUID();
     const path = await provisionWorkspace(userId);
 
@@ -38,9 +38,16 @@ describe("workspace provisioning", () => {
     expect(existsSync(settingsPath)).toBe(true);
 
     const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
-    expect(settings.permissions.allow).toContain("Read");
-    expect(settings.permissions.allow).toContain("Glob");
-    expect(settings.permissions.allow).toContain("Grep");
+    expect(settings.permissions.allow).toEqual([]);
+  });
+
+  test("creates .claude/settings.json with sandbox enabled", async () => {
+    const userId = randomUUID();
+    const path = await provisionWorkspace(userId);
+
+    const settingsPath = join(path, ".claude/settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    expect(settings.sandbox.enabled).toBe(true);
   });
 
   // Git init test skipped: Bun's test runner inherits the parent git

@@ -15,7 +15,7 @@ users:
     shell: /bin/bash
     lock_passwd: true
     ssh_authorized_keys:
-      - ${deploy_ssh_public_key}
+      - restrict,command="/usr/local/bin/ci-deploy.sh" ${deploy_ssh_public_key}
 
 write_files:
   - path: /etc/ssh/sshd_config.d/01-hardening.conf
