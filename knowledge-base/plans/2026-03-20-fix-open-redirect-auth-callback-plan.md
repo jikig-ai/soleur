@@ -162,15 +162,15 @@ The firewall (`infra/firewall.tf`) exposes ports 80 and 3000 to `0.0.0.0/0`. Res
 
 ## Acceptance Criteria
 
-- [ ] `origin` used in `NextResponse.redirect()` calls is validated against a hardcoded allowlist of known domains
-- [ ] `resolveOrigin` is exported as a named function for direct unit testing (no logic duplication in tests)
-- [ ] Requests with `X-Forwarded-Host: evil.com` redirect to `https://app.soleur.ai/*` (not `evil.com`)
-- [ ] Requests with `X-Forwarded-Proto: http` + `X-Forwarded-Host: evil.com` redirect to `https://app.soleur.ai/*`
-- [ ] Requests via Cloudflare (legitimate `X-Forwarded-Host: app.soleur.ai`) still redirect correctly
-- [ ] Local development (`localhost:3000`) redirects still work
-- [ ] Requests with no forwarded headers (direct `host: app.soleur.ai`) redirect correctly
-- [ ] Rejected origins are logged with `console.warn` (truncated, no auth code)
-- [ ] Unit tests cover all validation branches in `apps/web-platform/test/callback.test.ts`
+- [x] `origin` used in `NextResponse.redirect()` calls is validated against a hardcoded allowlist of known domains
+- [x] `resolveOrigin` is exported as a named function for direct unit testing (no logic duplication in tests)
+- [x] Requests with `X-Forwarded-Host: evil.com` redirect to `https://app.soleur.ai/*` (not `evil.com`)
+- [x] Requests with `X-Forwarded-Proto: http` + `X-Forwarded-Host: evil.com` redirect to `https://app.soleur.ai/*`
+- [x] Requests via Cloudflare (legitimate `X-Forwarded-Host: app.soleur.ai`) still redirect correctly
+- [x] Local development (`localhost:3000`) redirects still work
+- [x] Requests with no forwarded headers (direct `host: app.soleur.ai`) redirect correctly
+- [x] Rejected origins are logged with `console.warn` (truncated, no auth code)
+- [x] Unit tests cover all validation branches in `apps/web-platform/test/callback.test.ts`
 
 ## Test Scenarios
 
