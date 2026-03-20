@@ -12,15 +12,9 @@ resource "hcloud_firewall" "web" {
     }
   }
 
-  # SSH -- CI deploy (GitHub Actions runners use dynamic IPs)
-  rule {
-    direction  = "in"
-    protocol   = "tcp"
-    port       = "22"
-    source_ips = ["0.0.0.0/0", "::/0"]
-  }
+  # CI deploy SSH rule removed -- deploys now use webhook via Cloudflare Tunnel (#749).
 
-  # HTTP (redirect to HTTPS or direct app access)
+  # HTTP (app traffic via Cloudflare proxy)
   rule {
     direction  = "in"
     protocol   = "tcp"
@@ -33,14 +27,6 @@ resource "hcloud_firewall" "web" {
     direction  = "in"
     protocol   = "tcp"
     port       = "443"
-    source_ips = ["0.0.0.0/0", "::/0"]
-  }
-
-  # App port (3000) for direct access during development
-  rule {
-    direction  = "in"
-    protocol   = "tcp"
-    port       = "3000"
     source_ips = ["0.0.0.0/0", "::/0"]
   }
 
