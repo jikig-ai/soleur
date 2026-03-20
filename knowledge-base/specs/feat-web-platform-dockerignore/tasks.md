@@ -6,8 +6,8 @@ Issue: #807
 ## Phase 1: Implementation
 
 - [ ] 1.1 Create `apps/web-platform/.dockerignore` with exclusions mirroring telegram-bridge pattern plus Next.js-specific entries
-  - Exclude: `node_modules`, `.env`, `.env.example`, `.env*.local`, `infra/`, `.git`, `.gitignore`, `*.md`, `test/`, `supabase/`, `.next/`, `out/`, `*.pem`, `*.tsbuildinfo`, `next-env.d.ts`
-  - Do NOT exclude `tsconfig.json` (Next.js needs it at build time)
+  - Exclude: `node_modules`, `.env`, `.env.example`, `.env*.local`, `infra/`, `.git`, `.gitignore`, `*.md`, `test/`, `supabase/`, `.next/`, `out/`, `*.pem`, `*.tsbuildinfo`, `next-env.d.ts`, `Dockerfile`, `.dockerignore`, `docker-compose*.yml`
+  - Do NOT exclude: `tsconfig.json` (Next.js TypeScript compilation), `next.config.ts` (build config), `postcss.config.mjs` (Tailwind CSS 4), `middleware.ts`, `server/`, `app/`, `lib/`
 
 ## Phase 2: Verification
 
