@@ -3,84 +3,71 @@
 **Plan:** [2026-03-20-infra-cloudflare-tunnel-deploy-plan.md](../../plans/2026-03-20-infra-cloudflare-tunnel-deploy-plan.md)
 **Issue:** [#749](https://github.com/jikig-ai/soleur/issues/749)
 
-## Phase 1: Cloudflare Zero Trust + Tunnel (Terraform)
+[Updated 2026-03-20] Simplified to 2 phases after plan review.
 
-- [ ] 1.1 Enable Cloudflare Zero Trust free tier (Playwright: navigate to dash.cloudflare.com → Zero Trust → enable)
-- [ ] 1.2 Get `cloudflare_account_id` (Cloudflare dashboard or API)
-- [ ] 1.3 Create `apps/web-platform/infra/tunnel.tf` with:
-  - [ ] 1.3.1 `random_id.tunnel_secret` (32-byte)
-  - [ ] 1.3.2 `cloudflare_zero_trust_tunnel_cloudflared.web`
-  - [ ] 1.3.3 `cloudflare_zero_trust_tunnel_cloudflared_config.web` (ingress rules: app, deploy, ssh, catch-all)
-  - [ ] 1.3.4 `cloudflare_zero_trust_access_application.ssh`
-  - [ ] 1.3.5 `cloudflare_zero_trust_access_policy.ssh_admin`
-- [ ] 1.4 Add `random` provider to `apps/web-platform/infra/main.tf`
-- [ ] 1.5 Add new variables to `apps/web-platform/infra/variables.tf`:
-  - [ ] 1.5.1 `cloudflare_account_id` (string)
-  - [ ] 1.5.2 `admin_email` (string)
-  - [ ] 1.5.3 `webhook_deploy_secret` (string, sensitive)
+## Phase 1: Tunnel + Webhook Infrastructure
+
+- [ ] 1.1 Enable Cloudflare Zero Trust free tier (Playwright: dash.cloudflare.com → Zero Trust → enable)
+- [ ] 1.2 Get `cloudflare_account_id` (Cloudflare API or dashboard)
+- [ ] 1.3 Add `random` provider to `apps/web-platform/infra/main.tf`
+- [ ] 1.4 Add new variables to `apps/web-platform/infra/variables.tf`:
+  - [ ] 1.4.1 `cloudflare_account_id` (string)
+  - [ ] 1.4.2 `webhook_deploy_secret` (string, sensitive)
+- [ ] 1.5 Create `apps/web-platform/infra/tunnel.tf`:
+  - [ ] 1.5.1 `random_id.tunnel_secret` (32-byte)
+  - [ ] 1.5.2 `cloudflare_zero_trust_tunnel_cloudflared.web`
+  - [ ] 1.5.3 `cloudflare_zero_trust_tunnel_cloudflared_config.web` (ingress: deploy.soleur.ai → localhost:9000, catch-all 404)
+  - [ ] 1.5.4 `cloudflare_zero_trust_access_application.deploy` (service token auth)
+  - [ ] 1.5.5 `cloudflare_zero_trust_access_service_token.deploy`
+  - [ ] 1.5.6 `cloudflare_zero_trust_access_policy.deploy_service_token`
+  - [ ] 1.5.7 Sensitive output: `tunnel_token`
 - [ ] 1.6 Update `apps/web-platform/infra/dns.tf`:
-  - [ ] 1.6.1 Change `cloudflare_record.app` from A → CNAME (tunnel)
-  - [ ] 1.6.2 Add `cloudflare_record.deploy` CNAME
-  - [ ] 1.6.3 Add `cloudflare_record.ssh` CNAME
-- [ ] 1.7 Add tunnel token output for cloud-init injection
-- [ ] 1.8 Run `terraform validate` and `terraform plan`
+  - [ ] 1.6.1 Keep `cloudflare_record.app` unchanged (A record)
+  - [ ] 1.6.2 Add `cloudflare_record.deploy` CNAME to tunnel
+- [ ] 1.7 Update `apps/web-platform/infra/cloud-init.yml`:
+  - [ ] 1.7.1 Add write_files: `/etc/webhook/hooks.json` (HMAC, SSH_ORIGINAL_COMMAND injection, POST-only, 403 on mismatch, include-command-output)
+  - [ ] 1.7.2 Add write_files: `/etc/systemd/system/webhook.service` (hardened: NoNewPrivileges, ProtectSystem, deploy user)
+  - [ ] 1.7.3 Add runcmd: install cloudflared via pkg.cloudflare.com apt repo
+  - [ ] 1.7.4 Add runcmd: `cloudflared service install <tunnel_token>`
+  - [ ] 1.7.5 Add runcmd: install webhook v2.8.2 with SHA256 checksum verification
+  - [ ] 1.7.6 Add runcmd: `systemctl enable --now webhook`
+- [ ] 1.8 Update `apps/web-platform/infra/server.tf`:
+  - [ ] 1.8.1 Add `tunnel_token` to templatefile variables
+  - [ ] 1.8.2 Add `webhook_deploy_secret` to templatefile variables
+- [ ] 1.9 Run `terraform validate` and `terraform plan`
+- [ ] 1.10 Verify: cloudflared running, tunnel connected, webhook on localhost:9000
 
-## Phase 2: Server Provisioning (cloud-init)
+## Phase 2: CI Switch + Firewall Lockdown + Cleanup
 
-- [ ] 2.1 Update `apps/web-platform/infra/cloud-init.yml`:
-  - [ ] 2.1.1 Add write_files: `/etc/webhook/hooks.json` (HMAC config, SSH_ORIGINAL_COMMAND env injection)
-  - [ ] 2.1.2 Add write_files: `/etc/systemd/system/webhook.service` (run as deploy user, Restart=on-failure)
-  - [ ] 2.1.3 Add runcmd: install cloudflared binary (version-pinned, curl from GitHub releases)
-  - [ ] 2.1.4 Add runcmd: `cloudflared service install <tunnel_token>`
-  - [ ] 2.1.5 Add runcmd: install webhook binary (v2.8.2, curl from GitHub releases)
-  - [ ] 2.1.6 Add runcmd: `systemctl enable --now webhook`
-  - [ ] 2.1.7 Remove deploy user `ssh_authorized_keys`
-  - [ ] 2.1.8 Update AllowUsers from `root deploy` to `root`
-- [ ] 2.2 Update `apps/web-platform/infra/server.tf`:
-  - [ ] 2.2.1 Add `tunnel_token` to templatefile variables
-  - [ ] 2.2.2 Add `webhook_deploy_secret` to templatefile variables
-- [ ] 2.3 Mirror changes in `apps/telegram-bridge/infra/cloud-init.yml` (for future server split)
-- [ ] 2.4 Mirror changes in `apps/telegram-bridge/infra/server.tf`
+- [ ] 2.1 Add GitHub Actions secrets:
+  - [ ] 2.1.1 `WEBHOOK_DEPLOY_SECRET`
+  - [ ] 2.1.2 `CF_ACCESS_CLIENT_ID`
+  - [ ] 2.1.3 `CF_ACCESS_CLIENT_SECRET`
+- [ ] 2.2 Update `.github/workflows/web-platform-release.yml`:
+  - [ ] 2.2.1 Replace `appleboy/ssh-action` with curl POST + HMAC + CF Access headers
+  - [ ] 2.2.2 Capture response body on failure (mktemp + cat)
+  - [ ] 2.2.3 Set --max-time 150
+  - [ ] 2.2.4 Preserve `deploy-production` concurrency group
+- [ ] 2.3 Update `.github/workflows/telegram-bridge-release.yml`:
+  - [ ] 2.3.1 Same changes as 2.2 with telegram-bridge component/image
+- [ ] 2.4 Verify: trigger test deploy via webhook → health check passes
+- [ ] 2.5 Update `apps/web-platform/infra/firewall.tf`:
+  - [ ] 2.5.1 Remove CI SSH 0.0.0.0/0 rule (lines 16-21)
+  - [ ] 2.5.2 Remove port 3000 dev rule (lines 38-44)
+  - [ ] 2.5.3 Keep admin SSH, HTTP 80, HTTPS 443, ICMP
+- [ ] 2.6 Clean up SSH deploy infrastructure:
+  - [ ] 2.6.1 Remove deploy `ssh_authorized_keys` from `cloud-init.yml`
+  - [ ] 2.6.2 Update AllowUsers from `root deploy` to `root`
+  - [ ] 2.6.3 Remove `deploy_ssh_public_key` from `variables.tf`
+  - [ ] 2.6.4 Remove `deploy_ssh_public_key` from `server.tf` templatefile
+- [ ] 2.7 Remove GitHub Actions secrets: `WEB_PLATFORM_SSH_KEY`, `WEB_PLATFORM_HOST_FINGERPRINT`
+- [ ] 2.8 Run `ci-deploy.test.sh` to confirm test suite passes
+- [ ] 2.9 Verify: admin SSH from admin IP still works
+- [ ] 2.10 Verify: SSH from non-admin IP rejected
 
-## Phase 3: GitHub Actions Update
+## Future Work (not in scope)
 
-- [ ] 3.1 Update `.github/workflows/web-platform-release.yml`:
-  - [ ] 3.1.1 Replace `appleboy/ssh-action` deploy step with curl POST + HMAC
-  - [ ] 3.1.2 Add error handling (check HTTP response code)
-  - [ ] 3.1.3 Preserve `deploy-production` concurrency group
-- [ ] 3.2 Update `.github/workflows/telegram-bridge-release.yml`:
-  - [ ] 3.2.1 Same changes as 3.1 with telegram-bridge component/image
-- [ ] 3.3 Add GitHub Actions secrets:
-  - [ ] 3.3.1 `WEBHOOK_DEPLOY_SECRET` (same value as Terraform variable)
-  - [ ] 3.3.2 `WEBHOOK_DEPLOY_URL` (`https://deploy.soleur.ai`)
-
-## Phase 4: Verification + Cutover
-
-- [ ] 4.1 Verify app traffic: `curl -sf https://app.soleur.ai/health` → 200
-- [ ] 4.2 Verify webhook deploy: trigger web-platform release → health check passes
-- [ ] 4.3 Verify webhook deploy: trigger telegram-bridge release → health check passes
-- [ ] 4.4 Verify SSH: `cloudflared access ssh --hostname ssh.soleur.ai` → shell
-- [ ] 4.5 Verify rejection: curl with invalid HMAC → 401
-- [ ] 4.6 Verify DNS: `dig app.soleur.ai` → CNAME, not A record
-- [ ] 4.7 Verify tunnel health: `cloudflared tunnel info`
-
-## Phase 5: Firewall Lockdown
-
-- [ ] 5.1 Update `apps/web-platform/infra/firewall.tf`:
-  - [ ] 5.1.1 Remove SSH admin IPs dynamic rule
-  - [ ] 5.1.2 Remove SSH CI 0.0.0.0/0 rule
-  - [ ] 5.1.3 Remove HTTP 80 rule
-  - [ ] 5.1.4 Remove HTTPS 443 rule
-  - [ ] 5.1.5 Remove App 3000 rule
-  - [ ] 5.1.6 Keep ICMP rule only
-- [ ] 5.2 Run `terraform apply`
-- [ ] 5.3 External port scan: `nmap -Pn -p 22,80,443,3000 <server-ip>` → all filtered
-
-## Phase 6: Cleanup
-
-- [ ] 6.1 Remove `deploy_ssh_public_key` variable from `apps/web-platform/infra/variables.tf`
-- [ ] 6.2 Remove `deploy_ssh_public_key` from `apps/web-platform/infra/server.tf` templatefile
-- [ ] 6.3 Remove from `apps/telegram-bridge/infra/variables.tf` and `server.tf`
-- [ ] 6.4 Remove GitHub Actions secrets: `WEB_PLATFORM_SSH_KEY`, `WEB_PLATFORM_HOST_FINGERPRINT`
-- [ ] 6.5 Run `ci-deploy.test.sh` to confirm test suite still passes
-- [ ] 6.6 Set up external monitoring (Uptime Robot or similar) for tunnel health
+- Route app traffic through tunnel (full zero-trust)
+- Route admin SSH through tunnel (eliminate all SSH firewall rules)
+- Telegram-bridge infra mirroring (when servers split)
+- Webhook replay protection (timestamp validation)

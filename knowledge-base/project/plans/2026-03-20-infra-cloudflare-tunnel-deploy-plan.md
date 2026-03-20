@@ -6,111 +6,127 @@ date: 2026-03-20
 
 # infra: migrate to Cloudflare Tunnel deploy
 
+[Updated 2026-03-20] Simplified after plan review — reduced from 6 phases to 2. Tunnel scoped to webhook endpoint only. Admin SSH and app traffic stay on existing paths.
+
 ## Overview
 
-Replace SSH-based CI deploy with a Cloudflare Tunnel routing all traffic (app, webhook, SSH) through Cloudflare's edge network. Install a webhook listener (`adnanh/webhook`) that validates GitHub HMAC signatures and invokes the existing `ci-deploy.sh` — preserving version pinning, health checks, and audit trail while eliminating all inbound firewall ports.
+Replace SSH-based CI deploy with a Cloudflare Tunnel routing the deploy webhook through Cloudflare's edge. Install a webhook listener (`adnanh/webhook`) that validates GitHub HMAC signatures and invokes the existing `ci-deploy.sh` — preserving version pinning, health checks, and audit trail while eliminating the `0.0.0.0/0` SSH firewall rule.
 
 ## Problem Statement
 
-The web-platform CI deploy opens SSH (port 22) to `0.0.0.0/0` because GitHub Actions runners use 5000+ dynamic IPs (`apps/web-platform/infra/firewall.tf:16-21`). This exposes the server to SSH brute-force attacks from the entire internet. The forced-command restriction limits what the CI key can do, but the port itself is unnecessarily exposed.
+The web-platform CI deploy opens SSH (port 22) to `0.0.0.0/0` because GitHub Actions runners use 5000+ dynamic IPs (`apps/web-platform/infra/firewall.tf:16-21`). This exposes the server to SSH brute-force attacks from the entire internet.
 
 ## Proposed Solution
 
-Route all server traffic through a Cloudflare Tunnel. The server becomes invisible — zero inbound ports, no scannable surface. A webhook listener triggered through the tunnel replaces SSH as the deploy mechanism.
+Route deploy webhook traffic through a Cloudflare Tunnel. Admin SSH stays via `admin_ips` firewall rules. App traffic stays via existing Cloudflare-proxied A record. Only the CI deploy path changes.
 
 ```
 ┌──────────────┐      ┌─────────────────┐      ┌───────────────────────────────┐
 │ GitHub Actions│─────▶│ Cloudflare Edge  │─────▶│ Hetzner Server                │
 │ (curl POST)  │ HTTPS│ deploy.soleur.ai │Tunnel│ cloudflared ──▶ localhost:9000 │
-└──────────────┘      │                  │      │ webhook ──▶ ci-deploy.sh       │
-                      │ app.soleur.ai    │──────│ cloudflared ──▶ localhost:3000 │
-                      │                  │      │                               │
-                      │ ssh.soleur.ai    │──────│ cloudflared ──▶ localhost:22   │
+└──────────────┘      │ (Access + HMAC)  │      │ webhook ──▶ ci-deploy.sh       │
                       └─────────────────┘      └───────────────────────────────┘
-                                                  (zero inbound firewall rules)
+
+┌──────────┐          ┌─────────────────┐      ┌───────────────────────────────┐
+│ Users    │─────────▶│ Cloudflare Proxy │─────▶│ :80 ──▶ Docker :3000          │
+└──────────┘   HTTPS  │ app.soleur.ai   │  A   │ (unchanged — existing path)   │
+                      └─────────────────┘      └───────────────────────────────┘
+
+┌──────────┐                                   ┌───────────────────────────────┐
+│ Admin    │──────────────────────────────────▶│ :22 (admin_ips only)           │
+└──────────┘            SSH (direct)           │ (unchanged — existing path)   │
+                                               └───────────────────────────────┘
 ```
 
 ## Technical Approach
 
 ### Architecture
 
-**Key design constraint:** `ci-deploy.sh` (`apps/web-platform/infra/ci-deploy.sh`) parses `SSH_ORIGINAL_COMMAND` (line 38). The webhook handler sets this env var before invocation — the script stays completely unchanged, and `ci-deploy.test.sh` passes unmodified.
+**Key design constraint:** `ci-deploy.sh` parses `SSH_ORIGINAL_COMMAND` (line 38). The webhook handler sets this env var via `pass-environment-to-command` in `hooks.json` — the script stays unchanged, and `ci-deploy.test.sh` passes unmodified.
 
 **Components:**
 
 | Component | Purpose | Binary | Managed By |
 |-----------|---------|--------|------------|
-| `cloudflared` | Tunnel daemon (outbound connection to CF edge) | Pre-built Linux amd64 | cloud-init install + systemd (via `cloudflared service install`) |
-| `webhook` | HTTP listener for deploy triggers | Pre-built Go binary (~5MB) | cloud-init install + systemd unit |
-| `hooks.json` | Webhook route config (HMAC validation, env injection) | JSON config file | cloud-init write_files |
+| `cloudflared` | Tunnel daemon (outbound connection to CF edge) | Pre-built Linux amd64 (pkg.cloudflare.com) | cloud-init install + systemd (via `cloudflared service install`) |
+| `webhook` | HTTP listener for deploy triggers | Pre-built Go binary (~5MB, v2.8.2) | cloud-init install + systemd unit |
+| `hooks.json` | Webhook config (HMAC validation, env injection) | JSON config file | cloud-init write_files (templated) |
 | Terraform | Tunnel, DNS, Access resources | Cloudflare provider ~> 4.0 | Existing `apps/web-platform/infra/` |
 
 **HMAC flow:**
 
-1. GitHub Actions computes `HMAC-SHA256(payload, secret)` and sends as `X-Signature-256` header
-2. `webhook` binary validates signature against configured secret
-3. On match: sets `SSH_ORIGINAL_COMMAND` from `payload.command` field, invokes `ci-deploy.sh`
-4. On mismatch: returns 401, logs rejection
+1. GitHub Actions computes `HMAC-SHA256(payload, secret)` and sends as `X-Signature-256: sha256=<hex>` header
+2. `webhook` binary validates signature (returns 403 on mismatch via `trigger-rule-mismatch-http-response-code`)
+3. On match: sets `SSH_ORIGINAL_COMMAND` from `payload.command` field, invokes `ci-deploy.sh` synchronously (`include-command-output-in-response: true`)
+4. Returns ci-deploy.sh exit code as HTTP status to GitHub Actions
+
+**Defense in depth on `deploy.soleur.ai`:**
+
+1. Cloudflare Access service token — rejects unauthenticated requests at the edge
+2. HMAC-SHA256 signature validation — proves request came from holder of the secret
+3. ci-deploy.sh allowlist — validates component, image, and tag format
 
 ### Implementation Phases
 
-#### Phase 1: Cloudflare Zero Trust + Tunnel (Terraform)
+#### Phase 1: Tunnel + Webhook Infrastructure
 
-Create the tunnel and DNS infrastructure. No server changes yet — existing deploy path stays active.
+Create the tunnel, webhook listener, and server provisioning. Deploy alongside existing SSH path.
 
-**New Terraform resources in `apps/web-platform/infra/`:**
+**New Terraform resources (`apps/web-platform/infra/tunnel.tf`):**
 
 - `cloudflare_zero_trust_tunnel_cloudflared.web` — creates the tunnel
-- `random_id.tunnel_secret` — 32-byte tunnel secret
-- `cloudflare_zero_trust_tunnel_cloudflared_config.web` — ingress rules (app, deploy, SSH, catch-all 404)
-- `cloudflare_zero_trust_access_application.ssh` — SSH access app
-- `cloudflare_zero_trust_access_policy.ssh_admin` — email-based allow policy
+- `cloudflare_zero_trust_tunnel_cloudflared_config.web` — single ingress: `deploy.soleur.ai` → `http://localhost:9000` + catch-all 404
+- `cloudflare_zero_trust_access_application.deploy` — Access app for the deploy endpoint
+- `cloudflare_zero_trust_access_service_token.deploy` — service token for GitHub Actions
+- `cloudflare_zero_trust_access_policy.deploy_service_token` — allow policy for the service token
 
-**DNS changes (replace existing A record):**
+**DNS (`apps/web-platform/infra/dns.tf`):**
 
-- `cloudflare_record.app` — change from A record (`hcloud_server.web.ipv4_address`) to CNAME (`<tunnel-id>.cfargotunnel.com`)
-- `cloudflare_record.deploy` — new CNAME for `deploy.soleur.ai`
-- `cloudflare_record.ssh` — new CNAME for `ssh.soleur.ai`
+- Keep `cloudflare_record.app` **unchanged** (A record, proxied — existing app path)
+- Add `cloudflare_record.deploy` — CNAME to `<tunnel-id>.cfargotunnel.com` (proxied)
 
-**New Terraform variables:**
+**New Terraform variables (`apps/web-platform/infra/variables.tf`):**
 
 - `cloudflare_account_id` (string) — needed for Zero Trust resources
-- `admin_email` (string) — email for SSH Access policy
 - `webhook_deploy_secret` (string, sensitive) — HMAC shared secret
 
-**Files to modify:**
+**Terraform provider (`apps/web-platform/infra/main.tf`):**
 
-- `apps/web-platform/infra/main.tf` — add `random` provider
-- `apps/web-platform/infra/dns.tf` — replace A record, add CNAME records
-- `apps/web-platform/infra/variables.tf` — add new variables
-- New file: `apps/web-platform/infra/tunnel.tf` — all tunnel + access resources
+- Add `random` provider (for tunnel secret generation)
 
-**Acceptance criteria:**
-- [ ] `terraform plan` shows tunnel, DNS, and access resources to create
-- [ ] Tunnel token output available for cloud-init injection
+**Terraform outputs:**
 
-#### Phase 2: Server Provisioning (cloud-init)
-
-Add `cloudflared` and `webhook` to the server. Both run alongside the existing SSH deploy path.
+- `tunnel_token` (sensitive = true) — for cloud-init injection
+- `access_service_token_client_id` — for GitHub Actions
+- `access_service_token_client_secret` (sensitive) — for GitHub Actions
 
 **cloud-init changes (`apps/web-platform/infra/cloud-init.yml`):**
 
-New write_files entries:
-- `/etc/webhook/hooks.json` — webhook configuration (HMAC validation, `SSH_ORIGINAL_COMMAND` env injection, command: `/usr/local/bin/ci-deploy.sh`)
-- `/etc/systemd/system/webhook.service` — systemd unit (runs as `deploy` user, `RestartSec=5`, `Restart=on-failure`)
+New write_files:
+- `/etc/webhook/hooks.json` — HMAC config with `trigger-rule-mismatch-http-response-code: 403`, `include-command-output-in-response: true`, `http-methods: ["POST"]`, `SSH_ORIGINAL_COMMAND` env injection
+- `/etc/systemd/system/webhook.service` — hardened systemd unit (runs as `deploy` user, `Restart=on-failure`, `RestartSec=5`, `NoNewPrivileges=true`, `ProtectSystem=strict`)
 
-New runcmd entries:
-- Install `cloudflared` binary (curl from GitHub releases, version-pinned)
-- Install `cloudflared` as system service with tunnel token: `cloudflared service install <token>`
-- Install `webhook` binary (curl from GitHub releases, version-pinned, e.g., 2.8.2)
-- Enable and start webhook systemd unit
+New runcmd:
+- Install `cloudflared` via pkg.cloudflare.com apt repository (automatic updates)
+- `cloudflared service install <tunnel_token>`
+- Install `webhook` binary v2.8.2 from GitHub releases with SHA256 checksum verification
+- `systemctl enable --now webhook`
 
-**Templatefile changes (`apps/web-platform/infra/server.tf`):**
+**server.tf templatefile changes:**
 
-- Add `tunnel_token` to `templatefile()` variables (from tunnel Terraform output)
-- Add `webhook_deploy_secret` to `templatefile()` variables
+- Add `tunnel_token` and `webhook_deploy_secret` variables
 
-**Key detail — hooks.json structure:**
+**Files to create:**
+- `apps/web-platform/infra/tunnel.tf`
+
+**Files to modify:**
+- `apps/web-platform/infra/main.tf` — add `random` provider
+- `apps/web-platform/infra/dns.tf` — add deploy CNAME
+- `apps/web-platform/infra/variables.tf` — add new variables
+- `apps/web-platform/infra/cloud-init.yml` — add cloudflared/webhook provisioning
+- `apps/web-platform/infra/server.tf` — add templatefile variables
+
+**hooks.json structure:**
 
 ```json
 [
@@ -118,6 +134,9 @@ New runcmd entries:
     "id": "deploy",
     "execute-command": "/usr/local/bin/ci-deploy.sh",
     "command-working-directory": "/",
+    "include-command-output-in-response": true,
+    "http-methods": ["POST"],
+    "trigger-rule-mismatch-http-response-code": 403,
     "pass-environment-to-command": [
       {
         "source": "payload",
@@ -139,131 +158,116 @@ New runcmd entries:
 ]
 ```
 
-**Deploy user changes:**
+**webhook systemd unit:**
 
-- **Keep** the `deploy` user (needed for docker group membership, sudoers for chown)
-- **Remove** `ssh_authorized_keys` (no more SSH-based deploy)
-- **Remove** `deploy` from `AllowUsers` in sshd hardening config (only `root` needs SSH via tunnel)
-- **Keep** sudoers entry for `chown 1001:1001 /mnt/data/workspaces`
+```ini
+[Unit]
+Description=Webhook deploy listener
+After=network.target
 
-**Files to modify:**
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/webhook -hooks /etc/webhook/hooks.json -port 9000 -ip 127.0.0.1
+Restart=on-failure
+RestartSec=5
+User=deploy
+Group=deploy
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/webhook /usr/local/bin
+TimeoutStopSec=180
 
-- `apps/web-platform/infra/cloud-init.yml` — add cloudflared/webhook install, hooks.json, systemd unit; remove deploy SSH key
-- `apps/web-platform/infra/server.tf` — add templatefile variables for tunnel_token and webhook_deploy_secret
-- `apps/telegram-bridge/infra/cloud-init.yml` — same changes (both deploy to same server, but cloud-init should match for when they split)
+[Install]
+WantedBy=multi-user.target
+```
+
+Note: `TimeoutStopSec=180` accounts for synchronous ci-deploy.sh execution (telegram-bridge health check can take 120s).
 
 **Acceptance criteria:**
-- [ ] `cloudflared` running as systemd service, tunnel connected
+- [ ] `terraform plan` shows tunnel, DNS, and access resources
+- [ ] `cloudflared` running, tunnel connected
 - [ ] `webhook` listening on `localhost:9000`
-- [ ] `curl -sf localhost:9000/hooks/deploy` returns 200 (unauthenticated = rejected, but endpoint reachable)
-- [ ] Deploy user still has docker group membership
+- [ ] Unauthenticated request to `deploy.soleur.ai` rejected by Cloudflare Access
+- [ ] HMAC-authenticated request invokes ci-deploy.sh and returns output
 
-#### Phase 3: GitHub Actions Update
+#### Phase 2: CI Switch + Firewall Lockdown + Cleanup
 
-Replace SSH deploy steps with webhook curl in both release workflows. Run alongside existing SSH path initially.
+Replace SSH deploy in CI workflows, remove the `0.0.0.0/0` SSH firewall rule, clean up SSH deploy infrastructure.
 
-**Changes to `.github/workflows/web-platform-release.yml`:**
+**GitHub Actions changes (`.github/workflows/web-platform-release.yml`):**
 
-Replace the `deploy` job's `appleboy/ssh-action` step with:
+Replace `appleboy/ssh-action` deploy step with:
 
 ```yaml
 steps:
   - name: Deploy via webhook
     env:
       WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
-      DEPLOY_URL: ${{ secrets.WEBHOOK_DEPLOY_URL }}
+      DEPLOY_URL: https://deploy.soleur.ai
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+      VERSION: ${{ needs.release.outputs.version }}
     run: |
-      PAYLOAD=$(printf '{"command":"deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v%s"}' \
-        "$VERSION")
+      PAYLOAD=$(printf '{"command":"deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v%s"}' "$VERSION")
       SIGNATURE=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
-      HTTP_CODE=$(curl -sf -o /dev/null -w '%{http_code}' \
+      RESPONSE=$(mktemp)
+      HTTP_CODE=$(curl -s -o "$RESPONSE" -w '%{http_code}' \
+        --max-time 150 \
         -X POST \
         -H "Content-Type: application/json" \
         -H "X-Signature-256: sha256=$SIGNATURE" \
+        -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+        -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
         -d "$PAYLOAD" \
         "${DEPLOY_URL}/hooks/deploy")
       if [[ ! "$HTTP_CODE" =~ ^2 ]]; then
         echo "::error::Deploy webhook failed (HTTP $HTTP_CODE)"
+        cat "$RESPONSE"
         exit 1
       fi
-      echo "Deploy triggered successfully (HTTP $HTTP_CODE)"
+      echo "Deploy completed (HTTP $HTTP_CODE)"
+      cat "$RESPONSE"
 ```
 
-**Same change for `.github/workflows/telegram-bridge-release.yml`** with `telegram-bridge` component name and image.
+Same change for `telegram-bridge-release.yml` with `telegram-bridge` component/image.
 
-**New GitHub Actions secrets:**
+Note: `--max-time 150` accommodates the telegram-bridge 120s health check + buffer. Cloudflare free-tier proxy timeout is 100s — if this becomes an issue, restructure telegram-bridge health check to complete within 90s (reduce from 24 attempts x 5s to 18 attempts x 5s = 90s).
 
-- `WEBHOOK_DEPLOY_SECRET` — HMAC shared secret (same value as Terraform `webhook_deploy_secret`)
-- `WEBHOOK_DEPLOY_URL` — `https://deploy.soleur.ai` (or use env, not secret — but URL is non-sensitive)
+**Firewall change (`apps/web-platform/infra/firewall.tf`):**
 
-**Secrets to remove (after verification):**
-
-- `WEB_PLATFORM_SSH_KEY`
-- `WEB_PLATFORM_HOST_FINGERPRINT`
-- Keep `WEB_PLATFORM_HOST` for now (may be useful for health check polling from CI)
-
-**GitHub Actions security (per institutional learnings):**
-
-- No new actions to SHA-pin (curl is built-in)
-- Webhook secret stored as `secrets.*`, never `vars.*`
-- Payload constructed with `printf`, not string interpolation (prevents injection)
-- `$HTTP_CODE` captured safely (no `$GITHUB_OUTPUT` needed for this step)
-
-**Files to modify:**
-
-- `.github/workflows/web-platform-release.yml` — replace deploy step
-- `.github/workflows/telegram-bridge-release.yml` — replace deploy step
-
-**Acceptance criteria:**
-- [ ] Deploy job triggers webhook successfully
-- [ ] ci-deploy.sh health checks pass (visible in webhook output)
-- [ ] Concurrency group `deploy-production` still prevents parallel deploys
-- [ ] Deploy audit trail visible in GitHub Actions logs
-
-#### Phase 4: Verification + Cutover
-
-Verify all traffic flows through the tunnel before removing firewall rules.
-
-**Verification checklist:**
-
-1. App traffic: `curl -sf https://app.soleur.ai/health` returns 200
-2. Webhook deploy: trigger web-platform release → deploy completes with health check
-3. Webhook deploy: trigger telegram-bridge release → deploy completes with health check
-4. SSH access: `cloudflared access ssh --hostname ssh.soleur.ai` → shell on server
-5. Invalid HMAC: `curl` with wrong signature → 401 rejected
-6. Invalid payload: malformed command → ci-deploy.sh rejects (same as SSH path)
-7. DNS: `dig app.soleur.ai` returns CNAME, not A record
-8. Tunnel health: `cloudflared tunnel info` shows healthy connection
-
-**Port scan verification:**
-
-```bash
-# From an external host (not the server itself)
-nmap -Pn -p 22,80,443,3000 <server-ip>
-# Expected: all ports filtered/closed (only ICMP responds)
-```
-
-#### Phase 5: Firewall Lockdown
-
-After verification passes, remove all non-ICMP inbound rules.
-
-**Changes to `apps/web-platform/infra/firewall.tf`:**
-
-Remove:
-- SSH admin IPs dynamic rule (lines 4-13) — admin SSH goes through tunnel
-- SSH CI deploy 0.0.0.0/0 rule (lines 16-21) — deploy goes through webhook
-- HTTP 80 rule (lines 24-28) — app traffic goes through tunnel
-- HTTPS 443 rule (lines 30-35) — not needed (no direct HTTPS, tunnel handles it)
-- App port 3000 rule (lines 38-44) — dev access goes through tunnel
-
-Keep:
-- ICMP rule (lines 47-52) — for basic connectivity monitoring
-
-**End state `firewall.tf`:**
+Remove only the CI deploy SSH rule (lines 16-21). Keep everything else unchanged.
 
 ```hcl
 resource "hcloud_firewall" "web" {
   name = "soleur-web-platform"
+
+  # SSH -- admin IPs (kept for direct admin access)
+  dynamic "rule" {
+    for_each = var.admin_ips
+    content {
+      direction  = "in"
+      protocol   = "tcp"
+      port       = "22"
+      source_ips = [rule.value]
+    }
+  }
+
+  # HTTP (app traffic via Cloudflare proxy -- existing path)
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "80"
+    source_ips = ["0.0.0.0/0", "::/0"]
+  }
+
+  # HTTPS
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "443"
+    source_ips = ["0.0.0.0/0", "::/0"]
+  }
 
   # ICMP (ping) from anywhere
   rule {
@@ -274,146 +278,136 @@ resource "hcloud_firewall" "web" {
 }
 ```
 
-**Files to modify:**
+Note: Also removes port 3000 rule (was "for development" — should not be open on production).
 
-- `apps/web-platform/infra/firewall.tf` — strip to ICMP only
+**SSH deploy cleanup:**
 
-**Acceptance criteria:**
-- [ ] `terraform apply` removes firewall rules
-- [ ] Port scan confirms zero open TCP ports
-- [ ] App, webhook, and SSH still work through tunnel
+- `apps/web-platform/infra/cloud-init.yml` — remove deploy user `ssh_authorized_keys` (keep deploy user for webhook/docker)
+- `apps/web-platform/infra/cloud-init.yml` — update `AllowUsers root deploy` to `AllowUsers root` (deploy user no longer needs SSH)
+- `apps/web-platform/infra/variables.tf` — remove `deploy_ssh_public_key`
+- `apps/web-platform/infra/server.tf` — remove `deploy_ssh_public_key` from templatefile
 
-#### Phase 6: Cleanup
+**New GitHub Actions secrets:**
 
-Remove SSH deploy infrastructure that's no longer needed.
+- `WEBHOOK_DEPLOY_SECRET` — HMAC shared secret
+- `CF_ACCESS_CLIENT_ID` — Cloudflare Access service token client ID
+- `CF_ACCESS_CLIENT_SECRET` — Cloudflare Access service token client secret
 
-**cloud-init cleanup:**
+**GitHub Actions secrets to remove:**
 
-- Remove `deploy_ssh_public_key` from `ssh_authorized_keys`
-- Remove `deploy` from `AllowUsers` in sshd hardening (root only)
-- Remove `ci_deploy_script_b64` write_files entry (ci-deploy.sh now delivered by webhook cloud-init section, or kept as-is since it's still needed)
-
-Wait — `ci-deploy.sh` is still needed. The webhook invokes it. Keep the write_files entry that installs it to `/usr/local/bin/ci-deploy.sh`. Only remove the SSH-specific parts.
-
-**Terraform cleanup:**
-
-- Remove `deploy_ssh_public_key` variable from `variables.tf`
-- Remove `deploy_ssh_public_key` from `server.tf` templatefile
-- Update `ci_deploy_script_b64` — still needed (webhook invokes the same script)
-
-**GitHub secrets cleanup:**
-
-- Remove `WEB_PLATFORM_SSH_KEY`
-- Remove `WEB_PLATFORM_HOST_FINGERPRINT`
-- Consider removing `WEB_PLATFORM_HOST` (or keep for SSH fallback)
+- `WEB_PLATFORM_SSH_KEY`
+- `WEB_PLATFORM_HOST_FINGERPRINT`
 
 **Files to modify:**
 
+- `.github/workflows/web-platform-release.yml` — replace deploy step
+- `.github/workflows/telegram-bridge-release.yml` — replace deploy step
+- `apps/web-platform/infra/firewall.tf` — remove CI SSH rule + port 3000
+- `apps/web-platform/infra/cloud-init.yml` — remove deploy SSH key, update AllowUsers
 - `apps/web-platform/infra/variables.tf` — remove `deploy_ssh_public_key`
 - `apps/web-platform/infra/server.tf` — remove from templatefile
-- `apps/web-platform/infra/cloud-init.yml` — remove SSH key, update AllowUsers
-- `apps/telegram-bridge/infra/cloud-init.yml` — same
-- `apps/telegram-bridge/infra/server.tf` — remove from templatefile
-- `apps/telegram-bridge/infra/variables.tf` — remove `deploy_ssh_public_key` (if it exists there)
+
+**Verification (inline, not separate phase):**
+
+1. Trigger web-platform release → deploy completes with health check via webhook
+2. Trigger telegram-bridge release → same
+3. Invalid HMAC → 403 rejected
+4. Admin SSH → still works via `ssh root@<ip>` from admin IP
+5. `nmap -Pn -p 22 <server-ip>` from non-admin IP → filtered
 
 **Acceptance criteria:**
-- [ ] `terraform plan` shows no unexpected changes
-- [ ] ci-deploy.sh still invocable by webhook
-- [ ] No SSH secrets remain in GitHub Actions
+- [ ] Both release workflows deploy via webhook successfully
+- [ ] ci-deploy.sh health checks pass through webhook path
+- [ ] `0.0.0.0/0` SSH rule removed from firewall
+- [ ] Port 3000 rule removed from firewall
+- [ ] Admin SSH still works from admin IPs
+- [ ] Deploy SSH key removed from cloud-init and Terraform
+- [ ] Old GitHub Actions SSH secrets removed
+- [ ] ci-deploy.test.sh passes unchanged
+
+## Rollback Procedure
+
+If the tunnel or webhook fails post-deployment:
+
+1. **Immediate:** Re-enable SSH deploy by adding `appleboy/ssh-action` back to workflows and re-creating `WEB_PLATFORM_SSH_KEY` secret. The `0.0.0.0/0` SSH rule can be restored via `terraform apply` with the rule re-added to `firewall.tf`.
+2. **Emergency server access:** Hetzner console (VNC/serial) provides network-independent access regardless of firewall or tunnel state. Admin-IP SSH remains available as the primary access path.
+3. **Webhook secret rotation:** Update `WEBHOOK_DEPLOY_SECRET` in GitHub Actions, update `/etc/webhook/hooks.json` on server, `systemctl restart webhook`.
 
 ## Alternative Approaches Considered
 
 | Option | Verdict | Reason |
 |--------|---------|--------|
 | Watchtower | Rejected | Loses version pinning, health checks, CI audit trail, deploy serialization. Prior plans rejected it twice. |
-| Standalone webhook (no tunnel) | Rejected | Solves SSH dependency but leaves server IP exposed, requires new open port. |
-| Partial tunnel (webhook + SSH only) | Rejected | Two traffic paths to maintain. App still reachable by IP. |
-| GitHub repository webhooks (release event) | Considered | GitHub fires webhooks on release events with HMAC signatures built-in. But adds complexity: parsing release payload, handling multiple components from one webhook. The explicit `curl` from CI is simpler and preserves the structured `deploy <component> <image> <tag>` protocol. |
+| Full tunnel (app + SSH + webhook) | Rejected (scope) | Adds failure modes (cloudflared crash kills app), makes admin SSH worse (browser auth). The problem is one firewall rule, not the entire traffic architecture. Revisit as a separate initiative if desired. |
+| Standalone webhook (no tunnel) | Rejected | Requires new open port in firewall. Tunnel keeps webhook on localhost only — better security. |
+| GitHub repository webhooks | Considered | Built-in HMAC but adds complexity parsing release payloads. Explicit curl preserves structured protocol. |
 
 ## Acceptance Criteria
 
 ### Functional Requirements
 
-- [ ] Cloudflare Tunnel active with routes for app (`app.soleur.ai`), webhook (`deploy.soleur.ai`), SSH (`ssh.soleur.ai`)
+- [ ] Cloudflare Tunnel active with route for `deploy.soleur.ai`
 - [ ] Deploy triggered via webhook from GitHub Actions (not SSH)
 - [ ] ci-deploy.sh health checks pass through webhook trigger path
-- [ ] All inbound firewall rules removed except ICMP
-- [ ] Server IP not reachable on any TCP port (verified via external port scan)
-- [ ] Admin SSH works via `cloudflared access ssh`
+- [ ] `0.0.0.0/0` SSH firewall rule removed
+- [ ] Admin SSH works from admin IPs (unchanged)
+- [ ] App accessible via `app.soleur.ai` (unchanged)
 
 ### Non-Functional Requirements
 
 - [ ] Existing `ci-deploy.test.sh` passes unchanged
-- [ ] Phased migration: tunnel coexists with existing rules during verification
 - [ ] All infrastructure changes via Terraform
-- [ ] GitHub Actions references SHA-pinned
 - [ ] Webhook secret stored as GitHub Actions `secrets.*`
 - [ ] Deploy concurrency group preserved (`deploy-production`)
-
-### Quality Gates
-
-- [ ] `terraform validate` passes
-- [ ] `terraform plan` shows expected changes at each phase
-- [ ] ci-deploy.test.sh passes (run locally in worktree)
-- [ ] End-to-end deploy test via webhook before removing SSH path
+- [ ] Webhook binary checksum-verified during install
+- [ ] Cloudflare Access service token protects deploy endpoint
 
 ## Test Scenarios
 
 ### Acceptance Tests
 
-- Given tunnel is active, when `curl -sf https://app.soleur.ai/health` is called, then returns HTTP 200
-- Given webhook is running, when GitHub Actions sends a valid HMAC-signed deploy payload, then ci-deploy.sh executes and health check passes
-- Given webhook is running, when an invalid HMAC signature is sent, then returns HTTP 401 and ci-deploy.sh is NOT invoked
-- Given webhook is running, when payload contains invalid component/image/tag, then ci-deploy.sh rejects with appropriate error (same as SSH path)
-- Given SSH access is configured, when admin runs `cloudflared access ssh --hostname ssh.soleur.ai`, then gets a shell on the server
-- Given firewall is locked down, when external nmap scans the server IP, then zero TCP ports respond
+- Given webhook is running, when GitHub Actions sends a valid HMAC-signed deploy payload with CF Access headers, then ci-deploy.sh executes and health check passes
+- Given webhook is running, when an invalid HMAC signature is sent, then returns HTTP 403 and ci-deploy.sh is NOT invoked
+- Given webhook is running, when CF Access headers are missing, then Cloudflare edge returns 403 before reaching the server
+- Given webhook is running, when payload contains invalid component/image/tag, then ci-deploy.sh rejects with appropriate error
+- Given firewall updated, when SSH attempted from non-admin IP, then connection refused
 
 ### Edge Cases
 
-- Given cloudflared restarts (systemd), when a deploy webhook arrives during restart, then webhook binary is unaffected (separate service) and deploy succeeds
-- Given tunnel disconnects temporarily, when it reconnects, then all routes resume without manual intervention
-- Given server reboots, when cloud-init has run, then both cloudflared and webhook start automatically (systemd enabled)
-- Given two deploys arrive simultaneously, when concurrency group is active, then second deploy queues (GitHub Actions level, not server level)
-
-### Regression Tests
-
-- Given ci-deploy.sh receives "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" via SSH_ORIGINAL_COMMAND, then all existing test cases pass (run ci-deploy.test.sh)
-- Given ci-deploy.sh receives adversarial input, then rejects with appropriate error (shell injection tests)
+- Given cloudflared restarts (systemd), when a deploy webhook arrives during restart, then webhook binary is unaffected (separate service on localhost)
+- Given tunnel disconnects temporarily, when it reconnects, then deploy route resumes (app and SSH unaffected — they don't use the tunnel)
+- Given server reboots, when cloud-init has run, then both cloudflared and webhook start automatically
+- Given deploy takes >100s (telegram-bridge), when Cloudflare proxy times out, then restructure health check to complete within 90s
 
 ## Dependencies & Prerequisites
 
 | Dependency | Status | Action |
 |------------|--------|--------|
 | Cloudflare account | Exists | Already using for DNS |
-| Cloudflare Zero Trust | New | Enable free tier (up to 50 users) |
-| Cloudflare API token | Exists | May need additional permissions for tunnels |
-| `cloudflare/cloudflare` Terraform provider ~> 4.0 | Exists | Already in `main.tf` |
-| `adnanh/webhook` binary | New | Download in cloud-init (pin to v2.8.2) |
-| `cloudflared` binary | New | Download in cloud-init (pin version) |
-| `cloudflare_account_id` | New | Add to Terraform variables + tfvars |
+| Cloudflare Zero Trust | New | Enable free tier |
+| Cloudflare API token | Exists | May need tunnel + access permissions |
+| `cloudflare/cloudflare` provider ~> 4.0 | Exists | Already in `main.tf` |
+| `adnanh/webhook` binary v2.8.2 | New | Install in cloud-init with checksum |
+| `cloudflared` | New | Install via apt (pkg.cloudflare.com) |
+| `cloudflare_account_id` | New | Add to Terraform variables |
 
 ## Risk Analysis & Mitigation
 
 | Risk | Severity | Probability | Mitigation |
 |------|----------|-------------|------------|
-| Tunnel goes down → all traffic stops | High | Low | External uptime monitor (Uptime Robot). cloudflared auto-reconnects. systemd restart-on-failure. |
-| Webhook secret compromised → unauthorized deploys | High | Low | HMAC validation. Secret rotation procedure. ci-deploy.sh still validates component/image/tag. |
-| Cloudflare outage → can't deploy or serve app | High | Very Low | Accept risk: already depend on Cloudflare for DNS. Tunnel failure = DNS failure = same blast radius. |
-| DNS propagation during cutover → brief downtime | Medium | Medium | Cloudflare proxied records propagate near-instantly (seconds). TTL=1 (auto). |
-| cloudflared update breaks tunnel | Medium | Low | Pin version in cloud-init. Test upgrades in staging. |
-| Webhook replay attack | Low | Low | HMAC prevents forgery. Add timestamp validation if needed (future). |
-| SSH via tunnel UX worse than direct SSH | Low | High | Accept: security > convenience. Can always re-enable admin-IP SSH as fallback. |
+| Tunnel down → can't deploy | Medium | Low | systemd restart-on-failure. App and SSH unaffected (separate paths). Rollback: re-enable SSH deploy. |
+| Webhook secret compromised | Medium | Low | CF Access service token as second auth layer. ci-deploy.sh allowlist limits blast radius. Rotation procedure documented. |
+| Cloudflare outage → can't deploy | Medium | Very Low | App still serves via A record. SSH still works. Only deploys blocked. |
+| `adnanh/webhook` binary compromise | Low | Very Low | Checksum verification on install. Pin to specific release. |
+| Telegram-bridge deploy exceeds CF 100s timeout | Medium | High | Reduce health check from 24x5s (120s) to 18x5s (90s). |
 
 ## Institutional Learnings Applied
 
-From `knowledge-base/learnings/`:
-
-1. **Bash operator precedence** (`runtime-errors/2026-02-13`): ci-deploy.sh already uses `{ ...; }` grouping for `|| true` (lines 76-77, 104-105). No action needed — validated as safe.
-2. **Webhook URLs are secrets** (`implementation-patterns/2026-02-12`): Store `WEBHOOK_DEPLOY_SECRET` as `secrets.*`, not `vars.*`. Check inside step scripts, not job-level `if:`.
-3. **SHA-pin all actions** (`2026-02-27`): No new actions introduced (curl is built-in). Existing pins maintained.
-4. **Sanitize $GITHUB_OUTPUT** (`2026-03-05`): No new step outputs needed for the webhook curl. Existing sanitization patterns preserved.
-5. **GITHUB_TOKEN cascade** (`integration-issues/github-actions-auto-release-permissions`): Deploy is triggered from the same workflow that creates the release — no cascade issue.
-6. **Terraform + cloud-init conflicts** (`integration-issues/2026-02-10`): New cloud-init entries are additive (new services), not conflicting with existing volume/mount logic.
+1. **Bash operator precedence** (`runtime-errors/2026-02-13`): ci-deploy.sh already uses `{ ...; }` grouping. Validated safe.
+2. **Webhook URLs are secrets** (`implementation-patterns/2026-02-12`): `WEBHOOK_DEPLOY_SECRET` stored as `secrets.*`.
+3. **SHA-pin all actions** (`2026-02-27`): No new actions (curl is built-in).
+4. **GITHUB_TOKEN cascade** (`integration-issues`): Deploy in same workflow as release — no cascade issue.
+5. **Terraform + cloud-init** (`integration-issues/2026-02-10`): New entries are additive, no conflicts.
 
 ## References
 
@@ -423,20 +417,20 @@ From `knowledge-base/learnings/`:
 - **Spec:** `knowledge-base/project/specs/feat-webhook-deploy/spec.md`
 - **ci-deploy.sh:** `apps/web-platform/infra/ci-deploy.sh`
 - **ci-deploy.test.sh:** `apps/web-platform/infra/ci-deploy.test.sh`
-- **Web platform firewall:** `apps/web-platform/infra/firewall.tf`
-- **Web platform cloud-init:** `apps/web-platform/infra/cloud-init.yml`
-- **Web platform release:** `.github/workflows/web-platform-release.yml`
-- **Telegram bridge release:** `.github/workflows/telegram-bridge-release.yml`
+- **Firewall (target):** `apps/web-platform/infra/firewall.tf:16-21`
+- **Cloud-init:** `apps/web-platform/infra/cloud-init.yml`
+- **Release workflows:** `.github/workflows/web-platform-release.yml`, `.github/workflows/telegram-bridge-release.yml`
 
 ### External
 
 - [Cloudflare Tunnel docs](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
-- [Cloudflare Terraform provider — tunnel resources](https://registry.terraform.io/providers/cloudflare/cloudflare/latest/docs/resources/zero_trust_tunnel_cloudflared)
-- [adnanh/webhook](https://github.com/adnanh/webhook) — lightweight webhook server
-- [Cloudflare Access SSH](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/use-cases/ssh/)
+- [Cloudflare Terraform — tunnel resources](https://registry.terraform.io/providers/cloudflare/cloudflare/latest/docs/resources/zero_trust_tunnel_cloudflared)
+- [adnanh/webhook](https://github.com/adnanh/webhook)
+- [adnanh/webhook hook definition](https://github.com/adnanh/webhook/wiki/Hook-Definition)
+- [Cloudflare pkg.cloudflare.com](https://pkg.cloudflare.com/)
 
 ### Related Work
 
 - Issue: [#749](https://github.com/jikig-ai/soleur/issues/749)
-- Prior work: [#738](https://github.com/jikig-ai/soleur/issues/738) (CI deploy SSH key fix)
+- Prior: [#738](https://github.com/jikig-ai/soleur/issues/738) (CI deploy SSH key fix)
 - PR: [#963](https://github.com/jikig-ai/soleur/pull/963) (draft)
