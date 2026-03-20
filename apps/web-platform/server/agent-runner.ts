@@ -23,6 +23,10 @@ const PLUGIN_PATH =
 
 // ---------------------------------------------------------------------------
 // Workspace permissions migration (#725)
+// Defense-in-depth layer 2: settingSources: [] (layer 1) prevents the SDK
+// from loading settings files. This migration cleans stale pre-approvals
+// from disk -- relevant if settingSources is ever changed to ["project"]
+// for CLAUDE.md support.
 // ---------------------------------------------------------------------------
 const FILE_TOOLS_TO_REMOVE = new Set(["Read", "Glob", "Grep"]);
 
@@ -180,6 +184,10 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         cwd: workspacePath,
         model: "claude-sonnet-4-6",
         permissionMode: "default",
+        // Prevent SDK from loading .claude/settings.json -- permissions.allow
+        // entries bypass canUseTool entirely (permission chain step 4 before
+        // step 5). Default is [] since SDK v0.1.0; explicit for defense-in-depth.
+        settingSources: [],
         includePartialMessages: true,
         persistSession: false,
         maxTurns: 50,

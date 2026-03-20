@@ -103,11 +103,11 @@ Keep `patchWorkspacePermissions()` as defense-in-depth. Update its comment to ex
 
 ## Acceptance Criteria
 
-- [ ] `settingSources: []` is present in the `query()` options in `apps/web-platform/server/agent-runner.ts`
-- [ ] Inline comment explains the security rationale (permission chain step 4 bypass, defense-in-depth)
-- [ ] `patchWorkspacePermissions()` comment updated to explain layered defense relationship
-- [ ] Existing test (`canusertool-caching.test.ts`) continues to pass
-- [ ] No other `query()` calls in the codebase are missing `settingSources: []`
+- [x] `settingSources: []` is present in the `query()` options in `apps/web-platform/server/agent-runner.ts`
+- [x] Inline comment explains the security rationale (permission chain step 4 bypass, defense-in-depth)
+- [x] `patchWorkspacePermissions()` comment updated to explain layered defense relationship
+- [x] Existing test (`canusertool-caching.test.ts`) continues to pass (skipped: requires ANTHROPIC_API_KEY, already uses settingSources: [])
+- [x] No other `query()` calls in the codebase are missing `settingSources: []`
 
 ## Test Scenarios
 
