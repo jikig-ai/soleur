@@ -1,13 +1,13 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const PUBLIC_PATHS = ["/login", "/signup", "/callback", "/api/webhooks", "/ws"];
+const PUBLIC_PATHS = ["/login", "/signup", "/callback", "/api/webhooks", "/ws", "/accept-terms", "/api/accept-terms"];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow public paths
-  if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {
+  // Allow public paths (exact match or prefix with trailing slash)
+  if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
     return NextResponse.next();
   }
 
@@ -56,6 +56,26 @@ export async function middleware(request: NextRequest) {
   if (!user) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
+    return NextResponse.redirect(url);
+  }
+
+  // Enforce T&C acceptance — redirect to /accept-terms if not accepted
+  const { data: userRow, error: tcError } = await supabase
+    .from("users")
+    .select("tc_accepted_at")
+    .eq("id", user.id)
+    .single();
+
+  if (tcError) {
+    // Fail open: allow request if we cannot verify T&C status.
+    // Auth is already verified by getUser() above.
+    console.error(`[middleware] tc_accepted_at query failed: ${tcError.message}`);
+    return response;
+  }
+
+  if (!userRow?.tc_accepted_at) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/accept-terms";
     return NextResponse.redirect(url);
   }
 
