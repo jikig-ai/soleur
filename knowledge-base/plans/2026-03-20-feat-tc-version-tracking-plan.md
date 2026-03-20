@@ -3,9 +3,28 @@ title: "feat: add T&C version tracking to tc_accepted_at"
 type: feat
 date: 2026-03-20
 semver: patch
+deepened: 2026-03-20
 ---
 
 # feat: add T&C version tracking to tc_accepted_at
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-20
+**Sections enhanced:** 6 (Problem Statement, Proposed Solution, Technical Considerations, Test Scenarios, Dependencies & Risks, References)
+**Research sources:** ICO consent guidance, Supabase SSR docs, Next.js middleware patterns, GDPR enforcement trends 2025-2026, Supabase middleware performance discussions
+
+### Key Improvements
+
+1. **ICO four-element consent record:** Plan now aligns with ICO's explicit requirement to record identity, timing, document version, and method -- the `tc_accepted_version` column satisfies the "document version" element that was previously missing.
+2. **Middleware performance mitigation:** Research confirmed `getUser()` already runs on every request; the additional `select('tc_accepted_version')` query can be combined into the existing middleware flow by piggy-backing on the authenticated user's session rather than making a separate DB call.
+3. **Consent refresh obligation:** ICO guidance confirms consent must be refreshed when processing changes -- this validates the re-acceptance mechanism as a legal requirement, not just a nice-to-have.
+4. **Missing `tc_version` metadata validation:** Added edge case for when signup form sends `tc_accepted: true` but omits `tc_version` -- the trigger should store NULL version (not an empty string), and the middleware should treat NULL version as stale.
+
+### New Considerations Discovered
+
+- The middleware already calls `supabase.auth.getUser()` on every request, so adding a `.from('users').select('tc_accepted_version')` query doubles the DB round-trips. Recommended: combine both checks in a single query or cache version in JWT custom claims (future optimization).
+- ICO guidance explicitly requires keeping a "master copy of the consent statement in use at that time, plus version numbers" -- the `TC_VERSION` constant alone is insufficient; the actual T&C document content for each version should be preserved (git history satisfies this if T&C docs are committed).
 
 ## Overview
 
@@ -20,6 +39,19 @@ This plan adds a `tc_accepted_version` column to the `public.users` table, a `TC
 **Re-acceptance on update:** When T&C are updated (e.g., the upcoming Section 5 subscription/cancellation clauses from #893), existing users should be required to accept the new version. Without version tracking, the only option is a blanket re-acceptance for all users, including those who already accepted the current version.
 
 **Audit trail integrity:** The combination of `tc_accepted_at` (when) and `tc_accepted_version` (what) creates a complete consent record per GDPR Article 7(1).
+
+### Research Insights: ICO Four-Element Consent Record
+
+The UK ICO's [consent guidance](https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/lawful-basis/consent/how-should-we-obtain-record-and-manage-consent/) requires recording four elements for demonstrable consent:
+
+1. **Identity** -- who consented (user ID, already tracked via `public.users.id`)
+2. **Timing** -- when they consented (`tc_accepted_at` timestamp)
+3. **Document version** -- "a master copy of the consent statement in use at that time, plus version numbers and dates matching when consent was given" (`tc_accepted_version` -- the column this plan adds)
+4. **Method** -- how they consented (clickwrap checkbox on `/accept-terms` page, implicit from the acceptance route)
+
+The system currently records elements 1, 2, and 4. Element 3 (document version) is the gap this plan closes. Additionally, ICO requires that consent be "refreshed" when processing changes -- validating the re-acceptance mechanism as a legal obligation, not a product enhancement.
+
+**Document preservation:** The `TC_VERSION` constant maps to a specific T&C document. Since T&C source files are committed to git (`docs/legal/terms-and-conditions.md`), git history preserves the master copy for each version. No additional archival mechanism is needed as long as T&C version bumps are committed alongside the document changes.
 
 ## Proposed Solution
 
@@ -90,10 +122,41 @@ Update `apps/web-platform/middleware.ts` to check version staleness after confir
 
 - Query `tc_accepted_version` from `public.users` for the authenticated user
 - Compare against `TC_VERSION` constant
-- If `tc_accepted_version` is NULL or < `TC_VERSION`: redirect to `/accept-terms`
+- If `tc_accepted_version` is NULL or `!== TC_VERSION`: redirect to `/accept-terms`
 - If equal: proceed normally
 
 This extends the existing auth check (redirect to `/login` if no user) with a version gate.
+
+#### Research Insights: Middleware Performance
+
+The [Supabase community discussion on getUser() performance](https://github.com/orgs/supabase/discussions/20905) confirms that `supabase.auth.getUser()` already makes a round-trip to the Supabase Auth server on every middleware invocation. Adding a second query (`.from('users').select('tc_accepted_version')`) doubles the DB round-trips per request.
+
+**Recommended approach:** Place the version query immediately after the `getUser()` call, only when the user is authenticated. Use `.select('tc_accepted_version').eq('id', user.id).single()` for the narrowest possible query. This adds ~5-15ms per request (single-row PK lookup), which is acceptable for a legal compliance gate.
+
+**Future optimization path (non-goal for v1):** Cache `tc_accepted_version` in Supabase JWT custom claims via a database hook, eliminating the extra query entirely. The `getUser()` response would then contain the version. This requires Supabase Pro plan features and is out of scope for the initial implementation.
+
+```typescript
+// Middleware pattern: version check after auth (apps/web-platform/middleware.ts)
+const { data: { user } } = await supabase.auth.getUser();
+
+if (!user) {
+  // existing redirect to /login
+}
+
+// Version check -- only for authenticated users on non-public paths
+const { data: profile, error: profileError } = await supabase
+  .from("users")
+  .select("tc_accepted_version")
+  .eq("id", user.id)
+  .single();
+
+// Fail open on query error (consistent with existing pattern)
+if (!profileError && profile?.tc_accepted_version !== TC_VERSION) {
+  const url = request.nextUrl.clone();
+  url.pathname = "/accept-terms";
+  return NextResponse.redirect(url);
+}
+```
 
 ### 5. Accept-terms API: Stamp version on re-acceptance
 
@@ -128,6 +191,10 @@ PR #940 (enforce `tc_accepted_at` -- middleware, WebSocket, acceptance page) is 
 
 Use semantic versioning (`1.0.0`) for T&C versions. This is human-readable, sortable, and allows distinguishing major rewrites (2.0.0) from clause additions (1.1.0) from typo fixes (1.0.1). The comparison logic uses simple string equality (`!== TC_VERSION`), not semver comparison -- any version mismatch triggers re-acceptance.
 
+#### Research Insight: When NOT to bump version
+
+Not every T&C edit requires re-acceptance. ICO guidance states consent must be refreshed when "processing changes" -- i.e., when the legal substance changes. Typo fixes, formatting changes, or clarifications that do not alter processing purposes or user rights should NOT bump the version, because forced re-acceptance on trivial changes creates consent fatigue and may itself be considered a dark pattern under 2025-2026 GDPR enforcement priorities. The manual version bump gives legal control over this distinction.
+
 ### Migration safety
 
 - The new column is nullable with no default, so the `ALTER TABLE` is a metadata-only operation (no table rewrite)
@@ -139,6 +206,19 @@ Use semantic versioning (`1.0.0`) for T&C versions. This is human-readable, sort
 Per the learning in `knowledge-base/learnings/2026-03-20-supabase-trigger-fallback-parity.md`, the database trigger and the TypeScript fallback in `callback/route.ts` must use identical conditional logic for `tc_accepted_version`. Both must:
 - Only set `tc_accepted_version` when `tc_accepted` is true
 - Read the version from the same metadata key (`tc_version`)
+
+#### Research Insight: Parity verification checklist
+
+The learning prescribes "field-by-field structural symmetry" between trigger and fallback. For `tc_accepted_version`, verify:
+
+| Check | Trigger (SQL) | Fallback (TypeScript) |
+|---|---|---|
+| Conditional gate | `WHEN (raw_user_meta_data->>'tc_accepted') = 'true'` | `tcAccepted ? ... : null` |
+| Source key | `raw_user_meta_data->>'tc_version'` | `user.user_metadata?.tc_version` |
+| NULL on false | `ELSE null` | `: null` |
+| NULL on missing key | PostgreSQL `->>'` returns NULL for missing key | `?.tc_version` returns `undefined`, coerced to NULL by Supabase client |
+
+The `undefined` vs `null` coercion in the TypeScript path is safe because the Supabase client serializes both to SQL NULL. However, add an explicit `?? null` for defensive clarity.
 
 ### WebSocket enforcement
 
@@ -179,6 +259,9 @@ The WebSocket handler (from PR #940) rejects connections with close code 4004 if
 
 - Given the Supabase query for `tc_accepted_version` fails in middleware, when a user accesses a protected route, then the middleware fails open (user proceeds) -- consistent with existing fail-open behavior for auth queries
 - Given the database trigger fires but the metadata does not contain `tc_version`, when a new user is created, then `tc_accepted_version` is NULL (not a stale string)
+- Given a user accepted T&C v1.0.0 and `TC_VERSION` is bumped to 1.0.0 (same value after redeployment), when the user accesses a protected route, then they proceed normally (no spurious re-acceptance)
+- Given the signup form sends `tc_accepted: "true"` but `tc_version` is undefined, when the trigger fires, then `tc_accepted_at` is set but `tc_accepted_version` is NULL -- the user will be redirected to `/accept-terms` on first protected route access to stamp the version
+- Given `/accept-terms` is in `PUBLIC_PATHS`, when an unauthenticated user navigates to `/accept-terms` directly, then they see the login redirect (middleware checks auth before version)
 
 ### Regression Tests
 
@@ -192,9 +275,13 @@ The WebSocket handler (from PR #940) rejects connections with close code 4004 if
 | Issue #933 (no downstream enforcement) | Open, addressed by #940 | Resolved when #940 merges |
 | Migration 006 (column-level GRANT) | Merged | New column auto-protected; no GRANT change needed |
 
-**Risk: Middleware performance.** Adding a `users` table query to middleware for every request adds latency. Mitigation: the query is a single-row lookup by primary key (`id`), which is O(1) on the index. If this becomes a concern, the version can be cached in the session cookie or JWT claims.
+**Risk: Middleware performance.** Adding a `users` table query to middleware for every request adds latency. Research confirms `getUser()` already adds one round-trip; this adds a second. Mitigation: the query is a single-row PK lookup (~5-15ms). For the current user count this is acceptable. If it becomes a concern, migrate to JWT custom claims (see middleware research insights above).
 
 **Risk: Grandfathered users flood.** When this ships, all existing users have `tc_accepted_version = NULL` and will be redirected to `/accept-terms` on their next visit. This is the intended behavior -- it is the "require re-acceptance" mechanism described in the issue.
+
+**Risk: Version in metadata is client-controlled.** The `tc_version` field in signup metadata is set by the frontend and could theoretically be tampered with (same concern as #931 for `tc_accepted`). Mitigation: the middleware always checks against the server-side `TC_VERSION` constant. A user who sets a fake version in metadata will have a mismatched `tc_accepted_version` and be redirected to re-accept via the server-controlled `/accept-terms` flow. The metadata version is a convenience for the trigger; the enforcement is server-side.
+
+**Risk: Redirect loop.** If `/accept-terms` is not in `PUBLIC_PATHS`, authenticated users with stale versions get caught in an infinite redirect loop (middleware redirects to `/accept-terms`, which itself triggers middleware, which redirects again). The `/accept-terms` path must be added to `PUBLIC_PATHS` -- PR #940 should handle this, but verify during implementation.
 
 ## References & Research
 
@@ -220,3 +307,8 @@ The WebSocket handler (from PR #940) rejects connections with close code 4004 if
 
 - GDPR Article 7 -- Conditions for consent (demonstrable, specific, informed)
 - GDPR Article 7(1) -- Controller must demonstrate consent was given
+- [ICO: How should we obtain, record and manage consent?](https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/lawful-basis/consent/how-should-we-obtain-record-and-manage-consent/) -- Four-element consent record requirement (identity, timing, document version, method)
+- [Supabase SSR auth middleware pattern](https://github.com/supabase/supabase/blob/master/examples/prompts/nextjs-supabase-auth.md) -- Canonical Next.js middleware with `getUser()` + cookie handling
+- [Next.js middleware authentication guide](https://github.com/vercel/next.js/blob/canary/docs/01-app/02-guides/authentication.mdx) -- Route protection and redirect patterns
+- [Supabase getUser() middleware performance discussion](https://github.com/orgs/supabase/discussions/20905) -- Latency concerns and JWT caching strategies
+- [GDPR Consent Management Best Practices 2026](https://secureprivacy.ai/blog/gdpr-consent-management) -- Consent refresh, granular options, dark pattern enforcement
