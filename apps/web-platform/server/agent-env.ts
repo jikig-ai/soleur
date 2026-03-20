@@ -7,7 +7,7 @@
 // the allowlist is equivalent to blocking it.
 // ---------------------------------------------------------------------------
 
-const AGENT_ENV_ALLOWLIST = [
+const AGENT_ENV_ALLOWLIST = Object.freeze([
   "HOME",
   "PATH",
   "NODE_ENV",
@@ -20,13 +20,16 @@ const AGENT_ENV_ALLOWLIST = [
   "HTTP_PROXY",
   "HTTPS_PROXY",
   "NO_PROXY",
-] as const;
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+] as const);
 
-const AGENT_ENV_OVERRIDES: Record<string, string> = {
+const AGENT_ENV_OVERRIDES = Object.freeze({
   DISABLE_AUTOUPDATER: "1",
   DISABLE_TELEMETRY: "1",
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-};
+} as const);
 
 export function buildAgentEnv(apiKey: string): Record<string, string> {
   const env: Record<string, string> = {

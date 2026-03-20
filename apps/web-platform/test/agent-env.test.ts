@@ -1,17 +1,22 @@
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import { buildAgentEnv } from "../server/agent-env";
 
+// Intentionally duplicated from agent-env.ts -- importing would defeat the
+// security boundary test. Changes to the allowlist must be reflected here,
+// forcing an explicit review of what the subprocess can see.
 const SERVER_SECRETS = [
   "SUPABASE_SERVICE_ROLE_KEY",
   "BYOK_ENCRYPTION_KEY",
   "STRIPE_SECRET_KEY",
   "STRIPE_WEBHOOK_SECRET",
+  "STRIPE_PRICE_ID",
   "NEXT_PUBLIC_SUPABASE_URL",
   "NEXT_PUBLIC_SUPABASE_ANON_KEY",
   "PORT",
   "WORKSPACES_ROOT",
   "SOLEUR_PLUGIN_PATH",
   "CLAUDECODE",
+  "RANDOM_NEW_SECRET",
 ] as const;
 
 const EXPECTED_ALLOWLIST = [
@@ -27,6 +32,9 @@ const EXPECTED_ALLOWLIST = [
   "HTTP_PROXY",
   "HTTPS_PROXY",
   "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
 ] as const;
 
 const EXPECTED_OVERRIDES: Record<string, string> = {
@@ -106,22 +114,18 @@ describe("buildAgentEnv", () => {
   });
 
   test("does not contain CLAUDECODE (prevents nested-session error)", () => {
-    process.env.CLAUDECODE = "1";
     const env = buildAgentEnv("sk-ant-test");
     expect(env).not.toHaveProperty("CLAUDECODE");
-    delete process.env.CLAUDECODE;
   });
 
   test("forwards proxy vars when present", () => {
-    process.env.HTTPS_PROXY = "http://proxy.corp:8080";
     const env = buildAgentEnv("sk-ant-test");
-    expect(env.HTTPS_PROXY).toBe("http://proxy.corp:8080");
+    expect(env.HTTPS_PROXY).toBe("test-https_proxy");
+    expect(env.http_proxy).toBe("test-http_proxy");
   });
 
   test("contains only known keys (no process.env leakage)", () => {
-    process.env.RANDOM_NEW_SECRET = "should-not-leak";
     const env = buildAgentEnv("sk-ant-test");
     expect(env).not.toHaveProperty("RANDOM_NEW_SECRET");
-    delete process.env.RANDOM_NEW_SECRET;
   });
 });
