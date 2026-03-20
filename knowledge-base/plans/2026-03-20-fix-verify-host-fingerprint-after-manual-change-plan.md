@@ -83,12 +83,12 @@ The `publicKey` in the callback is whatever key the server presents during the S
 
 ## Acceptance Criteria
 
-- [ ] SSH into web platform server and retrieve host key fingerprints for ALL key types (ed25519, ecdsa, rsa)
-- [ ] Identify which key type `appleboy/ssh-action` actually negotiates (by trial: set fingerprint, trigger deploy, check result)
-- [ ] Set `WEB_PLATFORM_HOST_FINGERPRINT` GitHub secret to the verified correct `SHA256:<hash>` value for the negotiated key type
-- [ ] Trigger a web-platform deploy and confirm SSH connection succeeds with fingerprint verification
-- [ ] Confirm telegram-bridge uses the same host (both reference `WEB_PLATFORM_HOST`) so a single fingerprint covers both workflows
-- [ ] Document the working key type in a learning file for future reprovisioning reference
+- [x] SSH into web platform server and retrieve host key fingerprints for ALL key types (ed25519, ecdsa, rsa)
+- [x] Identify which key type `appleboy/ssh-action` actually negotiates (by trial: set fingerprint, trigger deploy, check result)
+- [x] Set `WEB_PLATFORM_HOST_FINGERPRINT` GitHub secret to the verified correct `SHA256:<hash>` value for the negotiated key type
+- [x] Trigger a web-platform deploy and confirm SSH connection succeeds with fingerprint verification
+- [x] Confirm telegram-bridge uses the same host (both reference `WEB_PLATFORM_HOST`) so a single fingerprint covers both workflows
+- [x] Document the working key type in a learning file for future reprovisioning reference
 
 ## Test Scenarios
 
