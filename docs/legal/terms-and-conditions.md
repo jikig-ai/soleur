@@ -209,7 +209,7 @@ For Users in the EU/EEA, the limitations in this section apply only to the exten
 
 You agree to indemnify, defend, and hold harmless Jikigai and its affiliates, contributors, and licensors from and against any claims, damages, losses, liabilities, costs, and expenses (including reasonable attorneys' fees) arising out of or relating to:
 
-- Your use of the Plugin
+- Your use of the Plugin or the Web Platform
 - Your violation of these Terms
 - Your violation of any applicable law or regulation
 - Your User Content
@@ -243,7 +243,7 @@ For details on data retention after account deletion, see the [Privacy Policy](p
 
 ### 13.2 Termination by Us
 
-We may suspend or terminate your right to use the Plugin for cause, including but not limited to violation of these Terms. For EU/EEA Users, we will provide at least 30 days' notice before termination takes effect, except where termination is necessitated by a legal obligation or where the User has repeatedly or materially breached these Terms.
+We may suspend or terminate your right to use the Plugin or the Web Platform for cause, including but not limited to violation of these Terms. For EU/EEA Users, we will provide at least 30 days' notice before termination takes effect, except where termination is necessitated by a legal obligation or where the User has repeatedly or materially breached these Terms.
 
 ### 13.3 Effect of Termination
 
