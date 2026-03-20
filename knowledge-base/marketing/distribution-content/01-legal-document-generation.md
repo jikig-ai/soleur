@@ -1,7 +1,7 @@
 ---
 title: "How We Generated 9 Legal Documents in Days, Not Months"
 type: case-study
-publish_date: 2026-03-19
+publish_date: 2026-03-21
 channels: bluesky, linkedin-company
 status: scheduled
 ---
