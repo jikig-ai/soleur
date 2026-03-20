@@ -40,6 +40,8 @@ function resolveRealPath(filePath: string): string | null {
  *
  * Returns null if any ancestor throws a non-ENOENT error (ELOOP, EACCES)
  * -- this prevents skipping a malicious symlink by walking past it.
+ * Also returns null if a dangling symlink is detected (symlink exists
+ * but its target does not) -- prevents walking past unresolvable symlinks.
  */
 function resolveParentRealPath(filePath: string): string | null {
   let current = filePath;
@@ -58,7 +60,18 @@ function resolveParentRealPath(filePath: string): string | null {
         // Cannot verify safety -- deny rather than walk past it.
         return null;
       }
-      // ENOENT -- this ancestor doesn't exist either, keep walking up
+      // ENOENT -- check if this is a dangling symlink rather than
+      // a genuinely non-existent path component.
+      try {
+        const stat = fs.lstatSync(current);
+        if (stat.isSymbolicLink()) {
+          // Dangling symlink: the symlink exists but its target does not.
+          // Cannot verify where it resolves -- deny.
+          return null;
+        }
+      } catch {
+        // lstat also failed -- truly non-existent, continue walking up
+      }
     }
   }
 

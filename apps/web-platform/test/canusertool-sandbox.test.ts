@@ -151,6 +151,14 @@ describe("isPathInWorkspace symlink defense", () => {
     ).toBe(true);
   });
 
+  test("denies dangling symlink pointing outside workspace", () => {
+    const linkPath = path.join(tmpWorkspace, "dangling");
+    fs.symlinkSync("/nonexistent/outside/target", linkPath);
+    expect(
+      isPathInWorkspace(path.join(linkPath, "file.txt"), tmpWorkspace),
+    ).toBe(false);
+  });
+
   test("resolves workspace path accessed through a symlink", () => {
     const workspaceAlias = fs.mkdtempSync(path.join(os.tmpdir(), "ws-alias-"));
     const aliasLink = path.join(workspaceAlias, "link");
