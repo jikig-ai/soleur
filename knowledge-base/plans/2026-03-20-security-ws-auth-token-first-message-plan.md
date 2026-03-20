@@ -253,16 +253,16 @@ From `knowledge-base/learnings/2026-03-18-typed-error-codes-websocket-key-invali
 
 ## Acceptance Criteria
 
-- [ ] WebSocket URL no longer contains `?token=` parameter (`ws-client.ts`)
-- [ ] Client sends `{ type: "auth", token }` as first message after `onopen` (`ws-client.ts`)
-- [ ] Client waits for `auth_ok` before setting status to `connected` (`ws-client.ts`)
-- [ ] Server validates auth from first message, not from URL query (`ws-handler.ts`)
-- [ ] Server closes connection with `4001` if no auth message received within 5 seconds (`ws-handler.ts`)
-- [ ] Server closes connection with `4003` if first non-auth message received before auth (`ws-handler.ts`)
-- [ ] `WSMessage` type union includes `auth` and `auth_ok` variants (`types.ts`)
-- [ ] All existing tests pass; new tests cover auth handshake protocol (`test/ws-protocol.test.ts`)
-- [ ] No token appears in any server-side log output
-- [ ] `KeyInvalidError` / `errorCode: "key_invalid"` detection still works after refactor
+- [x] WebSocket URL no longer contains `?token=` parameter (`ws-client.ts`)
+- [x] Client sends `{ type: "auth", token }` as first message after `onopen` (`ws-client.ts`)
+- [x] Client waits for `auth_ok` before setting status to `connected` (`ws-client.ts`)
+- [x] Server validates auth from first message, not from URL query (`ws-handler.ts`)
+- [x] Server closes connection with `4001` if no auth message received within 5 seconds (`ws-handler.ts`)
+- [x] Server closes connection with `4003` if first non-auth message received before auth (`ws-handler.ts`)
+- [x] `WSMessage` type union includes `auth` and `auth_ok` variants (`types.ts`)
+- [x] All existing tests pass; new tests cover auth handshake protocol (`test/ws-protocol.test.ts`)
+- [x] No token appears in any server-side log output
+- [x] `KeyInvalidError` / `errorCode: "key_invalid"` detection still works after refactor
 
 ## Test Scenarios
 

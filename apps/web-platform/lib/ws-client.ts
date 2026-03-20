@@ -40,12 +40,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   /** Stable ref to the latest partial assistant message index for streaming */
   const streamIndexRef = useRef<number | null>(null);
 
-  const getWsUrl = useCallback(async () => {
+  const getWsUrlAndToken = useCallback(async () => {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
     const supabase = createClient();
     const { data: { session } } = await supabase.auth.getSession();
     const token = session?.access_token || "";
-    return `${proto}://${window.location.host}/ws?token=${token}`;
+    return { url: `${proto}://${window.location.host}/ws`, token };
   }, []);
 
   const send = useCallback((msg: WSMessage) => {
@@ -73,14 +73,14 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     }
 
     setStatus("connecting");
-    const url = await getWsUrl();
+    const { url, token } = await getWsUrlAndToken();
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
     ws.onopen = () => {
       if (!mountedRef.current) return;
-      setStatus("connected");
-      backoffRef.current = INITIAL_BACKOFF;
+      // Send auth as first message — do NOT set status to "connected" yet
+      ws.send(JSON.stringify({ type: "auth", token }));
     };
 
     ws.onmessage = (event) => {
@@ -94,6 +94,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       }
 
       switch (msg.type) {
+        case "auth_ok": {
+          setStatus("connected");
+          backoffRef.current = INITIAL_BACKOFF;
+          break;
+        }
+
         case "stream": {
           setMessages((prev) => {
             if (msg.type !== "stream") return prev;
@@ -213,7 +219,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           break;
         }
 
-        // session_started, chat — handled at transport level, no UI message needed
+        // auth (client-only), session_started, chat — no UI message needed
         default:
           break;
       }
@@ -236,7 +242,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     ws.onerror = () => {
       // onclose will fire after onerror — reconnect logic lives there
     };
-  }, [getWsUrl]);
+  }, [getWsUrlAndToken]);
 
   useEffect(() => {
     mountedRef.current = true;
