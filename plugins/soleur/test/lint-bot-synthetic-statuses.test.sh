@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+
 # Tests for scripts/lint-bot-synthetic-statuses.sh
 # Run: bash plugins/soleur/test/lint-bot-synthetic-statuses.test.sh
 
@@ -40,8 +41,11 @@ jobs:
           gh api repos/foo/statuses/$SHA -f state=success -f context=test -f description="ok"
           gh pr create --title "test" --base main
 YAML
+output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
 rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
 assert_eq "0" "$rc" "exits 0 when both contexts present"
+assert_contains "$output" "ok:" "reports passing file"
+assert_contains "$output" "All 1 scheduled" "reports summary"
 echo ""
 
 # Test 2: Missing context=test fails
@@ -57,8 +61,10 @@ jobs:
           gh api repos/foo/statuses/$SHA -f context=cla-check
           gh pr create --title "test"
 YAML
+output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
 rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
 assert_eq "1" "$rc" "exits 1 when context=test missing"
+assert_contains "$output" "context=test" "reports missing context=test"
 echo ""
 
 # Test 3: Missing context=cla-check fails
@@ -74,8 +80,10 @@ jobs:
           gh api repos/foo/statuses/$SHA -f context=test
           gh pr create --title "test"
 YAML
+output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
 rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
 assert_eq "1" "$rc" "exits 1 when context=cla-check missing"
+assert_contains "$output" "context=cla-check" "reports missing context=cla-check"
 echo ""
 
 # Test 4: Missing both contexts fails
@@ -89,8 +97,12 @@ jobs:
     steps:
       - run: gh pr create --title "test"
 YAML
+output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
 rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
 assert_eq "1" "$rc" "exits 1 when both contexts missing"
+assert_contains "$output" "context=cla-check" "reports missing cla-check"
+assert_contains "$output" "context=test" "reports missing test"
+assert_contains "$output" "2 missing" "reports correct failure count"
 echo ""
 
 # Test 5: File without gh pr create is skipped (passes)
@@ -113,6 +125,35 @@ echo "Test 6: Empty workflow directory passes"
 WF=$(setup_wf_dir "test6")
 rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
 assert_eq "0" "$rc" "exits 0 when no scheduled-*.yml files exist"
+echo ""
+
+# Test 7: Multi-file aggregation (one passing, one failing)
+echo "Test 7: Multi-file directory aggregates failures correctly"
+WF=$(setup_wf_dir "test7")
+cat > "$WF/scheduled-good.yml" << 'YAML'
+name: Good
+on: schedule
+jobs:
+  run:
+    steps:
+      - run: |
+          gh api repos/foo/statuses/$SHA -f context=cla-check
+          gh api repos/foo/statuses/$SHA -f context=test
+          gh pr create --title "test"
+YAML
+cat > "$WF/scheduled-bad.yml" << 'YAML'
+name: Bad
+on: schedule
+jobs:
+  run:
+    steps:
+      - run: gh pr create --title "test"
+YAML
+output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
+rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
+assert_eq "1" "$rc" "exits 1 when one file fails in multi-file directory"
+assert_contains "$output" "ok:" "reports passing file"
+assert_contains "$output" "scheduled-bad.yml" "names the failing file"
 echo ""
 
 print_results
