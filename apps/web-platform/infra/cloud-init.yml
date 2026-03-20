@@ -44,8 +44,9 @@ runcmd:
   - mount /dev/disk/by-id/scsi-0HC_Volume_* /mnt/data || true
   - echo '/dev/disk/by-id/scsi-0HC_Volume_* /mnt/data ext4 defaults 0 2' >> /etc/fstab
 
-  # Create workspace and plugin directories
+  # Create workspace and plugin directories (owned by soleur UID 1001, must match apps/web-platform/Dockerfile)
   - mkdir -p /mnt/data/workspaces
+  - chown 1001:1001 /mnt/data/workspaces
   - mkdir -p /mnt/data/plugins/soleur
 
   # Create .env placeholder
