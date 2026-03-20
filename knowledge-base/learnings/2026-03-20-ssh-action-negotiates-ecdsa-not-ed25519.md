@@ -55,6 +55,17 @@ For future reprovisioning, cloud-init handles all of this automatically.
 - After changing cloud-init configurations, verify the changes are applied to running servers (cloud-init only runs at first boot)
 - Deploy users need GHCR credentials separately from root — either copy Docker config or use `docker login`
 
+## Session Errors
+
+1. Ralph loop script path wrong (`skills/one-shot/scripts/` vs `scripts/`)
+2. Terraform state unavailable locally — no remote backend configured for this infra
+3. hcloud CLI installed but no context/token configured in environment
+4. Server IP discovery required 6 approaches before finding the Hetzner token in `settings.local.json` permissions history
+5. ED25519 fingerprint failed as predicted by plan — required ECDSA fallback
+6. Deploy user missing from running server (cloud-init only runs at provisioning)
+7. ci-deploy.sh forced command script missing from server
+8. GHCR Docker credentials not configured for deploy user
+
 ## Related
 
 - Issue #858: Verify WEB_PLATFORM_HOST_FINGERPRINT secret
