@@ -8,7 +8,7 @@ permalink: pages/legal/data-protection-disclosure.html
 <section class="page-hero">
   <div class="container">
     <h1>Data Protection Disclosure</h1>
-    <p>Effective February 20, 2026 | Last Updated March 19, 2026 (corrected Supabase region to EU (eu-west-1), updated DPA execution status, added DPA verification dates)</p>
+    <p>Effective February 20, 2026 | Last Updated March 20, 2026 (added Section 5.3 Web Platform data subject rights)</p>
   </div>
 </section>
 
@@ -18,7 +18,7 @@ permalink: pages/legal/data-protection-disclosure.html
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 19, 2026 (corrected Supabase region to EU (eu-west-1), updated DPA execution status for all web platform processors, added DPA verification dates)
+**Last Updated:** March 20, 2026 (added Section 5.3 Web Platform data subject rights)
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -189,6 +189,19 @@ For data processed through the Docs Site or GitHub repository:
 
 - **(a)** Users may exercise their data subject rights by contacting us through the [Soleur GitHub repository](https://github.com/jikig-ai/soleur).
 - **(b)** For data processed by GitHub as a platform, Users should refer to [GitHub's data subject request process](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
+
+### 5.3 Web Platform Data
+
+For data processed through the Web Platform (app.soleur.ai) where Jikigai acts as controller (see Section 2.1b), data subjects may exercise the following rights by contacting legal@jikigai.com:
+
+- **(a)** **Right of Access (Article 15):** Request confirmation of whether personal data is being processed and obtain a copy of the data (account data, workspace data, subscription metadata).
+- **(b)** **Right to Rectification (Article 16):** Request correction of inaccurate personal data held by Jikigai.
+- **(c)** **Right to Erasure (Article 17):** Request deletion of personal data under applicable conditions. Note: subscription records subject to French tax law retention (Code de commerce Art. L123-22) may be retained for up to 10 years (see Section 2.3(g)).
+- **(d)** **Right to Restriction of Processing (Article 18):** Request that Jikigai restrict processing of personal data.
+- **(e)** **Right to Data Portability (Article 20):** Request personal data in a structured, commonly used, machine-readable format.
+- **(f)** **Right to Object (Article 21):** Object to processing of personal data. The legal basis for Web Platform processing is contract performance (Article 6(1)(b)), so this right applies primarily when processing extends beyond strict contractual necessity.
+
+Jikigai will acknowledge requests within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3). For full details on how each right applies, see the companion [GDPR Policy](/pages/legal/gdpr-policy.html) Section 5.
 
 ---
 
