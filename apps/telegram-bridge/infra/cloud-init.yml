@@ -4,6 +4,18 @@ packages:
   - curl
   - jq
 
+groups:
+  - docker
+
+users:
+  - default
+  - name: deploy
+    groups: docker
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ${deploy_ssh_public_key}
+
 write_files:
   - path: /etc/ssh/sshd_config.d/01-hardening.conf
     content: |
@@ -12,7 +24,7 @@ write_files:
       MaxAuthTries 3
       LoginGraceTime 30
       PermitRootLogin prohibit-password
-      AllowUsers root
+      AllowUsers root deploy
       ClientAliveInterval 300
       ClientAliveCountMax 2
     owner: root:root
@@ -43,8 +55,11 @@ runcmd:
   - mount /dev/disk/by-id/scsi-0HC_Volume_* /mnt/data || true
   - echo '/dev/disk/by-id/scsi-0HC_Volume_* /mnt/data ext4 defaults 0 2' >> /etc/fstab
 
-  # Create .env placeholder
+  # Create .env placeholder and grant deploy user ownership of /mnt/data
+  # (deploy user writes .env vars and manages containers via CI/CD)
   - touch /mnt/data/.env
+  - chmod 600 /mnt/data/.env
+  - chown -R deploy:deploy /mnt/data
 
   # Pull and run container
   - docker pull ${image_name}

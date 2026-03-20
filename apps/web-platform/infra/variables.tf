@@ -55,3 +55,8 @@ variable "app_domain" {
   type        = string
   default     = "app.soleur.ai"
 }
+
+variable "deploy_ssh_public_key" {
+  description = "SSH public key for the deploy user (used by CI/CD)"
+  type        = string
+}
