@@ -1,4 +1,10 @@
 import type { NextConfig } from "next";
+import { buildSecurityHeaders } from "./lib/security-headers";
+
+const securityHeaders = buildSecurityHeaders({
+  isDev: process.env.NODE_ENV === "development",
+  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
+});
 
 const nextConfig: NextConfig = {
   // Custom server handles HTTP — disable standalone output
@@ -11,6 +17,14 @@ const nextConfig: NextConfig = {
       process.env.NODE_ENV === "development"
         ? ["app.soleur.ai", "localhost:3000"]
         : ["app.soleur.ai"],
+  },
+  async headers() {
+    return [
+      {
+        source: "/(.*)",
+        headers: securityHeaders,
+      },
+    ];
   },
 };
 

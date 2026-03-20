@@ -6,6 +6,7 @@ import { randomUUID } from "crypto";
 
 import { KeyInvalidError, type WSMessage, type Conversation } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
+import { TC_VERSION } from "@/lib/legal/tc-version";
 
 // Agent runner stubs -- will be implemented in server/agent-runner.ts
 import {
@@ -298,6 +299,29 @@ export function setupWebSocket(server: HTTPServer) {
         clearTimeout(authTimer);
         authenticated = true;
         userId = user.id;
+
+        // Enforce T&C acceptance (version-aware)
+        const { data: userRow, error: tcError } = await supabase
+          .from("users")
+          .select("tc_accepted_version")
+          .eq("id", user.id)
+          .single();
+
+        // Guard: socket may have closed during the await
+        if (ws.readyState !== WebSocket.OPEN) {
+          return;
+        }
+
+        if (tcError) {
+          console.error(`[ws] tc_accepted_version query failed for ${user.id}: ${tcError.message}`);
+          ws.close(4005, "Internal error");
+          return;
+        }
+
+        if (userRow?.tc_accepted_version !== TC_VERSION) {
+          ws.close(4004, "T&C not accepted");
+          return;
+        }
 
         // If user already has an open socket, close the old one
         const existing = sessions.get(userId);

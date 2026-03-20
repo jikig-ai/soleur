@@ -25,12 +25,9 @@ Guide the user to install:
 # macOS
 brew install rclone
 
-# Linux (script install)
-curl https://rclone.org/install.sh | sudo bash
-
-# Or via package manager
-sudo apt install rclone  # Debian/Ubuntu
-sudo dnf install rclone  # Fedora
+# Linux (static binary to ~/.local/bin)
+mkdir -p ~/.local/bin && curl -sfL https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /tmp/rclone.zip && unzip -q /tmp/rclone.zip -d /tmp && cp /tmp/rclone-*/rclone ~/.local/bin/ && chmod +x ~/.local/bin/rclone
+# For arm64: replace amd64 with arm64 in the URL above
 ```
 
 ### If NO remotes are configured
