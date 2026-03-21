@@ -98,3 +98,8 @@ variable "doppler_token" {
   type        = string
   sensitive   = true
 }
+
+variable "cf_notification_email" {
+  description = "Email address for Cloudflare notification policies"
+  type        = string
+}
