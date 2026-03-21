@@ -14,10 +14,6 @@ terraform {
   }
 
   required_providers {
-    hcloud = {
-      source  = "hetznercloud/hcloud"
-      version = "~> 1.49"
-    }
     cloudflare = {
       source  = "cloudflare/cloudflare"
       version = "~> 4.0"
@@ -28,10 +24,6 @@ terraform {
     }
   }
   required_version = ">= 1.6"
-}
-
-provider "hcloud" {
-  token = var.hcloud_token
 }
 
 provider "cloudflare" {
