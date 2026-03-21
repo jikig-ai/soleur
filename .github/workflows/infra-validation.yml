@@ -165,9 +165,13 @@ jobs:
           DOPPLER_PROJECT: soleur
           DOPPLER_CONFIG: prd_terraform
         run: |
+          VAR_ARGS=()
+          if grep -q 'variable "ssh_key_path"' variables.tf 2>/dev/null; then
+            VAR_ARGS+=(-var="ssh_key_path=/tmp/ci_ssh_key.pub")
+          fi
           PLAN_OUTPUT=$(doppler run --name-transformer tf-var -- \
             terraform plan -no-color -input=false \
-            -var="ssh_key_path=/tmp/ci_ssh_key.pub" 2>&1)
+            "${VAR_ARGS[@]}" 2>&1)
           PLAN_EXIT=$?
 
           if [[ ${#PLAN_OUTPUT} -gt 60000 ]]; then
