@@ -6,6 +6,26 @@ date: 2026-03-21
 
 # infra: add scheduled drift detection for Terraform
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-21
+**Sections enhanced:** 7
+**Research sources:** Web search (Terraform drift CI patterns, setup-terraform wrapper bug, Doppler CLI action), project learnings (6 files), security-sentinel review, terraform-architect review, deployment-verification review, code-simplicity review
+
+### Key Improvements
+
+1. **CRITICAL: `terraform_wrapper: false` required** -- The `hashicorp/setup-terraform` action's wrapper script converts exit code 2 to exit code 1, silently breaking drift detection. Must set `terraform_wrapper: false` in the action config.
+2. **Replace raw `curl | tar` Doppler install with official SHA-pinned action** -- `dopplerhq/cli-action` provides verified, maintained binary installation. Raw binary download without checksum verification violates the project's supply-chain security learning (2026-03-20).
+3. **Plan output sensitivity** -- Terraform plan output can leak sensitive values even with `sensitive = true` in variable declarations. Added `TF_CLI_ARGS_plan=-compact-warnings` and a sanitization step to scrub known secret patterns before writing to GitHub issues.
+4. **`continue-on-error: true` on plan step** -- Prevents the wrapper from marking the job as failed when exit code is non-zero, which would skip all subsequent notification steps.
+5. **HEREDOC indentation bug in issue body** -- The original MVP has leading whitespace in HEREDOC content (inside a step with indentation), which renders as code blocks in GitHub Markdown. Must use unindented HEREDOC or `<<-` with tabs.
+
+### New Considerations Discovered
+
+- The `hashicorp/setup-terraform` wrapper bug ([#152](https://github.com/hashicorp/setup-terraform/issues/152), [#9](https://github.com/hashicorp/setup-terraform/issues/9)) would have silently made exit code 2 unreachable, meaning drift would never be detected -- the entire workflow would be no-op.
+- Terraform issue [#35117](https://github.com/hashicorp/terraform/issues/35117) documents false exit code 2 with `plan -refresh-only`. Using standard `plan` (not `refresh-only`) avoids this bug.
+- GitHub issue search (`gh issue list --search`) uses fuzzy matching. The deduplication logic should also filter by exact title match in the `--jq` expression to avoid false positive deduplication.
+
 ## Overview
 
 Add a scheduled GitHub Actions workflow that runs `terraform plan -detailed-exitcode` every 12 hours against both Terraform stacks (`telegram-bridge` and `web-platform`). When drift is detected (exit code 2), the workflow creates a GitHub issue and sends a Discord notification. When Terraform errors occur (exit code 1), it sends an alert without creating a drift issue.
@@ -27,13 +47,26 @@ A single workflow file `.github/workflows/scheduled-terraform-drift.yml` that:
 
 1. Runs on `schedule` (every 12 hours) and `workflow_dispatch`
 2. Uses a matrix strategy to cover both stacks: `["apps/telegram-bridge/infra", "apps/web-platform/infra"]`
-3. Installs Doppler CLI and Terraform
+3. Installs Doppler CLI (via official `dopplerhq/cli-action`) and Terraform (with `terraform_wrapper: false`)
 4. Sets R2 backend credentials as plain env vars (not through `--name-transformer tf-var` -- see learning from #970)
 5. Runs `doppler run --name-transformer tf-var -- terraform plan -detailed-exitcode`
 6. Handles exit codes: 0 = clean, 1 = error (alert), 2 = drift (issue + alert)
-7. Creates a GitHub issue on drift with the plan output
+7. Creates a GitHub issue on drift with the plan output (sanitized for sensitive values)
 8. Sends Discord notification on drift or error
 9. Deduplicates issues by checking for existing open drift issues before creating new ones
+
+### Research Insights
+
+**Best Practices (from industry patterns):**
+- Use `terraform_wrapper: false` with `hashicorp/setup-terraform` when relying on exit codes -- the wrapper script has a [known bug](https://github.com/hashicorp/setup-terraform/issues/152) that converts exit code 2 to 1
+- Prefer official GitHub Actions (`dopplerhq/cli-action@v4`) over raw binary downloads for supply-chain security ([project learning: checksum verification](../learnings/2026-03-20-checksum-verification-binary-downloads.md))
+- Use `continue-on-error: true` on the plan step so that non-zero exit codes don't skip subsequent notification steps
+- Sanitize plan output before posting to GitHub issues -- even with `sensitive = true`, Terraform may include partial values in error messages
+
+**Common Pitfalls:**
+- The `setup-terraform` wrapper makes `$?` unreliable. With `terraform_wrapper: false`, capture exit code directly from the `terraform` binary
+- HEREDOC content inside indented workflow steps produces leading whitespace that renders as Markdown code blocks in GitHub issues. Use `<<-EOF` with tab indentation or unindented `<<EOF`
+- `gh issue list --search` uses GitHub's fuzzy search, not exact title match. Filter results with `--jq` to compare `.title` exactly
 
 ### `.github/workflows/scheduled-terraform-drift.yml`
 
@@ -182,6 +215,25 @@ Both stacks use `file(var.ssh_key_path)` to read a public SSH key at plan time. 
 
 **Recommendation:** Option 2 (add `ignore_changes`) is the cleanest. The SSH key is a create-time attribute that should never change via Terraform -- it's already an import artifact. Option 1 is the fallback if modifying `.tf` files is out of scope for this PR.
 
+### setup-terraform Wrapper Bug (CRITICAL)
+
+The `hashicorp/setup-terraform` action installs a wrapper script around the `terraform` binary. This wrapper intercepts exit codes and calls `setFailed()` for any non-zero exit, converting exit code 2 to exit code 1. This means `$?` after `terraform plan -detailed-exitcode` will NEVER be 2 when using the default wrapper configuration.
+
+**Fix:** Set `terraform_wrapper: false` in the action configuration:
+
+```yaml
+- uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+  with:
+    terraform_version: "1.10.5"
+    terraform_wrapper: false   # REQUIRED for -detailed-exitcode
+```
+
+This is the most critical change from the original plan. Without it, the workflow would silently succeed on every run, never detecting drift.
+
+**References:**
+- [setup-terraform #152: Plan with -detailed-exitcode option returns error](https://github.com/hashicorp/setup-terraform/issues/152)
+- [setup-terraform #9: Wrapper does not forward the exit code correctly](https://github.com/hashicorp/setup-terraform/issues/9)
+
 ### Exit Code Semantics
 
 | Exit Code | Meaning | Action |
@@ -190,9 +242,23 @@ Both stacks use `file(var.ssh_key_path)` to read a public SSH key at plan time. 
 | 1 | Error (syntax, auth, provider) | Discord alert, workflow annotation |
 | 2 | Drift detected (changes needed) | GitHub issue + Discord alert |
 
+**Edge case:** Terraform issue [#35117](https://github.com/hashicorp/terraform/issues/35117) documents `plan -refresh-only -detailed-exitcode` returning exit code 2 even with no changes. This workflow uses standard `plan` (not `refresh-only`), which is not affected by this bug. Do NOT switch to `-refresh-only` unless this upstream issue is resolved.
+
 ### Issue Deduplication
 
 Before creating a new drift issue, search for existing open issues with the `infra-drift` label and matching title. If found, append a comment with updated plan output and timestamp. This prevents issue flooding when drift persists across multiple runs (e.g., an intentional manual change not yet codified).
+
+**Research Insight -- Exact title matching:** `gh issue list --search` uses GitHub's fuzzy text search, which can match unrelated issues. The deduplication logic must also filter by exact title in the `--jq` expression:
+
+```bash
+EXISTING=$(gh issue list --label "infra-drift" --state open \
+  --search "drift detected in ${STACK_NAME}" \
+  --json number,title \
+  --jq ".[] | select(.title == \"${TITLE}\") | .number" \
+  | head -1)
+```
+
+This prevents false-positive deduplication where a search for "drift detected in telegram-bridge" matches an issue titled "drift detected in web-platform" due to shared keywords.
 
 ### Concurrency
 
@@ -205,22 +271,63 @@ The `concurrency` group `terraform-drift` with `cancel-in-progress: false` ensur
 
 Resources with `lifecycle { ignore_changes }` blocks may still show plan output for attributes Terraform tracks but doesn't manage. The SSH key dummy-key diff (option 1) is the primary false positive. The plan should document expected non-zero diff lines so operators can distinguish real drift from noise.
 
+### Plan Output Sensitivity
+
+Terraform plan output can contain sensitive values in certain conditions:
+- Error messages may include partial credential values
+- Provider bugs can leak values marked `sensitive = true` in plan diffs
+- `templatefile()` rendered content appears in plan output for `user_data` changes
+
+**Mitigation:** Add a sanitization step before writing plan output to GitHub issues. Strip known secret patterns (tokens, keys) using `sed`:
+
+```bash
+# Sanitize plan output before posting to issues
+sed -i \
+  -e 's/\(DOPPLER_TOKEN\s*=\s*\)"[^"]*"/\1"***"/g' \
+  -e 's/\(hcloud_token\s*=\s*\)"[^"]*"/\1"***"/g' \
+  -e 's/\(cf_api_token\s*=\s*\)"[^"]*"/\1"***"/g' \
+  -e 's/\(tunnel_token\s*=\s*\)"[^"]*"/\1"***"/g' \
+  -e 's/\(webhook_deploy_secret\s*=\s*\)"[^"]*"/\1"***"/g' \
+  plan-output.txt
+```
+
+Combined with `-no-color` (already in the plan step), this reduces the risk of secret exposure in GitHub issues. The `sensitive = true` declarations in `variables.tf` handle most cases, but defense-in-depth is appropriate for a workflow that posts plan output publicly.
+
+### Doppler CLI Installation Method
+
+The original plan uses `curl | tar` to install the Doppler CLI. This pattern:
+- Downloads an unsigned binary without checksum verification
+- Pulls the latest version (not pinned), making builds non-reproducible
+- Violates the project's supply-chain security learning ([2026-03-20-checksum-verification-binary-downloads.md](../learnings/2026-03-20-checksum-verification-binary-downloads.md))
+
+**Recommendation:** Use the official `dopplerhq/cli-action` GitHub Action instead:
+
+```yaml
+- uses: dopplerhq/cli-action@v4  # TODO: SHA-pin after verifying latest release
+```
+
+This action is maintained by Doppler, handles architecture detection, and can be SHA-pinned like all other action references in the project. If SHA-pinning the action is not immediately possible, the `curl | tar` fallback is acceptable with an added checksum verification step.
+
 ## Acceptance Criteria
 
 - [ ] Workflow file `.github/workflows/scheduled-terraform-drift.yml` exists and passes `actionlint`
 - [ ] Workflow runs on `schedule` (every 12 hours) and `workflow_dispatch`
 - [ ] Both stacks (`telegram-bridge`, `web-platform`) are checked via matrix strategy
 - [ ] R2 backend credentials are set as plain env vars, not through `--name-transformer tf-var`
+- [ ] `hashicorp/setup-terraform` uses `terraform_wrapper: false` so exit code 2 is reachable
 - [ ] `terraform plan -detailed-exitcode` correctly detects drift (exit code 2)
 - [ ] GitHub issue with `infra-drift` label is created on drift detection
-- [ ] Existing open drift issues receive a comment instead of duplicate creation
+- [ ] Existing open drift issues receive a comment instead of duplicate creation (exact title match, not fuzzy search)
 - [ ] Discord notification fires on drift (exit code 2) and error (exit code 1)
 - [ ] No notification on clean plan (exit code 0)
 - [ ] SSH key `file()` dependency is handled (dummy key or `ignore_changes`)
 - [ ] Plan output in GitHub issues is truncated to stay under body size limits
+- [ ] Plan output is sanitized to remove potential sensitive values before posting to issues
 - [ ] All action references are SHA-pinned per project convention
+- [ ] Doppler CLI installed via `dopplerhq/cli-action` (SHA-pinned) or raw download with checksum verification
 - [ ] `infra-drift` label is created idempotently (check before create)
 - [ ] Workflow includes security comment header documenting secrets used and trust boundaries
+- [ ] HEREDOC content in issue body steps has no leading whitespace that would render as code blocks
 
 ## Test Scenarios
 
@@ -231,6 +338,10 @@ Resources with `lifecycle { ignore_changes }` blocks may still show plan output 
 - Given R2 credentials (`AWS_ACCESS_KEY_ID`) are missing, when the workflow runs, then `terraform init` fails, the plan step is skipped, and the workflow reports an error.
 - Given `~/.ssh/id_ed25519.pub` does not exist in CI, when the workflow runs, then the dummy key generation step creates it before `terraform plan` so `file()` does not fail.
 - Given a `workflow_dispatch` trigger, when invoked manually, then the workflow runs identically to the scheduled trigger.
+- Given `terraform_wrapper: false` is set, when `terraform plan -detailed-exitcode` detects drift, then `$?` is 2 (not 1).
+- Given an open drift issue titled "infra: drift detected in web-platform" exists, when drift is detected in `telegram-bridge`, then a NEW issue is created (not a comment on the web-platform issue) because exact title matching prevents false deduplication.
+- Given the plan output contains a token value in an error message, when the sanitization step runs, then the token is replaced with `***` before the output is posted to the GitHub issue.
+- Given the plan output exceeds 60,000 characters, when the truncation step runs, then the GitHub issue body contains exactly 60,000 characters of plan output (not a truncation error from GitHub's API).
 
 ## Dependencies and Risks
 
@@ -245,10 +356,14 @@ Resources with `lifecycle { ignore_changes }` blocks may still show plan output 
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
+| setup-terraform wrapper silently converts exit code 2 to 1 | Certain (without fix) | Critical | Set `terraform_wrapper: false` -- this is a must-have, not optional |
 | SSH key false positive noise | High (if option 1) | Low | Use option 2 (`ignore_changes`) or filter known diffs |
+| Sensitive values leaked in plan output posted to GitHub issues | Low | High | Sanitize plan output with `sed` before posting; verify `sensitive = true` on all variables |
 | Doppler rate limiting on 2x daily runs | Very Low | Medium | 4 API calls/day is well within free tier |
 | Plan output exceeds GitHub issue body limit (65,536 chars) | Low | Low | Truncate to 60,000 chars with `head -c` |
 | R2 credentials expire | Low | High | Doppler sync keeps GH Secrets updated; token rotation is a separate concern |
+| Fuzzy search deduplication matches wrong stack's issue | Medium | Low | Use exact title match in `--jq` expression, not just `--search` |
+| Unsigned Doppler binary in CI (supply chain) | Low | High | Use official `dopplerhq/cli-action` (SHA-pinned) or add checksum verification |
 
 ## References and Research
 
@@ -269,6 +384,12 @@ Resources with `lifecycle { ignore_changes }` blocks may still show plan output 
 - [Terraform plan -detailed-exitcode](https://developer.hashicorp.com/terraform/cli/commands/plan#detailed-exitcode)
 - [GitHub Actions scheduled events](https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#schedule)
 - [Discord webhook API](https://discord.com/developers/docs/resources/webhook)
+- [setup-terraform #152: -detailed-exitcode returns error](https://github.com/hashicorp/setup-terraform/issues/152) -- wrapper exit code bug
+- [setup-terraform #9: Wrapper does not forward exit code](https://github.com/hashicorp/setup-terraform/issues/9) -- original bug report
+- [Terraform #35117: refresh-only detailed-exitcode false positive](https://github.com/hashicorp/terraform/issues/35117) -- avoid `-refresh-only`
+- [dopplerhq/cli-action](https://github.com/DopplerHQ/cli-action) -- official Doppler CLI GitHub Action
+- [Implementing Continuous Drift Detection in CI/CD Pipelines](https://www.firefly.ai/academy/implementing-continuous-drift-detection-in-ci-cd-pipelines-with-github-actions-workflow) -- industry patterns
+- [Terraform Drift Detection Powered by GitHub Actions](https://dev.to/rosesecurity/terraform-drift-detection-powered-by-github-actions-3akm) -- community reference implementation
 
 ### Related Issues
 
@@ -277,16 +398,17 @@ Resources with `lifecycle { ignore_changes }` blocks may still show plan output 
 - #970 (Doppler + Terraform integration -- prerequisite, merged)
 - #971 (Cloudflare Tunnel provisioning -- prerequisite, merged)
 
-## MVP
+## MVP (Enhanced)
 
 ### `.github/workflows/scheduled-terraform-drift.yml`
 
 ```yaml
-# Security: Requires DOPPLER_TOKEN, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+# Security: Requires DOPPLER_TOKEN, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
 # (from GitHub Secrets, synced via Doppler). DISCORD_WEBHOOK_URL for notifications.
 # R2 backend credentials are set as plain env vars -- not through --name-transformer
 # tf-var, which would convert them to TF_VAR_* format and break S3 auth.
-# Plan output is included in GitHub issues (truncated to 60k chars).
+# Plan output is sanitized and truncated before posting to GitHub issues.
+# To test manually: gh workflow run scheduled-terraform-drift.yml
 name: Terraform Drift Detection
 
 on:
@@ -316,18 +438,23 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
+      # CRITICAL: terraform_wrapper must be false for -detailed-exitcode to work.
+      # The wrapper converts exit code 2 to 1 (setup-terraform #152, #9).
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
           terraform_version: "1.10.5"
+          terraform_wrapper: false
 
       - name: Install Doppler CLI
-        run: |
-          mkdir -p ~/.local/bin
-          ARCH=$(uname -m)
-          case "$ARCH" in x86_64) ARCH="amd64";; aarch64) ARCH="arm64";; esac
-          curl -Ls "https://cli.doppler.com/download?os=linux&arch=${ARCH}&format=tar" \
-            | tar -xz -C ~/.local/bin doppler
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        uses: dopplerhq/cli-action@<SHA-PIN> # v4 -- TODO: pin to SHA after release check
+        # Fallback (if SHA not yet pinned):
+        # run: |
+        #   mkdir -p ~/.local/bin
+        #   ARCH=$(uname -m)
+        #   case "$ARCH" in x86_64) ARCH="amd64";; aarch64) ARCH="arm64";; esac
+        #   curl -Ls "https://cli.doppler.com/download?os=linux&arch=${ARCH}&format=tar" \
+        #     | tar -xz -C ~/.local/bin doppler
+        #   echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Generate CI SSH key
         run: |
@@ -358,7 +485,14 @@ jobs:
           set -e
 
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+
+          # Truncate and sanitize plan output for GitHub issue body
           echo "$PLAN_OUTPUT" | head -c 60000 > plan-output.txt
+          sed -i \
+            -e 's/\(token\s*=\s*\)"[^"]*"/\1"***"/gi' \
+            -e 's/\(secret\s*=\s*\)"[^"]*"/\1"***"/gi' \
+            -e 's/\(password\s*=\s*\)"[^"]*"/\1"***"/gi' \
+            plan-output.txt
 
           STACK_NAME=$(echo "${{ matrix.directory }}" | sed 's|apps/||;s|/infra||')
           echo "stack_name=$STACK_NAME" >> "$GITHUB_OUTPUT"
@@ -390,55 +524,52 @@ jobs:
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
           PLAN_CONTENT=$(cat plan-output.txt)
 
+          # Exact title match to avoid cross-stack false deduplication
           EXISTING=$(gh issue list --label "infra-drift" --state open \
             --search "drift detected in ${STACK_NAME}" \
-            --json number --jq '.[0].number // empty')
+            --json number,title \
+            --jq ".[] | select(.title == \"${TITLE}\") | .number" \
+            | head -1)
 
           if [[ -n "$EXISTING" ]]; then
-            gh issue comment "$EXISTING" --body "$(cat <<EOF
-          Drift still present as of ${TIMESTAMP}.
+            gh issue comment "$EXISTING" --body "Drift still present as of ${TIMESTAMP}.
 
-          <details><summary>Plan output</summary>
+<details><summary>Plan output</summary>
 
-          \`\`\`
-          ${PLAN_CONTENT}
-          \`\`\`
+\`\`\`
+${PLAN_CONTENT}
+\`\`\`
 
-          </details>
-          EOF
-          )"
+</details>"
             echo "Updated existing issue #$EXISTING"
           else
             gh issue create \
               --title "$TITLE" \
               --label "infra-drift" \
-              --body "$(cat <<EOF
-          ## Drift Detected
+              --body "## Drift Detected
 
-          **Stack:** \`${STACK_NAME}\`
-          **Detected:** ${TIMESTAMP}
-          **Workflow:** [Run #${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+**Stack:** \`${STACK_NAME}\`
+**Detected:** ${TIMESTAMP}
+**Workflow:** [Run #${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
-          Terraform \`plan -detailed-exitcode\` returned exit code 2, indicating infrastructure has drifted from the Terraform state.
+Terraform \`plan -detailed-exitcode\` returned exit code 2, indicating infrastructure has drifted from the Terraform state.
 
-          <details><summary>Plan output</summary>
+<details><summary>Plan output</summary>
 
-          \`\`\`
-          ${PLAN_CONTENT}
-          \`\`\`
+\`\`\`
+${PLAN_CONTENT}
+\`\`\`
 
-          </details>
+</details>
 
-          ## Next Steps
+## Next Steps
 
-          1. Review the plan output above
-          2. If the drift is intentional, run \`terraform apply\` locally to update state
-          3. If the drift is unintentional, revert the manual change
-          4. Close this issue when resolved
+1. Review the plan output above
+2. If the drift is intentional, run \`terraform apply\` locally to update state
+3. If the drift is unintentional, revert the manual change
+4. Close this issue when resolved
 
-          _Auto-created by the [terraform-drift workflow](${{ github.server_url }}/${{ github.repository }}/actions/workflows/scheduled-terraform-drift.yml)._
-          EOF
-          )"
+_Auto-created by the [terraform-drift workflow](${{ github.server_url }}/${{ github.repository }}/actions/workflows/scheduled-terraform-drift.yml)._"
             echo "Created new drift issue for $STACK_NAME"
           fi
 
