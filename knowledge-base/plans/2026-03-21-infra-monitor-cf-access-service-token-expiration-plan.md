@@ -338,14 +338,14 @@ Create `knowledge-base/learnings/2026-03-21-cloudflare-service-token-rotation.md
 
 ## Acceptance Criteria
 
-- [ ] `cloudflare_notification_policy.service_token_expiry` resource exists in `apps/web-platform/infra/tunnel.tf`
-- [ ] `cf_notification_email` variable added to `apps/web-platform/infra/variables.tf` with Doppler value
-- [ ] `terraform plan` shows the notification policy will be created (no errors)
-- [ ] `scheduled-cf-token-expiry-check.yml` workflow exists and passes lint
-- [ ] Workflow creates a GitHub issue when token is within 30 days of expiry
-- [ ] Workflow deduplicates issues (doesn't create a second if one is open)
-- [ ] Workflow closes stale issues when token is refreshed
-- [ ] Rotation runbook exists in `knowledge-base/learnings/`
+- [x] `cloudflare_notification_policy.service_token_expiry` resource exists in `apps/web-platform/infra/tunnel.tf`
+- [x] `cf_notification_email` variable added to `apps/web-platform/infra/variables.tf` with Doppler value
+- [x] `terraform plan` shows the notification policy will be created (no errors)
+- [x] `scheduled-cf-token-expiry-check.yml` workflow exists and passes lint
+- [x] Workflow creates a GitHub issue when token is within 30 days of expiry
+- [x] Workflow deduplicates issues (doesn't create a second if one is open)
+- [x] Workflow closes stale issues when token is refreshed
+- [x] Rotation runbook exists in `knowledge-base/engineering/ops/runbooks/`
 - [ ] `terraform apply` succeeds (notification policy created)
 - [ ] Workflow validated via `gh workflow run` before enabling cron schedule
 

@@ -1,0 +1,141 @@
+# Backup monitor: check CF Access service token expiry via Cloudflare API.
+# Primary alert is the Terraform-managed cloudflare_notification_policy.
+# This workflow catches cases where the CF notification is missed.
+#
+# Security: CF_API_TOKEN from repository secrets (not user-controlled).
+# CF_ACCOUNT_ID is a non-secret repository variable.
+# No untrusted user input is used in run: commands.
+
+name: "Scheduled: CF Token Expiry Check"
+
+on:
+  workflow_dispatch:
+  # Add cron after validating the workflow works end-to-end:
+  # schedule:
+  #   - cron: '0 9 * * 1'  # Monday 09:00 UTC
+
+concurrency:
+  group: scheduled-cf-token-expiry-check
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+
+jobs:
+  check-token:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check service token expiry
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          WARN_DAYS: "30"
+          TOKEN_NAME: "github-actions-deploy"
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${CF_API_TOKEN:-}" ]]; then
+            echo "::warning::CF_API_TOKEN secret is not set. Skipping check."
+            exit 0
+          fi
+
+          if [[ -z "${CF_ACCOUNT_ID:-}" ]]; then
+            echo "::warning::CF_ACCOUNT_ID variable is not set. Skipping check."
+            exit 0
+          fi
+
+          # List service tokens
+          HTTP_CODE=$(curl -s -o /tmp/cf-tokens.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/access/service_tokens")
+
+          if [[ ! "$HTTP_CODE" =~ ^2 ]]; then
+            echo "::warning::Cloudflare API returned HTTP $HTTP_CODE. Token status unknown."
+            exit 0
+          fi
+
+          # Find the deploy token by name
+          EXPIRES_AT=$(jq -r \
+            --arg name "$TOKEN_NAME" \
+            '.result[] | select(.name == $name) | .expires_at // empty' \
+            /tmp/cf-tokens.json)
+
+          if [[ -z "$EXPIRES_AT" ]]; then
+            echo "::warning::Service token '$TOKEN_NAME' not found in API response."
+            exit 0
+          fi
+
+          # Calculate days remaining (ISO 8601 -> epoch)
+          EXPIRES_EPOCH=$(date -d "$EXPIRES_AT" +%s)
+          NOW_EPOCH=$(date +%s)
+          DAYS_REMAINING=$(( (EXPIRES_EPOCH - NOW_EPOCH) / 86400 ))
+
+          echo "Token '$TOKEN_NAME' expires at $EXPIRES_AT ($DAYS_REMAINING days remaining)."
+
+          ISSUE_TITLE="[Action Required] Cloudflare deploy service token expiring"
+
+          if [[ "$DAYS_REMAINING" -le "$WARN_DAYS" ]]; then
+            echo "::warning::Token expires in $DAYS_REMAINING days (threshold: $WARN_DAYS)."
+
+            BODY="## Cloudflare Deploy Service Token Expiring
+
+          The \`github-actions-deploy\` service token expires on **$EXPIRES_AT** ($DAYS_REMAINING days remaining).
+
+          When expired, all deploys via \`web-platform-release.yml\` will fail with HTTP 403.
+
+          ### Renewal steps
+
+          **Option A: Extend expiry (no credential change)**
+
+          1. Edit \`apps/web-platform/infra/tunnel.tf\` -- add or update \`duration\` on the service token resource
+          2. Run: \`doppler run --project soleur --config prd_terraform --name-transformer tf-var -- terraform apply\`
+
+          **Option B: Rotate credentials**
+
+          1. Run: \`terraform apply -replace=cloudflare_zero_trust_access_service_token.deploy\`
+          2. Update GitHub secrets:
+             \`\`\`bash
+             terraform output -raw access_service_token_client_id | gh secret set CF_ACCESS_CLIENT_ID
+             terraform output -raw access_service_token_client_secret | gh secret set CF_ACCESS_CLIENT_SECRET
+             \`\`\`
+          3. Verify: \`gh workflow run web-platform-release.yml\`
+
+          **References:** #974, knowledge-base/engineering/ops/runbooks/cloudflare-service-token-rotation.md"
+
+            # Dedup: check for existing open issue
+            EXISTING=$(gh issue list --repo "$GH_REPO" --state open \
+              --search "in:title \"[Action Required] Cloudflare deploy service token\"" \
+              --json number --jq '.[0].number // empty')
+
+            if [[ -n "$EXISTING" ]]; then
+              echo "Issue already exists: #$EXISTING -- adding comment."
+              gh issue comment "$EXISTING" --repo "$GH_REPO" \
+                --body "Token check ran $(date -u '+%Y-%m-%d %H:%M UTC') -- $DAYS_REMAINING days remaining."
+            else
+              # Pre-create label if missing
+              gh label create "action-required" --repo "$GH_REPO" \
+                --description "Requires manual intervention" --color "B60205" 2>/dev/null || true
+              gh issue create --repo "$GH_REPO" \
+                --title "$ISSUE_TITLE" \
+                --label "action-required" \
+                --body "$BODY"
+            fi
+          else
+            echo "Token is healthy ($DAYS_REMAINING days remaining)."
+
+            # Close stale renewal issues
+            STALE=$(gh issue list --repo "$GH_REPO" --state open \
+              --search "in:title \"[Action Required] Cloudflare deploy service token\"" \
+              --json number --jq '.[0].number // empty')
+
+            if [[ -n "$STALE" ]]; then
+              echo "Closing stale renewal issue #$STALE."
+              gh issue close "$STALE" --repo "$GH_REPO" \
+                --comment "Token check ran $(date -u '+%Y-%m-%d %H:%M UTC') -- $DAYS_REMAINING days remaining. Auto-closing."
+            fi
+          fi
+
+          rm -f /tmp/cf-tokens.json
