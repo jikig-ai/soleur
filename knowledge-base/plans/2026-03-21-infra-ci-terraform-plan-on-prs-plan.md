@@ -215,20 +215,20 @@ This avoids the complexity of manually propagating exit codes through `GITHUB_OU
 
 ## Acceptance Criteria
 
-- [ ] `infra-validation.yml` has a `plan` job that runs `terraform plan` against real R2 backend state
-- [ ] Plan job uses `DOPPLER_TOKEN` GitHub Secret and `DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c` (v4) for credential injection
-- [ ] `setup-terraform` step sets `terraform_wrapper: false` to avoid output capture interference
-- [ ] Backend credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) are extracted as plain env vars via `doppler secrets get --plain`
-- [ ] TF variables are injected via `doppler run --name-transformer tf-var` in the plan step
-- [ ] CI generates a temporary SSH key for `ssh_key_path` variable override
-- [ ] Plan output is posted as a sticky PR comment per stack using `marocchino/sticky-pull-request-comment@70d2764d1a7d5d9560b100cbea0077fc8f633987` (v3.0.2)
-- [ ] Large plan output (>60000 chars) is truncated with a warning message
-- [ ] Fork/Dependabot PRs where secrets are unavailable skip the plan job gracefully
-- [ ] Concurrency group prevents parallel plan runs per PR per directory, with `cancel-in-progress: false`
-- [ ] All action references are SHA-pinned per existing conventions
-- [ ] `timeout-minutes: 10` is set on the plan job
-- [ ] Security comment header documents input trust boundaries and secret leakage considerations
-- [ ] Workflow permissions: `contents: read` workflow-level, `pull-requests: write` on plan job only
+- [x] `infra-validation.yml` has a `plan` job that runs `terraform plan` against real R2 backend state
+- [x] Plan job uses `DOPPLER_TOKEN` GitHub Secret and `DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c` (v4) for credential injection
+- [x] `setup-terraform` step sets `terraform_wrapper: false` to avoid output capture interference
+- [x] Backend credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) are extracted as plain env vars via `doppler secrets get --plain`
+- [x] TF variables are injected via `doppler run --name-transformer tf-var` in the plan step
+- [x] CI generates a temporary SSH key for `ssh_key_path` variable override
+- [x] Plan output is posted as a sticky PR comment per stack using `marocchino/sticky-pull-request-comment@70d2764d1a7d5d9560b100cbea0077fc8f633987` (v3.0.2)
+- [x] Large plan output (>60000 chars) is truncated with a warning message
+- [x] Fork/Dependabot PRs where secrets are unavailable skip the plan job gracefully
+- [x] Concurrency group prevents parallel plan runs per PR per directory, with `cancel-in-progress: false`
+- [x] All action references are SHA-pinned per existing conventions
+- [x] `timeout-minutes: 10` is set on the plan job
+- [x] Security comment header documents input trust boundaries and secret leakage considerations
+- [x] Workflow permissions: `contents: read` workflow-level, `pull-requests: write` on plan job only
 
 ## Test Scenarios
 
