@@ -17,5 +17,6 @@ A brainstorm on an ON HOLD issue may produce its highest value by confirming the
 Specific convergence: CPO said "0/5 pricing gates passed," CTO said "~65% of agent value is orchestration that doesn't port," CFO said "API pass-through unit economics unknown." All three pointed to the same blocker: zero external user validation.
 
 ## Tags
+
 category: workflow
 module: brainstorm, domain-leaders

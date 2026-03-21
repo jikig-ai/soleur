@@ -1,6 +1,6 @@
 # Tasks: DPD Section 5.3 Web Platform Data Subject Rights
 
-**Plan:** `knowledge-base/plans/2026-03-20-legal-dpd-web-platform-data-subject-rights-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-03-20-legal-dpd-web-platform-data-subject-rights-plan.md`
 **Branch:** `dpd-web-platform-rights`
 **Issue:** #888
 
@@ -9,7 +9,7 @@
 - [x] 1.1 Add Section 5.3 to `docs/legal/data-protection-disclosure.md`
   - [x] 1.1.1 Insert new Section 5.3 "Web Platform Data" after Section 5.2, before the `---` separator
   - [x] 1.1.2 Enumerate all six GDPR rights (Articles 15-18, 20-21) with Web Platform context
-  - [x] 1.1.3 Include contact channel (legal@jikigai.com) and response timeline (Article 12(3))
+  - [x] 1.1.3 Include contact channel (<legal@jikigai.com>) and response timeline (Article 12(3))
   - [x] 1.1.4 Add cross-reference to GDPR Policy Section 5 (relative markdown link)
   - [x] 1.1.5 Update "Last Updated" date in frontmatter and document header
 

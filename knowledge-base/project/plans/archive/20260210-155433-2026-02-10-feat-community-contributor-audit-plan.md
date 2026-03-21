@@ -104,7 +104,7 @@ Do this first since it affects badges and other files.
 
 1. **`LICENSE`** (root) -- Replace BSL-1.1 with standard Apache License 2.0 text
    - Copyright line: `Copyright 2025 Jikigai`
-   - Use the standard text from https://www.apache.org/licenses/LICENSE-2.0.txt
+   - Use the standard text from <https://www.apache.org/licenses/LICENSE-2.0.txt>
 
 2. **`plugins/soleur/LICENSE`** -- Same Apache 2.0 text
 
@@ -197,6 +197,7 @@ Apache-2.0. See [LICENSE](LICENSE) for details.
 ```
 
 **Key changes:**
+
 - 3 badges (version, license, Discord) -- no CI badge since CI has no meaningful checks
 - "What is Soleur?" replaces 40+ lines of vision -- 3 sentences
 - Quick Start merged into Installation (single section, not two)
@@ -236,6 +237,7 @@ Keep it short -- 3 main sections:
 **4a. `.github/ISSUE_TEMPLATE/bug_report.yml`**
 
 YAML form fields:
+
 - **Description** (textarea, required) -- What happened?
 - **Steps to reproduce** (textarea, required)
 - **Expected behavior** (textarea, required)
@@ -249,6 +251,7 @@ YAML form fields:
 **4b. `.github/ISSUE_TEMPLATE/feature_request.yml`**
 
 YAML form fields:
+
 - **Problem** (textarea, required) -- What problem does this solve?
 - **Proposed solution** (textarea, required)
 - **Alternatives considered** (textarea, optional)
@@ -315,12 +318,14 @@ After all files are ready, bump the plugin version (this is a MINOR bump -- new 
 ## Dependencies & Risks
 
 **Dependencies:**
+
 - Phase 0 (pre-checks) must complete before Phase 1
 - Phase 1 (license) must complete before Phase 2 (README badges need correct license)
 - Phase 5 (version bump) runs last
 - Phases 2, 3, 4 are independent of each other
 
 **Risks:**
+
 - License change is legally significant -- mitigated by Phase 0a compatibility audit
 - Changing repo description/topics is immediately visible to watchers -- run after merge
 - If component counts differ from expected 22/26/19, all files referencing counts need updating
@@ -354,6 +359,6 @@ All changes are file additions/modifications in a single branch. Revert the merg
 - Brainstorm: `knowledge-base/project/brainstorms/2026-02-10-community-contributor-audit-brainstorm.md`
 - Current plugin docs: `plugins/soleur/README.md`
 - Plugin dev guide: `plugins/soleur/AGENTS.md`
-- Contributor Covenant v2.1: https://www.contributor-covenant.org/version/2/1/code_of_conduct/
-- Apache License 2.0: https://www.apache.org/licenses/LICENSE-2.0.txt
-- GitHub community standards: https://docs.github.com/en/communities/setting-up-your-project-for-healthy-contributions
+- Contributor Covenant v2.1: <https://www.contributor-covenant.org/version/2/1/code_of_conduct/>
+- Apache License 2.0: <https://www.apache.org/licenses/LICENSE-2.0.txt>
+- GitHub community standards: <https://docs.github.com/en/communities/setting-up-your-project-for-healthy-contributions>

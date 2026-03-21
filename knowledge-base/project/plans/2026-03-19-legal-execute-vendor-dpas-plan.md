@@ -73,11 +73,13 @@ The web platform (app.soleur.ai) is deployed with four external processors, but 
 ### Research Insights: Hetzner DPA
 
 **Best Practices:**
+
 - Hetzner's DPA process is German-standard (AVV = Auftragsverarbeitungsvertrag). It follows the standard German/EU template structure which typically includes all Art. 28(3) requirements out of the box.
 - The click-to-sign mechanism in the Cloud Console is legally binding per German electronic signature law (BGB Section 126a) since Hetzner's ToS specifically authorize this acceptance method.
 - Hetzner operates exclusively in EU/EEA jurisdictions (Germany, Finland) so no Chapter V transfer analysis is needed.
 
 **Edge Cases:**
+
 - The Cloud Console and Robot (robot.your-server.de) are separate systems with separate DPA processes. The CX33 cloud server is managed via Cloud Console only. If Jikigai also uses Robot for dedicated servers (check `apps/telegram-bridge/infra/`), a separate Robot DPA may be needed.
 - If the Cloud Console DPA UI is not found under account settings, check: Profile > Data Protection, or the billing/account section. Hetzner has reorganized their console UI periodically.
 
@@ -127,6 +129,7 @@ Run the Art. 28(3) compliance matrix (per learning `third-party-dpa-gap-analysis
 **DPA tier uncertainty**: The Supabase DPA page (supabase.com/legal/dpa) does not specify plan-tier restrictions. The security page mentions SOC2 reports and HIPAA BAA are available for Enterprise/Team plans only, but the DPA is referenced without tier qualification. This is a positive signal but not conclusive.
 
 **Precedent comparison**:
+
 - GitHub: DPA only for paid plans (Enterprise, Teams) -- per learning `github-dpa-free-plan-scope-limitation`
 - Buttondown: DPA covers all plans including free -- per brainstorm verification
 - Stripe: DPA covers all accounts -- confirmed via WebFetch
@@ -198,9 +201,10 @@ Since Supabase is US-based (AWS us-east-1) and NOT DPF-certified:
 **Recommended approach**: Attempt full automation via Playwright. If the signature step requires a canvas drawing (not a typed signature option), capture a screenshot of the signature field and hand to the founder with the instruction: "Sign in this field, then click Submit." This minimizes founder context-switch time.
 
 **Company details needed for PandaDoc**:
+
 - Company name: Jikigai
 - Address: 25 rue de Ponthieu, 75008 Paris, France
-- DPO contact: legal@jikigai.com
+- DPO contact: <legal@jikigai.com>
 - Authorized signatory: founder name
 
 **2.6 Record execution**
@@ -219,6 +223,7 @@ Since Supabase is US-based (AWS us-east-1) and NOT DPF-certified:
 ### Research Insights: Stripe DPA
 
 **Confirmed via WebFetch (stripe.com/legal/dpa)**:
+
 - DPA "forms part of the Agreement" -- no separate execution, binding on all accounts
 - Processing only "according to User's Instructions"
 - Data Incident notification within **48 hours** for GDPR-scoped data (stricter than Art. 33's 72-hour controller notification window -- this gives Jikigai a 24-hour buffer)
@@ -246,6 +251,7 @@ Since Supabase is US-based (AWS us-east-1) and NOT DPF-certified:
 ### Research Insights: Cloudflare DPA
 
 **Confirmed via WebFetch (cloudflare.com/cloudflare-customer-dpa/)**:
+
 - DPA explicitly lists "Self-Serve Subscription Agreement" as a qualifying Main Agreement -- free-tier is covered
 - Acceptance appears automatic upon service use ("If you are accepting this DPA on behalf of Customer, you warrant that you have full legal authority to bind Customer")
 - No separate signature or dashboard action required
@@ -302,9 +308,11 @@ When adding DPA execution dates, verify these cross-references remain consistent
 | GDPR Policy | 2.2 (third-party services), 6 (international transfers), 10 (Art. 30 register) | DPA status, transfer mechanism, processing activity updates |
 
 **Grep verification after edits** (per learning `first-pii-collection-legal-update-pattern`):
+
 ```bash
 grep -rn "NOT SIGNED\|not.*signed\|pending.*DPA\|DPA.*pending" docs/legal/ plugins/soleur/docs/pages/legal/
 ```
+
 After all DPAs are executed, there should be zero matches for "NOT SIGNED" or "pending DPA" in any legal document.
 
 **5.3 Run legal-compliance-auditor**
@@ -325,6 +333,7 @@ If Phase 2.2 reveals that the free-tier does not support DPA signing:
 ### Research Insights: Supabase Pro Upgrade
 
 **Pro tier details** (from Supabase pricing/security pages):
+
 - Cost: $25/mo
 - Includes: 8GB database, 100GB bandwidth, 1GB file storage, 100K MAU
 - Additional features: daily backups (vs none on free), Point-in-Time Recovery as add-on
@@ -437,12 +446,12 @@ If Phase 2.2 reveals that the free-tier does not support DPA signing:
 
 ### External References
 
-- Hetzner ToS (Section 6.2 DPA clause): https://www.hetzner.com/legal/terms-and-conditions/
-- Supabase DPA: https://supabase.com/legal/dpa
-- Supabase Privacy Policy (SCCs confirmation): https://supabase.com/privacy
-- Supabase Security page (SOC2/compliance): https://supabase.com/security
-- Stripe DPA (updated November 18, 2025): https://stripe.com/legal/dpa
-- Cloudflare DPA: https://www.cloudflare.com/cloudflare-customer-dpa/
-- EU SCCs Implementing Decision 2021/914: https://eur-lex.europa.eu/eli/dec_impl/2021/914/oj
-- EDPB Recommendations 01/2020 (supplementary measures): https://www.edpb.europa.eu/our-work-tools/our-documents/recommendations/recommendations-012020-measures-supplement-transfer_en
-- CJEU Schrems II (C-311/18): https://curia.europa.eu/juris/liste.jsf?num=C-311/18
+- Hetzner ToS (Section 6.2 DPA clause): <https://www.hetzner.com/legal/terms-and-conditions/>
+- Supabase DPA: <https://supabase.com/legal/dpa>
+- Supabase Privacy Policy (SCCs confirmation): <https://supabase.com/privacy>
+- Supabase Security page (SOC2/compliance): <https://supabase.com/security>
+- Stripe DPA (updated November 18, 2025): <https://stripe.com/legal/dpa>
+- Cloudflare DPA: <https://www.cloudflare.com/cloudflare-customer-dpa/>
+- EU SCCs Implementing Decision 2021/914: <https://eur-lex.europa.eu/eli/dec_impl/2021/914/oj>
+- EDPB Recommendations 01/2020 (supplementary measures): <https://www.edpb.europa.eu/our-work-tools/our-documents/recommendations/recommendations-012020-measures-supplement-transfer_en>
+- CJEU Schrems II (C-311/18): <https://curia.europa.eu/juris/liste.jsf?num=C-311/18>

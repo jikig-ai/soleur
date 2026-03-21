@@ -20,5 +20,6 @@ Then Phase 3's worktree creation was skipped since the worktree already existed.
 The branch safety check protects against committing to main, but Phases 0.5-2 (domain leader assessment, dialogue) don't write any files. The check is too aggressive — it should gate file writes (Phase 3+), not the entire skill. Alternatively, the skill should create the worktree in Phase 0 instead of Phase 3.
 
 ## Tags
+
 category: logic-errors
 module: brainstorm-skill

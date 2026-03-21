@@ -22,6 +22,7 @@ A two-part system for smarter agent selection in the Soleur plugin:
 - **No magic** -- Agents remain plain markdown files. Commands explicitly reference the filtering logic. No hidden middleware.
 
 **Rejected alternatives:**
+
 - **Central Registry Config (Approach B):** Adds an indirection layer (agent-registry.yaml) when frontmatter metadata already exists. Single file becomes a bottleneck.
 - **Smart Command Middleware (Approach C):** Hidden middleware violates the plugin's "commands are readable markdown" philosophy. Hard to debug.
 

@@ -14,12 +14,14 @@ deepened: 2026-03-18
 **Research performed:** jq exit code verification, pipefail interaction testing, empty-stdin edge case discovery, test helper pattern analysis
 
 ### Key Improvements
+
 1. Corrected false assumption: empty stdin is actually safe (jq exits 0), narrowing the vulnerability to malformed text/JSON only
 2. Added concrete jq exit code matrix from empirical testing
 3. Refined test strategy: new tests must bypass `run_hook` helper (which always constructs valid JSON) and pipe raw input directly
 4. Identified test pattern precedent in existing tests 16, 20, 36-37 (raw `'{}'` piped directly)
 
 ### New Considerations Discovered
+
 - The output `jq -n` call (line 240) is confirmed safe via empirical testing -- `--arg` properly escapes all content including multiline strings, quotes, and special characters
 - Empty stdin to jq is a non-issue (exits 0 with no output), so the "empty stdin" acceptance criterion can be simplified
 

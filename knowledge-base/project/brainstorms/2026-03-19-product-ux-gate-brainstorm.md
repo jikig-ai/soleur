@@ -42,12 +42,14 @@ A tiered product/UX gate that detects user-facing work in engineering plans and 
 ## Scope
 
 ### In Scope
+
 - Plan skill Phase 2.5: semantic UI detection + agent pipeline
 - Work skill Phase 0.5: backstop pre-flight check
 - Brainstorm domain config: broaden Product assessment question
 - Constitution enforcement: the rule exists (line 122), implementation closes the gap
 
 ### Out of Scope
+
 - New ux-reviewer agent for auditing existing sites (learning #1 recommends this, but it's a separate feature)
 - PreToolUse hook enforcement (semantic detection cannot be done in hooks — they are syntactic)
 - Changes to agent definitions (spec-flow-analyzer, CPO, ux-design-lead are all capable; the gap is in orchestration, not agent capability)

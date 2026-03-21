@@ -3,6 +3,7 @@
 ## Problem
 
 The `scheduled-community-monitor.yml` workflow failed with `error_max_turns` after exhausting its 30-turn limit. The agent needed to:
+
 - Read plugin files (AGENTS.md, constitution, brand guide) — ~5 turns overhead
 - Detect platforms (1 turn)
 - Collect data from 5 platforms (Discord, X, GitHub, HN, LinkedIn) — ~10 turns
@@ -24,6 +25,7 @@ When setting `--max-turns` for `claude-code-action` workflows that load the Sole
 **Required turns = plugin overhead (~10) + task tool calls + error/retry buffer (~5)**
 
 Current workflow turn budgets for reference:
+
 - Bug fixer: 25 (at risk — consider increasing)
 - Community monitor: 50 (fixed from 30)
 - Ship/merge: 40
@@ -33,5 +35,6 @@ Current workflow turn budgets for reference:
 Batching shell commands with `;` (not `&&` — failures shouldn't halt the batch) is the most effective way to reduce turn consumption for data-collection-heavy workflows.
 
 ## Tags
+
 category: ci-workflows
 module: github-actions

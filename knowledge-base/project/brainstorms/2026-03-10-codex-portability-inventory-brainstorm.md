@@ -14,11 +14,13 @@ This is a research artifact — no code changes, no abstraction layer, no port. 
 ## Why This Approach
 
 ### Motivation (all three apply)
+
 - **Strategic hedge:** De-risk against Claude Code platform dependency. Anthropic's Cowork Plugins launch (Feb 2026) showed platform owners can absorb horizontal features.
 - **Market opportunity:** Codex adoption is growing; Soleur's domain knowledge (62 agents' worth of business expertise) has value beyond Claude Code.
 - **Sizing:** Understand the concrete engineering cost before committing to any multi-platform strategy.
 
 ### Why inventory-first (not build)
+
 - Codex's plugin system shipped March 2026. Key primitives (PreToolUse hooks, structured interactive prompts, SessionStart hooks) don't exist yet.
 - Building now risks investing on shifting foundations.
 - An inventory gives concrete data to inform the build-vs-wait decision without engineering commitment.

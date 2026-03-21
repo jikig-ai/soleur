@@ -37,5 +37,6 @@ Correct JSON output for a SessionStart hook:
 Internal migration plans and review agent suggestions about external APIs must be verified against the upstream spec before acting. The pattern-recognition agent cited a codebase-internal document as authority over the external API, leading to an incorrect edit that had to be reverted. Always treat internal docs about external APIs as hypotheses to verify.
 
 ## Tags
+
 category: integration-issues
 module: plugins/soleur/hooks

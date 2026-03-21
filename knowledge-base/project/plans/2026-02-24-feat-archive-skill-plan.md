@@ -42,6 +42,7 @@ The worktree-manager.sh script already solves this for spec directories during `
 ### Research Insights: Command Substitution History
 
 This problem has recurred 4 times across the project (learning: `command-substitution-in-plugin-markdown`):
+
 - v2.23.15: one-shot command
 - v2.23.18: 4 commands, 9 skills, AGENTS.md
 - v2.26.1: merge-pr skill, community-manager agent, 2 reference files
@@ -358,6 +359,7 @@ This moves matching artifacts to `knowledge-base/project/brainstorms/archive/` w
 ### Research Insight: nullglob Pitfall
 
 When `set -euo pipefail` is active and a glob like `knowledge-base/project/brainstorms/*slug*` matches nothing, bash will pass the literal glob string to the loop. The script must handle this by either:
+
 1. Enabling `shopt -s nullglob` before the glob and `shopt -u nullglob` after, or
 2. Checking `[[ -e "$f" ]]` inside the loop to skip non-existent paths
 
@@ -366,6 +368,7 @@ Option 1 (`nullglob`) is cleaner. The scope should be limited to avoid surprisin
 ## Rollback Plan
 
 If the script has issues after merge:
+
 1. Revert the consumer SKILL.md changes (restoring inline instructions)
 2. Delete the `skills/archive-kb/` directory
 3. The old inline pattern still works (just triggers safety prompts)

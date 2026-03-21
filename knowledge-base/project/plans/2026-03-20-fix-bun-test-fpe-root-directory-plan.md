@@ -57,6 +57,7 @@ The crash report shows `spawn(127)` in the features line, confirming the high su
 The FPE belongs to a known class of Bun GC/allocator bugs. [oven-sh/bun#20429](https://github.com/oven-sh/bun/issues/20429) documents a similar floating point exception during garbage collection's `JSC::JSString::visitChildren` phase. The crash correlates with high subprocess counts because each `Bun.spawn`/`Bun.spawnSync` call creates internal tracking objects that accumulate pressure on the GC visitor. When the GC fires during a spawn-heavy test run, the accounting code hits a division-by-zero in its statistics aggregation.
 
 This project has now documented three distinct Bun crash classes:
+
 1. **Segfault from missing deps** (2026-03-18) -- unresolvable imports cause allocator panic
 2. **Segfault from leaked timers** (2026-03-20) -- `setInterval` leak causes RSS spike to 1GB
 3. **FPE from spawn count** (this issue) -- high `Bun.spawnSync` count triggers GC accounting bug
@@ -80,6 +81,7 @@ Two-layer fix plus CI DRY improvement:
 ### Layer 1: Pin Bun version across local and CI (primary fix)
 
 **a) Create `.bun-version` file** at repo root containing `1.3.11`. This file is read by:
+
 - `oven-sh/setup-bun` via `bun-version-file: ".bun-version"` (CI)
 - Third-party version managers like BunVM and Bum (local dev)
 - Note: Bun itself does NOT natively read this file for auto-switching
@@ -87,6 +89,7 @@ Two-layer fix plus CI DRY improvement:
 **b) Add `packageManager` field to `package.json`**: Set `"packageManager": "bun@1.3.11"` as the standards-compliant version declaration. `setup-bun` reads this as a fallback when `bun-version-file` is not set.
 
 **c) Update CI workflows** to use `bun-version-file: ".bun-version"` instead of hardcoded `bun-version: "1.3.11"`. This affects 3 files:
+
 - `.github/workflows/ci.yml`
 - `.github/workflows/scheduled-bug-fixer.yml`
 - `.github/workflows/scheduled-ship-merge.yml`
@@ -96,6 +99,7 @@ Two-layer fix plus CI DRY improvement:
 ### Layer 2: Sequential test runner script (defense-in-depth)
 
 Create a `scripts/test-all.sh` script that:
+
 1. Checks the local Bun version and warns if it does not match `.bun-version`
 2. Runs test suites sequentially per directory instead of relying on Bun's recursive discovery
 3. Provides a summary of pass/fail counts

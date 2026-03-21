@@ -24,6 +24,7 @@ PRs accumulate waiting for manual `/ship` invocation. The `--headless` flag conv
 ### FR1: PR Selection
 
 The workflow selects the oldest open PR matching ALL criteria:
+
 - Not a draft
 - Open for 24+ hours
 - CI checks passing
@@ -46,6 +47,7 @@ The workflow invokes `skill: soleur:ship --headless` which runs compound, tests,
 ### FR4: Failure Handling
 
 On failure:
+
 - Apply `ship/failed` label
 - Post PR comment with failure details
 - Do not retry without human intervention

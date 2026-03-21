@@ -21,6 +21,7 @@ The competitive-intelligence agent writes `knowledge-base/overview/competitive-i
 Add a single shell step after `claude-code-action` in `.github/workflows/scheduled-competitive-analysis.yml` that pushes the report directly to main.
 
 **Why direct push instead of PR?** The original plan used `gh pr merge --squash --auto`, but SpecFlow analysis revealed three blockers:
+
 1. `allow_auto_merge` is OFF on this repo — `--auto` fails immediately
 2. GITHUB_TOKEN cascade limitation — bot PRs don't trigger CI/CLA workflows, so required checks never pass
 3. No branch protection ruleset blocks regular pushes to main (only force-push and deletion are blocked)

@@ -29,6 +29,7 @@ The operational data lives in two structured files under `knowledge-base/ops/`:
 | Domain registration (one-time) | $140.00 | domain |
 
 **`domains.md`** -- Domain inventory with DNS records and security configuration:
+
 - 4 A records (GitHub Pages IPs), 1 CNAME (www redirect), 1 TXT (domain verification)
 - Security: Full Strict SSL, HTTPS enforced, TLS 1.2 minimum, HSTS with preload, nosniff headers
 

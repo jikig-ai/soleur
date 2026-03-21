@@ -52,5 +52,6 @@ closest equivalent to Python's `__name__` check.
 4. GitHub Actions workflow edit blocked by security hook (fixed with env: variables)
 
 ## Tags
+
 category: prevention
 module: scripts/weekly-analytics

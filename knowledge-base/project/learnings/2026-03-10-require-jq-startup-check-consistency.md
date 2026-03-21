@@ -19,6 +19,7 @@ require_jq() {
 ```
 
 Called early in `main()`:
+
 ```bash
 require_jq
 validate_env
@@ -29,5 +30,6 @@ validate_env
 When a group of scripts share the same external dependency, all of them should fail-fast with the same startup check. Inconsistency across sibling scripts means one script gives confusing errors while others give clear ones. Code review of PRs touching a script family should check for startup-check parity.
 
 ## Tags
+
 category: logic-errors
 module: community-scripts

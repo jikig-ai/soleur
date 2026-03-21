@@ -21,6 +21,7 @@ This is designed to be reusable by any project using Soleur, not just Soleur's o
 **Orchestrator pattern over replacement:** Existing skills (`discord-content`, `release-announce`) stay as sharp, single-purpose tools. The agent adds the higher-level intelligence -- when to post, what to digest, who to recognize. No duplication, no breaking changes.
 
 **Agent + Skill combo over agent-only or skill-only:**
+
 - Skill gives users a discoverable entry point (`/soleur:community digest`)
 - Agent provides multi-step reasoning for complex workflows (analyzing a week of Discord data)
 - Both are independently reusable -- other agents can call community-manager, users can invoke the skill directly

@@ -78,6 +78,7 @@ The strategy document will include actionable plans for closing all 3 capability
 **Goal:** Publicly document Soleur's non-engineering domain usage to attract early adopters.
 
 **Actions:**
+
 - Identify 5-7 authentic case studies from existing non-engineering usage (legal docs, brand guide, competitive intelligence, ops decisions, marketing strategy)
 - Publish as blog posts, Discord posts, or social content with specific before/after comparisons
 - Track inbound interest metrics (Discord joins, GitHub stars, plugin installs if measurable)
@@ -95,6 +96,7 @@ The strategy document will include actionable plans for closing all 3 capability
 #### Customer Interview Framework
 
 **Recruitment:**
+
 - Source from Phase 0 inbound interest first
 - Fallback: IndieHackers, solo founder communities, Claude Code Discord, Twitter/X
 - Target: solo technical founders who use AI tools for work beyond coding
@@ -118,6 +120,7 @@ The strategy document will include actionable plans for closing all 3 capability
    - What would you pay for that? (Open-ended, not anchored)
 
 **Analysis Framework:**
+
 - Code each interview for: domains mentioned, pain intensity (1-5), existing solutions, WTP signals
 - Track frequency of each domain across all interviews
 - Pattern-match: do founders converge on 2-3 domains, or diverge across all 8?
@@ -131,16 +134,19 @@ The strategy document will include actionable plans for closing all 3 capability
 **Actions:**
 
 **Cohort Design (10 founders, split):**
+
 - **Cohort A (5):** Problem interview first, then 2 weeks of guided Soleur usage
 - **Cohort B (5):** 2 weeks of guided Soleur usage first, then debrief interview
 
 **Guided Onboarding Script:**
+
 1. Install Soleur (`claude plugin install soleur`)
 2. Run `/soleur:sync` on their project
 3. Walk through one non-engineering domain task together (legal doc, competitive analysis, brand guide)
 4. Leave them for 2 weeks of unassisted usage
 
 **Observation Metrics:**
+
 - Which domains do they activate on their own?
 - How many sessions include non-engineering domain usage?
 - What questions do they ask during onboarding?
@@ -153,6 +159,7 @@ The strategy document will include actionable plans for closing all 3 capability
 **Goal:** Test retention and willingness to pay.
 
 **Actions:**
+
 - After 2-week unassisted period, run debrief interviews
 - Direct WTP question: "Would you pay for this? How much per month?"
 - NPS-style: "Would you recommend this to another solo founder?"
@@ -183,6 +190,7 @@ At week 12, assess all gates:
 **Problem:** Cannot measure install counts, activation rates, domain usage, or retention.
 
 **Action Items:**
+
 - Evaluate lightweight telemetry options that respect the BSL license and user privacy
 - Minimum viable metrics: install count, first-run completion, domain activation (which C-level agents are invoked), session count per week
 - Consider opt-in telemetry with clear disclosure (aligned with existing privacy policy)
@@ -194,6 +202,7 @@ At week 12, assess all gates:
 **Problem:** No interview scripts, recording templates, or analysis framework.
 
 **Action Items:**
+
 - Interview script: captured above in Phase 1
 - Create a simple spreadsheet or markdown template for coding interview responses
 - Columns: founder name, stage, team size, domains mentioned, pain intensity per domain, existing solutions, WTP signal, key quotes
@@ -205,6 +214,7 @@ At week 12, assess all gates:
 **Problem:** Product was built by its creator for its creator. No evidence of onboarding optimization for first-time users.
 
 **Action Items:**
+
 - Run a "fresh eyes" test: have someone install Soleur from scratch and observe where they get stuck
 - Audit the Getting Started page against the IA learning (2026-02-17): is it discoverable? Is the first action clear?
 - Create a "first 5 minutes" onboarding flow: install -> sync -> one domain task -> see result

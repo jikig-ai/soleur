@@ -16,6 +16,7 @@ Extending `/soleur:compound` to feed captured learnings back into the skill and 
 - **Over Tagging-Based Deferred Routing (C):** Adding a `target_skill` frontmatter tag defers the fix and adds friction. The learning should flow back immediately during the compound session, not wait for a separate processing step.
 
 The chosen approach works at two layers:
+
 1. **Compound (real-time):** Auto-detect from session context which skill/agent was active, propose a one-line bullet edit, confirm with user.
 2. **Sync (periodic):** Broad scan across all definitions to apply accumulated learnings that cross skill boundaries.
 

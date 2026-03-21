@@ -24,6 +24,7 @@ Git operations (53/139 sessions) and PR merges (42/139 sessions) are the top two
 ### FR1: PR Validation
 
 Validate pre-conditions before starting the pipeline:
+
 - PR exists and is open
 - Branch has been pushed to remote
 - Compound has been run (no unarchived KB artifacts for the feature slug)
@@ -49,6 +50,7 @@ Critical constraint: always read full files with `git show HEAD:` before editing
 ### FR4: Version Bump
 
 After merging content:
+
 - Read current version from main's `plugin.json`
 - Determine bump type based on PR changes (new skill/agent = MINOR, fix = PATCH)
 - Update versioning triad: plugin.json, CHANGELOG.md, README.md
@@ -64,6 +66,7 @@ After merging content:
 ### FR6: End-of-Run Report
 
 Display summary of:
+
 - PRs successfully merged (with version numbers)
 - PRs skipped due to failures (with failure reasons)
 - New version on main
@@ -78,6 +81,7 @@ All operations must happen in the PR's worktree, never in the main working tree.
 ### TR2: Guardrails Compatibility
 
 Must work with the existing guardrails hook:
+
 - Never commit on main (version bump goes on a temporary branch or uses exception flag)
 - Never use `--delete-branch` with `gh pr merge`
 - Handle the worktree existence check gracefully
@@ -85,6 +89,7 @@ Must work with the existing guardrails hook:
 ### TR3: CHANGELOG Integrity
 
 When editing CHANGELOG.md:
+
 - Read full file from `git show HEAD:plugins/soleur/CHANGELOG.md`
 - Reconstruct complete file after edits
 - Validate structure (no duplicate version headers, correct date format)

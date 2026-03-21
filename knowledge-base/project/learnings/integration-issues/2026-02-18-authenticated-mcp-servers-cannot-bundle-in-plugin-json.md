@@ -36,6 +36,7 @@ Cloudflare released a unified "Code Mode" MCP server at `https://mcp.cloudflare.
 The infra-security agent was rewritten in PR #254 to use MCP instead of curl for all Cloudflare API operations. The GitHub MCP conclusion remains unchanged -- `gh` CLI is still preferred.
 
 ## Tags
+
 category: integration-issues
 module: infra-security-agent
 symptoms: MCP server cannot replace curl-based Cloudflare API calls, GitHub MCP requires auth header not supported by plugin.json

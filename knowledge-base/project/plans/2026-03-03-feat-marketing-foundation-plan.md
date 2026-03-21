@@ -33,11 +33,13 @@ Six deliverables, all within the existing Eleventy 3.x site:
 All changes are within `plugins/soleur/docs/` — no plugin code, no agents, no skills modified.
 
 **Files to create:**
+
 - `plugins/soleur/docs/articles/articles.json` — directory data file (auto-tags collection)
 - `plugins/soleur/docs/_includes/article.njk` — article layout extending base.njk
 - `plugins/soleur/docs/pages/articles.njk` — article index/listing page
 
 **Files to modify:**
+
 - `plugins/soleur/docs/index.njk` — H1, hero-sub, H2s, FAQ section + FAQPage JSON-LD
 - `plugins/soleur/docs/_includes/base.njk` — JSON-LD SoftwareApplication description, conditional Article schema
 - `plugins/soleur/docs/_data/site.json` — navigation entry for Articles, description update
@@ -47,6 +49,7 @@ All changes are within `plugins/soleur/docs/` — no plugin code, no agents, no 
 - `plugins/soleur/docs/llms.txt.njk` — expanded content with keywords and positioning
 
 **Files NOT modified (important):**
+
 - No changes to `eleventy.config.js` — Eleventy directory data files handle collection creation automatically
 - No changes to `style.css` — reuse existing CSS classes (`.page-hero`, `.catalog-grid`, `.component-card`)
 - No changes to legal docs, plugin code, agents, or skills
@@ -111,9 +114,11 @@ Target keywords to weave into existing pages (from content audit):
 ## Dependencies & Risks
 
 **Dependencies:**
+
 - None — all changes are within the docs site, no external services
 
 **Risks:**
+
 - Blog layout may need CSS adjustments if article content doesn't fit existing styles (mitigated: reuse existing classes first)
 - Keyword integration in H1s may affect brand voice (mitigated: maintain brand guide tone, test each rewrite against prohibited terms list)
 - Build-time Article JSON-LD requires date handling in Nunjucks (mitigated: `dateToRfc3339` filter already exists)

@@ -74,11 +74,13 @@ Commands use `argument-hint` in frontmatter and `$ARGUMENTS` in the body. Skills
 ### Excluded Commands
 
 **Orchestration commands stay as commands** (they compose multiple skills into multi-phase workflows):
+
 - `soleur:brainstorm`, `soleur:plan`, `soleur:work`, `soleur:review`, `soleur:compound`, `soleur:sync`
 - `triage` -- spawns sequential finding presentation with status transitions, composes `file-todos` skill
 - `agent-native-audit` -- spawns 8 parallel principle-review agents with score compilation
 
 **User-only commands stay as commands** (require human intent/judgment):
+
 - `deploy-docs`, `generate_command`, `heal-skill`, `feature-video`, `report-bug`, `help`, `lfg`
 
 ## Implementation Phases
@@ -101,6 +103,7 @@ For each of these, create `plugins/soleur/skills/<name>/SKILL.md`:
 | 10 | `commands/xcode-test.md` | `skills/xcode-test/` |
 
 **Migration per command:**
+
 1. Create `plugins/soleur/skills/<name>/` directory
 2. Read command file content
 3. Rewrite frontmatter: normalize `name` to kebab-case, rewrite `description` to third person with trigger keywords, drop `argument-hint`
@@ -134,6 +137,7 @@ All paths relative to repo root:
 5. **`.github/ISSUE_TEMPLATE/bug_report.yml`** -- update placeholder version
 
 Validate with existing commands from `plugins/soleur/AGENTS.md`:
+
 ```bash
 grep -E '`(references|assets|scripts)/[^`]+`' plugins/soleur/skills/*/SKILL.md  # should return nothing
 grep -E '^description:' plugins/soleur/skills/*/SKILL.md | grep -v 'This skill'  # should return nothing

@@ -52,6 +52,7 @@ OpenSSH uses **first-match-wins** for most configuration directives. Ubuntu 24.0
 **Fix:** Use prefix `01-` (i.e., `01-hardening.conf`) to ensure our hardening directives are the first values sshd sees for each parameter.
 
 Sources:
+
 - [Chris's Wiki: OpenSSH Configuration Ordering](https://utcc.utoronto.ca/~cks/space/blog/sysadmin/OpenSSHConfigurationOrdering)
 - [The order of files in /etc/ssh/sshd_config.d/ matters](https://news.ycombinator.com/item?id=43573507)
 - [Ubuntu Community Hub: PermitRootLogin multiple versions](https://discourse.ubuntu.com/t/permitrootlogin-sshd-config-multiple-versions-no-impact/72347)

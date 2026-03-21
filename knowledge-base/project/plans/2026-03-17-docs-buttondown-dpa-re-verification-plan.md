@@ -73,7 +73,7 @@ Buttondown refreshed their legal documents on March 16, 2026, addressing 3 of 5 
 
 - Brainstorm: `knowledge-base/project/brainstorms/2026-03-11-buttondown-dpa-review-brainstorm.md`
 - Verification memo: `knowledge-base/project/specs/feat-buttondown-dpa-review/dpa-verification-memo.md`
-- Buttondown blog post: https://buttondown.com/blog/2026-03-16-legal-docs-refresh
+- Buttondown blog post: <https://buttondown.com/blog/2026-03-16-legal-docs-refresh>
 - Related issue: #501 (Newsletter)
 - PR: #528
 - Precedent: `knowledge-base/project/learnings/2026-03-11-third-party-dpa-gap-analysis-pattern.md`

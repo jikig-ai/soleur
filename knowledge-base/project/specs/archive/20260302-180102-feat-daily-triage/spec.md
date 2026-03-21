@@ -62,6 +62,7 @@ Fix 6 known template gaps before generating the workflow:
 ### TR2: Extended ticket-triage Agent
 
 Update the agent to:
+
 - Apply labels via `gh issue edit --add-label`
 - Add comments via `gh issue comment`
 - Maintain its classification-focused scope (no code changes)
@@ -70,6 +71,7 @@ Update the agent to:
 ### TR3: daily-triage Skill
 
 Create a new skill that orchestrates:
+
 1. List open issues without severity labels
 2. Delegate classification to ticket-triage agent
 3. Verify labels were applied

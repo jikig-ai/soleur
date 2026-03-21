@@ -46,6 +46,7 @@ When adding new functionality that requires `$()`, `${VAR}`, or pipe chains, def
 3. Initial script included `--list` flag with no caller -- removed as YAGNI after simplicity review
 
 ## Tags
+
 category: integration-issues
 module: plugins/soleur/skills/archive-kb
 symptoms: recurring $() permission prompts across multiple skills

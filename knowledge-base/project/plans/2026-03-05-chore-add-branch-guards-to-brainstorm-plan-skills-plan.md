@@ -60,6 +60,7 @@ Insert a branch safety check paragraph immediately after the "Load project conve
 ### Research Insight: Placement Rationale
 
 The guard must fire before any of these downstream phases that write files or spawn agents:
+
 - Phase 0.5: Domain Leader Assessment (spawns Task agents)
 - Phase 1.1: Research (spawns repo-research-analyst, learnings-researcher)
 - Phase 3: Create Worktree (creates directories)
@@ -89,6 +90,7 @@ Insert a branch safety check paragraph in Phase 0 (Load Knowledge Base Context),
 ### Research Insight: Placement Rationale
 
 The guard must fire before any of these downstream phases that write files or spawn agents:
+
 - Phase 0.5: Idea Refinement (uses AskUserQuestion but could spawn agents)
 - Phase 1: Local Research (spawns repo-research-analyst, learnings-researcher)
 - Phase 3: SpecFlow Analysis (spawns spec-flow-analyzer)

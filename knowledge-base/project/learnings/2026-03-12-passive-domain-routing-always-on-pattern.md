@@ -24,6 +24,7 @@ Extended domain routing from brainstorm-only to always-on via three changes:
 ### What We Dropped (YAGNI)
 
 Plan review caught several proposed mechanisms that weren't needed:
+
 - **Per-message cap** (2 leaders max): The global 5-agent cap in the constitution is sufficient.
 - **Deduplication clause**: The LLM can see what it already spawned in conversational context.
 - **Return contract format**: Existing "Output a brief structured assessment" instruction is sufficient.

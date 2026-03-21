@@ -26,6 +26,7 @@ Three reviewers unanimously challenged the original multi-phase plan. Decision: 
 ### Round 2 [2026-02-18]
 
 Three reviewers challenged the implementation plan:
+
 - **DHH:** Cut to signpost only (log message, no registry queries). 80% scope cut.
 - **Simplicity:** Keep agent approach but cut to 1 registry, agents-only, binary trust. 40% cut.
 - **Architecture:** Agent approach is sound. Move from Phase 0.1 to Phase 1.5. Fix gap detection, test frontmatter loader, use curl instead of WebFetch for JSON.
@@ -33,6 +34,7 @@ Three reviewers challenged the implementation plan:
 **Decision:** Keep current scope. Apply targeted fixes from Architecture reviewer. User chose to proceed with full plan over signpost-only or minimal approaches.
 
 **Fixes applied:**
+
 1. Moved discovery from Phase 0.1 to Phase 1.5 (after idea refinement and local research)
 2. Added Phase 0 loader test for extra frontmatter fields
 3. Added `stack` frontmatter field for reliable gap re-detection
@@ -92,6 +94,7 @@ The gap check uses the `stack` frontmatter field, not filename heuristics:
 4. If no match, the stack is a gap -- trigger discovery
 
 This means:
+
 - Built-in agents that cover specific stacks should have `stack: rails`, `stack: typescript` etc. in their frontmatter (a prerequisite task)
 - Community agents installed by discovery include `stack: flutter` in their frontmatter
 - Re-running `/plan` after installing a Flutter agent correctly detects coverage
@@ -133,12 +136,14 @@ Hardcoded in the discovery agent for v1. Configurable allowlist deferred.
 **Why `agents/community/` and not domain directories:** The Architecture reviewer suggested placing community agents in domain directories (e.g., `agents/engineering/review/community--flutter-review.md`). We chose a separate `community/` directory because: (a) it enables easy bulk cleanup, (b) the discovered name (`soleur:community:flutter-review`) clearly signals provenance to the user, (c) community agents may not fit neatly into existing domain categories.
 
 Validation before writing to disk:
+
 1. YAML frontmatter parses successfully
 2. Required fields present (`name`, `description`)
 3. File size under 100KB
 4. No path traversal in field values
 
 Provenance frontmatter added to every installed artifact:
+
 ```yaml
 ---
 name: flutter-review
@@ -157,6 +162,7 @@ verified: true
 ### Approval Flow
 
 Present up to 5 suggestions. For each:
+
 ```
 [1/3] flutter-review (anthropics/skills, verified)
   Flutter-specific code review patterns for Dart and Widget trees.
@@ -168,6 +174,7 @@ Present up to 5 suggestions. For each:
 ### Rollback
 
 If a community agent causes issues:
+
 1. Delete the file: `rm agents/community/<name>.md` or `rm -rf skills/community-<name>/`
 2. The agent/skill disappears from the next session
 3. No plugin reload or restart needed (files are read per-session)
@@ -181,25 +188,30 @@ To list all community-installed artifacts: `ls agents/community/ skills/communit
 **Tasks:**
 
 **1.0 Phase 0 Loader Test (prerequisite)**
+
 - Create a test agent with extra frontmatter fields (`stack`, `source`, `registry`, `installed`, `verified`)
 - Verify the plugin loader discovers it correctly
 - If loader rejects extra fields: move provenance to markdown comment blocks
 - Delete the test agent after verification
 
 **1.1 Add `stack` field to existing conditional agents**
+
 - Add `stack: rails` to `dhh-rails-reviewer.md` and `kieran-rails-reviewer.md`
 - This enables the gap check algorithm to know Rails is covered
 
 **1.2 Create discovery agent**
+
 - Create `plugins/soleur/agents/engineering/discovery/agent-finder.md`
 - YAML frontmatter: name, description, model (inherit)
 - Example block with context/user/assistant/commentary (per constitution)
 - Instructions for: stack gap detection, registry queries (curl), JSON parsing, trust filtering, deduplication, approval flow, installation with validation, graceful degradation
 
 **1.3 Create community directory**
+
 - Create `plugins/soleur/agents/community/.gitkeep`
 
 **1.4 Integrate discovery into /plan**
+
 - Add Phase 1.5 "Discovery Check" between local research and external research
 - Stack detection via file-signature heuristics
 - Gap checking via `stack:` frontmatter field
@@ -207,17 +219,20 @@ To list all community-installed artifacts: `ls agents/community/ skills/communit
 - Graceful fallthrough if no gap or discovery fails
 
 **1.5 Version bump and docs**
+
 - Bump version in `plugins/soleur/plugin.json` (MINOR -- new agent + new behavior)
 - Add CHANGELOG.md entry
 - Update README.md (agent count, mention community discovery)
 
 **1.6 Review and ship**
+
 - Run code review on unstaged changes
 - Run `/soleur:compound` to capture learnings
 - Stage all artifacts
 - Commit, push, create PR referencing #55
 
 **Files changed:**
+
 - `plugins/soleur/agents/engineering/discovery/agent-finder.md` (new)
 - `plugins/soleur/agents/community/.gitkeep` (new)
 - `plugins/soleur/agents/engineering/review/dhh-rails-reviewer.md` (add `stack` field)

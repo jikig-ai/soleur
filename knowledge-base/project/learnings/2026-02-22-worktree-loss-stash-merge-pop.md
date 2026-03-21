@@ -69,6 +69,7 @@ The general rule: never hold significant work in an uncommitted state when perfo
 - [Never use --delete-branch with parallel worktrees](2026-02-19-never-use-delete-branch-with-parallel-worktrees.md) -- another worktree destruction vector
 
 ## Tags
+
 category: runtime-errors
 module: git-worktree
 symptoms: worktree deleted, branch lost, stash conflict, uncommitted work destroyed, stash pop failure

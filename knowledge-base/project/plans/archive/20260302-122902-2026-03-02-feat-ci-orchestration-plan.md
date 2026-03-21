@@ -88,6 +88,7 @@ Summary: [one-line description of what changed]
 ### CI/Scheduled Workflow
 
 The scheduled workflow (`scheduled-competitive-analysis.yml`) runs the cascade in GitHub Actions:
+
 - Report written to ephemeral filesystem (runner is writable, just not pushed)
 - Specialists run and update ephemeral files
 - Cascade Results included in the GitHub Issue body alongside base report
@@ -96,6 +97,7 @@ The scheduled workflow (`scheduled-competitive-analysis.yml`) runs the cascade i
 ### Fan-Out Pattern
 
 Follows established pattern from `work-subagent-fanout.md`:
+
 - Max 4 parallel agents (within 5-agent limit)
 - Lead-coordinated commits (subagents do NOT commit)
 - Failed specialists logged in Cascade Results

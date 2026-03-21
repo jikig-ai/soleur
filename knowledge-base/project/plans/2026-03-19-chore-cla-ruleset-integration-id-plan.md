@@ -11,11 +11,13 @@ date: 2026-03-19
 **Research sources:** GitHub Rulesets API docs, GitHub Community Discussions (#86534, #144508, #162623, #43460), GitHub Changelog, learnings (CLA push rejection, CLA GDPR compliance, auto-push vs PR pattern)
 
 ### Key Improvements
+
 1. **Critical risk discovered:** Auto-merge (`gh pr merge --auto`) may not respect bypass actors for required status checks -- this is a known GitHub limitation with rulesets. The plan is restructured to a phased approach that keeps synthetic statuses until bypass is verified working.
 2. **PUT payload format documented:** The GitHub API `PUT /rulesets/{id}` replaces the entire ruleset. A complete JSON payload is now provided to prevent accidental field loss.
 3. **`bypass_mode: "always"` recommended over `"pull_request"`:** The `"pull_request"` mode means the actor can only bypass when merging PRs, but `gh pr merge` (the immediate non-auto path) needs bypass to work for the merge command itself, not just for the PR creation. Using `"always"` is safer and matches the existing bypass actors' configuration.
 
 ### New Considerations Discovered
+
 - GitHub rulesets bypass actors do NOT skip status checks -- checks still run and may fail, but bypass actors can merge anyway. However, `gh pr merge --auto` waits for checks to pass regardless of bypass status.
 - The `security_reminder_hook` will trigger when editing `.github/workflows/*.yml` files. This is advisory only, but the agent should expect and re-attempt edits.
 - The existing bot workflows use `gh pr merge --squash --auto || gh pr merge --squash` with a fallback. The non-auto fallback is the path that bypass enables.
@@ -95,6 +97,7 @@ Both the real CLA check and synthetic bot statuses are created by the `github-ac
 ### Research Insight: Check Run vs Commit Status
 
 Verified via API inspection of actual PRs:
+
 - **PR #769 (human):** `cla-check` appears as a **check run** (via `GET /commits/{sha}/check-runs`) with `app.id: 15368`, `app.slug: github-actions`
 - **PR #633 (bot):** `cla-check` appears as a **commit status** (via `GET /commits/{sha}/status`) with no creator metadata
 
@@ -118,11 +121,13 @@ The original plan proposed removing synthetic cla-check statuses from bot workfl
 The revised approach uses a phased strategy:
 
 **Phase 1 (This PR): Ruleset hardening ~~+ bypass actor~~**
+
 - Add `integration_id: 15368` to `cla-check` required status check
 - ~~Add `github-actions` (ID 15368) to bypass actors with `bypass_mode: "always"`~~ *(NOT FEASIBLE -- 422 error, see Execution Notes)*
 - Keep synthetic `cla-check` statuses in bot workflows (safety net)
 
 **Phase 2 (Follow-up PR): Remove synthetic statuses after verification**
+
 - After Phase 1 merges, trigger a bot workflow manually
 - If auto-merge works WITHOUT synthetic status -> remove synthetic statuses in a follow-up PR
 - If auto-merge fails WITHOUT synthetic status -> keep synthetic statuses, bypass provides defense-in-depth only
@@ -149,6 +154,7 @@ Set `integration_id: 15368` (the `github-actions` app) on the `cla-check` requir
 **Bypass does NOT skip checks -- it allows merge despite failures.** Per [GitHub Community Discussion #86534](https://github.com/orgs/community/discussions/86534), bypass actors' checks still run and may fail, but the actor gains permission to merge despite failures. The selected actor "can then choose to bypass any branch protections and merge that pull request."
 
 **`bypass_mode: "always"` vs `"pull_request"`:** Use `"always"` (not `"pull_request"`). Rationale:
+
 1. All existing bypass actors use `"always"` -- consistency matters
 2. `"pull_request"` mode restricts bypass to "when acting via pull requests," but the merge command itself may not be recognized as "acting via PR" depending on GitHub's internal evaluation
 3. Bot workflows already use the PR-based pattern (post-#771), so `"always"` does not create new risk -- direct pushes from `github-actions[bot]` would still be blocked by the `Force Push Prevention` ruleset (ID 13044280)
@@ -226,6 +232,7 @@ gh api repos/jikig-ai/soleur/rulesets/13304872 \
 ```
 
 Verify after update:
+
 ```bash
 gh api repos/jikig-ai/soleur/rulesets/13304872 | python3 -m json.tool
 ```
@@ -235,6 +242,7 @@ gh api repos/jikig-ai/soleur/rulesets/13304872 | python3 -m json.tool
 Two workflows have synthetic `cla-check` status blocks that would be removed in Phase 2:
 
 1. `.github/workflows/scheduled-weekly-analytics.yml` (lines 101-108):
+
    ```yaml
    # Set CLA check status to success -- bot PRs have no human
    # contributor to sign a CLA, and the CLA Required ruleset
@@ -263,6 +271,7 @@ Per learning `2026-03-02-github-actions-auto-push-vs-pr-for-bot-content.md`, PRs
 ### Rollback
 
 If the bypass or integration_id causes issues, revert by:
+
 1. Run `gh api repos/jikig-ai/soleur/rulesets/13304872 --method PUT --input` with the original payload (remove `integration_id` from `cla-check`, remove 15368 from `bypass_actors`)
 2. No workflow changes needed since synthetic statuses are retained in Phase 1
 
@@ -296,16 +305,19 @@ Update the CLA Required ruleset (ID 13304872) via the GitHub Rulesets API:
 **Only proceed if Phase 2 confirms bypass works with bot auto-merge.**
 
 **Modify:** `.github/workflows/scheduled-weekly-analytics.yml`
+
 - Remove the synthetic `cla-check` status block (lines 101-108)
 - Remove `statuses: write` from permissions
 
 **Modify:** `.github/workflows/scheduled-content-publisher.yml`
+
 - Remove the synthetic `cla-check` status block (lines 85-92)
 - Remove `statuses: write` from permissions
 
 ## Acceptance Criteria
 
 ### Phase 1 (This PR)
+
 - [x] CLA Required ruleset `cla-check` has `integration_id: 15368`
 - [x] ~~CLA Required ruleset `bypass_actors` includes `github-actions` (ID 15368)~~ **NOT FEASIBLE** — `github-actions` is a built-in platform app, not an installable integration (API returns 422)
 - [x] Existing bypass actors preserved (OrganizationAdmin, RepositoryRole 5, Integration 262318, Integration 1236702)
@@ -313,10 +325,12 @@ Update the CLA Required ruleset (ID 13304872) via the GitHub Rulesets API:
 - [x] Bot workflows continue to work (synthetic statuses still in place, match `integration_id: 15368`)
 
 ### Phase 2 (Post-Merge Verification)
+
 - [ ] Bot PR from `scheduled-weekly-analytics.yml` auto-merges (with or without synthetic status)
 - [ ] Bypass behavior documented (works with auto-merge, or only with immediate merge)
 
 ### Phase 3 (Follow-up PR, conditional)
+
 - [ ] `scheduled-weekly-analytics.yml` no longer posts synthetic `cla-check` status
 - [ ] `scheduled-content-publisher.yml` no longer posts synthetic `cla-check` status
 - [ ] `statuses: write` permission removed from both bot workflows

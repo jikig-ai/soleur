@@ -63,11 +63,13 @@ USER soleur
 #### 1. `apps/telegram-bridge/Dockerfile` (line 21)
 
 **Before:**
+
 ```dockerfile
 RUN useradd -m soleur
 ```
 
 **After:**
+
 ```dockerfile
 RUN useradd --no-log-init --uid 1001 -m soleur
 ```
@@ -77,6 +79,7 @@ No other changes needed -- `USER soleur` and `VOLUME /home/soleur/data` are alre
 #### 2. `apps/web-platform/Dockerfile` (lines 47-49)
 
 **Before:**
+
 ```dockerfile
 # Non-root user (node:22-slim includes a 'node' user at uid 1000)
 USER node
@@ -84,6 +87,7 @@ RUN git config --global user.name "Soleur" && git config --global user.email "so
 ```
 
 **After:**
+
 ```dockerfile
 # Non-root user (UID 1001 avoids collision with node:22-slim's built-in node user at UID 1000)
 RUN useradd --no-log-init --uid 1001 -m soleur \

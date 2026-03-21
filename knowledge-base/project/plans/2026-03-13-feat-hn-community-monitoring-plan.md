@@ -19,6 +19,7 @@ The community agent monitors Discord, GitHub, and X/Twitter but has no HN visibi
 Create `hn-community.sh` following the existing standalone script convention (no adapter refactor). Use `github-community.sh` as the structural template (always-enabled, no auth, simple error handling) with 429 retry from the discord/x pattern. Three subcommands: `mentions`, `trending`, `thread`.
 
 **Key choices:**
+
 - `mentions` uses `/search_by_date` (recency over relevance) searching both stories and comments
 - `trending` returns all front-page stories — the LLM agent filters for domain relevance
 - No `url_encode()` helper — use `curl --data-urlencode`

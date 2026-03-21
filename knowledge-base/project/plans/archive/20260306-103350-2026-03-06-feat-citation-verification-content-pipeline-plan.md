@@ -13,6 +13,7 @@ date: 2026-03-06
 **Research sources:** 4 institutional learnings, agent-native-architecture skill, CMO delegation table analysis, agent compliance checklist, content-writer skill structure analysis
 
 ### Key Improvements
+
 1. Added CMO delegation table update requirement -- fact-checker must be registered in `cmo.md` for the domain leader to route to it
 2. Added disambiguation sentence requirements for 3 sibling agents (copywriter, growth-strategist, seo-aeo-analyst) -- both forward and reverse directions
 3. Identified that no new skill registration is needed (modifying existing skill, not creating a new one) -- avoids the 6-file skill creation lifecycle
@@ -20,6 +21,7 @@ date: 2026-03-06
 5. Added `--headless` bypass requirement for Phase 2.5 since content-writer may be invoked by pipelines
 
 ### Learnings Applied
+
 - `2026-02-20-agent-description-token-budget-optimization.md`: Keep fact-checker description under 45 words, routing-only, no examples
 - `2026-02-22-new-skill-creation-lifecycle.md`: No new skill registration needed (modifying existing content-writer)
 - `adding-new-agent-domain-checklist.md`: Marketing domain already exists; only agent-level additions needed (README count, AGENTS.md count, CMO table)
@@ -60,6 +62,7 @@ Draft description (39 words):
 This follows the disambiguation pattern from the token budget optimization learning: core routing text + sibling disambiguation in a single compound sentence.
 
 **Disambiguation updates required (both directions):**
+
 - `copywriter.md`: Add "use fact-checker for citation and claim verification" to its existing disambiguation sentence
 - `growth-strategist.md`: Add disambiguation if its description mentions content quality (it currently focuses on strategy, so likely no change needed)
 - `cmo.md`: Add `fact-checker` row to the delegation table in the Delegate phase
@@ -67,6 +70,7 @@ This follows the disambiguation pattern from the token budget optimization learn
 **Claim extraction heuristics for agent body:**
 
 The agent body should instruct the LLM to identify verifiable claims using these patterns:
+
 1. **Hyperlinked text**: Any markdown link `[text](URL)` where the text makes a factual assertion
 2. **Inline statistics**: Numbers with units or comparisons (e.g., "30M users", "grew 200%", "$1B acquisition")
 3. **Attributed quotes**: Text in quotation marks followed by attribution (e.g., "..." -- Sam Altman)
@@ -78,6 +82,7 @@ Non-verifiable claims to skip: subjective opinions, rhetorical questions, defini
 **WebFetch verification protocol for agent body:**
 
 For each claim with a URL:
+
 1. Fetch the URL via WebFetch
 2. Search the page content for the specific claim (not just the topic)
 3. For statistics: confirm the exact number appears on the page
@@ -99,6 +104,7 @@ Proposed: Phase 2 (generate draft) -> Phase 2.5 (verify citations) -> Phase 3 (u
 **Task tool invocation pattern:**
 
 The content-writer skill invokes fact-checker as a Task agent, not as a direct function call. Per the multi-agent cascade learning, this requires:
+
 1. The Task tool must be available in the execution context (it is by default in local Claude Code sessions; CI workflows need explicit `--allowedTools Task`)
 2. The fact-checker agent must have a concrete output contract (the Verification Report heading structure)
 3. The fact-checker agent must produce a writable artifact (the verification report is returned inline, not written to disk -- this is correct since it's ephemeral)
@@ -183,6 +189,7 @@ Current cumulative agent description word count is 2,454 (limit: 2,500). The fac
 ### Agent structure
 
 The fact-checker agent follows the project's agent conventions:
+
 - YAML frontmatter with `name`, `description` (routing text only), `model: inherit`
 - Disambiguation sentence referencing the copywriter agent (adjacent scope in marketing domain)
 - Body contains verification protocol, not examples or commentary
@@ -201,6 +208,7 @@ The skill already has a guideline at line 124: "Every factual claim, statistic, 
 The fact-checker agent relies on WebFetch to retrieve cited URLs. WebFetch is already used by 11 files across the plugin (research agents, competitive intelligence, growth strategist, etc.). No new tool dependencies are introduced.
 
 **Edge cases for WebFetch:**
+
 - **Paywalled content:** WebFetch cannot bypass paywalls. Mark as FAIL with "paywall detected" if the response is truncated or contains paywall indicators.
 - **JavaScript-rendered pages:** WebFetch may not execute JavaScript. Single-page apps or dynamically loaded content may appear empty. Mark as FAIL with "content not extractable."
 - **Redirects:** Some URLs redirect (e.g., shortened URLs). WebFetch follows redirects by default. The final URL should be reported if it differs from the cited URL.
@@ -234,6 +242,7 @@ The fact-checker agent must produce a structured output with heading-level contr
 ### Content-writer presentation
 
 During Phase 3 (User Approval), each claim in the draft gets a status indicator:
+
 - PASS: claim verified against source
 - FAIL: source does not support the claim (with reason)
 - UNSOURCED: no citation provided for a quantitative or attributed claim
@@ -254,6 +263,7 @@ Per the agent domain checklist learning, adding a new agent to an existing domai
 6. **Verify token budget:** Run word count check after adding
 
 **Not needed (marketing domain already exists):**
+
 - No `docs/_data/agents.js` changes (domain already registered)
 - No `docs/css/style.css` changes (CSS variable already exists)
 - No `skills.js` changes (no new skill)

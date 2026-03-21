@@ -21,7 +21,7 @@
 ## Phase 3: Manual Steps (Post-Merge)
 
 - [ ] 3.1 Install Renovate GitHub App on `jikig-ai/soleur` (requires org admin -- genuinely manual, no API)
-  - Navigate to https://github.com/apps/renovate and install for `jikig-ai/soleur`
+  - Navigate to <https://github.com/apps/renovate> and install for `jikig-ai/soleur`
   - Since `renovate.json5` is already committed, the onboarding PR will be skipped
 - [ ] 3.2 Verify Renovate opens grouped digest update PRs on next scheduled run
 - [ ] 3.3 Verify first digest-only PR auto-merges after CI passes

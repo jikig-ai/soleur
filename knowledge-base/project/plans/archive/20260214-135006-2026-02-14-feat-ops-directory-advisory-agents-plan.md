@@ -65,6 +65,7 @@ last_updated: 2026-02-14
 ```
 
 **Column definitions:**
+
 - **Service**: Product name (e.g., "GitHub Copilot", "Hetzner CX22")
 - **Provider**: Company (e.g., "GitHub", "Hetzner")
 - **Category**: Free-form tag -- common values: `hosting`, `domain`, `dev-tools`, `saas`, `api`
@@ -89,6 +90,7 @@ last_updated: 2026-02-14
 ```
 
 **Column definitions:**
+
 - **Domain**: FQDN (e.g., `soleur.dev`)
 - **Registrar**: Provider name (e.g., "Cloudflare", "Namecheap")
 - **Renewal Date**: Next renewal in `YYYY-MM-DD`
@@ -107,6 +109,7 @@ Single agent handles all operational queries by reading the appropriate data fil
 #### `ops-advisor.md`
 
 Reads and updates `knowledge-base/ops/expenses.md` and `knowledge-base/ops/domains.md`. Capabilities:
+
 - Summarize total monthly/annual spend by category
 - Add, update, or remove expense/domain entries
 - Flag upcoming renewals (within 30 days)
@@ -114,6 +117,7 @@ Reads and updates `knowledge-base/ops/expenses.md` and `knowledge-base/ops/domai
 - Advise on domain strategy (no live WHOIS)
 
 **Sharp edges to embed:**
+
 - File paths: `knowledge-base/ops/expenses.md` and `knowledge-base/ops/domains.md`
 - expenses.md has two sections: `## Recurring` and `## One-Time`
 - Amounts are plain numbers in USD (no `$` prefix in table cells)
@@ -156,6 +160,7 @@ model: inherit
 ### File Initialization
 
 When the agent is asked to read a data file that does not exist:
+
 1. Create the directory `knowledge-base/ops/` if missing
 2. Create the file with YAML frontmatter and table headers (exact templates from schemas above, no data rows)
 3. Inform the user: "Created `<file>` with empty template. You can start adding entries."
@@ -168,6 +173,7 @@ When the agent is asked to read a data file that does not exist:
   1. `plugins/soleur/.claude-plugin/plugin.json` -- version to `2.8.0`, description count "24 agents" -> "25 agents"
   2. `plugins/soleur/CHANGELOG.md` -- add `## [2.8.0]` entry
   3. `plugins/soleur/README.md` -- update agent count, add Operations section:
+
      ```markdown
      ### Operations Agents
      - `ops-advisor` - Track expenses, manage domains, advise on hosting
@@ -217,9 +223,11 @@ When the agent is asked to read a data file that does not exist:
 ## Dependencies and Risks
 
 **Dependencies:**
+
 - None -- clean slate, no existing ops infrastructure to migrate
 
 **Risks:**
+
 - **Low**: Agent prompt may need iteration after testing real queries
 - **Low**: Table schemas may need additional columns in Phase 2 -- markdown tables are easy to extend
 - **Mitigated**: Concurrent modification handled by git (last-write-wins with conflict detection)

@@ -3,6 +3,7 @@
 ## Phase 1: Core Protocol Document
 
 ### 1.1 ~~Create work-lifecycle-parallel.md reference file~~ DONE
+
 - **File:** `plugins/soleur/skills/work/references/work-lifecycle-parallel.md`
 - Follow the existing reference file pattern (work-agent-teams.md, work-subagent-fanout.md)
 - Include 6 steps: Offer/Auto-select, Generate Contract, Spawn 2 Agents, Collect Results, Integration (commit + test-fix-loop), Write Docs Sequentially
@@ -18,6 +19,7 @@
 ## Phase 2: Work Skill Modification
 
 ### 2.1 ~~Add Tier 0 pre-check to work SKILL.md Phase 2~~ DONE
+
 - **File:** `plugins/soleur/skills/work/SKILL.md`
 - Insert Tier 0 check BEFORE the existing independence analysis
 - Single LLM judgment: "Does this plan have independent code + test workstreams with non-overlapping file scopes?"
@@ -31,6 +33,7 @@
 ## Phase 3: Testing and Verification
 
 ### 3.1 ~~Verify one-shot and ship compatibility~~ DONE
+
 - Read one-shot SKILL.md and trace the flow: plan -> work -> review -> compound -> ship
 - Confirm work invocation is unchanged (same args, same Skill tool call)
 - Read ship SKILL.md Phase 5 and confirm version triad handling is unaffected
@@ -38,6 +41,7 @@
 - **DoD:** One-shot and ship flows verified, no changes needed to either
 
 ### 3.2 ~~File test-fix-loop stash issue~~ DONE (#409)
+
 - Create a GitHub issue tracking the pre-existing conflict: test-fix-loop uses `git stash` internally but constitution forbids stash in worktrees
 - This is not introduced by Tier 0 but is surfaced by it
 - **DoD:** GitHub issue created with clear reproduction steps
@@ -45,6 +49,7 @@
 ## Phase 4: Compliance
 
 ### 4.1 ~~Version bump (MINOR)~~ DONE (3.8.2 -> 3.9.0)
+
 - **Files:** `plugins/soleur/.claude-plugin/plugin.json`, `plugins/soleur/CHANGELOG.md`, `plugins/soleur/README.md`
 - Also check: `.claude-plugin/marketplace.json`, `.github/ISSUE_TEMPLATE/bug_report.yml`, root `README.md`
 - MINOR bump for new skill capability

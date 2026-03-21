@@ -129,6 +129,7 @@ Currently Phase 9 prints all non-Discord variants to the terminal for copy-paste
 **New Phase 9: Confirmation & Next Steps**
 
 Output:
+
 ```
 Content file written: knowledge-base/marketing/distribution-content/<slug>.md
 
@@ -168,6 +169,7 @@ The current Phase 7 asks whether to post to Discord immediately via webhook. Wit
 Option A is better because it preserves the existing interactive workflow while adding persistence. The user can still get instant Discord feedback on new content.
 
 **Implementation for Option A:**
+
 - Phase 7 stays as-is (Discord approval)
 - If Discord posted successfully: set `channels: x` in frontmatter (Discord already done)
 - If Discord skipped or no webhook: set `channels: discord, x` in frontmatter
@@ -223,10 +225,12 @@ This is forward-compatible. The content-publisher scans all `*.md` files in the 
 ## Dependencies & Risks
 
 **Dependencies:**
+
 - #549 (directory-driven pipeline) -- already merged
 - Existing content file format established by #549 -- compatible, no changes needed
 
 **Risks:**
+
 - **Format drift between hand-written and skill-generated content files.** Mitigated by matching the exact format of existing files (same section headings, same tweet label format, same `---` separators).
 - **User confusion about draft vs scheduled.** Mitigated by clear next-step instructions in Phase 9 output.
 
@@ -235,6 +239,7 @@ This is forward-compatible. The content-publisher scans all `*.md` files in the 
 ## References & Research
 
 ### Internal References
+
 - Skill: `plugins/soleur/skills/social-distribute/SKILL.md`
 - Content publisher: `scripts/content-publisher.sh`
 - Content files: `knowledge-base/marketing/distribution-content/*.md`
@@ -243,10 +248,12 @@ This is forward-compatible. The content-publisher scans all `*.md` files in the 
 - Parent plan: `knowledge-base/project/plans/2026-03-12-feat-unified-marketing-campaign-plan.md` (Follow-Up Issues section)
 
 ### Institutional Learnings Applied
+
 - Directory-driven content discovery frontmatter parsing (`knowledge-base/project/learnings/2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md`) -- use established YAML frontmatter format
 - Multi-platform publisher error propagation (`knowledge-base/project/learnings/2026-03-11-multi-platform-publisher-error-propagation.md`) -- maintain per-file failure semantics
 - Discord allowed mentions sanitization -- webhooks must include `allowed_mentions: {parse: []}`
 
 ### Related Work
+
 - Issue: #557
 - Dependency: #549 (merged)

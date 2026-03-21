@@ -69,6 +69,6 @@ No plugin files modified. No version bump needed.
 
 ## References
 
-- coreyhaines31/marketingskills: https://github.com/coreyhaines31/marketingskills
+- coreyhaines31/marketingskills: <https://github.com/coreyhaines31/marketingskills>
 - Landscape audit: `knowledge-base/project/learnings/2026-02-19-full-landscape-discovery-audit.md`
 - Related: #154 (CMO agent exploration), #165 (this issue)

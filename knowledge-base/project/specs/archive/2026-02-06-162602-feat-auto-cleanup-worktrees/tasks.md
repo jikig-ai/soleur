@@ -11,12 +11,14 @@ updated: 2026-02-06
 ## Phase 1: Core Implementation
 
 ### 1.1 Add cleanup_merged_worktrees function
+
 - [x] Add function to `worktree-manager.sh` after line 331
 - [x] Implement TTY detection for output mode (`[ -t 1 ]`)
 - [x] Run `git fetch --prune` with error capture
 - [x] Find `[gone]` branches via `git for-each-ref` (robust detection)
 
 ### 1.2 Implement cleanup logic
+
 - [x] Skip active worktree (PWD check)
 - [x] Skip worktrees with uncommitted changes (`git status --porcelain`)
 - [x] Archive spec directory with timestamp: `knowledge-base/project/specs/archive/YYYY-MM-DD-HHMMSS-<name>/`
@@ -26,17 +28,20 @@ updated: 2026-02-06
 - [x] Report failures as warnings, continue with next branch
 
 ### 1.3 Implement output formatting
+
 - [x] Verbose mode (TTY): detailed output with warnings
 - [x] Quiet mode (non-TTY): summary only when cleanup occurred
 - [x] Track cleaned branches in array for summary
 
 ### 1.4 Update command handler
+
 - [x] Add `cleanup-merged` case to main() switch statement
 - [x] Update show_help() with new command documentation
 
 ## Phase 2: Hook Configuration
 
 ### 2.1 Configure SessionStart hook
+
 - [x] Verify correct hook config location (`.claude/settings.local.json` vs plugin.json)
 - [x] Add SessionStart hook with script path
 - [ ] Test hook fires on session start
@@ -44,6 +49,7 @@ updated: 2026-02-06
 ## Phase 3: Testing
 
 ### 3.1 Manual testing scenarios
+
 - [ ] No [gone] branches (should exit cleanly)
 - [ ] Single [gone] branch + worktree + spec
 - [ ] [gone] branch with worktree but no spec
@@ -55,12 +61,14 @@ updated: 2026-02-06
 - [ ] Branch with local-only commits (safe delete should fail gracefully)
 
 ### 3.2 Verify hook trigger
+
 - [ ] Start new Claude Code session, verify SessionStart fires
 - [ ] Verify quiet output when run from hook (non-TTY)
 
 ## Phase 4: Documentation
 
 ### 4.1 Update plugin documentation
+
 - [ ] Update README with new cleanup-merged command
 - [x] Bump version in plugin.json
 - [x] Update CHANGELOG.md

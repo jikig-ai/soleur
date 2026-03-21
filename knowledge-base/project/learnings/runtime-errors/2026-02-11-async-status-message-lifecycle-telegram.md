@@ -12,12 +12,14 @@ Building a Telegram bridge with a "Thinking..." status message revealed four asy
 ## Solution
 
 **Decouple cleanup from delivery** -- run as independent promises:
+
 ```typescript
 cleanupTurnStatus().catch(err => console.error("Cleanup failed:", err));
 sendChunked(chatId, html).catch(err => console.error("Send failed:", err));
 ```
 
 **Create state synchronously, backfill async data**:
+
 ```typescript
 turnStatus = { chatId, messageId: 0, tools: [], typingTimer };
 const sent = await bot.api.sendMessage(chatId, "Thinking...");
@@ -27,6 +29,7 @@ if (turnStatus && turnStatus.typingTimer === typingTimer) {
 ```
 
 **Guard operations on async readiness**:
+
 ```typescript
 function recordToolUse(toolName: string): void {
   if (!turnStatus || turnStatus.messageId === 0) return;
@@ -35,6 +38,7 @@ function recordToolUse(toolName: string): void {
 ```
 
 **Throttle via time-check, not timers**:
+
 ```typescript
 if (Date.now() - turnStatus.lastEditTime >= STATUS_EDIT_INTERVAL_MS) {
   flushStatusEdit();
@@ -42,6 +46,7 @@ if (Date.now() - turnStatus.lastEditTime >= STATUS_EDIT_INTERVAL_MS) {
 ```
 
 **Null-out before async delete for idempotent cleanup**:
+
 ```typescript
 async function cleanupTurnStatus(): Promise<void> {
   const status = turnStatus;
@@ -63,6 +68,7 @@ Async coordination in message lifecycle requires: (1) create state synchronously
 - [Cloud deploy SDK integration](../integration-issues/2026-02-10-cloud-deploy-infra-and-sdk-integration.md) -- WebSocket initialization race
 
 ## Tags
+
 category: runtime-errors
 module: telegram-bridge
 symptoms: response not delivered, race condition, status message not deleted, timer fires after cleanup

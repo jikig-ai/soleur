@@ -12,6 +12,7 @@ A scheduled GitHub Actions workflow that runs the community agent daily to monit
 ### Scope
 
 **In scope:**
+
 - Daily scheduled workflow (`cron` + `workflow_dispatch`) using `claude-code-action`
 - Discord monitoring: message volume, active members, notable conversations
 - X/Twitter metrics: profile stats (followers, tweets) via Free tier API
@@ -20,6 +21,7 @@ A scheduled GitHub Actions workflow that runs the community agent daily to monit
 - Safety constraints: timeout, max-turns, concurrency group
 
 **Out of scope (deferred):**
+
 - Autonomous reply posting (no human approval bypass)
 - X mention fetching (Free tier returns 403; deferred until paid API tier)
 - Playwright web fallback for X scraping (fragile in CI)

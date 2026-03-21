@@ -144,6 +144,7 @@ data files following the conventions documented above.
 **`plugins/soleur/.claude-plugin/plugin.json`**: Bump version (MINOR), update description agent count
 
 **`plugins/soleur/CHANGELOG.md`**: Add entry:
+
 ```markdown
 ## [x.x.0] - 2026-02-16
 

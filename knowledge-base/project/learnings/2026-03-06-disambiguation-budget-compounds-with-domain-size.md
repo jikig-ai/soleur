@@ -33,5 +33,6 @@ Budget-aware disambiguation when adding agents to large domains:
 The agent description word budget is a shared resource that grows sublinearly with agent count but disambiguation requirements grow linearly with domain size. Marketing (11 specialists) is the largest domain and is now at the budget ceiling. The next agent addition to ANY domain will require either trimming existing descriptions or raising the budget limit. Plan for this during the brainstorm/plan phase, not during implementation.
 
 ## Tags
+
 category: integration-issues
 module: plugins/soleur/agents

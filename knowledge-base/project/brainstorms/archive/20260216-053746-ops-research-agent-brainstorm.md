@@ -25,26 +25,31 @@ The ops-advisor was deliberately consolidated from 3 planned agents into 1 becau
 ## Phased Workflow
 
 ### Phase 1: Context
+
 - Read `knowledge-base/ops/expenses.md` and `domains.md` to understand existing infrastructure
 - Understand what the user already has before recommending
 
 ### Phase 2: Research
+
 - Use WebSearch for initial research (pricing, alternatives, reviews)
 - Use WebFetch for specific provider pages
 - Compile options into a comparison
 
 ### Phase 3: Present
+
 - Show structured comparison (table format)
 - Lead with recommendation and explain why
 - Ask user which option to pursue
 
 ### Phase 4: Navigate (requires user confirmation)
+
 - Use agent-browser to navigate to the provider
 - Check live availability/pricing
 - Navigate to checkout page
 - STOP and present final details to user
 
 ### Phase 5: Record (after user completes purchase)
+
 - User confirms they completed the purchase
 - Auto-invoke ops-advisor to record in expenses.md and/or domains.md
 

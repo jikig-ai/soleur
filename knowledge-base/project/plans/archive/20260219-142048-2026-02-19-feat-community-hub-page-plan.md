@@ -177,6 +177,7 @@ cd plugins/soleur/docs && npx @11ty/eleventy --input=. --output=../_site_test
 ```
 
 Confirm:
+
 - `pages/community.html` is generated
 - Sitemap includes the new page
 - No build errors
@@ -186,6 +187,7 @@ Confirm:
 This modifies files under `plugins/soleur/docs/` -- requires a PATCH bump (docs update, no new skill/agent/command).
 
 Update:
+
 - `plugins/soleur/.claude-plugin/plugin.json` -- bump patch version
 - `plugins/soleur/CHANGELOG.md` -- add entry under new version
 - `plugins/soleur/README.md` -- verify counts (no new components, just docs page)

@@ -26,5 +26,6 @@ GDPR terminology precision matters: Buttondown is a **processor** (not sub-proce
 2. Eleventy docs build failure — pre-existing issue where `agents.js` resolves paths relative to docs dir. Unrelated to this change.
 
 ## Tags
+
 category: legal-compliance
 module: data-protection-disclosure

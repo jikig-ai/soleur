@@ -13,11 +13,13 @@ date: 2026-03-13
 **Research sources:** Repo-wide grep audit, 3 relevant learnings, constitution analysis
 
 ### Key Improvements
+
 1. Discovered sync.md has 12 `overview` mentions (not 7) -- includes `mkdir -p` brace expansion (line 41) and sync area name references (lines 4, 20, 116, 326, 441, 444)
 2. Discovered compound-capture.md has 7 `overview` mentions (not 4) -- includes prose references on lines 383, 450, 455
 3. Identified decision point: the sync command uses `overview` as a command argument/area name, not just a file path -- renaming the directory should also rename the sync area from `overview` to `project`
 
 ### New Considerations Discovered
+
 - sync.md `mkdir -p` brace expansion on line 41 creates `overview/components` -- must change to `project/components`
 - The `/sync overview` command name should change to `/sync project` for consistency
 - Learnings from `2026-02-22-skill-count-propagation-locations.md`: always grep for the old value across the entire repo rather than relying on a memorized file list -- applied in Phase 4 verification
@@ -57,6 +59,7 @@ Mechanical rename using `git mv` for history preservation, followed by find-and-
 The deepening phase discovered references the initial plan missed:
 
 **sync.md (14 total, not 7):**
+
 - Line 4: `argument-hint` includes `overview` as a valid area name
 - Line 20: Valid areas list includes `overview`
 - Line 41: `mkdir -p knowledge-base/{...,overview/components}` -- brace expansion creates the directory
@@ -67,6 +70,7 @@ The deepening phase discovered references the initial plan missed:
 - Lines 131, 132, 160, 244, 391, 393, 395, 396: file path references (already in initial plan)
 
 **compound-capture.md (7 total, not 4):**
+
 - Line 383: "Which overview file to update" (prose)
 - Line 450: "No overview updates applied" (prose)
 - Line 455: "overview edits + archival moves" (prose)
@@ -118,6 +122,7 @@ Replace `knowledge-base/overview/` with `knowledge-base/project/` in these 7 fil
 The sync command uses `overview` as a semantic area name (a command argument). Rename the area from `overview` to `project` for consistency:
 
 **sync.md changes:**
+
 - Line 4: `argument-hint` -- replace `overview` with `project` in the area list
 - Line 20: Valid areas list -- replace `overview` with `project`
 - Line 116: Section header -- "Generate or update project overview documentation" (keep as-is -- "project overview" is descriptive text, not a path)
@@ -126,6 +131,7 @@ The sync command uses `overview` as a semantic area name (a command argument). R
 - Line 444: Example command -- `/sync overview` -> `/sync project`
 
 **compound-capture.md prose changes:**
+
 - Line 383: "Which overview file to update" -> "Which project file to update"
 - Line 450: "No overview updates applied" -> "No project updates applied"
 - Line 455: "overview edits + archival moves" -> "project edits + archival moves"

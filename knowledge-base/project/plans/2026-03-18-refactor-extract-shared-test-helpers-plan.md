@@ -53,6 +53,7 @@ The grep-based `assert_contains` in `resolve-git-root.test.sh` (line 36: `echo "
 **`assert_eq` local variable style canonicalization:**
 
 The ralph-loop file uses multi-line declarations (lines 90-92):
+
 ```bash
 local expected="$1"
 local actual="$2"
@@ -60,6 +61,7 @@ local msg="$3"
 ```
 
 The resolve-git-root file uses compact single-line (line 22):
+
 ```bash
 local expected="$1" actual="$2" label="$3"
 ```

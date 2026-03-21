@@ -192,6 +192,7 @@ Read these before every interview session.
 These mitigations reduce but do not eliminate creator bias. The results are directional signals, not statistically rigorous findings. That is appropriate for this stage.
 
 **Practical logistics:**
+
 - Audio record if the founder consents (ask at the start). If not, take detailed notes.
 - Use the exact question wording. Read from this guide, not from memory.
 - If the interview runs over 30 minutes, wrap up the current question and skip to question 12 (WTP). The willingness signal is more important than exhaustive domain probing.

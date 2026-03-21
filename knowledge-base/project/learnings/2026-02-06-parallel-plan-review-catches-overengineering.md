@@ -14,6 +14,7 @@ severity: medium
 ## Problem
 
 Initial plan for fuzzy deduplication feature (#12) was over-engineered:
+
 - Proposed Claude embeddings for semantic similarity (API doesn't exist)
 - 65+ implementation tasks
 - 3 new CLI flags
@@ -77,6 +78,7 @@ Same pattern, third confirmation. Plan for brand vision and marketing tools:
 | Total components | 4 | 2 |
 
 All three reviewers converged again:
+
 - **DHH**: "brand-voice-reviewer is premature -- inline it. github-presence conflates two unrelated things."
 - **Kieran**: "Brand guide parsing contract underspecified. Skill-to-agent invocation unresolved."
 - **Simplicity**: "Cut reviewer (inline instead), defer github-presence, slim brand guide to 3 sections. ~50% scope reduction."
@@ -92,6 +94,7 @@ This pattern has now been confirmed across 3 features (#12, #46, #71). Every tim
 ## Prevention
 
 Before implementing any plan with:
+
 - New directories or file structures
 - External API dependencies
 - Multiple CLI flags

@@ -29,6 +29,7 @@ The failure mode was silent: no errors, no warnings, just "No artifacts found" w
 Replaced hardcoded single-path lookups with directory arrays that search current paths first, then legacy paths:
 
 **archive-kb.sh `discover_artifacts()`:**
+
 ```bash
 local file_dirs=(
   "knowledge-base/brainstorms"
@@ -55,10 +56,12 @@ done
 ```
 
 **worktree-manager.sh `cleanup_merged_worktrees()`:**
+
 - Spec archiving iterates over a `spec_candidates` array (current + legacy paths), archiving into a sibling `archive/` directory relative to where the spec was found (using `dirname`).
 - `archive_kb_files()` calls doubled: each legacy path call paired with the equivalent current path call.
 
 **worktree-manager.sh `create_for_feature()`:**
+
 - Updated to create new specs at `knowledge-base/project/specs/` only (the current canonical path). No reason to create at the legacy path.
 
 `nullglob` (already set in `discover_artifacts()`) handles nonexistent directories gracefully -- empty globs expand to nothing rather than producing literal glob strings.
@@ -72,5 +75,6 @@ The fix pattern -- array of candidate paths with current-first ordering -- is th
 Filed #604 to track broader SKILL.md reference cleanup for stale `knowledge-base/project/` paths in documentation across the repository.
 
 ## Tags
+
 category: workflow-issues
 module: plugins/soleur/skills/archive-kb, plugins/soleur/skills/git-worktree

@@ -15,6 +15,7 @@ When a git worktree exists for the current feature branch:
 3. **Verify location before writing**: run `pwd` and check for `.worktrees/<name>/` in the path
 
 Signs of editing the wrong location:
+
 - `pwd` shows the main repo root, not `.worktrees/<name>/`
 - `git status` in the worktree doesn't show your changes
 - Feature-specific directories appear at repo root
@@ -29,6 +30,7 @@ Git worktrees create isolated working directories but the filesystem doesn't pre
 - AGENTS.md "Worktree Awareness" section -- existing rules that should have been followed
 
 ## Tags
+
 category: workflow-patterns
 module: git-worktree
 symptoms: changes lost, edits in wrong directory, uncommitted work disappeared

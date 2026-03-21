@@ -24,9 +24,11 @@ A secondary lesson: prompt instructions for CI agents should be compressed. The 
 1. **Ralph-loop setup script path** -- The session initially referenced `./plugins/soleur/skills/one-shot/scripts/setup-ralph-loop.sh` which does not exist. The correct path is `./plugins/soleur/scripts/setup-ralph-loop.sh`. This matches the general pattern: scripts live under `plugins/soleur/scripts/`, not nested under individual skill directories, unless they are skill-specific. When a plan prescribes a relative path, trace it before executing (per AGENTS.md hard rule).
 
 ## Tags
+
 category: integration-issues
 module: community-monitor
 issue: 592
 related:
-  - knowledge-base/project/learnings/2026-03-13-platform-integration-scope-calibration.md
-  - knowledge-base/project/learnings/2026-03-13-community-router-deduplication.md
+
+- knowledge-base/project/learnings/2026-03-13-platform-integration-scope-calibration.md
+- knowledge-base/project/learnings/2026-03-13-community-router-deduplication.md

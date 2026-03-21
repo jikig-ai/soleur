@@ -9,6 +9,7 @@
 A new marketing agent (`growth-strategist`) and skill (`/soleur:growth`) that handles content strategy, keyword research, content gap analysis, content planning, and AI agent consumability auditing. This fills the gap left by the existing `seo-aeo-analyst` agent, which focuses exclusively on technical SEO correctness (meta tags, structured data, sitemap validation) but has zero content strategy capability.
 
 The tool serves two purposes:
+
 1. **For Soleur users:** A reusable content strategy agent that any Soleur user can apply to their docs/marketing sites.
 2. **For soleur.ai:** The first test case -- audit and improve our own site's discoverability for terms like "agentic company", "company as a service", "agentic engineering".
 
@@ -17,6 +18,7 @@ The tool serves two purposes:
 ### The Gap in Current SEO/AEO Tooling
 
 The `seo-aeo-analyst` agent (v2.15.0) was deliberately scoped to technical correctness:
+
 - Meta tags present and valid
 - JSON-LD structured data correct
 - Sitemap with lastmod dates
@@ -24,6 +26,7 @@ The `seo-aeo-analyst` agent (v2.15.0) was deliberately scoped to technical corre
 - CI validation via standalone bash script
 
 What it does NOT do:
+
 - Research what people actually search for
 - Analyze whether page copy matches search intent
 - Identify content gaps vs competitors
@@ -35,6 +38,7 @@ This was the right call for v1 -- ship the infrastructure first. But infrastruct
 ### Separate Agent, Not Extension
 
 We chose a dedicated `growth-strategist` agent over extending `seo-aeo-analyst` because:
+
 - **Different disciplines:** Technical SEO auditing is deterministic (pass/fail). Content strategy is creative, research-heavy, and ongoing.
 - **Different workflows:** Auditing runs once and reports. Strategy requires iteration, research, planning.
 - **Different outputs:** Audits produce reports. Strategy produces content plans, keyword maps, editorial calendars.
@@ -72,6 +76,7 @@ Named `growth-strategist` (not `content-strategist`) to allow future expansion b
 | Web Search | No | Yes (keyword research) |
 
 The two agents are complementary:
+
 - Run `seo-aeo` to ensure technical foundation is correct
 - Run `growth` to ensure content actually targets what people search for
 

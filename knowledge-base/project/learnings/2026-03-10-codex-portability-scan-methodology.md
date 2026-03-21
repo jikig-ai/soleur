@@ -9,6 +9,7 @@ Needed to assess how much of the Soleur Claude Code plugin (122 components) coul
 Built a grep-based scan methodology that classifies components by checking for 10 Claude Code-specific primitives. Components are classified using worst-primitive-wins logic across four tiers (green/yellow/red/N/A).
 
 **Key primitives that determine portability** (ordered by impact):
+
 1. Task/subagent spawning (100+ refs, 30+ files) — Codex has no programmatic agent spawning
 2. Skill tool chaining (80+ refs, 20+ files) — Codex has `$skill-name` mentions but no mid-execution invocation
 3. AskUserQuestion (54 refs, 29 files) — Codex has no structured interactive prompt tool

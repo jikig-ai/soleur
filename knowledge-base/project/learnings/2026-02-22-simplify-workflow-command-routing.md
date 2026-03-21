@@ -32,6 +32,7 @@ Plan review by 3 specialized reviewers (Architecture, Implementation, Plugin Mec
 ## Final Design
 
 **2 files changed:**
+
 - `commands/soleur/go.md` (57 lines): Router command that classifies user input into one of 3 intents and dispatches to existing commands
 - `commands/soleur/help.md` (updated): Added `/soleur:go` to command listing
 

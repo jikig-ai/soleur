@@ -37,6 +37,7 @@ LinkedIn is NOT added to the content file `channels` frontmatter field — it is
 Like IndieHackers, Reddit, and HN in social-distribute today: content is generated in the content file, displayed in the summary, and the user copies it to LinkedIn manually. No `channels` field entry, no content-publisher integration, no API scripts.
 
 This avoids:
+
 - The one-channel-to-one-section ambiguity (SpecFlow Q1)
 - Content-publisher partial-publish status issues (SpecFlow Gap 10)
 - Dead stub scripts that print "go do it manually" (Simplicity review)

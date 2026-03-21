@@ -35,6 +35,7 @@ This fetches only tag refs (not full history), adding minimal overhead while mak
 `git tag --sort=-version:refname` is semver-aware and handles prefixed tags correctly (e.g., `web-v0.10.0 > web-v0.9.0`). But it only sees locally available tags. In CI with shallow clones, always run `git fetch --tags` before version computation. The existing plugin workflow avoids this by using `gh release view` (API call, no local tags needed), but that approach breaks when multiple tag namespaces coexist in a monorepo.
 
 ## Tags
+
 category: integration-issues
 module: ci-cd, github-actions, versioning
 severity: high

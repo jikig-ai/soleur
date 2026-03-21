@@ -14,12 +14,14 @@ semver: patch
 **Research conducted:** gitignore negation patterns, full skill audit for screenshot producers, tracked-vs-untracked PNG inventory, cleanup safety analysis
 
 ### Key Improvements
+
 1. Identified `gemini-imagegen` as a fifth screenshot-producing skill (writes `output.png` to CWD) -- covered by the blanket `*.png` rule
 2. Discovered cleanup command `rm -f *.png` in repo root is safe -- tracked PNGs (`vision-master-plan-*.png`) survive because `rm -f` only deletes working tree files while git retains them; however, the .gitignore will then hide them from future `git status` unless negated or `git rm --cached`
 3. Added concrete bash commands to skill cleanup sections instead of prose-only instructions
 4. Flagged that `feature-video/` and `screenshots/` directories (tracked PNGs) should be cleaned up via `git rm --cached` in a follow-up issue to avoid gitignore hiding modifications
 
 ### New Considerations Discovered
+
 - The blanket `*.png` gitignore will suppress `git status` output for modifications to tracked root-level PNGs (`vision-master-plan-*.png`) -- these should be `git rm --cached` in this PR or the next
 - `gemini-imagegen` skill also produces PNGs in CWD (`output.png`) -- no cleanup phase exists, but covered by gitignore
 - The `review/references/review-e2e-testing.md` reference routes to `/test-browser` which then produces screenshots -- cleanup at the test-browser level is the correct fix point
@@ -80,16 +82,19 @@ tmp/
 #### Research Insights
 
 **Negation pattern mechanics:**
+
 - Negation (`!path`) only works when the pattern negates a file, not a directory. Since `*.png` ignores files (not directories), the `!plugins/soleur/docs/images/*.png` negation works correctly.
 - Negation patterns MUST appear AFTER the rule they negate. Git processes `.gitignore` top-to-bottom; the last matching rule wins.
 - Negation cannot un-ignore a file inside an ignored directory. Since we ignore `*.png` (a file glob) and not `plugins/` (a directory), intermediate directories are not ignored and negation works.
 
 **Edge case -- tracked files and the blanket rule:**
+
 - `.gitignore` does not affect files already tracked by git. The 14 committed PNGs remain in the index.
 - However, the blanket `*.png` rule means `git status` will suppress display of these files even when modified. This is a subtle UX issue: if someone modifies `vision-master-plan-desktop.png`, `git status` won't show the change.
 - **Recommendation:** Run `git rm --cached` on the 13 tracked PNGs outside `plugins/soleur/docs/` in this PR. This un-tracks them without deleting the working tree copies (which are already gitignored after the rule is added). This cleanly separates "legitimate docs images" from "stale artifacts that should never have been tracked."
 
 **Files to `git rm --cached` (optional but recommended):**
+
 ```bash
 git rm --cached feature-video/01-homepage-stats.png feature-video/02-agents-nav-with-finance.png feature-video/03-finance-section.png screenshots/docs-404.png screenshots/docs-agents.png screenshots/docs-index-styled.png screenshots/docs-index.png screenshots/final-desktop-1200.png screenshots/final-mobile-375.png screenshots/video-desktop.png screenshots/video-mobile.png screenshots/video-tablet.png vision-master-plan-desktop.png vision-master-plan-mobile.png
 ```
@@ -144,6 +149,7 @@ if [[ -n "$MAIN_REPO" ]]; then
   rm -f "$MAIN_REPO"/bug-*.png
 fi
 ```
+
 ```
 
 #### Research Insights

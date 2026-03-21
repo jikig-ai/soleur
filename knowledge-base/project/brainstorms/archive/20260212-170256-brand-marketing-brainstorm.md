@@ -101,6 +101,7 @@ The single source of truth for Soleur's brand identity. Generated via the brand-
 ## Phasing
 
 **Phase 1 (This feature):**
+
 - Brand architect agent
 - Brand voice reviewer agent
 - Brand guide document (generated via workshop)
@@ -108,11 +109,13 @@ The single source of truth for Soleur's brand identity. Generated via the brand-
 - GitHub presence skill
 
 **Phase 2 (Future):**
+
 - Twitter/X content skill
 - Content calendar/scheduling
 - Analytics and engagement tracking
 
 **Phase 3 (Future):**
+
 - Full marketing campaign orchestration
 - Multi-channel content strategy agent
 - A/B testing for messaging

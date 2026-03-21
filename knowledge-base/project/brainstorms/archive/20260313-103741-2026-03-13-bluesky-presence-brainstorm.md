@@ -57,11 +57,13 @@ From 12 documented institutional learnings (X/Twitter and Discord integrations):
 ## Files to Create/Modify
 
 ### PR 1: Adapter Refactor (#470)
+
 - Extract shared patterns from `discord-community.sh` and `x-community.sh`
 - Standardize auth, request wrapping, retry logic, error propagation
 - Scope TBD during planning
 
 ### PR 2: Bluesky Integration (#139)
+
 | Action | File |
 |---|---|
 | Create | `plugins/soleur/skills/community/scripts/bsky-community.sh` |

@@ -91,6 +91,7 @@ Work already has pipeline mode that skips all prompts when `$ARGUMENTS` contains
 **Deduplication:** Constitution promotions use substring match against existing rules to prevent duplicates.
 
 **Error handling in headless mode:**
+
 - Test failure in headless ship → abort pipeline, do not attempt auto-fix
 - Merge conflict in headless ship → abort pipeline, log conflicting files
 - Flaky CI in headless ship → abort (do not auto-proceed past failed checks)

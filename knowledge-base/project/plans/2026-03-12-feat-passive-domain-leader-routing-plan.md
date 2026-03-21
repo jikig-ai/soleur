@@ -59,13 +59,17 @@ Four file edits, no new files:
 ## Implementation Sequence
 
 ### Task 1: Add Passive Domain Routing section to AGENTS.md
+
 **Files:** `AGENTS.md`
+
 - Add `## Passive Domain Routing` section between Workflow Gates and Communication
 - 2 bullets: (1) behavioral rule with qualifying language ("clear, actionable domain signal unrelated to the current task"), (2) spawn as background agent via `run_in_background: true`, reference `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md` for domain→leader mapping
 - Modify line 22: add "Exception: passive domain routing" to the zero-agents rule
 
 ### Task 2: Rewrite brainstorm Phase 0.5 and update domain config
+
 **Files:** `plugins/soleur/skills/brainstorm/SKILL.md` (lines 70-77), `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md`
+
 - Replace AskUserQuestion with direct Task spawn for each relevant domain using Task Prompt from config table
 - Spawn relevant domains in parallel (respect 5-agent constitution limit)
 - Add explicit workshop conditional: "If the user explicitly requests a brand workshop or validation workshop, follow the named workshop section below. Otherwise, use the assessment Task Prompt for all domains."
@@ -73,7 +77,9 @@ Four file edits, no new files:
 - Update domain config file header: remove AskUserQuestion instruction, describe auto-fire pattern, note Routing Prompt/Options columns are for workshop reference
 
 ### Task 3: Update plugin AGENTS.md
+
 **File:** `plugins/soleur/AGENTS.md`
+
 - Update Domain Leaders table: change "Auto-consulted via brainstorm domain detection" to "Auto-consulted via passive domain routing and brainstorm domain detection"
 - Update "Adding a New Domain Leader" checklist step 3: note that new domains are automatically routable via both passive routing and brainstorm Phase 0.5
 

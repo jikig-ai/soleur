@@ -29,6 +29,7 @@ Rule: Before starting brand fixes, run a grep for each prohibited term across th
 ### 2. Legal docs have dual locations -- both must move together
 
 Legal documents exist in two locations:
+
 - `docs/legal/` -- root-level copies (used by the worktree during development)
 - `plugins/soleur/docs/pages/legal/` -- Eleventy source files, compiled into the site
 

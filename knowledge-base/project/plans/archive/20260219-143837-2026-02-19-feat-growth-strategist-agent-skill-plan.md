@@ -58,6 +58,7 @@ Skip: general SEO knowledge, content strategy principles, readability analysis, 
 ### Phase 1: Agent
 
 Create `plugins/soleur/agents/marketing/growth-strategist.md`:
+
 - Frontmatter: `name`, `description` with 2 `<example>` blocks, `model: inherit`
 - Opening paragraph: third-person summary (extracted by docs data file)
 - Body: information requirements, brand guide integration, AEO checks, exclusion rule
@@ -65,6 +66,7 @@ Create `plugins/soleur/agents/marketing/growth-strategist.md`:
 ### Phase 2: Skill
 
 Create `plugins/soleur/skills/growth/SKILL.md`:
+
 - Frontmatter: `name: growth`, third-person `description` with triggers
 - Sub-command table (audit, plan, aeo)
 - Each sub-command: input parsing, agent delegation via Task tool
@@ -90,6 +92,7 @@ Create `plugins/soleur/skills/growth/SKILL.md`:
 ### Phase 5: Live Test on soleur.ai
 
 Apply the tool to soleur.ai as the first real test case:
+
 - Run `growth audit https://soleur.ai` -- verify content audit output
 - Run `growth plan "agentic company" --site https://soleur.ai` -- verify keyword research + gap analysis + content plan
 - Run `growth aeo https://soleur.ai` -- verify AI consumability audit

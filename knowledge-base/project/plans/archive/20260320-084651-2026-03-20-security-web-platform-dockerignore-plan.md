@@ -11,6 +11,7 @@ date: 2026-03-20
 **Research sources used:** Docker official docs (Context7), Node.js best practices, Next.js Docker guides, web-platform source analysis
 
 ### Key Improvements
+
 1. Fixed contradiction: removed `tsconfig.json` from acceptance criteria exclusion list (Next.js requires it at build time)
 2. Added `postcss.config.mjs` and `next.config.ts` to explicit "must NOT exclude" list after verifying they are required for Tailwind CSS and Next.js build
 3. Added `Dockerfile` and `.dockerignore` self-exclusion per Docker official best practices
@@ -18,6 +19,7 @@ date: 2026-03-20
 5. Identified that `server/`, `lib/`, `app/`, `middleware.ts` are all required at runtime (custom server pattern via `tsx server/index.ts`)
 
 ### New Considerations Discovered
+
 - The Dockerfile uses `npm ci --production=false` (installs devDependencies including `@tailwindcss/postcss`), so `postcss.config.mjs` must be in the build context
 - `next.config.ts` sets `serverExternalPackages` for ws and claude-agent-sdk -- excluding it would break the build
 - Docker official docs recommend excluding the `Dockerfile` itself from the build context to avoid unnecessary layer invalidation
@@ -93,6 +95,7 @@ tsconfig.json
 ```
 
 The web-platform `.dockerignore` mirrors this with two deliberate deviations:
+
 1. **Does NOT exclude `tsconfig.json`** -- Next.js requires it at build time for path aliases and TypeScript compilation (telegram-bridge uses Bun which has its own resolution)
 2. **Does NOT have `scripts/`** -- web-platform has no `scripts/` directory at its root (the `supabase/scripts/` subdirectory is covered by the `supabase/` exclusion)
 
@@ -171,6 +174,7 @@ docker-compose*.yml
 ```
 
 **Files intentionally NOT excluded (required at build time):**
+
 - `tsconfig.json` -- Next.js TypeScript compilation
 - `next.config.ts` -- Next.js build configuration (serverExternalPackages)
 - `postcss.config.mjs` -- Tailwind CSS 4 processing
@@ -181,6 +185,7 @@ docker-compose*.yml
 ### Research Insights (MVP)
 
 **Docker official best practices applied:**
+
 - Self-exclusion of `Dockerfile` and `.dockerignore` prevents unnecessary context transmission and layer invalidation (from Docker's React containerization guide)
 - `*.env*` pattern is intentionally NOT used as a single glob because it would also match `.env.production` files that some Next.js setups legitimately need; instead, specific patterns (`.env`, `.env.example`, `.env*.local`) provide precise control
 - Comments explain the "why" for each exclusion group, following Docker's recommended documentation pattern
@@ -197,7 +202,7 @@ The official Docker docs `.dockerignore` for Node.js projects also excludes `npm
 - Learning: `knowledge-base/project/learnings/2026-03-19-docker-base-image-digest-pinning.md`
 - Learning: `knowledge-base/project/learnings/2026-03-19-npm-global-install-version-pinning.md`
 - Related PR: #803 (security review that found this gap)
-- Docker official `.dockerignore` guide: https://docs.docker.com/build/building/best-practices/#exclude-with-dockerignore
-- Node.js best practices (`.dockerignore`): https://github.com/goldbergyoni/nodebestpractices/blob/master/sections/docker/docker-ignore.md
-- Docker containerization guide (React/Node.js): https://github.com/docker/docs/blob/main/content/guides/reactjs/containerize.md
-- Docker secrets best practices: https://docs.docker.com/build/building/secrets/
+- Docker official `.dockerignore` guide: <https://docs.docker.com/build/building/best-practices/#exclude-with-dockerignore>
+- Node.js best practices (`.dockerignore`): <https://github.com/goldbergyoni/nodebestpractices/blob/master/sections/docker/docker-ignore.md>
+- Docker containerization guide (React/Node.js): <https://github.com/docker/docs/blob/main/content/guides/reactjs/containerize.md>
+- Docker secrets best practices: <https://docs.docker.com/build/building/secrets/>

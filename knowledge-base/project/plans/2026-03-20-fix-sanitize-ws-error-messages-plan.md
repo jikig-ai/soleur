@@ -163,6 +163,7 @@ The `chat` catch block (line 161) and `review_gate_response` catch block (line 1
 **YAGNI assessment:** The `KNOWN_SAFE_MESSAGES` map and `sanitizeErrorForClient` function are minimal and justified. Each entry maps to a real error thrown in the codebase. The function is ~15 lines, has no external dependencies beyond `KeyInvalidError`, and requires no configuration.
 
 **Avoided complexity:**
+
 - No error classification hierarchy (single function, no class tree)
 - No error telemetry or structured logging changes (out of scope)
 - No client-side changes (message shape is unchanged)

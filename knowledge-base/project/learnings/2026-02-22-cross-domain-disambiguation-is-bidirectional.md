@@ -21,6 +21,7 @@ When adding agent N to a domain that borders existing domains, update ALL agents
 2. **Existing agents reference new ones** (easy to miss -- requires reading adjacent domain agents)
 
 For the Finance domain, the fixes were:
+
 - `cro.md` description: added "Use cfo for company-level financial analysis and budgeting"
 - `cro.md` Sharp Edges: added "Defer company-level revenue analysis (P&L, cash flow) to the CFO"
 - `coo.md` description: added "Use cfo for financial analysis and budgeting"
@@ -33,5 +34,6 @@ For the Finance domain, the fixes were:
 Disambiguation is a graph property, not a node property. Adding one node to the graph requires updating all adjacent nodes, not just the new one. The natural workflow (writing new files, then moving on) biases toward forward references only. Make the reverse-reference pass a mandatory final step in the adding-new-domain checklist.
 
 ## Tags
+
 category: integration-issues
 module: agents

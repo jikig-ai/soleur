@@ -27,5 +27,6 @@ Reddit is fundamentally hostile to automated content distribution, unlike Discor
 **When to reconsider:** Only after the Reddit account has 6+ months of organic participation history with sufficient karma in target subreddits. Even then, semi-automated (human reviews and clicks "post") is safer than fully automated.
 
 ## Tags
+
 category: integration-issues
 module: distribution-strategy

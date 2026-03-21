@@ -90,7 +90,7 @@ jobs:
 - Issue: #66
 - Brainstorm: `knowledge-base/project/brainstorms/2026-02-12-code-coverage-brainstorm.md`
 - Spec: `knowledge-base/project/specs/feat-code-coverage/spec.md`
-- Bun coverage docs: https://bun.sh/docs/test/code-coverage
-- Bun bunfig.toml reference: https://bun.sh/docs/runtime/bunfig
+- Bun coverage docs: <https://bun.sh/docs/test/code-coverage>
+- Bun bunfig.toml reference: <https://bun.sh/docs/runtime/bunfig>
 - Current CI: `.github/workflows/ci.yml`
 - Current baseline: 88.5% functions, 96.8% lines (`apps/telegram-bridge/`)

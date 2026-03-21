@@ -48,6 +48,7 @@ The hybrid API approach (manual posting + API stubs) mirrors what worked for X/T
 ## Domain Leader Assessments
 
 ### CMO Assessment
+
 - Brand guide exists but needs `### LinkedIn` Channel Notes added
 - LinkedIn content differs fundamentally from X (long-form thought leadership vs. 280-char brevity)
 - Company page + personal profile is the correct dual-surface strategy
@@ -55,6 +56,7 @@ The hybrid API approach (manual posting + API stubs) mirrors what worked for X/T
 - "Building a company with AI agents" is a high-interest LinkedIn narrative
 
 ### CCO Assessment
+
 - Community skill needs LinkedIn row in platform detection table
 - community-manager needs LinkedIn in Capabilities 1 (Digest), 2 (Health), 3 (Content Suggestions)
 - Digest file contract needs optional `## LinkedIn Metrics` heading
@@ -64,6 +66,7 @@ The hybrid API approach (manual posting + API stubs) mirrors what worked for X/T
 ## Scope Summary
 
 ### In Scope
+
 - `linkedin-community.sh` script with hybrid API stubs
 - `social-distribute` LinkedIn variants (company page + personal profile)
 - `community-manager` LinkedIn monitoring/analytics in digests
@@ -74,6 +77,7 @@ The hybrid API approach (manual posting + API stubs) mirrors what worked for X/T
 - `linkedin-setup.sh` credential validation script
 
 ### Out of Scope
+
 - Platform adapter interface refactor (#470 — separate PR)
 - LinkedIn comment engagement (v1 is monitoring only)
 - LinkedIn API App approval (parallel manual process)

@@ -27,6 +27,7 @@ Insert between Phase 2 (Issue Planning, ends line 192) and Phase 3 (SpecFlow Ana
 **Semantic assessment:** After generating the plan structure, evaluate the plan content:
 
 > "Based on the plan structure generated above, classify this plan into one of three tiers:
+>
 > - **BLOCKING**: Creates new user-facing pages, multi-step user flows, or significant new UI components (e.g., signup flows, dashboards, onboarding wizards, chat interfaces)
 > - **ADVISORY**: Modifies existing user-facing pages or components (e.g., layout changes, form updates, adding fields to existing screens)
 > - **NONE**: Infrastructure, backend, tooling, or orchestration changes with no user-facing impact
@@ -151,10 +152,12 @@ This follows the existing `[hook-enforced: ...]` pattern but indicates skill-lev
 ## Dependencies & Risks
 
 **Dependencies:**
+
 - Pencil MCP for ux-design-lead wireframes (gracefully degrades when unavailable)
 - spec-flow-analyzer, CPO agents exist and are capable (confirmed by repo research)
 
 **Risks:**
+
 - Semantic assessment accuracy: LLM classification may misclassify edge cases. Mitigated by the work backstop as safety net.
 - Over-triggering in brainstorm: broadened Product assessment question may fire on UI modification features. Mitigated by scoping the broadening to "new" pages/flows only.
 - Context budget in one-shot: three additional agents in plan subagent increases token usage. Acceptable for BLOCKING tier (infrequent, high-value).

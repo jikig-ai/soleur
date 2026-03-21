@@ -31,6 +31,7 @@ Week:  1         2         3         4         5         6
 Fix the first-run experience so a stranger can install and use Soleur in 10 minutes.
 
 **Audit checklist:**
+
 - [ ] Check Getting Started nav position (must be top 3 -- learning 2026-02-17)
 - [ ] Fresh install test: `claude plugin install soleur` then `/soleur:go` on a new project
 - [ ] Test `/soleur:sync` on a project with no `knowledge-base/`
@@ -41,6 +42,7 @@ Fix the first-run experience so a stranger can install and use Soleur in 10 minu
 **Deliverable:** Onboarding audit report + fixes shipped (`knowledge-base/project/specs/feat-product-strategy/onboarding-audit.md`)
 
 **Files to modify (if needed):**
+
 - `plugins/soleur/docs/pages/getting-started.md`
 - `plugins/soleur/commands/go/COMMAND.md`
 
@@ -59,6 +61,7 @@ Write 5 case studies from Soleur's own non-engineering usage. Each follows a con
 | 5 | Operations | Expense tracking, hosting research, infrastructure provisioning | `knowledge-base/ops/` |
 
 **Structure per case study:**
+
 1. The problem -- what non-engineering task needed doing?
 2. The AI approach -- which domain/agent, what workflow?
 3. The result -- concrete artifact produced
@@ -96,6 +99,7 @@ One file with everything needed to conduct 10 interviews.
 Post case studies across channels. 1-2 per week through Weeks 1-4.
 
 **Channels:**
+
 1. Discord (via `discord-content` skill)
 2. Twitter/X (manual)
 3. IndieHackers (manual)
@@ -124,6 +128,7 @@ For each founder, in sequence:
 All 10 founders get the same guided domain task (pick the strongest -- likely legal doc generation based on case study strength).
 
 **Observation during unassisted period:**
+
 - Weekly 15-minute check-in call (replaces telemetry): "What did you use this week? Any questions?"
 - Note which domains they mention using on their own
 - Note what broke or confused them
@@ -137,6 +142,7 @@ All 10 founders get the same guided domain task (pick the strongest -- likely le
 After each founder's 2-week unassisted period, conduct a debrief call.
 
 **Debrief questions (3 questions, 15 min):**
+
 1. What did you use Soleur for? What worked, what didn't? Which domains were useful vs. irrelevant?
 2. Would you pay for this? How much per month? (open-ended, no anchoring)
 3. If I removed Soleur from your setup tomorrow, what would you miss?
@@ -153,6 +159,7 @@ After each founder's 2-week unassisted period, conduct a debrief call.
 **Check Cowork weekly:** Review Anthropic blog, Cowork changelog, and Claude Code Discord announcements every Monday morning.
 
 **Decision rules:**
+
 - **All validation gates pass (G1-G3) + risk clear (G4):** Build a real roadmap.
 - **2/3 validation gates pass:** Iterate on the failing dimension for 4 more weeks with 5 new people.
 - **0-1/3 validation gates pass:** CaaS thesis invalidated. Pivot or wind down non-engineering domains.

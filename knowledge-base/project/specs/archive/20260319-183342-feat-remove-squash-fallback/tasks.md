@@ -5,9 +5,11 @@
 **Note:** Edit tool is blocked for workflow files by `security_reminder_hook.py`. Use `sed` via Bash.
 
 - [x] 1.1 Run single sed command to remove fallback from all 9 workflows:
+
   ```bash
   sed -i 's/ || gh pr merge "$BRANCH" --squash$//' .github/workflows/scheduled-*.yml
   ```
+
   If pre-merge hook triggers a false positive on the "merge" text, write the sed command to a temp script and execute it.
 
 ## Phase 2: Verification

@@ -24,5 +24,6 @@ When wrapping an SDK's error handling, check the actual SDK source for its excep
 3. **Committed `__pycache__/`**: Python bytecode cache was staged because `.gitignore` lacked `__pycache__/`. Added to `.gitignore` and cleaned up.
 
 ## Tags
+
 category: integration-issues
 module: gemini-imagegen

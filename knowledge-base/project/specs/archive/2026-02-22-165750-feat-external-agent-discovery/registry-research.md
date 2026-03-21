@@ -184,6 +184,7 @@ Findings from #116 audit (PR #125):
 **Viable paths now exist.** The original "park implementation" recommendation is revised. Two unauthenticated registries provide sufficient data for gap-triggered discovery.
 
 Recommended data source stack:
+
 1. `api.claude-plugins.dev` -- Primary search (skills + plugins, rich metadata, 1000 req/30s)
 2. `claudepluginhub.com` -- Secondary/enrichment (largest dataset at 12K+ plugins)
 3. Anthropic repos -- Curated catalog via raw GitHub (highest trust, no search)

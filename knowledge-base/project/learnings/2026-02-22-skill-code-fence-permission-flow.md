@@ -18,6 +18,7 @@ This was discovered when `/soleur:one-shot` tried to execute `setup-ralph-loop.s
 Two approaches:
 
 1. **Pre-add the script path to the allow list** in `.claude/settings.local.json`:
+
    ```json
    "Bash(\"<full-path-to-script>\":*)"
    ```
@@ -31,6 +32,7 @@ The Skill tool's `!` code fence execution path does not support interactive perm
 When a plugin maintains its own copy of a utility script (rather than importing from another plugin), the permission allow list must explicitly whitelist that copy's path. Whitelisting the original location does not cascade to copies.
 
 ## Tags
+
 category: tool-integration
 module: skills, one-shot, ralph-loop
 symptoms: Skill tool returns error instead of showing permission prompt for Bash command in code fence

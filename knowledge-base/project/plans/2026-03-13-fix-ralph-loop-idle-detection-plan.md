@@ -13,6 +13,7 @@ deepened: 2026-03-13
 **Research sources:** stop-hook.sh source analysis, set-euo-pipefail-upgrade-pitfalls learning, awk-scoping-yaml-frontmatter learning, shell-api-wrapper-hardening learning, live regex validation against 12 test phrases
 
 ### Key Improvements
+
 1. **Fixed false positive risk in idle pattern regex**: Substring matching on `grep -iqE` catches "all done" embedded in substantive responses like "The authentication module is all done and tested." Added response length gate: only apply idle detection when response is under 200 chars (truly idle responses are short; substantive responses containing idle substrings are long)
 2. **Identified `set -euo pipefail` safety requirement**: The `if echo ... | grep -iqE` wrapping is confirmed safe (the `if` statement absorbs grep's exit 1 on no match), but `md5sum` in a command substitution needs `|| true` guard for edge cases where input pipe fails
 3. **Added macOS portability note**: `md5sum` is Linux-only; macOS uses `md5 -r`. Added cross-platform hash function using `cksum` as fallback
@@ -76,6 +77,7 @@ already (done|complete|finished)
 **Mitigation**: Add a response length gate. Truly idle responses are short (under ~100 chars). Substantive responses containing idle substrings are long. Apply idle pattern detection only when `RESPONSE_LENGTH < 200`. This eliminates false positives from long substantive responses while catching all observed failure-mode responses (which are all under 50 chars of stripped content).
 
 This is a two-tier approach:
+
 1. `RESPONSE_LENGTH < 20` -> definitely minimal (existing behavior)
 2. `20 <= RESPONSE_LENGTH < 200` AND idle pattern match -> semantically idle (new)
 3. `RESPONSE_LENGTH >= 200` -> always treated as substantive (too long to be idle)
@@ -87,6 +89,7 @@ The 200-char threshold is conservative. The longest observed idle response in th
 Track the last response hash in the state file frontmatter. If 3 consecutive responses produce the same hash, terminate.
 
 **Implementation**:
+
 - Add `last_response_hash` field to state file frontmatter (default: empty)
 - Add `repeat_count` field (default: 0)
 - Compute hash: `echo "$STRIPPED_OUTPUT" | tr '[:upper:]' '[:lower:]' | md5sum | cut -d' ' -f1`
@@ -258,6 +261,7 @@ All new code paths are safe under `set -euo pipefail`. No additional guards need
 1. **Add new fields to state file frontmatter** (in the `cat` block at line 132):
 
 Add after `stuck_threshold:` line:
+
 ```yaml
 last_response_hash:
 repeat_count: 0

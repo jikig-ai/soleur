@@ -51,6 +51,7 @@ Switch from Apache-2.0 to BSL 1.1 for the entire project (CLI plugin + future we
 **Rationale:** The CLI plugin's agent orchestration architecture, 60+ agent definitions, and skill system represent significant IP worth protecting. The CLI is the product, not just a distribution vehicle.
 
 **Transition mechanics:**
+
 - Prior versions released under Apache-2.0 are grandfathered -- existing forks keep their rights.
 - Future versions are BSL 1.1.
 - Converts to Apache-2.0 after a set period (3-4 years, exact timeline TBD).
@@ -91,12 +92,14 @@ No near-term revenue pressure. Accepted risk that the web platform likely won't 
 ## Domain Leader Assessments Summary
 
 ### CPO Assessment
+
 - The knowledge base is the moat, not the agents. Business model should center on who owns/hosts the knowledge base.
 - No distribution strategy exists. A business model without a path to users is a pricing exercise.
 - The "aha moment" that converts free-to-paid must be identified -- it doesn't exist in the current product.
 - 5 sharpest questions: What does hosted do that self-hosted can't? Is the monetization unit a seat, domain, or outcome? Does the model work if only engineers adopt? What converts free to paid? How does open-source coexist with paid tiers?
 
 ### CFO Assessment
+
 - Current burn: ~$15.83/month (GitHub Copilot, Hetzner, Plausible trial).
 - Hosted platform introduces a cost cliff: per-customer storage, compute, and Claude API tokens.
 - At $0.003/token, a single active user could cost $5-20/month in API costs before margin.
@@ -104,6 +107,7 @@ No near-term revenue pressure. Accepted risk that the web platform likely won't 
 - Sequence matters: locking pricing before unit economics are understood risks underpricing or overpricing.
 
 ### CRO Assessment
+
 - Pre-pipeline state: no ICP, no outbound sequences, no conversion mechanism, no pricing framework.
 - Zero demand signal for paid conversion. This is a pipeline generation problem, not a pricing problem.
 - Concierge onboarding ($500-2,000 one-time) is fastest path to first revenue and WTP validation.
@@ -111,6 +115,7 @@ No near-term revenue pressure. Accepted risk that the web platform likely won't 
 - 6 key questions: Who is the specific first customer? What's the one paid-tier gate? What happens to Apache-2.0 license with paid tiers? Is sales motion product-led or founder-led? Is the 50-user gate from validation agreed? Is there a professional services wedge?
 
 ### CMO Assessment
+
 - Monetization timing vs brand credibility: zero paying customers while promising "billion-dollar company" energy creates misalignment.
 - Open-source signals collide with premium pricing. Users anchor on "free."
 - The freemium tier split (engineering free, business paid) may undersell the integration thesis.

@@ -11,6 +11,7 @@ A unified marketing strategy document for Soleur, replacing the fragmented colle
 ### Context
 
 The last comprehensive marketing audit was Feb 19, 2026 (content audit + content plan). Since then:
+
 - Product grew from 32 to 61 agents and 41 to 56 skills
 - Anthropic launched Cowork Plugins (first-party competition)
 - Competitive landscape shifted significantly
@@ -25,6 +26,7 @@ A mix of **capacity constraints** (competing priorities consumed all bandwidth) 
 ## Why This Approach
 
 **CMO-led orchestration** was chosen over manual assembly because:
+
 - The CMO agent can delegate to specialists (growth-strategist, pricing-strategist, programmatic-seo-specialist, deal-architect) in parallel
 - Specialists regenerate cascade docs aligned with the unified strategy
 - CMO ensures cross-domain consistency across all artifacts

@@ -11,6 +11,7 @@ issue: "#10"
 Automatic cleanup of worktrees and associated spec directories when a PR is merged. The system will detect merged branches, remove the corresponding worktree from `.worktrees/`, archive the spec directory to `knowledge-base/project/specs/archive/`, and optionally delete the local branch.
 
 Cleanup is triggered in two scenarios:
+
 1. **Session start** - catches PRs merged via GitHub UI while user was away
 2. **Post-merge hook** - catches PRs merged within the current Claude Code session
 
@@ -25,6 +26,7 @@ We considered three approaches:
 | C: GitHub Actions webhook | High | GH Actions + coordination | No |
 
 **Approach A wins** because:
+
 - Builds on existing `worktree-manager.sh` infrastructure
 - Uses git's native `[gone]` branch tracking (no custom state)
 - Both triggers share the same cleanup logic
@@ -51,6 +53,7 @@ branch-name Optional specific branch to clean (for post-merge hook)
 ```
 
 Logic:
+
 1. Run `git fetch --prune` to update remote tracking
 2. Find branches with `[gone]` status: `git branch -vv | grep '\[gone\]'`
 3. For each gone branch with matching worktree:

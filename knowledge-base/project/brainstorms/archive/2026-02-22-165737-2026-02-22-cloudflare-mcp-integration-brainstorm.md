@@ -19,6 +19,7 @@ The new Cloudflare "Code Mode" MCP server exposes ~2,500 API endpoints through j
 **Full MCP replacement over dual-path:** The Cloudflare MCP server can be bundled in `plugin.json` the same way as Context7 (HTTP transport, no special config). Users authenticate once via `/mcp` (OAuth 2.1). This eliminates the need for `CF_API_TOKEN` and `CF_ZONE_ID` environment variables.
 
 The alternative (dual-path: prefer MCP, fall back to curl) was considered but rejected because:
+
 - It doubles the agent's complexity for a graceful degradation path
 - The MCP setup is a one-time OAuth flow, not a hard gate
 - The curl-based code is the main maintenance burden
@@ -45,6 +46,7 @@ The alternative (dual-path: prefer MCP, fall back to curl) was considered but re
 ## CTO Assessment Summary
 
 The CTO assessed three options:
+
 - **Option A (full replacement):** Selected. Simplest agent code, requires MCP setup.
 - **Option B (dual-path):** Rejected. Preserves backward compat but doubles complexity.
 - **Option C (documentation only):** Rejected. The ability to bundle MCP changes the calculus.

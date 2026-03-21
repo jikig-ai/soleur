@@ -209,6 +209,7 @@ For scripts in `plugins/soleur/skills/gemini-imagegen/scripts/`, document the ve
 ### What Happened
 
 Initial text sizes (wordmark 28px, thesis 44px, metrics 16px) were unreadable at 1500x500 banner scale. Two rounds of increase were needed:
+
 - Round 1: 28/44/16 (too small)
 - Round 2: 42/64/22 (still small)
 - Round 3: 52/82/26 (acceptable)
@@ -218,6 +219,7 @@ The final sizes were roughly 2x the initial guesses.
 ### Prevention Strategy
 
 Use the **1% rule** as a baseline for banner text sizing: primary text height should be approximately 10-16% of the image height, secondary text 6-10%. For a 500px-tall banner:
+
 - Primary text (thesis/headline): 50-80px (10-16% of 500)
 - Secondary text (wordmark): 40-60px (8-12% of 500)
 - Tertiary text (metrics/labels): 20-30px (4-6% of 500)

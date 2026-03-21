@@ -34,6 +34,7 @@ When a CLI tool (`claude mcp add`) isn't idempotent, the remove-then-add pattern
 5. **README table count missed** — Bumped plugin.json description (52→53) but missed README markdown table. The versioning checklist should include "README component count tables" explicitly.
 
 ## Tags
+
 category: integration-issues
 module: pencil-setup, mcp-registration
 symptoms: claude mcp add fails on duplicate, stale MCP binary path after extension update

@@ -112,6 +112,7 @@ All old→new replacements across plugins/, scripts/, .github/:
 **Specific files to update:**
 
 Agents:
+
 - `plugins/soleur/agents/marketing/brand-architect.md` — brand-guide
 - `plugins/soleur/agents/marketing/{cmo,growth-strategist,programmatic-seo-specialist,paid-media-strategist,pricing-strategist,analytics-analyst,conversion-optimizer,copywriter,retention-strategist}.md` — brand-guide
 - `plugins/soleur/agents/product/{business-validator,competitive-intelligence,cpo}.md` — business-validation, competitive-intelligence, brand-guide
@@ -122,6 +123,7 @@ Agents:
 - `plugins/soleur/agents/support/{community-manager,cco}.md` — community/, brand-guide
 
 Skills:
+
 - `plugins/soleur/skills/brainstorm/references/brainstorm-brand-workshop.md` — brand-guide
 - `plugins/soleur/skills/brainstorm/references/brainstorm-validation-workshop.md` — business-validation
 - `plugins/soleur/skills/competitive-analysis/SKILL.md` — competitive-intelligence
@@ -129,13 +131,16 @@ Skills:
 - `plugins/soleur/skills/{discord-content,content-writer,social-distribute,growth,release-docs,ship}/SKILL.md` — brand-guide
 
 Workflows:
+
 - `.github/workflows/scheduled-competitive-analysis.yml` — competitive-intelligence
 - `.github/workflows/scheduled-community-monitor.yml` — community/, brand-guide
 
 Scripts:
+
 - `scripts/content-publisher.sh` — already correct (`knowledge-base/marketing/distribution-content`), verify only
 
 Todos (informational, not runtime):
+
 - `todos/013-complete-p1-star-count-inconsistency.md` — business-validation
 - `todos/016-complete-p2-stale-polsia-business-validation.md` — business-validation
 

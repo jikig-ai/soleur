@@ -10,6 +10,7 @@ tags: [workflow-issues, documentation, medium, documentation-gap, inadequate-doc
 ## Problem
 
 After implementing the spec-driven workflow (GitHub issues #3 and #4), documentation was scattered across multiple locations:
+
 - `/docs/plans/` - Feature plans and archived plans
 - `/docs/specs/` - External platform specifications
 - `/docs/solutions/` - Problem solutions and learnings
@@ -36,6 +37,7 @@ knowledge-base/
 ```
 
 **Migration steps:**
+
 1. Created new directory structure in knowledge-base/
 2. Used `git mv` for tracked files to preserve history
 3. Used regular `mv` for untracked files (brainstorms)

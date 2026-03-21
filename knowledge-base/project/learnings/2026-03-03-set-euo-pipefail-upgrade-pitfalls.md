@@ -83,5 +83,6 @@ Static code review often catches `-e` risks (commands known to fail) but misses 
 2. **No test run before declaring done** -- The script changes were committed without running `worktree-manager.sh cleanup-merged` in a clean environment (no gone branches). The grep trap would have surfaced immediately.
 
 ## Tags
+
 category: runtime-errors
 module: plugins/soleur/skills/git-worktree

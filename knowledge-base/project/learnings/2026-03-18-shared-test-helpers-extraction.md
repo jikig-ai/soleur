@@ -37,5 +37,6 @@ For substring checks in bash: use `[[ "$haystack" == *"$needle"* ]]`, not `echo 
 - `knowledge-base/project/learnings/2026-03-14-bare-repo-helper-extraction-patterns.md` -- helper extraction design constraints
 
 ## Tags
+
 category: test-failures
 module: plugins/soleur/test

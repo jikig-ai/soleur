@@ -29,5 +29,6 @@ Fire-and-forget async methods that create timers are a timer leak hazard in test
 **Meta-lesson:** When a test runner crashes (segfault, OOM), never dismiss it as a "known runtime bug." Investigate whether your code is triggering it. Added a hard rule to AGENTS.md to enforce this.
 
 ## Tags
+
 category: test-failures
 module: apps/telegram-bridge

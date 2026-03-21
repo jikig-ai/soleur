@@ -24,6 +24,7 @@ Trimmed 16 agent descriptions from 2,496 to 2,154 words (342 recovered). Key tec
 ### Phase 2: Table-Driven Brainstorm Refactor
 
 Replaced ~258 lines of inline domain blocks with ~125 lines:
+
 - Single Domain Config table: 6 columns (Domain, Assessment Question, Leader, Routing Prompt, Options, Task Prompt) x 6 rows
 - 6-step Processing Instructions that interpret the table generically
 - Merged brand into marketing (3 options: workshop / include-CMO / skip) reducing 7 rows to 6
@@ -37,7 +38,7 @@ Updated 8 files: plugin.json, README.md (x2), AGENTS.md, getting-started.md (2 l
 
 ## Key Insight
 
-When a markdown command's structure scales linearly with the number of variants (N domains = N inline blocks), refactor to a table-driven config where N domains = N rows. The LLM interprets the table + generic instructions just as reliably as inline blocks, but the maintenance cost drops from O(N * block_size) to O(N * row_size). The critical constraint: preserve exact question text, full option labels, and task prompts in the table cells so routing behavior doesn't change.
+When a markdown command's structure scales linearly with the number of variants (N domains = N inline blocks), refactor to a table-driven config where N domains = N rows. The LLM interprets the table + generic instructions just as reliably as inline blocks, but the maintenance cost drops from O(N *block_size) to O(N* row_size). The critical constraint: preserve exact question text, full option labels, and task prompts in the table cells so routing behavior doesn't change.
 
 ## Session Errors
 

@@ -14,6 +14,7 @@ The `check_deps.sh` script treated all MCP binaries as coming from the IDE exten
 ## Solution
 
 Extracted the Pencil Desktop AppImage (`--appimage-extract`) and found:
+
 - Desktop ships `mcp-server-linux-x64` at `resources/app.asar.unpacked/out/`
 - The binary is a different build from the extension's (different SHA256, same size)
 - Desktop also bundles `@anthropic-ai/claude-agent-sdk` and `@openai/codex-sdk`
@@ -39,5 +40,6 @@ When a tool ships binaries through multiple distribution channels (IDE extension
 3. CWD drifted to `/tmp` after AppImage extraction (had to cd back to worktree)
 
 ## Tags
+
 category: integration-issues
 module: pencil-setup

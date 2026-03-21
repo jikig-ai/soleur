@@ -30,7 +30,7 @@ The stuck detection used a single length threshold (20 chars) to classify respon
 
 Three changes to `plugins/soleur/hooks/stop-hook.sh`:
 
-1. **Idle pattern detection**: Regex matching against known "nothing to do" patterns (case-insensitive): "nothing to do", "no .* to", "all .* finished", "already completed", "no remaining", "no pending", "no outstanding". Applied only when the stripped response is under 200 chars (length gate prevents false positives on substantive responses that happen to contain an idle phrase mid-paragraph).
+1. **Idle pattern detection**: Regex matching against known "nothing to do" patterns (case-insensitive): "nothing to do", "no .*to", "all .* finished", "already completed", "no remaining", "no pending", "no outstanding". Applied only when the stripped response is under 200 chars (length gate prevents false positives on substantive responses that happen to contain an idle phrase mid-paragraph).
 
 2. **Repetition detection**: md5sum hash of each response stored in state file frontmatter (`last_response_hash`). If 3 consecutive responses produce the same hash (`repeat_count` >= 3), the loop terminates regardless of length or content. Independent of stuck detection -- catches any degenerate loop, not just idle ones.
 

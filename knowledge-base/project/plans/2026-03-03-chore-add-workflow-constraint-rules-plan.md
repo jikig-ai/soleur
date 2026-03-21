@@ -64,11 +64,13 @@ Rationale: constitution.md line 60 covers "fetch before version bumps" but does 
 #### Research Insights: Rebase Rule
 
 **Edge cases:**
+
 - Claude Code's Bash tool does not support interactive mode (`-i` flag). The rule must use non-interactive `git rebase origin/main`, never `git rebase -i`. This is already correctly specified in the rule wording.
 - If rebase produces conflicts in version files (`plugin.json`, `CHANGELOG.md`), the agent should resolve by accepting theirs (latest main) and re-applying the version bump on top. The learning `2026-02-10-parallel-feature-version-conflicts-and-flag-lifecycle.md` documents this pattern.
 - The `cleanup-merged` script already runs `git pull --ff-only origin main` after cleaning worktrees (per `2026-02-24-pull-latest-main-after-cleanup-merged.md`), so session-start gets the latest main automatically. The rebase rule covers the gap between session-start and merge time when parallel PRs land.
 
 **Rule phrasing:**
+
 - Research confirms definitive language ("Before merging any PR, rebase...") is followed more reliably than suggestive ("Consider rebasing before merge"). The current wording is correct.
 - The rule provides an alternative action (the explicit git commands), which research shows improves compliance vs. bare prohibitions.
 
@@ -83,11 +85,13 @@ Rationale: 7+ learnings document this failure mode. The Edit tool's built-in gua
 #### Research Insights: Read-Before-Edit Rule
 
 **Compaction interaction:**
+
 - This rule is the one most likely to be violated *after* context compaction, because compaction erases the evidence that a file was previously read. The rule explicitly calls out "re-read after any compaction event" which is the critical clause.
 - The `2026-02-24-bsl-license-migration-pattern.md` learning documents 3 separate Write/Edit rejections in a single session caused by context compaction erasing prior reads. The `2026-02-22-domain-prerequisites-refactor-table-driven-routing.md` learning documents 5 such rejections.
 - Research from HumanLayer confirms that "as instruction count increases, instruction-following quality decreases uniformly." This rule is high-leverage because it prevents a failure mode that wastes 1-2 turns per occurrence, and occurs in nearly every long session.
 
 **Documented occurrences across learnings:**
+
 1. `2026-02-24-bsl-license-migration-pattern.md` -- 3 rejections (LICENSE, legal docs)
 2. `2026-02-27-feature-video-graceful-degradation.md` -- README.md and bug_report.yml
 3. `2026-03-02-multi-agent-cascade-orchestration-checklist.md` -- plugin.json
@@ -107,11 +111,13 @@ Rationale: Agents sometimes try alternative commands to accomplish blocked opera
 #### Research Insights: Hook Awareness Rule
 
 **Maintenance cost:**
+
 - This rule creates a second place to update when a new guard is added (guardrails.sh + AGENTS.md). The guard error messages already explain what was blocked and suggest alternatives.
 - Justification for the redundancy: the 61 friction events include cases where agents attempted workarounds after receiving hook error messages. The rule preemptively informs the agent about all guards, preventing the initial blocked attempt entirely.
 - Mitigation: add a comment in `guardrails.sh` and `worktree-write-guard.sh` reminding maintainers to update AGENTS.md when adding new guards.
 
 **Rule structure:**
+
 - Lists all 4 guards in a single line with Guard numbers (1-4) for cross-reference to the hook source code.
 - Provides the two primary alternative commands (`git worktree remove`, `worktree-manager.sh cleanup-merged`) so the agent knows what to do instead.
 
@@ -132,10 +138,12 @@ Add to `## Architecture > ### Never`:
 #### Research Insights: Constitution vs AGENTS.md Separation
 
 **The two-tier rule system:**
+
 - **AGENTS.md** (gotchas-only, ~30 lines): Loaded into the system prompt on every turn. Contains only rules the agent would violate without being told. Per ETH Zurich research, context files increase reasoning tokens by 10-22% and cost by 15-20% per interaction -- every line must earn its place.
 - **constitution.md** (~250 lines): Loaded on-demand when specific skills request it (plan, work, compound). Contains the full convention set with rationale.
 
 **Duplication principle:**
+
 - The AGENTS.md versions are terse one-liners (gotcha form).
 - The constitution.md versions include the full rationale and the specific git commands.
 - This is intentional duplication: the AGENTS.md version prevents the violation; the constitution.md version explains why.

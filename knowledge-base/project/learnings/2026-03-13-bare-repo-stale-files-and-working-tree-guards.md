@@ -35,5 +35,6 @@ Bare repo + worktree workflows have a **two-layer failure model**: (1) git plumb
 - For bare repo workflows, add a `sync` mechanism for any files that tools read from disk rather than from git
 
 ## Tags
+
 category: build-errors
 module: git-worktree

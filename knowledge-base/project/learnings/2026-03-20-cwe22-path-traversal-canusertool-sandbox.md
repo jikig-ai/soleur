@@ -7,6 +7,7 @@ The `canUseTool` workspace sandbox in `agent-runner.ts` used `path.startsWith(wo
 However, the more severe issue was hiding in plain sight: `workspace.ts` DEFAULT_SETTINGS pre-approved Read, Glob, and Grep tools unconditionally. These tools never reached `canUseTool` at all — they were permitted by the settings layer before the sandbox check ran. An attacker with workspace access could read any file on the server filesystem via these tools without triggering any path validation.
 
 The combination meant:
+
 1. Read/Glob/Grep bypassed `canUseTool` entirely (pre-approved in settings.json)
 2. Even if they reached `canUseTool`, the `startsWith` check was bypassable with path traversal
 
@@ -41,5 +42,6 @@ For path containment checks specifically: never use string prefix matching (`sta
 4. **Wrong path for setup-ralph-loop.sh script**: A script path referenced in the session was incorrect, causing a command failure. Fix: always verify paths with `ls` or `stat` before executing scripts, especially when paths are recalled from memory rather than read from the filesystem.
 
 ## Tags
+
 category: security-issues
 module: web-platform/server

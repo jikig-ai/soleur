@@ -26,6 +26,7 @@ Use the `env` key to set the environment variable instead:
 The `env` key in settings.json sets environment variables for Claude Code sessions. `CLAUDE_CODE_EFFORT_LEVEL` is the correct environment variable name, accepting values: `low`, `medium`, `high` (default).
 
 Other valid methods to control effort:
+
 - `/model` command mid-session (effort slider with left/right arrows)
 - `CLAUDE_CODE_EFFORT_LEVEL` env var before starting Claude
 

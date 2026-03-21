@@ -105,6 +105,7 @@ resource "aws_instance" "web" {
 ### Required Files
 
 **Root module (minimum):**
+
 - `main.tf` - Primary entrypoint, resource creation, module calls
 - `variables.tf` - Input variable declarations
 - `outputs.tf` - Output value declarations
@@ -135,6 +136,7 @@ terraform {
 Place under `modules/` subdirectory. Any nested module with `README.md` is considered public/usable by external users. Modules without README are internal-only.
 
 **Example structure:**
+
 ```
 my-terraform-project/
 ├── main.tf
@@ -244,11 +246,13 @@ variable "db_password" {
 **Simple types:** `string`, `number`, `bool`
 
 **Collection types:**
+
 - `list(string)` - Ordered collection of strings
 - `map(string)` - Key-value pairs
 - `set(string)` - Unordered unique values
 
 **Structural types:**
+
 - `object({...})` - Fixed schema with typed attributes
 - `tuple([...])` - Fixed-length list with typed elements
 - `any` - Disable type validation (use sparingly)
@@ -326,16 +330,19 @@ output "db_connection_string" {
 ### Backend Options
 
 **AWS (S3 + DynamoDB):**
+
 - S3 Standard: 99.999999999% durability, 99.99% availability
 - DynamoDB state locking (deprecated in Terraform 1.10+)
 - S3 native state locking (recommended since Terraform 1.10)
 
 **Terraform Cloud/HCP:**
+
 - SaaS platform with built-in state management
 - Access controls, policy checks, collaboration features
 - Optimal for teams prioritizing security/governance over self-hosting
 
 **Consul:**
+
 - Distributed key-value store
 - Suitable for multi-datacenter setups
 - Requires Consul infrastructure
@@ -409,18 +416,21 @@ terraform init -reconfigure
 ### Workspaces vs Directory-Per-Environment
 
 **Workspaces:**
+
 - One codebase, multiple state files
 - Switch with `terraform workspace select <name>`
 - Good for: Identical infrastructure across environments
 - Limitations: Shared backend, same credentials, weak isolation
 
 **Directory-per-environment:**
+
 - Separate folder per environment with own config/state
 - Strong isolation, different credentials, unique policies
 - Better CI/CD integration (per-directory pipelines)
 - Recommended for: Prod vs non-prod separation
 
 **Hybrid approach:**
+
 - Separate directories for major tiers (dev, staging, prod)
 - Workspaces within directories for variations (staging-us, staging-eu)
 
@@ -488,6 +498,7 @@ terraform {
 ### Provider Versions
 
 **Syntax:** Version constraint operators:
+
 - `=` - Exact version (maximum stability)
 - `~>` - Allow rightmost version component to increment
 - `>=`, `<=`, `>`, `<` - Comparison operators
@@ -513,6 +524,7 @@ terraform {
 ```
 
 **Best practice:**
+
 - Production: Use `~>` to allow patch updates, prevent minor/major changes
 - Root modules: Set upper bounds to avoid incompatible upgrades
 - Every provider should have an explicit version constraint
@@ -547,6 +559,7 @@ terraform init -upgrade
 **Consistent pattern:** `<prefix>-<project>-<env>-<resource>-<location>-<description>`
 
 **Example patterns:**
+
 - AWS: `mycompany-webapp-prod-alb-us-east-1`
 - Azure: `mycompany-prod-eastus-app-rg`
 - Hetzner: `mycompany-api-staging-cx21-fsn1`
@@ -579,6 +592,7 @@ resource "aws_vpc" "main" {
 ### Tagging Strategies
 
 **Common tags (apply to all resources):**
+
 - `Environment` - dev, staging, prod
 - `Project` - Project or application name
 - `ManagedBy` - Terraform (or tool name)
@@ -614,16 +628,19 @@ resource "aws_instance" "web" {
 ### Provider-Specific Naming
 
 **AWS:**
+
 - Use hyphen-separated lowercase
 - Include region for global resources (S3 buckets)
 - Pattern: `{org}-{project}-{env}-{resource}-{region}`
 
 **Azure:**
+
 - Follow Cloud Adoption Framework naming conventions
 - Resource group: `{company}-{env}-{location}-{purpose}-rg`
 - Storage account: `{company}{project}{env}sa` (no hyphens, max 24 chars)
 
 **Hetzner:**
+
 - Use hyphen-separated lowercase
 - Include datacenter location: `fsn1`, `nbg1`, `hel1`
 - Pattern: `{project}-{env}-{resource}-{location}`
@@ -668,6 +685,7 @@ module "database" {
 ```
 
 **Benefits:**
+
 - Independent versioning per module
 - Easier testing and reuse
 - Clear dependency graph
@@ -678,6 +696,7 @@ module "database" {
 ### Secrets Management
 
 **Never do this:**
+
 ```hcl
 # BAD: Hardcoded secrets
 variable "db_password" {
@@ -686,6 +705,7 @@ variable "db_password" {
 ```
 
 **Do this:**
+
 ```hcl
 # GOOD: No default, marked sensitive
 variable "db_password" {
@@ -697,6 +717,7 @@ variable "db_password" {
 ```
 
 **Runtime secret injection:**
+
 ```bash
 # From environment
 export TF_VAR_db_password="$(aws secretsmanager get-secret-value --secret-id prod/db/password --query SecretString --output text)"
@@ -709,6 +730,7 @@ terraform apply -var-file=secrets.tfvars
 ### Public Exposure Checks
 
 **Common issues to flag:**
+
 - S3 buckets with public ACLs
 - Security groups with `0.0.0.0/0` on non-standard ports
 - RDS instances with `publicly_accessible = true`
@@ -756,11 +778,13 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "app_data" {
 ### Instance Sizing Guidelines
 
 **Hetzner Cloud (2024 pricing - verify current):**
+
 - CX22 (2 vCPU, 4GB RAM): ~$5.83/month - Good for small apps
 - CX32 (4 vCPU, 8GB RAM): ~$11.66/month - Medium workloads
 - CX42 (8 vCPU, 16GB RAM): ~$23.33/month - Larger workloads
 
 **AWS EC2 (us-east-1, on-demand 2024 pricing - verify current):**
+
 - t3.micro (2 vCPU, 1GB RAM): ~$7.52/month
 - t3.small (2 vCPU, 2GB RAM): ~$15.04/month
 - t3.medium (2 vCPU, 4GB RAM): ~$30.08/month
@@ -786,6 +810,7 @@ variable "instance_type" {
 ### Resource Cleanup Patterns
 
 **Auto-termination for dev environments:**
+
 ```hcl
 resource "aws_instance" "dev_server" {
   count = var.environment == "dev" ? var.instance_count : 0
@@ -805,6 +830,7 @@ resource "aws_instance" "dev_server" {
 ## 12. Code Review Checklist (For SRE Agent)
 
 ### Security
+
 - [ ] No hardcoded secrets in variables
 - [ ] Sensitive variables marked with `sensitive = true`
 - [ ] S3 buckets have public access blocked (unless explicitly required)
@@ -814,6 +840,7 @@ resource "aws_instance" "dev_server" {
 - [ ] Encryption enabled for storage resources
 
 ### Cost
+
 - [ ] Instance types appropriate for environment (t3.micro for dev, not c6i.8xlarge)
 - [ ] Dev/staging resources have auto-shutdown tags
 - [ ] No unused Elastic IPs
@@ -821,6 +848,7 @@ resource "aws_instance" "dev_server" {
 - [ ] Reserved instances or Savings Plans considered for prod
 
 ### Best Practices
+
 - [ ] All variables have `description` and `type`
 - [ ] All outputs have `description`
 - [ ] Provider versions pinned with `~>` constraint
@@ -832,6 +860,7 @@ resource "aws_instance" "dev_server" {
 - [ ] `.terraform.lock.hcl` committed
 
 ### Structure
+
 - [ ] Files split logically (network.tf, compute.tf) if > 300 lines
 - [ ] Nested modules in `modules/` directory
 - [ ] Each module has `variables.tf`, `outputs.tf`, `README.md`
@@ -842,6 +871,7 @@ resource "aws_instance" "dev_server" {
 This research synthesized information from:
 
 ### HashiCorp Official Documentation
+
 - [Standard Module Structure](https://developer.hashicorp.com/terraform/language/modules/develop/structure)
 - [Style Guide](https://developer.hashicorp.com/terraform/language/style)
 - [Module Creation Pattern](https://developer.hashicorp.com/terraform/tutorials/modules/pattern-module-creation)
@@ -855,12 +885,14 @@ This research synthesized information from:
 - [Workspace Best Practices](https://developer.hashicorp.com/terraform/cloud-docs/workspaces/best-practices)
 
 ### Cloud Provider Best Practices
+
 - [AWS Terraform Best Practices - Code Structure](https://docs.aws.amazon.com/prescriptive-guidance/latest/terraform-aws-provider-best-practices/structure.html)
 - [AWS Terraform Best Practices - Backend](https://docs.aws.amazon.com/prescriptive-guidance/latest/terraform-aws-provider-best-practices/backend.html)
 - [AWS Terraform Best Practices - Version Management](https://docs.aws.amazon.com/prescriptive-guidance/latest/terraform-aws-provider-best-practices/version.html)
 - [Google Cloud Terraform Best Practices](https://cloud.google.com/docs/terraform/best-practices/general-style-structure)
 
 ### Community Resources
+
 - [Terraform Best Practices - Naming](https://www.terraform-best-practices.com/naming)
 - [Terraform Best Practices - Code Structure](https://www.terraform-best-practices.com/code-structure)
 - [Spacelift - Terraform Best Practices](https://spacelift.io/blog/terraform-best-practices)
@@ -892,6 +924,7 @@ This research synthesized information from:
 - [AWS DevOps Blog - Managing Terraform State Files](https://aws.amazon.com/blogs/devops/best-practices-for-managing-terraform-state-files-in-aws-ci-cd-pipeline/)
 
 ### Tooling and Utilities
+
 - [Scalr - Terraform Provider Requirements](https://scalr.com/learning-center/terraform-provider-requirements-foundations-for-reproducible-infrastructure/)
 - [Scalr - Terraform Modules Explained](https://scalr.com/learning-center/terraform-modules-explained/)
 - [Compile N Run - Terraform Project Structure](https://www.compilenrun.com/docs/devops/terraform/terraform-best-practices/terraform-project-structure/)

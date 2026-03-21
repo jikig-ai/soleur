@@ -13,12 +13,14 @@ date: 2026-03-19
 **Research sources:** Bluesky AT Protocol docs, LinkedIn Posts API (v2026-03), project learnings (CLA push rejection, security hook, env indirection, bun test segfault), codebase analysis of all 5 target files
 
 ### Key Improvements
+
 1. **Bluesky URLs are NOT clickable without facets** -- `bsky-community.sh` does not parse or attach facets. URLs in posts will render as plain text. Documented as known limitation with future follow-up.
 2. **LinkedIn `w_organization_social` scope required** -- the authenticated member must also hold Super Admin or Content Admin role on the company page. Added pre-flight validation guidance.
 3. **Workflow files cannot be edited via Edit tool** -- `security_reminder_hook` blocks it. Implementation must use `sed` via Bash for `.github/workflows/*.yml` changes.
 4. **LinkedIn API version deprecation cadence** -- version `202503` already sunset. The existing `LINKEDIN_API_VERSION="202602"` in `linkedin-community.sh` is current but needs monitoring.
 
 ### New Considerations Discovered
+
 - Bluesky rich text facets (byte-offset link annotations) are required for clickable URLs -- bare URLs display as plain text
 - LinkedIn `require_credentials()` in `linkedin-community.sh` currently requires `LINKEDIN_PERSON_URN` even for org posting -- the `--author` override must not bypass this check, but the function should accept either person URN or org ID
 - The `BSKY_ALLOW_POST` safety guard in `bsky-community.sh` must be set to `"true"` in the workflow, matching the existing `X_ALLOW_POST` pattern
@@ -77,6 +79,7 @@ BSKY_SCRIPT="$REPO_ROOT/plugins/soleur/skills/community/scripts/bsky-community.s
 **1.3 Add `post_bluesky()` function** (after the X/Twitter section, ~line 307)
 
 Follow the `post_x_thread` pattern:
+
 - Check `BSKY_HANDLE` and `BSKY_APP_PASSWORD` env vars; if missing, warn and `return 0` (graceful skip)
 - Extract `## Bluesky` section content from the content file
 - If empty, warn and skip
@@ -102,6 +105,7 @@ Bluesky measures text length in graphemes (Unicode grapheme clusters). The `bsky
 **1.4 Add `create_bluesky_fallback_issue()` function** (near other fallback functions)
 
 Follow the `create_x_fallback_issue` pattern:
+
 - Extract Bluesky section content
 - Create dedup issue with title `[Content Publisher] Bluesky API failed -- manual posting required for $CASE_NAME`
 - Body includes the content for manual posting at `https://bsky.app`
@@ -146,6 +150,7 @@ The existing `post_linkedin()` function (lines 327-349) calls `linkedin-communit
 **Option A (Recommended): Add `--author` flag to `linkedin-community.sh`**
 
 Add an optional `--author` parameter to `cmd_post_content()` in `linkedin-community.sh` that overrides the default `LINKEDIN_PERSON_URN` author. The content-publisher calls:
+
 - Personal: `bash "$LINKEDIN_SCRIPT" post-content --text "$content"` (existing, uses LINKEDIN_PERSON_URN)
 - Company: `bash "$LINKEDIN_SCRIPT" post-content --text "$content" --author "urn:li:organization:${LINKEDIN_ORG_ID}"` (new)
 
@@ -160,6 +165,7 @@ Duplicate the function with a different author. More code, same outcome.
 **2.1 Update `linkedin-community.sh` `cmd_post_content()`** to accept `--author` flag
 
 In the argument parsing loop (~line 234), add:
+
 ```bash
 --author)
   author_override="${2:-}"
@@ -177,6 +183,7 @@ Use `local author="${author_override:-$LINKEDIN_PERSON_URN}"` when building the 
 
 **API Confirmation (from LinkedIn Posts API docs, v2026-03):**
 The LinkedIn Posts API (`POST https://api.linkedin.com/rest/posts`) uses the same endpoint and request body structure for both person and organization posting. The only difference is the `author` field:
+
 - Person: `"author": "urn:li:person:{id}"`
 - Organization: `"author": "urn:li:organization:{id}"`
 
@@ -223,12 +230,15 @@ post_linkedin_company() {
 **2.3 Update `linkedin-company` case in main dispatch** (line 477-478)
 
 Change from:
+
 ```bash
 linkedin-company)
   post_linkedin "$file" "LinkedIn Company Page" || file_failures=1
   ;;
 ```
+
 To:
+
 ```bash
 linkedin-company)
   post_linkedin_company "$file" || file_failures=1
@@ -267,6 +277,7 @@ linkedin-company)
 **3.3 Update Phase 9 Step 3** (channels field logic)
 
 Update the channel determination:
+
 - If Discord was posted successfully in Phase 8: set `channels: x, bluesky, linkedin-company`
 - If Discord was skipped/failed: set `channels: discord, x, bluesky, linkedin-company`
 
@@ -304,10 +315,13 @@ Update the headless `channels` default from `discord, x` to `discord, x, bluesky
 **4.1 `scheduled-content-generator.yml` -- Update channels** (line 103)
 
 Change:
+
 ```yaml
 - channels: discord, x
 ```
+
 To:
+
 ```yaml
 - channels: discord, x, bluesky, linkedin-company
 ```
@@ -317,6 +331,7 @@ To:
 **4.2 `scheduled-content-publisher.yml` -- Pass secrets** (in the `Publish content` step env block, ~line 50-61)
 
 Add:
+
 ```yaml
 BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
 BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
@@ -574,9 +589,9 @@ After merging this PR, create these tracking issues:
 
 ### External References
 
-- Bluesky AT Protocol `com.atproto.repo.createRecord`: https://docs.bsky.app/docs/api/com-atproto-repo-create-record
-- Bluesky post creation guide (facets, embeds): https://docs.bsky.app/docs/advanced-guides/posts
-- Bluesky rich text facets: https://docs.bsky.app/docs/advanced-guides/post-richtext
-- LinkedIn Posts API (v2026-03): https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api?view=li-lms-2026-03
+- Bluesky AT Protocol `com.atproto.repo.createRecord`: <https://docs.bsky.app/docs/api/com-atproto-repo-create-record>
+- Bluesky post creation guide (facets, embeds): <https://docs.bsky.app/docs/advanced-guides/posts>
+- Bluesky rich text facets: <https://docs.bsky.app/docs/advanced-guides/post-richtext>
+- LinkedIn Posts API (v2026-03): <https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api?view=li-lms-2026-03>
 - LinkedIn organization URN format: `urn:li:organization:{id}`
 - LinkedIn API permissions: `w_organization_social` scope + Super Admin/Content Admin role required

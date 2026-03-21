@@ -14,15 +14,19 @@ The fix logic also lives in a dual-use skill (`soleur:fix-issue`) that works bot
 ## Why This Approach
 
 ### Minimal viable scope
+
 Phase 2 is deliberately narrow: 1 issue per run, single-file fixes only, prompt-enforced constraints, human merge approval required. This validates the concept before investing in mechanical enforcement or PAT-based CI integration.
 
 ### Use existing labels instead of new taxonomy
+
 The original spec called for `agent/fixable` + `severity/minor` labels, but the deployed Phase 1 triage produces `priority/*` + `type/*` + `domain/*`. Rather than extending triage (creating a dependency), we trigger on `priority/p3-low` + `type/bug` — labels that already exist.
 
 ### Accept GITHUB_TOKEN limitation
+
 PRs created by `GITHUB_TOKEN` don't trigger `pull_request` events, so `claude-code-review.yml` won't run on bot PRs. We accept this because the human reviewer is the real safety net — no PR merges without human approval. PAT-based CI triggering can be added later if needed.
 
 ### Thin skill over pipeline reuse
+
 `one-shot` is a 10-step interactive pipeline with Ralph Loop, plan approval, browser test, and feature video. These interactive gates are valuable for feature development but pure overhead for a single-file bug fix. A thin `soleur:fix-issue` skill does just: read issue → create branch → fix → commit → push → open PR.
 
 ## Key Decisions
@@ -62,6 +66,7 @@ PRs created by `GITHUB_TOKEN` don't trigger `pull_request` events, so `claude-co
 ### Prompt Constraints (Sharp Edges)
 
 The agent prompt must include:
+
 - Single-file changes only — do not edit more than one file
 - No dependency updates (Gemfile, package.json, etc.)
 - No schema/migration changes

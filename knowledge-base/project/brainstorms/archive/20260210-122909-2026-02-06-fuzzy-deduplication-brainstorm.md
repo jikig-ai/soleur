@@ -20,12 +20,14 @@ Enhance the `/sync` command to detect **near-duplicate** entries, not just exact
 **Decision:** Use Jaccard similarity first, Claude embeddings for candidates above a low threshold.
 
 **Rationale:**
+
 - String similarity catches obvious textual variations cheaply (zero API cost)
 - Embeddings handle semantic duplicates that string matching misses
 - Cost-efficient: only call embedding API for ~10-20% of comparisons
 - No new dependencies - Claude API already required for the agent
 
 **Alternatives considered:**
+
 - Embeddings-first: More accurate but slower and costly for large knowledge-bases
 - String-only: Fast but misses semantic duplicates ("use const" vs "prefer const over let")
 
@@ -34,6 +36,7 @@ Enhance the `/sync` command to detect **near-duplicate** entries, not just exact
 **Decision:** Show clusters of similar items together in the review phase.
 
 **Rationale:**
+
 - Natural mental model for users (see all related items at once)
 - Enables "merge" action that combines similar rules
 - Fits the existing review flow (Phase 2 of /sync)
@@ -43,6 +46,7 @@ Enhance the `/sync` command to detect **near-duplicate** entries, not just exact
 **Decision:** CLI flag `--similarity-threshold 0.8` with sensible default.
 
 **Rationale:**
+
 - Different projects have different tolerance for "similar"
 - Allows tuning without code changes
 - Default 0.8 works for most cases (from testing)
@@ -52,6 +56,7 @@ Enhance the `/sync` command to detect **near-duplicate** entries, not just exact
 **Decision:** Detect duplicates within existing knowledge-base entries too.
 
 **Rationale:**
+
 - Knowledge-base accumulates cruft over time
 - Users want to clean up existing duplicates, not just prevent new ones
 - Adds modest complexity but high value

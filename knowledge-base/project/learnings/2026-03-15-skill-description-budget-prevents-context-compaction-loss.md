@@ -11,17 +11,20 @@ The plugin had grown to 58 skills (2,729 description words / ~3.6k tokens) plus 
 Two-pronged approach: reduce metadata footprint and enforce a budget.
 
 **Prong 1: Trim descriptions (2,729 -> 1,789 words, 34% reduction)**
+
 - Removed `Triggers on "..."` phrases from 29 of 58 skills (~435 words saved). The model infers intent from skill name + core description without explicit trigger keywords.
 - Shortened verbose restatements where the skill name already communicates intent.
 - Preserved routing-critical keywords and third-person voice convention.
 
 **Prong 2: Enforce budget via test**
+
 - Added `SKILL_DESCRIPTION_WORD_BUDGET = 1800` ceiling in `components.test.ts`.
 - Per-skill `SKILL_DESCRIPTION_CHAR_LIMIT = 1024` test.
 - Budget test includes diagnostic output listing top 5 offenders on failure.
 - Test runs in CI on every commit -- budget violations are caught before merge.
 
 **What was NOT needed:**
+
 - A separate shell script (`verify-skills.sh`) was initially created but deleted after 4 review agents identified it as redundant with the TypeScript tests. The TS tests use a proper YAML parser; the shell script used fragile sed-based extraction.
 
 ## Key Insight
@@ -49,5 +52,6 @@ This is the same class of problem solved for agent descriptions (2026-02-20): st
 - GitHub issue: #618
 
 ## Tags
+
 category: performance-issues
 module: plugin-loader

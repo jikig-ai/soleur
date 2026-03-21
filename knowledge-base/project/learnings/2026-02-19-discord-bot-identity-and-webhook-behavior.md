@@ -30,9 +30,11 @@ During Discord community setup, several identity-related issues surfaced:
 ## Solution
 
 ### Avatar sizing
+
 Generate a 512x512 PNG with padding inside the gold ring so Discord's circular crop doesn't clip borders. Saved as `plugins/soleur/docs/images/logo-mark-512.png`.
 
 ### Update both bot AND webhook
+
 Bot user and webhook identities must be updated separately:
 
 ```bash
@@ -47,10 +49,12 @@ curl -X PATCH https://discord.com/api/webhooks/{id}/{token} \
 ```
 
 ### Content edits vs identity changes
+
 - **Content only**: `PATCH /webhooks/{id}/{token}/messages/{msg_id}` -- identity unchanged
 - **Identity change**: Must `DELETE` then re-`POST` the message
 
 ### Consistent identity across webhooks
+
 Use bot token with Manage Webhooks permission to list and update all guild webhooks:
 
 ```bash

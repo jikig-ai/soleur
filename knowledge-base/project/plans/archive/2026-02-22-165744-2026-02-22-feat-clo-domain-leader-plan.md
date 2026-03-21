@@ -25,12 +25,14 @@ Create `agents/legal/clo.md` following the COO 3-phase pattern (Assess, Recommen
 Follow the COO pattern (lightweight orchestrator with 2 specialists):
 
 **Phase 1 -- Assess:**
+
 - Check for existing legal documents in `docs/legal/`, `knowledge-base/`, or project root
 - Inventory which document types exist (Terms, Privacy, Cookie, GDPR, AUP, DPA, Disclaimer)
 - Report: structured table of legal document health (document type, exists/missing, staleness)
 - Do NOT check cross-document consistency here -- that is the auditor's job. Inventory only.
 
 **Phase 2 -- Recommend and Delegate:**
+
 - Recommend actions based on assessment (missing documents, stale documents, compliance gaps)
 - Prioritize by legal risk and compliance urgency, then by impact
 
@@ -44,6 +46,7 @@ Follow the COO pattern (lightweight orchestrator with 2 specialists):
 **Common sequential workflow:** audit (legal-compliance-auditor) -> generate/fix (legal-document-generator) -> re-audit (legal-compliance-auditor). Many tasks only need 1 agent -- do not force the full pipeline.
 
 **Phase 3 -- Sharp Edges:**
+
 - Defer technical architecture decisions to the CTO
 - Do not provide legal advice -- all output is draft requiring professional review
 - When assessing features that cross domains (e.g., data processing with infrastructure), flag cross-domain implications but defer non-legal concerns to respective leaders
@@ -63,6 +66,7 @@ Note: The brainstorm comment at line 61 says "consider table-driven refactor at 
 ### Sibling Agent Disambiguation
 
 Update descriptions of existing legal agents to append a CLO cross-reference:
+
 - legal-document-generator: append "; use clo for cross-cutting legal strategy and multi-agent coordination"
 - legal-compliance-auditor: append "; use clo for cross-cutting legal strategy and multi-agent coordination"
 

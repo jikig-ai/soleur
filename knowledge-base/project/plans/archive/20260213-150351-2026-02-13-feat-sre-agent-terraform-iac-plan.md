@@ -36,15 +36,18 @@ Name: `soleur:engineering:infra:terraform-architect`
 These are the non-obvious instructions worth embedding. Everything else Claude already knows from training data.
 
 **Hetzner-specific:**
+
 - Always attach `hcloud_firewall` + `hcloud_firewall_attachment` to servers (never naked servers)
 - Hetzner Object Storage backend requires `skip_credentials_validation`, `skip_metadata_api_check`, `skip_region_validation`, `skip_requesting_account_id`, `use_path_style`, `skip_s3_checksum` flags
 - Prefer CAX (ARM) instances for cost optimization; note ARM compatibility requirement
 
 **AWS-specific:**
+
 - Never use default VPC -- always create explicit VPC with public/private subnets
 - Always include `aws_s3_bucket_public_access_block` on every S3 bucket
 
 **Cross-provider:**
+
 - S3 native locking for Terraform 1.10+ (DynamoDB locking deprecated)
 - Generate modular file structure by default: main.tf, variables.tf, outputs.tf, versions.tf
 - Review output format: findings grouped by severity (Critical/High/Medium/Low) with file references and remediation HCL

@@ -22,6 +22,7 @@ Currently, all documents claim consent (Art 6(1)(a)) as the sole lawful basis an
 - **Legitimate interest (Art 6(1)(f))** for HTTP metadata (IP address, referrer URL, subscription timestamp, browser/device info) — automatically collected by Buttondown during subscription
 
 Rationale:
+
 - Mirrors existing legitimate interest patterns in the docs (Plausible Section 4.3, CLA Section 4.5)
 - Eliminates internal inconsistency: same data types should have same legal basis across sections
 - CNIL requires consent to be specific and informed — bundling technical metadata into newsletter consent is the pattern regulators push back on (EDPB Guidelines 05/2020)
@@ -45,7 +46,7 @@ None — all questions resolved during brainstorming.
 
 ## References
 
-- Buttondown privacy policy: https://buttondown.com/legal/privacy
+- Buttondown privacy policy: <https://buttondown.com/legal/privacy>
 - Buttondown features page confirms opt-in tracking: "We don't collect any data about you or your subscribers by default"
 - Existing learnings: `knowledge-base/project/learnings/2026-03-10-first-pii-collection-legal-update-pattern.md`
 - CLO assessment completed 2026-03-18 (recommended split basis)

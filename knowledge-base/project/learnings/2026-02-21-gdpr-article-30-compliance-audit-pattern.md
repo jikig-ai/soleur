@@ -26,6 +26,7 @@ The Article 30(5) SME exemption is narrower than it appears. The CNIL interprets
 Also: legal documents exist in TWO locations in this repo (`docs/legal/` for source markdown and `plugins/soleur/docs/pages/legal/` for docs site Eleventy templates). Both must be updated in sync. The docs site copies are NOT generated from the source -- they are independent files with different frontmatter (Eleventy layout vs. document metadata).
 
 ## Tags
+
 category: integration-issues
 module: legal-agents
 tags: [GDPR, Article-30, CNIL, legal-compliance-auditor, French-law, processing-register]

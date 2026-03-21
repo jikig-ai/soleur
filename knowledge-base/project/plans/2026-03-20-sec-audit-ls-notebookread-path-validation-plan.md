@@ -12,12 +12,14 @@ semver: patch
 **Research sources:** SDK TypeScript API reference (ToolInputSchemas), CWE-22/CWE-59 MITRE documentation, OWASP Path Traversal guidance, 4 project security learnings, PR #884/#725 analysis
 
 ### Key Improvements
+
 1. Resolved parameter name uncertainty -- SDK ToolInputSchemas confirm LS and NotebookRead are NOT in the exported type union, meaning they are internal/undocumented tools whose schemas must be discovered at runtime
 2. Added NotebookEdit path validation as a third tool to address (it has `notebook_path` and is also missing from the checked-tools block)
 3. Added concrete test implementation patterns with extractable `canUseTool` logic for unit testing without SDK dependency
 4. Added OWASP-aligned mitigation strategy: canonicalize-then-allowlist pattern
 
 ### New Considerations Discovered
+
 - The SDK exports `ToolInputSchemas` union type with 24 tool schemas -- `LS` and `NotebookRead` are absent, confirming they are internal tools without exported type definitions
 - `NotebookEdit` (has `notebook_path: string`) is also NOT in the file-tool check block and NOT in SAFE_TOOLS -- it would be denied by the catch-all deny-by-default, but should be explicitly checked for defense-in-depth
 - `TodoRead` is not in the SDK's `ToolInputSchemas` either (only `TodoWriteInput` exists), confirming it has no path parameters
@@ -66,11 +68,13 @@ type ToolInputSchemas =
 ```
 
 This confirms:
+
 - **LS** and **NotebookRead** are internal Claude Code tools without exported schema types
 - Their parameter structures must be discovered empirically (runtime logging or binary inspection)
 - The `canUseTool` callback receives `toolInput: Record<string, unknown>` -- all type information is erased at this boundary
 
 **Known parameter patterns from related tools:**
+
 - `FileReadInput` (Read tool): `{ file_path: string, offset?: number, limit?: number }`
 - `GlobInput` (Glob tool): `{ pattern: string, path?: string }`
 - `NotebookEditInput`: `{ notebook_path: string, cell_id?: string, new_source: string }`
@@ -201,6 +205,7 @@ The SDK's ToolInputSchemas union lists 24 tool types. Cross-referencing against 
 ### Path parameter discovery
 
 The `canUseTool` callback receives `toolInput: Record<string, unknown>`. The path parameter name varies by tool:
+
 - `file_path`: Read, Write, Edit, NotebookRead (probable), NotebookEdit (confirmed)
 - `path`: Glob, Grep, LS (probable)
 - `notebook_path`: NotebookEdit (confirmed)
@@ -244,12 +249,14 @@ if (["LS", "NotebookRead"].includes(toolName) && !filePath) {
 ### Bubblewrap sandbox interaction
 
 The bubblewrap sandbox (layer 1) independently restricts filesystem access via Linux namespaces configured through the `sandbox.filesystem` option:
+
 ```typescript
 filesystem: {
   allowWrite: [workspacePath],
   denyRead: ["/workspaces"],
 }
 ```
+
 The `isPathInWorkspace` check is layer 2 (application-level). Even if layer 2 is bypassed, layer 1 should block access. But defense-in-depth requires both layers to be correct independently.
 
 ### Research Insights: Layer Independence
@@ -376,10 +383,10 @@ Applied: The path parameter name checking is similarly defense-in-depth -- the b
 
 ### External References
 
-- Claude Agent SDK TypeScript v0.2.80 -- ToolInputSchemas type (https://platform.claude.com/docs/en/agent-sdk/typescript#tool-input-types)
-- CWE-22: Improper Limitation of a Pathname to a Restricted Directory (https://cwe.mitre.org/data/definitions/22.html)
-- CWE-59: Improper Link Resolution Before File Access (https://cwe.mitre.org/data/definitions/59.html)
-- OWASP Path Traversal (https://owasp.org/www-community/attacks/Path_Traversal)
+- Claude Agent SDK TypeScript v0.2.80 -- ToolInputSchemas type (<https://platform.claude.com/docs/en/agent-sdk/typescript#tool-input-types>)
+- CWE-22: Improper Limitation of a Pathname to a Restricted Directory (<https://cwe.mitre.org/data/definitions/22.html>)
+- CWE-59: Improper Link Resolution Before File Access (<https://cwe.mitre.org/data/definitions/59.html>)
+- OWASP Path Traversal (<https://owasp.org/www-community/attacks/Path_Traversal>)
 
 ### Related Issues and PRs
 

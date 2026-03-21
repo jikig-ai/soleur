@@ -16,6 +16,7 @@ Extend `review-reminder.yml` to enforce periodic review of strategic knowledge-b
 Strategic documents (brand-guide, business-validation, constitution) go stale without anyone noticing. The Cowork Plugins incident proved this: a competitive threat went undetected for 22 days because `business-validation.md` was never re-reviewed. Downstream agents consume these docs as ground truth and propagate stale information.
 
 A `review-reminder.yml` workflow exists but has three problems:
+
 1. Only scans `knowledge-base/project/learnings/` (misses strategic docs)
 2. Only 3 files use the `next_review` field
 3. **Bug:** Silently skips all overdue documents (only flags docs due in 0-7 days)
@@ -31,6 +32,7 @@ Replace `next_review` with `last_reviewed` + `review_cadence`. Widen scan to all
 ### Bug fix: Overdue documents silently skipped
 
 `.github/workflows/review-reminder.yml:66` has:
+
 ```bash
 if [[ $days_until -lt 0 || $days_until -gt 7 ]]; then
   continue
@@ -38,6 +40,7 @@ fi
 ```
 
 This skips documents where `days_until < 0` (overdue). A document due Feb 15 with a March 1 run gets `-14` and is permanently ignored. The new condition must be:
+
 ```bash
 if [[ $days_until -gt 7 ]]; then
   continue
@@ -52,6 +55,7 @@ Current: `slug=$(basename "$file" .md)` produces `brand-guide` from any path.
 Risk: If `knowledge-base/overview/expenses.md` and `knowledge-base/ops/expenses.md` both have cadence, they'd collide.
 
 Fix: Use relative path from `knowledge-base/`:
+
 ```bash
 slug="${file#knowledge-base/}"  # e.g., "overview/brand-guide.md"
 slug="${slug%.md}"               # e.g., "overview/brand-guide"
@@ -62,6 +66,7 @@ Issue title becomes: `Review Reminder: overview/brand-guide`
 ### Cadence computation
 
 Replace `next_review` parsing with date arithmetic:
+
 ```bash
 # Extract fields
 review_cadence=$(sed -n '/^---$/,/^---$/{ /^review_cadence:/{ s/.*: *//; p; q; } }' "$file")

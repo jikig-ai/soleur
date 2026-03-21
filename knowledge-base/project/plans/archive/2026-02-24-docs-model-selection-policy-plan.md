@@ -29,10 +29,13 @@ Formalize the implicit model selection policy (`model: inherit` everywhere) into
 - No current justified exceptions
 
 Also update line 101 in the Agent Compliance Checklist from:
+
 ```
 - [ ] `model:` field present (`inherit`, `haiku`, `sonnet`, or `opus`)
 ```
+
 to:
+
 ```
 - [ ] `model: inherit` (see Model Selection Policy; explicit overrides require justification)
 ```

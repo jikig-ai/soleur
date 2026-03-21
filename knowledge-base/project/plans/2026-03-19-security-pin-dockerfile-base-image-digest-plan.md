@@ -13,12 +13,14 @@ date: 2026-03-19
 **Research sources:** Docker official docs (digest pinning), Chainguard Academy (container image digests), Renovate docs (automated digest updates), repo Dockerfile audit, institutional learnings, GitHub issue #794
 
 ### Key Improvements
+
 1. Verified digest format is the multi-arch manifest list digest (not a platform-specific manifest), ensuring correct platform resolution on both amd64 and arm64
 2. Confirmed Bun 1.3.11 aligns with CI-pinned version (via `setup-bun` in `ci.yml`, `scheduled-ship-merge.yml`, `scheduled-bug-fixer.yml`) -- no version skew between build-time and CI
 3. Added Dockerfile comment convention recommendation for long-term maintainability (documenting pinned version alongside digest)
 4. Identified Renovate `docker:pinDigests` preset as future automation path for keeping digests current
 
 ### New Considerations Discovered
+
 - Docker ignores the tag entirely when a digest is present -- the `1.3.11` in `oven/bun:1.3.11@sha256:...` is purely documentary. If someone updates the tag without updating the digest, Docker silently uses the old image. This is a feature (immutability) but could surprise maintainers unfamiliar with the convention.
 - The `oven/bun` image publishes multi-arch manifest lists (amd64 + arm64). Pinning the manifest list digest (as opposed to a platform-specific digest) preserves multi-arch compatibility -- important since CI builds on `ubuntu-latest` (amd64) but local development may use arm64 (Apple Silicon).
 - `apps/web-platform/Dockerfile` has the same vulnerability (`FROM node:22-slim` without digest) -- should be filed as a separate issue.
@@ -37,11 +39,13 @@ The telegram-bridge Dockerfile uses `FROM oven/bun:latest`, a mutable tag that r
 ### Research Insights
 
 **Docker digest behavior (from [Docker Docs](https://docs.docker.com/dhi/core-concepts/digests/)):**
+
 - A digest is a SHA-256 hash of the image manifest content. It is immutable -- if the image content changes, the digest changes.
 - When a `@sha256:...` suffix is present in the FROM line, Docker ignores the tag entirely and pulls by digest only. The tag (`1.3.11`) serves as a human-readable annotation.
 - Multi-arch images have two levels of digests: the manifest list digest (points to the multi-arch index) and per-platform manifest digests. Pinning the manifest list digest preserves multi-arch resolution.
 
 **Version alignment verification:**
+
 - `oven/bun:1.3.11` matches the version pinned in CI via `setup-bun` (confirmed in `ci.yml:19`, `scheduled-ship-merge.yml:44`, `scheduled-bug-fixer.yml:49`)
 - The learning `2026-03-18-bun-test-segfault-missing-deps.md` documents that Bun 1.3.5 segfaults on missing deps -- `1.3.11` is the known-good version already validated across the project
 - No Bun breaking changes between 1.3.5 and 1.3.11 that affect the telegram-bridge runtime
@@ -78,10 +82,12 @@ The digests match, confirming `latest` currently points to `1.3.11`. The `@sha25
 ### Research Insights
 
 **Supply chain context (from [Chainguard Academy](https://edu.chainguard.dev/chainguard/chainguard-images/how-to-use/container-image-digests/)):**
+
 - Tags are mutable pointers -- a registry maintainer (or attacker with push access) can update what a tag points to at any time. Digests are content-addressed and cannot be changed without changing the content itself.
 - The `oven/bun` image is maintained by Oven (the Bun company). While generally trustworthy, pinning removes the trust dependency on their registry access controls and release process.
 
 **Automated digest updates (from [Renovate Docs](https://docs.renovatebot.com/docker/)):**
+
 - Renovate's `docker:pinDigests` preset automatically pins Dockerfile FROM lines to digests and creates PRs when new versions are available. The `:automergeDigest` preset can auto-merge digest-only updates for convenience.
 - This is explicitly listed as a non-goal for this PR but is the recommended follow-up for keeping the digest current without manual lookups.
 
@@ -94,11 +100,13 @@ The digests match, confirming `latest` currently points to `1.3.11`. The `@sha25
 ### `apps/telegram-bridge/Dockerfile` (line 1)
 
 **Before:**
+
 ```dockerfile
 FROM oven/bun:latest
 ```
 
 **After:**
+
 ```dockerfile
 FROM oven/bun:1.3.11@sha256:0733e50325078969732ebe3b15ce4c4be5082f18c4ac1a0f0ca4839c2e4e42a7
 ```
@@ -106,6 +114,7 @@ FROM oven/bun:1.3.11@sha256:0733e50325078969732ebe3b15ce4c4be5082f18c4ac1a0f0ca4
 ### Why version + digest (not digest alone)
 
 The `version@sha256:...` format serves two purposes:
+
 1. **Human readability** -- developers can see at a glance which Bun version the image is based on
 2. **Immutability** -- Docker ignores the tag when a digest is present and pulls by content hash only
 
@@ -114,10 +123,12 @@ This mirrors the `@<sha> # vX.Y.Z` convention used for CI action pinning through
 ### Research Insights
 
 **Best practice confirmation (from [Docker Build Best Practices](https://docs.docker.com/build/building/best-practices/)):**
+
 - Docker's official guidance recommends pinning base images to specific versions rather than `latest`. Adding the digest goes one step further by making the pin content-addressed rather than tag-addressed.
 - The `tag@sha256:digest` format is the recommended approach, combining human readability with cryptographic immutability.
 
 **Edge case -- digest vs tag mismatch:**
+
 - If a maintainer updates the tag (e.g., changes `1.3.11` to `1.3.12`) without updating the digest, Docker silently uses the old image (digest wins). This is correct behavior -- the digest is the source of truth. But it could confuse someone reading the Dockerfile who assumes the tag is authoritative.
 - Mitigation: when updating the base image, always update both tag and digest together. Renovate handles this automatically.
 

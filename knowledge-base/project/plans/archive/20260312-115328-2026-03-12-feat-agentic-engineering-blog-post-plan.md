@@ -49,6 +49,7 @@ The "agentic engineering" content space is crowded with definitions but thin on 
 The plateau problem: engineering teams adopt AI tools that stop getting better after week two. Session 100 starts from the same blank slate as session 1. The tools solved autocomplete. They did not solve institutional memory.
 
 Frame the eras by **what compounds** (SpecFlow insight):
+
 - Era 1 (vibe coding): Nothing compounds. Every session starts from zero.
 - Era 2 (agentic engineering): Specs and engineering knowledge compound.
 - Era 3 (compound engineering done right): Everything compounds — rules, agents, workflows, and cross-domain knowledge.
@@ -62,6 +63,7 @@ Combine Eras 1 and 2 into a single landscape section. Brief, not a history lesso
 **Vibe coding (2024-2025):** Karpathy coined the term Feb 2025. Ad-hoc prompting, autocomplete, conversation-as-IDE. Works for prototypes. Breaks at scale — no memory, no specs, no quality gates.
 
 **Agentic engineering (2025-2026):** Specs, structured workflows, agent orchestration. The market split into two approaches:
+
 - **Spec-driven:** Spec Kit (GitHub), OpenSpec, Kiro (AWS), Tessl — capture intent before coding
 - **Compound engineering:** Every's Compound Engineering — plan/work/assess/compound, captures learnings
 
@@ -160,6 +162,7 @@ Review the existing article at `plugins/soleur/docs/blog/what-is-company-as-a-se
 - Issue: #548 | Draft PR: #547
 
 ### External Sources (for fact-checking)
+
 - Spec Kit: `github.com/github/spec-kit`
 - OpenSpec: `github.com/Fission-AI/OpenSpec`
 - Kiro: `kiro.dev`

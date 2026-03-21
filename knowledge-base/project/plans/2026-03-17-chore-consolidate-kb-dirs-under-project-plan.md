@@ -75,6 +75,7 @@ No filename collisions.
 #### A4: Merge root specs/ → project/specs/
 
 Two directories overlap (`feat-plausible-goals` and `feat-weekly-analytics-improvements`):
+
 - Root has `session-state.md`, project/ has `tasks.md` — complementary files, merge via individual file moves.
 
 ```text

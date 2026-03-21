@@ -18,6 +18,7 @@ Three independent code reviewers (security, quality, simplicity) all converged o
 Consolidate into a single parameterized `install_tool()` function that takes the tool name as an argument and passes it directly to `apt-get install -y "$tool"` or `brew install "$tool"`. Extract post-install verification into `verify_install()`.
 
 Before (two functions, 42 lines):
+
 ```bash
 install_ffmpeg() {
   case "$OS" in
@@ -36,6 +37,7 @@ install_rclone() {
 ```
 
 After (one function, 16 lines):
+
 ```bash
 install_tool() {
   local tool="$1"
@@ -54,5 +56,6 @@ The refactor reduced the script from 120 to 103 lines and eliminated the functio
 When multiple shell install functions differ only in the package name, parameterize the name instead of duplicating the function. Package managers (`apt-get`, `brew`) already accept the tool name as an argument — the function structure maps 1:1 to the parameter. The test for this: if a new tool needs the same install path, does it require a new function (bad) or a new call site (good)?
 
 ## Tags
+
 category: code-quality
 module: feature-video

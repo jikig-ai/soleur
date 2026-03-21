@@ -12,11 +12,13 @@ date: 2026-03-02
 **Sections enhanced:** 4 (Acceptance Criteria, Context, Test Scenarios, Non-goals)
 
 ### Key Improvements
+
 1. Identified two additional files with "draft" references that must NOT be changed (legal-generate skill, CLO agent) -- added to explicit preserve list
 2. Corrected acceptance criteria: the legal-document-generator agent does NOT need changes (its description and DRAFT template are about newly generated docs, not the project's own reviewed docs)
 3. Added verification commands from institutional learnings (sed-silent-failure pattern, dual-location sync pattern)
 
 ### Applicable Learnings
+
 - `2026-03-02-governing-law-jurisdiction-change-pattern.md`: Dual-location sync is mechanical but critical; grep verification after editing catches missed references
 - `2026-02-14-sed-insertion-fails-silently-on-missing-pattern.md`: Use `grep -rL` after batch operations to verify changes landed
 - `2026-02-20-dogfood-legal-agents-cross-document-consistency.md`: The DPA-to-DPD rename is a known historical event; the filename discrepancy is documented

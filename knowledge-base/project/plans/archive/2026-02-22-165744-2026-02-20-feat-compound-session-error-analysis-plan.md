@@ -17,6 +17,7 @@ Extend the `/soleur:compound` skill to scan the conversation history for ALL err
 Compound captures the problem that was intentionally solved (root cause, solution, prevention). Step 2 extracts "investigation attempts: what didn't work and why" -- but only for the TARGET problem.
 
 Session-level errors go undocumented:
+
 - Bash commands that failed (wrong flags, missing tools, path errors)
 - Wrong hypotheses investigated and abandoned
 - Process mistakes (editing wrong file, wrong branch, forgetting to stage)
@@ -66,6 +67,7 @@ Add after "What Didn't Work" and before "Solution", using the same bold-heading 
 **3. `plugins/soleur/commands/soleur/compound.md`** -- Add bullet to "What It Captures"
 
 Add to the existing bullet list at line 209:
+
 ```
 - **Session errors**: Process mistakes, failed commands, and wrong approaches from the session
 ```

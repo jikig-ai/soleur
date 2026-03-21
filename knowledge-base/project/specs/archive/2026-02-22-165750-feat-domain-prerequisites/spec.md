@@ -7,6 +7,7 @@
 ## Problem Statement
 
 The Soleur plugin cannot add new domains (like Support) because:
+
 - Agent description token budget is at 2,497/2,500 words (3 words from ceiling)
 - Brainstorm Phase 0.5 routing requires ~35 lines of edits per new domain (unmaintainable at 7+ domains)
 - plugin.json description is stale (missing Sales domain)

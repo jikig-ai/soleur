@@ -13,6 +13,7 @@ date: 2026-02-22
 **Research sources:** codebase grep analysis, plugin loader learnings, brand-guide count locations, community-manager agent dependency analysis
 
 ### Key Improvements
+
 1. Found 2 additional skill count locations the original plan missed: `knowledge-base/overview/brand-guide.md` (lines 21, 51)
 2. Found `skills.js` category comment line needs updating (line 7)
 3. Identified 3 exact lines in community-manager agent needing update (17, 19, 209) with specific replacement text
@@ -39,11 +40,13 @@ Both skills were created as proper `skills/<name>/SKILL.md` files and are correc
 ### Research Insights
 
 **Plugin loader behavior (from learning `2026-02-12-plugin-loader-agent-vs-skill-recursion.md`):**
+
 - Skills loader discovers exactly `skills/<name>/SKILL.md` at one level of nesting
 - Removing the SKILL.md file is sufficient to make a skill invisible -- the directory and its contents can remain
 - This is the inverse of the v3.0.3 fix which moved files INTO skills directories to hide them
 
 **Dependency analysis (verified by grep):**
+
 - `soleur:report-bug`: Zero references anywhere in the codebase outside its own SKILL.md and docs/changelog
 - `soleur:community`: Referenced only in its own SKILL.md and in the community-manager agent (3 lines referencing `/soleur:community setup`)
 - Neither is used in any Skill tool invocation by any other skill or agent
@@ -119,31 +122,37 @@ Remove both entries from `plugins/soleur/docs/_data/skills.js` SKILL_CATEGORIES 
 ### Step 6: Update README.md skill table and counts
 
 Remove both entries from the skills table in `plugins/soleur/README.md`:
+
 - `community` row
 - `report-bug` row
 
 Update the skill count from 52 to 50:
+
 - Line 44: `| Skills | 52 |` -> `| Skills | 50 |`
 
 ### Step 7: Update plugin.json description
 
 Update the skill count in `plugins/soleur/.claude-plugin/plugin.json` description field:
+
 - Line 4: `"52 skills"` -> `"50 skills"`
 
 ### Step 8: Update root README.md
 
 Update the skill count text in root `README.md`:
+
 - Line 14: `"52 skills"` -> `"50 skills"`
 
 ### Step 9: Update brand guide
 
 Update the skill count in `knowledge-base/overview/brand-guide.md`:
+
 - Line 21: `"52 skills"` -> `"50 skills"`
 - Line 51: `"52 skills"` -> `"50 skills"`
 
 ### Step 10: Version bump (PATCH)
 
 Update the versioning triad:
+
 - `plugins/soleur/.claude-plugin/plugin.json` -- bump version (3.0.3 -> 3.0.4)
 - `plugins/soleur/CHANGELOG.md` -- document removal under `### Removed`
 - `plugins/soleur/README.md` -- verify counts match
@@ -181,10 +190,12 @@ Expected results: grep for removed skills returns only CHANGELOG.md entries (his
 ## Files Modified
 
 **Deleted (2 files + 1 directory):**
+
 - `plugins/soleur/skills/community/SKILL.md`
 - `plugins/soleur/skills/report-bug/` (entire directory)
 
 **Edited (7 files):**
+
 - `plugins/soleur/agents/support/community-manager.md` -- remove `/soleur:community setup` references (3 lines)
 - `plugins/soleur/docs/_data/skills.js` -- remove 2 skill category entries, update comment count
 - `plugins/soleur/README.md` -- remove 2 skill table rows, update count from 52 to 50

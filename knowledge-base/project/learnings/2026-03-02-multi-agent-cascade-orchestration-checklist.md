@@ -22,6 +22,7 @@ Three critical items must be verified for any agent-to-agent cascade:
 3. **Every specialist must produce a writable artifact**: If a specialist's task is read-only analysis ("flag stale pages"), it has no output for the Cascade Results table. Either give it a concrete write destination (`knowledge-base/marketing/seo-refresh-queue.md`) or explicitly state the output is ephemeral.
 
 Additional review-caught improvements:
+
 - Restrict sub-agent tool access (remove Bash/WebFetch from specialists that only need Read/Write/Edit/Glob/Grep)
 - Add explicit Phase 1→2 handoff signal so the agent confirms disk write before cascading
 - Specify return contract format precisely (comma-separated paths, not free-form)

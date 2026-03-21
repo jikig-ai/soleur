@@ -52,6 +52,7 @@ Trade-off: agents installed at Phase 1.5 don't participate in the current `/plan
 ## Solution
 
 Created a 3-tier architecture:
+
 1. `stack:` frontmatter field on agents for gap detection
 2. `agent-finder` agent that queries 3 unauthenticated registries in parallel
 3. Phase 1.5 in `/plan` that detects stacks, checks gaps, and conditionally spawns agent-finder

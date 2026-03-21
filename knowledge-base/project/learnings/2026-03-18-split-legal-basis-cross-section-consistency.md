@@ -23,5 +23,6 @@ Each exists in 2 locations (docs/legal/ + plugins/soleur/docs/pages/legal/) exce
 When a plan review catches missing sections, the issue is usually that the planner enumerated only the sections that directly mention "lawful basis" and missed secondary sections (retention, processor descriptions, rights) that reference the same data types. A legal basis split is a cross-cutting change — grep for the processing activity name (e.g., "Buttondown", "newsletter") across all legal docs to find every reference, not just the ones with "legal basis" or "consent" in them.
 
 ## Tags
+
 category: legal-compliance
 module: legal-docs

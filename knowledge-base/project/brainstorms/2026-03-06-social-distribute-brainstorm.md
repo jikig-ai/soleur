@@ -43,6 +43,7 @@ Approach A was selected because: solo founder, low article cadence, YAGNI. If a 
 ### Skill design
 
 The `social-distribute` skill will:
+
 - Read a published blog article (by path or URL)
 - Read the content repurposing table from content-strategy.md
 - Read brand guide channel notes for each target platform

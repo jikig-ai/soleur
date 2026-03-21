@@ -35,5 +35,6 @@ For errors needing client-side UX routing (like `KeyInvalidError` -> `/setup-key
 2. **`npm install` required in worktree** -- worktree didn't have `node_modules`. Tests failed until dependencies were installed.
 
 ## Tags
+
 category: security-issues
 module: web-platform

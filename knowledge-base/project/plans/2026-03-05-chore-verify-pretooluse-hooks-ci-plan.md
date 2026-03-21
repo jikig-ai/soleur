@@ -13,6 +13,7 @@ deepened: 2026-03-05
 **Research sources:** Claude Code hooks reference (code.claude.com), claude-code-action source (setup-claude-code-settings.ts, action.yml), 6 institutional learnings, SpecFlow analysis
 
 ### Key Improvements
+
 1. Strong hypothesis formed: hooks likely DO fire because Claude Code loads project `.claude/settings.json` independently of the action's `settings` input -- the action only writes to `~/.claude/settings.json` (user-level), not project-level
 2. Detached HEAD bypass identified as the highest-risk edge case -- Guard 1 returns `HEAD` (not `main`) in detached state, silently passing
 3. Test workflow design refined: must use `actions/checkout` with `ref: main` to get a real branch checkout, not detached HEAD
@@ -20,6 +21,7 @@ deepened: 2026-03-05
 5. `PermissionRequest` hooks confirmed NOT to fire in non-interactive mode, but `PreToolUse` hooks are documented as firing normally
 
 ### New Considerations Discovered
+
 - The competitive-analysis workflow already commits directly to main with a prompt override ("AGENTS.md rule does NOT apply here") -- if Guard 1 fires, it would block this workflow's push unless the agent is in detached HEAD state
 - Hook scripts must be executable (`chmod +x`) -- the CI runner may not preserve execute bits from the Git checkout; verify with `ls -la .claude/hooks/`
 - All matching hooks for the same matcher run in parallel, and identical commands are deduplicated
@@ -79,6 +81,7 @@ Create `.github/workflows/test-pretooluse-hooks.yml` -- a `workflow_dispatch`-on
 #### Research Insights: Workflow Design
 
 **Best Practices:**
+
 - Use `workflow_dispatch` only (no schedule) to avoid unnecessary recurring costs
 - Pin `actions/checkout` and `claude-code-action` to exact SHAs matching existing workflows
 - Include `id-token: write` in permissions (required for OIDC auth)
@@ -86,11 +89,13 @@ Create `.github/workflows/test-pretooluse-hooks.yml` -- a `workflow_dispatch`-on
 - Use `claude-sonnet-4-6` with `--max-turns 15` for cost control
 
 **Performance Considerations:**
+
 - Keep the test prompt deterministic: list exact commands the agent must run in sequence
 - Do NOT use open-ended exploration prompts -- the agent should execute a fixed checklist
 - Include `jq --version` as the first check to verify the dependency
 
 **Edge Cases:**
+
 - **Detached HEAD state**: `actions/checkout` with `fetch-depth: 1` creates a detached HEAD by default. Guard 1 checks `git rev-parse --abbrev-ref HEAD` which returns `HEAD` in detached state, NOT `main`. This means Guard 1 would pass-through even if the agent is on the main commit. Fix: the test must use `actions/checkout` with explicit `ref: main` and then run `git checkout main` to get a real branch checkout.
 - **Execute permission on hooks**: Git stores the execute bit, but `actions/checkout` may not preserve it on all platforms. The test prompt should include `chmod +x .claude/hooks/*.sh` as a safety step, and also check `ls -la .claude/hooks/` to verify permissions.
 - **Plugin loading**: Include `plugin_marketplaces` and `plugins` inputs to match real workflow conditions (hooks fire in the context of plugin-loaded sessions).
@@ -193,6 +198,7 @@ After running the test workflow:
 #### Research Insights: Documentation Pattern
 
 **Best Practices:**
+
 - Create the learning file regardless of outcome -- both "hooks fire" and "hooks don't fire" are valuable institutional knowledge
 - Include the workflow run URL as evidence
 - Tag with `[claude-code-action, hooks, ci, pretooluse]` for future discoverability
@@ -203,6 +209,7 @@ After running the test workflow:
 If hooks don't fire, add lightweight inline checks to the skills that depend on them:
 
 **ship SKILL.md** -- Add before commit phase:
+
 ```bash
 # Fallback branch guard (defense-in-depth when PreToolUse hooks unavailable)
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -212,6 +219,7 @@ fi
 ```
 
 **compound SKILL.md** -- Add before constitution promotion:
+
 ```bash
 # Fallback branch guard
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -221,6 +229,7 @@ fi
 ```
 
 **work SKILL.md** -- Add before first file write:
+
 ```bash
 # Fallback branch guard
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -232,15 +241,18 @@ fi
 #### Research Insights: Fallback Guard Design
 
 **Best Practices:**
+
 - Fallback guards should be defense-in-depth, not replacements for hooks. Even if hooks fire, adding the guards is cheap insurance.
 - Use `exit 2` (not `exit 1`) if the guard is in a script that Claude Code may interpret as a hook output -- but in SKILL.md inline blocks, `exit 1` is correct since these run as regular bash commands.
 - The `$BRANCH = "HEAD"` case (detached HEAD) is ambiguous -- detached HEAD could be on any commit. In CI, it's likely on the main branch tip. Consider adding `|| [ "$BRANCH" = "HEAD" ]` to the guard for CI safety, but this would break legitimate detached-HEAD work locally.
 
 **Edge Cases:**
+
 - `git rev-parse --abbrev-ref HEAD` returns `HEAD` in detached state (not `main`). This is a bypass vector in CI where `actions/checkout` creates detached HEAD. Constitution.md should document this edge case.
 - Skills invoked by competitive-analysis workflow explicitly override the "no commits on main" rule. Fallback guards must check for a `--headless` or `--ci-override` flag to allow this pattern.
 
 **Implementation Details:**
+
 - Consider adding guards even if hooks fire (defense-in-depth principle from constitution.md line 199)
 - The headless mode plan already includes a branch guard for compound (`--headless` aborts on main/master). Align the fallback guard pattern with the headless convention.
 
@@ -253,6 +265,7 @@ The critical unknown: does `claude-code-action` load `.claude/settings.json` fro
 #### Research Insights: Settings Architecture
 
 **Source code analysis of `setup-claude-code-settings.ts`:**
+
 - The action's `settings` input is written to `~/.claude/settings.json` (user-level home directory)
 - The function reads existing user settings, merges with input settings via object spread, then writes back
 - It always forces `enableAllProjectMcpServers: true`
@@ -260,6 +273,7 @@ The critical unknown: does `claude-code-action` load `.claude/settings.json` fro
 
 **Claude Code settings resolution (from docs):**
 Settings load from multiple locations with a merge hierarchy:
+
 1. Managed policy settings (highest priority)
 2. Project `.claude/settings.json` (committed to repo)
 3. Project `.claude/settings.local.json` (gitignored)
@@ -268,11 +282,13 @@ Settings load from multiple locations with a merge hierarchy:
 Since `claude-code-action` only writes to user-level and Claude Code independently loads project-level, hooks defined in project `.claude/settings.json` should load. The action's `settings` input adds to (not replaces) project hooks.
 
 **Environment variables available to hooks:**
+
 - `$CLAUDE_PROJECT_DIR`: project root directory
 - `$CLAUDE_CODE_REMOTE`: set to `"true"` in remote web environments (not set in local CLI)
 - `cwd` field in JSON input: working directory when the hook fired
 
 **References:**
+
 - [Claude Code hooks reference](https://code.claude.com/docs/en/hooks)
 - [Claude Code hooks guide](https://code.claude.com/docs/en/hooks-guide)
 
@@ -283,6 +299,7 @@ All three hooks require `jq` on the runner. `ubuntu-latest` includes `jq` by def
 #### Research Insights
 
 **Best Practices:**
+
 - Always verify `jq` as the first test step before running hook tests
 - The hooks guide recommends: "Install it with `apt-get install jq` (Debian/Ubuntu)" as a fallback
 - Consider adding `which jq` to the prerequisite check for diagnostic output
@@ -294,11 +311,13 @@ GitHub Actions checkout creates a detached HEAD state by default. Guard 1 (block
 #### Research Insights: Checkout Behavior
 
 **Best Practices:**
+
 - Use `ref: main` in `actions/checkout` to get a clean branch checkout
 - After checkout, verify with `git rev-parse --abbrev-ref HEAD` that the result is `main` (not `HEAD`)
 - The `fetch-depth: 1` default is acceptable since Guard 1 only needs the current branch name
 
 **Edge Cases:**
+
 - PR-triggered workflows check out the merge commit, creating a detached HEAD pointing at a temporary merge ref. Guard 1 returns `HEAD` in this case -- it will NOT block commits in PR-context workflows.
 - `workflow_dispatch` on the default branch checks out that branch directly. With `ref: main`, the checkout should produce `main` as the branch name.
 - If the test uses `ref: ${{ github.sha }}`, it creates a detached HEAD. Use `ref: main` for branch-name testing.
@@ -392,10 +411,10 @@ Two hooks match the `Bash` tool (guardrails.sh and pre-merge-rebase.sh). The tes
 
 ### External References
 
-- Claude Code hooks reference: https://code.claude.com/docs/en/hooks
-- Claude Code hooks guide: https://code.claude.com/docs/en/hooks-guide
-- claude-code-action repository: https://github.com/anthropics/claude-code-action
-- claude-code-base-action settings setup: https://github.com/anthropics/claude-code-base-action/blob/main/src/setup-claude-code-settings.ts
+- Claude Code hooks reference: <https://code.claude.com/docs/en/hooks>
+- Claude Code hooks guide: <https://code.claude.com/docs/en/hooks-guide>
+- claude-code-action repository: <https://github.com/anthropics/claude-code-action>
+- claude-code-base-action settings setup: <https://github.com/anthropics/claude-code-base-action/blob/main/src/setup-claude-code-settings.ts>
 
 ### Related Work
 

@@ -17,6 +17,7 @@ Implement the spec artifact system with two-file approach (spec.md + tasks.md) a
 ## Problem Statement
 
 Current workflow lacks:
+
 - Standardized spec format for features
 - Structured task tracking tied to specs
 - Mechanism to detect when implementation diverges from spec
@@ -29,6 +30,7 @@ Current workflow lacks:
 Two files per feature in `knowledge-base/project/specs/<feature-name>/`:
 
 **spec.md** - Pure markdown with FR/TR split:
+
 - Context (optional)
 - Problem Statement
 - Goals / Non-Goals
@@ -37,6 +39,7 @@ Two files per feature in `knowledge-base/project/specs/<feature-name>/`:
 - Constraints (optional)
 
 **tasks.md** - Grouped phases with hierarchical checkboxes:
+
 - Phase 1: Setup
 - Phase 2: Core Implementation
 - Phase 3: Testing & Polish
@@ -48,6 +51,7 @@ Create `plugins/soleur/skills/spec-templates/` with templates for spec.md and ta
 ### 3. Spec Sync Command
 
 Create `soleur:sync-spec` command that:
+
 - Detects divergence between spec and implementation
 - Auto-updates spec to match reality
 - Commits changes with descriptive message
@@ -120,6 +124,7 @@ Provides standardized templates for feature specifications.
 ## Phase 3: Testing & Polish
 - [ ] 3.1 Task description
 ```
+
 ```
 
 ### Phase 2: Spec Sync Command

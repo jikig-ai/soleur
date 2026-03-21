@@ -53,6 +53,7 @@ Created `.github/workflows/scheduled-weekly-analytics.yml`:
 ### 4. Follow-up issues for full operationalization
 
 Filed two GitHub issues to track remaining work:
+
 - **#578:** Configure Plausible dashboard goals (signup conversions, docs engagement, CTA clicks)
 - **#579:** Establish UTM parameter conventions for campaign attribution
 

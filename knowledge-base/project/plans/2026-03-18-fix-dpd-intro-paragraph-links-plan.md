@@ -34,10 +34,12 @@ The correct link patterns already exist in the "Related Documents" footer at the
 ## Problem Statement
 
 **Eleventy source** (`plugins/soleur/docs/pages/legal/data-protection-disclosure.md`, line 29):
+
 - Current (broken): `[Terms and Conditions](/docs/legal/terms-and-conditions.md)` and `[Privacy Policy](/docs/legal/privacy-policy.md)`
 - Footer (correct): `/pages/legal/terms-and-conditions.html` and `/pages/legal/privacy-policy.html`
 
 **Root source copy** (`docs/legal/data-protection-disclosure.md`, line 20):
+
 - Current (broken): `[Terms and Conditions](/docs/legal/terms-and-conditions.md)` and `[Privacy Policy](/docs/legal/privacy-policy.md)`
 - Footer (correct): `terms-and-conditions.md` and `privacy-policy.md` (relative)
 

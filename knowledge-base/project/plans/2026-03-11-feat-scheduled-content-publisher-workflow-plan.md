@@ -12,6 +12,7 @@ semver: patch
 **Research sources:** GitHub Actions docs, Discord webhook API docs, X API v2 docs, project learnings corpus (8 learnings applied), prior social distribution plan (#502)
 
 ### Key Improvements
+
 1. Added concrete `extract_section` and `extract_tweets` implementations with edge case handling for content files missing platform sections
 2. Added thread posting recovery pattern from proven #502 distribution plan -- partial thread creates a resume issue instead of silent failure
 3. Added Discord webhook rate limit awareness (30 req/min, 5 req/2s) -- not a concern for single posts but documents the limit
@@ -20,6 +21,7 @@ semver: patch
 6. Added cron timing offset recommendation: use non-zero minutes (e.g., `:07`, `:37`) to avoid GitHub Actions top-of-hour congestion delays
 
 ### New Considerations Discovered
+
 - Content files for studies 2 and 4 contain "Not scheduled for [platform] distribution" placeholder text in unused platform sections -- the extraction logic must handle this gracefully (detect and skip)
 - `x-community.sh post-tweet` argument order matters: text first, then `--reply-to ID` -- reversed order triggers the "unknown option" error path
 - The `openssl` dependency for OAuth 1.0a signing is pre-installed on `ubuntu-latest` runners -- no setup step needed
@@ -91,8 +93,9 @@ extract_section() {
 ```
 
 **Edge cases to handle:**
+
 - Studies 2 and 4 have placeholder text (`"Not scheduled for [platform] distribution. Use Discord + X only."`) in unused platform sections -- detect and treat as empty
-- The `## Hacker News` section is always the last section in the file -- the `sed` range pattern handles this correctly because it matches to the next `## ` or EOF
+- The `## Hacker News` section is always the last section in the file -- the `sed` range pattern handles this correctly because it matches to the next `##` or EOF
 - Content between the file header (`# Title`, `**Blog post:**`, etc.) and `---` separator must be skipped -- start extraction only after the first `---` delimiter
 - The `---` horizontal rule between sections must not be included in extracted content
 
@@ -257,6 +260,7 @@ post_x_thread() {
 ```
 
 **Key patterns from research:**
+
 - Each reply must reference the immediately preceding tweet's ID (not the hook tweet's ID) to maintain linear thread order
 - All tweets in a thread share the same `conversation_id` (the hook tweet's ID) -- useful for later retrieval
 - There is no batch/atomic thread endpoint -- each tweet is a separate API call
@@ -301,16 +305,19 @@ post_discord() {
 #### Research Insights: Discord Webhook Limits
 
 **Rate limits (from Discord API docs):**
+
 - 30 requests per minute per webhook URL; 5 requests per 2 seconds
 - Not a concern for this workflow (single post per run)
 - Failed requests count toward the rate limit -- do not retry in a tight loop
 
 **Content limits:**
+
 - Maximum content length: 2,000 characters
 - All content files have been written to stay within this limit (verified during content generation)
 - If content exceeds 2,000 chars, Discord returns 400 Bad Request -- the script should detect this and truncate with an ellipsis + link
 
 **Webhook URL security:**
+
 - Webhook URLs are stored as GitHub secrets, never committed
 - If a webhook returns 404, the webhook has been deleted -- do not retry (per Discord docs, repeated 404 attempts result in temporary restrictions)
 - The webhook URL format includes a token that grants post access -- treat it as an API key

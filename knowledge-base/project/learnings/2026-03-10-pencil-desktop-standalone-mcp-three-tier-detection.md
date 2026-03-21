@@ -22,6 +22,7 @@ Restructured `check_deps.sh` with a three-tier detection cascade where each tier
 3. **IDE tier** (fallback): Detect IDE extension and register with `--app cursor` or `--app visual_studio_code` (corrected from the previous `--app code` value).
 
 Key implementation details:
+
 - Output contract: `PREFERRED_MODE`, `PREFERRED_BINARY`, `PREFERRED_APP` consumed by SKILL.md
 - Main flow flattened to `try_cli_tier || try_desktop_tier || try_ide_tier`
 - `is_pencil_running()` uses platform-specific process matching (macOS: `Pencil.app/Contents/MacOS`, Linux: `pgrep -x pencil` or AppImage pattern) to avoid false positives from broad `pgrep -f "[Pp]encil"`
@@ -38,6 +39,7 @@ When a tool distributes through multiple channels (IDE extension, Desktop app, C
 None.
 
 ## Tags
+
 category: integration-issues
 module: pencil-setup
 symptoms: IDE hard dependency blocks standalone terminal use, WebSocket not connected to app

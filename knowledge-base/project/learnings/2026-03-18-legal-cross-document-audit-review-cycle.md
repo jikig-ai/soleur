@@ -5,6 +5,7 @@
 When adding new data processors (Supabase, Stripe, Hetzner, Cloudflare) to legal documents, the initial implementation missed several cross-document consistency issues despite following the plan's detailed section-by-section instructions. The legal-compliance-auditor review found 4 critical and 6 high findings after all edits were complete.
 
 Key misses:
+
 - DPD Section 2.1b listed Cloudflare as Article 28 processor but Section 4.2 table omitted it (auditor contradiction)
 - Privacy Policy and GDPR Policy rights sections still said "most relevant to GitHub" without mentioning Web Platform
 - GDPR Policy data retention section (8) had no Web Platform subsection
@@ -29,5 +30,6 @@ The pattern is: edit all documents → run auditor → fix findings → re-verif
 - `worktree-manager.sh feature` failed in bare repo root (not a worktree context). Used `git worktree add` directly.
 
 ## Tags
+
 category: integration-issues
 module: legal-documents

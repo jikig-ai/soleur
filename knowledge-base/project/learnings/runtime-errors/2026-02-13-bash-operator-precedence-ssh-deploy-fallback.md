@@ -58,6 +58,7 @@ ssh "$HOST" "docker pull $IMAGE:$TAG \
 ```
 
 With grouping:
+
 - If `docker pull` fails, the first `&&` short-circuits and the entire chain stops
 - `|| true` only applies within its `{ ...; }` group (stop/rm may legitimately have no container)
 - `docker run` only executes if all prior critical steps succeeded

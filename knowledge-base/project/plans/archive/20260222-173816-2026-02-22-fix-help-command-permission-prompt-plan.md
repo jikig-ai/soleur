@@ -47,6 +47,7 @@ The fix replaces all bash code blocks with prose instructions directing the LLM 
 ### Related Learnings
 
 Three documented learnings cover this exact pattern:
+
 - `2026-02-22-command-substitution-in-plugin-markdown.md` -- documents the `$()` recurrence pattern across 3 versions (v2.23.15, v2.23.18, v2.26.1)
 - `2026-02-22-shell-expansion-codebase-wide-fix.md` -- documents the broader `${VAR}` fix across 18+ files
 - `2026-02-22-skill-count-propagation-locations.md` -- documents that component counts appear in 5+ files (relevant if counts change)
@@ -63,6 +64,7 @@ But for help, an even better approach exists: replace Bash entirely with dedicat
 ### Approach: Replace Bash with Prose Instructions for Native Tools
 
 Rewrite `help.md` to instruct the LLM to use:
+
 - **Read tool** for `plugin.json` (instead of `cat`)
 - **Glob tool** for file/directory discovery (instead of `find`)
 - **Direct counting** from Glob results (instead of `wc -l`)
@@ -89,6 +91,7 @@ Replace the four `find | wc` bash blocks with prose instructions using Glob. All
 > 4. **Count agent domains:** Use pattern `*` with path `plugins/soleur/agents` to list top-level domain directories -- count them
 
 **Critical Glob tool behavior (verified empirically):**
+
 - The `path` parameter must be provided for these patterns to work
 - `*/SKILL.md` returns zero results; `**/SKILL.md` is required even for depth-1 matches
 - The tool returns absolute file paths sorted by modification time
@@ -186,6 +189,7 @@ The formatted text template remains the same -- the LLM fills in counts from Glo
 ### Domain Counting Edge Case
 
 The Glob tool does not have a "directories only" mode. To count domains, either:
+
 1. Infer from the agent file paths (extract unique second path segments after `agents/`)
 2. Or use a single `ls` Bash command on `plugins/soleur/agents/` (this is a simple listing, not a piped command, so it should not trigger permission issues)
 

@@ -2,7 +2,7 @@
 
 ## Phase 1: Resend Account & Domain Setup
 
-- [ ] 1.1 Create Resend account at https://resend.com (or use existing account)
+- [ ] 1.1 Create Resend account at <https://resend.com> (or use existing account)
 - [ ] 1.2 Add `soleur.ai` as a sending domain in Resend dashboard
 - [ ] 1.3 Generate a dedicated API key for Supabase SMTP (starts with `re_`)
 - [ ] 1.4 Collect DNS verification records from Resend dashboard (SPF: `include:amazonses.com`, DKIM: CNAME records)
@@ -18,7 +18,7 @@
 
 ## Phase 3: Supabase Project Configuration (Management API)
 
-- [ ] 3.1 Obtain Supabase access token from https://supabase.com/dashboard/account/tokens
+- [ ] 3.1 Obtain Supabase access token from <https://supabase.com/dashboard/account/tokens>
 - [ ] 3.2 Apply all config in a single Management API call (`PATCH /v1/projects/$PROJECT_REF/config/auth`):
   - [ ] 3.2.1 Set `site_url` to `https://app.soleur.ai`
   - [ ] 3.2.2 Set `uri_allow_list` to `http://localhost:3000/**,https://app.soleur.ai/**`

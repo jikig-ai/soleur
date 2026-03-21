@@ -18,6 +18,7 @@ Three-tier defense-in-depth, where each layer independently blocks the most crit
 3. **disallowedTools for hard deny** — `WebSearch` and `WebFetch` are blocked at the SDK level before `canUseTool` even runs. Belt-and-suspenders for tools that should never be available to tenant agents.
 
 Supporting changes:
+
 - **Minimal env allowlist** — only 6 variables (`NODE_ENV`, `HOME`, `PATH`, `LANG`, `TERM`, `USER`) are passed to the subprocess instead of the full `process.env`. This eliminates the entire class of env-var exfiltration attacks.
 - **Empty permissions.allow** — `settings.json` uses `"allow": []` so every tool invocation flows through `canUseTool`.
 - **`settingSources: []` in query() options** — explicitly prevents the SDK from loading `.claude/settings.json`, which could contain `permissions.allow` entries that bypass `canUseTool` (permission chain step 4 before step 5). The SDK defaults to `[]` since v0.1.0, but the explicit setting is defense-in-depth against SDK regression or someone adding `settingSources: ["project"]` for CLAUDE.md support. If CLAUDE.md support is ever needed, inject content via `systemPrompt` instead of changing `settingSources`.
@@ -42,5 +43,6 @@ Five generalizable lessons:
 1. **`npx vitest` failed with rolldown native binding error** — the worktree's `node_modules` had a stale or incompatible rolldown binary. Resolved by using the project-local vitest binary (`./node_modules/.bin/vitest`) instead of `npx`, which can resolve to a different version.
 
 ## Tags
+
 category: security-issues
 module: web-platform

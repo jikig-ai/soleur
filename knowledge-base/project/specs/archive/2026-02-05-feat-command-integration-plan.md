@@ -20,6 +20,7 @@ Update the four core workflow commands (brainstorm, plan, work, compound) to int
 ## Problem Statement
 
 Current commands operate independently. The unified workflow requires:
+
 - `soleur:brainstorm` to create worktree + spec.md
 - `soleur:plan` to consult constitution + create tasks.md
 - `soleur:work` to operate in worktree + track task progress
@@ -34,15 +35,18 @@ Update each command to integrate with the new layers while maintaining backward 
 To avoid overwhelming users with context, each command uses **tiered disclosure**:
 
 **Tier 1 (Always shown):**
+
 - Current task status
 - Immediate next action
 
 **Tier 2 (On request or relevance):**
+
 - Constitution principles (only when making decisions)
 - Patterns (only when similar problem detected)
 - Reviews (only when touching related code)
 
 **Tier 3 (Explicit `--verbose`):**
+
 - Full context dump
 - All loaded knowledge sources
 - Metrics and statistics
@@ -266,6 +270,7 @@ If `knowledge-base/` doesn't exist:
 ## Acceptance Criteria
 
 ### soleur:brainstorm
+
 - [ ] Creates worktree at start (if knowledge-base/ exists)
 - [ ] Creates spec directory
 - [ ] Generates spec.md at end of brainstorm
@@ -273,6 +278,7 @@ If `knowledge-base/` doesn't exist:
 - [ ] Backward compatible without knowledge-base/
 
 ### soleur:plan
+
 - [ ] Loads constitution for guidance
 - [ ] Loads existing spec.md if available
 - [ ] Surfaces relevant past reviews
@@ -282,6 +288,7 @@ If `knowledge-base/` doesn't exist:
 - [ ] Backward compatible without knowledge-base/
 
 ### soleur:work
+
 - [ ] Verifies worktree context
 - [ ] Loads constitution principles
 - [ ] Loads tasks.md as checklist
@@ -292,6 +299,7 @@ If `knowledge-base/` doesn't exist:
 - [ ] Backward compatible without knowledge-base/
 
 ### soleur:compound
+
 - [ ] Syncs spec with implementation
 - [ ] Captures learning to knowledge-base/project/learnings/
 - [ ] Captures review feedback if applicable

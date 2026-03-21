@@ -45,6 +45,7 @@ Remove `commands/create-agent-skill.md` -- the `create-agent-skills` skill alrea
 ### FR3: Skill format compliance
 
 Each new SKILL.md must include:
+
 - YAML frontmatter with `name` (matching directory name, kebab-case) and `description` (third person, with trigger keywords)
 - Content adapted from the command markdown
 - Proper reference links if `scripts/` or `references/` subdirectories exist
@@ -54,6 +55,7 @@ Each new SKILL.md must include:
 ### TR1: Plugin versioning
 
 Update the versioning triad:
+
 - `.claude-plugin/plugin.json` -- MINOR version bump (new skills added)
 - `CHANGELOG.md` -- document all changes
 - `README.md` -- update component counts and tables
@@ -63,6 +65,7 @@ Update the versioning triad:
 ### TR2: Naming normalization
 
 Convert underscore-based command names to kebab-case skill names:
+
 - `plan_review` -> `plan-review`
 - `resolve_todo_parallel` -> `resolve-todo-parallel`
 - `resolve_pr_parallel` -> `resolve-pr-parallel`

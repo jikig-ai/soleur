@@ -26,6 +26,7 @@ fi
 Binary detection and binary execution are separate concerns in dependency cascades. A tier can succeed at detection (the binary exists and is the right version) while failing at execution (no display server). Design cascades so that detection alone is sufficient for registration, and execution failures are handled gracefully rather than crashing the whole flow.
 
 ## Tags
+
 category: runtime-errors
 module: pencil-setup
 symptoms: Trace/breakpoint trap, SIGTRAP, Electron crash in SSH, AppImage crash headless

@@ -31,6 +31,7 @@ The **hybrid interface contract** is the key innovation. Without it, parallel ag
 ### Tier 0 in Work Skill (Not a New Skill)
 
 The work skill already owns execution tier selection (Tier A: Agent Teams, Tier B: Subagent Fan-Out, Tier C: Sequential). Adding Tier 0 is architecturally consistent:
+
 - One-shot, ship, review, compound — nothing changes
 - Work internally decides whether the plan warrants Tier 0/A/B/C
 - New reference file (`work-lifecycle-parallel.md`) follows the existing pattern

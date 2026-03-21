@@ -83,6 +83,7 @@ Current version: 3.0.9 -> New version: 3.1.0
 The BSL 1.1 template is published at mariadb.com/bsl11/. Fill in the four parameters (Licensor, Licensed Work, Additional Use Grant, Change Date/License) and the license text is complete.
 
 **Additional Use Grant wording is critical.** The grant must:
+
 - Clearly allow individual and internal company use
 - Clearly block competing hosted/managed services
 - Not accidentally block users who deploy Soleur internally for their company

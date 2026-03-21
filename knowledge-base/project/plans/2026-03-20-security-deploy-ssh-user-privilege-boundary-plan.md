@@ -12,6 +12,7 @@ issue: "#832"
 **Research sources:** cloud-init 26.1 docs, GitHub Actions security best practices, sudoers hardening guides, 5 institutional learnings
 
 ### Key Improvements
+
 1. Added concrete cloud-init YAML for the `users:` block with the critical `default` user preservation
 2. Identified docker group = root-equivalent risk and documented the accepted tradeoff
 3. Added sudoers file permissions hardening (0440 root:root) and validation via `visudo -c`
@@ -19,6 +20,7 @@ issue: "#832"
 5. Added Terraform `templatefile` approach for injecting the deploy SSH public key into cloud-init
 
 ### New Considerations Discovered
+
 - Docker group membership is effectively root-equivalent (can `docker run -v /:/host`). This is an accepted tradeoff for this change -- the alternative (sudo for every docker command) is more complex and creates a wider sudoers surface. Document the residual risk.
 - Cloud-init `users:` section replaces the default user list unless `default` is the first entry. Omitting it would lock out root SSH entirely on first boot.
 - The sudoers rule must use the full path `/usr/bin/chown` and escape the colon in `1001:1001` as `1001\:1001` to prevent argument injection.
@@ -43,12 +45,14 @@ Both workflows target the **same server** (both use `WEB_PLATFORM_HOST` / `WEB_P
 ### Research Insights
 
 **GitHub Actions SSH Security Best Practices:**
+
 - The principle of least privilege is fundamental: each secret should be accessible only to workflows that need it ([GitHub Docs](https://docs.github.com/en/actions/reference/security/secure-use), [StepSecurity](https://www.stepsecurity.io/blog/github-actions-security-best-practices))
 - Runners should operate with a non-root user account. Limit sudo permissions to only what is absolutely necessary for CI/CD workflows ([Blacksmith](https://www.blacksmith.sh/blog/best-practices-for-managing-secrets-in-github-actions))
 - Consider environment-level secrets with mandatory approval for production deploys as a future enhancement ([GitGuardian](https://blog.gitguardian.com/github-actions-security-cheat-sheet/))
 
 **Residual Risk -- Docker Group:**
 Docker group membership is effectively root-equivalent. A compromised deploy user can run `docker run -v /:/host busybox sh` to access the entire filesystem. This is an accepted tradeoff for this PR because:
+
 1. The alternative (sudoers rules for every docker subcommand) creates a wider and more fragile sudoers surface
 2. The deploy user can only reach the server via SSH with the CI key -- it cannot be used for interactive login
 3. This PR reduces blast radius from "unrestricted root" to "root-equivalent via docker only" -- still a meaningful improvement because it eliminates direct root shell access, prevents non-docker privilege escalation, and creates an audit trail via docker logs
@@ -56,12 +60,14 @@ Docker group membership is effectively root-equivalent. A compromised deploy use
 ## Proposed Solution
 
 Create a `deploy` user via cloud-init with:
+
 - Docker group membership (run docker commands without root)
 - Ownership of `/mnt/data` subtree (read/write env files, workspace dirs)
 - Passwordless sudo for exactly one command: `chown` on `/mnt/data/workspaces` (needed by web-platform deploy to fix ownership after volume mount)
 - No other sudo access, no login shell needed beyond `/bin/bash`
 
 Then update:
+
 1. Both cloud-init files to create the user and authorize the deploy SSH key
 2. SSH hardening config to allow the deploy user alongside root
 3. Both workflow files to use `username: deploy` instead of `username: root`
@@ -114,6 +120,7 @@ write_files:
 ### SSH key management
 
 The deploy user needs its own authorized key. Options:
+
 - **Option A (recommended):** Reuse the existing `WEB_PLATFORM_SSH_KEY` -- install its public key for the deploy user, remove it from root's authorized_keys. No secret rotation needed, just server-side config.
 - **Option B:** Generate a new key pair for deploy, update the GitHub secret `WEB_PLATFORM_SSH_KEY` with the new private key. More secure (root retains a separate admin key) but requires secret rotation.
 
@@ -139,6 +146,7 @@ users:
 ```
 
 **Key fields:**
+
 - `lock_passwd: true` -- disables password login for the deploy user (SSH key only)
 - `groups: docker` -- adds to the docker group (created by Docker's install script in `runcmd`)
 - `ssh_authorized_keys` -- list of public keys authorized for this user
@@ -209,11 +217,13 @@ Both `apps/web-platform/infra/cloud-init.yml` and `apps/telegram-bridge/infra/cl
 ### Existing SSH hardening
 
 Current `01-hardening.conf` in both cloud-init files:
+
 ```
 AllowUsers root
 ```
 
 Must become:
+
 ```
 AllowUsers root deploy
 ```
@@ -324,24 +334,29 @@ user_data = templatefile("${path.module}/cloud-init.yml", {
 ## Dependencies & Risks
 
 ### Dependencies
+
 - Server access to verify deploy user creation (manual step after Terraform apply)
 - The public key corresponding to `WEB_PLATFORM_SSH_KEY` must be extracted and provided as a Terraform variable
 
 ### Risks
+
 - **Cloud-init is one-shot:** Changes to cloud-init only apply to new servers. For the existing server, the deploy user must be created manually (or via a one-time SSH script). Document the manual provisioning commands.
 - **Terraform state:** If Terraform state is out of sync, `terraform apply` may recreate the server. Plan should include `terraform plan` verification before apply.
 - **Secret timing:** If the workflow change merges before the server has the deploy user, deploys will fail. Mitigation: provision the deploy user on the server first, then merge the workflow changes.
 - **Docker group = root-equivalent:** Accepted tradeoff. See "Residual Risk" section above.
 
 ### Rollback
+
 If deploys break: revert the workflow changes (two `sed` commands to switch back to `root`). The deploy user's existence on the server is harmless.
 
 ## Implementation Sequence
 
 **Phase 1: Server preparation (must happen before workflow merge)**
+
 1. SSH into server as root
 2. Create deploy user: `useradd -m -s /bin/bash -G docker deploy`
 3. Set up authorized_keys:
+
    ```bash
    mkdir -p /home/deploy/.ssh
    # Derive public key from the WEB_PLATFORM_SSH_KEY private key:
@@ -351,7 +366,9 @@ If deploys break: revert the workflow changes (two `sed` commands to switch back
    chmod 700 /home/deploy/.ssh
    chmod 600 /home/deploy/.ssh/authorized_keys
    ```
+
 4. Add sudoers rule:
+
    ```bash
    cat > /etc/sudoers.d/deploy-chown << 'SUDOEOF'
    deploy ALL=(root) NOPASSWD: /usr/bin/chown 1001\:1001 /mnt/data/workspaces
@@ -360,23 +377,30 @@ If deploys break: revert the workflow changes (two `sed` commands to switch back
    chown root:root /etc/sudoers.d/deploy-chown
    visudo -c -f /etc/sudoers.d/deploy-chown
    ```
+
 5. Set ownership of `/mnt/data`:
+
    ```bash
    chown -R deploy:deploy /mnt/data
    ```
+
 6. Update SSH AllowUsers:
+
    ```bash
    sed -i 's/AllowUsers root/AllowUsers root deploy/' /etc/ssh/sshd_config.d/01-hardening.conf
    systemctl restart sshd
    ```
+
 7. Test from a separate terminal: `ssh -i <ci_key> deploy@<server_ip> "docker ps && ls /mnt/data/.env && sudo chown 1001:1001 /mnt/data/workspaces && echo OK"`
 
 **Phase 2: Code changes (this PR)**
+
 1. Update both cloud-init.yml files (for future server provisioning)
 2. Update both variables.tf and server.tf files (deploy_ssh_public_key)
 3. Update both workflow files (username + sudo chown) via `sed`
 
 **Phase 3: Verification**
+
 1. Trigger a manual workflow run after merge
 2. Verify deploy succeeds with the deploy user
 3. Verify health checks pass
@@ -384,6 +408,7 @@ If deploys break: revert the workflow changes (two `sed` commands to switch back
 ## References & Research
 
 ### Internal References
+
 - Issue: #832
 - Flagged in: #748 / PR #824
 - Learning: `knowledge-base/project/learnings/2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md`
@@ -399,6 +424,7 @@ If deploys break: revert the workflow changes (two `sed` commands to switch back
 - Firewall config: `apps/web-platform/infra/firewall.tf`
 
 ### External References
+
 - [cloud-init 26.1 -- Configure users and groups](https://docs.cloud-init.io/en/latest/reference/yaml_examples/user_groups.html)
 - [cloud-init 26.1 -- All examples](https://cloudinit.readthedocs.io/en/latest/topics/examples.html)
 - [GitHub Docs -- Secure use reference](https://docs.github.com/en/actions/reference/security/secure-use)

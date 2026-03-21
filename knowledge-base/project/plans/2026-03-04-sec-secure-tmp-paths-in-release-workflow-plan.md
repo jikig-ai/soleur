@@ -19,12 +19,14 @@ Fixes #426.
 **Research sources:** security-sentinel review, code-simplicity review, CWE-377, GitHub Actions docs, institutional learnings
 
 ### Key Improvements
+
 1. Added `$RUNNER_TEMP` analysis and confirmed `mktemp` is the correct choice
 2. Added consideration for the `give_up()` function needing env var access pattern
 3. Added edge case for tmpfiles step placement relative to conditional `if:` guards
 4. Incorporated learnings from prior version-bump-and-release.yml fixes (#420)
 
 ### Institutional Learnings Applied
+
 - `2026-02-21-github-actions-workflow-security-patterns.md` -- confirms this repo's security posture for workflow hardening
 - `2026-03-03-fix-release-notes-pr-extraction.md` -- documents the exact workflow file being modified, including the `give_up()` function structure and prior `sed` portability issues
 - `2026-02-27-github-actions-sha-pinning-workflow.md` -- confirms `security_reminder_hook.py` will block the first Edit call on workflow files (expect retry)
@@ -55,11 +57,13 @@ Replace all predictable `/tmp` paths with `mktemp`-generated paths, created once
 ### Research Insights
 
 **Security Properties of `mktemp`:**
+
 - `mktemp` internally uses `mkstemp()` which creates files with `O_CREAT|O_EXCL` flags -- the kernel guarantees atomic creation that fails if the file already exists, preventing symlink substitution ([Secure Coding Practices](https://securecodingpractices.com/avoiding-insecure-temporary-file-creation-scripts-mktemp-usage/))
 - Default permissions are `0600` (owner read/write only), preventing other processes from reading the temp files
 - The random suffix is generated from `/dev/urandom`, making names unpredictable ([CWE-377](https://cwe.mitre.org/data/definitions/377.html))
 
 **GitHub Actions Context:**
+
 - `$RUNNER_TEMP` (`runner.temp`) provides a job-specific temp directory that is cleaned up after each job -- useful for isolation but does not address filename predictability ([GitHub Actions Contexts](https://docs.github.com/en/actions/learn-github-actions/contexts))
 - `GITHUB_OUTPUT` is the standard mechanism for passing data between steps within the same job ([GitHub Docs](https://docs.github.com/actions/reference/workflow-commands-for-github-actions))
 
@@ -176,6 +180,7 @@ Then replace every `/tmp/pr_body.txt` with `${{ steps.tmpfiles.outputs.pr_body }
 ## Simplicity Assessment
 
 This fix has minimal complexity:
+
 - **1 file changed:** `.github/workflows/version-bump-and-release.yml`
 - **1 new step added:** 5 lines for the tmpfiles step
 - **Mechanical substitution:** Every `/tmp/X` becomes `$ENV_VAR` -- no logic changes

@@ -34,5 +34,6 @@ When guarding against specific commands in a shell string, never anchor to `^` a
 This is the third guardrail grep pattern bug in this file -- all three had the same root cause of insufficient context matching. Guard patterns should be reviewed holistically whenever one is fixed.
 
 ## Tags
+
 category: safety-mechanisms
 module: .claude/hooks/guardrails.sh

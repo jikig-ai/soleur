@@ -32,5 +32,6 @@ A second insight: when a shell script converts branch names with `tr '/' '-'`, a
 - `feature/` prefix was listed in compound-capture slug extraction but omitted from branch detection condition, creating dead documentation -- caught by review agents
 
 ## Tags
+
 category: logic-errors
 module: knowledge-base-archiving

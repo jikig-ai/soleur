@@ -51,5 +51,6 @@ In multi-platform publishers, "graceful degradation" and "failure visibility" ar
 **Rule of thumb:** A function that creates a fallback issue should return 1, not 0. The fallback issue records what to do about the failure; the non-zero return signals that something went wrong.
 
 ## Tags
+
 category: integration-issues
 module: ci-workflows, content-publisher

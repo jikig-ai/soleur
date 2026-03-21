@@ -138,6 +138,7 @@ post-merge-monitor.yml (on push to main)
 **Files:** `plugins/soleur/skills/fix-issue/SKILL.md`
 
 Update the skill to:
+
 1. After opening the PR, evaluate auto-merge eligibility
 2. If eligible (single-file, p3-low source, tests passed with no new failures): add `bot-fix/auto-merge-eligible` label to the PR
 3. If not eligible: add `bot-fix/review-required` label
@@ -149,11 +150,13 @@ Update the skill to:
 **Files:** `.github/workflows/scheduled-bug-fixer.yml`
 
 Add a post-fix step that:
+
 1. Checks if the fix-issue agent created a PR (parse PR number from agent output or list open `bot-fix/*` PRs)
 2. If PR exists and has `bot-fix/auto-merge-eligible` label: run `gh pr merge <number> --squash --auto`
 3. Pre-create required labels (`bot-fix/auto-merge-eligible`, `bot-fix/review-required`, `bot-fix/verified`, `bot-fix/reverted`)
 
 **Sharp edges:**
+
 - The `gh pr merge --squash --auto` step runs **outside** the `claude-code-action` step, using `GITHUB_TOKEN`. This is fine because auto-merge queues the merge -- it doesn't push directly. The actual merge happens when GitHub's bot processes the queue, which respects ruleset bypass for the merge.
 - The CLA Required ruleset has Integration bypass actors (IDs 262318, 1236702) already configured. Bot-fix PRs created by `claude-code-action` use the Claude App identity, which has bypass. Auto-merge will work because GitHub evaluates required status checks for the merge queue, not the actor identity.
 - `allow_auto_merge` is already `true` on the repo (verified via API).
@@ -167,6 +170,7 @@ The `gh pr merge --squash --auto` command must execute in a separate workflow st
 2. **claude-code-action token revocation.** The agent's App installation token is revoked in post-step cleanup. If the auto-merge is queued inside the agent, and the merge hasn't completed before token revocation, the merge may silently fail. Running `gh pr merge` in a subsequent step uses `GITHUB_TOKEN` which persists for the entire workflow.
 
 3. **PR number discovery.** The agent creates the PR during its run. The workflow step after the agent can discover the PR via:
+
    ```bash
    PR_NUM=$(gh pr list --head "bot-fix/" --state open --json number --jq '.[0].number // empty')
    ```
@@ -301,6 +305,7 @@ jobs:
 ```
 
 **Sharp edges:**
+
 - **Infinite loop prevention:** The `workflow_run` trigger fires when CI completes on main. The revert commit pushed to main will trigger a new CI run, which will trigger another `workflow_run`. But the revert commit message starts with `Revert "[bot-fix]..."` (GitHub's default format), NOT `[bot-fix]`, so the `startsWith` guard blocks it. If using a custom revert message, ensure it does NOT start with `[bot-fix]`.
 - **Squashed commit message format:** `gh pr merge --squash` uses the PR title as the first line of the commit message. Since the PR title starts with `[bot-fix]`, the squashed commit message will too. This is the string the `startsWith` guard matches against.
 - **`workflow_run` only triggers if the workflow file exists on main.** This means the post-merge-monitor workflow must be merged to main before it can be tested via `workflow_run`. The `workflow_dispatch` input provides a testing escape hatch.
@@ -330,6 +335,7 @@ Creating a dedicated bot PAT to bypass CLA and merge restrictions. Rejected beca
 ### 2. Direct Push to Main (Skip PRs)
 
 Having the bot push fixes directly to main instead of going through PRs. Rejected because:
+
 - Loses the PR-based audit trail
 - No opportunity for CI check before merge
 - No revert PR mechanism (would need force-push revert, which is blocked by ruleset)
@@ -428,6 +434,7 @@ If the post-merge monitor's revert push fails mid-flight (network, runner crash)
 ### Research Insight: GITHUB_TOKEN push and recursive workflow triggering
 
 Pushes made with `GITHUB_TOKEN` do NOT trigger `push` or `pull_request` events (GitHub's anti-recursion protection). This is actually beneficial: the revert push will NOT trigger another `push`-triggered CI run. However, the CI workflow triggers on `push: branches: [main]` AND `pull_request`. The revert push using `GITHUB_TOKEN` will be invisible to CI. This means:
+
 - The revert itself is NOT CI-tested before landing on main
 - This is acceptable because `git revert` is mechanically correct (it applies the inverse diff)
 - If the revert somehow introduces issues, the next human PR will catch them in CI
@@ -468,11 +475,11 @@ Pushes made with `GITHUB_TOKEN` do NOT trigger `push` or `pull_request` events (
 
 ### External References
 
-- Auto-revert on CI failure pattern: https://some-natalie.dev/blog/undo-commit-on-failure/
-- GitHub community discussion on automated revert: https://github.com/orgs/community/discussions/140805
-- `gh run watch` runner issues: https://github.com/cli/cli/issues/8194
-- `workflow_run` event documentation: https://docs.github.com/actions/using-workflows/triggering-a-workflow
-- Managing merge queues: https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue
+- Auto-revert on CI failure pattern: <https://some-natalie.dev/blog/undo-commit-on-failure/>
+- GitHub community discussion on automated revert: <https://github.com/orgs/community/discussions/140805>
+- `gh run watch` runner issues: <https://github.com/cli/cli/issues/8194>
+- `workflow_run` event documentation: <https://docs.github.com/actions/using-workflows/triggering-a-workflow>
+- Managing merge queues: <https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue>
 
 ### Related Work
 

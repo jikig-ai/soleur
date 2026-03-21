@@ -13,6 +13,7 @@ date: 2026-03-13
 **Research sources:** repo audit (12 shell scripts checked), 3 institutional learnings, git bare repo behavior analysis
 
 ### Key Improvements
+
 1. Discovered secondary failure: `cleanup_merged_worktrees` "update main" block calls `git diff`, `git checkout`, `git pull` which all fail in bare repo context
 2. Identified `.claude/settings.json` allow rule using `$(git rev-parse --show-toplevel)` -- another bare-repo-sensitive path
 3. Found 11 other shell scripts using `git rev-parse --show-toplevel` with `|| pwd` or `|| "."` fallbacks -- these survive but may resolve to wrong paths
@@ -20,6 +21,7 @@ date: 2026-03-13
 5. Identified that the `IS_BARE` check should be computed once at script init and reused, not re-evaluated per function
 
 ### New Considerations Discovered
+
 - The `git fetch --prune`, `git for-each-ref`, and `git worktree list --porcelain` commands all work correctly in bare repo context -- only working-tree operations (`diff`, `checkout`, `pull`) need guarding
 - `git rev-parse --abbrev-ref HEAD` works in bare repos (returns `main`) -- `list_worktrees` line 241 is safe
 - Part A (sync stale on-disk files) should also sync `.claude/settings.json` and any hook scripts that may have diverged
@@ -80,6 +82,7 @@ In a bare repo, there is no "main checkout" to update. These must be guarded.
 ### Edge Case: `.claude/settings.json` Allow Rule
 
 `.claude/settings.json` line 8 contains:
+
 ```
 "Bash(bash $(git rev-parse --show-toplevel)/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh *)"
 ```
@@ -116,6 +119,7 @@ chmod +x plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh
 This makes the sync repeatable and discoverable. It could also be called automatically at the end of `cleanup-merged` when bare is detected, ensuring on-disk files stay current after each merge cycle.
 
 **Files to sync (critical for Claude Code operation):**
+
 - `AGENTS.md` -- session-start instructions, hard rules
 - `CLAUDE.md` -- references AGENTS.md
 - `plugins/soleur/AGENTS.md` -- plugin-specific rules
@@ -165,9 +169,11 @@ The AGENTS.md session-start instruction already directs running from a worktree 
 1. **Add a comment block** at the top of worktree-manager.sh explaining the bare-repo-stale-file problem, so future editors understand why the bare detection exists.
 
 2. **Self-healing warning** (lightweight, not full sync): When the script detects `IS_BARE=true`, compare `$0`'s hash against `git show HEAD:$relative_path` hash. If they differ, print:
+
 ```
 Warning: On-disk script is stale (bare repo). Run 'worktree-manager.sh sync-bare-files' to update.
 ```
+
 This is cheap (one `git show` + hash compare) and only triggers in bare contexts.
 
 ### Research Insights: Institutional Learnings Applied
@@ -185,6 +191,7 @@ From `knowledge-base/project/learnings/2026-03-13-archive-kb-stale-path-resoluti
 From `knowledge-base/project/learnings/2026-03-13-bash-arithmetic-and-test-sourcing-patterns.md`:
 
 4. **Guard main() with BASH_SOURCE check** for testability. Currently worktree-manager.sh has no tests. While adding tests is out of scope for this fix, adding the `BASH_SOURCE` guard now makes future testing possible without refactoring:
+
 ```bash
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   main "${args[@]+"${args[@]}"}"

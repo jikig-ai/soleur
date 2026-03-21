@@ -16,6 +16,7 @@ Create the `knowledge-base/` directory structure that serves as the foundation f
 ## Problem Statement
 
 Currently Soleur uses scattered directories (`docs/solutions/`, `docs/brainstorms/`, `docs/specs/`) for different knowledge artifacts. The new unified workflow needs a single, agent-agnostic location for:
+
 - Feature specifications
 - Session learnings
 - Extracted patterns
@@ -90,6 +91,7 @@ This allows tools to detect and migrate older constitution formats automatically
 ### Phase 3: Migration Guidance
 
 Document how existing artifacts can migrate:
+
 - `docs/solutions/` content → `knowledge-base/project/learnings/` (with date prefix)
 - `docs/specs/` content → `knowledge-base/project/specs/`
 - Principles from `AGENTS.md` → `knowledge-base/overview/constitution.md`
@@ -126,6 +128,7 @@ async function migrate() {
 ```
 
 **Migration checklist:**
+
 - [ ] Run migration script
 - [ ] Review migrated files for correct date prefixes
 - [ ] Update any hardcoded paths in CLAUDE.md or AGENTS.md
@@ -157,6 +160,7 @@ async function migrate() {
 ## Rollback Plan
 
 If knowledge-base/ needs to be removed:
+
 1. All commands check for existence before use (backward compatible)
 2. Simply delete `knowledge-base/` directory
 3. Commands fall back to `docs/` paths automatically

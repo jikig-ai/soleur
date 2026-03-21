@@ -26,6 +26,7 @@ if echo "$COMMAND" | grep -qE 'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[
 ```
 
 Key changes:
+
 - Single pattern enforces proximity -- `.worktrees/` must follow rm flags as an argument
 - Handles all flag orderings (-rf, -fr, -rfv, -frv) via `[a-zA-Z]*` after both r and f
 - `\S*` before `.worktrees/` allows absolute paths
@@ -35,5 +36,6 @@ Key changes:
 When building grep-based security guards, never split a compound check into independent grep calls that are ANDed together. Each grep only sees "does this substring exist anywhere?" -- it cannot enforce that two substrings appear in a meaningful relationship (e.g., as command + argument). Combine into a single pattern that enforces proximity and syntactic context.
 
 ## Tags
+
 category: safety-mechanisms
 module: .claude/hooks/guardrails.sh

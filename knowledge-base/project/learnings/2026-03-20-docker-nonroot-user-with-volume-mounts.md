@@ -29,6 +29,7 @@ The web-platform container ran as root. Switching to a non-root user required co
 | cloud-init.yml | chown host volume mount points at first-boot provisioning |
 
 **Checklist for future non-root migrations:**
+
 - Identify the base image's existing user and UID
 - Pick a non-colliding UID
 - Audit which directories the process writes to at runtime -- chown only those

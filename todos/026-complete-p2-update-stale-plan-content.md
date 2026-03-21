@@ -10,7 +10,7 @@ dependencies: []
 
 ## Problem Statement
 
-The plan document (`knowledge-base/plans/2026-03-19-chore-cla-ruleset-integration-id-plan.md`) still describes adding `github-actions` (15368) as a bypass actor in its prose sections, even though this was rejected by the GitHub API (422 error). The tasks file correctly marks it as "NOT FEASIBLE" but the plan body was not updated, creating conflicting information for future readers.
+The plan document (`knowledge-base/project/plans/2026-03-19-chore-cla-ruleset-integration-id-plan.md`) still describes adding `github-actions` (15368) as a bypass actor in its prose sections, even though this was rejected by the GitHub API (422 error). The tasks file correctly marks it as "NOT FEASIBLE" but the plan body was not updated, creating conflicting information for future readers.
 
 ## Findings
 
@@ -45,7 +45,7 @@ Option A
 
 ## Technical Details
 
-- **Affected files:** `knowledge-base/plans/2026-03-19-chore-cla-ruleset-integration-id-plan.md`
+- **Affected files:** `knowledge-base/project/plans/2026-03-19-chore-cla-ruleset-integration-id-plan.md`
 - **Lines:** 29, 109, 129-143, 189-196, 310-317, 326
 
 ## Acceptance Criteria

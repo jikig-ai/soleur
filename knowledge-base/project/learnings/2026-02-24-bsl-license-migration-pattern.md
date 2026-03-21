@@ -32,6 +32,7 @@ A license change is a legal/policy change, not a functional API change. MINOR bu
 ### BSL 1.1 Parameters Checklist
 
 When filling in the BSL 1.1 template:
+
 - **Licensor:** Company name
 - **Licensed Work:** Product name and minimum version
 - **Additional Use Grant:** What production use IS allowed (keep it simple -- avoid HashiCorp's multi-paragraph definitions unless needed)
@@ -50,5 +51,6 @@ A license migration is a cross-cutting scope change that touches license artifac
 3. WebFetch returned summarized paraphrase of BSL 1.1 template -- unusable for verbatim license text
 
 ## Tags
+
 category: implementation-patterns
 module: license-migration

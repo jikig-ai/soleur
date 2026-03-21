@@ -26,6 +26,7 @@ Without Marketing Developer Platform (MDP) approval, LinkedIn provides **no prog
 ### Bearer Token is the Simplest Auth Model
 
 LinkedIn's OAuth 2.0 Bearer token is simpler than every other platform in the ecosystem:
+
 - X/Twitter: OAuth 1.0a with HMAC-SHA1 signing (most complex)
 - Bluesky: Session-based JWT with createSession step
 - Discord: Bot token with `Authorization: Bot` prefix
@@ -54,6 +55,7 @@ LinkedIn's OAuth 2.0 Bearer token is simpler than every other platform in the ec
 ## Domain Leader Assessments
 
 ### CCO Assessment
+
 - Community SKILL.md needs LinkedIn in 4 places: platform detection table, scripts list, `platforms` sub-command output, setup instructions
 - No support runbooks directory exists (`knowledge-base/support/`) — gap for all platforms, not just LinkedIn
 - 60-day token refresh is a net-new operational concern with no monitoring today (validates Approach 3 choice)
@@ -62,6 +64,7 @@ LinkedIn's OAuth 2.0 Bearer token is simpler than every other platform in the ec
 ## Scope Summary
 
 ### In Scope
+
 - `linkedin-community.sh` with `post-content` (live), `fetch-metrics` (stub), `fetch-activity` (stub)
 - `linkedin-setup.sh` with `validate-credentials`, `generate-token` (Playwright), `check-expiry`, `write-env`
 - 5-layer shell hardening (input, transport, response parsing, error extraction, retry arithmetic)
@@ -70,6 +73,7 @@ LinkedIn's OAuth 2.0 Bearer token is simpler than every other platform in the ec
 - SKILL.md updates for LinkedIn platform registration
 
 ### Out of Scope
+
 - Marketing API analytics (requires MDP approval — separate PR)
 - Programmatic refresh token flow (requires MDP approval)
 - LinkedIn Company Page creation (manual browser action)

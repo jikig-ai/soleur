@@ -20,6 +20,7 @@ The plugin has strong technical content (22 agents, 26 commands, 19 skills, acti
 **Rationale:** 45% of the current README discusses aspirational business strategy before showing what the repo actually contains. Contributors need to see the product in the first scroll.
 
 **New README structure:**
+
 1. Title + one-line description + badges (CI, version, license, Discord)
 2. What is Soleur? (2-3 sentences about the plugin)
 3. Quick Start (install command)
@@ -38,6 +39,7 @@ The plugin has strong technical content (22 agents, 26 commands, 19 skills, acti
 **Decision:** Replace BSL-1.1 with Apache License 2.0.
 
 **Actions:**
+
 - Replace root `/LICENSE` with Apache 2.0 text
 - Replace `/plugins/soleur/LICENSE` with Apache 2.0 text
 - Update `plugin.json` license field from "BSL-1.1" to "Apache-2.0"
@@ -51,6 +53,7 @@ The plugin has strong technical content (22 agents, 26 commands, 19 skills, acti
 **Decision:** Create a comprehensive CONTRIBUTING.md that surfaces the development conventions currently hidden in AGENTS.md.
 
 **Contents:**
+
 - How to run the plugin locally (clone + `claude --plugin-dir`)
 - How to file issues (link to templates)
 - How to submit PRs (branch naming: `feat-<name>`, commit conventions)
@@ -116,6 +119,7 @@ The plugin has strong technical content (22 agents, 26 commands, 19 skills, acti
 ### 11. CI Improvements (Optional, low priority)
 
 **Observations for future work (not part of this brainstorm):**
+
 - `deploy-docs.yml` points to an empty `plugins/soleur/docs/` directory
 - CI runs `bun test` but there appear to be no test files
 - Pre-commit hooks (lefthook) enforce Rust linting and markdownlint but CI doesn't replicate these checks

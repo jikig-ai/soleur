@@ -13,12 +13,14 @@ date: 2026-03-18
 **Research conducted:** Buttondown DPA, subprocessor list, GDPR compliance page, EU-US transfer mechanism analysis
 
 ### Key Improvements
+
 1. Verified SCCs as the correct transfer mechanism (Buttondown's DPA confirms Module 2 SCCs per EU Implementing Decision 2021/914; Buttondown is NOT certified under EU-US Data Privacy Framework)
 2. Corrected proposed Section 6 text to reference Buttondown's DPA (not just privacy policy) as the authoritative transfer document
 3. Added DPA-sourced data retention language: "at controller's option, delete or return all Personal Data" upon termination
 4. Added verification step: grep for "Buttondown" consistency across all legal docs post-edit
 
 ### New Considerations Discovered
+
 - Buttondown's DPA references SCCs Module 2 (Controller to Processor) with Option 2 for sub-processor authorization -- consistent with existing Privacy Policy Section 5.3 claim
 - Buttondown hosts on Heroku (Salesforce) and AWS in the United States; all 12 listed subprocessors are US-based
 - Buttondown is NOT listed on the EU-US Data Privacy Framework participant list -- SCCs are the sole transfer mechanism (do NOT reference DPF)

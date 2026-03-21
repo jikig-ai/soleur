@@ -30,5 +30,6 @@ After `npm install`, the build completes in under 1 second (0.35s for 18 files).
 A potential preventive measure: the `worktree-manager.sh feature` subcommand could run `npm install` (or detect `package.json` and warn) after creating the worktree.
 
 ## Tags
+
 category: build-errors
 module: docs, git-worktree

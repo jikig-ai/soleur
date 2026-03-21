@@ -46,6 +46,7 @@ After deleting the `.hero-badge` and `.hero-badge-dot` rules, grep the entire CS
 
 **Spacing Math:**
 The total vertical space above the h1 changes as follows:
+
 - Before: `padding-top: 128px` + badge height (~36px) + `margin-bottom: 32px` = ~196px from header to h1
 - After: `padding-top: 80px` + no badge = 80px from header to h1
 - Net reduction: ~116px. This is a significant visual tightening -- intentional for a headline-first hero.
@@ -99,6 +100,7 @@ No SEO or positioning loss.
 
 **CSS Variable Audit:**
 The `--space-12` variable (`:root` line 72) is used in 3 places total:
+
 1. `.landing-hero` padding (line 407) -- being changed to `--space-10`
 2. `.landing-cta` padding (line 627) -- unrelated, keep as-is
 3. `.error-page` padding (line 932) -- unrelated, keep as-is

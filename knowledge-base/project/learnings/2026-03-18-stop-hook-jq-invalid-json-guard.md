@@ -23,5 +23,6 @@ On failure, `LAST_OUTPUT` becomes empty string — a safe value that the stuck d
 Empirical testing showed empty stdin is safe (jq exits 0), so only malformed text/JSON triggers the vulnerability.
 
 ## Tags
+
 category: runtime-errors
 module: plugins/soleur/hooks/stop-hook.sh

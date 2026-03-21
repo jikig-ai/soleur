@@ -17,6 +17,7 @@ Enhance the existing `git-worktree` skill to support the unified spec-driven wor
 ## Problem Statement
 
 The current `git-worktree` skill provides basic worktree management, but the new workflow needs:
+
 - Automatic worktree creation when starting a feature (at brainstorm)
 - Easy switching between active worktrees via interactive picker
 - Automatic cleanup when PRs are merged
@@ -28,6 +29,7 @@ The current `git-worktree` skill provides basic worktree management, but the new
 ### 1. Enhance git-worktree skill
 
 Update `plugins/soleur/skills/git-worktree/SKILL.md` to support:
+
 - `create-for-feature <name>` - Creates worktree + corresponding spec directory
 - `list-with-specs` - Shows worktrees with their spec status
 - `cleanup-merged` - Removes worktrees for merged branches
@@ -35,6 +37,7 @@ Update `plugins/soleur/skills/git-worktree/SKILL.md` to support:
 ### 2. Create soleur:switch command
 
 New command `plugins/soleur/commands/soleur/switch.md` that:
+
 - Lists all active worktrees with their feature names
 - Shows spec status (has spec.md? has tasks.md?)
 - Provides interactive selection (fzf-like)
@@ -43,6 +46,7 @@ New command `plugins/soleur/commands/soleur/switch.md` that:
 ### 3. Auto-cleanup mechanism
 
 Add cleanup check to `soleur:compound` that:
+
 - Checks if current branch's PR is merged
 - If merged, offers to clean up worktree
 - Removes worktree and optionally archives spec
@@ -74,9 +78,11 @@ Lists worktrees with their spec status.
 
 **Output format:**
 ```
+
 feat-auth       [spec.md tasks.md]  .worktrees/feat-auth/
 feat-payment    [spec.md ---------]  .worktrees/feat-payment/
 feat-search     [-------- ---------]  .worktrees/feat-search/
+
 ```
 
 ### cleanup-merged
@@ -115,6 +121,7 @@ export async function createForFeature(name: string) {
 ```
 
 This provides:
+
 - Type safety and IDE support
 - Cross-platform compatibility (Windows, Linux, macOS)
 - Easier testing with Bun's test runner
@@ -132,6 +139,7 @@ description: Interactively switch between active feature worktrees
 ```
 
 **Behavior:**
+
 1. Call `worktree-manager.sh list-with-specs`
 2. Present options via AskUserQuestion with worktree details
 3. On selection, output `cd` command or use shell integration

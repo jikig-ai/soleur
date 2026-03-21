@@ -69,11 +69,13 @@ Plus docs integration, versioning updates, and optional CSS variable addition.
 ```
 
 **Frontmatter:**
+
 - `name: legal-document-generator`
 - `description:` Third-person with 2 inline `<example>` blocks (generate a privacy policy, generate terms & conditions)
 - `model: inherit`
 
 **Body -- sharp-edges-only (3 instructions):**
+
 1. Mandatory "DRAFT - Requires professional legal review" disclaimer as blockquote at top and bottom of every document
 2. Output format: markdown with YAML frontmatter (`title`, `type`, `jurisdiction`, `generated-date`)
 3. Cross-reference hints: when generating a document that references another type (e.g., privacy policy mentions cookies), note the reference and suggest generating the companion document
@@ -87,11 +89,13 @@ The model already knows legal document structure, GDPR requirements, standard se
 ```
 
 **Frontmatter:**
+
 - `name: legal-compliance-auditor`
 - `description:` Third-person with 2 inline `<example>` blocks (audit a privacy policy, audit all legal docs for cross-consistency)
 - `model: inherit`
 
 **Body -- sharp-edges-only (3 instructions):**
+
 1. Finding output format: `[SEVERITY] Section > Issue > Recommendation` with summary counts
 2. Cross-document consistency: when multiple documents are provided, check that references between them are consistent (e.g., privacy policy mentions cookies --> cookie policy must exist and align)
 3. Never persist audit findings to files -- output inline in conversation only (constitution requirement for open-source repos)
@@ -105,6 +109,7 @@ The model already knows GDPR/CCPA/UK GDPR requirements, standard audit methodolo
 ```
 
 **Frontmatter:**
+
 - `name: legal-generate`
 - `description:` "This skill should be used when generating draft legal documents..."
 
@@ -125,6 +130,7 @@ The model already knows GDPR/CCPA/UK GDPR requirements, standard audit methodolo
 ```
 
 **Frontmatter:**
+
 - `name: legal-audit`
 - `description:` "This skill should be used when auditing existing legal documents for compliance gaps..."
 

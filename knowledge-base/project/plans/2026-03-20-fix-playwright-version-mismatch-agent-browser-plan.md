@@ -67,6 +67,7 @@ agent-browser install  # Downloads Chrome for Testing (not Playwright's Chromium
 ### Research Insights
 
 **Architecture migration timeline (from npm registry):**
+
 - `agent-browser@0.5.0` (installed) -- Node.js, depends on `playwright-core@^1.57.0`, 3.7 MB
 - `agent-browser@0.21.0` -- Still depends on `playwright-core@^1.57.0` (last version with Playwright dep)
 - `agent-browser@0.21.1` -- Zero dependencies, 50 MB (Rust binary bundled, Chrome for Testing)
@@ -100,12 +101,14 @@ agent-browser install  # Downloads Chrome for Testing (not Playwright's Chromium
 **Key breaking change:** `--session` is now `--session-name`. The agent-browser SKILL.md section on "Sessions (Parallel Browsers)" needs updating.
 
 **Advantages:**
+
 - Eliminates the Playwright version coupling permanently -- agent-browser now uses Chrome for Testing, a completely separate browser from Playwright's Chromium
 - No shared cache directory (`~/.cache/ms-playwright/`) -- the two tools are fully independent
 - Maintained version (0.5.0 is 80 versions behind)
 - Faster startup (Rust native daemon model vs Node.js per-command)
 
 **Risks:**
+
 - The `--session` to `--session-name` rename will break SKILL.md documentation (low risk -- easy to update)
 - 50.6 MB package size is ~14x larger (acceptable for a global CLI)
 - `agent-browser install` now downloads Chrome for Testing (~300 MB) which needs disk space in addition to any existing Playwright browsers
@@ -122,10 +125,12 @@ npx playwright-core@1.57.0 install chromium
 This would create `~/.cache/ms-playwright/chromium-1200/` alongside the existing `chromium-1208/`.
 
 **Advantages:**
+
 - Minimal change, no version upgrade needed
 - Both revisions coexist in the cache
 
 **Risks:**
+
 - Fragile -- next Playwright MCP update may change revision again, re-triggering the mismatch
 - Wastes ~300 MB disk for duplicate Chromium installations
 - Does not address the underlying coupling between two independent tools sharing a cache
@@ -183,6 +188,7 @@ These files contain agent-browser commands or version references that may need u
 ### Playwright MCP is unaffected
 
 The Playwright MCP plugin (`mcp__plugin_playwright_playwright__*` tools) runs via `npx @playwright/mcp@latest` and manages its own browser installation (the `mcp-chrome-*` directory in the cache). After this fix, agent-browser and Playwright MCP use completely different browser backends:
+
 - **agent-browser@0.21.4** -- Chrome for Testing (its own download directory)
 - **Playwright MCP** -- Chromium from `~/.cache/ms-playwright/chromium-1208/` or its own `mcp-chrome-*` profile
 
@@ -270,6 +276,7 @@ agent-browser --session-name browser2 open https://site2.com
 # List saved states
 agent-browser state list
 ```
+
 ```
 
 2. Update "vs Playwright MCP" table -- agent-browser now uses Chrome for Testing (Rust native):
@@ -297,6 +304,7 @@ agent-browser state list
 npm install -g agent-browser@0.21.4
 agent-browser install  # Downloads Chrome for Testing (~300MB)
 ```
+
 ```
 
 **check_deps.sh:** Install instruction `npm install -g agent-browser && agent-browser install` is still correct. Consider adding `--with-deps` note for Linux.
@@ -310,6 +318,7 @@ knowledge-base/project/learnings/2026-03-20-playwright-shared-cache-version-coup
 ```
 
 Key insights:
+
 1. When two tools share `~/.cache/ms-playwright/`, their Playwright versions must be compatible or one must bundle its own browser
 2. Self-contained packages (like agent-browser@0.21.1+) that use Chrome for Testing instead of Playwright eliminate this coupling entirely
 3. Playwright's browser lookup is exact-match on revision number -- no forward compatibility between revisions

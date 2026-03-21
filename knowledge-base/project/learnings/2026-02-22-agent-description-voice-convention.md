@@ -24,6 +24,7 @@ grep -rn '^description:' plugins/soleur/agents/ | grep -v 'Use this agent'
 ## Context
 
 Three agents were found using wrong voice forms during a `/soleur:sync` audit (2026-02-21). The patterns were:
+
 - "This agent should be used when..." (passive, belongs in skills)
 - "This agent performs..." (third person declarative)
 - "This agent analyzes..." (third person declarative)

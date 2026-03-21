@@ -72,5 +72,5 @@ This follows the growth-strategist pattern where sharp-edges-only reduced the pr
 
 - Overlap analysis: `knowledge-base/project/learnings/2026-02-20-marketingskills-overlap-analysis.md`
 - CMO agent exploration: issue #154
-- marketingskills repo: https://github.com/coreyhaines31/marketingskills (MIT license)
+- marketingskills repo: <https://github.com/coreyhaines31/marketingskills> (MIT license)
 - Growth-strategist sharp-edges learning: `knowledge-base/project/learnings/2026-02-19-growth-strategist-agent-skill-development.md`

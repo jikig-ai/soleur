@@ -15,12 +15,14 @@ deepened: 2026-03-19
 **Research sources:** appleboy/ssh-action README, GitHub issue #293, SSH key best practices guides (2025-2026), GitHub Actions deploy key documentation
 
 ### Key Improvements
+
 1. Added key format validation step (OpenSSH format header check) to prevent silent failures from wrong key encoding
 2. Added `timeout` and `command_timeout` parameters to the `appleboy/ssh-action` configuration for resilience
 3. Added host key verification step (`ssh-keyscan`) to harden against MITM during automated deploys
 4. Incorporated institutional learning: `security_reminder_hook` will fire advisory warnings when editing workflow files -- expect and verify the edit applies
 
 ### New Considerations Discovered
+
 - GitHub secrets support multiline values natively -- the key must be pasted exactly as-is including `-----BEGIN/END OPENSSH PRIVATE KEY-----` delimiters
 - The `appleboy/ssh-action` has configurable `timeout` (default 30s) and `command_timeout` (default 10m) -- the current workflow uses defaults, which are adequate but worth documenting
 - The `-a` flag (KDF rounds) in `ssh-keygen` is irrelevant for passwordless keys -- omitting it is correct for CI keys
@@ -232,15 +234,19 @@ This is relevant because while this fix is primarily a secret rotation (no workf
 ### Phase 1: Key Generation and Installation (manual -- requires SSH access)
 
 1. Generate a new Ed25519 keypair without a passphrase:
+
    ```bash
    ssh-keygen -t ed25519 -C "ci-deploy@soleur-web-platform" -f ci_deploy_key -N ""
    ```
+
 2. Verify key format: `head -1 ci_deploy_key` outputs `-----BEGIN OPENSSH PRIVATE KEY-----`
 3. SSH into the web-platform server using existing access
 4. Append the new public key to `/root/.ssh/authorized_keys`:
+
    ```bash
    ssh root@<server-ip> 'cat >> /root/.ssh/authorized_keys' < ci_deploy_key.pub
    ```
+
 5. Verify permissions: `ssh root@<server-ip> 'stat -c "%a %U:%G" /root/.ssh/authorized_keys'` (expect `600 root:root`)
 6. Verify SSH access with the new key: `ssh -i ci_deploy_key root@<server-ip> 'echo ok'`
 7. Update the `WEB_PLATFORM_SSH_KEY` GitHub secret: `gh secret set WEB_PLATFORM_SSH_KEY < ci_deploy_key`

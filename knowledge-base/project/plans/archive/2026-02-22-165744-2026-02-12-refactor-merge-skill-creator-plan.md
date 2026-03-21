@@ -15,11 +15,13 @@ version_bump: PATCH
 **Agents used:** code-simplicity-reviewer, learnings-researcher (backtick-references, plugin-versioning)
 
 ### Key Improvements
+
 1. Simplified merge strategy: link to reference files instead of inlining content into SKILL.md (avoids bloat and duplication)
 2. Added cleanup for `core-principles.md` XML contradiction
 3. Added backtick-to-markdown-link fix (from documented learning)
 
 ### Risks Discovered
+
 - `references/core-principles.md` advocates XML tags, contradicting both skills' "no XML tags" guidance
 - Several broken internal cross-references in moved reference files
 - `skill-creator/SKILL.md` uses backtick references instead of markdown links (constitution violation)
@@ -39,6 +41,7 @@ Move resource directories from `create-agent-skills` into `skill-creator`, link 
 ### What Each Skill Brings
 
 **`skill-creator` (keep):**
+
 - Concrete, process-oriented creation flow (Steps 1-6)
 - `scripts/init_skill.py` -- initialization script
 - `scripts/package_skill.py` -- packaging/validation script
@@ -47,6 +50,7 @@ Move resource directories from `create-agent-skills` into `skill-creator`, link 
 - Anatomy of a skill (directory structure, bundled resources)
 
 **`create-agent-skills` (absorb then delete):**
+
 - `references/` -- 12 reference files (official-spec, best-practices, common-patterns, etc.)
 - `templates/` -- 2 templates (router-skill, simple-skill)
 - `workflows/` -- 8 workflow files (audit, create, add-reference, etc.)
@@ -106,6 +110,7 @@ cp -r plugins/soleur/skills/create-agent-skills/workflows/ plugins/soleur/skills
 ### Phase 2: Update SKILL.md
 
 Update `plugins/soleur/skills/skill-creator/SKILL.md`:
+
 - Expand description to add: "audit skill", "skill best practices", "write a SKILL.md", "how to write skills"
 - Add a "Reference Files" section linking to moved files with markdown links
 - Add a "Workflows" section linking to moved workflow files
@@ -115,6 +120,7 @@ Update `plugins/soleur/skills/skill-creator/SKILL.md`:
 ### Phase 3: Clean Up core-principles.md
 
 Review `plugins/soleur/skills/skill-creator/references/core-principles.md`:
+
 - Remove or rewrite any sections advocating XML tags in skill bodies
 - Ensure consistency with "standard markdown headings" guidance
 
@@ -127,21 +133,26 @@ rm -rf plugins/soleur/skills/create-agent-skills/
 ### Phase 5: Version Bump (PATCH)
 
 Update `plugins/soleur/.claude-plugin/plugin.json`:
+
 - Bump version (PATCH)
 - Update description count (35 -> 34 skills)
 
 Update `plugins/soleur/CHANGELOG.md`:
+
 - Add entry under "Changed" and "Removed" for consolidation
 
 Update `plugins/soleur/README.md`:
+
 - Update skill count (35 -> 34)
 - Remove `create-agent-skills` from skill table
 - Update `skill-creator` description in table
 
 Update root `README.md`:
+
 - Update version badge
 
 Update `.github/ISSUE_TEMPLATE/bug_report.yml`:
+
 - Update version placeholder if present
 
 ## References

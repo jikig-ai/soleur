@@ -19,5 +19,6 @@ Three-pronged fix that addresses the root cause (liveness/readiness conflation) 
 When a health check conflates "process is alive" with "service is fully ready," the fix is to separate the concerns — not to increase timeouts. Docker's `--start-period` and the Kubernetes liveness/readiness probe model are established patterns for this exact problem. Look for `--start-period` before reaching for timeout increases.
 
 ## Tags
+
 category: integration-issues
 module: telegram-bridge

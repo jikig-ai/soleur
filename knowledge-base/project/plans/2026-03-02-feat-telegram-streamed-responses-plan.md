@@ -150,6 +150,7 @@ On result event:
 **`cleanupTurnStatus` modification:** When `streamState` is active, skip `deleteMessage` but still null the status and clear the timer.
 
 **Acceptance:**
+
 - Text appears progressively in Telegram
 - Updates throttled at ~2.5s intervals
 - Final message is HTML-formatted
@@ -220,5 +221,5 @@ Revert the commit. The change is additive — `stream_event` handling and the `-
 - Bridge source: `apps/telegram-bridge/src/bridge.ts`
 - Async lifecycle learning: `knowledge-base/project/learnings/runtime-errors/2026-02-11-async-status-message-lifecycle-telegram.md`
 - DI architecture learning: `knowledge-base/project/learnings/implementation-patterns/2026-02-11-testability-refactoring-dependency-injection.md`
-- Telegram Bot API: https://core.telegram.org/bots/api
-- grammY docs: https://grammy.dev/ref/core/api
+- Telegram Bot API: <https://core.telegram.org/bots/api>
+- grammY docs: <https://grammy.dev/ref/core/api>

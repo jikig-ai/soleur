@@ -22,6 +22,7 @@ Create a standalone skill and add a conditional invocation in `/ship` Phase 8:
 2. **Ship Phase 8** adds a conditional check (~5 lines) that invokes the skill only when relevant
 
 Pattern:
+
 ```markdown
 **If merged:**
 1. Check if <condition>:

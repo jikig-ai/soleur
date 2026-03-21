@@ -12,6 +12,7 @@ deepened: 2026-03-13
 **Research method:** Exhaustive grep of all plugin/script/agent/command files against old path patterns
 
 ### Key Improvements
+
 1. **Fixed incomplete file inventory** -- compound/SKILL.md was listed with 2 patterns but actually has 4 (added brainstorms/, plans/); merge-pr/SKILL.md was listed with 2 but has 3 (added brainstorms/); sync.md has category paths not just root learnings/
 2. **Discovered missed line references** -- worktree-manager.sh help text (line 617) references `knowledge-base/project/specs/feat-<name>/` and was not in the original plan
 3. **Added edge case: self-referential plan paths** -- this plan file itself and the tasks.md reference old paths; after the git mv, they will be under features/plans/ and features/specs/ respectively, which is correct (no update needed since the content describes old->new mapping)
@@ -237,6 +238,7 @@ Contains a 13-row routing table mapping feature types to `knowledge-base/project
 ### Feature-Spec Convention
 
 Multiple skills use the convention `feat-<name>` -> `knowledge-base/project/specs/feat-<name>/`. This convention appears in:
+
 - constitution.md (line 149)
 - knowledge-base.md component doc
 - plan SKILL.md, work SKILL.md, compound SKILL.md, brainstorm SKILL.md, ship SKILL.md, spec-templates SKILL.md

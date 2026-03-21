@@ -26,6 +26,7 @@ The overview integrates with the `/sync` command as a new area, allowing automat
 4. **Comprehensiveness** - User wants full architecture docs with diagrams and examples; separate files accommodate this
 
 **Relationship to existing docs:**
+
 - Overview = what the project does (new)
 - Constitution = how to work on it (existing, no change)
 - Overview links to constitution for conventions, no duplication

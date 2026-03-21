@@ -40,6 +40,7 @@ Mobile <=768:     problem-cards 1fr           | feature-grids repeat(2,1fr)
 ### CSS change (tablet breakpoint)
 
 Before:
+
 ```css
 @media (min-width: 769px) and (max-width: 1024px) {
   .problem-cards { grid-template-columns: 1fr 1fr; }
@@ -47,6 +48,7 @@ Before:
 ```
 
 After:
+
 ```css
 @media (min-width: 769px) and (max-width: 1024px) {
   .feature-grid-departments,
@@ -69,6 +71,7 @@ card_count % column_count == 0  # Must be true at every breakpoint
 ```
 
 For the landing page:
+
 - 3 problem cards: valid columns are 3 or 1 (never 2)
 - 6 feature cards: valid columns are 6, 3, 2, or 1
 
@@ -97,6 +100,7 @@ For the landing page:
 - PR #260 (v2.31.6): Complete fix with CMO consultation
 
 ## Tags
+
 category: ui-bugs
 module: plugins/soleur/docs
 tags: css-grid, responsive-design, tablet-breakpoint, landing-page, grid-divisibility, process-failure, cmo-delegation

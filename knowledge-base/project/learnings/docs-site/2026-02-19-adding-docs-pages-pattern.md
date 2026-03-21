@@ -18,6 +18,7 @@ Need a repeatable pattern for adding new pages to the docs site at `plugins/sole
 Three files to touch for a new page:
 
 1. **Create the page** at `plugins/soleur/docs/pages/<name>.njk` with frontmatter:
+
    ```yaml
    ---
    title: Page Name
@@ -42,5 +43,6 @@ Three files to touch for a new page:
 - Run `npm install` in worktrees before building -- dependencies are not shared across worktrees.
 
 ## Tags
+
 category: docs-site
 module: docs

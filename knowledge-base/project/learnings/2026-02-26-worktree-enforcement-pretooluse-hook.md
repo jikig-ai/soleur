@@ -45,5 +45,6 @@ For `git status --porcelain` checks that gate further operations: consider wheth
 - `2026-02-21-stale-worktrees-accumulate-across-sessions.md` — Why cleanup-merged runs at session start
 
 ## Tags
+
 category: integration-issues
 module: git-worktree, guardrails

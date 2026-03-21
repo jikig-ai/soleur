@@ -41,6 +41,7 @@ knowledge-base/
 **1. Bootstrap dependency.** discord-content checks for `brand-guide.md` existence at invocation. If missing, it warns and exits: "No brand guide found. Run the brand architect agent first." This makes the dependency explicit.
 
 **2. Discord overlap with changelog and release-announce (#59).** discord-content is self-contained for v1. It does not subsume the changelog skill or release-announce (#59). Each has a distinct concern:
+
 - `changelog` = generates formatted changelog from git history (content generation)
 - `release-announce` (#59) = posts release announcements to Discord/GitHub (distribution, not yet built)
 - `discord-content` = creates community content beyond releases (engagement, updates, tips)
@@ -73,11 +74,12 @@ Downstream tools (discord-content, future skills) depend on these exact heading 
 | `## Channel Notes` | No | Channel-specific tweaks (Discord length, GitHub formality) |
 
 **Rules:**
+
 - The brand architect MUST use these exact `##` headings (no variations like "Voice and Tone" or "Brand Voice")
 - Downstream tools match headings via exact string: `^## Voice$`, `^## Channel Notes$`, etc.
 - If a required section is missing, downstream tools warn: "Brand guide is incomplete -- missing [section]. Run brand architect to update."
 - If an optional section is missing, downstream tools proceed without it (no warning)
-- `### ` subsections within each `##` section are freeform -- no parsing contract on subsections
+- `###` subsections within each `##` section are freeform -- no parsing contract on subsections
 
 ## Implementation Phases
 
@@ -197,11 +199,13 @@ description: "This skill should be used when creating and posting community cont
    - **Edit:** User provides feedback, skill regenerates.
    - **Reject:** Discard draft, exit.
 6. **Post:** On approval, post via `curl` using plain `content` field (not rich embeds):
+
    ```bash
    curl -H "Content-Type: application/json" \
      -d "{\"content\": \"$CONTENT\"}" \
      "$DISCORD_WEBHOOK_URL"
    ```
+
    Content must be properly JSON-escaped before posting.
 7. **Error handling:** If webhook returns 4xx/5xx, display the error and the draft content so the user can copy-paste manually. Do not retry.
 
@@ -278,6 +282,7 @@ description: "This skill should be used when creating and posting community cont
 **Intent:** 2.1.1 -> 2.2.0
 
 **Files to update:**
+
 - `plugins/soleur/.claude-plugin/plugin.json` -- version + description counts (23 agents, 35 skills)
 - `plugins/soleur/CHANGELOG.md` -- v2.2.0 section
 - `plugins/soleur/README.md` -- add marketing agents section, add discord-content to skills table, update counts

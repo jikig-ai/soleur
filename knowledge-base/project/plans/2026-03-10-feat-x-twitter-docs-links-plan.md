@@ -14,6 +14,7 @@ semver: patch
 **Research sources:** 6 institutional learnings, CSS grid analysis, Nunjucks template review, Twitter Card meta tag best practices
 
 ### Key Improvements
+
 1. Added grid orphan analysis with breakpoint verification checklist (from landing-page-grid-orphan-regression learning)
 2. Added Eleventy build command correction -- must build from repo root, not docs directory (from build-errors learning)
 3. Added CSS variable consistency check -- use `--color-*` tokens, not shorthand `--accent` (from docs-site-css-variable learning)
@@ -21,6 +22,7 @@ semver: patch
 5. Promoted footer social links from "optional" to "included" -- minimal CSS, high discoverability value
 
 ### Institutional Learnings Applied
+
 - `2026-02-22-landing-page-grid-orphan-regression` -- grid divisibility rule at all breakpoints
 - `2026-02-22-docs-site-css-variable-inconsistency` -- use `var(--color-accent)` not `var(--accent)`
 - `docs-site/2026-02-19-adding-docs-pages-pattern` -- add CSS to `@layer components`, reuse existing classes

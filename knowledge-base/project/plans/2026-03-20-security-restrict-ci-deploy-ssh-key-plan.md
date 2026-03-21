@@ -82,6 +82,7 @@ This means the CI workflow must encode its intent (which component, what image, 
 ### Research Insights
 
 **Security best practices for forced command scripts:**
+
 - Script must be owned by `root:root` with mode `755` -- a world-writable forced command script lets any local user change what the restricted key executes
 - Use `read -r` (not `read`) to prevent backslash interpretation in untrusted input
 - Never `eval` or `bash -c` the contents of `SSH_ORIGINAL_COMMAND` -- parse with `read -r` and validate each field independently
@@ -90,12 +91,14 @@ This means the CI workflow must encode its intent (which component, what image, 
 - Validate field count explicitly -- `read -r` assigns all remaining words to the last variable, silently accepting extra fields
 
 **`drone-ssh` / `easyssh-proxy` command transmission:**
+
 - `drone-ssh` uses Go's `session.Start(command)` to send the raw command string -- no `bash -c` wrapping
 - When `envs` input is set, `export VAR='value'` lines are prepended to the command before transmission
 - `SSH_ORIGINAL_COMMAND` therefore contains `export ...\nscript` when `envs` is used -- this would break `read -r` parsing since the first line would be an `export` statement
 - The plan correctly removes the env setup step, but this constraint must be documented as a sharp edge for future workflow changes
 
 **OpenSSH `restrict` keyword:**
+
 - `restrict` is preferred over individual `no-*` options -- it disables all features (forwarding, PTY, user-rc) and is forward-compatible with future OpenSSH restrictions
 - Syntax requires `restrict` before `command=` with comma separators and no spaces
 
@@ -274,6 +277,7 @@ The deploy script and `authorized_keys` update must be applied to the running se
 ### Research Insights
 
 **Ordering constraint:** The server-side changes MUST be applied before merging the workflow changes. The forced command replaces whatever the CI workflow sends, so:
+
 - Old workflow + new `authorized_keys` = forced command runs, old multi-line script is `SSH_ORIGINAL_COMMAND`, fails field count validation (safe -- deploy fails with clear error)
 - New workflow + old `authorized_keys` = single-line `deploy ...` command runs directly on server without validation (unsafe -- no command restriction)
 - New workflow + new `authorized_keys` = forced command runs, validates structured command (correct behavior)
@@ -281,6 +285,7 @@ The deploy script and `authorized_keys` update must be applied to the running se
 The second case (new workflow, old `authorized_keys`) is the dangerous one -- the single-line `deploy ...` command would execute as a shell command, and while it would fail (no `deploy` binary exists), the point is that the key is still unrestricted. Apply server-side changes first.
 
 **Script file security:**
+
 - Ownership must be `root:root` -- a forced command script writable by non-root users allows privilege escalation
 - Mode `755` is correct (owner rwx, others rx)
 - `/usr/local/bin/` is the correct location for locally installed admin scripts

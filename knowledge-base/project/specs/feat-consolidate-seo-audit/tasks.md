@@ -6,7 +6,7 @@
 - [x] 1.2 Renumber existing steps: Content Audit (1), AEO Audit (2), Content Plan (3->4), GitHub Issue (4->5), Persist (5->6)
 - [x] 1.3 Insert new Step 3 (Technical SEO Audit) between AEO Audit and Content Plan
   - Launch `seo-aeo-analyst` agent via Task tool
-  - Instruct agent to audit https://soleur.ai using WebFetch
+  - Instruct agent to audit <https://soleur.ai> using WebFetch
   - Save report to `knowledge-base/marketing/audits/soleur-ai/$(date +%Y-%m-%d)-seo-audit.md`
   - Add failure continuation instruction: "If the SEO audit agent fails, note the failure and continue to Step 4"
 - [x] 1.4 Update Step 5 (GitHub Issue) to include SEO audit findings summary bullet

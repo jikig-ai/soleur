@@ -86,7 +86,7 @@ done
 
 ### Step 8: Contact GitHub Support
 
-GitHub caches old commit objects via internal `refs/pull/*/head` refs. These cannot be deleted via git or the API. Submit a support request at https://support.github.com/request asking them to run garbage collection and purge dangling objects.
+GitHub caches old commit objects via internal `refs/pull/*/head` refs. These cannot be deleted via git or the API. Submit a support request at <https://support.github.com/request> asking them to run garbage collection and purge dangling objects.
 
 ## Key Insight
 

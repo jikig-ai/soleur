@@ -14,6 +14,7 @@ semver: patch
 **Research sources used:** Supabase docs (Context7), WCAG accessibility patterns, French/EU clickwrap case law, project learnings (3 relevant), Vercel React best practices
 
 ### Key Improvements
+
 1. Revised architecture recommendation from Option A (callback metadata) to Option C (trigger-based) after Supabase docs confirmed `new.raw_user_meta_data->>'key'` is accessible in PL/pgSQL triggers -- simpler, atomic, zero application-layer coordination
 2. Added WCAG accessibility requirements for the checkbox (native HTML checkbox, proper label association, no aria-checked)
 3. Added concrete code examples for signup page, migration SQL, and trigger modification
@@ -21,6 +22,7 @@ semver: patch
 5. Added edge case for Supabase `data` option first-signup-only limitation and mitigation
 
 ### New Considerations Discovered
+
 - The `signInWithOtp` `data` option only persists metadata on first signup (not subsequent sign-ins) -- this is fine for T&C acceptance since acceptance only happens at signup
 - The existing `handle_new_user()` trigger already accesses `new.id` and `new.email` -- extending it with `new.raw_user_meta_data->>'tc_accepted'` follows the established pattern
 - WCAG requires native HTML checkbox elements with proper `<label>` association; `aria-checked` must NOT be used on `<input type="checkbox">`
@@ -38,6 +40,7 @@ Under French contract law and EU consumer protection rules, the enforceability o
 The European Court of Justice (2015) established that clickwrap mechanisms create a "durable record" of binding agreement. Under GDPR Article 7, consent must be "freely given, specific, informed, and unambiguous" -- requiring an affirmative act such as ticking a checkbox or clicking a button. Pre-ticked checkboxes are explicitly prohibited (CJEU, Planet49, C-673/17).
 
 Without a clickwrap mechanism:
+
 - T&C acceptance is unenforceable if challenged in court
 - DPD Section 8.1(g) "FULFILLED" status is inaccurate -- no mechanism exists to produce an acceptance record
 - No audit trail of when each user accepted which version of the T&C
@@ -63,6 +66,7 @@ The solution has three layers:
 | Clickwrap checkbox (proposed) | Strong -- accepted by ECJ and French courts | Timestamped record | Fully compliant |
 
 Clickwrap with a required unchecked checkbox is the gold standard because:
+
 - It requires an affirmative action (checking a box)
 - The unchecked default proves the user actively chose to accept
 - Combined with a timestamp, it creates a durable, auditable record
@@ -73,6 +77,7 @@ Clickwrap with a required unchecked checkbox is the gold standard because:
 ### Signup flow changes
 
 The signup page (`apps/web-platform/app/(auth)/signup/page.tsx`) is a client component using Supabase `signInWithOtp`. The checkbox must:
+
 - Be unchecked by default (GDPR requirement)
 - Block form submission until checked (HTML `required` attribute + React state)
 - Link to T&C and Privacy Policy with visible, underlined hyperlinks
@@ -81,12 +86,14 @@ The signup page (`apps/web-platform/app/(auth)/signup/page.tsx`) is a client com
 #### Research Insights: UI Implementation
 
 **Accessibility (WCAG compliance):**
+
 - Use a native HTML `<input type="checkbox">` element -- never a custom div with `aria-checked` (the W3C APG Checkbox Pattern specifies that `aria-checked` must NOT be added to native checkbox inputs; browser determines checked state)
 - Associate the label with `<label htmlFor="tc-checkbox">` wrapping the text content
 - Links inside the label must be standard `<a>` elements with `target="_blank"` and `rel="noopener noreferrer"` for security
 - Add `aria-required="true"` only if there is a visual indicator (asterisk or "required" text) -- per WCAG, the programmatic requirement must match visual cues
 
 **React state pattern (from existing codebase conventions):**
+
 - The signup page already uses `useState` for `email`, `sent`, `error`, `loading` -- add `tcAccepted` in the same pattern
 - Disable the submit button when `!tcAccepted` (consistent with the existing `disabled={loading}` pattern)
 - Show validation error text in the same `text-sm text-red-400` style as the existing error display
@@ -206,6 +213,7 @@ $$ language plpgsql security definer;
 **Silent error returns** (learning: `2026-03-20-supabase-silent-error-return-values.md`): The Supabase JS client returns `{ data, error }` without throwing. Every Supabase call must destructure and check `error`. The `signInWithOtp` call in the signup page already checks `error` correctly, but verify the metadata `data` option does not silently fail.
 
 **Trigger failure blocks signups** (from Supabase docs): If the `handle_new_user()` trigger throws an error, the entire `auth.users` INSERT is rolled back and signup fails silently. Test the `CASE WHEN` expression with:
+
 - `tc_accepted = 'true'` (string from metadata)
 - `tc_accepted` missing from metadata (returns NULL, handled by `ELSE null`)
 - Unexpected value (e.g., `'false'`, empty string)

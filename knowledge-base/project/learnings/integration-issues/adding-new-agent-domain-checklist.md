@@ -17,20 +17,24 @@ Adding a new top-level agent domain (e.g., Legal, alongside Engineering, Marketi
 ### Mandatory Checklist (6 edits across 3 files)
 
 **1. `docs/_data/agents.js`** (3 edits):
+
 - Add domain to `DOMAIN_LABELS` object (alphabetical order)
 - Add CSS variable to `DOMAIN_CSS_VARS` (matches key from DOMAIN_LABELS)
 - Add domain to `domainOrder` array (controls display order on site)
 
 **2. `docs/_data/skills.js`** (2 edits):
+
 - Add entry to `SKILL_CATEGORIES` object with domain name and color
 - Update comment above `SKILL_CATEGORIES` with new count (e.g., `// 5 categories`)
 
 **3. `docs/css/style.css`** (1 edit):
+
 - Add `--cat-<domain>: <color>;` CSS variable in `@layer tokens :root` block
 
 ### Key Gotchas
 
 **Build CWD matters:** Run Eleventy from **repo root**, not `docs/`. Data files use `resolve("plugins/soleur/agents")` which fails if CWD is `docs/`.
+
 ```bash
 # Correct (from repo root)
 npx @11ty/eleventy --input=docs --output=docs/_site_test
@@ -40,6 +44,7 @@ cd docs && npx @11ty/eleventy  # paths resolve incorrectly
 ```
 
 **Guardrails blocks `rm -rf` on worktree paths:** The hook rejects `rm -rf` on ANY path containing `.worktrees/`, even build artifacts. Use `rm -r` (without `-f`) instead:
+
 ```bash
 rm -r docs/_site_test  # works in worktree
 rm -rf docs/_site_test # BLOCKED by guardrails
@@ -56,9 +61,10 @@ rm -rf docs/_site_test # BLOCKED by guardrails
 **5. Add brainstorm routing** to `commands/soleur/brainstorm.md` Phase 0.5: add a single row to the Domain Config table with all 6 columns (Domain, Assessment Question, Leader, Routing Prompt, Options, Task Prompt). [Updated 2026-02-22: refactored from 3 inline blocks to table-driven config]
 
 **6. Add disambiguation sentences** to agents with overlapping scope in adjacent domains. BOTH directions are mandatory -- this is the most commonly missed step:
-   - Forward: new domain agents reference existing agents (natural during creation)
-   - Reverse: existing agents in adjacent domains reference new agents back (easy to forget)
-   - Check domain leaders AND specialists (e.g., adding Finance requires updating CRO, COO, pricing-strategist descriptions AND Sharp Edges)
+
+- Forward: new domain agents reference existing agents (natural during creation)
+- Reverse: existing agents in adjacent domains reference new agents back (easy to forget)
+- Check domain leaders AND specialists (e.g., adding Finance requires updating CRO, COO, pricing-strategist descriptions AND Sharp Edges)
 
 **7. Update AGENTS.md**: Add to directory tree, domain leader table, and agent count.
 
@@ -71,6 +77,7 @@ When adding agents, check cumulative description word count: `shopt -s globstar 
 ### Verification Steps
 
 After making edits:
+
 1. Build docs: `npx @11ty/eleventy --input=docs --output=docs/_site_test --serve`
 2. Check `http://localhost:8080/agents.html` -- new domain appears in navigation
 3. Check `http://localhost:8080/skills.html` -- skills in new category render correctly

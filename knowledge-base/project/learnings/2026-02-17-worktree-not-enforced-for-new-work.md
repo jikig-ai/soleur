@@ -35,6 +35,7 @@ The Worktree Awareness section already handles the discipline once a worktree ex
 Instructions that say "do X when Y is active" but never say "activate Y" create a dead rule. The worktree discipline was well-defined but never triggered because nothing required worktree creation in the first place.
 
 ## Tags
+
 category: workflow-patterns
 module: AGENTS.md
 symptoms: work done on main checkout instead of worktree

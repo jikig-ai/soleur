@@ -21,6 +21,7 @@ A gap-triggered discovery system that detects when the current project uses a st
 - **Constitution-aligned** -- Does not run unless the user invokes `/plan`. Not unsolicited automation.
 
 **Rejected alternatives:**
+
 - **Explicit `/find-skill` command (pull-based):** Users forget it exists. Doesn't surface naturally in workflow.
 - **Always-on contextual suggestions:** Too aggressive. Interrupts active work in `/review` or `/work`.
 - **Separate `/discover` phase in lifecycle:** Adds ceremony. Most users would skip it.

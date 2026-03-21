@@ -36,6 +36,7 @@ Audit all 54 agent descriptions and trim to recover 200+ words. Current top cand
 | terraform-architect | 56 | `agents/engineering/infra/terraform-architect.md` |
 
 **Rules:**
+
 - Keep disambiguation sentences ("Use X for Y; use this agent for Z")
 - Keep imperative voice ("Use this agent when...")
 - Strip filler phrases, redundant scope lists, and wordy explanations

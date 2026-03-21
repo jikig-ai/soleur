@@ -150,8 +150,8 @@ Update the existing Discord webhook convention (line 92) to include `allowed_men
 
 ## References
 
-- Discord API `allowed_mentions` object: https://docs.discord.com/developers/resources/message#allowed-mentions-object
-- Discord API Execute Webhook: https://docs.discord.com/developers/resources/webhook#execute-webhook
+- Discord API `allowed_mentions` object: <https://docs.discord.com/developers/resources/message#allowed-mentions-object>
+- Discord API Execute Webhook: <https://docs.discord.com/developers/resources/webhook#execute-webhook>
 - GitHub Issue: #427
 - PR #420 (where the vulnerability was found)
 - `.github/workflows/version-bump-and-release.yml:239-278` (the "Post to Discord" step)

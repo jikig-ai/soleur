@@ -73,6 +73,7 @@ The `ws` library's [recommended authentication pattern](https://github.com/webso
 First-message auth intentionally trades that gate for log safety: the server accepts the TCP connection and WebSocket upgrade without credentials, then authenticates via the first message. The tradeoff is that unauthenticated connections briefly consume server resources (socket, memory). The 5-second auth timeout mitigates this -- connections that do not authenticate are terminated before they can accumulate.
 
 This tradeoff is acceptable because:
+
 - The app is behind Cloudflare, which provides L7 DDoS protection
 - The existing heartbeat interval (30s) already manages idle connections
 - Supabase tokens are short-lived (1 hour default), limiting the window for stolen tokens

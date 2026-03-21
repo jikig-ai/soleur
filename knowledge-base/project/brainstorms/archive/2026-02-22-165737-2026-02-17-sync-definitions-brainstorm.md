@@ -14,6 +14,7 @@ Additionally, a constitution cross-check phase scans constitution.md for rules t
 ## Why This Approach
 
 Compound routing (hot path) catches ~80% of learnings in-session. But some learnings are:
+
 - **Cross-cutting** -- apply to multiple skills (e.g., a worktree gotcha affects git-worktree, ship, work, and plan skills)
 - **Retroactive** -- captured before compound routing existed
 - **Indirect** -- captured in sessions where the relevant skill wasn't the primary one invoked
@@ -23,10 +24,12 @@ A periodic cold-path scan closes this gap. Integrating it into `/soleur:sync` (r
 ## Key Decisions
 
 ### Entry Point: Auto-detect within /soleur:sync
+
 - `/soleur:sync` runs both codebase analysis (existing Phases 0-3) AND definition sync (new Phase 4) AND constitution cross-check (new Phase 5) in one pass
 - No new commands, no flags, no area arguments
 
 ### Sync Tracking: Frontmatter fields on learning files
+
 - `synced_to: [skill-name, agent-name]` -- accepted proposals
 - `skipped_for: [skill-name]` -- dismissed proposals (prevents re-proposals)
 - Both fields are arrays of definition names
@@ -34,23 +37,27 @@ A periodic cold-path scan closes this gap. Integrating it into `/soleur:sync` (r
 - Neither field is required -- absence means "not yet evaluated"
 
 ### Matching Strategy: Metadata pre-filter + LLM confirmation
+
 - **Pass 1 (fast):** Match learning tags, module, component, and symptoms against definition names and content keywords. Generate candidate pairs.
 - **Pass 2 (accurate):** LLM evaluates each candidate pair: "Is this learning relevant to this definition? If yes, draft a one-line bullet."
 - This reduces the O(learnings x definitions) problem to a manageable set
 
 ### Review UX: Grouped by definition
+
 - Group all proposals for the same definition together
 - User reviews one definition at a time -- sees all proposed bullets before accepting/skipping
 - Each bullet gets Accept/Skip/Edit
 - Consistent with existing sync review pattern but batched for context
 
 ### Constitution Cross-Check: Included in v1
+
 - Phase 5 runs after Phase 4 completes
 - Scans constitution.md for rules that overlap with recently-synced definition bullets
 - Proposes migration: remove from constitution, confirm it exists in the specific definition
 - Same Accept/Skip/Edit UX
 
 ### Implementation: Extend sync.md directly
+
 - Add Phase 4 (Definition Sync) and Phase 5 (Constitution Cross-Check) to existing sync command
 - No new skills, agents, or commands
 - Keeps architecture simple and consistent

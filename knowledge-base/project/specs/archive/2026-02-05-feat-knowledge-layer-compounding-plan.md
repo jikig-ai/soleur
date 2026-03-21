@@ -17,6 +17,7 @@ Implement the full knowledge compounding system including constitution managemen
 ## Problem Statement
 
 Current `compound-docs` skill captures solutions but lacks:
+
 - Structured constitution for project principles (Always/Never/Prefer)
 - Learning decay to prevent context bloat (old learnings deleted after 6 months)
 - Promotion flow to elevate important learnings to constitution
@@ -28,6 +29,7 @@ Current `compound-docs` skill captures solutions but lacks:
 ### 1. Constitution Management
 
 Enhance constitution.md with:
+
 - 8 domain categories
 - Always/Never/Prefer structure per domain
 - Skill for reading/updating constitution
@@ -35,6 +37,7 @@ Enhance constitution.md with:
 ### 2. Learning System
 
 Update compound-docs skill to:
+
 - Save learnings with YYYY-MM-DD prefix
 - Check and delete learnings older than 6 months
 - Suggest constitution promotions
@@ -42,6 +45,7 @@ Update compound-docs skill to:
 ### 3. Pattern Extraction
 
 Add pattern detection to compound flow:
+
 - Agent-detected patterns across sessions
 - User-tagged patterns
 - Permanent storage (no decay)
@@ -49,6 +53,7 @@ Add pattern detection to compound flow:
 ### 4. Review Memory
 
 Capture and surface review feedback:
+
 - Issue + Context + Resolution + Prevention format
 - Surface during plan/review commands
 - Decay like learnings (~6 months)
@@ -124,9 +129,11 @@ Read `knowledge-base/overview/constitution.md` to understand project principles 
 - **Prefer**: Soft preferences, use when applicable
 
 Keep principles:
+
 - Concise (one line if possible)
 - Actionable (clear what to do)
 - Specific (not vague platitudes)
+
 ```
 
 ### Phase 2: Enhanced Compound Flow
@@ -213,6 +220,7 @@ interface PromotionCandidate {
   };
 }
 ```
+
 ```
 
 ### Phase 3: Pattern Extraction
@@ -265,9 +273,11 @@ Save to `knowledge-base/patterns/YYYY-MM-DD-pattern-name.md`:
 ## Detection Heuristics
 
 Agent looks for:
+
 - Similar code structures across features
 - Repeated problem/solution pairs
 - Common architectural decisions
+
 ```
 
 ### Phase 4: Review Memory
@@ -305,10 +315,12 @@ After code review (PR comments or soleur:review), save to `knowledge-base/review
 ## Surfacing Reviews
 
 During `soleur:plan`:
+
 - Search reviews for keywords related to current feature
 - Surface relevant past feedback
 
 During `soleur:review`:
+
 - Check if current code repeats past issues
 - Flag potential repeated mistakes
 
@@ -317,6 +329,7 @@ During `soleur:review`:
 - Reviews decay like learnings (~6 months)
 - Repeated issues get promoted to constitution
 - Reviews can reference related patterns
+
 ```
 
 ### Phase 5: Integration in Compound
@@ -359,29 +372,34 @@ Full compound flow:
 ## Acceptance Criteria
 
 ### Constitution
+
 - [ ] `plugins/soleur/skills/constitution/SKILL.md` exists
 - [ ] `knowledge-base/overview/constitution.md` has 8 domain categories
 - [ ] Each domain has Always/Never/Prefer sections
 - [ ] Constitution can be read and updated by commands
 
 ### Learning Decay
+
 - [ ] Learnings saved with YYYY-MM-DD prefix
 - [ ] Compound checks and deletes learnings > 6 months old
 - [ ] Cleanup is reported to user
 
 ### Constitution Promotion
+
 - [ ] Compound suggests promotion candidates
 - [ ] User can approve/reject promotions
 - [ ] Approved learnings distilled to single principle
 - [ ] Principles added to correct domain/category
 
 ### Patterns
+
 - [ ] `plugins/soleur/skills/patterns/SKILL.md` exists
 - [ ] Patterns saved to `knowledge-base/patterns/`
 - [ ] Patterns have Problem/Solution/Example/When to Use sections
 - [ ] Patterns don't decay (permanent)
 
 ### Review Memory
+
 - [ ] `plugins/soleur/skills/review-memory/SKILL.md` exists
 - [ ] Reviews saved to `knowledge-base/reviews/`
 - [ ] Reviews have Issue/Context/Resolution/Prevention sections

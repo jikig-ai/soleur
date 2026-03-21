@@ -21,23 +21,27 @@ Real-time response streaming for the Telegram bridge. Instead of waiting for Cla
 ## Key Decisions
 
 ### 1. Streaming Strategy: Native-first with progressive fallback
+
 - **Primary:** `sendMessageDraft` for smooth animated text
 - **Fallback:** `editMessageText` with 2-3s throttled updates
 - **Detection:** Try `sendMessageDraft` on first turn, catch errors, cache the result for the session
 - **Rationale:** Best UX when native works, graceful degradation when it doesn't
 
 ### 2. Mid-stream Formatting: Plain text during stream, HTML on final
+
 - Stream raw text without markdown conversion during generation
 - When the response completes, replace with properly formatted HTML via existing `markdownToHtml` + `sendChunked` pipeline
 - **Rationale:** Partial markdown produces broken HTML (unclosed code blocks, incomplete bold). Plain text is safe and readable. Final HTML delivery preserves the polished formatting users expect.
 
 ### 3. Long Message Handling: Finalize current + start new
+
 - When approaching 4096-char Telegram limit mid-stream, finalize the current draft/message
 - Start a new streaming message for the remainder
 - User sees multiple messages building progressively
 - **Rationale:** Better than truncating (user sees everything in real-time) and simpler than buffering
 
 ### 4. Tool Use During Streaming: Pause and show status
+
 - When a `tool_use` event arrives mid-stream, pause text streaming
 - Show a status indicator (reuse existing "Using [tool]..." pattern)
 - Resume streaming when text content continues
@@ -46,6 +50,7 @@ Real-time response streaming for the Telegram bridge. Instead of waiting for Cla
 ## Technical Context
 
 ### Current Architecture
+
 - `Bridge` class in `bridge.ts` handles CLI message routing
 - `handleCliMessage` switch only processes: `system`, `assistant` (complete), `result`
 - `content_block_delta`, `content_block_start`, `content_block_stop` events are logged and discarded
@@ -53,6 +58,7 @@ Real-time response streaming for the Telegram bridge. Instead of waiting for Cla
 - `TurnStatus` tracks: message ID, tool uses, timing — already handles async lifecycle
 
 ### What Changes
+
 - Add `content_block_start`, `content_block_delta`, `content_block_stop` cases to `handleCliMessage`
 - New `StreamState` type (separate from `TurnStatus`) for accumulated text, message IDs, strategy
 - Extend `BotApi` with `sendMessageDraft` method
@@ -60,6 +66,7 @@ Real-time response streaming for the Telegram bridge. Instead of waiting for Cla
 - Status-to-streaming transition: repurpose "Thinking..." message or replace it
 
 ### Risks
+
 | Risk | Severity | Mitigation |
 |------|----------|------------|
 | `sendMessageDraft` errors in private chats | High | Fallback to `editMessageText` on error |
@@ -71,6 +78,7 @@ Real-time response streaming for the Telegram bridge. Instead of waiting for Cla
 | grammY lacks `sendMessageDraft` support | Low | Use raw `bot.api.raw.sendMessageDraft` call |
 
 ### Institutional Learnings Applied
+
 - **P1-012 fix:** Never chain cleanup to delivery via `.then()` — streaming cleanup follows same pattern
 - **Throttle pattern:** Use `Date.now()` time-checks, not `setTimeout` timers
 - **Readiness guards:** Check `messageId !== 0` before any edit/draft call

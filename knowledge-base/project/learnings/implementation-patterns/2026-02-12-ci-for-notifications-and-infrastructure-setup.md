@@ -37,6 +37,7 @@ jobs:
 ## Key Insight
 
 **Notifications belong in CI, not on developer machines.** The pattern is:
+
 - Local skill creates the GitHub Release (needs AI for summary generation)
 - CI workflow triggers on `release: published` and handles all downstream notifications
 - Secrets live in GitHub Settings, not in local env vars or `.claude/settings.local.json`
@@ -46,6 +47,7 @@ This separation means: AI-powered work stays local (where Claude runs), mechanic
 ## Prevention Strategy
 
 Before adding any feature that uses secrets or talks to external services, ask:
+
 1. Does this need AI/Claude? -> Local skill
 2. Is this mechanical (POST to webhook, send email)? -> CI workflow
 3. Does it use secrets? -> GitHub Actions secrets, never local env vars
@@ -55,21 +57,25 @@ Before adding any feature that uses secrets or talks to external services, ask:
 When a team adopts Soleur, these infrastructure pieces should be configured once and forgotten:
 
 ### Day 1: Repository Setup
+
 - [ ] `claude plugin install soleur`
 - [ ] `/soleur:sync` to populate knowledge-base from existing codebase
 - [ ] `.gitignore` includes `.claude/settings.local.json`, `.env`, `*.local.*`
 - [ ] Lefthook or similar pre-commit hooks installed
 
 ### Day 1: GitHub Actions Secrets
+
 - [ ] `DISCORD_WEBHOOK_URL` -- for release announcements (Settings > Secrets > Actions)
 - [ ] `ANTHROPIC_API_KEY` -- for Claude Code CI review (if using `claude.yml` workflow)
 
 ### Week 1: CI Workflows
+
 - [ ] `ci.yml` -- tests on push to main + all PRs
 - [ ] `release-announce.yml` -- Discord notification on release publish
 - [ ] `claude-code-review.yml` -- automated PR review (optional)
 
 ### As You Scale
+
 - [ ] Add coverage thresholds in `bunfig.toml` (decimal format: 0.8 not 80)
 - [ ] Add `bun test` to pre-commit hooks (currently a documented gap)
 - [ ] Branch protection rules: require CI pass + PR review before merge

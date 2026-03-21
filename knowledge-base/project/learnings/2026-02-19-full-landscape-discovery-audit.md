@@ -8,12 +8,15 @@ tags: [discovery, functional-discovery, community-overlap, landscape-audit]
 # Learning: Full Landscape Discovery Audit -- 75 Components vs Community
 
 ## Problem
+
 After building the functional-discovery agent (#155), we had no baseline understanding of how our 33 agents and 42 skills compare to the broader community ecosystem. Without this audit, we risk:
+
 - Building features that already exist as mature community tools
 - Missing complementary tools that could layer alongside ours
 - Not knowing which of our components are truly unique vs commoditized
 
 ## Solution
+
 Ran 5 parallel functional-discovery agents across all components, querying 3 registries (api.claude-plugins.dev, claudepluginhub.com, Anthropic official marketplace).
 
 ### Key Findings
@@ -60,9 +63,11 @@ Ran 5 parallel functional-discovery agents across all components, querying 3 reg
 4. No retirements needed
 
 ## Key Insight
+
 Running functional-discovery at scale (75 components x 3 registries) confirms that lifecycle integration and domain-specific tooling are the moats. Individual features (SEO audit, code review, brainstorming) are commoditized -- what makes Soleur unique is how they compose into a coherent workflow.
 
 ## Tags
+
 category: discovery
 module: functional-discovery
 symptoms: community-overlap, landscape-audit

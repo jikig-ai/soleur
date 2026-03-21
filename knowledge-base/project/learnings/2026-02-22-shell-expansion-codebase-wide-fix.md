@@ -14,6 +14,7 @@ Soleur plugin `.md` files (commands, skills, agents) contained bash code blocks 
 **Scope:** 18+ files across commands, skills, and agents contained shell expansion patterns in executable bash code blocks.
 
 **Symptoms:**
+
 - Every `${CLAUDE_PLUGIN_ROOT}`, `${WORKTREE_PATH}`, `${BRANCH}`, `${slug}`, `$token`, `$VARIABLE` in a bash code block triggered manual approval
 - Autonomous one-shot workflows stalled waiting for human approval at each flagged command
 - The ship skill had already fixed this in v2.31.5, but the pattern was not applied project-wide
@@ -49,5 +50,6 @@ The fix: run multiple grep patterns (`\$\{`, `\$[A-Z]`, `\$[a-z]`) and verify ag
 3. **Inconsistent placeholder notation** -- community/SKILL.md used `{APP_ID}` (curly braces) instead of `<app-id>` (angle brackets). Caught by code review and standardized.
 
 ## Tags
+
 category: integration-issues
 module: plugin-instructions

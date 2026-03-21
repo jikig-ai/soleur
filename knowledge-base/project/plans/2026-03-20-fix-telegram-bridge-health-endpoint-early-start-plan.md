@@ -120,13 +120,16 @@ try {
 #### Research Insights
 
 **Bun top-level await (from Context7 docs):**
+
 - Bun natively supports top-level `await` in ES modules. Files using top-level `await` cannot be `require()`'d from other modules -- they must use `import()` or be the direct entrypoint. Since `main.ts` is the CMD entrypoint and uses `await import("./index")`, this is correct.
 - The `import()` call returns a module namespace object with all named exports. `app.boot(...)` accesses the `boot` named export.
 
 **Error handling on dynamic import (from learning: `fire-and-forget-promise-catch-handler`):**
+
 - The original plan had `await import("./index")` without error handling. If `index.ts` fails to load (e.g., grammY not installed, syntax error), the top-level `await` rejection becomes an unhandled rejection that terminates the process. Wrapping in try/catch keeps the health server alive for diagnostics and allows Docker's restart policy to handle recovery.
 
 **Why not `import("./index").catch()`:**
+
 - `try/catch` around `await` is clearer than `.catch()` for top-level sequential code. Both work, but try/catch makes the error recovery path (health server stays alive) explicit.
 
 ### Change 2: Refactor `src/index.ts` to export a `boot()` function
@@ -136,6 +139,7 @@ try {
 Convert from a top-level-execution module to an exported `boot()` function. Static imports (grammY, etc.) remain at the top -- they resolve when `main.ts` calls `import("./index")`, but by that time the health server is already listening.
 
 Key changes:
+
 - Remove the inline `createHealthServer()` call and its import
 - Remove the `HEALTH_PORT` constant (now in `main.ts`)
 - Export a `boot(healthState, healthServer)` function that:
@@ -181,13 +185,16 @@ export function boot(healthState: HealthState, healthServer: ReturnType<typeof i
 #### Research Insights
 
 **`Object.defineProperty` and `JSON.stringify` (SpecFlow edge case):**
+
 - `Object.defineProperty` with only a `get` accessor defaults to `enumerable: false`. `JSON.stringify()` (used internally by `Response.json()`) only serializes enumerable properties. Without `enumerable: true`, the health endpoint response would omit `cliState`, `messagesProcessed`, etc. after `boot()` replaces the static values with getters.
 - However, looking more closely at `health.ts`, the `fetch` handler constructs a **new object literal** for the response body (`{ status: healthy ? "ok" : "degraded", cli: state.cliState, ... }`). It reads `state.cliState` as a getter access but builds a fresh object for `Response.json()`. So `enumerable` on the `healthState` object is actually irrelevant for the response -- the getter just needs to return the correct value when accessed. Include `enumerable: true` anyway as defensive practice for any future code that might serialize `healthState` directly.
 
 **Alternative approach considered: callback-based state wiring:**
+
 - Instead of `Object.defineProperty`, `boot()` could accept a callback `onStateChange` and call it whenever state changes. Rejected because: (a) the health endpoint reads state on every request, not on change events, (b) would require storing callbacks and invoking them at every state transition, (c) `Object.defineProperty` is a well-understood JavaScript pattern for transparent property virtualization.
 
 **Test compatibility (from learning: `bun-segfault-leaked-setinterval-timers`):**
+
 - Tests import `Bridge` directly from `./bridge.ts` and `createHealthServer` from `./health.ts`. They do not import `main.ts` or `index.ts`. The refactoring does not change the `Bridge` class API or `createHealthServer` function signature, so all existing tests (including `bridge.destroy()` cleanup) continue to work unchanged.
 
 ### Change 3: Update `Dockerfile` CMD
@@ -203,10 +210,12 @@ CMD ["bun", "run", "src/main.ts"]
 #### Research Insights
 
 **HEALTHCHECK remains unchanged (from learning: `docker-healthcheck-use-native-runtime`):**
+
 - The existing `HEALTHCHECK CMD curl -f http://localhost:8080/health || exit 1` is correct for this image. The Dockerfile explicitly installs `curl` via `apt-get install -y ... curl ...` (line 5). Unlike `node:22-slim` images (which lack curl entirely), the `oven/bun:1.3.11` base image with the explicit curl install makes this safe.
 - Alternative: `bun -e "fetch(...)"` would eliminate the curl dependency, but since curl is already installed for other purposes (git operations, etc.), there is no benefit to switching.
 
 **`--start-period=120s` remains valuable (from learning: `docker-healthcheck-start-period-for-slow-init`):**
+
 - Even with the early health server start, keep `--start-period=120s`. The health endpoint returns 503 during CLI spawn, and `curl -f` treats 503 as failure (exit code 22). Without `--start-period`, Docker would count these 503 responses as health check failures and potentially mark the container unhealthy during normal CLI initialization. The start period ensures these failures are ignored.
 
 ### Change 4: Update `package.json` scripts
@@ -223,6 +232,7 @@ Update `start` and `dev` scripts to use `src/main.ts`:
 #### Research Insights
 
 **`bun --watch` with dynamic imports:**
+
 - `bun --watch` monitors the entrypoint and all its transitive imports for changes. Since `main.ts` uses `await import("./index")`, Bun still detects changes in `index.ts` and its dependencies (grammY wrappers, bridge.ts, etc.) and restarts the process. No special configuration needed for dynamic imports.
 
 ### Change 5: Update CI health check timeout (optional optimization)

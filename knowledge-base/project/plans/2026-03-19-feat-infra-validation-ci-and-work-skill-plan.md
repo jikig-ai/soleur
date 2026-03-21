@@ -39,6 +39,7 @@ Infrastructure files (`cloud-init.yml`, `*.tf`) in `apps/*/infra/` are currently
 The work skill's Phase 2 test loop currently says: "For infrastructure-only tasks (config, CI, scaffolding), tests may be skipped." This means cloud-init YAML typos, Terraform formatting violations, and schema errors pass through the agent workflow unchecked. CI (`ci.yml`) only runs `bun test` -- it has no infrastructure-specific validation.
 
 Evidence of the gap:
+
 - `apps/web-platform/infra/dns.tf` currently fails `terraform fmt -check` (exit code 3) -- this was never caught.
 - The SSH hardening plan (`2026-03-19-security-harden-sshd-config-plan.md`) modified `cloud-init.yml` without any automated schema validation.
 - Constitution already recommends SpecFlow analysis on infrastructure changes, but has no enforcement.
@@ -80,16 +81,19 @@ on:
 ### Research Insights: CI Workflow
 
 **Supply-chain security (from institutional learnings):**
+
 - Pin ALL action references to commit SHAs with version comments -- mutable tags are a supply-chain risk (ref: `2026-02-27-github-actions-sha-pinning-workflow.md`, tj-actions/changed-files compromise March 2025)
 - Avoid third-party change detection actions (`tj-actions/changed-files`, `dorny/paths-filter`) -- use `git diff` directly to minimize attack surface. The `tj-actions/changed-files` action was specifically compromised in 2025.
 - Use `printf '%s\n'` instead of `echo` for `$GITHUB_OUTPUT` writes, and always quote `"$GITHUB_OUTPUT"` (ref: `2026-03-05-github-output-newline-injection-sanitization.md`)
 
 **Runner environment findings:**
+
 - `ubuntu-latest` (24.04) does NOT have `cloud-init` pre-installed -- requires explicit `sudo apt-get install -y cloud-init`
 - `python3` IS pre-installed (3.12.3) but PyYAML is NOT -- however, `cloud-init` depends on `python3-yaml`, so installing `cloud-init` provides PyYAML as a transitive dependency
 - This means the separate `python3 -c "import yaml; ..."` YAML syntax check is redundant -- `cloud-init schema` performs YAML parsing as its first validation step. Removing the separate step simplifies the workflow.
 
 **Terraform action pinning:**
+
 - `hashicorp/setup-terraform` latest stable is **v4.0.0** (SHA: `5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85`)
 - `actions/checkout` is consistently pinned to `34e114876b0b11c390a56381ad16ebd13914f8d5` (v4.3.1) across all existing workflows
 
@@ -156,14 +160,17 @@ Add an "Infrastructure Validation" block that triggers when `git diff --name-onl
 ### Research Insights: Work Skill Modification
 
 **Pattern consistency:**
+
 - The work skill already checks for UI file patterns in Phase 0.5 scope check 7 (`page.tsx`, `layout.tsx`, etc.) and routes to UX review. Adding infra file pattern detection (`apps/*/infra/**`) follows the same pattern.
 - Per constitution: "Prefer inline instructions over Task agents for deterministic checks (shell commands with binary pass/fail outcomes)." These validation commands are deterministic -- no subagent needed.
 
 **Skill-enforced convention pattern** (from `2026-03-19-skill-enforced-convention-pattern.md`):
+
 - Constitution rules that require semantic judgment cannot use PreToolUse hooks. But infra validation is not semantic -- it's syntactic, using shell commands.
 - This means the work skill change is enforcement via instruction, complementing the CI enforcement. Both layers are needed: CI catches issues at PR time, the work skill catches them during development.
 
 **cloud-init availability on dev machines:**
+
 - `cloud-init` is available on the developer's machine (verified: version 25.3). On machines without `cloud-init`, the work skill should degrade gracefully -- warn and continue rather than block.
 
 ## Acceptance Criteria

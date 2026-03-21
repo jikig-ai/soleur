@@ -24,7 +24,7 @@ PR #637 deployed four external services for the Soleur web platform (app.soleur.
 
 ### Hetzner Online GmbH
 
-- **DPA URL:** https://www.hetzner.com/legal/terms-and-conditions/ (Section 6.2)
+- **DPA URL:** <https://www.hetzner.com/legal/terms-and-conditions/> (Section 6.2)
 - **Finding:** Hetzner ToS Section 6.2 states: "We only process personal data as a processor of orders pursuant to Art. 28 GDPR if the Customer concludes a contract for processing orders with us. This contract for processing orders is not concluded automatically."
 - **Tier coverage:** Applies to all plans including CX33.
 - **Region:** Helsinki (hel1), Finland -- EU jurisdiction. No international transfer concerns.
@@ -33,9 +33,9 @@ PR #637 deployed four external services for the Soleur web platform (app.soleur.
 
 ### Supabase Inc
 
-- **DPA URL:** https://supabase.com/legal/dpa
-- **DPA PDF:** https://supabase.com/downloads/docs/Supabase+DPA+260317.pdf
-- **TIA PDF:** https://supabase.com/downloads/docs/Supabase+TIA+250314.pdf (Supabase-provided)
+- **DPA URL:** <https://supabase.com/legal/dpa>
+- **DPA PDF:** <https://supabase.com/downloads/docs/Supabase+DPA+260317.pdf>
+- **TIA PDF:** <https://supabase.com/downloads/docs/Supabase+TIA+250314.pdf> (Supabase-provided)
 - **Finding:** Supabase DPA available as PDF. Legally binding version obtainable through PandaDoc via project dashboard's "Legal Documents" section.
 - **Tier coverage:** **CONFIRMED** -- Free tier supports DPA signing. Dashboard text: "All organizations can sign our Data Processing Addendum ("DPA") as part of their GDPR compliance." No Pro upgrade required.
 - **Region:** **eu-west-1** (Ireland, EU) -- confirmed via Supabase dashboard (project: soleur-web-platform, AWS eu-west-1). **No international data transfer. No Chapter V concerns. No TIA required for this deployment.**
@@ -45,7 +45,7 @@ PR #637 deployed four external services for the Soleur web platform (app.soleur.
 
 ### Stripe Inc
 
-- **DPA URL:** https://stripe.com/legal/dpa
+- **DPA URL:** <https://stripe.com/legal/dpa>
 - **Finding:** Stripe's DPA is incorporated into the Stripe Services Agreement automatically. No separate execution required.
 - **PCI scope:** Code review of `apps/web-platform/app/api/checkout/route.ts` confirms Stripe Checkout integration (`stripe.checkout.sessions.create()` with `window.location.href = data.url`). Card data never touches Jikigai servers. **SAQ-A eligible** (simplest PCI self-assessment).
 - **Tier coverage:** Applies to all Stripe accounts.
@@ -56,9 +56,9 @@ PR #637 deployed four external services for the Soleur web platform (app.soleur.
 
 ### Cloudflare Inc
 
-- **DPA URL:** https://www.cloudflare.com/cloudflare-customer-dpa/
+- **DPA URL:** <https://www.cloudflare.com/cloudflare-customer-dpa/>
 - **Finding:** Cloudflare DPA applies "where Cloudflare processes Personal Data as a Processor... on behalf of Customer to provide the Services" and is tied to the "Main Agreement."
-- **Tier coverage:** **CONFIRMED** -- Self-Serve Subscription Agreement constitutes the "Main Agreement." Dashboard verified: account Jean.deruelle@jikigai.com with soleur.ai zone active on free tier. No explicit "sign DPA" UI exists -- the DPA is self-executing upon service use.
+- **Tier coverage:** **CONFIRMED** -- Self-Serve Subscription Agreement constitutes the "Main Agreement." Dashboard verified: account <Jean.deruelle@jikigai.com> with soleur.ai zone active on free tier. No explicit "sign DPA" UI exists -- the DPA is self-executing upon service use.
 - **Region:** Global CDN. Transfer via DPF, SCCs (Module 2 and Module 3), and Global CBPR certification.
 - **Data processed:** IP addresses, request headers, TLS termination for `app.soleur.ai`.
 - **Verification date:** 2026-03-19 (Cloudflare dashboard confirmed)
@@ -67,7 +67,7 @@ PR #637 deployed four external services for the Soleur web platform (app.soleur.
 ### Resend (NOT IN SCOPE)
 
 - **Status:** Listed in issue #670 but zero integration code found in `apps/web-platform/`.
-- **DPA URL:** https://resend.com/legal/dpa (DPF-certified, 21 US-based sub-processors)
+- **DPA URL:** <https://resend.com/legal/dpa> (DPF-certified, 21 US-based sub-processors)
 - **Action:** When Resend integration PR is opened, trigger DPA review and expense ledger update at that time. This is exactly the type of gate Phase 6 of this issue creates.
 
 ### Telegram-Bridge Hetzner Server

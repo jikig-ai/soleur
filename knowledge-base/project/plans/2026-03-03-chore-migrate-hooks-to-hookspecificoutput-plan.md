@@ -73,11 +73,13 @@ To:
 **API Spec vs Reference Implementation:**
 
 The Claude Code hooks API documents three fields inside `hookSpecificOutput`:
+
 - `permissionDecision` (required): `"allow"`, `"deny"`, or `"ask"`
 - `updatedInput` (optional): object to modify tool input before execution
 - `systemMessage` (optional, top-level): explanation for Claude
 
 The existing `pre-merge-rebase.sh` reference includes two undocumented fields:
+
 - `hookEventName: "PreToolUse"` -- not in the API spec, likely echoed from input
 - `permissionDecisionReason` -- not documented but functional; the spec suggests using `systemMessage` at the top level instead
 

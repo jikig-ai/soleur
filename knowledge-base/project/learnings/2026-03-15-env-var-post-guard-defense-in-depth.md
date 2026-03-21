@@ -11,6 +11,7 @@ This mirrors a gap already present in the X/Twitter integration, where the only 
 Added a `LINKEDIN_ALLOW_POST` environment variable guard at the top of `cmd_post_content()` in `plugins/soleur/skills/community/scripts/linkedin-community.sh` (PR #623). The guard checks `"${LINKEDIN_ALLOW_POST:-}" != "true"` and returns 1 with an error message if the variable is not set to exactly `"true"`.
 
 Then replicated the pattern to X and Bluesky (issue #629):
+
 - Added `X_ALLOW_POST` guard to `cmd_post_tweet()` in `plugins/soleur/skills/community/scripts/x-community.sh`.
 - Added `BSKY_ALLOW_POST` guard to `cmd_post()` in `plugins/soleur/skills/community/scripts/bsky-community.sh`.
 - Added `BASH_SOURCE` guard to `bsky-community.sh` for test harness consistency (X and LinkedIn already had this).
@@ -25,6 +26,7 @@ Design decisions:
 5. **6 lines per guard, not 10** -- initial LinkedIn implementation had a redundant comment and an extra echo line. Code-simplicity review compressed it without losing clarity. X and Bluesky guards replicated the compressed form directly.
 
 Collateral changes:
+
 - Added `LINKEDIN_ALLOW_POST` to the LinkedIn script header's environment variable documentation block.
 - Added `TODO(#590)` breadcrumb in `scheduled-content-publisher.yml` for the future LinkedIn env change (deferred because `channel_to_section()` only maps discord and x -- LinkedIn is dead code there).
 - Updated SKILL.md with consolidated guard documentation covering all three platforms.
@@ -49,10 +51,12 @@ This is the same defense-in-depth principle as the `BASH_SOURCE` guard (prevents
 ## Session Errors
 
 ### LinkedIn guard session (PR #623)
+
 1. **`setup-ralph-loop.sh` path wrong in one-shot skill** -- tried `./plugins/soleur/skills/one-shot/scripts/setup-ralph-loop.sh` but the script lives at `./plugins/soleur/scripts/setup-ralph-loop.sh`. Same class of error documented in `2026-03-14-bare-repo-helper-extraction-patterns.md` (plan-prescribed paths implemented verbatim without tracing).
 2. **`shellcheck` not installed** -- fell back to `bash -n` for syntax validation. `bash -n` catches syntax errors but misses the class of issues shellcheck detects (unquoted variables, unused variables, POSIX compatibility). Not a blocker for this change but a tooling gap.
 
 ### X/Bluesky guard session (issue #629)
+
 1. **Security hook blocked workflow edit** -- `security_reminder_hook.py` flagged the `scheduled-content-publisher.yml` edit as a workflow file modification, even though the edit was a hardcoded literal (`X_ALLOW_POST: "true"`), not untrusted input. Required re-read and retry. The hook is working as designed (workflow files are high-risk), but it introduces friction for safe edits. Not worth changing the hook -- the friction is the feature.
 2. **`bun test` panic** -- bun v1.3.5 crashed with a memory allocation error during the full test suite run. Pre-existing issue unrelated to the guard changes. Targeted test (`bun test community`) worked correctly. This is the same bun stability issue seen in other sessions.
 
@@ -67,6 +71,7 @@ This is the same defense-in-depth principle as the `BASH_SOURCE` guard (prevents
 - `2026-03-14-content-publisher-channel-extension-pattern.md` -- related workflow touchpoints when adding platform channels
 
 ## Tags
+
 category: prevention
 module: plugins/soleur/skills/community
 issue: 629

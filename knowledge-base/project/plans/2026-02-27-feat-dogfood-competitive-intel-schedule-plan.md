@@ -14,12 +14,14 @@ version_bump: PATCH
 **Research sources:** claude-code-action docs, existing workflow patterns (review-reminder.yml, claude-code-review.yml), 3 institutional learnings, security-sentinel agent patterns
 
 ### Key Improvements
+
 1. Added `--max-turns` configuration to prevent premature termination of multi-step competitive scans
 2. Identified permissions gap -- workflow needs `contents: write` for claude-code-action to function, not just `read`
 3. Added duplicate issue prevention pattern from review-reminder.yml precedent
 4. Flagged read-only checkout assumption as incorrect -- `actions/checkout` provides a writable workspace in CI
 
 ### New Considerations Discovered
+
 - The agent's fallback path ("output as code block if file cannot be written") will not trigger in standard CI because `actions/checkout` creates a writable clone. The agent will write `competitive-intelligence.md` to the workspace, but the file will be discarded after the job ends (no push step). The GitHub Issue must be created by the prompt instruction, not as a fallback.
 - GitHub Actions `with:` values are NOT shell-expanded -- `$(date)` in the prompt field would be passed literally. The schedule skill already uses natural language ("today's date in YYYY-MM-DD format") which is correct.
 - The `github.token` (GITHUB_TOKEN) is automatically available and has `issues: write` permission when declared in the workflow -- no additional secret is needed for issue creation. Only `ANTHROPIC_API_KEY` is a custom secret.
@@ -121,6 +123,7 @@ with the label "scheduled-competitive-analysis" summarizing your findings.
 **The original plan incorrectly assumed CI has a read-only checkout.** `actions/checkout` creates a full writable clone in the runner's workspace. The competitive-intelligence agent will successfully write `knowledge-base/overview/competitive-intelligence.md` to disk. However, without a `git push` step, the file is discarded when the job ends.
 
 This means:
+
 - The agent's fallback path ("output as code block instead") will NOT trigger
 - The agent will write the file AND the prompt instructs issue creation
 - Both the file write (ephemeral) and issue creation (persistent) will happen
@@ -244,9 +247,9 @@ From `knowledge-base/project/learnings/2026-02-27-schedule-skill-ci-plugin-disco
 
 ### External References
 
-- claude-code-action usage docs: https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-- claude-code-action setup docs: https://github.com/anthropics/claude-code-action/blob/main/docs/setup.md
-- Claude Code GitHub Actions docs: https://code.claude.com/docs/en/github-actions
+- claude-code-action usage docs: <https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md>
+- claude-code-action setup docs: <https://github.com/anthropics/claude-code-action/blob/main/docs/setup.md>
+- Claude Code GitHub Actions docs: <https://code.claude.com/docs/en/github-actions>
 
 ### Related PRs
 

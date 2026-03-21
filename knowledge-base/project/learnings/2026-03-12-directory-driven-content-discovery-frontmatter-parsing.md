@@ -124,5 +124,6 @@ fi
 4. **Prefer directory-driven discovery over case-statement registries.** When the pattern is "for each item, do X based on metadata," the metadata belongs in the item (frontmatter), not in the orchestrator (case statement). This eliminates the coordination cost of multi-file registration.
 
 ## Tags
+
 category: integration-issues
 module: scripts/content-publisher.sh

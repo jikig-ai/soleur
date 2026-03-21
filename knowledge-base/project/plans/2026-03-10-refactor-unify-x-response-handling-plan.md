@@ -92,19 +92,23 @@ get_request() {
 ### Research Insights [Updated 2026-03-10]
 
 **Simplicity review:**
+
 - The callback-via-positional-args pattern is the simplest approach for bash. Alternatives (eval, nameref functions, temporary files) are all more complex and fragile.
 - Passing `depth` to `handle_response` (4 fixed params + varargs) is preferable to embedding the attempt counter in the retry callback args, because `handle_response` needs depth for logging but should not parse it out of the retry command.
 
 **Security review:**
+
 - The `echo "$body" | jq` pattern is safe because `$body` is in double quotes and piped to stdin. No shell expansion occurs.
 - Credential leakage prevention (`curl 2>/dev/null`) is preserved in both callers. `handle_response` never touches curl, so no new leakage vector.
 - The retry callback `"${retry_cmd[@]}"` cannot be injected by API responses -- it is constructed entirely from hardcoded function names and local variables.
 
 **Pattern recognition:**
+
 - The `discord_request` function in `discord-community.sh` (line 70) follows the same single-function pattern this refactor creates for X. Post-refactor, `x-community.sh` will have the same architecture: one shared response handler, called by method-specific wrappers.
 - The `handle_response` function is analogous to a Strategy pattern where the retry strategy (which function to call back) is injected by the caller.
 
 **Shell hardening (from learnings):**
+
 - Per `2026-03-03-set-euo-pipefail-upgrade-pitfalls.md`: The `echo "$body" | jq ... 2>/dev/null || echo "fallback"` chains in `handle_response` are correct under `set -euo pipefail` because the `|| echo` prevents pipefail from aborting on jq failure.
 - Per `2026-03-09-shell-api-wrapper-hardening-patterns.md`: All five hardening layers (input validation, transport, response parsing, error extraction, retry arithmetic) are preserved in the refactored code.
 
@@ -181,12 +185,14 @@ The only caller of `x_request` is `cmd_post_tweet` (line 552). Renaming to `post
    - A curl wrapper function that can be overridden in tests (adds a seam)
 
 2. **Pragmatic: Source the script and call the function.** Create a thin test wrapper script:
+
    ```bash
    #!/usr/bin/env bash
    source "$(dirname "$0")/../plugins/soleur/skills/community/scripts/x-community.sh"
    # Override main to prevent execution
    handle_response "$@"
    ```
+
    Then Bun tests spawn this wrapper with specific http_code/body/endpoint args. This tests `handle_response` in isolation without mocking curl.
 
 **Recommendation:** Option 2 is simpler and directly tests the extracted function. Create `test/helpers/test-handle-response.sh` that sources the script, suppresses main, and exposes `handle_response` for direct invocation. The Bun tests spawn this helper.

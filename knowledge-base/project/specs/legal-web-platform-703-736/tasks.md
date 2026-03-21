@@ -11,7 +11,7 @@
 - [x] 1.1.5 Add Section 4.3: Web Platform Service (account, payment via Stripe Checkout, workspace, BYOK, data processing acknowledgment)
 - [x] 1.1.6 Add cross-reference in Section 7.1 to new Section 7.1b for Web Platform data practices
 - [x] 1.1.7 Add Section 7.1b: Web Platform Data Practices (Supabase account data, Stripe payment, Hetzner workspace, Cloudflare CDN)
-- [x] 1.1.8 Rewrite Section 7.4 to split Plugin (local control) and Web Platform (exercisable via legal@jikigai.com) GDPR rights
+- [x] 1.1.8 Rewrite Section 7.4 to split Plugin (local control) and Web Platform (exercisable via <legal@jikigai.com>) GDPR rights
 - [x] 1.1.9 Update Section 9.1 and 9.2 to cover both Plugin and Web Platform
 - [x] 1.1.10 Update Section 10.1 and 10.2 liability language to cover both Plugin and Web Platform; add EUR 100 floor
 - [x] 1.1.11 Add Section 13.1b: Web Platform Account Termination (data deletion, payment retention per French tax law)

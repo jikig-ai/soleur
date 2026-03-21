@@ -12,6 +12,7 @@ tags: [implementation-patterns, plugin-commands]
 Soleur had 8 commands but users only regularly used 4 (brainstorm, one-shot, sync, help). The natural instinct was to "simplify" by migrating rarely-used commands to skills and consolidating the namespace. Initial brainstorm proposed migrating 6 commands to skills and creating a bare `/soleur` entry point.
 
 Research during planning revealed two blockers:
+
 1. **Plugin loader constraint**: Claude Code requires `namespace:name` format -- bare `/soleur` without a colon suffix is not supported by the plugin system.
 2. **Migration risk**: Moving commands to skills changes frontmatter format (`argument-hint` vs third-person descriptions), directory structure, argument handling (`#$ARGUMENTS`), and breaks 50+ cross-references in other commands that invoke them via the Skill tool.
 
@@ -43,5 +44,6 @@ This generalizes: "add a facade, don't reorganize the internals" -- especially w
 - Run SpecFlow analysis early to catch integration risks before committing to an approach
 
 ## Tags
+
 category: implementation-patterns
 module: plugin-commands

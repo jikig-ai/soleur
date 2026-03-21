@@ -72,7 +72,7 @@ No duplicates. Minimal overlap with existing skills.
 
 ## References
 
-- Source repo: https://github.com/andlaf-ak/claude-code-agents
+- Source repo: <https://github.com/andlaf-ak/claude-code-agents>
 - Local clone: /home/jean/git-repositories/jikig-ai/claude-code-agents
 - Soleur agents: plugins/soleur/agents/
 - Soleur skills: plugins/soleur/skills/

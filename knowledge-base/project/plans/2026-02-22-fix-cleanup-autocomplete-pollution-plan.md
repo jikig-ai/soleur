@@ -7,6 +7,7 @@
 **Research sources:** Claude Code plugin reference docs, existing skill `references/` patterns, codebase grep analysis
 
 ### Key Improvements
+
 1. Confirmed approach is proven by 8 existing skills with `references/` directories (none pollute autocomplete)
 2. Added exact line numbers and grep-verified path references for all 10 occurrences
 3. Added verification that none of the reference files have YAML frontmatter (pure content files -- no name/description to confuse the loader)
@@ -29,12 +30,14 @@ Per the [Claude Code plugin reference](https://code.claude.com/docs/en/plugins-r
 ### Research Insights
 
 **Plugin loader command discovery behavior (verified via official docs):**
+
 - The `commands/` directory uses `.md` files as the discovery format
 - The loader appears to recurse into subdirectories, namespacing by path segments (same as agents)
 - None of the 10 reference files have YAML frontmatter -- they are pure content files with no `name:` or `description:` fields, yet the loader still discovers them as commands based on file extension and location alone
 - This contrasts with the `skills/` loader, which only discovers `skills/<name>/SKILL.md` at one level of nesting (documented in learning `2026-02-12-plugin-loader-agent-vs-skill-recursion.md`)
 
 **Precedent:** 8 existing skills already use `references/` subdirectories without autocomplete pollution:
+
 - `agent-native-architecture/references/` (14 files)
 - `skill-creator/references/` (4 files)
 - `deploy/references/` (1 file)
@@ -111,18 +114,22 @@ Update `knowledge-base/project/learnings/2026-02-22-context-compaction-command-o
 ## Files Modified
 
 **Moved (10 files):**
+
 - `plugins/soleur/commands/soleur/references/*.md` -> `plugins/soleur/skills/<name>/references/*.md`
 
 **Edited (4 files):**
+
 - `plugins/soleur/skills/brainstorm/SKILL.md`
 - `plugins/soleur/skills/plan/SKILL.md`
 - `plugins/soleur/skills/review/SKILL.md`
 - `plugins/soleur/skills/work/SKILL.md`
 
 **Deleted (1 directory):**
+
 - `plugins/soleur/commands/soleur/references/`
 
 **Version bump (3 files):**
+
 - `plugins/soleur/.claude-plugin/plugin.json`
 - `plugins/soleur/CHANGELOG.md`
 - `plugins/soleur/README.md`
@@ -146,6 +153,7 @@ Update `knowledge-base/project/learnings/2026-02-22-context-compaction-command-o
 ## Implementation Notes
 
 **Execution order matters:**
+
 1. Create `references/` directories first (4 `mkdir -p` calls)
 2. Move files with `git mv` (10 moves)
 3. Update paths in SKILL.md files (10 string replacements across 4 files)
@@ -153,9 +161,11 @@ Update `knowledge-base/project/learnings/2026-02-22-context-compaction-command-o
 5. Verify with grep for old paths
 
 **Verification command:**
+
 ```text
 grep -rn 'commands/soleur/references' plugins/soleur/
 ```
+
 Must return zero results after all changes.
 
 ## Out of Scope

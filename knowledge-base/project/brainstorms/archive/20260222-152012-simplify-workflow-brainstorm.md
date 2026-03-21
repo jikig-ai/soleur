@@ -21,6 +21,7 @@ Consolidate Soleur's 8 commands into 3 by creating a unified `/soleur` entry poi
 **The problem isn't missing capability -- it's unnecessary surface area.** All 8 commands exist and work, but most users (including the author) naturally converge on brainstorm as the starting point because it routes intelligently.
 
 **Approach A (Thin Router) was chosen over:**
+
 - Monolithic command (2000+ lines, unmaintainable)
 - Progressive disclosure (adds a 9th command instead of reducing)
 
@@ -81,16 +82,19 @@ Consolidate Soleur's 8 commands into 3 by creating a unified `/soleur` entry poi
 ## Research Context
 
 ### CTO Assessment Highlights
+
 - Smart routing accuracy is the highest risk -- threshold heuristic with user override is recommended
 - Context window pressure if command file grows too large -- thin router solves this
 - Plan/work/review serve dual purposes (pipeline stages AND standalone tools) -- absorbed via intent detection
 
 ### CPO Assessment Highlights
+
 - Aligned with business validation verdict ("stop adding features" -- this is subtraction)
 - Compound has ad-hoc use case outside feature lifecycle -- absorbed via "capture" intent
 - Reversibility is high -- UX layer change only, underlying skills/agents unchanged
 
 ### Learnings Applied
+
 - "Route through existing entry points" (2026-02-13) -- exactly what this does
 - "Table-driven routing" (2026-02-22) -- domain config table pattern carries forward
 - "Command vs skill criteria" (2026-02-12) -- commands that agents should invoke become skills

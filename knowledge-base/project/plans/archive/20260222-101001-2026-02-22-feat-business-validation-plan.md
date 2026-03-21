@@ -35,6 +35,7 @@ Framework knowledge (JTBD, Blue Ocean, Mom Test, Van Westendorp) is baked into q
 
 **Gate Failure Override Flow:**
 When a kill criterion triggers:
+
 1. Agent explains why this is a red flag (specific, not generic)
 2. AskUserQuestion with options:
    - **Revise answer** -- Re-attempt the gate with more specific information
@@ -43,6 +44,7 @@ When a kill criterion triggers:
 3. If override: record `> WARNING: Kill criterion triggered at Gate N -- user chose to proceed` under the gate's heading
 
 **Detect-and-Resume (Step 0):**
+
 - Check if `knowledge-base/overview/business-validation.md` exists
 - If exists: read document, present summary table of completed gates with verdicts
 - AskUserQuestion: "Which gate would you like to revisit?" with options for each completed gate + "Full refresh" + "Done"
@@ -52,6 +54,7 @@ When a kill criterion triggers:
 Gate 3 uses web search to find real competitors and pricing data. User validates results before they enter the document. Falls back to manual input if search is empty or irrelevant. "No search results" does not mean "no competitors."
 
 **Atomic Write:**
+
 - Collect all answers through the workshop
 - Write document atomically at the end (after all gates or after STOP)
 - Document includes YAML frontmatter: `last_updated`
@@ -89,6 +92,7 @@ Create `agents/product/cpo.md` following the CMO 4-phase pattern (since CPO dele
 | **3. Delegate** | Route to appropriate product agent based on product maturity. See routing table below. |
 
 **Sharp Edges:**
+
 - Do not prescribe engineering details -- recommend product direction and constraints.
 - Flag cross-domain concerns but defer marketing/legal/ops to their domain leaders.
 - Do not duplicate spec-flow-analyzer's gap analysis or ux-design-lead's visual design.
@@ -103,6 +107,7 @@ Create `agents/product/cpo.md` following the CMO 4-phase pattern (since CPO dele
 | Cross-cutting product question (strategy, roadmap, prioritization) | CPO handles directly | Advisory assessment, no delegation needed |
 
 **Description (following CMO pattern):**
+
 ```
 "Orchestrates the product domain -- assesses product strategy, validates business models, and delegates to specialist agents (spec-flow-analyzer, ux-design-lead, business-validator). Use individual product agents for focused tasks; use this agent for cross-cutting product strategy and multi-agent coordination."
 ```
@@ -112,6 +117,7 @@ Create `agents/product/cpo.md` following the CMO 4-phase pattern (since CPO dele
 Update `commands/soleur/brainstorm.md` Phase 0.5 with:
 
 1. **Assessment question (item 4):**
+
    ```
    4. **Product strategy implications** -- Does this feature involve validating a new business idea, assessing product-market fit, evaluating customer demand, competitive positioning, or determining whether to build something?
    ```

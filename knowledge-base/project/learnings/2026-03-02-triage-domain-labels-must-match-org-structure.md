@@ -26,5 +26,6 @@ This caused a disconnect: triage classified issues into domains that couldn't ro
 Any automated system that classifies by domain must use the canonical organizational taxonomy, not an ad-hoc one invented at implementation time. This is the same class of problem as "domain enumeration drift" (see `2026-02-22-domain-prerequisites-refactor-table-driven-routing.md`). The fix is simple: when adding a new workflow that routes by domain, reference the Domain Leaders table in `plugins/soleur/AGENTS.md` as the single source of truth.
 
 ## Tags
+
 category: integration-issues
 module: ci-workflows

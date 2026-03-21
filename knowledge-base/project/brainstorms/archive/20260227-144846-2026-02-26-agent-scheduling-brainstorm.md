@@ -39,12 +39,14 @@ A general-purpose scheduling primitive that lets users schedule any Soleur agent
 ## CTO Technical Assessment
 
 ### Architecture Risks
+
 - **Concurrent scheduled runs** could cause git conflicts. Worktree isolation is mandatory per run.
 - **Silent failures** — failed runs produce no alert. Post-run reporting (issue comment, Discord) should be built into the workflow template.
 - **GitHub Actions cron granularity** — minimum ~5 min, practical variance ~15 min. Not suitable for sub-minute scheduling.
 - **GITHUB_TOKEN cascade limitation** — workflows triggered by GITHUB_TOKEN don't trigger other workflows. All downstream effects must be in a single workflow.
 
 ### Capability Gaps Identified
+
 - No run-history or job-log mechanism (use GitHub Actions run history)
 - No cost-gate mechanism (deferred)
 - No health-check or alerting skill (post-run reporting in workflow template addresses this)

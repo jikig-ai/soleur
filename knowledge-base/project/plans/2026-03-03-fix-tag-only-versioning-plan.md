@@ -33,9 +33,11 @@ Migrate from CI-committed version files to tag-only versioning. The release work
 ### File: `.github/workflows/version-bump-and-release.yml`
 
 1. **Change version computation** (lines 130-148): Instead of reading `plugin.json`, derive the current version from the latest release using `gh release view`:
+
    ```bash
    CURRENT=$(gh release view --json tagName --jq '.tagName // "v0.0.0"' | sed 's/^v//')
    ```
+
    **Why `gh release view` not `gh release list`:** `gh release list` sorts by creation date, not semver. If someone manually creates a hotfix release `v3.8.5` after `v3.9.0`, `gh release list --limit 1` returns the hotfix. `gh release view` (no tag arg) returns GitHub's designated "latest" release, which respects semver ordering.
 
 2. **Delete steps:** "Configure git" (lines 34-37), "Compute component counts" (lines 198-211), "Update version files" (lines 213-257), "Verify version consistency" (lines 258-292), "Commit and push" (lines 294-308).
@@ -55,6 +57,7 @@ Migrate from CI-committed version files to tag-only versioning. The release work
 - Remove `'plugins/soleur/CHANGELOG.md'` from `paths:` trigger (file deleted)
 - Remove `'plugins/soleur/.claude-plugin/plugin.json'` from `paths:` trigger (now static)
 - Add `GITHUB_TOKEN` env var to the Eleventy build step:
+
   ```yaml
   - name: Build docs
     run: npx @11ty/eleventy
@@ -63,6 +66,7 @@ Migrate from CI-committed version files to tag-only versioning. The release work
   ```
 
 ### Resulting workflow structure:
+
 ```
 checkout → check_plugin → find_pr → bump_type → compute_version → idempotency → extract_changelog → create_release → discord
 ```
@@ -74,6 +78,7 @@ checkout → check_plugin → find_pr → bump_type → compute_version → idem
 ### File: `plugins/soleur/docs/_data/github.js` (NEW — replaces separate changelog.js and plugin.js API calls)
 
 Single shared data file that fetches the releases list once:
+
 - Fetch `GET /repos/jikig-ai/soleur/releases?per_page=30`
 - Use `GITHUB_TOKEN` if available (1000 req/hr in CI vs 60 unauthenticated)
 - **In CI** (`process.env.CI`): throw on non-200 response — a blank changelog is a broken build
@@ -84,6 +89,7 @@ Single shared data file that fetches the releases list once:
 ### File: `plugins/soleur/docs/_data/changelog.js`
 
 Rewrite to delegate to `github.js`:
+
 ```javascript
 import github from "./github.js";
 export default async function () {
@@ -95,6 +101,7 @@ export default async function () {
 ### File: `plugins/soleur/docs/_data/plugin.js`
 
 Read `plugin.json` for all fields, overlay version from `github.js`:
+
 ```javascript
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -122,6 +129,7 @@ Add a "View all releases on GitHub" link at the bottom of the changelog page.
 
 - Set `"version": "0.0.0-dev"` (sentinel — never updated by CI)
 - Remove hardcoded counts from `"description"`:
+
   ```
   "A full AI organization across engineering, finance, marketing, legal, operations, product, sales, and support that compounds your company knowledge over time."
   ```
@@ -133,6 +141,7 @@ Add a "View all releases on GitHub" link at the bottom of the changelog page.
 ### File: `README.md`
 
 - Replace static version badge with dynamic shields.io:
+
   ```
   [![Version](https://img.shields.io/github/v/release/jikig-ai/soleur)](https://github.com/jikig-ai/soleur/releases)
   ```
@@ -140,6 +149,7 @@ Add a "View all releases on GitHub" link at the bottom of the changelog page.
 ### File: `plugins/soleur/AGENTS.md`
 
 Rewrite "Versioning Requirements" and "Pre-Commit Checklist" sections:
+
 - Version derived from git tags / GitHub Releases (no committed version files)
 - CI creates `vX.Y.Z` tags via `gh release create` (no push to main)
 - PR authors still write `## Changelog` in PR body

@@ -25,5 +25,6 @@ Bare repos are a chicken-and-egg problem: the script that syncs files is itself 
 Also: `git fetch origin <branch>` and `git fetch origin <branch>:<branch>` are fundamentally different. The former updates tracking refs only; the latter advances the local ref. In bare repos where `git pull` is unavailable, the refspec form is essential.
 
 ## Tags
+
 category: shell-scripts
 module: worktree-manager

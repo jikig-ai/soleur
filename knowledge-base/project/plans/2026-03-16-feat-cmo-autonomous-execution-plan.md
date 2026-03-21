@@ -75,6 +75,7 @@ permissions:
 ```
 
 **Steps:**
+
 1. `actions/checkout` (SHA-pinned)
 2. `setup-node` + `npm ci` (for Eleventy build)
 3. Pre-create `scheduled-seo-aeo-audit` label
@@ -87,6 +88,7 @@ permissions:
 5. Discord failure notification (conditional)
 
 **Files to create:**
+
 - `.github/workflows/scheduled-seo-aeo-audit.yml`
 
 **Success criteria:** `gh workflow run scheduled-seo-aeo-audit.yml` completes, commits SEO fixes (or validates no issues), creates labeled issue.
@@ -109,6 +111,7 @@ permissions:
 ```
 
 **Steps:**
+
 1. `actions/checkout` (SHA-pinned)
 2. `setup-node` + `npm ci` (for build validation)
 3. Pre-create `scheduled-growth-execution` label
@@ -127,6 +130,7 @@ permissions:
 5. Discord failure notification (conditional)
 
 **Files to create:**
+
 - `.github/workflows/scheduled-growth-execution.yml`
 
 **Success criteria:** Manual dispatch applies keyword optimizations to at least one page, builds successfully, creates issue.
@@ -142,6 +146,7 @@ Add `--headless` support to `plugins/soleur/skills/content-writer/SKILL.md`:
 - Match the established pattern in `plugins/soleur/skills/social-distribute/SKILL.md` (lines 12-14, 234, 312)
 
 **Files to modify:**
+
 - `plugins/soleur/skills/content-writer/SKILL.md` — add headless detection + bypass logic
 
 **Success criteria:** `/soleur:content-writer <topic> --headless` completes without AskUserQuestion, writes article to disk.
@@ -164,6 +169,7 @@ permissions:
 ```
 
 **Steps:**
+
 1. `actions/checkout` (SHA-pinned)
 2. `setup-node` + `npm ci` (for Eleventy build validation)
 3. Pre-create `scheduled-content-generator` label
@@ -187,6 +193,7 @@ permissions:
 4. Discord failure notification (conditional)
 
 **Files to create:**
+
 - `.github/workflows/scheduled-content-generator.yml`
 
 **Success criteria:** Manual dispatch produces an article in `plugins/soleur/docs/blog/`, a distribution file in `knowledge-base/marketing/distribution-content/`, updates the SEO refresh queue, and the Eleventy build succeeds.
@@ -224,17 +231,20 @@ This is explicitly deferred from this PR. Track as a follow-up issue.
 ## Test Scenarios
 
 ### SEO/AEO Audit
+
 - Given the docs site has JSON-LD issues, when the audit runs, then fixes are committed and an issue documents findings
 - Given no SEO issues exist, when the audit runs, then validate-seo.sh passes and a "no issues found" issue is created
 - Given the Eleventy build fails after fixes, when the audit runs, then no commit is made and Discord is notified
 
 ### Content Generator
+
 - Given the SEO refresh queue has unwritten items, when the generator runs, then an article + distribution file are committed and the queue item is marked with `generated_date`
 - Given all queue items have `generated_date`, when the generator runs, then an "SEO refresh queue exhausted" issue is created and no article is generated
 - Given the fact-checker returns FAIL citations, when running in `--headless` mode, then the content-writer aborts and no article is committed
 - Given the Eleventy build fails with the new article, when the generator runs, then no commit is made and Discord is notified
 
 ### Growth Execution
+
 - Given the SEO refresh queue has Priority 1 stale pages, when growth execution runs, then keyword optimizations are applied and the build validates
 - Given no stale pages exist, when growth execution runs, then a "no pages to optimize" issue is created
 

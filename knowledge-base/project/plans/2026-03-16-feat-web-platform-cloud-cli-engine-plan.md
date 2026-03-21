@@ -216,6 +216,7 @@ for await (const message of runner) {
 - [ ] Document findings: what works, what breaks, what needs adaptation
 
 **Pass/fail criteria:**
+
 - PASS: Agent responds, can read/write KB files, subagents spawn, review gates interceptable → proceed to Phase 1
 - FAIL: Tools don't work or SDK rejects Soleur agent format → evaluate fallback (CLI subprocess via Telegram bridge pattern)
 
@@ -244,6 +245,7 @@ Everything a user needs to experience the core value: sign up, provide key, talk
 - [ ] 1.15 Deploy to Railway/Fly.io — persistent volume for `/workspaces/`
 
 **Acceptance criteria:**
+
 - [ ] User signs up via magic link, provides Anthropic API key, sees leader selector
 - [ ] Selects leader → chat opens → agent streams response in real-time
 - [ ] Agent reads/writes KB files in user's workspace
@@ -253,6 +255,7 @@ Everything a user needs to experience the core value: sign up, provide key, talk
 - [ ] BYOK key encrypted at rest, never logged
 
 **Test scenarios:**
+
 - Given valid BYOK key, when user chats with CMO, then streaming response appears
 - Given invalid key, when submitted, then clear error with retry option
 - Given agent at review gate, when user selects option in chat, then execution resumes
@@ -270,6 +273,7 @@ Only build after Phase 1 users tell you what they need to see. Likely scope:
 - [ ] 2.5 Execution history — list of completed conversations with outcomes
 
 **Acceptance criteria:**
+
 - [ ] User browses KB directory tree and reads rendered markdown
 - [ ] Search returns results across all artifact types
 - [ ] KB updates in real-time when agent writes files

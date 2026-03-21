@@ -17,6 +17,7 @@ Create a `pencil-setup` skill that auto-detects, installs, and registers the Pen
 Pencil MCP tools are required for visual design workflows (ux-design-lead agent, brainstorm visual handoffs) but have no automated setup path. The MCP server is a Go binary bundled inside the `highagency.pencildev` IDE extension — it can't be declared in `plugin.json` (HTTP-only). Users must manually install the extension, hope auto-registration triggers, and troubleshoot stale paths when extensions update.
 
 **Confirmed issues from spike (2026-02-27):**
+
 - Registration goes stale on extension updates (v0.6.25 registered, v0.6.26 installed)
 - `claude mcp add` errors on duplicate names (exit 1) — need remove-then-add
 - Default scope is `local` (project-level) — need `-s user` for global
@@ -80,6 +81,7 @@ A single SKILL.md file with inline bash blocks. The LLM runs 5 sequential comman
 ### `plugins/soleur/agents/product/design/ux-design-lead.md`
 
 Replace prerequisite check (lines 9-11):
+
 ```
 # Before:
 "The Pencil extension is required for visual design. Install it from https://docs.pencil.dev/getting-started/installation"

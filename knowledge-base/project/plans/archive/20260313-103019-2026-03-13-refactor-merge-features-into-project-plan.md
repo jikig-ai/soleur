@@ -17,6 +17,7 @@ The knowledge-base taxonomy principle is "top-level directories = domains." `fea
 ## Proposed Solution
 
 Three-phase migration following the pattern established in commit 91ae5be:
+
 1. `git mv` directories (preserving history)
 2. Bulk update all path references
 3. Grep-verify zero remaining old-path references

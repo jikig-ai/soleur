@@ -13,12 +13,14 @@ date: 2026-02-22
 **Research sources:** codebase analysis, institutional learnings, shell scripting patterns
 
 ### Key Improvements
+
 1. Added precise line-by-line edit instructions for compound-capture SKILL.md
 2. Added complete shell function for cleanup-merged brainstorm/plan archival with edge case handling
 3. Identified additional consistency fix needed in branch detection prose (line 321 and 323)
 4. Added `external/` directory exclusion note for one-time cleanup
 
 ### New Considerations Discovered
+
 - The `compound-capture` code fence contains literal `${current_branch#feat-}` which violates the constitution's "No command substitution in .md files" rule -- the fix should use prose instructions instead
 - The `external/` spec directory must be excluded from one-time cleanup (it contains reference docs, not feature specs)
 - The `cleanup-merged` script uses `mv` not `git mv` for spec archival -- brainstorm/plan archival should match this convention (non-git-tracked archive moves)
@@ -111,11 +113,13 @@ The constitution states: "Never use shell variable expansion (`${VAR}`, `$VAR`, 
 **Change 1a -- Branch detection (line 321):**
 
 Replace:
+
 ```text
 Run `git branch --show-current` to get the current branch. If it does not start with `feat-`, skip consolidation entirely.
 ```
 
 With:
+
 ```text
 Run `git branch --show-current` to get the current branch. If it does not start with `feat-` or `feat/`, skip consolidation entirely.
 ```
@@ -123,11 +127,13 @@ Run `git branch --show-current` to get the current branch. If it does not start 
 **Change 1b -- Section heading prose (line 323):**
 
 Replace:
+
 ```text
 **If on a `feat-*` branch, run the following steps automatically:**
 ```
 
 With:
+
 ```text
 **If on a feature branch (`feat-*` or `feat/*`), run the following steps automatically:**
 ```
@@ -135,11 +141,13 @@ With:
 **Change 1c -- Slug extraction (lines 327-331):**
 
 Replace the bash code fence:
+
 ```bash
 slug="${current_branch#feat-}"
 ```
 
 With prose instructions:
+
 ```text
 Extract the slug from the current branch name by stripping the branch type prefix. Handle all prefix variants:
 - `feat/` -> strip prefix (e.g., `feat/domain-leaders` -> `domain-leaders`)
@@ -152,6 +160,7 @@ Extract the slug from the current branch name by stripping the branch type prefi
 ### Research Insights for Task 1
 
 **Best practice:** The ship and merge-pr skills already use the correct prose-based approach -- they say "strip `feat-`, `feature/`, `fix-`, `fix/` prefix" as natural language that the LLM interprets. This is more resilient than a bash code fence because:
+
 1. It handles all variants without explicit bash parameter expansion
 2. It complies with the constitution's "no shell variable expansion in .md" rule
 3. It lets the LLM adapt to any future prefix convention
@@ -254,6 +263,7 @@ git commit -m "fix: archive 93 orphaned KB artifacts from completed features"
 ### Research Insights for Task 3
 
 **Exclusions:** Two directories in `knowledge-base/project/specs/` must NOT be archived:
+
 - `external/` -- contains reference docs (claude-code.md, codex.md, opencode.md), not feature specs
 - `feat-fix-archiving/` -- the active feature branch for this issue
 
@@ -295,21 +305,25 @@ To:
 ## Test Scenarios
 
 ### Given a branch named feat/domain-leaders, when compound runs
+
 - Then the slug extracted is `domain-leaders`
 - And `knowledge-base/project/brainstorms/*domain-leaders*` files are discovered
 - And `knowledge-base/project/plans/*domain-leaders*` files are discovered
 - And `knowledge-base/project/specs/feat-domain-leaders/` is discovered
 
 ### Given a branch named feat-legacy-name (hyphenated), when compound runs
+
 - Then the slug extracted is `legacy-name`
 - And artifact discovery works the same as with slash convention
 
 ### Given a merged PR whose branch was feat/code-coverage, when cleanup-merged runs
+
 - Then spec directory `knowledge-base/project/specs/feat-code-coverage/` is archived
 - And brainstorms matching `*code-coverage*` are archived
 - And plans matching `*code-coverage*` are archived
 
 ### Given orphaned artifacts with no feature branch, when one-time cleanup runs
+
 - Then all active brainstorms are moved to `knowledge-base/project/brainstorms/archive/`
 - And all active plans are moved to `knowledge-base/project/plans/archive/`
 - And all active specs (except external/ and feat-fix-archiving/) are moved to `knowledge-base/project/specs/archive/`

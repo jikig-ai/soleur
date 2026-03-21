@@ -97,11 +97,13 @@ Use `parentId` to scope `batch_get` searches. Searching with `patterns: [{ "type
 
 **Badge Structure Prediction:**
 Based on the CSS that was deleted in PR #317, the badge element had:
+
 - A container frame with `border-radius` (pill shape), `border: 1px solid` accent color, horizontal layout
 - A dot child (small circle with `background: accent`, `box-shadow` glow)
 - A text child with "The Company-as-a-Service Platform"
 
 In .pen format, this maps to:
+
 - Frame with `cornerRadius: [large_value]` or `cornerRadius: "pill"`, `stroke` property, `layout: "horizontal"`
 - Child frame (dot): small width/height, `fill` set to accent color, `cornerRadius` making it circular
 - Child text: `content: "The Company-as-a-Service Platform"`
@@ -128,6 +130,7 @@ The deletion target is the top-level badge container frame. Deleting it with `D(
 
 **Padding Format in .pen Files:**
 From the Pencil design system guidelines, padding in `batch_design` operations accepts these formats:
+
 - Single number: `padding: 32` (uniform all sides)
 - 2-element array: `padding: [16, 32]` (vertical, horizontal)
 - 4-element array: `padding: [16, 32, 16, 32]` (top, right, bottom, left)
@@ -159,6 +162,7 @@ Since .pen files are opaque (encrypted binary), the `get_screenshot` tool is the
 
 **After-State Checklist:**
 In the "after" screenshot, verify:
+
 - No badge/pill appears above the headline
 - The headline "Build a Billion-Dollar Company. Alone." is the first visible text in the hero
 - The vertical spacing between the top of the hero section and the headline is visibly tighter than the "before" screenshot
@@ -179,6 +183,7 @@ In the "after" screenshot, verify:
 ### Research Insights
 
 **Failure Modes and Recovery:**
+
 1. **Pencil not running** -- `get_editor_state` returns WebSocket error. Recovery: launch Pencil app, re-run `pencil-setup` skill if needed.
 2. **Badge element not found** -- the .pen file may have been updated separately, or the badge may use different text. Recovery: visually inspect with `get_screenshot` and search for text containing "CaaS" or "Company" instead.
 3. **Padding format mismatch** -- writing a single value when a 4-value array is expected could collapse horizontal padding. Recovery: read current value first, preserve format.

@@ -13,6 +13,7 @@ A full-scope infrastructure security agent (`soleur:engineering:infra:infra-secu
 ### The Gap
 
 During the soleur.ai domain purchase workflow, we identified that:
+
 - **ops-advisor** tracks domain costs and registrations (ledger)
 - **ops-research** researches and purchases domains (acquisition)
 - **terraform-architect** generates IaC for Hetzner/AWS (compute provisioning)
@@ -46,6 +47,7 @@ Considered splitting into infra-audit (read-only) and infra-config (write) agent
 ## Scope
 
 ### In Scope
+
 - DNS record management (A, AAAA, CNAME, TXT, MX)
 - SSL/TLS mode configuration and verification
 - DNSSEC enablement and validation
@@ -57,6 +59,7 @@ Considered splitting into infra-audit (read-only) and infra-config (write) agent
 - SSL certificate chain validation
 
 ### Out of Scope
+
 - IaC generation (terraform-architect's domain)
 - Domain purchase or registration (ops-research's domain)
 - Cost tracking (ops-advisor's domain)

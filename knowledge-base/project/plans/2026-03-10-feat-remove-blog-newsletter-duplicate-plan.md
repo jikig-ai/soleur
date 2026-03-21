@@ -13,11 +13,13 @@ deepened: 2026-03-10
 **Research sources:** Nunjucks block inheritance learning, Eleventy blog post pattern learning, template architecture analysis
 
 ### Key Improvements
+
 1. Added Nunjucks template inheritance verification confirming the footer newsletter renders outside `{% block content %}` and is unaffected by child template overrides
 2. Added build verification step to test scenarios (Eleventy build + HTML output grep)
 3. Added analytics tracking consideration -- `location: blog` events will stop; confirmed this is acceptable since footer captures the same users
 
 ### New Considerations Discovered
+
 - The `newsletter-form.njk` partial uses `location` variable for both HTML element IDs and Plausible analytics tracking -- removing the blog include eliminates the `location: blog` analytics segment (acceptable trade-off since footer captures the same audience)
 - Nunjucks block inheritance means the footer newsletter (outside `{% block content %}`) renders independently of child template content -- no risk of accidentally removing the footer form
 

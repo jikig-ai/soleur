@@ -46,6 +46,7 @@ This passes `SUPABASE_SERVICE_ROLE_KEY`, `BYOK_ENCRYPTION_KEY`, `STRIPE_SECRET_K
 **Exploitability:** High. The agent subprocess runs with `permissionMode: "default"`, which means Bash tool calls require user approval -- but the `canUseTool` callback does not gate Bash. An attacker who controls the user message can instruct the agent to read environment variables via Bash, `printenv`, or `/proc/self/environ`. Even if `canUseTool` were extended to block Bash, the correct defense-in-depth posture is to never expose secrets to the subprocess in the first place.
 
 **Blast radius:**
+
 - `SUPABASE_SERVICE_ROLE_KEY` -- full database access, bypasses RLS
 - `BYOK_ENCRYPTION_KEY` -- ability to decrypt every user's stored API keys
 - `STRIPE_SECRET_KEY` -- ability to issue refunds, read customer data
@@ -57,12 +58,14 @@ This passes `SUPABASE_SERVICE_ROLE_KEY`, `BYOK_ENCRYPTION_KEY`, `STRIPE_SECRET_K
 ### Research Insights
 
 **CWE Classification:**
+
 - Primary: [CWE-526](https://cwe.mitre.org/data/definitions/526.html) -- Cleartext Storage of Sensitive Information in an Environment Variable
 - Related: CWE-209 (already mitigated via `error-sanitizer.ts`)
 
 **OWASP Mapping:** A05:2021 Security Misconfiguration. The process.env spread is a textbook example of overly permissive default configuration.
 
 **Attack vectors beyond `echo`:**
+
 - `/proc/self/environ` -- readable by the process owner, no Bash tool needed if the agent has file Read access (gated by `canUseTool` to workspace, but defense-in-depth demands the vars not exist at all)
 - `env` / `printenv` / `set` -- Bash builtins that list all environment variables
 - Node.js `process.env` -- if the subprocess runs Node.js code via MCP tools
@@ -100,6 +103,7 @@ The Claude Agent SDK spawns `claude` CLI as a subprocess. The [Claude Code envir
 | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | `1` | Umbrella disable for autoupdater + feedback + error reporting + telemetry |
 
 The subprocess does **not** need:
+
 - `SUPABASE_SERVICE_ROLE_KEY` (server-side DB access only)
 - `BYOK_ENCRYPTION_KEY` (server-side encryption only)
 - `STRIPE_SECRET_KEY` (server-side Stripe operations only)
@@ -269,6 +273,7 @@ const SERVER_SECRETS = [
 **Dependencies:** None. This is a self-contained change to a single file.
 
 **Risks:**
+
 - If the Claude CLI or Agent SDK requires an undocumented env var, the agent subprocess will fail silently or with an unclear error. Mitigation: test the full agent flow after deployment; add the var to the allowlist if needed.
 - The `AGENT_ENV_ALLOWLIST` array is TypeScript `as const` so adding new vars requires a code change, not a config change. This is the correct tradeoff for security-critical code.
 - Proxy vars (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`) are in the allowlist because blocking them would break the subprocess in corporate environments. These are infrastructure config, not secrets.

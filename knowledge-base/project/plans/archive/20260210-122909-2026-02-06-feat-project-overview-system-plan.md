@@ -47,6 +47,7 @@ Use architectural boundaries for component detection:
 3. **Exclude by default**: `tests/`, `dist/`, `node_modules/`, generated code
 
 For this codebase, detected components:
+
 - `cli` (entry point)
 - `plugins` (plugin system)
 - `converters` (format conversion)
@@ -202,6 +203,7 @@ graph LR
 ### Phase 1: Static Structure (Manual)
 
 Create initial `knowledge-base/overview/` structure manually:
+
 - `README.md` with project overview
 - `components/` directory with initial component files
 
@@ -210,6 +212,7 @@ Create initial `knowledge-base/overview/` structure manually:
 ### Phase 2: Component Template
 
 Define and document component template:
+
 - YAML frontmatter schema
 - Section structure
 - Example content
@@ -219,6 +222,7 @@ Define and document component template:
 ### Phase 3: /sync Integration
 
 Extend `/sync` command:
+
 - Add `overview` area to valid areas
 - Implement component detection heuristics
 - Implement template generation

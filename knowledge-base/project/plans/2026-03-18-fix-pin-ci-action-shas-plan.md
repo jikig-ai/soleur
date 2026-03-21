@@ -134,6 +134,7 @@ uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
 18 other workflows in this repository already pin `actions/checkout` to `34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1`. After this fix, all 19 workflows will be consistent.
 
 Workflows checked:
+
 - `ci.yml`, `cla.yml`, `claude-code-review.yml`, `deploy-docs.yml`, `post-merge-monitor.yml`
 - `review-reminder.yml`, `scheduled-bug-fixer.yml`, `scheduled-campaign-calendar.yml`
 - `scheduled-community-monitor.yml`, `scheduled-competitive-analysis.yml`
@@ -156,7 +157,7 @@ This means the behavioral diff of this change is exactly zero -- we are freezing
 
 ## References
 
-- GitHub security advisory on tag mutability: https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions
+- GitHub security advisory on tag mutability: <https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions>
 - Related issue: #716
 - Found during review of: #715
 - Existing SHA-pinned workflows: `.github/workflows/ci.yml`, `.github/workflows/deploy-docs.yml`, `.github/workflows/cla.yml`

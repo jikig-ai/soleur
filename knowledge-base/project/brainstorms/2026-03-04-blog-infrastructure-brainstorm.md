@@ -57,11 +57,13 @@ The blog will host three content types at high cadence (multiple posts per week,
 ## Research Inputs
 
 ### CMO Assessment
+
 - Strong recommendation for `/blog/` over `/articles/` based on SEO, convention, and AEO signals
 - Identified clean URLs, RSS, and Schema.org upgrade as P1 gaps
 - Noted that Vercel uses `/blog` URL but sometimes calls posts "articles" in copy
 
 ### Learnings Research (10 files)
+
 - `content-writer` skill already generates articles with Eleventy frontmatter and JSON-LD
 - Marketing strategy unification identified blog infrastructure as the #1 capacity blocker
 - GEO/AEO research: citations, statistics, quotations each give +30-40% AI visibility

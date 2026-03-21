@@ -140,6 +140,7 @@ Same two-step process for `actions/checkout@v4`. The resolved SHAs are embedded 
 ### Cron Validation Rules (Natural Language in SKILL.md)
 
 The SKILL.md instructs the LLM to:
+
 1. Verify the expression has exactly 5 space-separated fields
 2. Verify each field contains only valid characters: `0-9`, `*`, `/`, `-`, `,`
 3. Reject named values (`MON`, `JAN`) — GitHub Actions POSIX cron does not support them
@@ -172,10 +173,12 @@ The SKILL.md instructs the LLM to:
 ## Dependencies & Risks
 
 **Dependencies:**
+
 - `claude-code-action` must support running Soleur plugin skills from a checked-out repo (spike required)
 - `ANTHROPIC_API_KEY` must be configured as a repository secret
 
 **Risks:**
+
 - `claude-code-action` plugin discovery may not auto-detect Soleur — mitigation: spike before implementation, design fallback path
 - GitHub Actions cron has ~15 min variance — mitigation: document limitation
 - Long-running skills may overlap — mitigation: concurrency groups (with documented queue limitation)
@@ -206,6 +209,7 @@ The SKILL.md instructs the LLM to:
 ## References & Research
 
 ### Internal References
+
 - Cron workflow pattern: `.github/workflows/review-reminder.yml`
 - claude-code-action usage: `.github/workflows/claude-code-review.yml`
 - Discord webhook pattern: `.github/workflows/auto-release.yml`
@@ -215,6 +219,7 @@ The SKILL.md instructs the LLM to:
 - Merge-pr skill design lessons: `knowledge-base/project/learnings/2026-02-22-merge-pr-skill-design-lessons.md`
 
 ### Related Work
+
 - Issue: #312
 - Brainstorm: `knowledge-base/project/brainstorms/2026-02-26-agent-scheduling-brainstorm.md`
 - Spec: `knowledge-base/project/specs/feat-agent-scheduling/spec.md`

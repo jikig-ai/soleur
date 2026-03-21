@@ -21,7 +21,7 @@ Multiple reference files contain hardcoded Claude 3/3.5 model IDs that are now o
 
 ## Research Enhancement (2026-02-22)
 
-Verified model IDs against official Anthropic documentation at https://platform.claude.com/docs/en/about-claude/models/overview
+Verified model IDs against official Anthropic documentation at <https://platform.claude.com/docs/en/about-claude/models/overview>
 
 **Key correction:** Lines 238-239 of `agent-execution-patterns.md` were flagged as "already updated" but use old Claude 4.0 IDs (`claude-sonnet-4-20250514`, `claude-opus-4-20250514`). These must also be updated to the latest 4.6 aliases.
 
@@ -32,7 +32,7 @@ Verified model IDs against official Anthropic documentation at https://platform.
 
 ## Model ID Mapping
 
-Source: https://platform.claude.com/docs/en/about-claude/models/overview
+Source: <https://platform.claude.com/docs/en/about-claude/models/overview>
 
 ### Code examples (where exact model ID is used in API calls)
 
@@ -132,5 +132,5 @@ grep -rn "claude-opus-4" plugins/soleur/skills/
 
 - Issue: #219
 - Existing 4.x convention: `apps/telegram-bridge/` uses `claude-opus-4-6`
-- Official model docs: https://platform.claude.com/docs/en/about-claude/models/overview
+- Official model docs: <https://platform.claude.com/docs/en/about-claude/models/overview>
 - Lines 238-239 of `agent-execution-patterns.md` had stale Claude 4.0 IDs -- updated to 4.6

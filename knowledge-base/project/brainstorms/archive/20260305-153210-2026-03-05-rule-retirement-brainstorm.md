@@ -19,6 +19,7 @@ A two-layer system to control governance rule growth and prevent context window 
 **Prior art:** Three plan reviewers rejected full automation (Layer 2 of self-healing workflow) on 2026-03-03 as premature. What changed: the concern is not "automate retirement" but "control context budget." The scheduled audit is a lightweight script, not the full CI sweep that was rejected. The compound gate is a warning, not a blocking gate.
 
 **Approach rationale:**
+
 - Scheduled audit catches drift before it compounds (bi-weekly)
 - Compound gate catches duplication at the source (per-session)
 - Neither requires session counting infrastructure or cross-session aggregation

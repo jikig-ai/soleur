@@ -81,6 +81,7 @@ Source: Conversations with tentative users (mix of technical and non-technical f
 ## Domain Leader Assessments
 
 ### CPO Assessment
+
 - Business validation (2026-03-12) gave PIVOT verdict — demand evidence flagged
 - Web platform spec does not exist — no architecture doc, no prototype
 - "Building a web platform is building a second product" — doubles maintenance surface for solo founder
@@ -88,6 +89,7 @@ Source: Conversations with tentative users (mix of technical and non-technical f
 - External user validation: 1-2 informal conversations total, below 5-person threshold
 
 ### CTO Assessment
+
 - 65-70% of agent value depends on CLI-native tool infrastructure
 - Four Claude Code-specific primitives block portability: Task/subagent spawning, Skill tool chaining, AskUserQuestion, $ARGUMENTS interpolation
 - Cloud CLI Engine is the only approach that preserves this without reimplementation
@@ -95,6 +97,7 @@ Source: Conversations with tentative users (mix of technical and non-technical f
 - Knowledge-base architecture mismatch: git-based → needs either git backend or database for web visibility
 
 ### Key Learnings (from knowledge-base/project/learnings/)
+
 - **Platform risk materialization (2026-02-25):** Thesis and revenue plan are separable. Horizontal features get absorbed by platform owners. Vertical depth and cross-platform presence survive.
 - **Codex portability scan (2026-03-10):** Agents 67.7% portable (prose), skills 57.9% non-portable (orchestration). Cloud CLI Engine sidesteps portability entirely.
 - **Agent context-blindness (2026-02-22):** Agents without full project context produce misaligned outputs. Cloud CLI preserves full context.

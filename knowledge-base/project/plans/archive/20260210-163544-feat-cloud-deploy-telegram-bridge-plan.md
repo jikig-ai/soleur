@@ -105,6 +105,7 @@ If the user sends a message while the CLI is processing a previous one, the brid
 The bridge implements the subset of the Claude Code WebSocket protocol documented in the [Companion project's WEBSOCKET_PROTOCOL_REVERSED.md](https://github.com/The-Vibe-Company/companion/blob/main/WEBSOCKET_PROTOCOL_REVERSED.md):
 
 **Startup sequence:**
+
 1. Bridge starts WebSocket server on `127.0.0.1:PORT` (localhost only)
 2. Bridge spawns CLI: `claude --sdk-url ws://127.0.0.1:PORT --print --output-format stream-json --input-format stream-json`
 3. CLI connects as WebSocket client with Bearer token from `CLAUDE_CODE_SESSION_ACCESS_TOKEN`
@@ -112,6 +113,7 @@ The bridge implements the subset of the Claude Code WebSocket protocol documente
 5. Bridge is now ready to relay messages
 
 **Message types the bridge handles:**
+
 - `system/init` -- CLI handshake; bridge acknowledges
 - `user` -- Bridge sends user's Telegram message to CLI
 - `assistant` -- CLI response; bridge relays to Telegram
@@ -291,6 +293,7 @@ apps/telegram-bridge/infra/
 | `hcloud_volume_attachment` | Attach volume to server |
 
 **cloud-init.yml** handles:
+
 - Docker install via official convenience script
 - Docker log rotation config (10MB, 3 files) in `/etc/docker/daemon.json`
 - Pull container from GHCR

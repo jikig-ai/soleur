@@ -130,6 +130,7 @@ Then conditionally skip the jq-dependent describe blocks:
 ```
 
 **Why not skip script-based tests too?** The script-based tests (credential validation, argument validation, fetch-user-timeline, unknown flag, rename verification) should NOT be skipped. When jq is missing:
+
 - `require_jq` exits 1 with a clear error -- this is correct behavior
 - The tests will fail assertion on stderr message, but the exit code is correct
 - Better approach: adjust these tests to accept EITHER the expected validation message OR the jq-missing message

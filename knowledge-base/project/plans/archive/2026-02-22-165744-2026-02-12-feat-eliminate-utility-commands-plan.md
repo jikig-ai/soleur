@@ -44,6 +44,7 @@ Also references `/ralph-wiggum:ralph-loop` -- external plugin dependency. Keep a
 ## help Body Rewrite
 
 The current `help.md` body is stale from before PR #60 -- it lists commands that were already converted to skills. The body needs a full rewrite, not just count updates:
+
 - Command list: only the 8 `soleur:` commands
 - Skill list: all 35 skills (read dynamically from manifest, per existing `help.md` approach)
 - Agent list: keep current structure
@@ -76,6 +77,7 @@ Update directory structure comment in `plugins/soleur/AGENTS.md` -- remove `*.md
 ## Breaking Changes
 
 Only 3 user-facing name changes:
+
 - `/help` -> `/soleur:help`
 - `/lfg` -> `/soleur:one-shot`
 - `/generate_command` -> removed (use `/skill-creator` instead)

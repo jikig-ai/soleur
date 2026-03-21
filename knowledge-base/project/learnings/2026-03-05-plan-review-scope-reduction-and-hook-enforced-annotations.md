@@ -10,6 +10,7 @@ tags: [plan_review, scope_reduction, hook_enforcement, rule_retirement, defense_
 ## Problem
 
 The original plan for rule retirement automation proposed a CI audit workflow:
+
 - GitHub Actions scheduled workflow scanning for prose/hook duplication
 - Auto-generated PRs to retire superseded rules
 - Rule staleness tracking with supersession metadata
@@ -42,5 +43,6 @@ The `[hook-enforced: ...]` pattern also solves a recurring tension in defense-in
 - [2026-03-03-deviation-analyst-scope-reduction.md](./2026-03-03-deviation-analyst-scope-reduction.md) -- Two-layer system to single-file edit
 
 ## Tags
+
 category: process_improvement
 module: compound_skill

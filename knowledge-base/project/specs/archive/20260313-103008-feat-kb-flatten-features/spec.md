@@ -39,10 +39,12 @@ The `knowledge-base/` taxonomy uses top-level directories for domains (engineeri
 ## Files to Modify
 
 ### Shell Scripts
+
 - `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`
 - `plugins/soleur/skills/archive-kb/scripts/archive-kb.sh`
 
 ### Skills (SKILL.md)
+
 - `plugins/soleur/skills/work/SKILL.md`
 - `plugins/soleur/skills/plan/SKILL.md`
 - `plugins/soleur/skills/compound/SKILL.md`
@@ -57,14 +59,17 @@ The `knowledge-base/` taxonomy uses top-level directories for domains (engineeri
 - `plugins/soleur/skills/ship/SKILL.md`
 
 ### Agents
+
 - `plugins/soleur/agents/product/cpo.md`
 
 ### Directories to Move
+
 - `knowledge-base/features/brainstorms/` → `knowledge-base/project/brainstorms/`
 - `knowledge-base/features/learnings/` → `knowledge-base/project/learnings/`
 - `knowledge-base/features/plans/` → `knowledge-base/project/plans/`
 - `knowledge-base/features/specs/` → `knowledge-base/project/specs/`
 
 ### Directories to Delete
+
 - `knowledge-base/features/` (after moves)
 - `knowledge-base/project/specs/` (stale leftover)

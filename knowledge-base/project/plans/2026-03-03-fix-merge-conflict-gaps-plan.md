@@ -14,6 +14,7 @@ Scope reduced from 4 fixes to 2 after plan review: Phase 5.5 pre-push sync dropp
 ## Context
 
 The brainstorm and CTO assessment revealed:
+
 - AGENTS.md mandates rebase but both `/ship` and `/merge-pr` use merge. The `pre-merge-rebase.sh` hook uses rebase but only fires on `gh pr merge`.
 - Conflict markers have been accidentally committed (documented learning) with no hook to prevent it.
 
@@ -28,6 +29,7 @@ The brainstorm and CTO assessment revealed:
 - `.claude/hooks/pre-merge-rebase.sh` — Edit in place (no rename): replace `git rebase origin/main` with `git merge origin/main`, replace `git rebase --abort` with `git merge --abort`, change push from `--force-with-lease --force-if-includes` to plain `git push origin HEAD`, update file header comment to reflect merge strategy
 
 **Edge cases:**
+
 - After `git merge origin/main` fails with conflicts, run `git merge --abort` before returning deny JSON (mirrors current `rebase --abort` pattern)
 - Switch from force-push to regular push since merge doesn't rewrite history
 - Let `git merge` auto-commit when no conflict (matches merge-pr Phase 2)
@@ -51,6 +53,7 @@ fi
 ```
 
 **Review corrections applied:**
+
 - Uses `hookSpecificOutput.permissionDecision/permissionDecisionReason` JSON schema (matching Guards 1-3), not the incorrect `decision/block` from the original plan
 - Includes `git merge --continue` in the command pattern (Gap 4)
 - Redirects stderr on git diff (TR5)

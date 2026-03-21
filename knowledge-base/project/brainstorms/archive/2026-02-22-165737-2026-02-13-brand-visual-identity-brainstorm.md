@@ -35,6 +35,7 @@ Four directions were explored as hero section mockups. Each interprets "solar en
 - **Feel:** Premium, powerful, concentrated. The darkness isn't brooding — it's the backdrop that makes the light hit harder.
 
 **Pros:**
+
 - Most aligned with Tesla/SpaceX audacity
 - Gold-on-dark is instantly premium
 - Serif headlines (Cormorant Garamond) distinguish it from every dev tool
@@ -42,6 +43,7 @@ Four directions were explored as hero section mockups. Each interprets "solar en
 - The forge metaphor connects directly to "solo founder building something massive"
 
 **Cons:**
+
 - Dark-first can feel heavy if overdone
 - Needs careful balance to avoid "crypto bro" territory
 - Serif font may feel unexpected for a developer tool
@@ -58,11 +60,13 @@ Four directions were explored as hero section mockups. Each interprets "solar en
 - **Feel:** Clean, approachable, energetic. Forward-looking.
 
 **Pros:**
+
 - More approachable for a broad audience
 - Warm gradient provides energy
 - Clean, modern, professional
 
 **Cons:**
+
 - Risks looking like a generic SaaS startup (every Y Combinator company looks like this)
 - Harder to feel "audacious" in a light palette
 - Less distinctive
@@ -80,11 +84,13 @@ Four directions were explored as hero section mockups. Each interprets "solar en
 - **Feel:** Cosmic, vast, futuristic. Tech-platform energy.
 
 **Pros:**
+
 - Most visually distinctive of the dark options
 - Cosmic scale matches the "$1B outcome" positioning
 - Glow effects add depth and modernity
 
 **Cons:**
+
 - Can feel cold or distant without warm elements
 - Purple is heavily used in AI/tech space (Anthropic, Vercel AI, etc.)
 - Harder to pull off without looking generic "tech"
@@ -102,12 +108,14 @@ Four directions were explored as hero section mockups. Each interprets "solar en
 - **Feel:** Radiant, warm, confident. The sun as central identity.
 
 **Pros:**
+
 - Strongest connection to the name's solar meaning
 - The sun mark is immediately recognizable and distinctive
 - Warm palette stands out in a sea of dark-mode dev tools
 - DM Sans is modern without being cold
 
 **Cons:**
+
 - Light palette carries less "weight" than dark alternatives
 - Sun symbolism could feel generic if not executed precisely
 - Pill buttons and rounded corners may feel less "serious"
@@ -125,15 +133,18 @@ Four directions were explored as hero section mockups. Each interprets "solar en
 ## Final Messaging (Solar Forge Landing Page)
 
 ### Hero
+
 - **Badge:** The Company-as-a-Service Platform
 - **Headline:** "Build a Billion-Dollar Company.\nAlone."
 - **Subheadline:** "Everything you need to build, ship, and scale — powered by AI teams.\nFor founders who think in billions."
 - **CTA:** Start Building (links to GitHub)
 
 ### Stats Strip
+
 - 1 Automated Workflow / 23+ AI Agents / 36+ Skills / ∞ Compounding Knowledge
 
 ### Problem Section
+
 - **Label:** THIS IS THE WAY
 - **Title:** "One founder powered by a full-stack AI organization."
 - **Subtitle:** "Not a copilot. Not an assistant. A full AI organization that reviews, plans, builds, and remembers. Every decision you make teaches the system. Every project starts faster than the last."
@@ -143,19 +154,23 @@ Four directions were explored as hero section mockups. Each interprets "solar en
   - Knowledge Compounds: "Solutions compound into patterns. Patterns compound into playbooks. Your AI organization gets smarter with every project — permanently."
 
 ### Quote
+
 - "The first billion-dollar company run by one person isn't science fiction. It's an engineering problem. We're solving it." — The Soleur Thesis
 
 ### Features (YOUR AI ORGANIZATION)
+
 - **Title:** "Every department. From idea to shipped."
 - **Left column (Departments):** Strategy / Product / Engineering / Marketing / Customer Support
 - **Right column (Workflow):** Think / Plan / Build / Ship / Learn & Grow
 
 ### Final CTA
+
 - **Title:** "Ready to build at scale?"
 - **Subtitle:** "Your AI organization is ready. Are you?"
 - **CTA:** Start Building
 
 ### Footer
+
 - [S] SOLEUR + GitHub / Discord / Docs links
 - "Designed, built, and shipped by Soleur — using Soleur."
 

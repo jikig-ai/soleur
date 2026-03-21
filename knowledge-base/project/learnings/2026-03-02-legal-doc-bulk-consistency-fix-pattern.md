@@ -31,6 +31,7 @@ Systematic bulk editing with dual-location sync:
    - `Soleur-operated` -- only DPA technical architecture references remain (correct)
 
 Key differences between the two file locations:
+
 - `docs/legal/`: Has `type`, `jurisdiction`, `generated-date` frontmatter; uses `.md` relative links
 - `plugins/soleur/docs/pages/legal/`: Has `layout`, `permalink`, `description` frontmatter; uses `/pages/legal/*.html` absolute links; wrapped in `<section>` HTML tags
 
@@ -45,5 +46,6 @@ Legal compliance audits always surface pre-existing issues beyond the original s
 When fixing entity attribution, the distinction matters: "Soleur" is the product name, "Jikigai" is the legal entity. Use "Jikigai" in legal contexts (controller/processor identification, indemnification, liability caps, governing law). Use "Soleur" for product descriptions (features, architecture, behavior).
 
 ## Tags
+
 category: integration-issues
 module: legal-documents

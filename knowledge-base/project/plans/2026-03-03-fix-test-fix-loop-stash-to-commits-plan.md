@@ -13,12 +13,14 @@ semver: patch
 **Sections enhanced:** 4 (Proposed Solution, Technical Considerations, Test Scenarios, Acceptance Criteria)
 
 ### Key Improvements
+
 1. Corrected the commit-based flow to match stash semantics precisely -- the original plan had a timing mismatch in when checkpoints occur vs when fixes are applied
 2. Added explicit flow diagrams showing the state of HEAD and working tree at each step
 3. Identified and resolved edge case: success path requires `git reset --soft` to unstage the checkpoint commit while preserving working tree fixes
 4. Added missing test scenario for the SKILL.md prose placeholder convention (no `$()` in markdown code blocks)
 
 ### New Considerations Discovered
+
 - The SKILL.md code block convention prohibits `$()` shell expansion -- the `initial_sha` capture must use prose placeholders, not literal `$(git rev-parse HEAD)`
 - The max-iterations termination has two valid behaviors (keep partial progress vs revert to initial) that need an explicit decision
 - The `git add -A` pattern is already used in other skills (`fix-issue`, `compound-capture`) so there is precedent
@@ -30,17 +32,21 @@ The `test-fix-loop` skill uses `git stash` as a rollback mechanism (checkpoint b
 ## Problem Statement
 
 From `plugins/soleur/skills/test-fix-loop/SKILL.md`:
+
 - Line 90: `git stash push -m "test-fix-loop: checkpoint iteration N"`
 - Lines 97-99: `git stash drop` and `git stash pop` for rollback decisions
 - Line 121: "Fail safe -- stash before every fix attempt, revert on regression"
 
 From `AGENTS.md`:
+
 - "Never `git stash` in worktrees. Commit WIP first, then merge."
 
 From `knowledge-base/overview/constitution.md` (line 115):
+
 - "Never use `git stash` in a worktree to hold significant uncommitted work during merge operations"
 
 From `knowledge-base/project/learnings/2026-02-22-worktree-loss-stash-merge-pop.md`:
+
 - A real incident where `git stash pop` conflict destroyed an entire worktree and branch, losing all uncommitted work. This is the documented catastrophic failure mode that the worktree stash prohibition was created to prevent.
 
 The issue was surfaced by Tier 0 parallel lifecycle work (#396/#408) because Tier 0 always operates in worktrees and delegates to test-fix-loop after integration.
@@ -93,6 +99,7 @@ Iteration N:
 **Progress path is the key difference.** On "failures decreased" (progress), the stash-based design drops the stash and the fixes remain in the working tree for the next iteration. In the commit-based design, the fixes remain in the working tree and the NEXT iteration's checkpoint commits them. This means progress accumulates naturally -- each checkpoint commit captures the cumulative fixes from all prior iterations.
 
 **Regression vs single-iteration revert.** The plan correctly distinguishes two cases:
+
 - Regression (failure count increased from last iteration): `git reset --hard HEAD` discards only the current iteration's uncommitted fixes
 - Circular/non-convergence/max-iterations: `git reset --hard <initial_sha>` reverts ALL accumulated progress, returning to the state before the loop started
 
@@ -151,6 +158,7 @@ initial_sha=$(git rev-parse HEAD)
 ### Edge case: iteration 1 checkpoint is a no-op
 
 On iteration 1, the working tree is clean (Phase 0 guarantees this). Running `git add -A && git commit` would fail with "nothing to commit." The skill should handle this gracefully:
+
 - Either skip the checkpoint on iteration 1 (the initial SHA already serves as the rollback point)
 - Or use `git commit --allow-empty -m "test-fix-loop: checkpoint iteration 1"` to create an explicit marker
 

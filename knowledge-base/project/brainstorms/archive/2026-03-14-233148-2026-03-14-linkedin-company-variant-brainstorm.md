@@ -52,11 +52,13 @@ Sequential delivery in one PR keeps each commit coherent while avoiding two revi
 ## Domain Leader Assessments
 
 ### CMO Assessment
+
 *(Spawned in background — assessment pending)*
 
 ## Scope Summary
 
 ### In Scope
+
 - `linkedin-setup.sh` Playwright MCP workflow for company page creation
 - `site.json` update with company page URL (auto-captured)
 - `## LinkedIn` → `## LinkedIn Personal` migration in existing content files
@@ -66,6 +68,7 @@ Sequential delivery in one PR keeps each commit coherent while avoiding two revi
 - Brand guide update with `### LinkedIn Company Page` Channel Notes
 
 ### Out of Scope
+
 - LinkedIn API automation (#590 — separate issue)
 - Content-publisher automated posting to LinkedIn (depends on #590)
 - LinkedIn comment engagement

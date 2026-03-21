@@ -13,6 +13,7 @@ date: 2026-02-27
 **Research sources used:** PR #337 reference script, Pencil docs, 4 institutional learnings, cross-platform detection best practices, dpkg scripting patterns
 
 ### Key Improvements
+
 1. Use `dpkg -s` instead of `dpkg -l` for Linux package detection -- cleaner exit codes, no grep needed
 2. Add `mdfind` as a secondary macOS fallback -- catches apps installed outside `/Applications/`
 3. Identified that the Pencil extension IS the hard dependency, not the Desktop app itself -- the MCP server binary lives in the extension, and the extension can function with just the IDE (Desktop app is needed separately for the `pencil` CLI and editor features, but MCP registration works without it)
@@ -20,6 +21,7 @@ date: 2026-02-27
 5. Clarified `--auto` exit behavior: in auto mode, exit 1 on any missing hard dependency (no prompts, no `[skip]`)
 
 ### New Considerations Discovered
+
 - `dpkg -l pencil` is fragile: it lists packages even if only partially installed or removed but not purged; `dpkg -s pencil 2>/dev/null | grep -q '^Status:.*installed'` is the robust alternative
 - The `pencil` CLI binary name may conflict with other tools named `pencil` (Pencil Project / evolus/pencil is a different product with the same name) -- platform-specific checks should take precedence over `command -v pencil`
 - SKILL.md code blocks must NOT contain `$()` or `${VAR}` per constitution -- but the script file itself is safe (scripts execute as units)
@@ -33,6 +35,7 @@ Add a `check_deps.sh` script to the `pencil-setup` skill that detects whether th
 The `pencil-setup` skill assumes Pencil Desktop and its IDE extension are already installed. When they are not, the skill fails partway through with a cryptic error (no MCP binary found). Users must manually discover the download page, figure out which package to get, install it, and then re-run the skill. This is the same UX gap that PR #337 solved for ffmpeg/rclone in feature-video.
 
 Unlike ffmpeg and rclone, Pencil Desktop is **not available in any standard package manager** (no brew cask, no apt package). It is distributed as:
+
 - **macOS**: `.dmg` download from pencil.dev/downloads
 - **Linux (Debian/Ubuntu)**: `.deb` download from pencil.dev/downloads
 - **Linux (other)**: `.AppImage` download from pencil.dev/downloads
@@ -62,17 +65,20 @@ Pencil Desktop can be detected three ways, in order of reliability:
 ### Research Insights: Detection Best Practices
 
 **Use `dpkg -s` over `dpkg -l` for scripting:**
+
 - `dpkg -l` outputs lines even for packages that are removed-but-not-purged, half-installed, or config-remaining. Grepping for `^ii` works but is fragile because it depends on column formatting.
 - `dpkg -s <package>` returns exit code 0 only for fully installed packages and includes a clean `Status:` line. The pattern `dpkg -s pencil 2>/dev/null | grep -q '^Status:.*installed'` is the robust alternative.
 - Source: [Baeldung Linux package detection](https://www.baeldung.com/linux/check-how-package-installed), [Debian Forums](https://forums.debian.net/viewtopic.php?t=159341)
 
 **Use `mdfind` as secondary macOS fallback:**
+
 - `test -d "/Applications/Pencil.app"` only checks the standard location. Users may install in `~/Applications/` or other custom paths.
 - `mdfind "kMDItemCFBundleIdentifier == 'dev.pencil.desktop'"` searches the Spotlight index, catching apps in any location. However, it requires Spotlight indexing to be enabled (disabled on some developer machines).
 - Check `/Applications/` first (fast, no index dependency), fall back to `mdfind` only if not found.
 - Source: [Stack Overflow macOS app detection](https://stackoverflow.com/questions/54100496/check-if-an-app-is-installed-on-macos-using-the-terminal)
 
 **Name collision risk with `command -v pencil`:**
+
 - The Pencil Project (evolus/pencil) is a completely different open-source GUI prototyping tool that uses the same `pencil` command name. On systems where both are installed, `command -v pencil` may resolve to the wrong binary.
 - Mitigation: Check platform-specific paths first, use `command -v pencil` only as a last-resort fallback, and verify identity with `pencil --version` if output format is known.
 
@@ -225,14 +231,17 @@ echo "=== Check Complete ==="
 ### Research Insights: Script Design
 
 **No `set -euo pipefail` -- intentional:**
+
 - Per feature-video precedent and `2026-02-27-feature-video-graceful-degradation.md`: "Scripts should either have `set -e` at the top or include a comment explaining why it is absent."
 - The comment in line 3 explains: soft dependency checks must not abort the script. If `mdfind` fails or `dpkg` is not installed, the script should fall through to the next check, not exit.
 
 **`$()` in script is safe:**
+
 - Per `2026-02-22-command-substitution-in-plugin-markdown.md` and `2026-02-24-extract-command-substitution-into-scripts.md`: `$()` is only a problem in SKILL.md code blocks (where Claude Code executes commands individually). Inside a bash script, `$()` is normal shell syntax and does not trigger permission prompts.
 - The SKILL.md Phase 0 section invokes the script with a static `bash ./plugins/soleur/skills/pencil-setup/scripts/check_deps.sh` command -- no `$()` in the markdown.
 
 **Output convention matches feature-video:**
+
 - `[ok]` -- dependency found and working
 - `[MISSING]` -- dependency not found (may be hard or soft)
 - `[installing]` -- actively installing
@@ -243,6 +252,7 @@ echo "=== Check Complete ==="
 ### SKILL.md Changes
 
 Add Phase 0 before the existing Step 1. The Phase 0 section in SKILL.md must follow these rules from institutional learnings:
+
 - No `$()` or `${VAR}` in bash code blocks (per constitution and `2026-02-22-shell-expansion-codebase-wide-fix.md`)
 - Use markdown link to script file (per skill compliance checklist: `[check_deps.sh](./scripts/check_deps.sh)`)
 - Use `./plugins/soleur/...` relative path (per `2026-02-22-shell-expansion-codebase-wide-fix.md`)
@@ -270,6 +280,7 @@ If the script exits non-zero, a required dependency is missing. Stop and
 inform the user with the printed instructions.
 
 If all checks pass, proceed to Step 1 (Check if Already Registered).
+
 ```
 
 ## Technical Considerations

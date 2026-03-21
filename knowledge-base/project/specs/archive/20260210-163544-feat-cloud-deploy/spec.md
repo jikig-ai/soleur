@@ -54,6 +54,7 @@ Soleur currently only runs locally in a terminal. Users cannot access it from mo
 ### 1. Telegram Bridge (`apps/telegram-bridge/`)
 
 Standalone application. Single `index.ts` (~400 lines) that:
+
 - Manages Claude Code CLI as a child process with `--sdk-url`
 - Translates Telegram Bot API messages to/from CLI WebSocket protocol
 - Forwards all `control_request` messages as Telegram inline keyboards

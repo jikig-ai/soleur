@@ -1,6 +1,6 @@
 # Tasks: SEO/AEO/GEO Content Plan Alignment
 
-**Plan:** `knowledge-base/plans/2026-03-20-docs-reconcile-seo-aeo-content-strategy-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-03-20-docs-reconcile-seo-aeo-content-strategy-plan.md`
 **Issue:** #661
 **Branch:** feat-seo-aeo-content-plan
 

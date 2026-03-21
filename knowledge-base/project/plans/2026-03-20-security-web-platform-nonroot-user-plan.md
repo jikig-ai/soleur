@@ -37,6 +37,7 @@ The web-platform Dockerfile (`apps/web-platform/Dockerfile`) runs the production
 ### Research Insights -- Acceptance Criteria
 
 **Best Practices (Docker official docs, Node.js Docker best practices):**
+
 - The [Node.js Docker best practices guide](https://github.com/nodejs/docker-node/blob/main/docs/BestPractices.md) recommends using the built-in `node` user (UID 1000) provided by official Node images. However, for consistency with the telegram-bridge pattern and to maintain a project-wide `soleur` user convention, creating a dedicated `soleur` user is acceptable. The tradeoff is a second non-root user in the image.
 - [Docker official documentation](https://github.com/docker/docs/blob/main/content/guides/agentic-ai.md) shows the pattern `RUN useradd --create-home --shell /bin/bash app && chown -R app:app /app` followed by `USER app` -- matching the approach in this plan.
 
@@ -87,6 +88,7 @@ docker run -d \
 ```
 
 Host directories are owned by `root` (created by prior root-based containers). After switching to `USER soleur` (UID 1001), the container process cannot write to `/workspaces` unless:
+
 1. The host directory ownership is changed to match `soleur`'s UID, OR
 2. The `docker run` command adds `--user root` (defeats the purpose), OR
 3. The Dockerfile creates `/workspaces` with `soleur` ownership before `USER`, and Docker preserves the ownership on bind-mount only if the host dir is empty (it is not -- existing workspaces exist).
@@ -148,15 +150,18 @@ CMD ["npm", "run", "start"]
 ### Research Insights -- Proposed Solution
 
 **Why `chown .next` instead of `chown /app`:**
+
 - `chown -R soleur:soleur /app` recurses into `node_modules/` (typically 10,000+ files), adding significant build time for no runtime benefit -- `node_modules` is read-only at runtime.
 - Only `.next/` needs ownership transfer: it contains the build output that Next.js reads and the cache directory it writes to.
 - `node_modules/`, `package.json`, source files, and other `/app` contents are read-only at runtime and world-readable by default, so root ownership is fine.
 
 **Why not use the built-in `node` user:**
+
 - The telegram-bridge uses `soleur` as the user name. Using the same name across all containers maintains a consistent security convention and makes `chown` commands in deploy scripts predictable.
 - The `node` user's home directory is `/home/node`. Using a `soleur` user with `/home/soleur` keeps home directory conventions aligned across services.
 
 **Why `--uid 1001` explicitly:**
+
 - `node:22-slim` already has `node` at UID 1000. Without `--uid`, `useradd` auto-assigns the next available UID, which is likely 1001 but not guaranteed across base image versions.
 - Explicit UID ensures deploy scripts can reliably reference `1001:1001` in `chown` commands.
 
@@ -185,6 +190,7 @@ chown -R 1001:1001 /mnt/data/workspaces
 ### Research Insights -- Test Scenarios
 
 **Verification commands (from Docker best practices):**
+
 ```bash
 # Verify non-root execution
 docker exec <container> id

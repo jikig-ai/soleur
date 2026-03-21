@@ -14,12 +14,14 @@ semver: patch
 **Research sources used:** CVE-2025-55130, gemini-cli#1121, OpenClaw GHSA-cfvj-7rx7-fc7c, CERT POS35-C, Node.js v25 fs API docs, 2 project learnings, 4 web searches
 
 ### Key Improvements
+
 1. Added `resolveRealPath` ancestor-walk algorithm with explicit security invariant documentation
 2. Identified workspace path resolution gap -- `workspacePath` itself may contain symlinks and must also be resolved
 3. Added `lstatSync` pre-check consideration and documented why `realpathSync` alone is sufficient here
 4. Enhanced test scenarios with relative symlink attacks and deeply nested non-existent path cases
 
 ### New Considerations Discovered
+
 - The `workspacePath` argument must also be resolved with `realpathSync` to prevent the workspace root itself from being a symlink target
 - `resolveParentRealPath` must catch non-ENOENT errors (ELOOP, EACCES) at each ancestor level and return null, not just silently continue walking up
 - Relative symlinks (`../../../etc`) behave identically to absolute symlinks for `realpathSync` -- no special handling needed
@@ -34,6 +36,7 @@ This is the exact vulnerability class described in CVE-2025-55130 (Node.js Permi
 ### Research Insights
 
 **Industry prevalence:** This vulnerability class has been independently discovered and exploited in at least 4 major projects in 2025-2026:
+
 - Node.js Permissions Model (CVE-2025-55130, CVSS 9.1)
 - Google Gemini CLI (gemini-cli#1121)
 - OpenClaw (GHSA-cfvj-7rx7-fc7c -- stageSandboxMedia symlink traversal)
@@ -64,6 +67,7 @@ Add `fs.realpathSync()` to `isPathInWorkspace()` to resolve symlinks before the 
 ### Research Insights
 
 **Why `realpathSync` over `lstatSync` + `O_NOFOLLOW`:**
+
 - `O_NOFOLLOW` (available via `fs.constants.O_NOFOLLOW` on POSIX) only checks the **final** path component. It does not protect against symlinks in intermediate directories. A path like `/workspaces/user1/symlinked-dir/file.md` would pass `O_NOFOLLOW` because the final component `file.md` is not a symlink -- even though `symlinked-dir` is.
 - `lstatSync` + `isSymbolicLink()` has the same limitation: it checks one path component at a time. Checking every component of the path manually is equivalent to what `realpathSync` does internally, but with more code and more opportunity for bugs.
 - `realpathSync` resolves the entire symlink chain in a single syscall (`realpath(3)`), returning the canonical physical path. This is the correct and simplest tool for the job.
@@ -96,6 +100,7 @@ The workspace provisioning (`workspace.ts`) creates a symlink `plugins/soleur ->
 ### Error Handling
 
 `fs.realpathSync()` throws:
+
 - `ENOENT` -- file does not exist (expected for Write/Edit targets; handled by ancestor walk)
 - `ELOOP` -- too many levels of symlinks (treat as deny -- potential attack)
 - `EACCES` -- permission denied (treat as deny -- cannot verify safety)
@@ -379,10 +384,12 @@ describe("isPathInWorkspace symlink defense", () => {
 ## Dependencies & Risks
 
 **Dependencies:**
+
 - `fs.realpathSync` (Node.js built-in, no new dependencies)
 - Existing test infrastructure (vitest)
 
 **Risks:**
+
 - **Plugin symlink breakage**: The `plugins/soleur` symlink resolves outside the workspace. If any agent tries to Read/Glob/Grep plugin files through file tools, those requests will be denied. Mitigated by the fact that agents access plugins through the SDK plugin system, not file tools. Monitor for agent errors that indicate plugin file access attempts.
 - **Performance in high-concurrency**: `realpathSync` is synchronous and hits the filesystem. At current scale (single-tenant per workspace), this is negligible. If scaling to hundreds of concurrent tool invocations per workspace, consider `fs.promises.realpath` with caching.
 - **Docker volume symlinks**: If the workspace root (`/workspaces`) is itself a symlink (common in Docker volume mounts), `resolveWorkspacePath` handles this by also resolving the workspace path. If it does not exist (test environments with mock paths), falls back to `path.resolve`.

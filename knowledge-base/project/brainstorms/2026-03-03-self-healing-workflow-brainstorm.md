@@ -18,6 +18,7 @@ A two-layer automated learning loop that detects workflow deviations and systemi
 The existing compound skill already captures learnings and routes them to definition files — but the promotion from learning to enforcement is human-gated and single-session scoped. The project's proven pattern is that documentation-only rules get violated until hooks enforce them mechanically. This approach automates the promotion pipeline while keeping humans in the loop at the PR review stage.
 
 Key evidence from learnings research:
+
 - 4 PreToolUse hooks exist, each added after a prose rule failed to prevent the violation it described
 - Session boundaries are the weakest link — end-of-session steps get skipped (learning: stale-worktrees-accumulate)
 - AGENTS.md has a measurable 10-22% reasoning token cost per rule (ETH Zurich, Feb 2026)
@@ -56,6 +57,7 @@ Key evidence from learnings research:
 ## Learnings Research Insights
 
 14 relevant learnings informed this brainstorm:
+
 - Hook enforcement beats documentation (worktree-enforcement-pretooluse-hook)
 - Compound is a pre-commit gate, not post-CI (review-compound-before-commit-workflow)
 - AGENTS.md gotchas-only principle (lean-agents-md-gotchas-only)

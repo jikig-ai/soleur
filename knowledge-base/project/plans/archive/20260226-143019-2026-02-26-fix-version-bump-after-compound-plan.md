@@ -14,11 +14,13 @@ version_bump: PATCH
 **Research sources:** compound-capture Step 8 (route-to-definition), compound SKILL.md, merge-pr-skill-design-lessons learning, ship/one-shot/work skill analysis
 
 ### Key Improvements
+
 1. Identified the exact mechanism: compound-capture Step 8 (route-to-definition) stages plugin file edits without committing them
 2. Simplified the solution to moving only version bump within ship skill -- no one-shot restructuring needed
 3. Discovered that compound-capture explicitly says "Do NOT commit or version-bump" for route-to-definition edits, meaning they rely on a subsequent version bump step to pick them up
 
 ### New Considerations Discovered
+
 - The compound-capture skill's auto-consolidation (Step F) commits `knowledge-base/` changes, NOT plugin file changes
 - Route-to-definition edits are staged but uncommitted -- they wait for the normal workflow completion protocol
 - The one-shot double-compound is intentional but its second run's route-to-definition edits are never version-bumped
@@ -44,15 +46,18 @@ The version-bump-relevant mutation is #2: route-to-definition. It stages plugin 
 ### Where the ordering breaks
 
 **Path A: Ship standalone (correct ordering)**
+
 ```
 Phase 2 compound -> route-to-definition stages plugin edits
 Phase 3.5 merge main
 Phase 4 version bump -> diff includes staged edits -> bump happens
 Phase 7 push
 ```
+
 This path works. Version bump sees compound's staged edits.
 
 **Path B: One-shot pipeline (broken ordering)**
+
 ```
 Step 3 work -> delegates to ship:
   ship Phase 2 compound #1 -> route-to-definition stages edits
@@ -64,9 +69,11 @@ Step 6 compound #2 -> route-to-definition stages NEW plugin edits
 Step 7 test-browser
 Step 8 feature-video
 ```
+
 Problem: Compound #2's route-to-definition edits at step 6 are staged AFTER ship already did version bump and push at Phase 4/7. These edits are orphaned -- no version bump picks them up, and they may not even be committed.
 
 **Path C: Ship with compound skipped (broken ordering)**
+
 ```
 Phase 2 compound -> user skips (no artifacts)
 Phase 4 version bump -> bumps based on current diff
@@ -75,6 +82,7 @@ Phase 7 pre-push gate -> catches unarchived artifacts -> runs compound
   BUT version bump already ran in Phase 4
 Phase 7 continues push -> version bump is stale
 ```
+
 Problem: The pre-push compound gate in Phase 7 can produce route-to-definition edits after version bump already committed.
 
 ### Research Insights
@@ -98,6 +106,7 @@ The fix is surgical: move the version bump phase in the ship skill to run after 
 In `plugins/soleur/skills/ship/SKILL.md`, reorder phases:
 
 **Current order:**
+
 ```
 Phase 1: Validate artifacts
 Phase 2: Capture learnings (compound)
@@ -110,6 +119,7 @@ Phase 7: Push and PR
 ```
 
 **New order:**
+
 ```
 Phase 1: Validate artifacts
 Phase 2: Capture learnings (compound)
@@ -138,6 +148,7 @@ Remove the pre-push compound gate from Phase 7. Phase 2 is the single point wher
 In `plugins/soleur/skills/one-shot/SKILL.md`, add a version bump step after compound (step 6) to capture any route-to-definition edits from the second compound run:
 
 **Current steps 3-9:**
+
 ```
 3. work (delegates to ship, which does version bump)
 4. review
@@ -149,6 +160,7 @@ In `plugins/soleur/skills/one-shot/SKILL.md`, add a version bump step after comp
 ```
 
 **New steps 3-10:**
+
 ```
 3. work (delegates to ship -- ship still does version bump for its compound run)
 4. review
@@ -172,6 +184,7 @@ The cleaner fix: **have ship NOT push when invoked from one-shot**. Instead, one
 But skills cannot invoke each other programmatically or pass flags. Ship always does push+PR in Phase 7.
 
 **Cleanest approach: Restructure one-shot to not use ship for push/PR.** One-shot should:
+
 1. Run work (which delegates to ship)
 2. Ship runs through version bump but STOPS before push (which it cannot -- ship is a single skill invocation)
 
@@ -182,6 +195,7 @@ This reveals a design tension. Let me simplify further.
 The simplest fix for one-shot: move compound to run BEFORE work/ship, so ship's version bump captures all compound edits:
 
 **New steps:**
+
 ```
 3. work (delegates to ship)
 4. review
@@ -254,15 +268,19 @@ After analyzing all the paths, the minimal change set is:
 ## Edge Cases
 
 ### Compound produces no route-to-definition edits
+
 Most common case. Version bump runs identically to today. No regression.
 
 ### Compound produces route-to-definition edits but no version bump was needed
+
 If the branch had no plugin file changes before compound, but compound's route-to-definition added one, the version bump step must now detect that a PATCH bump is needed. The existing `git diff --name-only origin/main...HEAD -- plugins/soleur/` check handles this correctly because it runs against HEAD (which includes compound's staged-then-committed edits).
 
 ### One-shot compound #2 produces edits after ship already pushed
+
 The version-bump-recheck at step 6.5 creates a new commit. The subsequent `git push` in step 7 (test-browser) or before feature-video would need to push this commit. Add an explicit push step after the version-bump-recheck.
 
 ### Tests fail after compound but before version bump
+
 Tests run in Phase 4 (new numbering). If they fail, ship stops. Version bump never runs. This is correct -- no version bump on broken code.
 
 ## References

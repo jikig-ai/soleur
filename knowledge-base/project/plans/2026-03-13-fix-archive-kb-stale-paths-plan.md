@@ -46,6 +46,7 @@ if [[ -d "knowledge-base/project/specs/feat-${slug}" ]]; then
 ```
 
 The actual artifact locations are now:
+
 - `knowledge-base/project/brainstorms/` (new primary)
 - `knowledge-base/project/plans/` (new primary)
 - `knowledge-base/project/specs/feat-<slug>/` (new primary)
@@ -114,6 +115,7 @@ discover_artifacts() {
 ### Research Insights for `archive-kb.sh`
 
 **Correctness verification:**
+
 - The `archive_artifact()` function (lines 154-167) computes the archive destination using `dirname "$artifact"`, so it places each artifact's archive in the correct subdirectory (`knowledge-base/project/brainstorms/archive/`, `knowledge-base/project/brainstorms/archive/`, etc.) regardless of which base path the artifact came from. No changes needed to `archive_artifact()` or `print_archive_path()`.
 - The `nullglob` shell option ensures that globbing against a nonexistent directory (e.g., if `knowledge-base/project/brainstorms/` doesn't exist yet) expands to nothing rather than a literal glob string. This means the dir arrays are safe without explicit `-d` guards on each entry.
 - The `printf '%s\n' "${artifacts[@]}"` with an empty array prints nothing (not even a newline in bash 4+), and the caller's `[[ -n "$line" ]]` guard handles empty lines. No risk of phantom artifacts.
@@ -126,6 +128,7 @@ Current paths are listed before legacy paths in each array. This means if an art
 The `worktree-manager.sh` has the same stale paths in three locations and must be fixed in this PR:
 
 **1. `create_for_feature()` spec dir creation (line 152):**
+
 ```bash
 # Current (stale):
 local spec_dir="$GIT_ROOT/knowledge-base/project/specs/$branch_name"
@@ -135,6 +138,7 @@ local spec_dir="$GIT_ROOT/knowledge-base/project/specs/$branch_name"
 ```
 
 **2. `cleanup_merged_worktrees()` spec dir archival (lines 426-427):**
+
 ```bash
 # Current (stale):
 local spec_dir="$GIT_ROOT/knowledge-base/project/specs/$safe_branch"
@@ -156,6 +160,7 @@ done
 ```
 
 **3. `cleanup_merged_worktrees()` brainstorm/plan archival (lines 465-466):**
+
 ```bash
 # Current (stale):
 archive_kb_files "$GIT_ROOT/knowledge-base/project/brainstorms" "$feature_slug" "brainstorm" "$verbose"
@@ -171,6 +176,7 @@ archive_kb_files "$GIT_ROOT/knowledge-base/project/plans" "$feature_slug" "plan"
 Note: `archive_kb_files()` already has `[[ -d "$dir" ]] || return 0` as its first line (line 367), so calling it with a nonexistent directory is safe.
 
 **4. Display message (line 194):**
+
 ```bash
 # Current (stale):
 echo -e "  2. Create spec: ${BLUE}knowledge-base/project/specs/$branch_name/spec.md${NC}"
@@ -186,6 +192,7 @@ Update the "What It Archives" table in `plugins/soleur/skills/archive-kb/SKILL.m
 ## Acceptance Criteria
 
 ### archive-kb.sh
+
 - [x] `archive-kb.sh` discovers artifacts in `knowledge-base/project/brainstorms/` (current path)
 - [x] `archive-kb.sh` discovers artifacts in `knowledge-base/project/plans/` (current path)
 - [x] `archive-kb.sh` discovers artifacts in `knowledge-base/project/specs/feat-<slug>/` (current path)
@@ -198,6 +205,7 @@ Update the "What It Archives" table in `plugins/soleur/skills/archive-kb/SKILL.m
 - [x] `SKILL.md` documentation reflects the updated search paths
 
 ### worktree-manager.sh
+
 - [x] `create_for_feature()` creates spec dirs at `knowledge-base/project/specs/` (not `knowledge-base/project/specs/`)
 - [x] `cleanup_merged_worktrees()` archives specs from all three spec locations
 - [x] `cleanup_merged_worktrees()` archives brainstorms from both current and legacy paths
@@ -249,6 +257,7 @@ Both scripts must be fixed in this PR. The broader SKILL.md reference cleanup sh
 ### Scope Boundary
 
 This PR fixes only the two bash scripts that silently fail. It does NOT update SKILL.md files for other skills (plan, work, brainstorm, compound, etc.) because:
+
 - LLM agents reading those SKILL.md files can see the actual filesystem and adapt
 - Updating 10+ SKILL.md files increases PR scope and review burden
 - A separate issue should track the SKILL.md reference cleanup as a documentation chore

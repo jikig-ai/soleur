@@ -13,6 +13,7 @@ date: 2026-03-13
 **Research sources:** X API v2 docs (GET /2/users/:id/mentions, GET /2/users/:id/tweets), 7 institutional learnings, constitution.md, codebase pattern analysis (x-community.sh, community-manager.md, x-community.test.ts)
 
 ### Key Improvements
+
 1. Added jq INDEX fallback pattern guidance -- new fields must follow the established `// null` / `// 0` fallback chain to prevent silent data loss (learning `2026-03-10-jq-generator-silent-data-loss.md`)
 2. Added 5-layer shell hardening checklist for `cmd_fetch_user_timeline` -- input validation, transport safety, JSON validation, error extraction fallback, float-safe arithmetic (learning `2026-03-09-shell-api-wrapper-hardening-patterns.md`)
 3. Added API credit conservation guidance -- `fetch-user-timeline` is a separate API call and must be gated behind initial skip criteria, not called per-mention (learning `2026-03-09-external-api-scope-calibration.md`)
@@ -21,6 +22,7 @@ date: 2026-03-13
 6. Added `author_id` propagation to output JSON -- the agent needs `author_id` to call `fetch-user-timeline`, but the current jq transform drops it
 
 ### Applied Learnings
+
 - `2026-03-10-guardrails-must-match-observable-data.md` -- primary motivation; this plan closes the gap between guardrail criteria and observable data
 - `2026-03-10-jq-generator-silent-data-loss.md` -- new jq fields must use INDEX + `// fallback` pattern, not generator-style joins
 - `2026-03-09-shell-api-wrapper-hardening-patterns.md` -- new command needs 5-layer defense (input, transport, response, error, retry)
@@ -52,6 +54,7 @@ Current data gaps (from learning `2026-03-10-guardrails-must-match-observable-da
 ### Research Insights: Motivation
 
 **Institutional Learnings:**
+
 - Learning `2026-03-10-guardrails-must-match-observable-data.md` identifies two failure modes when guardrails exceed the data pipeline: (1) the agent silently ignores criteria it cannot evaluate, (2) the agent hallucinates judgments from insufficient signals. Both modes are currently active for bot detection, brand association risk, and thread context checks.
 - Learning `2026-03-09-external-api-scope-calibration.md` warns against overscoping API integrations. This plan adds only the minimal fields needed to close the guardrail gaps -- no speculative enrichments.
 
@@ -64,16 +67,19 @@ Six changes across two files (`x-community.sh` and `community-manager.md`), plus
 Add `profile_image_url` and `public_metrics` to the `user.fields` parameter in `cmd_fetch_mentions()` (line 417). Propagate through the jq transform (lines 437-456) to expose `author_profile_image_url` and `author_followers_count` in the output JSON.
 
 **Current query params (line 417):**
+
 ```text
 user.fields=username,name
 ```
 
 **Proposed query params:**
+
 ```text
 user.fields=username,name,profile_image_url,public_metrics
 ```
 
 **Updated jq output shape per mention:**
+
 ```json
 {
   "id": "...",
@@ -94,17 +100,20 @@ X API v2 confirms `profile_image_url` and `public_metrics` are valid `user.field
 ### Research Insights: Bot Detection Fields
 
 **jq Transform Pattern (learning `2026-03-10-jq-generator-silent-data-loss.md`):**
+
 - The existing jq transform uses `INDEX(.id)` to build a user lookup map -- this is the correct pattern. New fields must follow the same `// fallback` chain:
   - `($user.profile_image_url // null)` -- null when user has no profile image or user is missing from includes
   - `(($user.public_metrics.followers_count) // 0)` -- 0 when public_metrics is absent (e.g., suspended accounts)
 - Do NOT use generator-style access like `(.includes.users[] | select(...))` which silently drops unmatched records
 
 **Edge Cases:**
+
 - X API may omit `profile_image_url` for default-avatar accounts (the field is absent, not an empty string). The `// null` fallback handles this correctly.
 - Suspended or deleted accounts may appear in `data[]` but be absent from `includes.users[]`. The existing INDEX pattern handles this -- the user lookup returns `{}`, and all field accesses fall through to defaults.
 - `public_metrics` is an object, not a scalar. Access the nested `followers_count` field: `$user.public_metrics.followers_count`, not `$user.public_metrics`.
 
 **Critical addition -- `author_id` propagation:**
+
 - The current jq transform does NOT include `author_id` in the output. The agent needs `author_id` to call `fetch-user-timeline <user_id>` for brand association risk checks. Add `author_id: .author_id` to the output object.
 
 ### 2. Brand association risk: add fetch-user-timeline command (x-community.sh)
@@ -112,6 +121,7 @@ X API v2 confirms `profile_image_url` and `public_metrics` are valid `user.field
 Add a new `cmd_fetch_user_timeline()` function and `fetch-user-timeline` command that accepts a user ID parameter. This fetches another user's recent tweets so the agent can check an author's content before replying.
 
 **Signature:**
+
 ```bash
 x-community.sh fetch-user-timeline <user_id> [--max N]
 ```
@@ -138,17 +148,20 @@ The new command must implement all 5 defense layers:
 Since `cmd_fetch_user_timeline` reuses `get_request` and `handle_response`, layers 2-5 are inherited. Only layer 1 (input validation) needs new code.
 
 **API Credit Conservation (learning `2026-03-09-external-api-scope-calibration.md`):**
+
 - Each `fetch-user-timeline` call costs API credits (separate request per author)
 - X API rate limit for GET /2/users/:id/tweets: 900 requests per 15 minutes per user token
 - The agent must call this selectively -- only for mentions that pass the initial bot/spam/off-topic skip checks and have ambiguous brand association risk
 - If the agent calls `fetch-user-timeline` for all 10 mentions in a session, that is 10 additional API requests -- acceptable, but unnecessary. Most mentions can be evaluated from the enriched mention data alone.
 
 **Pay-per-use Billing (learning `2026-03-10-x-api-pay-per-use-billing-and-web-fallback.md`):**
+
 - `fetch-user-timeline` may return 403 (`client-not-enrolled`) on accounts with $0 credits
 - Unlike `fetch-mentions` (which has a manual-mode fallback), there is no meaningful fallback for `fetch-user-timeline` -- the agent simply cannot check the author's timeline
 - When `fetch-user-timeline` fails, the agent should note "Unable to check author timeline (API access required)" in the approval prompt and delegate the brand association risk check entirely to the human reviewer
 
 **Default max_results:**
+
 - Default to `--max 5` (not 10). The agent only needs a quick scan of recent content, not a deep history. 5 tweets is sufficient to detect obvious brand association risks while conserving API credits.
 
 ### 3. Thread context: add referenced_tweets to tweet fields (x-community.sh)
@@ -156,11 +169,13 @@ Since `cmd_fetch_user_timeline` reuses `get_request` and `handle_response`, laye
 Add `referenced_tweets` to the `tweet.fields` parameter in `cmd_fetch_mentions()` and propagate through the jq transform.
 
 **Current tweet.fields:**
+
 ```text
 tweet.fields=author_id,created_at,conversation_id
 ```
 
 **Proposed tweet.fields:**
+
 ```text
 tweet.fields=author_id,created_at,conversation_id,referenced_tweets
 ```
@@ -172,6 +187,7 @@ The `referenced_tweets` field is an array of objects with `type` (`retweeted`, `
 ### Research Insights: Thread Context
 
 **X API v2 `referenced_tweets` structure:**
+
 ```json
 {
   "referenced_tweets": [
@@ -184,12 +200,14 @@ The `referenced_tweets` field is an array of objects with `type` (`retweeted`, `
 Valid `type` values: `retweeted`, `quoted`, `replied_to`. A single tweet can have multiple entries (e.g., a quote-tweet of a retweet).
 
 **Edge Cases:**
+
 - A mention with `referenced_tweets` containing `type: "retweeted"` is a retweet of Soleur content. The brand guide guardrail says "the RT is sufficient engagement" -- the agent should auto-skip these.
 - A mention with `referenced_tweets` containing `type: "quoted"` is a quote-tweet. The original content is the author's commentary, which may need a reply. Do NOT auto-skip quote-tweets -- they require human review.
 - A mention with `referenced_tweets` containing only `type: "replied_to"` is a reply in a thread. The `conversation_id` field handles dedup for these (see section 4).
 - Absent `referenced_tweets` (null after fallback) indicates an original tweet mentioning Soleur -- the most common case and highest priority for engagement.
 
 **Guardrail mapping:**
+
 | `referenced_tweets` state | Agent action |
 |---------------------------|-------------|
 | `null` (original mention) | Proceed to draft |
@@ -204,6 +222,7 @@ Add guidance to community-manager.md Step 3 (Draft Replies) instructing the agen
 **Location:** `community-manager.md`, Capability 4, Step 3 (Draft Replies), add before the existing bullet list.
 
 **Content:**
+
 ```text
 Before drafting individual replies, group mentions by `conversation_id`. When multiple mentions share the same `conversation_id`, select the most recent mention in the thread and skip the rest. Draft only one reply per conversation thread.
 ```
@@ -211,11 +230,13 @@ Before drafting individual replies, group mentions by `conversation_id`. When mu
 ### Research Insights: Conversation Dedup
 
 **Edge Cases:**
+
 - When multiple mentions in the same conversation come from different authors, the "most recent" heuristic may not be optimal. The agent should prefer the mention that is most directly addressable (e.g., a question over a casual mention). However, "most recent" is simpler and avoids subjective ranking. Keep "most recent" as the rule.
 - If a conversation has both a retweet and an original reply, the retweet should be skipped per the RT guardrail (section 3), and the reply should be the candidate for drafting. The RT skip runs before conversation dedup.
 - `conversation_id` may be null for some mentions (e.g., API inconsistency). Treat null `conversation_id` as unique -- each null-conversation mention is its own group.
 
 **Agent prompt wording (learning `2026-02-13-agent-prompt-sharp-edges-only.md`):**
+
 - The dedup instruction is a sharp edge -- the agent would not group by `conversation_id` without being told. Keep it concise.
 - Do NOT add general advice about thread etiquette or multi-party conversations -- the agent handles that correctly from training data.
 
@@ -232,18 +253,22 @@ This makes the guardrails structurally present in the agent's decision flow rath
 ### Research Insights: Guardrails Cross-Reference
 
 **Agent context blindness (learning `2026-02-22-agent-context-blindness-vision-misalignment.md`):**
+
 - Agents that produce content must read canonical sources before making decisions. The existing Step 2 reads `## Voice` and `## Channel Notes > ### X/Twitter`, which already includes the guardrails subsection. However, reading and applying are different actions.
 - The cross-reference adds an explicit "apply skip criteria" instruction. Without it, the agent reads the guardrails but treats them as general context rather than a decision gate.
 
 **Sharp edges only (learning `2026-02-13-agent-prompt-sharp-edges-only.md`):**
+
 - The guardrails screening step should be terse: "For each mention, apply the skip criteria from `#### Engagement Guardrails`. Skip mentions that match any criterion. For mentions requiring brand association risk assessment, call `fetch-user-timeline` with the mention's `author_id`."
 - Do NOT duplicate the guardrail criteria in the agent prompt -- the agent reads them from the brand guide. The prompt should only say "apply the criteria from that section."
 
 **Headless mode (learning `2026-03-03-headless-mode-skill-bypass-convention.md`):**
+
 - In headless mode, all mentions are already skipped ("engage requires interactive approval"). The guardrails screening step should be skipped in headless mode -- there is no point evaluating skip criteria if no replies will be posted.
 - Avoid calling `fetch-user-timeline` in headless mode since it consumes API credits for zero benefit.
 
 **Implementation choice -- Step 2b vs. new Step 2.5:**
+
 - Use Step 2b (sub-step) rather than inserting a new Step 3 that renumbers all subsequent steps. The community-manager agent's Step numbers are referenced by the community SKILL.md and the guardrails plan. Renumbering would require updating cross-references. Step 2b avoids this.
 
 ### 6. Approval prompt enrichment: surface author metadata (community-manager.md)
@@ -251,12 +276,14 @@ This makes the guardrails structurally present in the agent's decision flow rath
 Update the approval prompt format in Step 4 to include author metadata so the human reviewer can meaningfully enforce skip criteria.
 
 **Current format:**
+
 ```text
 Mention from @<author_username> (<created_at>):
 "<mention_text>"
 ```
 
 **Proposed format:**
+
 ```text
 Mention from @<author_username> (<created_at>):
   Followers: <author_followers_count> | Profile image: <yes/no>
@@ -269,6 +296,7 @@ The follower count and profile image presence help the reviewer spot bot account
 ### Research Insights: Approval Prompt
 
 **Mention type derivation logic:**
+
 - `referenced_tweets` is null -> "original"
 - `referenced_tweets` contains `type: "replied_to"` -> "reply"
 - `referenced_tweets` contains `type: "retweeted"` -> "retweet" (should have been auto-skipped in Step 2b; display as informational if it reaches Step 4)
@@ -276,16 +304,20 @@ The follower count and profile image presence help the reviewer spot bot account
 - Multiple types present -> show the most relevant (prefer "quoted" > "replied_to" > "retweeted")
 
 **Absent metadata handling (manual mode):**
+
 - In Free tier 403 fallback (manual mode), the agent has no API data for the mention author. The approval prompt should display:
+
   ```text
   Mention from @<author_username> (<created_at>):
     Followers: N/A | Profile image: N/A
     Type: N/A (manual mode)
   "<mention_text>"
   ```
+
 - The agent should note: "Author metadata unavailable in manual mode. Apply skip criteria based on mention text and author handle."
 
 **Bot signal thresholds:**
+
 - The guardrails say "alphanumeric handle pattern, generic or empty display name" -- these are text-based checks the agent can already do.
 - With enriched data, the agent can also check: followers_count == 0 AND profile_image_url == null as a strong bot signal. But avoid hardcoding a followers_count threshold (e.g., <10) -- new legitimate accounts also have low follower counts. The 0-followers + no-profile-image combination is the strongest signal.
 
@@ -294,6 +326,7 @@ The follower count and profile image presence help the reviewer spot bot account
 ### X API Field Availability
 
 Confirmed via X API v2 documentation (GET /2/users/:id/mentions):
+
 - `profile_image_url` is a valid `user.fields` value
 - `public_metrics` is a valid `user.fields` value (returns `followers_count`, `following_count`, `tweet_count`, `listed_count`)
 - `referenced_tweets` is a valid `tweet.fields` value (returns array of `{type, id}`)
@@ -322,6 +355,7 @@ Adding `user.fields` and `tweet.fields` to the existing `fetch-mentions` request
 ### Research Insights: API Credit Impact
 
 **Selective invocation strategy:**
+
 1. Fetch mentions with enriched fields (single API call -- no additional cost)
 2. Apply automated skip criteria (bot detection via followers/profile image, RT detection via referenced_tweets, conversation dedup)
 3. For remaining mentions (those that passed automated checks), call `fetch-user-timeline` ONLY when the mention text or author handle does not provide enough signal for brand association risk
@@ -338,6 +372,7 @@ In manual mode (Free tier 403 fallback), the enriched fields are not available b
 ### Research Insights: Free Tier Fallback
 
 **HTTP 402 vs. 403 (learning `2026-03-10-x-api-pay-per-use-billing-and-web-fallback.md`):**
+
 - X API may return HTTP 402 (Payment Required) when the account has $0 credits, in addition to 403 (client-not-enrolled).
 - The `handle_response` function in `x-community.sh` currently handles 403 but not 402. The new `fetch-user-timeline` command should handle 402 the same as 403 for the agent's purposes -- skip the timeline check and delegate to human reviewer.
 - Note: the existing `handle_response` falls through to the default `*` case for 402, which reports "HTTP 402" and exits 1. This is acceptable for `fetch-user-timeline` failures since the agent catches the non-zero exit and proceeds without timeline data.

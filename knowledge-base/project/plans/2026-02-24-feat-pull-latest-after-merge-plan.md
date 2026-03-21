@@ -16,11 +16,13 @@ After merging a PR and running `cleanup-merged`, the main checkout stays at what
 **Sections enhanced:** 3 (Edge cases, MVP code, References)
 
 ### Key Improvements
+
 1. Added `git pull --ff-only` instead of `git pull` to prevent accidental merge commits in the main checkout
 2. Added edge case for detached HEAD state (can happen if a previous operation left the main checkout detached)
 3. Added edge case for the session-start hygiene caller (runs from repo root, so no cd needed)
 
 ### New Considerations Discovered
+
 - Using `git pull --ff-only` is safer than `git pull` -- main should always fast-forward since no one commits directly to main. If `--ff-only` fails, it signals a diverged state that needs investigation, not silent merging.
 - The `git fetch --prune` that already runs at the top of `cleanup_merged_worktrees` means the remote refs are already up to date. The pull only needs to advance the local branch pointer -- a fast-forward is always sufficient.
 
@@ -112,6 +114,7 @@ fi
 ```
 
 **Implementation notes:**
+
 - Uses `git -C "$GIT_ROOT"` to ensure operations target the main checkout regardless of cwd
 - Uses `--ff-only` because main should never diverge from origin/main (no direct commits to main)
 - Respects the existing `verbose` pattern -- silent in non-TTY (CI, piped output), verbose in interactive mode

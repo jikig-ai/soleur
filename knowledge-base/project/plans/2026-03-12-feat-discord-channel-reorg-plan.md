@@ -14,12 +14,14 @@ semver: patch
 **Research sources:** 7 institutional learnings, codebase analysis (6 workflows, 3 scripts, 2 skills, 1 test file)
 
 ### Key Improvements
+
 1. Concrete implementation snippets for every file change -- copy-paste ready
 2. Identified that the workflow fallback must resolve the URL in the step script (not in env block) per the CI secrets learning
 3. Added the `discord-setup.sh write-env` cleanup regex for the new variable names
 4. Clarified that the `post_discord()` function in `content-publisher.sh` needs a parameter or resolved variable -- not a global change to `DISCORD_WEBHOOK_URL`
 
 ### New Considerations Discovered
+
 - The `scheduled-content-publisher.yml` failure notification step should keep using `DISCORD_WEBHOOK_URL` (not the blog webhook) -- failure alerts are operational, not content
 - The `discord-setup.sh write-env` function already uses `grep -v` to strip existing vars; the new vars need the same treatment
 
@@ -40,6 +42,7 @@ Currently, all automated Discord content flows through a single `DISCORD_WEBHOOK
 2. **Channel purpose clarity** -- Discord best practice is to give channels clear, single purposes. Mixing content types makes channels harder to scan and reduces engagement.
 
 The user wants:
+
 - **#releases** for version release announcements (currently in the `version-bump-and-release.yml` workflow's "Post to Discord" step)
 - **#blog** for blog post distribution (currently in the `content-publisher.sh` Discord posting and the `social-distribute` skill)
 
@@ -55,6 +58,7 @@ Add two new GitHub repository secrets:
 | `DISCORD_BLOG_WEBHOOK_URL` | #blog | `content-publisher.sh`, `social-distribute` skill |
 
 The existing `DISCORD_WEBHOOK_URL` remains as the **default/general** webhook for:
+
 - CI failure notifications (all workflows)
 - Community digest posting
 - Bot-fix monitor notifications
@@ -275,6 +279,7 @@ Discord webhooks are channel-scoped -- each webhook posts to exactly one channel
 ### Research Insights: Webhook URL Naming Convention
 
 The naming pattern `DISCORD_<PURPOSE>_WEBHOOK_URL` is consistent and discoverable:
+
 - `DISCORD_WEBHOOK_URL` -- general/default (existing)
 - `DISCORD_RELEASES_WEBHOOK_URL` -- releases channel
 - `DISCORD_BLOG_WEBHOOK_URL` -- blog channel
@@ -288,6 +293,7 @@ All changes use fallback patterns: `${DISCORD_RELEASES_WEBHOOK_URL:-$DISCORD_WEB
 ### Research Insights: Fallback Pattern Robustness
 
 The bash parameter expansion `${VAR1:-${VAR2:-}}` handles three states correctly:
+
 1. `VAR1` set and non-empty -- uses `VAR1` (new channel-specific webhook)
 2. `VAR1` unset/empty, `VAR2` set -- uses `VAR2` (fallback to general)
 3. Both unset -- expands to empty string, caught by the `-z` check
@@ -305,6 +311,7 @@ All webhook payloads already include explicit `username: "Sol"` and `avatar_url`
 ### Research Insights: Identity Across Channels
 
 Each new webhook is an independent identity record in Discord. Even though the code always sends `username` and `avatar_url` in the payload (overriding defaults), the webhook's own default identity matters in two edge cases:
+
 1. **Discord audit log** -- shows the webhook's registered name, not the payload override
 2. **Webhook list view** -- Server Settings > Integrations shows all webhooks with their default names
 

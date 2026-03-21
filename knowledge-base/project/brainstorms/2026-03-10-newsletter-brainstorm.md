@@ -71,18 +71,21 @@ A two-phase email capture and newsletter system for soleur.ai using Buttondown a
 ## Domain Leader Assessments
 
 ### CMO Assessment
+
 - Email capture is an identified infrastructure blocker in the marketing strategy
 - Two-step approach recommended: capture now (Phase 2 validation), send later (Phase 4)
 - Newsletter positions Soleur as category thought leader
 - Delegate form placement/copy to conversion-optimizer and copywriter
 
 ### COO Assessment
+
 - Adding $9/mo Buttondown brings recurring spend to ~$34/mo (115% increase)
 - Plausible trial ends 2026-03-24 ($9/mo) — avoid stacking two $9/mo tools simultaneously
 - DNS changes needed for sender domain verification (Cloudflare)
 - MCP is not a vendor differentiator — pick the tool that requires least engineering
 
 ### CLO Assessment
+
 - **This is the first PII collection on soleur.ai** — significant privacy posture change
 - Current legal docs claim "no personal data collection" — must be updated before launch
 - Three critical document updates: Privacy Policy, GDPR Policy, Data Protection Disclosure

@@ -78,6 +78,7 @@ Update `knowledge-base/operations/expenses.md` (verified correct path -- constit
 ### Research Insights: Expense Ledger
 
 **Best Practices:**
+
 - Add a "Status" column to distinguish `active`, `test-mode`, `free-tier`, `deferred`, and `decommissioned` services
 - Include "Upgrade Trigger" notes (e.g., "Supabase: upgrade at 500MB DB or 50K MAU") so cost increases are predictable
 - For Stripe, note that EU card pricing differs significantly from US (1.5% + EUR 0.25 vs 2.9% + $0.30) since the user base is likely EU-heavy given French company
@@ -122,11 +123,13 @@ For each vendor, verify that a Data Processing Agreement covers the data Jikigai
 ### Research Insights: DPA Verification
 
 **Institutional Learnings Applied:**
+
 - `github-dpa-free-plan-scope-limitation`: Always verify DPA tier-gating. The Hetzner finding confirms this pattern repeats across vendors.
 - `buttondown-gdpr-transfer-mechanism-sccs-only`: Do not assume all US vendors use DPF. Verify each vendor individually. Stripe uses both DPF + SCCs. Resend (when integrated) uses DPF.
 - `dogfood-legal-agents-cross-document-consistency`: Budget for a generate-audit-fix-reaudit cycle. Run `legal-compliance-auditor` after all edits.
 
 **Edge Cases:**
+
 - If Supabase DPA is not available for free tier, the remediation is upgrading to Pro ($25/mo) -- document this cost contingency in the expense ledger.
 - If Cloudflare's free-tier DPA coverage is ambiguous, the Self-Serve Subscription Agreement likely suffices, but document the analysis in the DPA verification memo.
 
@@ -170,10 +173,12 @@ Add transfer disclosures for:
 ### Research Insights: Privacy Policy
 
 **Institutional Learnings Applied:**
+
 - `first-pii-collection-legal-update-pattern`: After all targeted edits, run grep verification for blanket "does not collect" statements. The privacy policy currently says "does not collect, transmit, or store any personal data on external servers" (Section 4.1) and "The Plugin does not have its own backend, database, or cloud infrastructure" (Section 4.1). Both become contradictions with the web platform. **The Section 4.1 title "Data Collected by the Plugin: None" must be scoped to the plugin only, with a new section for the web platform.**
 - `split-legal-basis-cross-section-consistency`: A change to Section 4 propagates to Sections 5, 6, 7, and 10. Use this checklist: data category (4.x), processor description (5.x), legal basis summary (6), retention (7), international transfers (10).
 
 **Grep patterns to run after edits:**
+
 ```bash
 grep -rn "does not collect" docs/legal/ plugins/soleur/docs/pages/legal/
 grep -rn "no personal data" docs/legal/ plugins/soleur/docs/pages/legal/
@@ -229,10 +234,12 @@ Section 8 committed to specific actions. Mark each as fulfilled or in-progress:
 ### Research Insights: DPD
 
 **Institutional Learnings Applied:**
+
 - `dpd-processor-table-dual-file-sync`: PR #686 restructured the Eleventy DPD but never propagated to the root copy. **Check `docs/legal/data-protection-disclosure.md` sync status BEFORE editing. If out of sync, align first.**
 - `dpd-sub-processor-contradiction-fix`: When adding new processors to Section 4.2, audit Section 4.1 ("No Sub-processors") to ensure it's scoped to the plugin. The current Section 4.1 says "there are no Plugin-level Sub-processors" which is correctly scoped.
 
 **GDPR Terminology Precision:**
+
 - Supabase, Stripe, Hetzner are **processors** (Jikigai is controller). They are NOT sub-processors (sub-processors would be processors engaged by Jikigai's processor).
 - Supabase's own sub-processors (AWS, etc.) and Stripe's sub-processors are sub-processors from Jikigai's perspective, but Jikigai does not need to list them -- the processor (Supabase/Stripe) is responsible for sub-processor management per their DPA.
 
@@ -290,6 +297,7 @@ Add processing activities 7-9 to the register:
 **5.6 Evaluate DPIA Requirement (Section 9)**
 
 Section 9 currently states DPIA is not required. Reassess:
+
 - The web platform processes user PII at scale (email, auth tokens, encrypted API keys)
 - Payment processing involves financial data
 - However: no special categories (Art. 9), no systematic monitoring, no automated decision-making
@@ -300,6 +308,7 @@ Section 9 currently states DPIA is not required. Reassess:
 **File Count**: This phase touches 2 files (same GDPR policy in 2 locations), each needing updates to Sections 2.2, 3, 4.2, 6, 9, and 10. That's 12 section edits across 2 files = high cross-reference risk.
 
 **Institutional Learnings Applied:**
+
 - `split-legal-basis-cross-section-consistency`: Every new processing activity must appear in: lawful basis (Section 3), data categories (Section 4), international transfers (Section 6), and Article 30 register (Section 10). Missing any one creates an inconsistency.
 - `stripe-atlas-legal-benchmark-mismatch`: Do not over-commit to obligations. Jikigai is a pre-revenue SaaS -- DPIA is not required, and adding one creates ongoing maintenance obligations. Document the analysis, don't perform an unnecessary DPIA.
 
@@ -345,6 +354,7 @@ Update `.github/PULL_REQUEST_TEMPLATE.md` to add a conditional vendor section:
 ### Research Insights: Vendor Gate
 
 **Institutional Learnings Applied:**
+
 - `engineering-workflow-blind-spots`: This learning documents exactly the problem this phase solves -- "Stood up 4 new services without updating the expense ledger or triggering legal/DPA review." The constitution rule added then was prose-based (weakest enforcement). This phase upgrades it to a concrete checklist in both the constitution AND the PR template.
 - `plan-review-scope-reduction-and-hook-enforced-annotations`: Prefer PR template over PreToolUse hook for this gate. Hooks fire on every tool use and add latency. A PR template section is visible during review and can be deleted when not applicable.
 
@@ -428,10 +438,10 @@ Update `.github/PULL_REQUEST_TEMPLATE.md` to add a conditional vendor section:
 
 ### External References
 
-- Hetzner ToS (Section 6.2 DPA clause): https://www.hetzner.com/legal/terms-and-conditions/
-- Supabase DPA: https://supabase.com/legal/dpa
-- Stripe DPA: https://stripe.com/legal/dpa
-- Stripe PCI guidance: https://stripe.com/docs/security/guide
-- Cloudflare DPA: https://www.cloudflare.com/cloudflare-customer-dpa/
-- Resend DPA (future): https://resend.com/legal/dpa
-- Resend sub-processors (future): https://resend.com/legal/subprocessors
+- Hetzner ToS (Section 6.2 DPA clause): <https://www.hetzner.com/legal/terms-and-conditions/>
+- Supabase DPA: <https://supabase.com/legal/dpa>
+- Stripe DPA: <https://stripe.com/legal/dpa>
+- Stripe PCI guidance: <https://stripe.com/docs/security/guide>
+- Cloudflare DPA: <https://www.cloudflare.com/cloudflare-customer-dpa/>
+- Resend DPA (future): <https://resend.com/legal/dpa>
+- Resend sub-processors (future): <https://resend.com/legal/subprocessors>

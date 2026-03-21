@@ -13,6 +13,7 @@ deepened: 2026-03-05
 **Research sources:** constitution.md shell conventions, `set-euo-pipefail-upgrade-pitfalls` learning, `bundle-external-plugin-into-soleur` learning, stop-hook.sh source analysis
 
 ### Key Improvements
+
 1. Fixed `set -euo pipefail` trap in MVP code: `grep` for missing frontmatter fields returns exit 1 under `pipefail`, aborting the hook -- must append `|| true`
 2. Clarified placement order: stuck detection fires AFTER completion promise check but BEFORE iteration increment, so normal completions bypass the counter entirely
 3. Added edge case for tool-use-only responses where `LAST_OUTPUT` extraction returns empty string (jq `map(select(.type == "text"))` yields nothing when response is all tool_use blocks)

@@ -14,11 +14,13 @@ semver: patch
 **Research sources:** Claude Code hooks API reference (code.claude.com/docs/en/hooks), project learnings (set-euo-pipefail-upgrade-pitfalls, cleanup-merged-path-mismatch, sessionstart-hook-api-contract)
 
 ### Key Improvements
+
 1. Discovered `stop_hook_active` input field -- the hook must check this to prevent infinite re-entry, which is the actual root cause of the infinite loop
 2. Discovered `last_assistant_message` input field -- eliminates transcript file parsing entirely, simplifying ~20 lines of jq/grep logic
 3. Corrected exit code analysis: exit 1 under `set -e` is a non-blocking error (stop proceeds), NOT a blocking error. Only exit 2 or `{"decision": "block"}` blocks the stop. The infinite loop is caused by the hook successfully returning `{"decision": "block"}` after the state file is deleted mid-iteration
 
 ### New Considerations Discovered
+
 - The hook does not check `stop_hook_active`, violating the upstream API recommendation for preventing infinite loops
 - The `last_assistant_message` field in hook input makes transcript parsing redundant (lines 66-89 of current stop-hook.sh)
 - The `cwd` field in hook input could be used as a fallback for project root resolution
@@ -50,6 +52,7 @@ The original analysis assumed that exit code 1 (from `set -e` aborting on awk/jq
 | Any other (including 1) | Non-blocking error. Shown in verbose mode, stop proceeds |
 
 Exit code 1 from `set -e` is a **non-blocking error** -- the stop proceeds. The infinite loop is NOT caused by exit code 1. Instead, the loop occurs when:
+
 1. A ralph loop is active and the hook correctly returns `{"decision": "block"}`
 2. The loop completes (state file deleted mid-iteration)
 3. The hook fires again but encounters the awk error on the now-deleted file
@@ -111,6 +114,7 @@ LAST_OUTPUT=$(echo "$HOOK_INPUT" | jq -r '.last_assistant_message // ""')
 ```
 
 This eliminates:
+
 - `TRANSCRIPT_PATH` extraction and file existence check (lines 66-72)
 - `grep` for assistant messages in transcript (lines 75-81)
 - Complex `jq` extraction of text content blocks (lines 84-89)
@@ -214,7 +218,7 @@ PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || PROJECT_ROOT="."
 ## References
 
 - GitHub issue: #464
-- Claude Code hooks API: https://code.claude.com/docs/en/hooks (Stop hook input, exit code semantics, `stop_hook_active`, `last_assistant_message`)
+- Claude Code hooks API: <https://code.claude.com/docs/en/hooks> (Stop hook input, exit code semantics, `stop_hook_active`, `last_assistant_message`)
 - Stop hook: `plugins/soleur/hooks/stop-hook.sh`
 - Setup script: `plugins/soleur/scripts/setup-ralph-loop.sh`
 - Welcome hook (reference pattern): `plugins/soleur/hooks/welcome-hook.sh`

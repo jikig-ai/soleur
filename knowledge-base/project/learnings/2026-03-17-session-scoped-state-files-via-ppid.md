@@ -5,6 +5,7 @@
 The ralph loop state file (`.claude/ralph-loop.local.md`) was project-scoped -- one file per project. In a bare repo with worktrees, all Claude Code sessions resolve to the same project root via `git rev-parse --git-common-dir`. When one session had an active ralph loop, the stop hook in every parallel session found the state file and blocked exit, injecting stale loop prompts into unrelated sessions. This made parallel development workflows unusable whenever ralph loop was active in any single session.
 
 Alternatives considered and rejected:
+
 - **CLAUDE_SESSION_ID**: Does not exist as an environment variable. Claude Code exposes no session identifier to hooks.
 - **UUID generated at loop start**: Circular -- the loop start skill would need to propagate the UUID to the stop hook, but there is no shared channel except the state file itself.
 - **Worktree path hash**: Multiple sessions can operate on the same worktree (e.g., one session running tests while another edits). A worktree-scoped file would still collide.
@@ -54,6 +55,7 @@ This is preferable to lock files or advisory locks because lock files have the s
 - GitHub issue #650 -- The bug report for parallel session blocking
 
 ## Tags
+
 category: runtime-errors
 module: ralph-loop
 issue: 650

@@ -41,10 +41,12 @@ The agent-finder detects stack gaps (missing technology coverage) but not functi
 ## Files to Create/Modify
 
 ### New files
+
 - `agents/engineering/discovery/functional-discovery.md` -- new agent
 - `skills/agent-finder/scripts/registry-query.sh` (or similar) -- shared registry infrastructure
 
 ### Modified files
+
 - `agents/engineering/discovery/agent-finder.md` -- refactor to use shared script
 - `commands/soleur/plan.md` -- add Phase 1.5b functional overlap check
 - `commands/soleur/brainstorm.md` -- add light check in Phase 1.1

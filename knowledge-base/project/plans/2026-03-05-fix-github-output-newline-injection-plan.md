@@ -123,6 +123,7 @@ For values that are controlled constants or come from validated sources (e.g., `
 **Alternative considered -- `head -1` instead of `tr -d`:** Using `head -1` would truncate at the first newline rather than stripping all newlines (concatenating). For PR titles, truncation is arguably better (preserves meaning of the first line). However, `head -1` does not strip `\r`, requiring an additional `tr -d '\r'` regardless. The `tr -d '\n\r'` approach is a single operation that handles both characters.
 
 Sources:
+
 - [GitHub docs: workflow commands -- setting output parameters](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#setting-an-output-parameter)
 - [GitHub docs: script injection](https://docs.github.com/en/actions/concepts/security/script-injections)
 - [OpenSSF: mitigating attack vectors in GitHub workflows](https://openssf.org/blog/2024/08/12/mitigating-attack-vectors-in-github-workflows/)

@@ -30,5 +30,6 @@ This creates the binary at `~/.local/bin/agent-browser`.
 4. In `.bashrc`, change `export PATH="$PATH:~/.local/bin"` to `export PATH="$HOME/.local/bin:$PATH"`
 
 ## Tags
+
 category: dependency-management
 module: plugins/soleur/skills/agent-browser

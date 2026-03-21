@@ -100,12 +100,14 @@ Each agent receives via Task tool:
 6. **CONSTRAINTS:** "Do NOT commit. Do NOT modify files outside YOUR FILES list. Do NOT use the Bash tool. Do NOT use WebFetch or WebSearch. Do NOT run git commands. Run `pwd` before every file write to verify you are in the worktree."
 
 **Agent 1 (Code) instructions:**
+
 - Implement the feature to satisfy the public interfaces in the contract
 - Follow existing codebase patterns (read neighboring files for style)
 - Add dependencies to package.json if needed
 - Do NOT write test files -- Agent 2 handles all tests
 
 **Agent 2 (Tests) instructions:**
+
 - Write acceptance tests from the interface contract (ATDD RED phase)
 - Tests must validate the public interfaces listed in the contract
 - Use Given/When/Then format per constitution
@@ -200,6 +202,7 @@ test-fix-loop uses `git stash` internally as a rollback mechanism. The constitut
 **Create:** `plugins/soleur/skills/work/references/work-lifecycle-parallel.md`
 
 Contents: The full Tier 0 protocol following the existing reference file pattern:
+
 - Step 01: Offer (interactive) / Auto-select (pipeline)
 - Step 02: Generate interface contract (file scopes + signatures)
 - Step 03: Spawn 2 parallel agents (code + tests)
@@ -212,6 +215,7 @@ Contents: The full Tier 0 protocol following the existing reference file pattern
 **Modify:** `plugins/soleur/skills/work/SKILL.md`
 
 Changes:
+
 1. Add Tier 0 pre-check BEFORE the existing independence analysis in Phase 2 section 1
 2. Single judgment instruction: "Does this plan have independent code + test workstreams with non-overlapping file scopes?"
 3. Add reference file loading instruction: `**Read plugins/soleur/skills/work/references/work-lifecycle-parallel.md now**`
@@ -221,6 +225,7 @@ Changes:
 ### Phase 3: Version Bump and Compliance
 
 **Modify (version triad):**
+
 - `plugins/soleur/.claude-plugin/plugin.json` -- MINOR bump
 - `plugins/soleur/CHANGELOG.md` -- Added entry
 - `plugins/soleur/README.md` -- Verify counts

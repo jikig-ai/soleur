@@ -14,6 +14,7 @@ deepened: 2026-02-13
 **Research agents used:** GitHub Pages best practices, frontend design, architecture strategist, code simplicity, security sentinel, learnings researcher
 
 ### Key Improvements
+
 1. Added `.nojekyll`, `404.html`, `robots.txt`, `sitemap.xml` for complete GitHub Pages setup
 2. Added `<base href="/soleur/">` pattern for clean cross-page linking
 3. Defined visual design direction: utilitarian precision aesthetic with warm amber accent, OKLCH colors, CSS custom properties, dark mode, and accessibility compliance
@@ -21,6 +22,7 @@ deepened: 2026-02-13
 5. Security: HTML-escape all content generated from markdown source files, self-host all assets
 
 ### Considerations from Research
+
 - deploy-docs skill validation expects 7 pages (index + 6 subpages) — plan now matches
 - Static site numbers (agent/skill counts) are maintained by release-docs skill, not hand-edited
 - Documentation staleness is a known risk — release-docs integration prevents drift
@@ -42,7 +44,7 @@ Create the documentation site at `plugins/soleur/docs/` so the existing GitHub A
 - [ ] `plugins/soleur/docs/404.html` exists with nav and "return home" link
 - [ ] `plugins/soleur/docs/.nojekyll` exists (zero-byte file)
 - [ ] `/soleur:deploy-docs` validation passes (all pages present, counts match)
-- [ ] Site deploys successfully to https://jikig-ai.github.io/soleur/
+- [ ] Site deploys successfully to <https://jikig-ai.github.io/soleur/>
 - [ ] No Jekyll — plain static HTML (matches existing workflow)
 - [ ] All content from markdown source files is HTML-escaped (no raw insertion)
 - [ ] All assets self-hosted (no external CDN dependencies)
@@ -51,7 +53,7 @@ Create the documentation site at `plugins/soleur/docs/` so the existing GitHub A
 ## Test Scenarios
 
 - Given the docs directory exists with all required pages, when deploy-docs validation runs, then all checks pass
-- Given the site is deployed, when visiting https://jikig-ai.github.io/soleur/, then the landing page renders correctly with dark/light mode
+- Given the site is deployed, when visiting <https://jikig-ai.github.io/soleur/>, then the landing page renders correctly with dark/light mode
 - Given a user navigates between pages, when clicking nav links, then all pages load without 404s
 - Given a user hits an invalid URL, when the 404 page renders, then it shows navigation back to the site
 - Given a user views the site on mobile, when the viewport is < 768px, then the nav collapses to hamburger and cards stack vertically
@@ -86,6 +88,7 @@ Total: 11 files (6 HTML pages + index + 404 + CSS + robots.txt + sitemap.xml + .
 **Aesthetic:** Utilitarian precision — typography-forward, monochrome-dominant, single warm accent color. Communicates engineering rigor without being generic.
 
 **Color palette:** OKLCH-based CSS custom properties for perceptual uniformity. Light and dark themes via `data-theme` attribute on `<html>`.
+
 - Background hierarchy: near-white → subtle gray → code-block gray
 - Text hierarchy: near-black → mid-gray → light-gray
 - Accent: warm amber (`oklch(0.75 0.15 75)`) — distinctive, avoids cliche purple
@@ -94,6 +97,7 @@ Total: 11 files (6 HTML pages + index + 404 + CSS + robots.txt + sitemap.xml + .
 **Typography:** System font stack for body (no external font dependencies — self-hosting constraint). Monospace for component names and code. Major third type scale (1.25 ratio).
 
 **Layout:**
+
 - Fixed header with frosted-glass effect (`backdrop-filter: blur`)
 - Sticky category filter bar on catalog pages (horizontal pill navigation)
 - CSS Grid with `auto-fill minmax(320px, 1fr)` for responsive card grids
@@ -105,6 +109,7 @@ Total: 11 files (6 HTML pages + index + 404 + CSS + robots.txt + sitemap.xml + .
 **Navigation:** Duplicate nav in each page (not JS includes). Release-docs skill regenerates all pages, so duplication is a non-issue. Mobile: checkbox-based hamburger toggle (CSS-only, no JS needed).
 
 **Accessibility:**
+
 - Semantic HTML (`<header>`, `<nav>`, `<main>`, `<article>`, `<footer>`)
 - Skip link: `<a href="#main-content" class="skip-link">Skip to main content</a>`
 - `lang="en"` on `<html>`
@@ -119,6 +124,7 @@ Total: 11 files (6 HTML pages + index + 404 + CSS + robots.txt + sitemap.xml + .
 ### Cross-Page Path Handling
 
 Every HTML page includes `<base href="/soleur/">` in `<head>`. All paths are then relative to site root without leading slashes:
+
 - `css/style.css` (from any page)
 - `pages/agents.html` (from any page)
 - `index.html` (from any page)

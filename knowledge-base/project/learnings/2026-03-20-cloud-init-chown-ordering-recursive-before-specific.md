@@ -27,6 +27,7 @@ runcmd:
 ## Key Insight
 
 In any imperative permission setup (cloud-init, shell scripts, Dockerfiles), apply ownership in broadest-to-narrowest order. The most specific rule wins by being applied last. This is easy to miss because:
+
 - Cloud-init runs commands sequentially; the ordering looks cosmetic
 - Recursive chown exits 0 regardless — no warning that it overwrote deliberate permissions
 - The failure surfaces much later at runtime, not during provisioning
@@ -41,5 +42,6 @@ Also applies: cloud-init creates all files as root. Any non-root user that needs
 4. Branch not synced with origin/main — would have silently reverted SSH host fingerprint verification from PR #824
 
 ## Tags
+
 category: integration-issues
 module: infrastructure

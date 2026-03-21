@@ -86,6 +86,7 @@ python3 -m http.server 8766
 This is the real work. Everything else is mechanical propagation.
 
 **Files created:**
+
 - `plugins/soleur/docs/fonts/cormorant-garamond-500.woff2`
 - `plugins/soleur/docs/fonts/inter-400.woff2`
 - `plugins/soleur/docs/fonts/inter-700.woff2`
@@ -93,14 +94,17 @@ This is the real work. Everything else is mechanical propagation.
 - `plugins/soleur/docs/images/og-image.png` (1200x630)
 
 **Files modified:**
+
 - `plugins/soleur/docs/css/style.css` (full rewrite)
 - `plugins/soleur/docs/index.html` (full rewrite)
 
 **Files deleted:**
+
 - `plugins/soleur/docs/js/main.js`
 - `plugins/soleur/docs/js/` (directory)
 
 **Tasks:**
+
 1. Download font woff2 files into `docs/fonts/`
 2. Export favicon and OG image from .pen file logo variations
 3. Rewrite `style.css`:
@@ -124,6 +128,7 @@ This is the real work. Everything else is mechanical propagation.
 Mechanical changes: same header/footer/head across all remaining pages.
 
 **Files modified:**
+
 - `plugins/soleur/docs/pages/agents.html`
 - `plugins/soleur/docs/pages/commands.html`
 - `plugins/soleur/docs/pages/skills.html`
@@ -138,6 +143,7 @@ Mechanical changes: same header/footer/head across all remaining pages.
 - Root `README.md` (version badge)
 
 **Tasks (per page):**
+
 1. Remove `data-theme="light"` from `<html>` tag
 2. Remove inline theme detection `<script>` from `<head>`
 3. Remove theme toggle button from nav
@@ -175,12 +181,14 @@ Mechanical changes: same header/footer/head across all remaining pages.
 ## References
 
 ### Internal
+
 - Spec: `knowledge-base/project/specs/feat-brand-website/spec.md`
 - Brainstorm: `knowledge-base/project/brainstorms/2026-02-14-brand-website-brainstorm.md`
 - Design source: `knowledge-base/design/brand/brand-visual-identity-brainstorm.pen` (frame `0Ja8a`)
 - Brand guide: `knowledge-base/overview/brand-guide.md`
 
 ### Learnings Applied
+
 - `knowledge-base/project/learnings/2026-02-13-base-href-breaks-local-dev-server.md`
 - `knowledge-base/project/learnings/2026-02-13-parallel-subagent-css-class-mismatch.md`
 - `knowledge-base/project/learnings/2026-02-13-version-bump-cascades-to-html-badges.md`

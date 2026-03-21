@@ -36,5 +36,6 @@ grep -q "og:image" "$file" || sed -i '/<\/head>/i\  <meta property="og:image" ..
 Sed's append/insert commands (`a`, `i`) fail silently when the address pattern doesn't match. When making mechanical changes across multiple files with different structures, always verify with `grep -rL` (list files NOT matching) after the batch operation. Code review agents catch this reliably -- never skip the review step for "mechanical" changes.
 
 ## Tags
+
 category: build-errors
 module: docs

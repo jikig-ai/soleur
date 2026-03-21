@@ -204,6 +204,7 @@ git mv plugins/soleur/skills/xcode-test plugins/soleur/skills/engineering/
 **2.1 Agent category references in commands/skills that reference old paths:**
 
 Scan all commands and skills for references to:
+
 - `agents/review/` → `agents/engineering/review/`
 - `agents/design/` → `agents/engineering/design/`
 - `skills/dhh-rails-style` → `skills/engineering/dhh-rails-style`

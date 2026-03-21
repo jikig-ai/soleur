@@ -18,6 +18,7 @@ The grep patterns that caught these: `"does not collect"`, `"no personal data"`,
 ### 2. Six documents, not three
 
 Legal docs exist in two locations with different frontmatter formats:
+
 - **Published:** `plugins/soleur/docs/pages/legal/` (Eleventy layout frontmatter)
 - **Source:** `docs/legal/` (YAML type/jurisdiction frontmatter)
 
@@ -41,6 +42,7 @@ When a site transitions from zero PII collection to collecting any personal data
 2. **Edit tool file-not-read rejection:** Attempted to edit `index.njk` after only Grep'ing it. The Edit tool requires a Read call first. Grep results don't satisfy this requirement.
 
 ## Tags
+
 category: feature-implementation
 module: legal-docs, docs-infrastructure
 tags: gdpr, legal-compliance, pii, newsletter, buttondown, grep-verification

@@ -1,7 +1,7 @@
 # Brainstorm: Cowork Plugins Risk Analysis
 
 **Date:** 2026-02-25
-**Source:** https://claude.com/blog/cowork-plugins-across-enterprise
+**Source:** <https://claude.com/blog/cowork-plugins-across-enterprise>
 **Participants:** CPO, CMO, CRO, CTO, best-practices-researcher, repo-research-analyst
 
 ## What We're Analyzing
