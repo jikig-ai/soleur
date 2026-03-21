@@ -20,6 +20,9 @@ permissions:
   contents: read
   issues: write
 
+env:
+  TERRAFORM_VERSION: "1.10.5"
+
 jobs:
   drift-check:
     runs-on: ubuntu-24.04
@@ -38,7 +41,7 @@ jobs:
       # The wrapper converts exit code 2 to 1 (setup-terraform #152, #9).
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
-          terraform_version: "1.10.5"
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
       - name: Install Doppler CLI
@@ -55,8 +58,12 @@ jobs:
           DOPPLER_PROJECT: soleur
           DOPPLER_CONFIG: prd_terraform
         run: |
-          printf 'AWS_ACCESS_KEY_ID=%s\n' "$(doppler secrets get AWS_ACCESS_KEY_ID --plain)" >> "$GITHUB_ENV"
-          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)" >> "$GITHUB_ENV"
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain)
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
 
       - name: Terraform init
         run: terraform init -input=false
@@ -80,7 +87,7 @@ jobs:
 
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
 
-          echo "$PLAN_OUTPUT" | head -c 60000 > plan-output.txt
+          printf '%s' "$PLAN_OUTPUT" | head -c 60000 > plan-output.txt
           sed -i \
             -e 's/\(token\s*=\s*\)"[^"]*"/\1"***"/gi' \
             -e 's/\(secret\s*=\s*\)"[^"]*"/\1"***"/gi' \
@@ -118,7 +125,7 @@ jobs:
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
 
           EXISTING=$(gh issue list --label "infra-drift" --state open \
-            --search "drift detected in ${STACK_NAME}" \
+            --limit 100 \
             --json number,title \
             --jq ".[] | select(.title == \"${TITLE}\") | .number" \
             | head -1)
