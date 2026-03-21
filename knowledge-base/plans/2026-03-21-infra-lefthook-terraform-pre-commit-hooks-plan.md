@@ -104,6 +104,7 @@ Lefthook uses the [`gobwas/glob`](https://github.com/gobwas/glob) library by def
 Since all 12 `.tf` files are directly in `apps/<name>/infra/` (no subdirectories), the correct glob is `apps/*/infra/*.tf`.
 
 If the project later adds nested Terraform modules (e.g., `apps/web-platform/infra/modules/`), either:
+
 1. Add a second glob entry: `glob: ["apps/*/infra/*.tf", "apps/*/infra/**/*.tf"]` (supported since lefthook 1.10.10)
 2. Set `glob_matcher: doublestar` at the top level of `lefthook.yml` (changes `**` behavior globally)
 
@@ -129,10 +130,10 @@ Current priorities: rust-format (1), rust-lint-fix (2), rust-lint-check (3), mar
 
 ## Acceptance Criteria
 
-- [ ] `lefthook.yml` contains a `terraform-fmt` command with `glob: "apps/*/infra/*.tf"`
-- [ ] Staging a misformatted `.tf` file and committing results in auto-formatting and clean commit
-- [ ] Non-Terraform commits are not affected (hook skips when no `.tf` files are staged)
-- [ ] `lefthook run pre-commit` passes with no errors when `.tf` files are already formatted
+- [x] `lefthook.yml` contains a `terraform-fmt` command with `glob: "apps/*/infra/*.tf"`
+- [x] Staging a misformatted `.tf` file and committing results in auto-formatting and clean commit
+- [x] Non-Terraform commits are not affected (hook skips when no `.tf` files are staged)
+- [x] `lefthook run pre-commit` passes with no errors when `.tf` files are already formatted
 
 ## Test Scenarios
 
