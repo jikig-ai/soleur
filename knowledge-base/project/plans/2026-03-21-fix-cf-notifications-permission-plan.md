@@ -40,11 +40,11 @@ Closes #992.
 
 ## Acceptance Criteria
 
-- [ ] The `soleur-terraform-tunnel` CF API token has `Account > Notifications > Edit` permission
-- [ ] `terraform apply` succeeds and creates the `cloudflare_notification_policy.service_token_expiry` resource
-- [ ] The `cf_api_token` variable description in `variables.tf` is updated to reflect the expanded permission set
-- [ ] No existing resources are affected (plan shows only the notification policy as a new addition)
-- [ ] Token value in Doppler (`CF_API_TOKEN`) remains unchanged (editing permissions does not rotate the token)
+- [x] The `soleur-terraform-tunnel` CF API token has `Account > Notifications > Edit` permission
+- [x] `terraform apply` succeeds and creates the `cloudflare_notification_policy.service_token_expiry` resource
+- [x] The `cf_api_token` variable description in `variables.tf` is updated to reflect the expanded permission set
+- [x] No existing resources are affected (plan shows only the notification policy as a new addition)
+- [x] Token value in Doppler (`CF_API_TOKEN`) remains unchanged (editing permissions does not rotate the token)
 
 ## Test Scenarios
 
