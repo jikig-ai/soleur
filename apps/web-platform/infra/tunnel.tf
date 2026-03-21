@@ -90,7 +90,8 @@ output "tunnel_token" {
 }
 
 output "access_service_token_client_id" {
-  value = cloudflare_zero_trust_access_service_token.deploy.client_id
+  value     = cloudflare_zero_trust_access_service_token.deploy.client_id
+  sensitive = true
 }
 
 output "access_service_token_client_secret" {

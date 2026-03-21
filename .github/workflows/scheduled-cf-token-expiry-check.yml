@@ -37,6 +37,9 @@ jobs:
         run: |
           set -euo pipefail
 
+          TMPFILE=$(mktemp)
+          trap 'rm -f "$TMPFILE"' EXIT
+
           if [[ -z "${CF_API_TOKEN:-}" ]]; then
             echo "::warning::CF_API_TOKEN secret is not set. Skipping check."
             exit 0
@@ -48,7 +51,7 @@ jobs:
           fi
 
           # List service tokens
-          HTTP_CODE=$(curl -s -o /tmp/cf-tokens.json -w "%{http_code}" \
+          HTTP_CODE=$(curl -s -o "$TMPFILE" -w "%{http_code}" \
             -H "Authorization: Bearer ${CF_API_TOKEN}" \
             "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/access/service_tokens")
 
@@ -61,11 +64,17 @@ jobs:
           EXPIRES_AT=$(jq -r \
             --arg name "$TOKEN_NAME" \
             '.result[] | select(.name == $name) | .expires_at // empty' \
-            /tmp/cf-tokens.json)
+            "$TMPFILE")
 
           if [[ -z "$EXPIRES_AT" ]]; then
             echo "::warning::Service token '$TOKEN_NAME' not found in API response."
             exit 0
+          fi
+
+          # Validate ISO 8601 format before passing to date
+          if [[ ! "$EXPIRES_AT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
+            echo "::error::Unexpected date format from API: '$EXPIRES_AT'"
+            exit 1
           fi
 
           # Calculate days remaining (ISO 8601 -> epoch)
@@ -76,38 +85,29 @@ jobs:
           echo "Token '$TOKEN_NAME' expires at $EXPIRES_AT ($DAYS_REMAINING days remaining)."
 
           ISSUE_TITLE="[Action Required] Cloudflare deploy service token expiring"
+          ISSUE_SEARCH="in:title \"[Action Required] Cloudflare deploy service token\""
 
           if [[ "$DAYS_REMAINING" -le "$WARN_DAYS" ]]; then
             echo "::warning::Token expires in $DAYS_REMAINING days (threshold: $WARN_DAYS)."
 
-            BODY="## Cloudflare Deploy Service Token Expiring
+            BODY=$(cat <<ISSUE_BODY
+          ## Cloudflare Deploy Service Token Expiring
 
           The \`github-actions-deploy\` service token expires on **$EXPIRES_AT** ($DAYS_REMAINING days remaining).
 
           When expired, all deploys via \`web-platform-release.yml\` will fail with HTTP 403.
 
-          ### Renewal steps
+          ### What to do
 
-          **Option A: Extend expiry (no credential change)**
+          Follow the [rotation runbook](https://github.com/${GH_REPO}/blob/main/knowledge-base/engineering/ops/runbooks/cloudflare-service-token-rotation.md) for renewal steps.
 
-          1. Edit \`apps/web-platform/infra/tunnel.tf\` -- add or update \`duration\` on the service token resource
-          2. Run: \`doppler run --project soleur --config prd_terraform --name-transformer tf-var -- terraform apply\`
-
-          **Option B: Rotate credentials**
-
-          1. Run: \`terraform apply -replace=cloudflare_zero_trust_access_service_token.deploy\`
-          2. Update GitHub secrets:
-             \`\`\`bash
-             terraform output -raw access_service_token_client_id | gh secret set CF_ACCESS_CLIENT_ID
-             terraform output -raw access_service_token_client_secret | gh secret set CF_ACCESS_CLIENT_SECRET
-             \`\`\`
-          3. Verify: \`gh workflow run web-platform-release.yml\`
-
-          **References:** #974, knowledge-base/engineering/ops/runbooks/cloudflare-service-token-rotation.md"
+          **References:** #974
+          ISSUE_BODY
+          )
 
             # Dedup: check for existing open issue
             EXISTING=$(gh issue list --repo "$GH_REPO" --state open \
-              --search "in:title \"[Action Required] Cloudflare deploy service token\"" \
+              --search "$ISSUE_SEARCH" \
               --json number --jq '.[0].number // empty')
 
             if [[ -n "$EXISTING" ]]; then
@@ -128,7 +128,7 @@ jobs:
 
             # Close stale renewal issues
             STALE=$(gh issue list --repo "$GH_REPO" --state open \
-              --search "in:title \"[Action Required] Cloudflare deploy service token\"" \
+              --search "$ISSUE_SEARCH" \
               --json number --jq '.[0].number // empty')
 
             if [[ -n "$STALE" ]]; then
@@ -137,5 +137,3 @@ jobs:
                 --comment "Token check ran $(date -u '+%Y-%m-%d %H:%M UTC') -- $DAYS_REMAINING days remaining. Auto-closing."
             fi
           fi
-
-          rm -f /tmp/cf-tokens.json
