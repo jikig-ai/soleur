@@ -13,10 +13,10 @@ resource "hcloud_server" "bridge" {
 
   user_data = templatefile("${path.module}/cloud-init.yml", {
     image_name            = var.image_name
-    deploy_ssh_public_key = var.deploy_ssh_public_key
-    # Single source of truth: apps/web-platform/infra/ci-deploy.sh (tested by ci-deploy.test.sh)
-    ci_deploy_script_b64 = base64encode(file("${path.module}/../../web-platform/infra/ci-deploy.sh"))
-    doppler_token        = var.doppler_token
+    ci_deploy_script_b64  = base64encode(file("${path.module}/../../web-platform/infra/ci-deploy.sh"))
+    doppler_token         = var.doppler_token
+    tunnel_token          = cloudflare_zero_trust_tunnel_cloudflared.bridge.tunnel_token
+    webhook_deploy_secret = var.webhook_deploy_secret
   })
 
   # cloud-init and ssh_keys are create-time attributes. After import,

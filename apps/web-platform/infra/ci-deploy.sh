@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Forced command script for the CI deploy SSH key.
-# Runs automatically when the CI key authenticates (via command= in authorized_keys).
-# Parses SSH_ORIGINAL_COMMAND for structured "deploy <component> <image> <tag>" format.
-#
-# IMPORTANT: Do not add 'envs' input to appleboy/ssh-action steps that use this key.
-# drone-ssh prepends 'export VAR=value' lines to SSH_ORIGINAL_COMMAND which would
-# break the 'read -r' parsing below.
+# Deploy script invoked by the webhook listener (adnanh/webhook).
+# The webhook sets SSH_ORIGINAL_COMMAND from the JSON payload's "command" field.
+# Parses it for structured "deploy <component> <image> <tag>" format.
 
 readonly LOG_TAG="ci-deploy"
+
+# Structured error output: on failure, emit the failing line number and exit code.
+# In async mode (include-command-output-in-response: false), stderr goes to syslog
+# via journalctl -u webhook, not the HTTP response.
+trap 'echo "DEPLOY_ERROR: ci-deploy.sh failed at line $LINENO (exit $?)" >&2' ERR
 
 # Resolve env file: prefer Doppler secrets download, fall back to /mnt/data/.env.
 # Writes secrets to a temp file (chmod 600) that the caller must clean up via cleanup_env_file.

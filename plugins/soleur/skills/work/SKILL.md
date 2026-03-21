@@ -121,7 +121,9 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 ### Phase 2: Execute
 
-1. **Execution Mode Selection**
+1. **Execution Mode Selection** (HARD GATE — must complete before executing ANY task)
+
+   **Do NOT execute any task before completing this analysis.** Analyze independence first, select the execution tier, then begin. Starting sequential execution "because the first tasks feel simple" is a workflow violation — it forfeits parallelization savings on the remaining tasks.
 
    Before starting the sequential task loop, check for parallelization opportunities:
 

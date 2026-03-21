@@ -433,12 +433,12 @@ Both workflows currently use `concurrency: { group: deploy-production }`. Since 
 - [ ] Telegram-bridge release workflow deploys successfully via webhook (push trigger)
 - [ ] `workflow_dispatch` manual deploys work for both apps
 - [ ] Deploy retries work (re-running a failed workflow succeeds when the release already exists)
-- [ ] Deploys to different servers can run in parallel
-- [ ] Deploys to the same server are serialized (concurrency group)
+- [x] Deploys to different servers can run in parallel
+- [x] Deploys to the same server are serialized (concurrency group)
 - [ ] Cloudflare Access rejects unauthenticated requests to both deploy endpoints
-- [ ] ci-deploy.sh failures produce actionable error messages in CI logs (syslog + structured stderr)
-- [ ] Existing ci-deploy.test.sh passes unchanged
-- [ ] Webhook returns 202 within 5 seconds (no more 524 timeouts)
+- [x] ci-deploy.sh failures produce actionable error messages in CI logs (syslog + structured stderr)
+- [x] Existing ci-deploy.test.sh passes unchanged
+- [x] Webhook returns 202 within 5 seconds (no more 524 timeouts)
 - [ ] Health check polling in CI detects successful deploy within 300 seconds
 
 ## Test Scenarios
