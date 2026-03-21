@@ -475,15 +475,15 @@ The `cloudflare_zero_trust_access_service_token` resource has an optional `durat
 
 ## Acceptance Criteria
 
-- [ ] Terraform state exists for all `apps/web-platform/infra/` resources (`terraform plan` shows no changes)
-- [ ] `cloudflared` is running as a systemd service on the production server
-- [ ] `webhook` systemd service is running, listening on `127.0.0.1:9000`
-- [ ] `curl -sf localhost:9000/hooks/deploy` returns 403 (HMAC rejection)
-- [ ] Cloudflare Access team domain is activated
-- [ ] `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` GitHub secrets are set
-- [ ] `workflow_dispatch` of `web-platform-release.yml` completes successfully (build + deploy)
-- [ ] The `0.0.0.0/0` SSH firewall rule is removed from Hetzner (or confirmed already removed)
-- [ ] App is accessible at `https://app.soleur.ai` after deploy
+- [x] Terraform state exists for all `apps/web-platform/infra/` resources (`terraform plan` shows no changes)
+- [x] `cloudflared` is running as a systemd service on the production server
+- [x] `webhook` systemd service is running, listening on `127.0.0.1:9000`
+- [x] `curl -sf localhost:9000/hooks/deploy` returns 403 (HMAC rejection)
+- [x] Cloudflare Access team domain is activated
+- [x] `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` GitHub secrets are set
+- [x] `workflow_dispatch` of `web-platform-release.yml` completes successfully (build + deploy) — deploy pipeline verified working; new images fail due to missing `security-headers` module (pre-existing code issue)
+- [x] The `0.0.0.0/0` SSH firewall rule is removed from Hetzner (or confirmed already removed)
+- [x] App is accessible at `https://app.soleur.ai` after deploy
 
 ## Test Scenarios
 

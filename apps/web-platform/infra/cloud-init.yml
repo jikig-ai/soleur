@@ -76,8 +76,8 @@ write_files:
           }
         }
       ]
-    owner: root:root
-    permissions: '0600'
+    owner: root:deploy
+    permissions: '0640'
 
   # Hardened systemd unit for the webhook listener.
   # Runs as deploy user (docker group) on localhost:9000.
@@ -89,14 +89,14 @@ write_files:
 
       [Service]
       Type=simple
-      ExecStart=/usr/local/bin/webhook -hooks /etc/webhook/hooks.json -port 9000 -ip 127.0.0.1
+      ExecStart=/usr/local/bin/webhook -verbose -hooks /etc/webhook/hooks.json -port 9000 -ip 127.0.0.1
       Restart=on-failure
       RestartSec=5
       User=deploy
       Group=deploy
-      NoNewPrivileges=true
       ProtectSystem=strict
-      ProtectHome=true
+      ProtectHome=read-only
+      ReadWritePaths=/mnt/data /tmp
       ReadOnlyPaths=/etc/webhook /usr/local/bin
       TimeoutStopSec=180
 
@@ -176,7 +176,7 @@ runcmd:
   # Install webhook binary (adnanh/webhook v2.8.2) with checksum verification
   - |
     WEBHOOK_VERSION="2.8.2"
-    WEBHOOK_SHA256="4e41966a498b92d3e7a645968e0d55589f1a03d8bb327b0ccaadc3ea9a3a12ee"
+    WEBHOOK_SHA256="7a190ec7b4c2ffbb4eb1e11755a2e7acd82f1ffe74f60f235a360441daf22fd2"
     curl -fsSL "https://github.com/adnanh/webhook/releases/download/$${WEBHOOK_VERSION}/webhook-linux-amd64.tar.gz" -o /tmp/webhook.tar.gz
     echo "$${WEBHOOK_SHA256}  /tmp/webhook.tar.gz" | sha256sum -c -
     tar xzf /tmp/webhook.tar.gz -C /usr/local/bin --strip-components=1 webhook-linux-amd64/webhook
@@ -184,6 +184,15 @@ runcmd:
     rm /tmp/webhook.tar.gz
   - systemctl daemon-reload
   - systemctl enable --now webhook
+
+  # Weekly Docker image cleanup -- keeps only images used by running containers.
+  # Prevents disk exhaustion from accumulated deploy images (#967).
+  - |
+    cat > /etc/cron.weekly/docker-cleanup << 'CRONEOF'
+    #!/bin/sh
+    docker image prune -af --filter "until=168h" > /dev/null 2>&1
+    CRONEOF
+    chmod +x /etc/cron.weekly/docker-cleanup
 
   # Pull and run container (prefer Doppler secrets, fall back to /mnt/data/.env)
   - docker pull ${image_name}
