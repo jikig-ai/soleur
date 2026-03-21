@@ -22,6 +22,7 @@ resource "hcloud_server" "web" {
   # cloud-init and ssh_keys are create-time attributes. After import,
   # template interpolation differs from the original user_data, and
   # ssh_keys forces replacement. Both are safe to ignore (#967).
+  # TODO: remove ignore_changes after clean reprovisioning (import artifact)
   lifecycle {
     ignore_changes = [user_data, ssh_keys, image]
   }
