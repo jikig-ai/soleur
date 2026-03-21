@@ -8,7 +8,7 @@ resource "random_id" "tunnel_secret" {
 }
 
 resource "cloudflare_zero_trust_tunnel_cloudflared" "web" {
-  account_id = var.cloudflare_account_id
+  account_id = var.cf_account_id
   name       = "soleur-web-platform"
   config_src = "cloudflare"
   secret     = random_id.tunnel_secret.b64_std
@@ -24,7 +24,7 @@ resource "cloudflare_zero_trust_tunnel_cloudflared" "web" {
 }
 
 resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web" {
-  account_id = var.cloudflare_account_id
+  account_id = var.cf_account_id
   tunnel_id  = cloudflare_zero_trust_tunnel_cloudflared.web.id
 
   config {
@@ -44,7 +44,7 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web" {
 # headers alongside the HMAC signature for defense in depth.
 
 resource "cloudflare_zero_trust_access_application" "deploy" {
-  zone_id          = var.cloudflare_zone_id
+  zone_id          = var.cf_zone_id
   name             = "Deploy Webhook - soleur-web-platform"
   domain           = "deploy.${var.app_domain_base}"
   type             = "self_hosted"
@@ -52,12 +52,12 @@ resource "cloudflare_zero_trust_access_application" "deploy" {
 }
 
 resource "cloudflare_zero_trust_access_service_token" "deploy" {
-  account_id = var.cloudflare_account_id
+  account_id = var.cf_account_id
   name       = "github-actions-deploy"
 }
 
 resource "cloudflare_zero_trust_access_policy" "deploy_service_token" {
-  zone_id        = var.cloudflare_zone_id
+  zone_id        = var.cf_zone_id
   application_id = cloudflare_zero_trust_access_application.deploy.id
   name           = "Allow GitHub Actions deploy"
   decision       = "non_identity"

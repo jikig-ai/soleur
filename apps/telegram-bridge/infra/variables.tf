@@ -1,3 +1,6 @@
+# Secrets injected via Doppler:
+#   doppler run --project soleur --config prd_terraform --name-transformer tf-var -- terraform plan
+
 variable "hcloud_token" {
   description = "Hetzner Cloud API token"
   type        = string
