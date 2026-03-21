@@ -171,16 +171,16 @@ All TF variable renames were completed in PR #970. This issue is purely Doppler 
 
 ## Acceptance Criteria
 
-- [ ] `CF_API_TOKEN` key exists in Doppler `prd_terraform` config with correct value
-- [ ] `CF_ACCOUNT_ID` key exists in Doppler `prd_terraform` config with correct value
-- [ ] `ADMIN_IPS` key exists in Doppler `prd_terraform` config as JSON array
-- [ ] `DOPPLER_TOKEN` key exists in Doppler `prd_terraform` config with service token value
-- [ ] `DEPLOY_SSH_PUBLIC_KEY` key exists in Doppler `prd_terraform` config
-- [ ] Nested `doppler run` invocation succeeds for `terraform plan` in `apps/web-platform/infra/`
-- [ ] Nested `doppler run` invocation succeeds for `terraform plan` in `apps/telegram-bridge/infra/`
-- [ ] `variables.tf` header comment documents the nested invocation pattern with rationale
-- [ ] Stale long-form keys (`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`) deleted from `prd_terraform`
-- [ ] Learning document created capturing the R2 credential conflict workaround
+- [x] `CF_API_TOKEN` key exists in Doppler `prd_terraform` config with correct value
+- [x] `CF_ACCOUNT_ID` key exists in Doppler `prd_terraform` config with correct value
+- [x] `ADMIN_IPS` key exists in Doppler `prd_terraform` config as JSON array
+- [x] `DOPPLER_TOKEN` key exists in Doppler `prd_terraform` config with service token value
+- [x] `DEPLOY_SSH_PUBLIC_KEY` key exists in Doppler `prd_terraform` config
+- [x] Nested `doppler run` invocation succeeds for `terraform init` in `apps/web-platform/infra/`
+- [x] Nested `doppler run` invocation succeeds for `terraform init` in `apps/telegram-bridge/infra/`
+- [x] `variables.tf` header comment documents the nested invocation pattern with rationale
+- [x] Stale long-form keys (`CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`) deleted from `prd_terraform`
+- [x] Learning document updated with R2 credential conflict workaround and DOPPLER_TOKEN collision fix
 
 ## Test Scenarios
 
@@ -218,12 +218,14 @@ All TF variable renames were completed in PR #970. This issue is purely Doppler 
 ```hcl
 # Secrets injected via Doppler (nested invocation for R2 backend + TF variables):
 #   doppler run --project soleur --config prd_terraform -- \
-#     doppler run --project soleur --config prd_terraform --name-transformer tf-var -- \
+#     doppler run --token "$(doppler configure get token --plain)" \
+#       --project soleur --config prd_terraform --name-transformer tf-var -- \
 #     terraform plan
 #
 # Why nested: --name-transformer tf-var replaces ALL key names (AWS_ACCESS_KEY_ID
 # becomes TF_VAR_aws_access_key_id). The S3/R2 backend needs plain AWS_ACCESS_KEY_ID.
 # The outer call injects plain env vars; the inner call adds TF_VAR_* versions.
+# Why --token: DOPPLER_TOKEN secret collides with CLI auth token.
 ```
 
 ### variables.tf header comment (telegram-bridge)
@@ -231,12 +233,14 @@ All TF variable renames were completed in PR #970. This issue is purely Doppler 
 ```hcl
 # Secrets injected via Doppler (nested invocation for R2 backend + TF variables):
 #   doppler run --project soleur --config prd_terraform -- \
-#     doppler run --project soleur --config prd_terraform --name-transformer tf-var -- \
+#     doppler run --token "$(doppler configure get token --plain)" \
+#       --project soleur --config prd_terraform --name-transformer tf-var -- \
 #     terraform plan
 #
 # Why nested: --name-transformer tf-var replaces ALL key names (AWS_ACCESS_KEY_ID
 # becomes TF_VAR_aws_access_key_id). The S3/R2 backend needs plain AWS_ACCESS_KEY_ID.
 # The outer call injects plain env vars; the inner call adds TF_VAR_* versions.
+# Why --token: DOPPLER_TOKEN secret collides with CLI auth token.
 ```
 
 ### Doppler setup commands
