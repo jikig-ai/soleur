@@ -2,7 +2,7 @@
 
 ## Phase 1: Core Implementation
 
-- [ ] 1.1 Add `terraform-fmt` command to `lefthook.yml` with priority 7, glob `apps/*/infra/**/*.tf`, `stage_fixed: true`
+- [ ] 1.1 Add `terraform-fmt` command to `lefthook.yml` with priority 7, glob `apps/*/infra/*.tf` (NOT `**/*.tf` -- gobwas matcher requires 1+ dirs for `**`), `stage_fixed: true`
 - [ ] 1.2 Decide on tflint: Option A (skip, defer to CI) or Option B (add with graceful skip)
 - [ ] 1.3 If Option B: add `terraform-tflint` command to `lefthook.yml`
 
