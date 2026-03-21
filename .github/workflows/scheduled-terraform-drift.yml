@@ -87,12 +87,12 @@ jobs:
 
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
 
-          printf '%s' "$PLAN_OUTPUT" | head -c 60000 > plan-output.txt
+          printf '%s' "$PLAN_OUTPUT" | head -c 60000 > ${RUNNER_TEMP}/plan-output.txt
           sed -i \
             -e 's/\(token\s*=\s*\)"[^"]*"/\1"***"/gi' \
             -e 's/\(secret\s*=\s*\)"[^"]*"/\1"***"/gi' \
             -e 's/\(password\s*=\s*\)"[^"]*"/\1"***"/gi' \
-            plan-output.txt
+            ${RUNNER_TEMP}/plan-output.txt
 
           STACK_NAME=$(echo "$MATRIX_DIR" | sed 's|apps/||;s|/infra||')
           echo "stack_name=$STACK_NAME" >> "$GITHUB_OUTPUT"
@@ -137,7 +137,7 @@ jobs:
               echo "<details><summary>Plan output</summary>"
               echo ""
               echo '```'
-              cat plan-output.txt
+              cat ${RUNNER_TEMP}/plan-output.txt
               echo '```'
               echo ""
               echo "</details>"
@@ -157,7 +157,7 @@ jobs:
               echo "<details><summary>Plan output</summary>"
               echo ""
               echo '```'
-              cat plan-output.txt
+              cat ${RUNNER_TEMP}/plan-output.txt
               echo '```'
               echo ""
               echo "</details>"
