@@ -94,9 +94,11 @@ write_files:
       RestartSec=5
       User=deploy
       Group=deploy
+      # NoNewPrivileges omitted: ci-deploy.sh requires sudo for chown (#967)
       ProtectSystem=strict
       ProtectHome=read-only
-      ReadWritePaths=/mnt/data /tmp
+      PrivateTmp=true
+      ReadWritePaths=/mnt/data
       ReadOnlyPaths=/etc/webhook /usr/local/bin
       TimeoutStopSec=180
 
