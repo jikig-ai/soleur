@@ -12,6 +12,15 @@ resource "cloudflare_zero_trust_tunnel_cloudflared" "web" {
   name       = "soleur-web-platform"
   config_src = "cloudflare"
   secret     = random_id.tunnel_secret.b64_std
+
+  # The tunnel was created via API before Terraform state existed.
+  # secret: original b64 value is irrecoverable.
+  # config_src: forces replacement on import; the live tunnel already
+  #   uses remote config, so ignoring is safe (#967).
+  # TODO: remove ignore_changes after clean reprovisioning (import artifact)
+  lifecycle {
+    ignore_changes = [secret, config_src]
+  }
 }
 
 resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web" {

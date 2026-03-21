@@ -120,7 +120,7 @@ case "$COMPONENT" in
       sleep 3
     done
     echo "Health check failed"
-    docker logs soleur-web-platform --tail 30
+    docker logs soleur-web-platform --tail 30 2>&1 | logger -t ci-deploy
     exit 1
     ;;
   telegram-bridge)
@@ -151,7 +151,7 @@ case "$COMPONENT" in
       sleep 5
     done
     echo "Health check failed after 120s"
-    docker logs soleur-bridge --tail 30
+    docker logs soleur-bridge --tail 30 2>&1 | logger -t ci-deploy
     exit 1
     ;;
   *)
