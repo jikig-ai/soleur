@@ -3,9 +3,26 @@ title: "chore: remove stale top-level knowledge-base directories and add prevent
 type: chore
 date: 2026-03-21
 related_prs: [657, 897]
+deepened: 2026-03-21
 ---
 
 # chore: Clean Up Stale Top-Level Knowledge-Base Directories
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-21
+**Sections enhanced:** 3 (Phase 1, Phase 2, Phase 4)
+
+### Key Improvements
+
+1. Fixed Lefthook glob pattern -- `**` in gobwas requires 1+ directory levels, so files directly in `knowledge-base/brainstorms/*.md` would silently pass the proposed guard. Corrected to use array glob with both `*` and `**/*` patterns.
+2. Added git mv edge case handling for nested subdirectories (`build-errors/`, `archive/`) that need `mkdir -p` before move.
+3. Added sed dry-run verification step to catch false-positive replacements before committing.
+
+### Applicable Learnings
+
+- `knowledge-base/project/learnings/2026-03-21-lefthook-gobwas-glob-double-star.md` -- gobwas `**` matches 1+ dirs, not 0+. Directly impacts Phase 4 guard design.
+- `knowledge-base/project/learnings/workflow-issues/2026-03-20-verify-both-source-and-dest-before-migration-planning.md` -- verify both source AND destination before migration. Applied: scope is accurate (144 files, 0 duplicates confirmed).
 
 ## Problem
 
@@ -100,12 +117,29 @@ for type in brainstorms learnings plans specs; do
         done
         rmdir "$item" 2>/dev/null || true
       else
+        # Ensure target parent exists (needed for nested subdirs like build-errors/, archive/)
+        mkdir -p "$(dirname "$target")"
         git mv "$item" "knowledge-base/project/$type/"
       fi
     done
   fi
 done
 ```
+
+### Research Insights (Phase 1)
+
+**Edge Cases:**
+- **Nested subdirectories**: `learnings/build-errors/` and `plans/archive/` are
+  nested within their parent. The `mkdir -p` ensures the target parent exists
+  before `git mv`. Without it, `git mv` will fail with "destination does not exist".
+- **Empty glob expansion**: If a directory is empty, `knowledge-base/$type/*`
+  expands to the literal string. The `[[ -d "$item" ]]` check inside the loop
+  handles this, but wrapping in `shopt -s nullglob` before the loop and
+  `shopt -u nullglob` after is safer to prevent the literal-string case.
+- **Git mv atomicity**: Each `git mv` is atomic but the loop is not. If it fails
+  midway, some files will be in the old location and some in the new. This is
+  safe because the script can be re-run -- it skips already-moved files
+  (they no longer exist at the source).
 
 ### Phase 2: Fix Internal References (sed)
 
@@ -133,6 +167,33 @@ sed -i 's|knowledge-base/brainstorms/|knowledge-base/project/brainstorms/|g' \
   spike/agent-sdk-test.ts
 ```
 
+### Research Insights (Phase 2)
+
+**Dry-run verification before committing sed changes:**
+
+Run the sed with `--quiet` + `p` flag first to preview what would change without
+modifying files:
+
+```bash
+find knowledge-base/project/{brainstorms,learnings,plans,specs} \
+     -name '*.md' -exec grep -l \
+     -e 'knowledge-base/brainstorms/' \
+     -e 'knowledge-base/learnings/' \
+     -e 'knowledge-base/plans/' \
+     -e 'knowledge-base/specs/' {} + \
+     | grep -v 'knowledge-base/project/' \
+     | head -5
+```
+
+If this returns 0 files, all references are already correct and Phase 2 can be
+skipped. If it returns files, those are the ones sed needs to touch.
+
+**Double-prefix safety (verified):** Tested empirically -- `sed 's|knowledge-base/brainstorms/|knowledge-base/project/brainstorms/|g'`
+applied to the string `knowledge-base/project/brainstorms/foo.md` produces
+`knowledge-base/project/brainstorms/foo.md` (unchanged). The pattern
+`knowledge-base/brainstorms/` is NOT a substring of `knowledge-base/project/brainstorms/`
+because `project/` sits between the two segments.
+
 ### Phase 3: Remove Empty Directories
 
 After all files are moved, remove the now-empty top-level directories:
@@ -154,7 +215,9 @@ and #897 to be undone:
 # In lefthook.yml, add:
 kb-structure-guard:
   priority: 8
-  glob: "knowledge-base/{brainstorms,learnings,plans,specs}/**"
+  glob:
+    - "knowledge-base/{brainstorms,learnings,plans,specs}/*"
+    - "knowledge-base/{brainstorms,learnings,plans,specs}/**/*"
   run: |
     echo "ERROR: Files staged at deprecated knowledge-base paths." >&2
     echo "Move to knowledge-base/project/ before committing:" >&2
@@ -165,6 +228,45 @@ kb-structure-guard:
 **Why Lefthook**: The project already uses Lefthook for pre-commit hooks
 (`lefthook.yml` has 7 existing commands). A glob-based guard is the lightest
 enforcement that catches the problem at commit time, before files reach `main`.
+
+### Research Insights (Phase 4) -- CRITICAL FIX
+
+**Lefthook gobwas glob `**` gotcha (from documented learning):**
+
+The original plan used `glob: "knowledge-base/{brainstorms,...}/**"` which has
+a silent failure mode. Lefthook's default glob matcher (gobwas/glob) requires
+`**` to match 1+ directory levels, unlike bash/ripgrep where `**` matches 0+.
+
+This means:
+- `knowledge-base/brainstorms/**` matches `knowledge-base/brainstorms/subdir/file.md`
+- `knowledge-base/brainstorms/**` does NOT match `knowledge-base/brainstorms/file.md`
+
+75 of the 144 files sit directly in their type directory (no subdirectory), so
+the original glob would miss them entirely. The hook would run but match zero
+files and silently succeed ("skip: no files for inspection").
+
+**Fix:** Use an array glob (supported since Lefthook 1.10.10; installed version
+is 2.1.4) with both `*` (direct files) and `**/*` (nested files):
+
+```yaml
+glob:
+  - "knowledge-base/{brainstorms,learnings,plans,specs}/*"
+  - "knowledge-base/{brainstorms,learnings,plans,specs}/**/*"
+```
+
+**Testing the guard:** After adding the hook, verify with:
+```bash
+# Create a dummy file at an old path
+touch knowledge-base/brainstorms/test-guard.md
+git add knowledge-base/brainstorms/test-guard.md
+# This should fail with the guard error
+git commit -m "test: verify kb-structure-guard"
+# Clean up
+git reset HEAD knowledge-base/brainstorms/test-guard.md
+rm knowledge-base/brainstorms/test-guard.md
+```
+
+**Reference:** `knowledge-base/project/learnings/2026-03-21-lefthook-gobwas-glob-double-star.md`
 
 ### Phase 5: Update spike test reference
 
@@ -195,7 +297,7 @@ Fix the stale reference in `spike/agent-sdk-test.ts` (line 37) from
 |------|-----------|------------|
 | `git mv` breaks file history | Low | Use `git mv` (not `cp` + `rm`); verify with `git log --follow` |
 | sed corrupts file content | Low | Patterns are specific; cannot match `project/` prefix |
-| Lefthook glob doesn't match | Medium | Test with a dummy file before committing the guard |
+| Lefthook glob doesn't match | Low (was Medium) | Array glob with `*` + `**/*` covers both direct files and nested files. gobwas `**` gotcha addressed per documented learning. Test with dummy file to verify. |
 | Cached system prompts bypass guard | Medium | Guard runs at commit time, not at file write time -- catches the problem before merge |
 
 ## Non-Goals
@@ -203,4 +305,4 @@ Fix the stale reference in `spike/agent-sdk-test.ts` (line 37) from
 - Restructuring the domain directories (`engineering/`, `marketing/`, etc.) -- these are correctly placed
 - Modifying skill SKILL.md files -- they already use correct paths
 - Modifying agent definitions -- they already use correct paths
-- Adding CI-level path guards (Lefthook is sufficient since all commits go through local hooks)
+- Adding CI-level path guards (Lefthook is sufficient since all commits go through local hooks with Claude Code sessions; if external contributors join later, a GitHub Actions path check should be added as defense-in-depth)

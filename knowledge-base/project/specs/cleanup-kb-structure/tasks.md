@@ -2,19 +2,22 @@
 
 ## Phase 1: Move Files
 
+- [ ] 1.0 Enable nullglob to prevent literal-string glob expansion: `shopt -s nullglob`
 - [ ] 1.1 Move 8 brainstorm files from `knowledge-base/brainstorms/` to `knowledge-base/project/brainstorms/`
-- [ ] 1.2 Move 30 learning files from `knowledge-base/learnings/` (incl. `build-errors/` subdir) to `knowledge-base/project/learnings/`
-- [ ] 1.3 Move 39 plan files from `knowledge-base/plans/` (incl. `archive/` subdir) to `knowledge-base/project/plans/`
+- [ ] 1.2 Move 30 learning files from `knowledge-base/learnings/` to `knowledge-base/project/learnings/`
+  - [ ] 1.2.1 Ensure `knowledge-base/project/learnings/build-errors/` exists before moving nested subdir file
+- [ ] 1.3 Move 39 plan files from `knowledge-base/plans/` to `knowledge-base/project/plans/`
+  - [ ] 1.3.1 Ensure `knowledge-base/project/plans/archive/` exists before moving nested archive file
 - [ ] 1.4 Move 56 spec subdirectories (67 files) from `knowledge-base/specs/` to `knowledge-base/project/specs/`
-  - [ ] 1.4.1 Special case: merge `fix-playwright-version-mismatch/` -- move `session-state.md` into existing `knowledge-base/project/specs/fix-playwright-version-mismatch/` alongside `tasks.md`
+  - [ ] 1.4.1 Special case: merge `fix-playwright-version-mismatch/` -- move only `session-state.md` into existing target dir (which already has `tasks.md`)
+- [ ] 1.5 Restore nullglob: `shopt -u nullglob`
 
 ## Phase 2: Fix Internal References
 
-- [ ] 2.1 Run sed to replace `knowledge-base/brainstorms/` with `knowledge-base/project/brainstorms/` in all moved `.md` files (avoid matching existing `project/` prefix)
-- [ ] 2.2 Run sed to replace `knowledge-base/learnings/` with `knowledge-base/project/learnings/` in all moved `.md` files
-- [ ] 2.3 Run sed to replace `knowledge-base/plans/` with `knowledge-base/project/plans/` in all moved `.md` files
-- [ ] 2.4 Run sed to replace `knowledge-base/specs/` with `knowledge-base/project/specs/` in all moved `.md` files
-- [ ] 2.5 Fix `spike/agent-sdk-test.ts` stale reference (line 37)
+- [ ] 2.0 Dry-run: grep for old-path references in moved files to confirm scope (expect ~92 matches)
+- [ ] 2.1 Run sed to replace all four old-path patterns with `project/` counterparts in all moved `.md` files
+- [ ] 2.2 Fix `spike/agent-sdk-test.ts` stale reference (line 37)
+- [ ] 2.3 Post-check: re-run grep to confirm zero old-path references remain (excluding references to `project/` paths)
 
 ## Phase 3: Remove Empty Directories
 
@@ -25,7 +28,9 @@
 
 ## Phase 4: Add Prevention Guard
 
-- [ ] 4.1 Add `kb-structure-guard` command to `lefthook.yml` with glob `knowledge-base/{brainstorms,learnings,plans,specs}/**`
+- [ ] 4.1 Add `kb-structure-guard` command to `lefthook.yml` with array glob (CRITICAL: use both `*` and `**/*` patterns -- gobwas `**` requires 1+ dirs, so `**` alone misses direct files)
+  - Pattern 1: `knowledge-base/{brainstorms,learnings,plans,specs}/*` (direct files)
+  - Pattern 2: `knowledge-base/{brainstorms,learnings,plans,specs}/**/*` (nested files)
 - [ ] 4.2 Test the guard by staging a dummy file at an old path and verifying commit is blocked
 - [ ] 4.3 Remove dummy file after test
 
