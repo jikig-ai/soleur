@@ -68,13 +68,30 @@ resource "cloudflare_zero_trust_access_policy" "deploy_service_token" {
   }
 }
 
+# Alert one week before the deploy service token expires.
+# Cloudflare sends expiring_service_token_alert 7 days pre-expiry.
+# Note: this alert fires for ALL service tokens in the account (no per-token
+# filtering). Currently only one token exists (github-actions-deploy).
+resource "cloudflare_notification_policy" "service_token_expiry" {
+  account_id  = var.cf_account_id
+  name        = "Deploy service token expiring"
+  description = "Alert when github-actions-deploy service token approaches expiry"
+  alert_type  = "expiring_service_token_alert"
+  enabled     = true
+
+  email_integration {
+    id = var.cf_notification_email
+  }
+}
+
 output "tunnel_token" {
   value     = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
   sensitive = true
 }
 
 output "access_service_token_client_id" {
-  value = cloudflare_zero_trust_access_service_token.deploy.client_id
+  value     = cloudflare_zero_trust_access_service_token.deploy.client_id
+  sensitive = true
 }
 
 output "access_service_token_client_secret" {
