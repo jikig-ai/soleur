@@ -1,3 +1,6 @@
+# Secrets injected via Doppler:
+#   doppler run --project soleur --config prd_terraform --name-transformer tf-var -- terraform plan
+
 variable "hcloud_token" {
   description = "Hetzner Cloud API token"
   type        = string
@@ -39,13 +42,13 @@ variable "volume_size" {
   default     = 20
 }
 
-variable "cloudflare_api_token" {
+variable "cf_api_token" {
   description = "Cloudflare API token with DNS edit permissions"
   type        = string
   sensitive   = true
 }
 
-variable "cloudflare_zone_id" {
+variable "cf_zone_id" {
   description = "Cloudflare zone ID for soleur.ai"
   type        = string
 }
@@ -62,7 +65,7 @@ variable "deploy_ssh_public_key" {
   default     = ""
 }
 
-variable "cloudflare_account_id" {
+variable "cf_account_id" {
   description = "Cloudflare account ID (required for Zero Trust tunnel resources)"
   type        = string
 }
