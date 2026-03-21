@@ -1,5 +1,16 @@
-# Secrets injected via Doppler:
-#   doppler run --project soleur --config prd_terraform --name-transformer tf-var -- terraform plan
+# Secrets injected via Doppler (nested invocation for R2 backend + TF variables):
+#
+#   doppler run --project soleur --config prd_terraform -- \
+#     doppler run --token "$(doppler configure get token --plain)" \
+#       --project soleur --config prd_terraform --name-transformer tf-var -- \
+#     terraform plan
+#
+# Why nested: --name-transformer tf-var replaces ALL key names (AWS_ACCESS_KEY_ID
+# becomes TF_VAR_aws_access_key_id). The S3/R2 backend needs plain AWS_ACCESS_KEY_ID.
+# The outer call injects plain env vars; the inner call adds TF_VAR_* versions.
+# Why --token: The DOPPLER_TOKEN secret (Doppler service token for server injection)
+# collides with the CLI's auth token. Passing --token explicitly on the inner call
+# ensures the CLI authenticates with the personal token, not the service token.
 
 variable "hcloud_token" {
   description = "Hetzner Cloud API token"
@@ -86,4 +97,9 @@ variable "doppler_token" {
   description = "Doppler service token for production secrets injection"
   type        = string
   sensitive   = true
+}
+
+variable "cf_notification_email" {
+  description = "Email address for Cloudflare notification policies"
+  type        = string
 }

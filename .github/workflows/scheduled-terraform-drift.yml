@@ -1,0 +1,219 @@
+# Security: DOPPLER_TOKEN from repository secrets provides Terraform credentials
+# via `doppler run --name-transformer tf-var`. R2 backend credentials are extracted
+# separately via `doppler secrets get --plain` (not through --name-transformer,
+# which would convert them to TF_VAR_* format and break S3 auth).
+# Plan output is sanitized before posting to GitHub issues.
+# All action references are SHA-pinned.
+# To test manually: gh workflow run scheduled-terraform-drift.yml
+name: Terraform Drift Detection
+
+on:
+  schedule:
+    - cron: '0 6,18 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: terraform-drift
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  TERRAFORM_VERSION: "1.10.5"
+
+jobs:
+  drift-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        directory:
+          - apps/telegram-bridge/infra
+          - apps/web-platform/infra
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # CRITICAL: terraform_wrapper must be false for -detailed-exitcode.
+      # The wrapper converts exit code 2 to 1 (setup-terraform #152, #9).
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Generate CI SSH key
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain)
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        run: terraform init -input=false
+        working-directory: ${{ matrix.directory }}
+
+      - name: Terraform plan (drift detection)
+        id: plan
+        working-directory: ${{ matrix.directory }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+          MATRIX_DIR: ${{ matrix.directory }}
+        run: |
+          set +e
+          PLAN_OUTPUT=$(doppler run --name-transformer tf-var -- \
+            terraform plan -detailed-exitcode -no-color -input=false \
+            -var="ssh_key_path=${CI_SSH_PUB}" 2>&1)
+          EXIT_CODE=$?
+          set -e
+
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+
+          printf '%s' "$PLAN_OUTPUT" | head -c 60000 > ${RUNNER_TEMP}/plan-output.txt
+          sed -i \
+            -e 's/\(token\s*=\s*\)"[^"]*"/\1"***"/gi' \
+            -e 's/\(secret\s*=\s*\)"[^"]*"/\1"***"/gi' \
+            -e 's/\(password\s*=\s*\)"[^"]*"/\1"***"/gi' \
+            ${RUNNER_TEMP}/plan-output.txt
+
+          STACK_NAME=$(echo "$MATRIX_DIR" | sed 's|apps/||;s|/infra||')
+          echo "stack_name=$STACK_NAME" >> "$GITHUB_OUTPUT"
+
+          if [[ $EXIT_CODE -eq 0 ]]; then
+            echo "No drift detected in $STACK_NAME"
+          elif [[ $EXIT_CODE -eq 2 ]]; then
+            echo "::warning::Drift detected in $STACK_NAME"
+          else
+            echo "::error::Terraform plan failed in $STACK_NAME (exit $EXIT_CODE)"
+          fi
+
+      - name: Ensure infra-drift label exists
+        if: steps.plan.outputs.exit_code == '2'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh label create "infra-drift" --description "Terraform detected infrastructure drift" --color "D93F0B" 2>/dev/null || true
+
+      - name: Create or update drift issue
+        if: steps.plan.outputs.exit_code == '2'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STACK_NAME: ${{ steps.plan.outputs.stack_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          TITLE="infra: drift detected in ${STACK_NAME}"
+          TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          EXISTING=$(gh issue list --label "infra-drift" --state open \
+            --limit 100 \
+            --json number,title \
+            --jq ".[] | select(.title == \"${TITLE}\") | .number" \
+            | head -1)
+
+          if [[ -n "$EXISTING" ]]; then
+            {
+              echo "Drift still present as of ${TIMESTAMP}."
+              echo ""
+              echo "<details><summary>Plan output</summary>"
+              echo ""
+              echo '```'
+              cat ${RUNNER_TEMP}/plan-output.txt
+              echo '```'
+              echo ""
+              echo "</details>"
+            } > /tmp/issue-body.md
+            gh issue comment "$EXISTING" --body-file /tmp/issue-body.md
+            echo "Updated existing issue #$EXISTING"
+          else
+            {
+              echo "## Drift Detected"
+              echo ""
+              echo "**Stack:** \`${STACK_NAME}\`"
+              echo "**Detected:** ${TIMESTAMP}"
+              echo "**Workflow:** [Run #${RUN_NUMBER}](${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID})"
+              echo ""
+              echo "Terraform \`plan -detailed-exitcode\` returned exit code 2, indicating infrastructure has drifted from the Terraform state."
+              echo ""
+              echo "<details><summary>Plan output</summary>"
+              echo ""
+              echo '```'
+              cat ${RUNNER_TEMP}/plan-output.txt
+              echo '```'
+              echo ""
+              echo "</details>"
+              echo ""
+              echo "## Next Steps"
+              echo ""
+              echo "1. Review the plan output above"
+              echo "2. If the drift is intentional, run \`terraform apply\` locally to update state"
+              echo "3. If the drift is unintentional, revert the manual change"
+              echo "4. Close this issue when resolved"
+              echo ""
+              echo "_Auto-created by the [terraform-drift workflow](${SERVER_URL}/${REPOSITORY}/actions/workflows/scheduled-terraform-drift.yml)._"
+            } > /tmp/issue-body.md
+            gh issue create \
+              --title "$TITLE" \
+              --label "infra-drift" \
+              --body-file /tmp/issue-body.md
+            echo "Created new drift issue for $STACK_NAME"
+          fi
+
+      - name: Discord notification
+        if: steps.plan.outputs.exit_code != '0'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          EXIT_CODE: ${{ steps.plan.outputs.exit_code }}
+          STACK_NAME: ${{ steps.plan.outputs.stack_name }}
+        run: |
+          if [[ -z "${DISCORD_WEBHOOK_URL:-}" ]]; then
+            echo "DISCORD_WEBHOOK_URL not set, skipping"
+            exit 0
+          fi
+
+          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+          RUN_URL="${REPO_URL}/actions/runs/${GITHUB_RUN_ID}"
+
+          if [[ "$EXIT_CODE" == "2" ]]; then
+            MESSAGE=$(printf '**[DRIFT] Infrastructure drift detected in %s**\n\nRun: %s\n\nRun `terraform plan` locally to review changes.' \
+              "$STACK_NAME" "$RUN_URL")
+          else
+            MESSAGE=$(printf '**[ERROR] Terraform plan failed for %s**\n\nRun: %s\n\nCheck the workflow logs for details.' \
+              "$STACK_NAME" "$RUN_URL")
+          fi
+
+          PAYLOAD=$(jq -n \
+            --arg content "$MESSAGE" \
+            --arg username "Sol" \
+            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
+            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
+
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL")
+
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Discord notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Discord notification failed (HTTP $HTTP_CODE)"
+          fi
