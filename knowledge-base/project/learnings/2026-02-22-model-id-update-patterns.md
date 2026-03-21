@@ -22,7 +22,7 @@ The issue listed 7 affected files. A full `grep -rn "claude-3" plugins/soleur/sk
 
 ### 2. "Already updated" doesn't mean "up to date"
 
-Lines 238-239 of `agent-execution-patterns.md` used `claude-sonnet-4-20250514` and `claude-opus-4-20250514`, which appeared to be current Claude 4.x IDs. They were actually stale Claude 4.0 model IDs -- the latest are `claude-sonnet-4-6` and `claude-opus-4-6`. Always verify model IDs against the official docs at https://platform.claude.com/docs/en/about-claude/models/overview.
+Lines 238-239 of `agent-execution-patterns.md` used `claude-sonnet-4-20250514` and `claude-opus-4-20250514`, which appeared to be current Claude 4.x IDs. They were actually stale Claude 4.0 model IDs -- the latest are `claude-sonnet-4-6` and `claude-opus-4-6`. Always verify model IDs against the official docs at <https://platform.claude.com/docs/en/about-claude/models/overview>.
 
 ### 3. replace_all is prefix-sensitive
 

@@ -13,12 +13,14 @@ date: 2026-03-14
 **Research sources:** Context7 Claude Code docs, 4 institutional learnings, shell script patterns, agent description budget precedent
 
 ### Key Improvements
+
 1. Tightened budget ceiling from 2,000 to 1,800 words based on agent budget precedent (agents at 2,501/2,500 -- already at ceiling)
 2. Added concrete trimming examples with before/after for the three worst offenders
 3. Hardened verify-skills.sh with defensive patterns from institutional learnings (pipefail vectors, uniq -d empty array, local variables)
 4. Added word budget test for agents alongside skills to prevent cross-budget drift
 
 ### New Considerations Discovered
+
 - The agent description budget (2,501 words) is already at its 2,500 ceiling -- total metadata is ~5,230 words, not ~2,729
 - The "Triggers on..." pattern accounts for ~30% of skill description word count across affected skills and can be removed wholesale
 - Multi-line descriptions (YAML block scalars) may cause parsing issues with the sed-based extractor in verify-skills.sh
@@ -27,6 +29,7 @@ date: 2026-03-14
 ## Overview
 
 During implementation of #593, multiple `soleur:` skills failed to resolve via the Skill tool:
+
 - `soleur:work` -- Unknown skill
 - `soleur:compound` -- Unknown skill
 - `soleur:ship` -- Unknown skill
@@ -47,6 +50,7 @@ This is a systemic risk: as the plugin grows, compaction-induced skill loss will
 The identical class of problem was solved for agent descriptions: cumulative descriptions were ~15.8k tokens from verbose `<example>` blocks. Stripping examples and adding disambiguation sentences reduced to ~2.9k tokens (82% reduction). The same principle applies to skills: descriptions are for **routing**, not **instruction**. Trigger phrase lists are the skill equivalent of agent `<example>` blocks.
 
 **Current budget state:**
+
 - Agent descriptions: 2,501 words (at the 2,500 ceiling -- zero headroom)
 - Skill descriptions: 2,729 words (no enforced ceiling)
 - Combined metadata: ~5,230 words (~7k tokens) injected on every turn
@@ -64,6 +68,7 @@ A two-pronged approach that reduces the description metadata baseline and adds a
 Trim all 58 skill descriptions to be concise while retaining routing accuracy. Target: reduce from ~2,729 words to under ~1,800 words (34% reduction).
 
 **Strategy:**
+
 - Remove trigger phrases from descriptions (e.g., `Triggers on "ready to ship", "create PR", "ship it"`) -- the model infers these from the skill name and core description
 - Shorten verbose descriptions that restate what the skill name already communicates
 - Keep descriptions in third person per convention ("This skill should be used when...")
@@ -72,6 +77,7 @@ Trim all 58 skill descriptions to be concise while retaining routing accuracy. T
 **Concrete trimming examples (top 3 offenders by word count):**
 
 **gemini-imagegen (84 words to ~30 words):**
+
 ```yaml
 # Before:
 description: This skill should be used when generating and editing images using the Gemini API (Nano Banana Pro). It applies when creating images from text prompts, editing existing images, applying style transfers, generating logos with text, creating stickers, product mockups, or any image generation/manipulation task. Supports text-to-image, image editing, multi-turn refinement, and composition from multiple reference images. Triggers on "generate an image", "create a logo", "edit this image", "Gemini image", "text-to-image", "make a sticker", "product mockup photo".
@@ -81,6 +87,7 @@ description: "This skill should be used when generating or editing images using 
 ```
 
 **triage (79 words to ~30 words):**
+
 ```yaml
 # Before:
 description: "This skill should be used when triaging and categorizing findings for the CLI todo system. It presents code review findings, security audit results, or performance analysis items one by one for approval, skip, or customization, then creates structured todo files. Use ticket-triage agent for classifying user-reported GitHub issues by severity and domain. For automated daily triage via GitHub Actions, see scheduled-daily-triage.yml. Triggers on \"triage findings\", \"categorize issues\", \"review todos\", \"process audit results\", \"triage\"."
@@ -90,6 +97,7 @@ description: "This skill should be used when triaging and categorizing findings 
 ```
 
 **skill-creator (77 words to ~25 words):**
+
 ```yaml
 # Before:
 description: This skill should be used when creating, writing, refining, or auditing Claude Code Skills. It provides expert guidance on SKILL.md files, creating new skills from scratch, improving existing skills, packaging skills for distribution, and understanding skill structure and best practices. Triggers on "create a new skill", "build a skill", "package a skill", "init skill", "skill creation guide", "update this skill", "audit skill", "improve this skill", "skill best practices", "write a SKILL.md", "how to write skills".
@@ -103,6 +111,7 @@ description: "This skill should be used when creating, refining, or auditing Cla
 Create a lightweight diagnostic that can be run to verify all skills are discoverable. This surfaces the problem immediately rather than failing silently mid-pipeline.
 
 **Implementation:**
+
 - Add a `verify-skills.sh` script in `plugins/soleur/scripts/` that:
   1. Counts SKILL.md files on disk
   2. Extracts `name:` from each frontmatter
@@ -134,6 +143,7 @@ Agent descriptions (2,501 words) are at their 2,500-word guideline ceiling. They
 ### Research Insights
 
 **Shell script defensive patterns (from learnings):**
+
 - The `uniq -d` command for duplicate detection returns empty string when no duplicates exist, which is fine with `[ -n "$dupes" ]`
 - All variables in loop bodies must be declared with `local` -- but since verify-skills.sh uses a flat loop (not functions), this manifests as declaring loop variables at script scope (acceptable for scripts)
 - The `wc` variable name in the MVP shadows the `wc` command -- rename to `word_count` to avoid confusion

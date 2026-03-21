@@ -16,6 +16,7 @@ deepened: 2026-02-21
 **Research sources:** Plausible docs, GDPR legal assessment, Eleventy patterns, 8 institutional learnings
 
 ### Key Improvements
+
 1. Updated script tag to use `async` instead of `defer` (analytics-specific best practice)
 2. Added Plausible 2025 script update details (site-specific snippets, `plausible.init()` API)
 3. Added GDPR legal basis analysis with Art. 6(1)(f) three-part test and ePrivacy Art. 5(3) exemption
@@ -59,6 +60,7 @@ If $9/mo is not justified for current traffic levels, Umami Cloud's free tier co
 | **GitHub Pages** | Yes | Yes | Yes | Yes |
 
 **Why not the others:**
+
 - **Fathom** ($15/mo): More expensive than Plausible with fewer features (no funnels, no city-level geo, no Search Console integration).
 - **Simple Analytics** ($19/mo monthly, $9/mo annual): Highest entry price, similar features to Plausible at higher cost.
 
@@ -80,6 +82,7 @@ No build changes, no bundling, no configuration files. The analytics provider ha
 4. Verify script loads correctly on local dev (`npm run docs:dev`) -- run `npm install` first in the worktree (dependencies are not shared across worktrees)
 
 **Script insertion point in `base.njk`:**
+
 ```html
 <!-- Analytics: Plausible (cookie-free, GDPR-compliant) -->
 <script async src="https://plausible.io/js/script.js" data-domain="soleur.ai"></script>
@@ -90,6 +93,7 @@ Use `async` not `defer` for analytics scripts. With `defer`, if a user navigates
 **Note on Plausible 2025 script update:** Plausible now provides site-specific personalized snippets. The exact `src` URL may include a unique identifier (e.g., `pa-XXXXX`). Copy the exact snippet from the Plausible dashboard rather than using the generic URL above. If advanced configuration is needed later (custom properties, file downloads, hash-based routing), use the `plausible.init()` API instead of data attributes.
 
 If Umami is chosen instead:
+
 ```html
 <script async src="https://cloud.umami.is/script.js" data-website-id="YOUR_WEBSITE_ID"></script>
 ```
@@ -103,18 +107,21 @@ Update legal documents in BOTH locations. These are independent files with diffe
 
 Update the "Last Updated" / date header in every modified legal document.
 
-After updating all documents, verify cross-document consistency: entity name ("Jikigai, incorporated in France"), contact info (legal@jikigai.com), jurisdiction ("EU, US"), and dates must match across all documents.
+After updating all documents, verify cross-document consistency: entity name ("Jikigai, incorporated in France"), contact info (<legal@jikigai.com>), jurisdiction ("EU, US"), and dates must match across all documents.
 
 **Cookie Policy** (`cookie-policy.md`):
+
 - Section 3.2: Update from "We do not deploy any first-party analytics" to disclose the analytics service and confirm it is cookie-free
 - Section 4.2: Update from "We do not currently use any analytics cookies" to state the analytics provider name, confirm no cookies are set, and describe what data is collected
 
 **Privacy Policy** (`privacy-policy.md`):
+
 - Section 4.3: Update from "We do not add analytics, tracking pixels, or cookies" to disclose the analytics service, confirm cookie-free operation, and list collected data points (page views, referrer, country, device type, browser)
 
 Note: Section 12 ("Soleur does not add any first-party cookies to the Docs Site") remains factually correct -- Plausible/Umami are third-party scripts that set zero cookies. No change needed.
 
 **GDPR Policy** (`gdpr-policy.md`):
+
 - Section 4.1: Move "Usage analytics or telemetry" from "Data NOT Collected" to a new Section 4.3 "Website Analytics Data" describing the analytics data collected and its legal basis
 
   Legal basis justification (Art. 6(1)(f) three-part test):
@@ -133,6 +140,7 @@ Note: Section 12 ("Soleur does not add any first-party cookies to the Docs Site"
   - Safeguards: No personal data collected, no cookies, IP addresses not stored
 
 **Data Protection Disclosure** (`data-protection-disclosure.md` / root: `data-processing-agreement.md`):
+
 - Section 2.3(a): Update "Limited Processing by Soleur" to disclose the analytics provider alongside GitHub Pages as a processor of Docs Site data
 - Section 3.1(c): No change needed -- refers to the plugin, not the website
 
@@ -191,6 +199,7 @@ Remove the `<script>` tag from `base.njk` and revert legal document changes.
 ## References
 
 ### Internal
+
 - Issue #198: Evaluate analytics solutions
 - Issue #193: Marketing audit (deferred analytics)
 - Issue #188: Cookie consent banner
@@ -200,6 +209,7 @@ Remove the `<script>` tag from `base.njk` and revert legal document changes.
 - `knowledge-base/project/learnings/build-errors/eleventy-v3-passthrough-and-nunjucks-gotchas.md`: Eleventy template gotchas
 
 ### External
+
 - [Plausible Analytics](https://plausible.io/)
 - [Plausible GDPR Legal Assessment](https://plausible.io/blog/legal-assessment-gdpr-eprivacy)
 - [Plausible Script Update Guide](https://plausible.io/docs/script-update-guide)

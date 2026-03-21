@@ -64,5 +64,6 @@ This is the WebSocket equivalent of the file-system TOCTOU pattern documented in
 2. **TOCTOU race missed in initial implementation**: The race was only discovered during code review, not during implementation. Async-with-timeout is a known race pattern — it should be part of an implementation checklist for any WebSocket auth handler, not left to review to catch.
 
 ## Tags
+
 category: security-issues
 module: web-platform/ws-handler

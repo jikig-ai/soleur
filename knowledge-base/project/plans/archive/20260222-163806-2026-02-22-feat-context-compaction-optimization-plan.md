@@ -107,36 +107,47 @@ No programmatic compaction -- just guidance for the user.
 ## Test Scenarios
 
 ### Loader Verification
+
 - Given a `.md` file in `commands/soleur/references/`, when the plugin loads, then it must NOT appear as a discoverable command
 
 ### Standalone Brainstorm
+
 - Given a user runs `/soleur:brainstorm` alone, when brainstorm reaches Phase 0.5, then domain config table is loaded via Read tool and brainstorm functions identically to current behavior
 
 ### Standalone Plan
+
 - Given a user runs `/soleur:plan` alone with no prior command, when plan selects A LOT detail level, then the A LOT template is loaded from references and used correctly
 
 ### One-Shot Pipeline with Subagent
+
 - Given a user runs `/soleur:one-shot`, when plan+deepen completes as a subagent, then a structured session summary is returned and written to session-state.md
 
 ### One-Shot Subagent Failure Fallback
+
 - Given a user runs `/soleur:one-shot` and the plan subagent fails, when the parent detects the failure, then plan runs inline (no compaction) and the pipeline continues
 
 ### Malformed Subagent Output
+
 - Given the plan subagent returns output without the expected `## Session Summary` heading, when the parent attempts to parse, then the parent writes a "parsing failed" note to session-state.md and continues the pipeline
 
 ### Compound with Session-State
+
 - Given a one-shot pipeline run with session-state.md, when compound runs Phase 0.5, then it reads session-state.md and includes forwarded errors in the error inventory
 
 ### Compound without Session-State (Standalone)
+
 - Given a user runs `/soleur:compound` standalone, when no session-state.md exists, then compound falls back to scanning conversation history only (current behavior)
 
 ### Constitution Deduplication in Pipeline
+
 - Given a one-shot pipeline where plan loaded constitution, when work runs Phase 0, then constitution is not re-read from disk
 
 ### Manual Sequential Constitution Loading
+
 - Given a user runs `/soleur:plan` then `/soleur:work` manually in the same session, when work reaches Phase 0, then it detects constitution is already in context and skips re-reading
 
 ### Reference File Not Found
+
 - Given a reference file is missing or renamed, when a command attempts to Read it, then the command warns and continues with degraded behavior (not a fatal error)
 
 ## Implementation Phases
@@ -146,6 +157,7 @@ No programmatic compaction -- just guidance for the user.
 Verify command loader behavior and create reference directory structure.
 
 **Tasks:**
+
 - [x] 1.1: Create test file `commands/soleur/references/loader-test.md` with valid frontmatter
 - [x] 1.2: Verify it does NOT appear as a discoverable command
 - [x] 1.3: If it DOES appear, use fallback path `plugins/soleur/references/commands/`
@@ -159,6 +171,7 @@ Move heavy content from command bodies to reference files. For each command, the
 **Tasks:**
 
 #### brainstorm.md (2,906w -> ~1,300w target, actual: 1,711w = 41%)
+
 - [x] 2.1: Extract domain config table (8 rows) to `references/brainstorm-domain-config.md`
 - [x] 2.2: Extract Brand Workshop section to `references/brainstorm-brand-workshop.md`
 - [x] 2.3: Extract Validation Workshop section to `references/brainstorm-validation-workshop.md`
@@ -167,6 +180,7 @@ Move heavy content from command bodies to reference files. For each command, the
 - [x] 2.6: Verify standalone brainstorm still works end-to-end
 
 #### plan.md (3,274w -> ~1,800w target, actual: 2,280w = 30%)
+
 - [x] 2.7: Extract 3 issue templates (MINIMAL, MORE, A LOT) to `references/plan-issue-templates.md`
 - [x] 2.8: Extract Community Discovery Check to `references/plan-community-discovery.md`
 - [x] 2.9: Extract Functional Overlap Check to `references/plan-functional-overlap.md`
@@ -174,12 +188,14 @@ Move heavy content from command bodies to reference files. For each command, the
 - [x] 2.11: Verify standalone plan still works with each detail level
 
 #### work.md (2,946w -> ~2,000w target, actual: 2,291w = 22%)
+
 - [x] 2.12: Extract Agent Teams protocol (Tier A) to `references/work-agent-teams.md`
 - [x] 2.13: Extract Subagent Fan-Out protocol (Tier B) to `references/work-subagent-fanout.md`
 - [x] 2.14: Replace extracted content with Read instructions in work.md body
 - [x] 2.15: Verify standalone work still works with all 3 tiers
 
 #### review.md (2,500w -> ~1,700w target, actual: 1,777w = 29%)
+
 - [x] 2.16: Extract todo file structure and naming conventions to `references/review-todo-structure.md`
 - [x] 2.17: Extract end-to-end testing section to `references/review-e2e-testing.md`
 - [x] 2.18: Replace extracted content with Read instructions in review.md body
@@ -199,6 +215,7 @@ Only plan.md and work.md explicitly load constitution.md. brainstorm.md, review.
 Modify one-shot pipeline to spawn plan+deepen as an isolated subagent. The compaction boundary is between plan+deepen (step 1-2) and work (step 3).
 
 **Tasks:**
+
 - [x] 4.1: Define session-state.md format with concrete example
 - [x] 4.2: Modify `one-shot.md` to spawn steps 1-2 as a combined Task subagent
 - [x] 4.3: Add subagent return contract instructions to the Task prompt
@@ -211,6 +228,7 @@ Modify one-shot pipeline to spawn plan+deepen as an isolated subagent. The compa
 Update compound and compound-docs to read session-state.md.
 
 **Tasks:**
+
 - [x] 5.1: Update compound.md Phase 0.5 to read session-state.md if it exists
 - [x] 5.2: Update compound.md Route-to-Definition to include components from session-state.md
 - [x] 5.3: Read compound-docs SKILL.md and update Step 2 (Gather Context) to also read session-state.md
@@ -226,6 +244,7 @@ Update compound and compound-docs to read session-state.md.
 ## Dependencies & Risks
 
 **Dependencies:**
+
 - Phase 1 blocks Phase 2 (loader verification determines file placement)
 - Phase 2 blocks Phase 3 (both edit plan.md and work.md -- cannot parallel)
 - Phase 4 is independent after Phase 1 (only modifies one-shot.md)
@@ -234,6 +253,7 @@ Update compound and compound-docs to read session-state.md.
 - Phase 6 depends on Phases 2-5
 
 **Corrected execution order:**
+
 1. Phase 1 (verify loader)
 2. Phase 2 (extract references) + Phase 4 (one-shot subagent) -- can parallel
 3. Phase 3 (constitution dedup) -- after Phase 2
@@ -241,6 +261,7 @@ Update compound and compound-docs to read session-state.md.
 5. Phase 6 (measurement) -- after all
 
 **Risks:**
+
 - Command loader recurses into references/ (mitigated by Phase 1 test + fallback path)
 - Model inconsistently loads references (mitigated by explicit Read instructions)
 - Session-state parsing fails (mitigated by heading contract + fallback to inline)
@@ -249,6 +270,7 @@ Update compound and compound-docs to read session-state.md.
 ## References & Research
 
 ### Internal References
+
 - Brainstorm: `knowledge-base/project/brainstorms/2026-02-22-context-compaction-brainstorm.md`
 - Spec: `knowledge-base/project/specs/feat-context-compaction/spec.md`
 - Agent token budget learning: `knowledge-base/project/learnings/performance-issues/2026-02-20-agent-description-token-budget-optimization.md`
@@ -256,6 +278,7 @@ Update compound and compound-docs to read session-state.md.
 - Constitution: `knowledge-base/overview/constitution.md` (3,219 words)
 
 ### Related Issues
+
 - #268 - Context Compaction Optimization (this feature)
 
 ## Version Bump Intent

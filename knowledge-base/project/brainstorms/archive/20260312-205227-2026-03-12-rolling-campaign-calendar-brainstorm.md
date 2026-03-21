@@ -21,6 +21,7 @@ Replaces the fixed "Case Study Distribution Plan" in `knowledge-base/marketing/c
 **Approach chosen:** Dedicated Soleur skill (`soleur:campaign-calendar`) triggered by GitHub Actions twice weekly (Mon + Thu). The skill scans distribution-content/ frontmatter, builds a data table with capacity view, then invokes the CMO agent for strategy notes.
 
 **Why a dedicated skill over alternatives:**
+
 - **vs. CMO agent enhancement:** The CMO is a strategic agent — making it do file scanning is a role mismatch. A skill keeps concerns separated and is independently testable.
 - **vs. bash script + CMO overlay:** Two-step orchestration adds complexity for marginal reliability gain. A single skill can do both deterministic scanning and intelligent commentary.
 - **Why not just a script:** The strategy notes and capacity analysis require CMO intelligence, not just data extraction.

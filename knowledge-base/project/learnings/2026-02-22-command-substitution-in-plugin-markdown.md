@@ -9,9 +9,10 @@ tags: [integration-issues, plugin-architecture, command-substitution, permission
 
 ## Problem
 
-Claude Code's security mechanism prompts users with "Command contains $() command substitution" when the Bash tool receives commands containing `$()`. Plugin markdown files (commands, skills, agents, and reference docs) contain bash code blocks with `$()` that agents try to execute, triggering this permission prompt repeatedly and breaking autonomous workflows.
+Claude Code's security mechanism prompts users with "Command contains $() command substitution" when the Bash tool receives commands containing `$()`. Plugin markdown files (commands, skills, agents, and reference docs) contain bash code blocks with`$()` that agents try to execute, triggering this permission prompt repeatedly and breaking autonomous workflows.
 
 This issue recurred four times:
+
 - v2.23.15: one-shot command
 - v2.23.18: 4 commands, 9 skills, AGENTS.md
 - v2.26.1: merge-pr skill, community-manager agent, 2 reference files
@@ -37,6 +38,7 @@ Key principle: bash code blocks in plugin markdown are instructions for Claude, 
 ## Key Insight
 
 The root cause of recurrence is **incomplete search scope**. Each prior fix searched only the files that triggered the immediate complaint (commands, then skills) but missed:
+
 - Agent definition files (`agents/**/*.md`)
 - Reference documents (`skills/*/references/*.md`)
 - Any new files added after the previous fix
@@ -61,6 +63,7 @@ When fixing a pattern across files, always search the widest reasonable scope. F
 2. First edit to merge-pr SKILL.md was incomplete -- left `$(cat <<'EOF')` in the PR creation block, requiring a second edit pass
 
 ## Tags
+
 category: integration-issues
 module: plugins/soleur
 symptoms: "Command contains $() command substitution" permission prompt

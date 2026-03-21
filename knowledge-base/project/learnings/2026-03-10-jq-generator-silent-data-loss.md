@@ -60,6 +60,7 @@ Replace the generator-style join with `INDEX()` to build a lookup map. Missing e
 jq generators that produce zero results cause the entire surrounding expression to emit nothing -- not null, not an error, just silence. This is by design (generators are like nested loops where zero iterations produce zero output), but it makes generator-style joins fundamentally unsafe for data pipelines where every input record must produce an output record.
 
 The safe pattern is always `INDEX` + map lookup + `// fallback`:
+
 1. `INDEX(.key_field)` builds an O(1) lookup from the join table
 2. `$lookup[.foreign_key] // {}` ensures a missing match returns an empty object (not nothing)
 3. `$obj.field // "default"` provides graceful degradation for each field

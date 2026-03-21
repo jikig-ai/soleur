@@ -161,5 +161,6 @@ All five issues share one trait: they are invisible when the script works correc
 These are not judgment calls. They are mechanical checks that can be applied without understanding the business logic of the script.
 
 ## Tags
+
 category: prevention
 module: plugins/soleur/skills/analytics

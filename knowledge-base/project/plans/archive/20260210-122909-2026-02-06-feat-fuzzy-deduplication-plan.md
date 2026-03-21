@@ -42,6 +42,7 @@ jaccard(a, b) = |intersection(words_a, words_b)| / |union(words_a, words_b)|
 ```
 
 **Why Jaccard:**
+
 - Simple to implement (5-10 lines)
 - Catches textual variations ("use const" vs "always use const")
 - No external dependencies
@@ -56,6 +57,7 @@ jaccard(a, b) = |intersection(words_a, words_b)| / |union(words_a, words_b)|
 ### Threshold
 
 Hardcoded at 0.8. Tuned through testing:
+
 - 0.8 catches obvious rewording
 - Low false positive rate on intentionally different rules
 

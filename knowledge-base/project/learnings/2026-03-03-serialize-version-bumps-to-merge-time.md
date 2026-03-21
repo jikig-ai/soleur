@@ -25,6 +25,7 @@ Eliminate committed version files entirely. Version is derived from git tags via
 5. `CHANGELOG.md` deleted — GitHub Releases is the changelog source of truth
 
 Key design decisions:
+
 - **`gh release view` over `gh release list`**: `gh release list` sorts by creation date; `gh release view` returns GitHub's "latest" release which respects semver ordering
 - **CI vs local fallback in github.js**: In CI (`process.env.CI`), API failures are hard errors. In local dev, they produce a warning and empty data.
 - **Concurrency group with `cancel-in-progress: false`**: Queues rather than races when multiple PRs merge quickly

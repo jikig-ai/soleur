@@ -43,6 +43,7 @@ The actual need is a **guided provisioning flow** — the ops-provisioner patter
 ## Provisioning Steps
 
 ### Stage 1: X Account Registration
+
 - **URL:** `https://x.com/i/flow/signup`
 - **Pre-fill:** Display name "Soleur" from brand guide
 - **Manual:** Email, phone verification, CAPTCHA, password
@@ -50,18 +51,21 @@ The actual need is a **guided provisioning flow** — the ops-provisioner patter
 - **Note:** Check handle availability first (`@soleur` preferred, `@soleur_ai` fallback)
 
 ### Stage 2: Developer Portal Setup
+
 - **URL:** `https://developer.x.com`
 - **Pre-fill:** App name "Soleur", app description from project description
 - **Manual:** Developer terms agreement, identity verification, use case description
 - **Validation:** Project and app visible in Developer Console
 
 ### Stage 3: API Key Generation + Validation
+
 - **URL:** Developer Console → Keys and Tokens page
 - **Manual:** Founder copies 4 credentials (API Key, API Secret, Access Token, Access Token Secret)
 - **Automated:** `x-setup.sh write-env` stores credentials with `chmod 600`, `x-setup.sh verify` validates via API round-trip
 - **Validation:** `GET /2/users/me` returns valid response
 
 ### Stage 4: Expense Recording
+
 - **Automated:** ops-advisor updates `knowledge-base/ops/expenses.md` with X API tier costs
 - **Decision needed:** Monthly budget ceiling for X API credits (CFO concern)
 - **Note:** Free tier provides 50 tweets/month and `GET /2/users/me` only. Meaningful monitoring requires paid credits.
@@ -82,6 +86,7 @@ The actual need is a **guided provisioning flow** — the ops-provisioner patter
 ## CMO Assessment Summary
 
 The CMO recommends focusing automation on **post-registration** high-leverage activities:
+
 - Automate profile branding (bio, avatar, header from brand guide) via API
 - Automate first-post introduction thread via `social-distribute`
 - Automate credential distribution via existing `x-setup.sh`
@@ -90,6 +95,7 @@ The CMO recommends focusing automation on **post-registration** high-leverage ac
 ## COO Assessment Summary
 
 The COO recommends:
+
 - P0: Check `@soleur` handle availability (zero cost, 30 seconds)
 - P1: Decide Plausible trial conversion ($9/mo, 15 days until expiry)
 - P1: Research current X API pricing model (brainstorm/spec are inconsistent)

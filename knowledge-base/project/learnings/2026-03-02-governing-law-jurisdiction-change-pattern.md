@@ -23,5 +23,6 @@ Soleur's T&Cs and Disclaimer referenced Delaware as governing law, but the compa
 When changing a legal parameter across documents, the existing document suite IS the template. Match the structural weight of what's already there (CLAs = 2 sentences), don't over-engineer the new clause. Plan review is the gate that prevents a "replace jurisdiction" task from becoming a "redesign dispute resolution framework" task.
 
 ## Tags
+
 category: legal-agents
 module: legal, docs-site

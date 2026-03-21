@@ -37,6 +37,7 @@ Three reviewers independently recommended against building a separate `brand-voi
 The discord-content skill reads `## Voice` and `## Channel Notes > ### Discord`, then validates its own draft against the do's/don'ts before presenting to the user. No cross-component invocation needed.
 
 **Why this is better:**
+
 - No skill-to-agent invocation complexity (skills can't directly call agents)
 - Faster feedback loop (validation happens in the same context)
 - Simpler dependency graph (skill only needs to read a file, not coordinate with another component)

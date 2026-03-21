@@ -23,6 +23,7 @@ Strategic knowledge-base documents (brand-guide.md, business-validation.md, cons
 ### FR1: Frontmatter model
 
 Documents opt in to cadence enforcement by adding two YAML frontmatter fields:
+
 - `last_reviewed: YYYY-MM-DD` — date of last review
 - `review_cadence: monthly | quarterly | biannual | annual` — how often to review
 
@@ -41,6 +42,7 @@ Replace `next_review` with `last_reviewed` + `review_cadence` in the 3 existing 
 ### FR5: Strategic doc adoption
 
 Add `last_reviewed` and `review_cadence` frontmatter to:
+
 - `knowledge-base/overview/brand-guide.md`
 - `knowledge-base/overview/business-validation.md`
 - `knowledge-base/overview/constitution.md`

@@ -44,11 +44,13 @@ Pencil MCP tools are required for visual design workflows (ux-design-lead agent,
 ## Implementation Notes
 
 ### Binary path pattern
+
 ```
 ~/.cursor/extensions/highagency.pencildev-<version>-universal/out/mcp-server-<os>-<arch>
 ```
 
 ### Platform mapping
+
 | `uname -s` + `uname -m` | Binary suffix |
 |--------------------------|---------------|
 | Linux x86_64 | linux-x64 |
@@ -57,11 +59,13 @@ Pencil MCP tools are required for visual design workflows (ux-design-lead agent,
 | Darwin x86_64 | darwin-x64 |
 
 ### Registration command
+
 ```bash
 claude mcp add pencil -- /path/to/mcp-server-<platform> --app <ide>
 ```
 
 ### Version drift detection
+
 ```bash
 # Get registered path from claude mcp list
 # Extract version from path: highagency.pencildev-<VERSION>-universal

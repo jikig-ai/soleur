@@ -40,6 +40,7 @@ The issue (#424) identified during SpecFlow analysis for #397: approximately 69%
 > Learning files must include YAML frontmatter with `title`, `date`, `category`, and `tags` fields; optional fields include `symptoms`, `module`, and `synced_to`
 
 Current state breakdown:
+
 - **43 files** have YAML frontmatter (31%) -- but with inconsistent field sets (some use `symptom:` singular vs `symptoms:` plural, some use `component:` and `root_cause:` from the CORA schema)
 - **85 files** use informal inline bold fields (`**Date:**`, `**Tags:**`) or no metadata at all
 - **1 file** (`agent-prompt-sharp-edges-only.md`) lacks a date prefix in its filename
@@ -197,6 +198,7 @@ fi
 ### Risk: Content Corruption
 
 The script must never modify file content below the frontmatter block. Strategy:
+
 - Read full file into variable
 - Generate frontmatter string
 - Write: frontmatter + original content (minus any extracted inline metadata)

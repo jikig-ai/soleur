@@ -31,6 +31,7 @@ The brainstorm command follows a rigid, prescriptive question script. It runs a 
 ### Change 1: Add learnings-researcher in brainstorm.md
 
 **Current Phase 1.1** (lines ~54-57):
+
 ```markdown
 #### 1.1 Repository Research (Lightweight)
 Run a quick repo scan to understand existing patterns:
@@ -39,6 +40,7 @@ Focus on: similar features, established patterns, CLAUDE.md guidance.
 ```
 
 **New Phase 1.1** -- Replace with:
+
 ```markdown
 #### 1.1 Research (Context Gathering)
 
@@ -55,6 +57,7 @@ If either agent fails or returns empty, proceed with whatever results are availa
 ```
 
 **Why `learnings-researcher` and not others:**
+
 - `learnings-researcher` is cheap (haiku model), local-only, and answers WHAT questions ("we tried this before and hit X gotcha")
 - `best-practices-researcher` answers HOW questions (community standards, framework conventions) -- belongs in `/soleur:plan` Phase 1.5b where it already runs
 - `framework-docs-researcher` is a planning concern -- already in `/soleur:plan` Phase 1.5b
@@ -116,6 +119,7 @@ If either agent fails or returns empty, proceed with whatever results are availa
 Check current version in `plugins/soleur/.claude-plugin/plugin.json` at implementation time (defer exact number per learnings). This is a MINOR bump -- wiring a new agent into a command changes user-facing behavior.
 
 **Files to update:**
+
 - `plugins/soleur/.claude-plugin/plugin.json` -- bump version
 - `plugins/soleur/CHANGELOG.md` -- add entry with: Added learnings-researcher to brainstorm Phase 1; Changed brainstorming skill question techniques with conversational tone guidance
 - `plugins/soleur/README.md` -- verify component counts (no new agents/commands/skills, just wiring)

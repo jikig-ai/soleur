@@ -15,12 +15,14 @@ deepened: 2026-03-20
 **Research sources:** GitHub Actions security documentation, appleboy/ssh-action docs, project learnings (env-indirection, heredoc workflow edits, reusable workflow monorepo releases)
 
 ### Key Improvements
+
 1. Corrected `::error::` annotation to plain `echo` -- workflow commands do not work inside `appleboy/ssh-action` (remote SSH session, not Actions runner)
 2. Documented env indirection as the ideal-but-deferred stronger mitigation, keeping regex guard as the pragmatic MVP
 3. Added implementation constraint: Edit/Write tools are blocked on workflow files by `security_reminder_hook` -- must use `sed` via Bash tool
 4. Added edge case for `appleboy/ssh-action` shell compatibility (`[[` requires bash, not POSIX sh)
 
 ### New Considerations Discovered
+
 - The `appleboy/ssh-action` `envs:` parameter could eliminate the injection vector entirely by passing version as a remote environment variable, but the `${{ }}` expression is still interpolated in the step-level `env:` block -- the difference is that YAML value interpolation cannot inject into shell code
 - The remote server's default shell determines whether `[[ ]]` (bash) or `[ ]` (POSIX) syntax is required
 
@@ -135,7 +137,7 @@ Also grep to confirm no unguarded version interpolations remain:
 grep -n 'needs.release.outputs.version' .github/workflows/*.yml
 ```
 
-Each occurrence should have a corresponding `[[ "$TAG" =~ ` guard on the following line.
+Each occurrence should have a corresponding `[[ "$TAG" =~` guard on the following line.
 
 ## Context
 

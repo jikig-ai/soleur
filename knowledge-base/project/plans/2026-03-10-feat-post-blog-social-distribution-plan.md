@@ -14,6 +14,7 @@ semver: patch
 **Research sources:** X API v2 docs, X Developer Community forums, project learnings corpus
 
 ### Key Improvements
+
 1. Corrected X API Free tier rate limits (500+ posts/month, not 17/day as originally stated)
 2. Added concrete thread posting sequence with error handling between tweets
 3. Added `.env` sourcing details -- worktree `.env` has Discord webhook but X credentials need separate verification
@@ -21,6 +22,7 @@ semver: patch
 5. Added thread recovery procedure for partial posting failures
 
 ### New Considerations Discovered
+
 - X API may have transitioned to consumption-based billing (Developer Console) -- verify current tier before posting
 - `x-community.sh post-tweet` uses OAuth 1.0a signing which requires `openssl` -- already a dependency
 - Thread tweets share a `conversation_id` (the hook tweet's ID) regardless of depth -- useful for later retrieval
@@ -51,6 +53,7 @@ The first blog article ("What Is Company-as-a-Service?") shipped 2026-03-05 but 
 #### Research Insights: Credential Loading
 
 **Current state (verified):**
+
 - Worktree `.env` contains: `DISCORD_WEBHOOK_URL` (confirmed present)
 - Worktree `.env` does NOT contain: `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET`
 - Main repo `.env` does NOT contain X credentials either
@@ -75,6 +78,7 @@ bash plugins/soleur/skills/community/scripts/x-community.sh fetch-metrics
 ```
 
 **Security (from learnings):**
+
 - Never pass tokens as CLI arguments -- visible in `ps aux` and shell history
 - `x-community.sh` already suppresses curl stderr (`2>/dev/null`) to prevent auth header leakage
 - `.env` files are written with `chmod 600` by `x-setup.sh write-env`
@@ -96,10 +100,12 @@ bash plugins/soleur/skills/community/scripts/x-community.sh fetch-metrics
 #### Research Insights: Content Generation
 
 **Brand guide channel notes verified present:**
+
 - `### Discord` -- builder-to-builder tone, direct, collaborative
 - `### X/Twitter` -- hook-first threads, 280-char per tweet, numbered body tweets (2/ 3/ 4/), links only in final tweet, no emojis in hook tweet, metrics-driven opening
 
 **Stats to resolve (current as of 2026-03-10):**
+
 - `{{ stats.agents }}` = 62
 - `{{ stats.skills }}` = 57
 - `{{ stats.departments }}` = 9
@@ -130,6 +136,7 @@ TWEET_ID=$(echo "$RESULT" | jq -r '.id')
 #### Research Insights: Thread Posting
 
 **X API v2 thread mechanics (verified via docs.x.com):**
+
 - Threads are created by posting sequential replies using `POST /2/tweets` with `{"reply": {"in_reply_to_tweet_id": "<id>"}}`
 - All tweets in a thread share the same `conversation_id` (the hook tweet's ID)
 - There is no batch/atomic thread endpoint -- each tweet is a separate API call
@@ -163,6 +170,7 @@ done
 ```
 
 **Key considerations:**
+
 - Add a brief delay (1-2 seconds) between tweets to avoid triggering automated behavior detection
 - Validate each tweet ID before posting the next reply -- a `null` or empty ID means the previous post failed silently
 - The `x-community.sh` script outputs JSON `{id, text}` on success and prints "Tweet posted successfully." to stderr
@@ -179,6 +187,7 @@ done
 **Discord verification:** The webhook returns HTTP 2xx on success. The social-distribute skill already reports success/failure status.
 
 **X verification options:**
+
 - Check the profile page at `https://x.com/soleur_ai` (manual or via Playwright MCP `browser_navigate`)
 - Use `x-community.sh fetch-timeline --max 5` to confirm the thread tweets appear in the timeline
 - The hook tweet URL is `https://x.com/soleur_ai/status/<HOOK_ID>` -- this is the canonical thread URL to share
@@ -197,6 +206,7 @@ done
 **Corrected rate limits (verified 2026-03-10 via [docs.x.com](https://docs.x.com/x-api/fundamentals/rate-limits)):**
 
 The X API Free tier allows:
+
 - **500 posts per month** (some documentation indicates up to 1,500 -- X may have recently increased the limit or transitioned to consumption-based billing via the new Developer Console)
 - A 4-5 tweet thread consumes 4-5 of the monthly quota -- well within limits
 - `x-community.sh` handles 429 rate limit responses with depth-limited retry logic (up to 3 attempts, per `2026-03-09-depth-limited-api-retry-pattern.md`)
@@ -214,6 +224,7 @@ Per constitution: all Discord webhook payloads include explicit `username`, `ava
 ### Thread Posting Failure Recovery
 
 If a tweet in the middle of the thread fails (rate limit, network error):
+
 - The thread will be incomplete but not corrupted -- each posted tweet is permanent
 - Individual tweets can be deleted via `DELETE /2/tweets/:id` if needed (requires the tweet ID from the post response)
 - To resume: post the remaining tweets using `--reply-to <last_successful_tweet_id>`
@@ -222,6 +233,7 @@ If a tweet in the middle of the thread fails (rate limit, network error):
 #### Research Insights: Recovery
 
 **Partial thread recovery procedure:**
+
 1. Note the last successfully posted tweet ID (printed to stdout during posting)
 2. Diagnose the failure (rate limit? network? auth?)
 3. Fix the issue (wait for rate limit reset, reconnect, re-auth)
@@ -229,6 +241,7 @@ If a tweet in the middle of the thread fails (rate limit, network error):
 5. Continue the chain from there
 
 **Deletion if needed:**
+
 - The X API v2 supports `DELETE /2/tweets/:id` but `x-community.sh` does not implement this command yet
 - For the first distribution, manual deletion via the X web interface is acceptable
 - If this becomes a pattern, add a `delete-tweet` command to `x-community.sh`
@@ -236,6 +249,7 @@ If a tweet in the middle of the thread fails (rate limit, network error):
 ### Shell API Hardening (from learnings)
 
 The `x-community.sh` script has been hardened against five failure modes (per `2026-03-09-shell-api-wrapper-hardening-patterns.md`):
+
 1. jq fallback chains (`|| echo "fallback"`) for malformed responses
 2. curl stderr suppression (`2>/dev/null`) to prevent auth header leakage
 3. JSON validation on 2xx responses before consuming

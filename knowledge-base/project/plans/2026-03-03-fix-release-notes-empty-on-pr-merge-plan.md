@@ -15,12 +15,14 @@ deepened: 2026-03-03
 **Research sources:** GitHub REST API docs (Context7), project learnings (3 relevant), CI workflow logs
 
 ### Key Improvements
+
 1. Confirmed `GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls` API endpoint is the correct fix -- returns merged PRs for a commit, verified against actual v3.9.2 commit
 2. Identified additional edge case: API may return multiple PRs for cherry-picked commits -- added filtering for `state: closed` (merged PRs only)
 3. Added `DISPATCH_BUMP` env var cleanup -- present in the original step but unused; plan preserves it for clarity
 4. Identified that the `|| echo ""` fallback pattern silently swallows API errors -- replaced with explicit error logging
 
 ### Relevant Learnings Applied
+
 - `github-actions-auto-release-permissions.md`: Confirms GITHUB_TOKEN has sufficient permissions for the commits/pulls API since the workflow already has `contents: write`
 - `2026-02-12-ci-for-notifications-and-infrastructure-setup.md`: Validates the pattern of handling Discord notification in the same workflow (not cascading)
 - `2026-02-19-discord-bot-identity-and-webhook-behavior.md`: Confirms `username` and `avatar_url` must be explicit per-message fields
@@ -41,7 +43,7 @@ The PR title was `feat: add --headless mode for repeatable workflows (#393)` (re
 2. `gh pr view 393` fails silently because #393 is an issue, not a PR
 3. `|| echo ""` fallback produces empty title, labels, and body
 4. Empty body means the awk changelog extraction finds nothing
-5. Empty title means the fallback `- $PR_TITLE` produces just `- ` (dash and space)
+5. Empty title means the fallback `- $PR_TITLE` produces just `-` (dash and space)
 6. Release v3.9.2 body is `- \n`; Discord gets the same empty content
 
 **Secondary issue:** The Discord webhook payload does not include `username` and `avatar_url` fields, violating the constitution convention (line 89). This is a pre-existing issue but should be fixed alongside.
@@ -62,6 +64,7 @@ PR_NUM=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
 ```
 
 This is the most robust approach because:
+
 - It uses GitHub's own knowledge of which PR produced the merge commit
 - It handles any commit message format (multiple refs, no refs, unusual formats)
 - It does not depend on commit message conventions
@@ -69,6 +72,7 @@ This is the most robust approach because:
 ### Research Insights
 
 **API behavior confirmed via Context7 and live testing:**
+
 - `GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls` lists merged PRs that introduced a commit to the default branch
 - If the commit is NOT in the default branch, it returns both merged and open PRs
 - For squash-merge commits on main, it returns exactly one PR (the merged PR)
@@ -115,6 +119,7 @@ PAYLOAD=$(jq -n \
 ### Research Insights
 
 **Discord webhook identity behavior (from project learning):**
+
 - Webhook messages freeze author identity at post time -- updating webhook defaults does not retroactively change posted messages
 - `username` and `avatar_url` in the POST payload override the webhook's defaults for that specific message
 - The `logo-mark-512.png` file exists at `plugins/soleur/docs/images/logo-mark-512.png` (verified) -- raw.githubusercontent.com serves it publicly
@@ -192,6 +197,7 @@ Discord messages cannot be edited for identity but the content can be corrected 
 ### `.github/workflows/version-bump-and-release.yml` (Find merged PR step)
 
 Changes from original:
+
 1. **Primary lookup**: `gh api` commit-to-PR endpoint replaces regex `head -1`
 2. **Fallback**: `tail -1` regex when API fails
 3. **Validation**: Verify extracted number is a PR, not an issue

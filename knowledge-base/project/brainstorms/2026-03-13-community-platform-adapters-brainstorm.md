@@ -35,6 +35,7 @@ All existing scripts are bash. A TS layer would fight the architecture and risk 
 ### 3. Standardized command interface
 
 All platform scripts implement a subset of:
+
 - `capabilities` -- Returns supported operations (required for all)
 - `fetch-mentions` -- Fetch recent mentions/notifications
 - `fetch-metrics` -- Fetch account/profile metrics

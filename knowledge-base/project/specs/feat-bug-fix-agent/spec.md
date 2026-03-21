@@ -44,6 +44,7 @@ When the agent cannot fix an issue (can't reproduce, requires multi-file changes
 ### FR5: Dual-Use Skill
 
 The `soleur:fix-issue` skill works both:
+
 - In CI: invoked by `claude-code-action` in the scheduled workflow
 - Locally: invoked via `/soleur:fix-issue <issue-number>` by a developer
 

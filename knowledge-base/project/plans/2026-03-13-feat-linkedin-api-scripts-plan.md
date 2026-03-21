@@ -39,6 +39,7 @@ Follow the x-community.sh 10-section layout, replacing OAuth 1.0a signing with s
   - `Linkedin-Version: 202602` (versioned API — use current YYYYMM)
   - `Content-Type: application/json`
 - **Request body:**
+
   ```json
   {
     "author": "urn:li:person:{id}",
@@ -53,6 +54,7 @@ Follow the x-community.sh 10-section layout, replacing OAuth 1.0a signing with s
     "isReshareDisabledByAuthor": false
   }
   ```
+
 - **Response:** 201, post ID in `x-restli-id` response header (not JSON body)
 - **Response header capture:** The standard `curl -s -w "\n%{http_code}"` pattern cannot capture response headers. Use `curl -s -D -` to dump headers to stdout, then parse `x-restli-id` from the header block. This is a structural deviation from `x-community.sh` that must be handled in the `post_request` helper.
 - **Person URN:** Resolved from `LINKEDIN_PERSON_URN` env var (required). Set once via `/v2/userinfo` `sub` field during setup; cached as env var to avoid an extra API call per post.
@@ -69,12 +71,14 @@ Follow the x-community.sh 10-section layout, replacing OAuth 1.0a signing with s
 | `verify` | Sources `.env` and runs `validate-credentials` as a round-trip check. |
 
 **Credential requirements differ per script:**
+
 - `linkedin-community.sh` needs: `LINKEDIN_ACCESS_TOKEN` (Bearer auth) + `LINKEDIN_PERSON_URN` (author URN)
 - `linkedin-setup.sh` needs: `LINKEDIN_CLIENT_ID` + `LINKEDIN_CLIENT_SECRET` + `LINKEDIN_ACCESS_TOKEN` (introspection uses client credentials as POST body params, not Bearer)
 
 ### `community-router.sh` Update
 
 Add LinkedIn to the `PLATFORMS` array:
+
 ```bash
 "linkedin|linkedin-community.sh|LINKEDIN_ACCESS_TOKEN,LINKEDIN_PERSON_URN|"
 ```
@@ -82,6 +86,7 @@ Add LinkedIn to the `PLATFORMS` array:
 ### SKILL.md Updates
 
 Update `plugins/soleur/skills/community/SKILL.md` in 4 places:
+
 1. **Platform Detection table:** LinkedIn row already exists (just `LINKEDIN_ACCESS_TOKEN`). Add `LINKEDIN_PERSON_URN` as required. Note `LINKEDIN_CLIENT_ID` and `LINKEDIN_CLIENT_SECRET` required for setup/introspection only.
 2. **Scripts list:** Add `linkedin-community.sh` and `linkedin-setup.sh` entries.
 3. **`platforms` sub-command:** LinkedIn line already present. Update setup instructions to reference `linkedin-setup.sh`.
@@ -94,6 +99,7 @@ Update `plugins/soleur/skills/community/SKILL.md` in 4 places:
 ### Auth Simplification
 
 LinkedIn Bearer token auth eliminates all complexity from x-community.sh:
+
 - No `urlencode()` function (not needed for Bearer)
 - No `oauth_sign()` function (not needed)
 - No `require_openssl()` (not needed)
@@ -114,6 +120,7 @@ To post as a person, we need the authenticated user's LinkedIn person URN (`urn:
 ### Response Handler Adaptation
 
 LinkedIn errors use a different format than X/Twitter. LinkedIn returns:
+
 ```json
 {
   "status": 403,
@@ -140,6 +147,7 @@ LinkedIn returns rate limit info via `X-RateLimit-Limit`, `X-RateLimit-Remaining
 ### Token Introspection Response
 
 `/oauth/v2/introspectToken` returns:
+
 ```json
 {
   "active": true,
@@ -158,6 +166,7 @@ Note: `r_liteprofile` scope is deprecated. Current scopes use OpenID Connect equ
 ### Token Generation Flow
 
 The `generate-token` command uses the standard OAuth 2.0 authorization code flow:
+
 1. Print the authorization URL: `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${LINKEDIN_CLIENT_ID}&redirect_uri=...&scope=openid%20profile%20w_member_social`
 2. Optionally open URL with `xdg-open` (Linux) or `open` (macOS)
 3. Prompt user to paste the authorization code from the redirect
@@ -171,6 +180,7 @@ No Playwright dependency. No browser automation. Works in any terminal.
 ## Acceptance Criteria
 
 ### linkedin-community.sh
+
 - [ ] `post-content --text "Hello"` creates a LinkedIn post and outputs the post URN
 - [ ] Post URN extracted from `x-restli-id` response header
 - [ ] `fetch-metrics` exits with code 1 and message: "Marketing API credentials required"
@@ -185,6 +195,7 @@ No Playwright dependency. No browser automation. Works in any terminal.
 - [ ] Text exceeding 3000 characters is rejected with error (LinkedIn post limit)
 
 ### linkedin-setup.sh
+
 - [ ] `validate-credentials` reports token status (active/expired), days remaining, scopes
 - [ ] `validate-credentials` with expired token prints renewal instructions
 - [ ] `validate-credentials --warn-days 14` exits non-zero when TTL < 14 days
@@ -194,9 +205,11 @@ No Playwright dependency. No browser automation. Works in any terminal.
 - [ ] No source guard (consistent with `x-setup.sh` and `bsky-setup.sh` convention)
 
 ### community-router.sh
+
 - [ ] LinkedIn entry in PLATFORMS array with correct env vars and script name
 
 ### SKILL.md
+
 - [ ] Platform detection table lists LinkedIn with required vars
 - [ ] Scripts list includes `linkedin-community.sh` and `linkedin-setup.sh`
 - [ ] `platforms` sub-command references `linkedin-setup.sh` for setup
@@ -204,6 +217,7 @@ No Playwright dependency. No browser automation. Works in any terminal.
 - [ ] `engage` sub-command explicitly does NOT include LinkedIn (out of scope)
 
 ### Shell Hardening
+
 - [ ] `set -euo pipefail` at top
 - [ ] Input validation, curl stderr suppression, JSON response parsing, jq error extraction fallback chain, printf-safe retry arithmetic
 - [ ] Depth-limited retries (max 3) for GET requests; 429-only retry for POST
@@ -245,6 +259,7 @@ No Playwright dependency. No browser automation. Works in any terminal.
 ## References & Research
 
 ### Internal References
+
 - Pattern: `plugins/soleur/skills/community/scripts/x-community.sh` (642 lines, 10-section layout)
 - Setup pattern: `plugins/soleur/skills/community/scripts/x-setup.sh` (327 lines)
 - Router: `plugins/soleur/skills/community/scripts/community-router.sh` (PLATFORMS array)
@@ -255,13 +270,15 @@ No Playwright dependency. No browser automation. Works in any terminal.
 - Spec: `knowledge-base/project/specs/feat-linkedin-api-scripts/spec.md`
 
 ### External References
-- LinkedIn Posts API: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api
-- LinkedIn OAuth 2.0: https://learn.microsoft.com/en-us/linkedin/shared/authentication/authorization-code-flow
-- Token Introspection: https://learn.microsoft.com/en-us/linkedin/shared/authentication/token-introspection
-- Programmatic Refresh Tokens: https://learn.microsoft.com/en-us/linkedin/shared/authentication/programmatic-refresh-tokens
-- Getting API Access: https://learn.microsoft.com/en-us/linkedin/shared/authentication/getting-access
+
+- LinkedIn Posts API: <https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api>
+- LinkedIn OAuth 2.0: <https://learn.microsoft.com/en-us/linkedin/shared/authentication/authorization-code-flow>
+- Token Introspection: <https://learn.microsoft.com/en-us/linkedin/shared/authentication/token-introspection>
+- Programmatic Refresh Tokens: <https://learn.microsoft.com/en-us/linkedin/shared/authentication/programmatic-refresh-tokens>
+- Getting API Access: <https://learn.microsoft.com/en-us/linkedin/shared/authentication/getting-access>
 
 ### Related Work
+
 - Parent issue: #138 (LinkedIn Presence)
 - This issue: #589
 - Downstream: #590 (content-publisher), #592 (workflow secrets)

@@ -30,6 +30,7 @@ The deciding question is: "Should an agent be able to invoke this during an auto
 ## Migration Pattern
 
 When converting a command to a skill:
+
 1. Create `skills/<kebab-name>/SKILL.md`
 2. Rewrite frontmatter: normalize name to kebab-case, rewrite description to third person with trigger keywords, drop `argument-hint`
 3. Keep body content unchanged -- `$ARGUMENTS` injection works identically in both

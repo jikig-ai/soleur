@@ -16,6 +16,7 @@ Closes #160.
 **Research sources:** institutional learnings (CSS class mismatch, backdrop-filter gotcha, docs site patterns)
 
 ### Key Improvements
+
 1. Added concrete CSS implementation with exact breakpoints and column counts
 2. Added edge case handling for 5th card in odd-count groups
 3. Referenced institutional learnings to avoid known CSS pitfalls in this docs site
@@ -40,11 +41,13 @@ The landing page feature grid uses `auto-fill` with `minmax(200px, 1fr)`, which 
 ### Research Insights
 
 **CSS Grid Best Practices for Card Layouts:**
+
 - Use `repeat(auto-fill, minmax(Xpx, 1fr))` for fluid grids but switch to fixed columns when semantic grouping matters more than fluidity
 - For 5-item groups on 2-column mobile, the 5th card spans full width or centers -- use `grid-column: 1 / -1` or let it naturally wrap
 - The existing site uses CSS `@layer` ordering (reset, tokens, base, layout, components, utilities) -- add new rules in the `components` layer
 
 **Institutional Learnings Applied:**
+
 - From `2026-02-13-parallel-subagent-css-class-mismatch.md`: reuse existing class names from `style.css` -- add new classes only for the group containers
 - From `2026-02-13-static-docs-site-from-brand-guide.md`: the site uses 768px and 1024px breakpoints consistently -- follow the same pattern
 - From `2026-02-17-backdrop-filter-breaks-fixed-positioning.md`: unrelated to this fix but confirms CSS awareness of this specific docs site
@@ -87,6 +90,7 @@ The landing page feature grid uses `auto-fill` with `minmax(200px, 1fr)`, which 
 ```
 
 **Edge Cases:**
+
 - 5th card in a 2-column grid wraps to a row alone -- acceptable, the odd card (Support / Learn & Grow) naturally serves as a "capstone" for each group
 - Very narrow screens (<320px): 2-column grid may compress cards too much -- the existing `minmax(200px, 1fr)` would naturally fall back to 1 column at ~424px, which is fine since phones are typically 360px+
 

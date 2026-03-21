@@ -17,13 +17,13 @@ status: verified
 
 ## 1. Background
 
-The GDPR Article 30 compliance audit identified an outstanding action item: "Verify GitHub DPA -- Confirm Jikigai has accepted GitHub's Data Protection Agreement at https://github.com/customer-terms." This verification is required because Jikigai acts as data controller for the documentation site (soleur.ai) hosted on GitHub Pages, where GitHub acts as data processor.
+The GDPR Article 30 compliance audit identified an outstanding action item: "Verify GitHub DPA -- Confirm Jikigai has accepted GitHub's Data Protection Agreement at <https://github.com/customer-terms>." This verification is required because Jikigai acts as data controller for the documentation site (soleur.ai) hosted on GitHub Pages, where GitHub acts as data processor.
 
 ## 2. Findings
 
 ### 2.1 GitHub DPA Scope
 
-GitHub's formal Data Protection Agreement (DPA), available at https://github.com/customer-terms/github-data-protection-agreement, applies exclusively to:
+GitHub's formal Data Protection Agreement (DPA), available at <https://github.com/customer-terms/github-data-protection-agreement>, applies exclusively to:
 
 - GitHub Enterprise Cloud
 - GitHub Enterprise (Unified)
@@ -46,8 +46,8 @@ Jikigai (`jikig-ai` organization) is on the **free Organization plan** (1 seat).
 
 GitHub's data processing for free-plan accounts is governed by:
 
-1. **GitHub Terms of Service** (https://docs.github.com/en/site-policy/github-terms/github-terms-of-service)
-2. **GitHub Privacy Statement** (https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement)
+1. **GitHub Terms of Service** (<https://docs.github.com/en/site-policy/github-terms/github-terms-of-service>)
+2. **GitHub Privacy Statement** (<https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement>)
 
 These documents provide substantive data protection commitments:
 
@@ -57,7 +57,7 @@ These documents provide substantive data protection commitments:
 - GitHub is certified under the **EU-US Data Privacy Framework** (adequacy decision C(2023) 4745)
 - GitHub maintains **Standard Contractual Clauses** (European Commission Decision 2021/914) as supplementary safeguard
 - GitHub uses sub-processors bound by contractual security, privacy, and confidentiality obligations
-- GitHub's sub-processor list is publicly available at https://docs.github.com/en/site-policy/privacy-policies/github-subprocessors
+- GitHub's sub-processor list is publicly available at <https://docs.github.com/en/site-policy/privacy-policies/github-subprocessors>
 
 ### 2.5 Article 28 Compliance Assessment
 

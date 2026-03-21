@@ -11,6 +11,7 @@ A dedicated preflight dependency check script for the `feature-video` skill that
 ### The Problem
 
 The `feature-video` skill chains three external dependencies:
+
 1. **agent-browser** -- captures browser screenshots
 2. **ffmpeg** -- converts screenshots to video/GIF
 3. **rclone** -- uploads video to Cloudflare R2

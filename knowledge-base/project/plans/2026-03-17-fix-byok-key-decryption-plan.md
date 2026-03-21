@@ -37,6 +37,7 @@ UPDATE public.api_keys SET is_valid = false, validated_at = NULL;
 ```
 
 **Edge cases:**
+
 - Empty table: both statements are no-ops on zero rows
 - Not idempotent: `convert_from()` expects `bytea` input and would fail on a `text` column. Supabase migration tracking prevents re-execution.
 - Multiple providers per user: `UPDATE` invalidates all rows, which is correct

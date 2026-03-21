@@ -14,12 +14,14 @@ semver: patch
 **Research sources:** Context7 SDK docs, 5 institutional learnings, attack surface enumeration learning, SDK ToolInputSchemas type analysis
 
 ### Key Improvements
+
 1. Corrected `NotebookRead` gap -- SDK has no `NotebookRead` tool; notebook reading goes through `Read` tool. Removed from matcher and SAFE_TOOLS (stale reference).
 2. Added `updatedInput` hook capability -- hooks CAN provide `updatedInput` (not just deny), opening a future path to move review gates to hooks if needed.
 3. Added hook chaining pattern for auditability -- separate sandbox hook from a future audit-logging hook using the SDK's ordered hook array.
 4. Import `HookCallback` and `PreToolUseHookInput` directly from SDK -- confirmed exported in ^0.2.80 via Context7.
 
 ### New Considerations Discovered
+
 - `NotebookRead` in `SAFE_TOOLS` is a stale reference -- the SDK's `ToolInputSchemas` union does not include a `NotebookReadInput` type. Notebooks are read via the `Read` tool. Remove from SAFE_TOOLS during this migration.
 - Hooks support `updatedInput` in `hookSpecificOutput` (not just `systemMessage`) -- this contradicts the original plan's claim that hooks cannot provide `updatedInput`. However, moving review gates to hooks is still not recommended because `canUseTool`'s `updatedInput` is simpler for the AskUserQuestion flow.
 - Hook chaining: the SDK executes hooks in array order. A future audit-logging hook can be added as a second entry without modifying the sandbox hook.
@@ -263,6 +265,7 @@ import { query, HookCallback, PreToolUseHookInput } from "@anthropic-ai/claude-a
 ```
 
 The `HookCallback` type signature is:
+
 ```typescript
 type HookCallback = (
   input: PreToolUseHookInput,

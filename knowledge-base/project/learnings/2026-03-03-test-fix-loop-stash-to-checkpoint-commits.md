@@ -34,5 +34,6 @@ Any skill that needs "save state / attempt change / conditionally revert" semant
 When auditing skills for worktree compliance, search for `git stash` anywhere in SKILL.md files, not just in shell scripts -- the agent executes prose instructions verbatim.
 
 ## Tags
+
 category: integration-issues
 module: test-fix-loop

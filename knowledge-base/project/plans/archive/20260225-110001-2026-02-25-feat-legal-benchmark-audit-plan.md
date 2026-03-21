@@ -61,6 +61,7 @@ Claude already knows general compliance, CCPA, ICO, CNIL requirements from train
 ### Finding Source Labels
 
 Benchmark findings add a source prefix to distinguish from standard findings:
+
 - `[HIGH] [REGULATORY] Section > Issue > Recommendation`
 - `[MEDIUM] [PEER:Basecamp] Section > Issue > Recommendation`
 
@@ -171,6 +172,7 @@ Update the delegation table:
 ## References
 
 ### Internal
+
 - `plugins/soleur/agents/legal/legal-compliance-auditor.md` — agent being extended
 - `plugins/soleur/skills/legal-audit/SKILL.md` — skill being extended
 - `plugins/soleur/agents/legal/clo.md` — delegation table update
@@ -179,6 +181,7 @@ Update the delegation table:
 - `knowledge-base/project/learnings/agent-prompt-sharp-edges-only.md` — agent instruction design
 
 ### External
+
 - GDPR Article 13: Information to be provided where personal data are collected from the data subject
 - GDPR Article 14: Information to be provided where personal data have not been obtained from the data subject
 - Basecamp open-source policies: `https://github.com/basecamp/policies`

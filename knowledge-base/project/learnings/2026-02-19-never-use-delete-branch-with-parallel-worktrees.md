@@ -19,6 +19,7 @@ The original AGENTS.md instruction was misleading: "Never `gh pr merge --delete-
 The guardrails hook (`guardrails.sh`) checks if **any** worktree exists, not just the one for the branch being merged. In parallel development with multiple features in flight, there will almost always be other worktrees active.
 
 The correct merge pattern is:
+
 1. `gh pr merge <number> --squash` (never `--delete-branch`)
 2. `cleanup-merged` handles both worktree removal and branch deletion safely
 
@@ -27,6 +28,7 @@ The correct merge pattern is:
 Never use `--delete-branch` with `gh pr merge` -- period. It's not a conditional rule based on the current feature's worktree state. The guardrails hook enforces a blanket block whenever any worktree is detected, which is the correct behavior for parallel development.
 
 ## Tags
+
 category: workflow
 module: git-worktrees
 symptoms: "BLOCKED: --delete-branch with active worktrees will orphan them"

@@ -138,6 +138,7 @@ The ops-provisioner already follows this exact pattern for branch safety checks 
 ### Research Insights: Simplicity Check
 
 Per code-simplicity and YAGNI principles:
+
 - The plan does NOT create a new validation framework -- it adds two prose sections to existing files
 - The plan does NOT auto-fix missing surfaces -- it warns and suggests filing an issue
 - The plan does NOT enumerate all possible surface types in the ops-provisioner -- it asks a semantic question and lets the LLM judge

@@ -34,6 +34,7 @@ This works in Claude Code's non-interactive Bash tool where `source .env` variab
 ### X web UI thread posting via Playwright
 
 Posted a 5-tweet thread as connected replies:
+
 1. Navigate to `https://x.com/compose/post`
 2. Fill tweet text and click Post
 3. Navigate to the posted tweet's URL

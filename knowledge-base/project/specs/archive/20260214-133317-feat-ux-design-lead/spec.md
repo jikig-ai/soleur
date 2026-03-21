@@ -44,6 +44,7 @@ PR #82 (brand identity) left design artifacts untracked (.pen files, playwright 
 ### Agent Capabilities (ux-design-lead)
 
 The agent should handle:
+
 1. **Wireframes** -- Low-fidelity layout exploration
 2. **Visual design** -- High-fidelity screens using brand colors/typography
 3. **Design system components** -- Reusable components in .pen format
@@ -56,5 +57,6 @@ Add to plugin.json mcpServers alongside context7. Reference the pencil.dev MCP e
 ### Brainstorm Chain
 
 In `commands/soleur/brainstorm.md`, after brand-architect completes:
+
 - Ask user: "Would you like to explore visual design based on this brand identity?"
 - If yes, spawn ux-design-lead with the brand-guide.md context

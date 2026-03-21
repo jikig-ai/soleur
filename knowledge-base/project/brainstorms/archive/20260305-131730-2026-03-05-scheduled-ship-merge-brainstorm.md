@@ -29,6 +29,7 @@ A GitHub Actions scheduled workflow (`scheduled-ship-merge.yml`) that automatica
 ### 1. Qualifying PR Criteria: Age + CI Passing
 
 PRs qualify for auto-ship when ALL conditions are met:
+
 - Open (not draft) for 24+ hours
 - CI checks passing
 - No `ship/scheduled` label (not currently being processed)
@@ -44,6 +45,7 @@ One PR per scheduled run. Matches the bug-fixer pattern. Simple concurrency, bou
 ### 3. Scope: Full ship --headless
 
 The workflow invokes the complete ship skill pipeline:
+
 - Phase 0-1: Context detection, artifact trail validation
 - Phase 2: Compound (captures learnings)
 - Phase 3: Documentation verification
@@ -65,6 +67,7 @@ The selection query excludes PRs with `ship/scheduled`, `ship/failed`, or `no-au
 ### 5. Opt-Out: Draft + Label
 
 Two layers of protection:
+
 - Draft PRs excluded by default
 - `no-auto-ship` label provides explicit opt-out for any PR
 

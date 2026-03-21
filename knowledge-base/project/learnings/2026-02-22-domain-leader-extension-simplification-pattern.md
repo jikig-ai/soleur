@@ -32,5 +32,6 @@ When extending LLM-executed agents with parallel behavior (same capability added
 Secondary insight: SpecFlow analysis caught a misreference (plan said "agent-finder" for functional gap descriptions, but agent-finder is stack-based -- functional-discovery was the correct target). This validates running SpecFlow even for prompt-only changes.
 
 ## Tags
+
 category: implementation-patterns
 module: agents, commands

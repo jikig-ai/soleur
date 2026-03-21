@@ -24,5 +24,5 @@
 ## Phase 4: Verification & Summary
 
 - [x] 4.1 Confirm Discord post appeared in channel — HTTP 204 success
-- [x] 4.2 Confirm X thread is visible — https://x.com/soleur_ai/status/2031326087473463675
+- [x] 4.2 Confirm X thread is visible — <https://x.com/soleur_ai/status/2031326087473463675>
 - [x] 4.3 Report distribution summary (Discord: posted, X: posted via web, others: manual output provided)

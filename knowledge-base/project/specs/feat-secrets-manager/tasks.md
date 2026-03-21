@@ -1,7 +1,7 @@
 # Tasks: Adopt Doppler as Secrets Manager
 
 **Issue:** #734
-**Plan:** `knowledge-base/plans/2026-03-20-feat-adopt-doppler-secrets-manager-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-03-20-feat-adopt-doppler-secrets-manager-plan.md`
 
 ## Phase 0: Prerequisites
 

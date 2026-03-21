@@ -87,6 +87,7 @@ The validation report heading contract (for downstream agent consumption):
 ## Dogfooding
 
 Issue #141 explicitly asks to "apply it to Soleur itself" after implementation. This produces:
+
 1. A real validation report for Soleur as a product
 2. A case study proving the tool works
 3. Feedback on the agent's usability from actual use

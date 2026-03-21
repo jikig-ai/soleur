@@ -42,6 +42,7 @@ The current health check loop (20 retries * 5s = 100s) was already bumped from 3
 **Kubernetes probe model (industry standard):**
 
 The Kubernetes probe taxonomy is the established pattern for this exact problem:
+
 - **Liveness probe** (`/healthz`): "Is the process alive?" -- restart if not
 - **Readiness probe** (`/readyz`): "Can it accept traffic?" -- remove from load balancer if not
 - **Startup probe**: "Has it finished initializing?" -- don't check liveness/readiness until startup completes
@@ -81,6 +82,7 @@ In `.github/workflows/telegram-bridge-release.yml`, replace the `curl -sf` check
 **Implementation constraint:** The `security_reminder_hook.py` PreToolUse hook blocks the Edit tool on `.github/workflows/*.yml` files (see learning: `security-reminder-hook-blocks-workflow-edits`). Use `sed` via Bash tool instead.
 
 Current:
+
 ```bash
 for i in $(seq 1 20); do
   if curl -sf http://localhost:8080/health; then
@@ -95,6 +97,7 @@ exit 1
 ```
 
 Proposed:
+
 ```bash
 echo "Waiting for health endpoint (container liveness)..."
 for i in $(seq 1 12); do
@@ -117,11 +120,13 @@ This reduces retries to 12 (60s) since we only need the health endpoint to respo
 #### Research Insights
 
 **Best Practices:**
+
 - Capture HTTP status code separately from body to avoid `curl -sf` swallowing useful diagnostics on non-2xx responses
 - Log attempt numbers for debugging intermittent failures in CI logs
 - Print the full response body on success so deploy logs show the container's actual state at deploy time
 
 **Edge Cases:**
+
 - If a reverse proxy (nginx, etc.) sits in front of the health port and returns its own 503 (e.g., upstream unreachable), the check would incorrectly pass. Mitigation: the deploy runs `curl` directly against `localhost:8080`, which bypasses any reverse proxy. The port is bound to `127.0.0.1` so only local connections work.
 - If the health endpoint returns a non-JSON 503 (e.g., from a misconfigured middleware), the `BODY` capture still works since it's logged as a string, not parsed.
 - `curl` exit code on connection refused is 7 (not 0), so the `|| echo "000"` fallback correctly handles this case -- the `$()` captures the exit-0 output of `echo "000"`.
@@ -145,15 +150,18 @@ if (url.pathname === "/readyz" && req.method === "GET") {
 #### Research Insights
 
 **Best Practices (from Kubernetes probe model):**
+
 - `/health` (or `/healthz`) = liveness: "is the process alive?" The telegram-bridge health endpoint already serves this role -- it responds whenever the Bun server is running, even returning 503 during CLI spawn
 - `/readyz` = readiness: "can it handle requests?" Only returns 200 when CLI is fully initialized
 - Convention: liveness endpoints should almost never return unhealthy once the process is started (a restart loop is worse than degraded service). The current `/health` returning 503 during spawn is semantically acceptable because Docker's `--start-period` will ignore it during initialization.
 
 **Bun.serve pattern (from Context7 docs):**
+
 - Bun 1.2.3+ supports a `routes` object for declarative routing, but the current `fetch` handler with `if/else` is fine for 3 routes. Migrating to `routes` would be a separate refactor and is not warranted here.
 - The `Response.json()` helper is the correct API for JSON responses in Bun.
 
 **Performance Considerations:**
+
 - The `/readyz` endpoint is stateless and synchronous -- no async work, no allocations beyond the JSON response. Negligible overhead.
 
 ### Change 3: Update Dockerfile HEALTHCHECK (align with liveness semantics)
@@ -163,12 +171,14 @@ if (url.pathname === "/readyz" && req.method === "GET") {
 **Revised approach (from Docker docs research):** Use Docker's `--start-period` option instead of the grep fallback. This is purpose-built for containers that need time to bootstrap.
 
 Current:
+
 ```dockerfile
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD curl -f http://localhost:8080/health || exit 1
 ```
 
 Proposed:
+
 ```dockerfile
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
   CMD curl -f http://localhost:8080/health || exit 1
@@ -179,16 +189,19 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
 **Why `--start-period` is better than the grep fallback:**
 
 The original plan proposed:
+
 ```dockerfile
 CMD curl -sf http://localhost:8080/health || curl -s http://localhost:8080/health | grep -q '"bot":"running"' || exit 1
 ```
 
 Problems with this approach:
+
 1. Fragile string matching -- any change to the JSON field name or format breaks the check silently
 2. Two separate `curl` calls per check (doubled network overhead, though trivial on localhost)
 3. The `grep -q` swallows the response, making debugging harder
 
 Docker's `--start-period=120s` is the correct solution:
+
 - Health check failures during the first 120 seconds are ignored (container stays "starting", not "unhealthy")
 - Once the start period elapses, normal retry logic applies (3 consecutive failures = unhealthy)
 - If the CLI finishes initializing within the start period, the container transitions to "healthy" immediately

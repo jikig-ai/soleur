@@ -15,6 +15,7 @@ deepened: 2026-02-12
 **Research agents used:** test-design-reviewer, code-simplicity-reviewer, codebase explorer, Context7 (Bun docs)
 
 ### Key Improvements
+
 1. Simplified from 5 files to 2 files (components.test.ts + helpers.ts)
 2. Removed YAGNI: root package.json, test tsconfig, heading hierarchy checks, reference file existence checks
 3. Added granular assertion pattern: describe per file, test per field, custom error messages
@@ -198,17 +199,20 @@ Runs only when `.md` files under `plugins/soleur/` are staged. Sequential execut
 ## Implementation Phases
 
 ### Phase 1: Test Infrastructure
+
 1. Create `plugins/soleur/test/helpers.ts` -- file discovery (3 glob functions) + YAML frontmatter parser
 2. Create `plugins/soleur/test/components.test.ts` -- all validation tests with granular describe/test blocks
 3. Verify `bun test plugins/soleur/test/` discovers and runs tests
 
 ### Phase 2: Fix Violations
+
 4. Fix skill descriptions (agent-browser, rclone, and any others discovered by tests)
 5. Fix command frontmatter (help, one-shot argument-hint)
 6. Fix backtick references in skills (dspy-ruby, compound-docs, skill-creator, others)
 7. Run full test suite -- all 65 components must pass
 
 ### Phase 3: Hook Integration & Ship
+
 8. Update `lefthook.yml` with plugin-component-test hook
 9. Version bump (MINOR -- new test infrastructure)
 10. Update plugin README with test section

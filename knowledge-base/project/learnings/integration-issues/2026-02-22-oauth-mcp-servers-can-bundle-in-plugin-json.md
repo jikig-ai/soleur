@@ -25,6 +25,7 @@ The prior audit conflated two authentication patterns:
 2. **OAuth-based auth** -- Plugin.json doesn't need to express auth. OAuth orchestration is Claude Code's responsibility. Any MCP server using standard OAuth flow can bundle as `type: http`.
 
 Before concluding an authenticated MCP server cannot bundle, verify its auth model:
+
 - OAuth (browser-based interactive flow) -- bundleable via `type: http`
 - Static headers (API keys, PATs, bearer tokens) -- not bundleable until plugin.json adds header support
 

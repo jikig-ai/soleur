@@ -15,5 +15,6 @@ The DPD's dual-file pattern (Eleventy source for the docs site build, root copy 
 A secondary review insight: summary tables in legal documents should cross-reference detailed sections rather than reproducing implementation specifics. The Plausible row's original "Data Processed" text included salt-rotation mechanics that made the column overlong and duplicated content already covered in Section 2.3(a). Cross-references keep tables scannable and avoid stale-detail risk.
 
 ## Tags
+
 category: legal-compliance
 module: data-protection-disclosure

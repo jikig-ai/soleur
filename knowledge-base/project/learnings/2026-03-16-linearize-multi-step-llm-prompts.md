@@ -71,11 +71,13 @@ Every instruction must appear at the step where it executes, not where it is con
 ### 2. When to Use Conditional Blocks vs. Deferred Instructions
 
 Use **conditional blocks** (always):
+
 - When an earlier step sets a condition that affects a later step
 - When different execution paths converge at a common step
 - When the deferred action has side effects (file writes, API calls, git operations)
 
 Use **deferred instructions** (never in LLM prompts):
+
 - This pattern has no reliable use case in LLM sequential prompts. Even for simple "remember this value" scenarios, the conditional block pattern is more reliable because it places the instruction at the point of execution.
 
 ### 3. State Propagation Without Forward-References
@@ -83,12 +85,14 @@ Use **deferred instructions** (never in LLM prompts):
 When STEP 1 makes a decision that STEP 5 needs to know about, use one of these patterns:
 
 **Pattern A -- Conditional check at execution point (preferred):**
+
 ```
 STEP 5: If STEP 1b was used (topic was auto-discovered), do X.
         If a queue item was used (normal path), do Y.
 ```
 
 **Pattern B -- Explicit state variable (for complex flows):**
+
 ```
 STEP 1: ... Set TOPIC_SOURCE to "growth-plan" or "seo-queue".
 STEP 5: If TOPIC_SOURCE is "growth-plan", do X. Otherwise, do Y.
@@ -121,5 +125,6 @@ When reviewing multi-step LLM prompts (workflow files, skill instructions, agent
 - `2026-03-02-claude-code-action-token-revocation-breaks-persist-step.md` -- All persistence inside agent prompt (related: instructions must be self-contained)
 
 ## Tags
+
 category: prompt-engineering
 module: scheduled-workflows, ci-cd

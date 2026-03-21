@@ -2,7 +2,7 @@
 # Exclude git worktrees from test discovery (defense-in-depth).
 # Bun already skips dot-directories by default, but explicit exclusion
 # prevents segfaults if worktrees have missing node_modules.
-# See: knowledge-base/learnings/2026-03-18-bun-test-segfault-missing-deps.md
+# See: knowledge-base/project/learnings/2026-03-18-bun-test-segfault-missing-deps.md
 # FPE crash with Bun <=1.3.5 on root-level `bun test`. Use scripts/test-all.sh.
-# See: knowledge-base/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md
+# See: knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md
 pathIgnorePatterns = [".worktrees/**"]

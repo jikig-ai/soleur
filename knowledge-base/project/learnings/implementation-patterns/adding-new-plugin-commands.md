@@ -54,6 +54,7 @@ This is familiar UX with no custom syntax to learn.
 ### 4. Idempotency via Exact Match
 
 Before writing entries, check for exact duplicates:
+
 - Prevents duplicate entries on repeated runs
 - Users handle near-duplicates during review
 - Avoids complexity of fuzzy matching

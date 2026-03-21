@@ -66,6 +66,7 @@ Pencil MCP (design in .pen) -> get_screenshot (capture) -> Pillow (verify 1500x5
 ### Pencil Desktop MCP Mode
 
 Per learning `2026-03-10-pencil-desktop-standalone-mcp-three-tier-detection.md`:
+
 - Pencil Desktop is running with `--no-sandbox` (Electron flag for Linux)
 - MCP registered with `--app desktop` (Desktop binary mode, not IDE mode)
 - No IDE dependency -- `.pen` tab visibility in Cursor is NOT required
@@ -74,6 +75,7 @@ Per learning `2026-03-10-pencil-desktop-standalone-mcp-three-tier-detection.md`:
 ### Research Insights: WebSocket Connection Blocker
 
 **Live test result:** `get_editor_state` returns `WebSocket not connected to app: pencil` despite:
+
 - Pencil Desktop process confirmed running (PID 248616, `--no-sandbox`)
 - MCP server registered and showing "Connected" in `claude mcp list`
 - Display server available (X11 `:0`, Wayland `wayland-0`)
@@ -83,10 +85,12 @@ Per learning `2026-03-10-pencil-desktop-standalone-mcp-three-tier-detection.md`:
 1. Check if Pencil Desktop has a document open (WebSocket may only connect when a canvas is active)
 2. If no document is open, use `open_document` with `"new"` to create one -- this may establish the WebSocket
 3. If still failing, check `--app` flag mismatch: registration uses `--app desktop` but error says `app: pencil`. May need re-registration:
+
    ```bash
    claude mcp remove pencil
    claude mcp add pencil -- /tmp/.mount_PencilVuY4uO/resources/app.asar.unpacked/out/mcp-server-linux-x64 --app pencil
    ```
+
 4. After re-registration, restart Claude Code for the MCP to reconnect
 5. If still failing after restart, the AppImage mount path (`/tmp/.mount_PencilVuY4uO/`) may have changed. Re-extract and verify the path with `pgrep -a pencil`
 
@@ -119,6 +123,7 @@ The `batch_design` tool uses a JavaScript-like DSL with specific operations:
 | Image | `G(nodeId, "ai"/"stock", prompt)` | Apply image fill |
 
 **Critical rules:**
+
 - Every I(), C(), R() MUST have a binding name (left-hand assignment)
 - `"document"` is a predefined binding for the document root
 - Bindings only work within the same `batch_design` call
@@ -154,6 +159,7 @@ testText=I(document, {type:"text", content:"Font Test", fontFamily:"Inter", font
 ```
 
 If the font renders as a fallback (default sans-serif), it is not installed. Install system-wide:
+
 ```bash
 # Inter and Cormorant Garamond from google/fonts GitHub repo
 # Already in tmp/fonts/ from the original Pillow session if available
@@ -163,6 +169,7 @@ fc-list | grep -i "inter\|cormorant"
 ### Path Resolution
 
 MCP tools resolve from the repo root, not shell CWD. Absolute paths required:
+
 - .pen file: `/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-x-twitter-banner/knowledge-base/design/brand/x-banner.pen`
 - Output PNG: `/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-x-twitter-banner/plugins/soleur/docs/images/x-banner-1500x500.png`
 
@@ -181,6 +188,7 @@ browser_take_screenshot(filename: "/home/jean/git-repositories/jikig-ai/soleur/.
 ```
 
 After upload verification, clean up any screenshots that leaked to the main repo:
+
 ```bash
 ls /home/jean/git-repositories/jikig-ai/soleur/*.png 2>/dev/null
 ```
@@ -190,6 +198,7 @@ ls /home/jean/git-repositories/jikig-ai/soleur/*.png 2>/dev/null
 Per learning `2026-03-09-x-provisioning-playwright-automation.md`:
 
 X Free tier API cannot upload banners. Use Playwright MCP in headed mode:
+
 1. Navigate to `x.com/settings/profile` via `browser_navigate`
 2. Take `browser_snapshot` to assess page state
 3. If login required: pause for manual auth (per ops-provisioner pattern: never enter credentials via automation)
@@ -256,26 +265,32 @@ X Free tier API cannot upload banners. Use Playwright MCP in headed mode:
 **Goal:** Establish a working Pencil MCP connection.
 
 1. Verify Pencil Desktop is running:
+
    ```bash
    pgrep -a pencil | grep -v grep
    ```
+
 2. Call `mcp__pencil__get_editor_state(include_schema=false)`
 3. **If WebSocket error:**
    a. Try `mcp__pencil__open_document(filePathOrTemplate="new")` -- opening a document may establish the WebSocket
    b. Retry `get_editor_state`
    c. If still failing, check `--app` flag. Current registration uses `--app desktop`. Try re-registering with `--app pencil`:
+
       ```bash
       claude mcp remove pencil
       claude mcp add pencil -- /tmp/.mount_PencilVuY4uO/resources/app.asar.unpacked/out/mcp-server-linux-x64 --app pencil
       ```
+
    d. After re-registration, inform user: "Claude Code must be restarted for MCP changes to take effect."
    e. **Fallback:** If WebSocket cannot be resolved, fall back to Pillow-only regeneration (same as original session) and file a GitHub issue for the Pencil Desktop MCP connection bug.
 4. Verify fonts -- create a test text node:
+
    ```javascript
    // In batch_design
    testInter=I(document, {type:"text", content:"Inter Test", fontFamily:"Inter", fontWeight:"500", fontSize:20})
    testCormorant=I(document, {type:"text", content:"Cormorant Test", fontFamily:"Cormorant Garamond", fontWeight:"500", fontSize:20})
    ```
+
    Then `get_screenshot` to verify both render correctly. Delete test nodes after.
 5. Verify or create .pen file:
    - Prefer creating a new dedicated `x-banner.pen` rather than modifying the existing `brand-visual-identity-brainstorm.pen`
@@ -324,6 +339,7 @@ metrics=I("bannerId", {type:"text", name:"Metrics", content:"60+ Agents \u00B7 8
 4. Iterate: adjust positions, sizes, or spacing based on screenshot review
 
 **Design adjustments per brand guide:**
+
 - Text sizing follows the 1% rule from learning `2026-03-10-x-banner-session-error-prevention.md`: thesis at 82px = 16.4% of 500px height (within 12-16% guideline), wordmark at 52px = 10.4% (within 8-12%), metrics at 26px = 5.2% (within 4-6%)
 - Mobile safe zone: all text centered with `width:1500` and `textAlign:"center"` -- automatically within center 60%
 - Avatar overlap: bottom-left ~150x150px is clear (text starts at y=140, centered)
@@ -340,6 +356,7 @@ metrics=I("bannerId", {type:"text", name:"Metrics", content:"60+ Agents \u00B7 8
 
 2. Save the screenshot image to disk:
    - If `get_screenshot` returns base64 image data, decode and save via Python/Pillow:
+
      ```python
      from PIL import Image
      import base64, io
@@ -348,9 +365,11 @@ metrics=I("bannerId", {type:"text", name:"Metrics", content:"60+ Agents \u00B7 8
      assert img.size == (1500, 500), f"Expected 1500x500, got {img.size}"
      img.save("/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-x-twitter-banner/plugins/soleur/docs/images/x-banner-1500x500.png")
      ```
+
    - If screenshot dimensions differ, resize with `Image.LANCZOS` resampling
 
 3. Verify the saved PNG:
+
    ```bash
    python3 -c "from PIL import Image; img=Image.open('plugins/soleur/docs/images/x-banner-1500x500.png'); print(f'Size: {img.size}, Mode: {img.mode}')"
    ```
@@ -367,6 +386,7 @@ metrics=I("bannerId", {type:"text", name:"Metrics", content:"60+ Agents \u00B7 8
      - `browser_take_screenshot` with filename `/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-x-twitter-banner/tmp/x-profile-verified.png`
 
 5. **Cleanup:** Check for orphan screenshots in main repo:
+
    ```bash
    ls /home/jean/git-repositories/jikig-ai/soleur/*.png 2>/dev/null
    ```

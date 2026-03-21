@@ -29,36 +29,43 @@ Following the implementation of the spec-driven workflow (issues #3 and #4), doc
 ## Functional Requirements
 
 ### FR1: Plans Migration
+
 - Convert `docs/plans/2026-02-06-feat-spec-workflow-foundation-plan.md` to `knowledge-base/project/specs/feat-spec-workflow-foundation/spec.md`
 - Convert `docs/plans/2026-02-06-feat-command-integration-plan.md` to `knowledge-base/project/specs/feat-command-integration/spec.md`
 - Move `docs/plans/archive/*.md` to `knowledge-base/project/specs/archive/`
 - Delete `docs/plans/` directory after migration
 
 ### FR2: External Specs Migration
+
 - Create `knowledge-base/project/specs/external/` directory
 - Move `docs/specs/claude-code.md`, `codex.md`, `opencode.md` to external/
 - Delete `docs/specs/` directory after migration
 
 ### FR3: Solutions Migration
+
 - Move `docs/solutions/plugin-versioning-requirements.md` to `knowledge-base/project/learnings/`
 - Delete `docs/solutions/` directory after migration
 
 ### FR4: Brainstorms Migration
+
 - Create `knowledge-base/project/brainstorms/` directory
 - Move `docs/brainstorms/2026-02-05-unified-spec-workflow-brainstorm.md`
 - Move `docs/brainstorms/2026-02-06-docs-cleanup-and-archive-brainstorm.md`
 - Delete `docs/brainstorms/` directory after migration
 
 ### FR5: OpenSpec Integration
+
 - Extract rules from `openspec/config.yaml`
 - Integrate proposal, spec, design, and task rules into `knowledge-base/overview/constitution.md`
 - Delete entire `openspec/` directory
 
 ### FR6: Learnings Documentation
+
 - Create `knowledge-base/project/learnings/2026-02-06-spec-workflow-implementation.md`
 - Document key learnings from implementing issues #3 and #4
 
 ### FR7: Workflow Command Enhancement
+
 - Update `plugins/soleur/commands/soleur/brainstorm.md` to include GitHub issue creation step
 - Add issue creation after worktree creation in Phase 3.5
 - Update output summary to show issue number and branch
@@ -66,13 +73,16 @@ Following the implementation of the spec-driven workflow (issues #3 and #4), doc
 ## Technical Requirements
 
 ### TR1: Preserve Git History
+
 - Use `git mv` for all file moves to preserve history
 
 ### TR2: Update References
+
 - Check CLAUDE.md and other files for references to moved paths
 - Update any broken references
 
 ### TR3: Verify Documentation Site
+
 - Ensure `docs/pages/`, `docs/css/`, `docs/js/` remain intact
 - Verify site still builds/serves correctly after cleanup
 

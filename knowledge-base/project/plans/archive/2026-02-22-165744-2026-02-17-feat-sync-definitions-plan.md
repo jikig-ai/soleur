@@ -70,17 +70,21 @@ Accept / Skip / Edit / Done reviewing
 ```
 
 **Accept:**
+
 - Write the bullet to the definition file at the end of the target section
 - Add definition name to learning's `synced_to` frontmatter
 - If learning has no YAML frontmatter: prepend a minimal `---` block with `synced_to: [definition-name]`
 
 **Skip:**
+
 - Move to next proposal. No tracking written (proposal may reappear on next run).
 
 **Edit:**
+
 - User modifies bullet text. Re-display for final Accept/Skip.
 
 **Done reviewing:**
+
 - Stop Phase 4. Unreviewed proposals reappear on next `/sync` run.
 
 #### 4.5 Summary
@@ -116,32 +120,41 @@ If zero proposals were generated: "Phase 4: All learnings already synced to rele
 ## Test Scenarios
 
 ### Happy Path
+
 - Given a learning about worktree gotchas and a git-worktree skill definition, when `/sync` runs, then Phase 4 proposes a bullet for git-worktree/SKILL.md
 
 ### Synced Tracking
+
 - Given a learning with `synced_to: [compound-docs]` in frontmatter, when `/sync` runs, then Phase 4 does not propose bullets for compound-docs from that learning
 
 ### No Frontmatter
+
 - Given a learning with no YAML frontmatter, when `/sync` runs and user accepts a proposal, then Phase 4 prepends a `---` block with `synced_to: [definition-name]`
 
 ### Existing Bullet
+
 - Given a definition that already contains a bullet covering the same topic, when Phase 4 evaluates the pair, then the proposal is discarded silently
 
 ### Scoped Area
+
 - Given the user runs `/sync conventions`, when sync executes, then only Phases 0-3 run (Phase 4 skipped)
 
 ### Compound Routing Idempotency
+
 - Given compound routing (Step 8) synced a learning to a definition and wrote `synced_to`, when `/sync` runs later, then Phase 4 does not re-propose that pair
 
 ### Empty State
+
 - Given all learnings are already synced, when `/sync` runs, then Phase 4 displays "All learnings already synced"
 
 ## Dependencies & Risks
 
 ### Dependencies
+
 - #104/#115 (compound routing) -- already shipped in v2.12.0
 
 ### Risks
+
 - **Noisy proposals:** LLM may over-match learnings to definitions. Mitigation: user reviews every proposal; skip is free and fast.
 - **Frontmatter mutation:** Adding YAML blocks to frontmatter-less files on accept. Mitigation: only adds `synced_to`, no backfilling.
 

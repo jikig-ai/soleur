@@ -64,6 +64,7 @@ A second insight: a script that reports "Cleaned N items" must verify the cleanu
 3. `feat-github-dpa-verify` was skipped by cleanup due to uncommitted changes from an interrupted compound archival -- required manual `--force` removal
 
 ## Tags
+
 category: runtime-errors
 module: plugins/soleur/skills/git-worktree
 symptoms: stale worktrees persist after cleanup-merged reports success

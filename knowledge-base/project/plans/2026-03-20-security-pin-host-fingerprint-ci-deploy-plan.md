@@ -15,12 +15,14 @@ deepened: 2026-03-20
 **Research sources:** appleboy/ssh-action action.yml, appleboy/drone-ssh plugin.go, appleboy/easyssh-proxy easyssh.go (fingerprint verification implementation), golang.org/x/crypto/ssh FingerprintSHA256 source code
 
 ### Key Improvements
+
 1. Traced fingerprint verification through the full call chain (ssh-action -> drone-ssh -> easyssh-proxy -> golang.org/x/crypto/ssh) and documented the exact comparison logic and format requirement
 2. Confirmed the `SHA256:<base64>` format requirement from Go source code -- the `ssh.FingerprintSHA256()` function prepends `SHA256:` to unpadded base64
 3. Added `ssh-keyscan` alternative for obtaining the fingerprint remotely (no server SSH access needed)
 4. Documented the silent fallback behavior when the fingerprint secret is empty -- the action defaults to `ssh.InsecureIgnoreHostKey()`, providing zero protection
 
 ### New Considerations Discovered
+
 - The fingerprint comparison in easyssh-proxy is an exact string match against `ssh.FingerprintSHA256(publicKey)` return value -- no normalization, no case folding, no prefix stripping
 - `ssh-keyscan -t ed25519 <host>` can obtain the host key remotely, which is then piped to `ssh-keygen -lf -` to get the SHA256 fingerprint -- this avoids needing SSH access to the server
 - The `telegram-bridge-release.yml` env setup step (line 41) passes sensitive env vars (`TELEGRAM_BOT_TOKEN`, `ANTHROPIC_API_KEY`) via the `envs` input -- without fingerprint verification, these secrets could be intercepted by a MITM attacker

@@ -37,22 +37,26 @@ Restructure Phase 2 section 1 from "Parallel Execution (optional)" into an "Exec
 Mirrors the existing subagent pattern: check, ask, do, finish.
 
 **Step 1: Check environment and analyze independence**
+
 - Verify `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`
 - If not set, skip to Tier B
 - Reuse the same independence analysis (TaskList, `blockedBy`, file overlap)
 - If fewer than 3 independent tasks, skip to Tier B
 
 **Step 2: Offer Agent Teams**
+
 - Use AskUserQuestion with teammate count, task assignments, and ~7x cost note
 - If declined, fall through to Tier B
 
 **Step 3: Initialize team and spawn teammates**
+
 - `spawnTeam` to initialize team directory
 - If `spawnTeam` fails (stale team exists): attempt `cleanup`, retry once, then fall through to Tier B
 - Spawn teammates via Task tool with `team_name` parameter
 - Teammates read CLAUDE.md/constitution from the working directory (not passed in prompt)
 
 **Step 4: Monitor, test, commit, and shutdown**
+
 - Lead monitors progress via `TaskList`, coordinates via `write`/`broadcast`
 - If a teammate fails, lead completes that task sequentially
 - When all tasks complete: run full test suite, create incremental commits, `requestShutdown`, `cleanup`

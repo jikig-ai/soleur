@@ -28,6 +28,7 @@ GitHub's formal DPA is only available to paid plans (Enterprise Cloud, Enterpris
 ## Solution
 
 Updated GDPR policy Section 2.2 to accurately describe that:
+
 - GitHub's processing is governed by the GitHub Terms of Service and GitHub Privacy Statement (not the formal DPA)
 - The formal DPA applies to paid plans only
 - GitHub's standard terms acknowledge processor obligations and maintain EU-US DPF certification and SCCs
@@ -55,6 +56,6 @@ When referencing third-party data protection agreements in legal documents, veri
 
 - Issue: #203
 - Prior audit: #187 (resolved in #200)
-- GitHub DPA: https://github.com/customer-terms/github-data-protection-agreement
-- GitHub Community Discussion: https://github.com/orgs/community/discussions/22277
-- GitHub Privacy Statement: https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement
+- GitHub DPA: <https://github.com/customer-terms/github-data-protection-agreement>
+- GitHub Community Discussion: <https://github.com/orgs/community/discussions/22277>
+- GitHub Privacy Statement: <https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement>

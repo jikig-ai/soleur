@@ -58,7 +58,7 @@ Project principles organized by domain. Add principles as you learn them.
 - When documentation mandates one strategy but code uses another, canonicalize on what the code does -- unless there is a strong reason to change the code; documentation that contradicts implementation creates confusion and wasted effort
 - Prefer numbered phase sections (Phase 1, Phase 2) in SKILL.md for multi-step workflows, with XML semantic tags (`<critical_sequence>`, `<decision_gate>`, `<validation_gate>`) to mark control flow
 - Prefer numeric literal underscores as thousand separators for readability (e.g., `3_000` instead of `3000`)
-- Prefer a language identifier after triple backticks in code blocks (e.g., ```bash, ```yaml -- never bare ```)
+- Prefer a language identifier after triple backticks in code blocks (e.g., ```bash,```yaml -- never bare ```)
 - Prefer verb-noun naming for skill directories where applicable (e.g., `deploy-docs`, `release-announce`, `resolve-pr-parallel`)
 - Prefer `# --- Section Name ---` comment headers in shell scripts to separate logical sections
 - Multi-step LLM prompts (workflow prompt blocks, skill instructions, agent prompts) must place every instruction at the step where it executes, not where it is conceptually related -- "NOTE: do X after STEP N" deferred instructions are unreliable because LLM agents either execute them immediately or forget them; use conditional blocks at the target step instead (e.g., "STEP 5: If STEP 1b was used, do X")

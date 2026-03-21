@@ -43,6 +43,7 @@ This is a coverage gap in the agent roster.
 ## Solution
 
 Performed a docs UX overhaul (v2.12.1):
+
 - Moved Get Started first in nav, removed Commands/MCP links
 - Deleted commands.html and mcp-servers.html
 - Collapsed Engineering sub-categories into one section with h3 sub-headers
@@ -62,6 +63,7 @@ Option 2 is cleaner -- creation and review are different concerns.
 ## Prevention
 
 When reviewing docs site changes:
+
 - Ask "does the navigation order match the user journey?" (install -> learn -> reference)
 - Ask "does every page justify its existence?" (if a page has <3 items, merge it)
 - Ask "do same-level sections have consistent visual treatment?"

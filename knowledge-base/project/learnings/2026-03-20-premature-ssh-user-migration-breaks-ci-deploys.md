@@ -5,6 +5,7 @@
 PR #834 changed CI release workflows from `username: root` to `username: deploy` for SSH deployments, but the server-side prerequisites (creating the deploy user, installing SSH keys, configuring forced commands, sudoers rules) were never completed. This caused immediate SSH authentication failures on the next release deploy. A secondary failure was a host key fingerprint mismatch caused by the wrong key-type algorithm.
 
 Two distinct failure modes:
+
 1. **SSH auth failure** (08:35 UTC): deploy user doesn't exist on server, no authorized_keys configured
 2. **Fingerprint mismatch** (08:39 UTC): appleboy/ssh-action negotiated ed25519 but the stored fingerprint was for a different algorithm
 
@@ -62,5 +63,6 @@ Secondary insight: SSH host key fingerprints are algorithm-specific. When using 
 - Learning: `2026-03-19-github-actions-env-indirection-for-context-values.md`
 
 ## Tags
+
 category: integration-issues
 module: CI/CD release workflows

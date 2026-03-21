@@ -90,6 +90,7 @@ graph TB
 ### constitution.md
 
 Project principles organized by domain (Code Style, Architecture, Testing, etc.). Each domain has:
+
 - **Always**: Rules that must be followed
 - **Never**: Anti-patterns to avoid
 - **Prefer**: Guidelines when multiple options exist
@@ -97,6 +98,7 @@ Project principles organized by domain (Code Style, Architecture, Testing, etc.)
 ### learnings/
 
 Documented solutions categorized by type:
+
 - `implementation-patterns/` - How to implement specific features
 - `architecture/` - Architectural decisions and patterns
 - `technical-debt/` - Known issues and planned improvements
@@ -123,6 +125,7 @@ severity: info
 ### specs/
 
 Feature specifications with lifecycle management:
+
 - `feat-<name>/spec.md` - Active feature specs
 - `feat-<name>/tasks.md` - Implementation tasks
 - `archive/` - Completed feature specs
@@ -131,6 +134,7 @@ Feature specifications with lifecycle management:
 ### brainstorms/
 
 Design explorations before implementation. Captures:
+
 - What we're building and why
 - Key decisions and rationale
 - Open questions

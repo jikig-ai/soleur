@@ -14,6 +14,7 @@ A GitHub Action that centralizes all version bumping, CHANGELOG generation, comp
 ### Problem
 
 Every plugin change currently requires updating 6+ files in the feature branch:
+
 - `plugins/soleur/.claude-plugin/plugin.json` (version)
 - `plugins/soleur/CHANGELOG.md` (entry)
 - `plugins/soleur/README.md` (counts)
@@ -43,6 +44,7 @@ When multiple feature branches bump versions independently, they collide at merg
 ### 1. CHANGELOG Entries: PR Body Section
 
 Feature branches no longer edit `CHANGELOG.md`. Instead:
+
 - Ship skill requires a `## Changelog` section in the PR body
 - The GitHub Action parses this section and inserts it into `CHANGELOG.md` at merge time
 - Keeps entries high-quality (human-written during development) without file conflicts
@@ -58,6 +60,7 @@ Feature branches no longer edit `CHANGELOG.md`. Instead:
 ### 3. Unified Workflow (Bump + Release + Discord)
 
 The new `version-bump-and-release.yml` replaces `auto-release.yml`:
+
 1. Triggers on push to main
 2. Reads `semver:*` label from merged PR
 3. Computes next version from current `plugin.json`
@@ -81,6 +84,7 @@ This avoids the GITHUB_TOKEN cascade problem (a commit pushed by GITHUB_TOKEN do
 ### 5. Component Count Automation
 
 The Action auto-computes counts at merge time:
+
 - `find agents -name '*.md' | wc -l` for agent count
 - Similar for skills and commands
 - Updates plugin.json description, plugin README.md, root README.md

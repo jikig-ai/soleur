@@ -11,11 +11,13 @@ date: 2026-03-04
 **Research performed:** gh CLI jq flag behavior, `$ENV` vs quote-unquote-quote approaches, shell injection surface analysis, edge case validation with actual jq binary
 
 ### Key Improvements
+
 1. Identified `export` + `$ENV.OPEN_FIXES` as the preferred approach over quote-unquote-quote shell interpolation -- cleaner, no quoting gymnastics, no shell injection surface
 2. Validated all edge cases (empty, single value, comma-separated) with actual jq binary execution
 3. Identified that the learnings doc must also be updated to prevent the same mistake recurring
 
 ### New Considerations Discovered
+
 - `gh` CLI's internal jq (go-jq) supports `$ENV` for reading environment variables, eliminating the need for shell string interpolation entirely
 - The `OPEN_FIXES` variable must be `export`ed before the `gh issue list` call since `$ENV` only reads exported environment variables, not shell-local variables
 
@@ -69,12 +71,15 @@ The `gh issue list --help` output confirms: `--jq expression   Filter JSON outpu
 Two approaches were evaluated:
 
 **Option A: Quote-unquote-quote shell interpolation**
+
 ```bash
 --jq '("'"$OPEN_FIXES"'" | split(",") | ...'
 ```
+
 Pros: No code change outside the `--jq` line. Cons: Fragile quoting, potential shell injection if `OPEN_FIXES` ever contains unexpected characters, harder to read.
 
 **Option B: `export` + `$ENV.OPEN_FIXES` (CHOSEN)**
+
 ```bash
 export OPEN_FIXES
 # ...
@@ -82,9 +87,11 @@ export OPEN_FIXES
   ($ENV.OPEN_FIXES | split(",") | map(select(length > 0)) | map(tonumber? // empty)) as $skip_nums |
   ...'
 ```
+
 Pros: Clean separation of shell and jq concerns, no quoting gymnastics, `$ENV` is a standard jq feature, no shell injection surface. Cons: Requires adding `export OPEN_FIXES` after the variable assignment.
 
 **Option B is preferred** because:
+
 1. The jq expression stays in a single-quoted string (no shell expansion inside it)
 2. `$ENV` is the standard jq mechanism for reading environment variables
 3. `gh` CLI's internal go-jq implementation supports `$ENV` (verified locally)
@@ -93,6 +100,7 @@ Pros: Clean separation of shell and jq concerns, no quoting gymnastics, `$ENV` i
 ### Implementation Detail
 
 **Before (broken):**
+
 ```yaml
           OPEN_FIXES=$(gh pr list \
             --state open \
@@ -115,6 +123,7 @@ Pros: Clean separation of shell and jq concerns, no quoting gymnastics, `$ENV` i
 ```
 
 **After (fixed):**
+
 ```yaml
           OPEN_FIXES=$(gh pr list \
             --state open \
@@ -138,6 +147,7 @@ Pros: Clean separation of shell and jq concerns, no quoting gymnastics, `$ENV` i
 ```
 
 Key changes:
+
 1. Add `export OPEN_FIXES` after the variable assignment (line after the `gh pr list` call)
 2. Remove `--arg skip "$OPEN_FIXES"` from the `--jq` flag
 3. Replace `$skip` with `$ENV.OPEN_FIXES` in the jq expression
@@ -158,7 +168,7 @@ Key changes:
 
 ## References
 
-- Failed CI run: https://github.com/jikig-ai/soleur/actions/runs/22657970844/job/65671713661
+- Failed CI run: <https://github.com/jikig-ai/soleur/actions/runs/22657970844/job/65671713661>
 - `gh issue list --help`: `--jq expression` accepts a single expression string, no extra jq flags
 - jq `$ENV` documentation: standard jq feature for reading environment variables
 - Existing learning: `knowledge-base/project/learnings/2026-03-03-scheduled-bot-fix-workflow-patterns.md`

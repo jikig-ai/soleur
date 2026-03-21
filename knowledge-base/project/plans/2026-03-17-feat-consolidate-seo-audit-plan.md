@@ -78,6 +78,7 @@ The SEO fix workflow runs at 10:00 UTC (one hour after the growth audit at 09:00
 ### Existing report naming convention
 
 Current reports follow `YYYY-MM-DD-<type>-audit.md` pattern:
+
 - `2026-03-16-aeo-audit.md`
 - `2026-03-16-content-audit.md`
 - `2026-03-16-content-plan.md`

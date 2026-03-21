@@ -9,7 +9,7 @@ date: 2026-03-12
 
 ## Problem
 
-Adding Paperclip (https://paperclip.ing/) as a Tier 3 CaaS competitor exposed a cross-phase data inconsistency in the competitive analysis pipeline.
+Adding Paperclip (<https://paperclip.ing/>) as a Tier 3 CaaS competitor exposed a cross-phase data inconsistency in the competitive analysis pipeline.
 
 The pipeline runs through distinct phases: brainstorm, one-shot, plan+deepen, work, competitive-analysis scan, review, resolve-todos, compound. Two of these phases independently fetch live data from external sources (GitHub API, product pages). The plan phase fetched GitHub data showing 19.6k stars for Paperclip. The competitive-intelligence agent independently fetched the same data and found 14.6k stars. Neither phase is aware of the other's results.
 
@@ -34,6 +34,7 @@ The structural gap remains unresolved: there is no 5th specialist in the cascade
 When a pipeline has multiple independent data-fetching phases (planning vs. execution), the later phase's data should govern because it is temporally closer to truth. However, governing alone is insufficient -- the later phase must also reconcile upstream documents, or the source of truth diverges from its derivatives.
 
 The competitive analysis cascade needs either:
+
 - A 5th specialist agent whose sole job is to reconcile business-validation.md with the cascade's output, or
 - An explicit step in the competitive-intelligence agent prompt to update business-validation.md after completing its scan
 

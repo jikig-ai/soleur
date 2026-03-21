@@ -33,3 +33,13 @@ pre-commit:
       glob: "apps/*/infra/*.tf"
       run: terraform fmt {staged_files}
       stage_fixed: true
+    kb-structure-guard:
+      priority: 8
+      glob:
+        - "knowledge-base/{brainstorms,learnings,plans,specs}/*"
+        - "knowledge-base/{brainstorms,learnings,plans,specs}/**/*"
+      run: |
+        echo "ERROR: Files staged at deprecated knowledge-base paths." >&2
+        echo "Move to knowledge-base/project/ before committing:" >&2
+        echo "  knowledge-base/{brainstorms,learnings,plans,specs}/ -> knowledge-base/project/{brainstorms,learnings,plans,specs}/" >&2
+        exit 1

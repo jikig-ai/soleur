@@ -13,6 +13,7 @@ Privacy Policy Section 4.6, GDPR Policy Section 3.6, and DPD Section 2.3(e) all 
 ## Proposed Solution
 
 Split the lawful basis:
+
 - **Consent (Art 6(1)(a))** for email address — actively provided via double opt-in
 - **Legitimate interest (Art 6(1)(f))** for technical metadata (IP address, referrer URL, subscription timestamp, browser/device info) — automatically collected by Buttondown during subscription
 
@@ -46,6 +47,7 @@ Add a balancing test for the legitimate interest claim, mirroring the existing p
 ### Replacement Content
 
 **Privacy Policy Section 4.6 — new data and basis lines:**
+
 ```
 - **Data collected:** Email address (actively provided by you); IP address, referrer URL, subscription timestamp, and browser/device metadata (automatically collected by Buttondown during the subscription request).
 - **Purpose:** Sending periodic newsletter emails about Soleur updates, features, and content.
@@ -58,6 +60,7 @@ Add a balancing test for the legitimate interest claim, mirroring the existing p
 Currently says "your email address is transmitted to and stored by Buttondown." Change to mention that Buttondown also automatically collects technical metadata during the subscription request.
 
 **Privacy Policy Section 6 — new newsletter paragraph:**
+
 ```
 For newsletter subscriptions, the legal basis for processing your email address is **consent** (Article 6(1)(a) GDPR). You provide consent by submitting the signup form and confirming your subscription via the double opt-in email. You may withdraw consent at any time by unsubscribing. For the technical metadata automatically collected by Buttondown during subscription (IP address, referrer URL, subscription timestamp, browser/device metadata), the legal basis is **legitimate interest** (Article 6(1)(f) GDPR) -- service operation and abuse prevention. You may object to this processing under Article 21 (see Section 8).
 ```
@@ -67,6 +70,7 @@ For newsletter subscriptions, the legal basis for processing your email address 
 Split retention: email retained until unsubscribe; technical metadata retention governed by Buttondown's data retention practices.
 
 **GDPR Policy Section 3.6 — replacement:**
+
 ```
 ### 3.6 Newsletter Subscription
 
@@ -114,5 +118,5 @@ grep -rn "Last Updated" docs/legal/privacy-policy.md docs/legal/gdpr-policy.md d
 - Brainstorm: `knowledge-base/project/brainstorms/2026-03-18-buttondown-legal-basis-brainstorm.md`
 - Spec: `knowledge-base/project/specs/feat-gdpr-buttondown-legal-basis-666/spec.md`
 - Issue: #666
-- Buttondown privacy policy: https://buttondown.com/legal/privacy
+- Buttondown privacy policy: <https://buttondown.com/legal/privacy>
 - Related PR: #688 (draft)

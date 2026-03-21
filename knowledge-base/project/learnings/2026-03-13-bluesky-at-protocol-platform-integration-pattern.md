@@ -41,5 +41,6 @@ AT Protocol is significantly simpler than X's OAuth 1.0a — the setup script is
 - #470 — platform adapter interface (follow-up refactor)
 
 ## Tags
+
 category: integration-issues
 module: plugins/soleur/skills/community

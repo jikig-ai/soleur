@@ -11,12 +11,14 @@ date: 2026-03-20
 **Research sources:** Context7 TypeScript docs, web search (Node.js fire-and-forget patterns), codebase grep analysis, institutional learnings, pr-review-toolkit/silent-failure-hunter analysis
 
 ### Key Improvements
+
 1. Confirmed production crash risk: Node 22 runtime + no `process.on('unhandledRejection')` handler = unhandled rejection terminates the server
 2. Identified existing `.catch()` pattern at `ws-handler.ts:274` (`handleMessage`) that should be mirrored for consistency
 3. Added `KeyInvalidError` handling to the `.catch()` handlers (the plan already mentioned this but the code examples were missing `errorCode`)
 4. Identified follow-up: enable `@typescript-eslint/no-floating-promises` to prevent recurrence
 
 ### New Considerations Discovered
+
 - The `ws-handler.ts` `start_session` case has a try/catch around `createConversation` but the `startAgentSession` call is outside it on line 130 -- if `startAgentSession` rejects, the try/catch does NOT help
 - No ESLint or `@typescript-eslint/no-floating-promises` configured for web-platform -- static analysis would have caught this at authoring time
 - The `handleMessage` function at `ws-handler.ts:274` already correctly uses `.catch()` for its own promise -- the `startAgentSession` call is the only inconsistency in the file
@@ -32,6 +34,7 @@ date: 2026-03-20
 **Runtime confirmation:** The web-platform runs on Node 22 (`Dockerfile: FROM node:22-slim`). Since Node 15, unhandled promise rejections crash the process by default (`--unhandled-rejections=throw`). There is no `process.on('unhandledRejection')` handler anywhere in the server code. This means every unhandled rejection from `startAgentSession()` kills the entire server -- affecting all connected users, not just the one whose session failed.
 
 **Industry standard (2025-2026):** The recommended pattern for fire-and-forget async calls is explicit `.catch()`:
+
 ```typescript
 // Explicit fire-and-forget with .catch()
 startAgentSession(userId, conversationId, leaderId).catch((err) => {
@@ -39,9 +42,11 @@ startAgentSession(userId, conversationId, leaderId).catch((err) => {
   sendToClient(userId, { type: 'error', message: err.message });
 });
 ```
+
 This satisfies the `@typescript-eslint/no-floating-promises` rule and documents intent for future maintainers.
 
 **Sources:**
+
 - [Analyze Fire-and-Forget in NodeJS](https://medium.com/@onu.khatri/analyze-the-fire-forget-in-nodejs-7a60f78128ec)
 - [typescript-eslint/no-floating-promises rule proposal](https://github.com/typescript-eslint/typescript-eslint/issues/6418)
 - [Jake Archibald: The gotcha of unhandled promise rejections](https://jakearchibald.com/2023/unhandled-rejections/)

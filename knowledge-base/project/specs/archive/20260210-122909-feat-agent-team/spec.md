@@ -39,6 +39,7 @@ When fewer than 3 independent tasks exist, proceed with sequential execution wit
 ### FR3: Agent Teams Execution
 
 When Agent Teams mode is selected:
+
 - Lead agent analyzes dependency graph, file overlap, and domain boundaries
 - Lead determines optimal teammate count and task grouping
 - Lead spawns teammates with task-specific context from the plan
@@ -49,6 +50,7 @@ When Agent Teams mode is selected:
 ### FR4: Subagent Fan-Out Execution
 
 When subagent mode is selected:
+
 - Spawn one Task tool subagent per independent task group
 - Each subagent receives plan context and task assignment
 - Results collected and integrated by the lead
@@ -57,6 +59,7 @@ When subagent mode is selected:
 ### FR5: Hybrid Worktree Strategy
 
 Default to shared worktree for all teammates. Before spawning, analyze file overlap between task groups. If file overlap is detected between groups:
+
 - Create per-teammate worktrees for conflicting groups
 - Lead merges worktree results after teammates complete
 - Non-conflicting groups continue in shared worktree

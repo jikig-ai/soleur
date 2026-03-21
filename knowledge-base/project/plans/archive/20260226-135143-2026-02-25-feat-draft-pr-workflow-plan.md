@@ -110,6 +110,7 @@ draft-pr)
 ```
 
 **Acceptance criteria:**
+
 - [ ] Idempotent: returns 0 if PR already exists
 - [ ] Warns but continues on network failure
 - [ ] Blocks on main/master (returns 1)
@@ -133,6 +134,7 @@ draft-pr)
    ```
 
    This creates an empty commit, pushes the branch, and opens a draft PR. If the push or PR creation fails (no network), a warning is printed but the workflow continues.
+
 ```
 
 **Edit 2 — End of Phase 3.6:** At the end of Phase 3.6, after step 5 (Save spec.md) and before step 6 (Switch to worktree), add:
@@ -167,6 +169,7 @@ After step 1 (Create worktree), within step 3 (Navigate to worktree), append the
    ```
 
    If this fails (no network), print a warning but continue.
+
 ```
 
 After step 4 (Hand off to brand-architect), before step 5 (Display completion), add:
@@ -201,6 +204,7 @@ bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh draft-pr
 ```
 
 If this fails (no network), print a warning but continue. The branch exists locally.
+
 ```
 
 ### Phase 5: Modify plan SKILL.md
@@ -221,6 +225,7 @@ If this fails (no network), print a warning but continue. The branch exists loca
    ```
 
    If the push fails (no network), print a warning but continue.
+
 ```
 
 Note: The plan file (from the Output Format section) and tasks.md are committed together in one commit, pushed once at the skill boundary.
@@ -273,6 +278,7 @@ gh pr list --head BRANCH_NAME --state open --json number,isDraft --jq '.[0]'
 **If no open PR exists:**
 
 Fall through to the current behavior: create a new PR with `gh pr create`. This handles cases where the user entered the pipeline through `/plan` or `/work` directly (skipping brainstorm/one-shot).
+
 ```
 
 The push section (lines 234-246) remains unchanged — it still runs before the PR check.

@@ -10,6 +10,7 @@ Complete the partially-started migration of workflow artifact directories (`brai
 ## Why This Approach
 
 The migration to `knowledge-base/project/` was started (worktree-manager.sh updated to use new paths) but never completed. This left:
+
 - 13+ skills writing to old top-level paths
 - `worktree-manager.sh` targeting empty `project/` subdirectories
 - AGENTS.md referencing a non-existent `knowledge-base/project/constitution.md`

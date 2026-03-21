@@ -60,6 +60,7 @@ Cloudflare provides 15 managed remote MCP servers covering analytics, observabil
 ### Conclusion
 
 MCP integration for Cloudflare DNS management is **not viable** with current tooling:
+
 - The capability doesn't exist in Cloudflare's official catalog
 - Even if it did, the OAuth requirement blocks auto-bundling
 - Building a custom MCP server requires hosting for marginal benefit over curl

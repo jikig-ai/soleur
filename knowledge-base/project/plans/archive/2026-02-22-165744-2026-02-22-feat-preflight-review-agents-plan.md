@@ -15,6 +15,7 @@ Add inline pre-flight assertions to `/soleur:work` Phase 0 that catch environmen
 ## Problem Statement
 
 From Claude Code Insights (2026-01-29 to 2026-02-21):
+
 - "wrong_approach" is the #1 friction type (45 instances)
 - "misunderstood_request" accounts for 12 more incidents
 - Wrong branch/worktree edits recurred across 4-5 sessions
@@ -100,6 +101,7 @@ In Phase 1's "Read Plan and Clarify" step, add: "Before proceeding, verify the p
 **Git fetch deduplication:** Phase 0 runs `cleanup-merged` which internally runs `git fetch`. The scope check in Phase 0.5 can skip the redundant `git fetch origin main` and just run `git log origin/main..HEAD --name-only --pretty=format:""` since the fetch already happened. If cleanup-merged was skipped (no knowledge-base), include the fetch.
 
 **Convention reminder specificity:** The Phase 1 convention reminder should check these concrete conventions from AGENTS.md and constitution.md:
+
 - File format: markdown tables, not YAML files (constitution.md "Markdown-first" rule)
 - Naming: kebab-case for files and directories
 - Directory structure: agents recurse, skills flat at root level

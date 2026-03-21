@@ -43,6 +43,7 @@ One contributor is interested but hasn't submitted yet -- timing is ideal to get
 ### Template Source
 
 Adapt Apache ICLA/CCLA as starting templates:
+
 - Replace Apache License 2.0 references with "any license terms selected by Jikigai"
 - Add express patent grant clause
 - Include "Representations" section (signer warrants authority)
@@ -52,7 +53,7 @@ Adapt Apache ICLA/CCLA as starting templates:
 ## Technical Considerations
 
 - **Dual-location legal docs:** Both `docs/legal/` (source markdown) and `plugins/soleur/docs/pages/legal/` (Eleventy site) must be updated in lockstep. Different frontmatter formats.
-- **Cross-document consistency:** Entity: "Jikigai, incorporated in France", Contact: legal@jikigai.com, Jurisdiction: "EU, US". All 7 existing docs use these values.
+- **Cross-document consistency:** Entity: "Jikigai, incorporated in France", Contact: <legal@jikigai.com>, Jurisdiction: "EU, US". All 7 existing docs use these values.
 - **Privacy policy update required:** CLA signatures collect personal data (GitHub username, timestamp). Current privacy policy says "no personal data collected on external servers." Must add CLA disclosure. Ship in same PR.
 - **GitHub Actions security:** Pin to commit SHAs, declare explicit `permissions:` block.
 - **Legal hub page is hardcoded:** Count "7" and card entries in `legal.njk` must be manually updated to 9.
@@ -65,12 +66,14 @@ Adapt Apache ICLA/CCLA as starting templates:
 Draft both CLA documents using Apache ICLA/CCLA as templates adapted for BSL 1.1.
 
 **Create:**
+
 - `docs/legal/individual-cla.md` -- source markdown with `type: individual-cla` frontmatter
 - `docs/legal/corporate-cla.md` -- source markdown with `type: corporate-cla` frontmatter
 - `plugins/soleur/docs/pages/legal/individual-cla.md` -- Eleventy page with `layout: base.njk`, `permalink: pages/legal/individual-cla.html`
 - `plugins/soleur/docs/pages/legal/corporate-cla.md` -- Eleventy page with `layout: base.njk`, `permalink: pages/legal/corporate-cla.html`
 
 **Key CLA clauses:**
+
 - Copyright license grant: perpetual, irrevocable, non-exclusive, worldwide, royalty-free
 - Patent grant: express grant covering contributed code
 - Relicensing right: "under any license terms selected by Jikigai"
@@ -80,10 +83,12 @@ Draft both CLA documents using Apache ICLA/CCLA as templates adapted for BSL 1.1
 ### Phase 2: CLA Enforcement
 
 **Prerequisites (manual, before workflow runs):**
+
 - Create a GitHub gist for signature storage (the CLA Assistant Action reads/writes signatures here)
 - Add `PERSONAL_ACCESS_TOKEN` repository secret with gist read/write permissions (fine-grained PAT)
 
 **Create:**
+
 - `.github/workflows/cla.yml` -- CLA Assistant Action workflow
   - Trigger: `pull_request_target` (opened, synchronize, reopened) + `issue_comment` (for re-check)
   - Pin `cla-assistant/cla-assistant-action` to commit SHA
@@ -94,15 +99,18 @@ Draft both CLA documents using Apache ICLA/CCLA as templates adapted for BSL 1.1
   - **Security:** Do not checkout or build PR code in this workflow (`pull_request_target` runs with base branch write access)
 
 **Smoke test:**
+
 - Open a throwaway PR against the feature branch to verify the action triggers and the status check appears
 
 **Configure (manual, post-merge):**
+
 - Add branch ruleset or branch protection rule requiring "CLA" status check on `main`
 - Document all manual steps (gist, secret, ruleset) in the PR description
 
 ### Phase 3: Contributor-Facing and Cross-Document Updates
 
 **Modify:**
+
 - `CONTRIBUTING.md` -- add "Contributor License Agreement" section after "Getting Started":
   - Plain-language explanation: what the CLA is, why it's needed (BSL + dual licensing), what it means (you keep copyright, Jikigai gets license)
   - Link to Individual CLA and Corporate CLA on docs site
@@ -118,6 +126,7 @@ Note: Only the 3 substantively affected legal docs get CLA cross-references. No 
 ### Phase 4: Docs Site and Versioning
 
 **Modify:**
+
 - `plugins/soleur/docs/pages/legal.njk` -- add 2 new card entries (Individual CLA, Corporate CLA), update count from 7 to 9, category: "Agreement"
 - Version bump `3.3.5` → `3.4.0` across all version locations: `plugin.json`, `CHANGELOG.md`, `README.md` (plugin + root), `bug_report.yml`
 
@@ -166,6 +175,7 @@ Note: Only the 3 substantively affected legal docs get CLA cross-references. No 
 ## References & Research
 
 ### Internal References
+
 - Brainstorm: `knowledge-base/project/brainstorms/2026-02-26-cla-contributor-agreements-brainstorm.md`
 - Spec: `knowledge-base/project/specs/feat-cla-contributor-agreements/spec.md`
 - BSL migration learning: `knowledge-base/project/learnings/2026-02-24-bsl-license-migration-pattern.md`
@@ -174,12 +184,14 @@ Note: Only the 3 substantively affected legal docs get CLA cross-references. No 
 - Private doc generation: `knowledge-base/project/learnings/2026-02-21-private-document-generation-pattern.md`
 
 ### External References
-- Apache ICLA template: https://www.apache.org/licenses/icla.pdf
-- Apache CCLA template: https://www.apache.org/licenses/cla-corporate.pdf
-- CLA Assistant Action: https://github.com/cla-assistant/cla-assistant-action
-- BSL 1.1 text: https://mariadb.com/bsl11/
+
+- Apache ICLA template: <https://www.apache.org/licenses/icla.pdf>
+- Apache CCLA template: <https://www.apache.org/licenses/cla-corporate.pdf>
+- CLA Assistant Action: <https://github.com/cla-assistant/cla-assistant-action>
+- BSL 1.1 text: <https://mariadb.com/bsl11/>
 
 ### Related Work
+
 - Issue: #320
 - PR: #319 (draft)
 - Prior brainstorm: community contributor audit (2026-02-10, archived)

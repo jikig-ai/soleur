@@ -34,7 +34,7 @@ async function runSpike() {
 
   try {
     const q = query({
-      prompt: "Read the file at knowledge-base/brainstorms/test-brainstorm.md and summarize the key decisions. Then list all files in the knowledge-base directory.",
+      prompt: "Read the file at knowledge-base/project/brainstorms/test-brainstorm.md and summarize the key decisions. Then list all files in the knowledge-base directory.",
       options: {
         cwd: WORKSPACE_PATH,
         model: "claude-sonnet-4-6",

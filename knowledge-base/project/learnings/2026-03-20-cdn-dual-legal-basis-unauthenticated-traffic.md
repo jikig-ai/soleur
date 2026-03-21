@@ -7,6 +7,7 @@ The DPD Section 4.2 processor table listed Cloudflare's legal basis as blanket "
 ## Solution
 
 Changed the Cloudflare legal basis in the DPD processor table to a dual basis:
+
 - **Contract performance (Article 6(1)(b))** for authenticated users (who accepted the T&C)
 - **Legitimate interest (Article 6(1)(f))** for unauthenticated traffic (website operator's interest in secure, performant delivery)
 
@@ -24,5 +25,6 @@ Any processor that sits in front of a web application (CDN, WAF, reverse proxy, 
 2. GitHub API returned HTTP 502 during draft PR creation — transient error, PR was created successfully despite the warning
 
 ## Tags
+
 category: legal-compliance
 module: data-protection-disclosure

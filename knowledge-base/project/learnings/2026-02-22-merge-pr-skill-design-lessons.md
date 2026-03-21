@@ -191,6 +191,7 @@ concrete reason (e.g., a bash script that is too long to inline, a reference tab
 would bloat the skill description).
 
 Before ANY plan with:
+
 - New directories
 - External scripts
 - Sub-agents

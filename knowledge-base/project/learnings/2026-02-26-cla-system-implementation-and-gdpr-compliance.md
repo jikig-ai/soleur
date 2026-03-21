@@ -24,6 +24,7 @@ uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a
 ### 2. Signature Storage: Repo Branch > Gist
 
 Use repo-based storage on a dedicated `cla-signatures` branch instead of gist-based storage:
+
 - Gists must be owned by the org, not a personal account -- easy to get wrong
 - Repo branch keeps signatures under the same access controls, backup, and audit trail
 - Requires `contents: write` permission instead of a gist-scoped PAT
@@ -33,6 +34,7 @@ Use repo-based storage on a dedicated `cla-signatures` branch instead of gist-ba
 The workflow uses `pull_request_target` (runs with write access to base repo). Hard rule: **never add `actions/checkout` or `run:` steps** that could execute attacker-controlled code from fork PRs. The CLA action operates entirely via GitHub API.
 
 Additional security from review:
+
 - Remove `actions: write` permission (unnecessary, expands attack surface)
 - Add `github.event.issue.pull_request` guard on `issue_comment` trigger to prevent firing on plain issues
 
@@ -51,6 +53,7 @@ The GDPR policy was missed during initial implementation and caught by the archi
 ### 5. Same-Repo Storage Eliminates PAT Requirement
 
 The CLA action has two code paths for writing signatures:
+
 - **With `remote-organization-name`/`remote-repository-name`**: Uses `getPATOctokit()` which requires a real PAT
 - **Without those params**: Uses `getDefaultOctokitClient()` which uses `GITHUB_TOKEN`
 
@@ -86,6 +89,7 @@ The body filter was a review agent suggestion that broke signing -- always test 
 ### 8. `pull_request_target` Chicken-and-Egg
 
 Workflow changes to `pull_request_target` triggers can't be tested on the PR that introduces them -- the workflow runs from **main**, not the PR branch. Solutions:
+
 - Add admin bypass to the branch ruleset for bootstrapping
 - Merge the fix with `gh pr merge --admin`, then test on a subsequent PR
 - Remove the admin bypass after verification (or keep for maintainer convenience)
@@ -97,6 +101,7 @@ After a user signs via `issue_comment`, the CLA action records the signature but
 ### 10. Dual-Location Legal Docs
 
 Legal docs exist in two locations with different frontmatter:
+
 - `docs/legal/*.md` -- source, YAML frontmatter (`type`, `jurisdiction`, `generated-date`)
 - `plugins/soleur/docs/pages/legal/*.md` -- Eleventy site, different frontmatter (`layout`, `permalink`, `description`)
 

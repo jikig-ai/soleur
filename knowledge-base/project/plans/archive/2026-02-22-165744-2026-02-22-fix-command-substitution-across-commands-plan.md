@@ -8,7 +8,7 @@ date: 2026-02-22
 
 ## Overview
 
-Claude Code's security mechanism prompts users with "Command contains $() command substitution" when the Bash tool receives commands containing `$()`. Our command and skill markdown files contain bash code blocks with `$()` that the agent tries to execute, triggering this permission prompt repeatedly.
+Claude Code's security mechanism prompts users with "Command contains $() command substitution" when the Bash tool receives commands containing `$()`. Our command and skill markdown files contain bash code blocks with`$()` that the agent tries to execute, triggering this permission prompt repeatedly.
 
 v2.23.14 fixed the one-shot command but missed the 4 commands and 8+ skills that still contain `$()` in their bash code blocks.
 
@@ -45,12 +45,14 @@ Replace all `$()` command substitution in bash code blocks across commands and s
 ## Files to Modify
 
 ### Commands (4 files)
+
 1. `plugins/soleur/commands/soleur/brainstorm.md` - 3 occurrences (lines 276, 283, 319)
 2. `plugins/soleur/commands/soleur/plan.md` - 3 occurrences (lines 42, 642, 730)
 3. `plugins/soleur/commands/soleur/work.md` - 5 occurrences (lines 36, 49, 87, 88, 92)
 4. `plugins/soleur/commands/soleur/compound.md` - 1 occurrence (line 121)
 
 ### Skills (8+ files)
+
 5. `plugins/soleur/skills/git-worktree/SKILL.md` - 2 occurrences (lines 244, 267)
 6. `plugins/soleur/skills/compound-docs/SKILL.md` - 2 occurrences (lines 329, 439)
 7. `plugins/soleur/skills/ship/SKILL.md` - ~20 occurrences (heaviest)

@@ -48,5 +48,6 @@ Always fetch and check main before bumping: `git fetch origin main && git log --
 - CHANGELOG referenced wrong PR number (#312 issue vs #321 PR)
 
 ## Tags
+
 category: integration-issues
 module: schedule, marketplace, versioning

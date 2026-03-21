@@ -23,6 +23,7 @@
 ## Phase 3: Prompt Replacement (per workflow)
 
 Each prompt replacement has three sub-tasks:
+
 - (a) Replace authorization notice ("authorized to push" -> "Do NOT push directly to main")
 - (b) Replace commit/push block with PR-based pattern (branch + push + CLA status + PR + auto-merge)
 - (c) Use timestamp branch name format (`%Y-%m-%d-%H%M%S`), `${GITHUB_REPOSITORY}` for gh api, `[skip ci]` in commit message

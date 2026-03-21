@@ -1,7 +1,7 @@
 # Tasks: BYOK HKDF Per-User Key Derivation
 
 **Issue:** #676
-**Plan:** `knowledge-base/plans/2026-03-20-feat-byok-hkdf-envelope-encryption-plan.md`
+**Plan:** `knowledge-base/project/plans/2026-03-20-feat-byok-hkdf-envelope-encryption-plan.md`
 
 ## Phase 1: Database Migration
 

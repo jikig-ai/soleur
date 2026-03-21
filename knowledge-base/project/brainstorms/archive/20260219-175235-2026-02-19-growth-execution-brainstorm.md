@@ -19,6 +19,7 @@ The growth-strategist agent (v2.16.0) produces high-quality analysis but stops a
 The `seo-aeo` skill already solved this exact problem for technical SEO with its audit/fix/validate flow. We replicate that pattern for content-level concerns.
 
 Content writing is a separate skill because:
+
 - It serves contexts beyond growth strategy (changelogs, docs articles, brand announcements)
 - It has a different prerequisite model (hard brand guide requirement vs optional)
 - Clean separation: growth-strategist analyzes, content-writer creates
@@ -40,10 +41,12 @@ Content writing is a separate skill because:
 ### Component 1: `growth fix`
 
 **Changes to existing files:**
+
 - `agents/marketing/growth-strategist.md` -- Add "Execute (when requested)" step that applies rewrite suggestions via Edit tool
 - `skills/growth/SKILL.md` -- Add `growth fix <url-or-path>` sub-command; remove "no files written" constraint
 
 **Behavior:**
+
 1. Agent audits the target (same as `growth audit`)
 2. For each issue found, applies the fix using Edit tool
 3. Fixes: keyword injection in headings/body, FAQ section generation, definition paragraphs, meta description rewrites
@@ -56,21 +59,25 @@ Content writing is a separate skill because:
 ### Component 2: `content-writer` skill
 
 **New files:**
+
 - `skills/content-writer/SKILL.md` -- Skill definition
 
 **No new agent needed** -- content generation is the skill's direct responsibility, not domain analysis requiring a specialized agent.
 
 **Interface:**
+
 - `content-writer <topic>` -- Write article on topic
 - `content-writer <topic> --outline "..."` -- Write with provided outline
 - `content-writer <topic> --keywords "k1, k2, k3"` -- Target specific keywords
 - `content-writer <topic> --path blog/posts/` -- Specify output location
 
 **Prerequisites:**
+
 - Brand guide must exist (`knowledge-base/overview/brand-guide.md`)
 - Blog infrastructure must exist (if not, directs user to `docs-site` skill)
 
 **Pipeline (follows discord-content pattern):**
+
 1. Read brand guide Voice and Channel Notes sections
 2. Generate full article with Eleventy frontmatter, JSON-LD Article structured data
 3. Generate FAQ schema if topic warrants it

@@ -35,5 +35,6 @@ When a skill is invoked mid-pipeline, its expanded prompt becomes the model's pr
 2. One-shot pipeline stall — work skill's "Return control immediately" ended the turn prematurely
 
 ## Tags
+
 category: logic-errors
 module: plugins/soleur/skills/work, plugins/soleur/skills/one-shot

@@ -33,6 +33,7 @@ Note the `{ ...; }` grouping around `|| true` — without it, bash operator prec
 `docker restart` ≠ "restart with latest image." It restarts the same container with the same image it was created from. To apply a new image, you must destroy the container (`stop` + `rm`) and create a new one (`run`). This is a semantic distinction that is easy to miss — the command name suggests it does more than it does.
 
 ## Tags
+
 category: runtime-errors
 module: deploy, docker
 severity: critical

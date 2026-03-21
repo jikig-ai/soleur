@@ -16,6 +16,7 @@ Merge conflicts from stale branches and version bumps are the most frequent fric
 **Sections enhanced:** 5 (Proposed Solution, SpecFlow Analysis, MVP, Test Scenarios, References)
 
 ### Key Improvements
+
 1. Replaced `set -euo pipefail` with `set -eo pipefail` in the hook script -- `set -u` (nounset) causes unrecoverable exit on unset variables, but hooks must return JSON on failure, not crash silently; `set -e` already exits on error, and all variables are initialized before use
 2. Added `--force-if-includes` alongside `--force-with-lease` for defense-in-depth against stale remote state after background fetches
 3. Added edge case 9 (detached HEAD) and edge case 10 (hook re-entrancy) discovered during SpecFlow deepening
@@ -23,6 +24,7 @@ Merge conflicts from stale branches and version bumps are the most frequent fric
 5. Added `additionalContext` output on successful rebase so the agent sees confirmation of what the hook did
 
 ### New Considerations Discovered
+
 - The `git fetch origin main` in the hook only updates `refs/remotes/origin/main`, which does NOT weaken `--force-with-lease` for the feature branch push. The lease checks the feature branch's remote ref, not main's. This is a safe interaction.
 - PreToolUse hooks with side effects (rebase + push) are non-reversible if the subsequent tool call fails. This is acceptable because the rebase only makes the branch more current -- there is no scenario where being rebased on latest main is worse than being stale.
 - The `echo "$INPUT" | jq` pattern is safe with `pipefail` because jq returns 0 on valid JSON parse. However, the `grep -qE` calls require careful handling: grep returns exit code 1 when no match is found, which under `set -e` would terminate the script before it can return JSON. The `if ! ...; then` and `if echo ... | grep` patterns handle this correctly because the exit code is consumed by the conditional.
@@ -76,11 +78,13 @@ The constitution already states: "Prefer hook-based enforcement over documentati
 PreToolUse hooks are designed primarily for inspection (allow/deny/ask decisions). This hook introduces side effects (rebase + push) which is atypical. Analysis of the implications:
 
 **Safe because:**
+
 - The side effect (rebasing onto latest main) is always beneficial -- a branch that is current with main is never worse than a stale branch
 - If the subsequent `gh pr merge` fails for unrelated reasons, the rebase still leaves the branch in a better state
 - The hook returns `additionalContext` so the agent knows what happened, maintaining transparency
 
 **Risk mitigated by:**
+
 - `--force-with-lease --force-if-includes` ensures no remote work is overwritten
 - `git rebase --abort` on conflict ensures the working tree is always clean on exit
 - Network failures are fail-open, never blocking the agent unnecessarily
@@ -90,12 +94,14 @@ PreToolUse hooks are designed primarily for inspection (allow/deny/ask decisions
 Two options:
 
 **Option A: New script `pre-merge-rebase.sh`** (recommended)
+
 - Single responsibility: guardrails.sh blocks dangerous commands; pre-merge-rebase.sh automates a workflow step
 - The rebase hook has side effects (modifies the working tree); guardrails.sh is pure inspection
 - Easier to test and debug independently
 - Follows the pattern established by `worktree-write-guard.sh` (separate concerns)
 
 **Option B: Add a guard to `guardrails.sh`**
+
 - Fewer hook entries in settings.json
 - But violates the single-responsibility principle: guardrails.sh is a gatekeeping script (block/allow), not a workflow automation script (fetch/rebase)
 
@@ -138,6 +144,7 @@ If the branch is already ahead of or at `origin/main`, `git rebase origin/main` 
 
 **Edge case 3: Rebase conflict**
 If rebase fails (exit code non-zero), the script must:
+
 1. Capture conflicting file names from `git diff --name-only --diff-filter=U` BEFORE aborting
 2. Run `git rebase --abort` to restore the working tree
 3. Return `permissionDecision: "deny"` with a clear message listing the conflicting files
@@ -165,6 +172,7 @@ If the worktree is in detached HEAD state (e.g., after a failed previous operati
 
 **Edge case 10: Hook re-entrancy** (discovered during deepening)
 If the agent's `gh pr merge` command is part of a retry loop (e.g., merge failed, agent retries), the hook will run again. This is safe because:
+
 - If the first run already rebased and pushed, the merge-base check will show "already up-to-date" and the hook exits early
 - If the first run's rebase conflicted, the agent resolved it, and now retries -- the hook runs a fresh rebase which may succeed this time
 
@@ -375,7 +383,7 @@ Per [Atlassian's analysis](https://www.atlassian.com/blog/it-teams/force-with-le
 ## References
 
 - Issue: #390
-- Claude Code hooks API: https://code.claude.com/docs/en/hooks
+- Claude Code hooks API: <https://code.claude.com/docs/en/hooks>
 - Existing hook pattern: `.claude/hooks/guardrails.sh` (command interception)
 - Existing hook pattern: `.claude/hooks/worktree-write-guard.sh` (file path interception)
 - Learning: `knowledge-base/project/learnings/2026-02-26-worktree-enforcement-pretooluse-hook.md` (hook > documentation)

@@ -3,12 +3,12 @@
 ## Phase 1: Move Files
 
 - [ ] 1.0 Enable nullglob to prevent literal-string glob expansion: `shopt -s nullglob`
-- [ ] 1.1 Move 8 brainstorm files from `knowledge-base/brainstorms/` to `knowledge-base/project/brainstorms/`
-- [ ] 1.2 Move 30 learning files from `knowledge-base/learnings/` to `knowledge-base/project/learnings/`
+- [ ] 1.1 Move 8 brainstorm files from `knowledge-base/project/brainstorms/` to `knowledge-base/project/brainstorms/`
+- [ ] 1.2 Move 30 learning files from `knowledge-base/project/learnings/` to `knowledge-base/project/learnings/`
   - [ ] 1.2.1 Ensure `knowledge-base/project/learnings/build-errors/` exists before moving nested subdir file
-- [ ] 1.3 Move 39 plan files from `knowledge-base/plans/` to `knowledge-base/project/plans/`
+- [ ] 1.3 Move 39 plan files from `knowledge-base/project/plans/` to `knowledge-base/project/plans/`
   - [ ] 1.3.1 Ensure `knowledge-base/project/plans/archive/` exists before moving nested archive file
-- [ ] 1.4 Move 56 spec subdirectories (67 files) from `knowledge-base/specs/` to `knowledge-base/project/specs/`
+- [ ] 1.4 Move 56 spec subdirectories (67 files) from `knowledge-base/project/specs/` to `knowledge-base/project/specs/`
   - [ ] 1.4.1 Special case: merge `fix-playwright-version-mismatch/` -- move only `session-state.md` into existing target dir (which already has `tasks.md`)
 - [ ] 1.5 Restore nullglob: `shopt -u nullglob`
 
@@ -21,10 +21,10 @@
 
 ## Phase 3: Remove Empty Directories
 
-- [ ] 3.1 Remove empty `knowledge-base/brainstorms/`
-- [ ] 3.2 Remove empty `knowledge-base/learnings/` and `knowledge-base/learnings/build-errors/`
-- [ ] 3.3 Remove empty `knowledge-base/plans/` and `knowledge-base/plans/archive/`
-- [ ] 3.4 Remove empty `knowledge-base/specs/` and all 56 empty subdirectories
+- [ ] 3.1 Remove empty `knowledge-base/project/brainstorms/`
+- [ ] 3.2 Remove empty `knowledge-base/project/learnings/` and `knowledge-base/project/learnings/build-errors/`
+- [ ] 3.3 Remove empty `knowledge-base/project/plans/` and `knowledge-base/project/plans/archive/`
+- [ ] 3.4 Remove empty `knowledge-base/project/specs/` and all 56 empty subdirectories
 
 ## Phase 4: Add Prevention Guard
 

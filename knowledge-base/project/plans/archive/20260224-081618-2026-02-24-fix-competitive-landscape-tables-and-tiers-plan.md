@@ -13,6 +13,7 @@ date: 2026-02-24
 **Research conducted:** Markdown table formatting best practices, competitive landscape analysis frameworks, AI website/app builders (Lovable, Bolt, v0, Replit), AI co-founder platforms (Tanka, SoloCEO), all-in-one business platforms (Systeme.io), company formation services (Stripe Atlas, Firstbase), Notion AI 3.0 agents
 
 ### Key Improvements
+
 1. Added SoloCEO as a critical competitor -- the closest direct competitor to Soleur's "AI executive board" positioning, with 12 AI board members analyzing business simultaneously ($2,000 diagnostic, beta in 2026)
 2. Added Notion AI 3.0 as a competitor -- autonomous agents across workspace, integrates with Claude via MCP, broad but shallow across domains
 3. Restructured tier numbering recommendation: insert new tier as Tier 3 (renumber current Tiers 3-4 to 4-5) rather than appending as Tier 5, since CaaS platforms are closer substitutes than agent frameworks
@@ -20,6 +21,7 @@ date: 2026-02-24
 5. Added competitive landscape framework guidance: primary/secondary/tertiary categorization maps to the tiered structure
 
 ### New Considerations Discovered
+
 - SoloCEO ($2,000 diagnostic, 12 AI board members) is the most direct CaaS competitor and was missing from the original plan
 - Notion AI 3.0 (launched Sep 2025) added autonomous agents that can execute multi-step workflows -- broader platform overlap than previously assessed
 - The sub-category structure may be over-engineering the tier; consider a flat Tier 3 table with all CaaS competitors in one table, using the "Approach" column to distinguish website builders vs operations vs formation
@@ -145,14 +147,17 @@ After adding the new tier, update the "Structural advantages" and "Assessment" s
 ### Research sources
 
 **Competitive landscape frameworks:**
+
 - [Competitive Landscape Analysis for Startups: Guide 2026](https://qubit.capital/blog/competitive-landscape-analysis) -- primary/secondary/tertiary tier framework
 - [How to Do a Competitive Landscape Analysis (Klue)](https://klue.com/blog/competitive-landscape-analysis-guide) -- categorization best practices
 
 **Markdown formatting:**
+
 - [GitHub Docs: Organizing information with tables](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/organizing-information-with-tables) -- GFM table spec
 - [Tables in Markdown: Complete Guide](https://www.glukhov.org/post/2025/11/tables-in-markdown/) -- formatting best practices
 
 **Competitor research:**
+
 - [SoloCEO](https://soloceoai.com) -- AI executive board, 12 board members, $2,000 diagnostic
 - [Tanka AI](https://tanka.ai) -- AI co-founder, launched TechCrunch Sessions June 2025, memory-native
 - [Lovable.dev](https://lovable.dev) -- $20M ARR in 2 months, fastest-growing European startup
@@ -166,6 +171,7 @@ After adding the new tier, update the "Structural advantages" and "Assessment" s
 - [Carta Solo Founders Report 2025](https://carta.com/data/solo-founders-report/) -- 36.3% solo-founded companies
 
 **Market context:**
+
 - [Best AI App Builder 2026](https://getmocha.com/blog/best-ai-app-builder-2026/) -- Lovable vs Bolt vs v0 vs Mocha comparison
 - [AI Co-Founder: Is Tanka the Answer?](https://entrepreneurloop.com/ai-co-founder-tanka-solo-founder-overload-2026/) -- Tanka positioning analysis
 - [12 AI Tools Every Solo Founder Needs](https://entrepreneurloop.com/ai-tools-to-scale-solo-business/) -- tool landscape overview

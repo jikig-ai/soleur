@@ -18,12 +18,14 @@ The planning phase had no check for browser task automation. Once a task was lab
 ## What Actually Works
 
 Playwright MCP can automate ~95% of browser tasks:
+
 - Account signups (navigate, fill forms, click buttons)
 - App password generation (navigate settings, create, copy)
 - Settings configuration (toggle switches, fill fields)
 - Form submissions of all kinds
 
 The only genuinely manual steps are:
+
 - **CAPTCHA solving** (image-based challenges like hCaptcha)
 - **Interactive OAuth consent screens** (Google, GitHub OAuth dialogs)
 

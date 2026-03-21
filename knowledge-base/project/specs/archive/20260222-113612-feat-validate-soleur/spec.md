@@ -63,25 +63,31 @@ Before inviting external users, the product artifacts must tell a coherent story
 ## Test Scenarios
 
 ### Given a new user visits the root README
+
 **When** they read the "What is Soleur?" section
 **Then** they should understand it covers 5 business domains, not just engineering
 
 ### Given a new user installs via the registry
+
 **When** they read the plugin description
 **Then** it should reference company knowledge, not engineering knowledge
 
 ### Given the business-validator runs on a project with a brand guide
+
 **When** it reaches Gate 1 (Problem)
 **Then** it should have already read the brand guide and vision artifacts
 
 ### Given the business-validator produces an assessment
+
 **When** its conclusions contradict the brand guide
 **Then** it should flag the contradiction explicitly in the document
 
 ### Given the CPO reads a business-validation.md
+
 **When** the validation's framing contradicts brand-guide.md
 **Then** the CPO should flag the misalignment rather than consuming it uncritically
 
 ### Given the Getting Started page is loaded
+
 **When** a new user reads Common Workflows
 **Then** they should see non-engineering use cases alongside engineering ones

@@ -24,6 +24,7 @@ Soleur has no LinkedIn presence despite LinkedIn being the #1 platform for B2B d
 ### FR1: LinkedIn Content Generation (social-distribute)
 
 Generate two LinkedIn post variants per content piece:
+
 - **Company page variant**: official announcement tone, links to full content, professional framing
 - **Personal profile variant**: thought-leadership reflection, founder voice, case study / lessons-learned framing
 - Character limits: up to 3,000 characters; aim for 1,300 for optimal visibility
@@ -32,6 +33,7 @@ Generate two LinkedIn post variants per content piece:
 ### FR2: LinkedIn Monitoring (community-manager)
 
 Collect LinkedIn metrics and include them in community digests:
+
 - Follower count, impressions, engagement rate
 - Optional `## LinkedIn Metrics` heading in digest file contract
 - Platform detection via `LINKEDIN_ACCESS_TOKEN` environment variable
@@ -39,6 +41,7 @@ Collect LinkedIn metrics and include them in community digests:
 ### FR3: Hybrid API Script (linkedin-community.sh)
 
 Shell script following the pattern of `x-community.sh`:
+
 - `fetch-metrics`: returns LinkedIn page analytics (stubbed until API credentials available)
 - `fetch-activity`: returns recent post engagement (stubbed)
 - Manual mode: outputs guidance for manual metric collection when no credentials
@@ -47,6 +50,7 @@ Shell script following the pattern of `x-community.sh`:
 ### FR4: Credential Setup (linkedin-setup.sh)
 
 Credential validation script following `x-setup.sh` pattern:
+
 - Validate required env vars: `LINKEDIN_ACCESS_TOKEN`, `LINKEDIN_ORGANIZATION_ID`
 - Test API connectivity
 - Report token expiry status (60-day refresh tokens)
@@ -54,6 +58,7 @@ Credential validation script following `x-setup.sh` pattern:
 ### FR5: Brand Guide LinkedIn Channel Notes
 
 Add `### LinkedIn` section under `## Channel Notes` in `knowledge-base/marketing/brand-guide.md`:
+
 - Thought leadership, case studies, reflective posts
 - Professional but authentic tone (distinct from X's brevity)
 - Tuesday-Thursday morning cadence
@@ -62,6 +67,7 @@ Add `### LinkedIn` section under `## Channel Notes` in `knowledge-base/marketing
 ### FR6: Content Publisher LinkedIn Support
 
 Add `linkedin` to `content-publisher.sh`:
+
 - `channel_to_section()` case statement for LinkedIn
 - LinkedIn publishing logic (manual copy guidance until API available)
 
@@ -75,6 +81,7 @@ Add `linkedin` to `content-publisher.sh`:
 ### TR1: Script Pattern Conformance
 
 `linkedin-community.sh` must follow the established pattern:
+
 - Same argument interface as `x-community.sh` and `discord-community.sh`
 - `set -euo pipefail` header
 - Exit codes: 0 success, 1 missing credentials, 2 API error
@@ -82,12 +89,14 @@ Add `linkedin` to `content-publisher.sh`:
 ### TR2: Platform Detection
 
 Add LinkedIn to the community skill's platform detection table:
+
 - Required env vars: `LINKEDIN_ACCESS_TOKEN`
 - Optional env vars: `LINKEDIN_ORGANIZATION_ID` (for company page)
 
 ### TR3: Scheduled Workflow
 
 Update `.github/workflows/scheduled-community-monitor.yml`:
+
 - Add LinkedIn env vars to secrets section
 - Add LinkedIn data collection to prompt instructions
 

@@ -45,10 +45,12 @@ This plan covers two work streams: (1) hardening the 11 scripts with proper IS_B
 ### Research Insights
 
 **Security (from security-sentinel review):**
+
 - The `.env` files written to bare root are a credential exposure risk. If the bare root is served or shared differently from the working tree, secrets could be exposed. This elevates the community setup scripts (discord, x, bsky) from "cosmetic fix" to "security hardening."
 - The `generate-article-30-register.sh` script generates GDPR-regulated content. A crash in bare context is acceptable (fail-closed), but the error message should be informative.
 
 **Pattern consistency (from pattern-recognition review):**
+
 - All 7 Category 1 scripts use one of two patterns: `PROJECT_ROOT=$(... 2>/dev/null) || PROJECT_ROOT="."` or `repo_root="$(... 2>/dev/null || pwd)"`. After this change, all should use the identical `source` + variable assignment pattern.
 - The community scripts (discord, x, bsky) have nearly identical `cmd_write_env` and `cmd_verify` functions. The bare repo fix is a good opportunity to ensure consistency but not to refactor their shared structure (that would be scope creep).
 
@@ -85,24 +87,28 @@ Option 2 (rejected): Inline the pattern. This was already rejected as Approach B
 **Concrete source pattern per script category:**
 
 Hooks (`plugins/soleur/hooks/*.sh`):
+
 ```bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../scripts/resolve-git-root.sh"
 ```
 
 Scripts (`plugins/soleur/scripts/*.sh`):
+
 ```bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/resolve-git-root.sh"
 ```
 
 Community scripts (`plugins/soleur/skills/community/scripts/*.sh`):
+
 ```bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../../../scripts/resolve-git-root.sh"
 ```
 
 Top-level scripts (`scripts/*.sh`):
+
 ```bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../plugins/soleur/scripts/resolve-git-root.sh"
@@ -157,12 +163,14 @@ fi
 ```
 
 **Key details:**
+
 - `unset _git_dir` -- clean up the temporary variable to avoid polluting the caller's namespace
 - `return 1` (not `exit 1`) -- sourced scripts must never call `exit`
 - The `2>/dev/null` on `--is-bare-repository` handles the edge case where `git` is not installed or CWD is not a repo at all
 - No `set` commands -- the caller controls strict mode
 
 **From shell-script-defensive-patterns learning:**
+
 - Validate that `GIT_ROOT` resolves to an actual directory after detection: `[[ -d "$GIT_ROOT" ]]`
 - This catches the edge case where `--absolute-git-dir` returns a path that has been deleted or moved
 
@@ -200,6 +208,7 @@ Each has two functions using `repo_root`. The `repo_root` variable is local to e
 
 **generate-article-30-register.sh (30 lines, simplest but needs guard):**
 Uses `cd "$(git rev-parse --show-toplevel)"` to navigate to repo root. In bare context, the template file does not exist on disk (no working tree). The script should exit with a clear error. After sourcing, add:
+
 ```bash
 if [[ "$IS_BARE" == "true" ]]; then
   echo "Error: Cannot generate Article 30 register from bare repo root." >&2
@@ -232,6 +241,7 @@ The function currently has a guard against running on main/master but no IS_BARE
 
 **`list_worktrees()` (code-simplicity review):**
 The "Main repository" section (lines 262-266) is the only part that needs an IS_BARE guard. Replace the entire block with:
+
 ```bash
 echo ""
 if [[ "$IS_BARE" == "true" ]]; then
@@ -327,6 +337,7 @@ fi
 ```
 
 **Edge cases to handle:**
+
 - `.claude/hooks/` directory does not exist on disk (first run) -- the glob produces no results, which is fine
 - `.claude/hooks/` exists in git but has no files -- `git ls-tree` returns empty, which triggers removal of all on-disk hooks. This is correct behavior
 - Non-hook files in the directory (e.g., `.DS_Store`) -- the cleanup should only remove `.sh` files or files that match the git list. Safer: only remove files that were previously synced (tracked via a manifest), but that adds complexity. Simpler: remove any file whose name is not in git HEAD. Accept that manually placed files will be removed (this is documented behavior for sync)
@@ -383,6 +394,7 @@ fi
 ## Dependencies and Risks
 
 **Dependencies:**
+
 - PR #609 must be merged first (provides the baseline IS_BARE pattern) -- already merged as of this plan
 
 **Risks:**

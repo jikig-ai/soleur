@@ -13,6 +13,7 @@ Add `/soleur:go` as a thin router that classifies user intent and delegates to e
 ## Divergences from Brainstorm
 
 The brainstorm proposed moving 6 commands to skills and using bare `/soleur`. Planning revealed:
+
 - Bare `/soleur` is not supported by the plugin loader (commands require `namespace:name` format)
 - Command-to-skill migration has zero user-facing benefit (invocation syntax is identical) but 5 critical risks (naming collision, argument passthrough, one-shot pipeline breakage, 53+ cross-references, ship/compound reference breakage)
 
@@ -49,6 +50,7 @@ argument-hint: "[what you want to do]"
 Domain leader routing stays in brainstorm -- the router has zero domain awareness.
 
 **Implementation notes:**
+
 - Use `#$ARGUMENTS` template syntax and angle-bracket placeholders per constitution rules (no shell variable expansion)
 - If command exceeds 100 lines, extract intent classification into a reference file
 

@@ -25,6 +25,7 @@ Adding content item #7 requires editing 3 files (bash script case statement, wor
 **Directory-driven content discovery** with self-describing content files. Each `.md` file in `distribution-content/` declares its own metadata via YAML frontmatter (`title`, `type`, `publish_date`, `channels`, `status`). The script scans the directory instead of switching on integers. A daily cron publishes files where `publish_date == today` and `status: scheduled`.
 
 **Scope changes from brainstorm:**
+
 - Reddit API automation deferred (90/10 rule, domain reputation risk, November 2025 API registration changes)
 - Social-distribute skill update deferred to follow-up issue (different kind of change with different risks)
 - Campaign calendar deferred (derived artifact — write when needed, not a code dependency)
@@ -198,6 +199,7 @@ Modify `.github/workflows/scheduled-content-publisher.yml`:
 ```
 
 **Status-update-commit details:**
+
 - **Commit message:** `ci: update content distribution status [skip ci]` — the `[skip ci]` prevents workflow recursion (push doesn't trigger another workflow run)
 - **Push target:** Direct to `main`. This is bot-generated metadata (status flag), not code. Per learnings: direct push is simpler and more reliable than PR flow for fully-overwritten bot content.
 - **Race condition:** If someone pushes to main between checkout and status push, the push fails. The workflow's `concurrency: cancel-in-progress: false` prevents overlapping cron runs. Manual + cron overlap is a theoretical risk but practically eliminated by the `concurrency` group name. If the push fails, content stays `scheduled` and will retry next cron run.
@@ -245,10 +247,12 @@ Modify `.github/workflows/scheduled-content-publisher.yml`:
 ## Dependencies & Risks
 
 **Dependencies:**
+
 - Existing `x-community.sh` and Discord webhook infrastructure (stable, no changes needed)
 - GitHub Actions secrets for X API credentials (already configured)
 
 **Risks:**
+
 - **Frontmatter parsing fragility in bash:** Mitigated by using the established `awk` counter pattern and simple flat fields. No nested YAML, no list parsing.
 - **X API HTTP 402 (pay-per-use billing):** Already handled by existing fallback issue creation. `create_dedup_issue()` preserved for this.
 - **Status push to main from CI:** Mitigated by `[skip ci]` commit message, `concurrency` group, and the fact that content-publisher triggers on `schedule`/`workflow_dispatch`, not `push`.
@@ -265,6 +269,7 @@ These were scoped out during review to keep this PR focused:
 ## References & Research
 
 ### Internal References
+
 - Brainstorm: `knowledge-base/project/brainstorms/2026-03-12-unified-marketing-campaign-brainstorm.md`
 - Spec: `knowledge-base/project/specs/feat-unified-marketing-campaign/spec.md`
 - Current publisher: `scripts/content-publisher.sh` (resolve_content at case statement, extract_section at line 36)
@@ -274,6 +279,7 @@ These were scoped out during review to keep this PR focused:
 - Community scripts: `plugins/soleur/skills/community/scripts/x-community.sh`
 
 ### Institutional Learnings Applied
+
 - Multi-platform publisher error propagation (exit code 2 for partial failure)
 - X API pay-per-use billing and web fallback (HTTP 402 handling)
 - awk scoping for YAML frontmatter parsing (counter pattern, not sed ranges)
@@ -283,6 +289,7 @@ These were scoped out during review to keep this PR focused:
 - GitHub Actions auto-push vs PR for bot content (direct push for bot metadata)
 
 ### Related Work
+
 - Issue: #549
 - PR: #556 (draft)
 - Current campaign plan: `knowledge-base/project/specs/feat-product-strategy/distribution-plan.md`

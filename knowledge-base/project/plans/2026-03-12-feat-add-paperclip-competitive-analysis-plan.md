@@ -14,11 +14,13 @@ semver: patch
 **Research sources:** WebFetch (paperclip.ing), WebSearch (3 queries), GitHub API (repo metadata), 3 institutional learnings
 
 ### Key Improvements
+
 1. Grounded all Paperclip claims with verified data from live site fetch and GitHub API (19.6k stars, 2.5k forks in 10 days)
 2. Refined the business-validation.md row to accurately reflect Paperclip's architecture (infrastructure orchestration layer, agent-runtime-agnostic, Node.js/React stack)
 3. Added strategic positioning analysis: Paperclip is infrastructure-layer (like Kubernetes for agents), not a CaaS product (like Polsia/Soleur) -- this distinction matters for the differentiation column
 
 ### New Considerations Discovered
+
 - Paperclip's explosive GitHub traction (19.6k stars in 10 days) signals strong developer interest in zero-human company infrastructure
 - Paperclip is explicitly "not an agent framework" and "not for single-agent deployments" -- it is the org chart layer above agent runtimes, which positions it as complementary infrastructure rather than a direct CaaS competitor
 - "Clipmart" (company template marketplace) is announced but not yet live -- monitor for CaaS convergence
@@ -53,8 +55,8 @@ Paperclip is an open-source (MIT-licensed), self-hosted orchestration platform f
 
 | Attribute | Value |
 |---|---|
-| URL | https://paperclip.ing/ |
-| GitHub | https://github.com/paperclipai/paperclip |
+| URL | <https://paperclip.ing/> |
+| GitHub | <https://github.com/paperclipai/paperclip> |
 | Stars | 19,614 (as of 2026-03-12) |
 | Forks | 2,479 |
 | Created | 2026-03-02 (10 days ago) |
@@ -66,6 +68,7 @@ Paperclip is an open-source (MIT-licensed), self-hosted orchestration platform f
 | Open Issues | 420 |
 
 **Core Features (verified from site):**
+
 - **Org chart with hierarchies:** Roles (CEO, CTO, engineers, designers, marketers), reporting lines, multi-company support with data isolation
 - **Goal alignment:** Cascading goals from company mission to individual tasks, SKILLS.md for agent context discovery
 - **Heartbeat scheduling:** Agents wake on schedules, check work, act; delegation flows up and down the org chart
@@ -76,6 +79,7 @@ Paperclip is an open-source (MIT-licensed), self-hosted orchestration platform f
 - **Portable company templates:** Revisioned configs with rollback, secret scrubbing, "Clipmart" template marketplace coming soon
 
 **What Paperclip is NOT (from their own positioning):**
+
 - Not a chatbot interface
 - Not an agent framework (does not dictate agent design)
 - Not a drag-and-drop workflow builder
@@ -100,6 +104,7 @@ Paperclip occupies a distinct niche within Tier 3. It is infrastructure-layer or
 19.6k GitHub stars in 10 days is among the fastest-growing open-source AI projects of 2026. For comparison, Polsia achieved $1M ARR in its first month with a proprietary approach. Paperclip's open-source approach attracts developers while Polsia attracts non-technical founders. Different audiences, same thesis.
 
 **Convergence Risk Assessment:**
+
 - **Low immediate threat.** Paperclip does not compete directly with Soleur -- it lacks domain-specific agents, compounding knowledge, and workflow orchestration (brainstorm > plan > work > review > compound).
 - **Medium-term watch.** If Clipmart launches pre-built company templates with domain-specific agents, convergence risk increases. Monitor monthly.
 - **Complementary potential.** Paperclip could become the orchestration layer beneath Soleur's agents, especially for multi-model deployments.
@@ -149,7 +154,7 @@ Add a new row to the Tier 3 table in `knowledge-base/overview/business-validatio
 
 Invoke `/soleur:competitive-analysis --tiers 0,3` to trigger the competitive-intelligence agent. The agent will:
 
-1. WebFetch https://paperclip.ing/ to verify claims and gather details
+1. WebFetch <https://paperclip.ing/> to verify claims and gather details
 2. WebSearch for Paperclip news, traction, pricing
 3. Read brand-guide.md and business-validation.md for positioning context
 4. Write updated report to competitive-intelligence.md with Paperclip in Tier 3 overlap matrix

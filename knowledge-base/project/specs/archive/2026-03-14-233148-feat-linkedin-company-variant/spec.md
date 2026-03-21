@@ -24,6 +24,7 @@ Issue #593 is gated on two conditions: (1) a LinkedIn company page must exist, a
 ### FR1: LinkedIn Company Page Creation (linkedin-setup.sh)
 
 Playwright MCP guided workflow:
+
 - Navigate to LinkedIn company page creation form
 - Fill company details from `site.json` and brand guide (name, description, industry, logo)
 - Pause for human on auth steps (login, MFA, CAPTCHA)
@@ -33,12 +34,14 @@ Playwright MCP guided workflow:
 ### FR2: Content Section Migration
 
 One-time migration of existing content files:
+
 - Rename `## LinkedIn` → `## LinkedIn Personal` across all files in `knowledge-base/marketing/distribution-content/`
 - Update social-distribute SKILL.md section references
 
 ### FR3: LinkedIn Company Page Variant (social-distribute)
 
 Add Phase 5.7 to social-distribute:
+
 - Official announcement tone, third-person ("Soleur now supports...")
 - ~1300 chars optimal, 3000 max
 - UTM: `utm_source=linkedin-company&utm_medium=social&utm_campaign=<slug>`
@@ -47,6 +50,7 @@ Add Phase 5.7 to social-distribute:
 ### FR4: Content-Publisher Channel Mapping
 
 Update `channel_to_section()` in `content-publisher.sh`:
+
 - `linkedin-personal` → `"LinkedIn Personal"`
 - `linkedin-company` → `"LinkedIn Company Page"`
 - Remove old `linkedin` → `""` mapping
@@ -55,6 +59,7 @@ Update `channel_to_section()` in `content-publisher.sh`:
 ### FR5: Brand Guide Update
 
 Add `### LinkedIn Company Page` Channel Notes:
+
 - Official announcement tone
 - Third-person company voice
 - Product updates, feature announcements, milestones
@@ -65,6 +70,7 @@ Add `### LinkedIn Company Page` Channel Notes:
 ### TR1: Playwright MCP Integration
 
 Follow established patterns:
+
 - Use absolute paths for all MCP file outputs (worktree-safe)
 - Pause for human input on security-sensitive steps only
 - Handle session timeouts and unexpected modals gracefully
@@ -72,6 +78,7 @@ Follow established patterns:
 ### TR2: Sed Migration Safety
 
 Content file migration must:
+
 - Only replace `## LinkedIn` at line start (not mid-line references)
 - Preserve all other content unchanged
 - Be idempotent (running twice produces same result)
@@ -84,6 +91,7 @@ Content file migration must:
 ### TR4: Error Handling (content-publisher)
 
 Follow learning from `2026-03-11-multi-platform-publisher-error-propagation.md`:
+
 - Return 0 for skips (missing credentials), 1 for failures
 - Create fallback GitHub issues on failure
 - Use exit code 2 for partial failure

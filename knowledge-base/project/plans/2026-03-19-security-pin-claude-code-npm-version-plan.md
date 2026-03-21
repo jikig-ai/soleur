@@ -13,12 +13,14 @@ date: 2026-03-19
 **Research sources:** npm security best practices (OpenSSF, Endor Labs), Docker build best practices, npm registry immutability guarantees, institutional learnings from docker-base-image-digest-pinning
 
 ### Key Improvements
+
 1. Added research-backed rationale for why version pinning (not integrity hashing) is the correct approach for global npm installs
 2. Added Dockerfile inline comment convention matching existing codebase pattern from #801
 3. Identified additional follow-up issue: `node:22-slim` base image in web-platform also unpinned
 4. Confirmed npm registry immutability guarantee makes version pinning equivalent to digest pinning for npm packages
 
 ### New Considerations Discovered
+
 - Global `npm install -g` has no lockfile mechanism -- version pinning is the only available control
 - npm registry guarantees published package versions are immutable (content-addressed storage) -- unlike Docker tags, an npm version string cannot be re-published with different content
 - The `npm unpublish` window is 72 hours for new packages; after that, versions are permanently immutable
@@ -46,12 +48,14 @@ Without a version pin, `npm install -g` resolves to `@latest` at build time. A c
 ### Research Insights
 
 **Why this matters (supply-chain risk):**
+
 - The npm ecosystem has experienced multiple supply-chain attacks via package takeover and typosquatting (event-stream, ua-parser-js, colors.js)
 - `npm install -g` with no version pin is equivalent to Docker's `FROM image:latest` -- it resolves to whatever is current at build time
 - Unlike local project dependencies (which have `package-lock.json` for integrity verification), global installs have no lockfile mechanism -- version pinning is the only available control
 - OpenSSF npm best practices explicitly recommend pinning all dependency versions in CI/CD environments
 
 **Why version pinning is sufficient (no digest equivalent needed):**
+
 - The npm registry guarantees that once a package version is published, its contents are immutable (content-addressed storage via SHA-512)
 - `npm unpublish` is restricted to a 72-hour window for packages with fewer than 300 weekly downloads; established packages like `@anthropic-ai/claude-code` cannot be unpublished and re-published with different content
 - This makes npm version strings functionally equivalent to Docker image digests for immutability purposes
@@ -131,7 +135,7 @@ docker run --rm <image> npx claude --version
 - Related PR: #801 (base image digest pinning)
 - Related issue: #794 (base image pinning)
 - Learning: `knowledge-base/project/learnings/2026-03-19-docker-base-image-digest-pinning.md`
-- npm registry: https://www.npmjs.com/package/@anthropic-ai/claude-code
+- npm registry: <https://www.npmjs.com/package/@anthropic-ai/claude-code>
 - [OpenSSF npm Best Practices for the Supply Chain](https://openssf.org/blog/2022/09/01/npm-best-practices-for-the-supply-chain/)
 - [How to Defend Against NPM Supply Chain Attacks (Endor Labs)](https://www.endorlabs.com/learn/how-to-defend-against-npm-software-supply-chain-attacks)
 - [How to Pin Package Versions in Dockerfiles (OneUptime)](https://oneuptime.com/blog/post/2026-02-08-how-to-pin-package-versions-in-dockerfiles-for-reproducible-builds/view)

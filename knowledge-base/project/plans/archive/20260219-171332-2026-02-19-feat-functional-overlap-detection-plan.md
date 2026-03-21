@@ -54,6 +54,7 @@ Create `plugins/soleur/agents/engineering/discovery/functional-discovery.md`.
 **Frontmatter:** Must include name, description (third person), model field, and example block with user/assistant/commentary dialogue. Follow the exact format of `agent-finder.md`.
 
 **Input from spawning command:**
+
 - `feature_description`: the plan feature description text
 
 **Agent flow:**
@@ -81,6 +82,7 @@ Create `plugins/soleur/agents/engineering/discovery/functional-discovery.md`.
 7. **Report:** Summary of results (N found, M installed, X skipped, registries queried Y/3).
 
 **Error handling** (copy from agent-finder):
+
 - Timeout or connection error: treat registry as zero results, continue with others
 - HTTP 401/403: log warning, skip registry
 - Malformed JSON: treat as zero results
@@ -88,6 +90,7 @@ Create `plugins/soleur/agents/engineering/discovery/functional-discovery.md`.
 - Zero results after filtering: report "No community overlap found. Continuing." -- no user prompt
 
 Files:
+
 - Create: `plugins/soleur/agents/engineering/discovery/functional-discovery.md`
 
 #### Phase 2: Integrate into Plan Command
@@ -113,6 +116,7 @@ and present install/skip suggestions."
 **Always runs** -- unlike Phase 1.5 which is conditional on stack gaps. Any feature could have community overlap regardless of technology stack. The 5-second timeout per registry keeps latency bounded.
 
 Files:
+
 - Modify: `plugins/soleur/commands/soleur/plan.md` (add Phase 1.5b section, ~25 lines)
 
 #### Phase 3: Version Bump and Documentation
@@ -125,6 +129,7 @@ Files:
 - Note: agents auto-discover via `docs/_data/agents.js` filesystem walk -- no manual docs registration needed
 
 Files:
+
 - Modify: `plugins/soleur/.claude-plugin/plugin.json`
 - Modify: `plugins/soleur/CHANGELOG.md`
 - Modify: `plugins/soleur/README.md`
@@ -162,10 +167,12 @@ Files:
 ## Dependencies & Risks
 
 **Dependencies:**
+
 - Registry APIs (`api.claude-plugins.dev`, `claudepluginhub.com`) must remain available and maintain current response formats
 - Anthropic marketplace JSON must remain at current GitHub raw URL
 
 **Risks:**
+
 - Registry search with raw feature descriptions may yield noisy results (mitigated: trust filtering removes low-quality; v2 can add LLM query generation)
 - Always-on check adds latency to every plan run (mitigated: 5s timeout, parallel with other plan steps)
 

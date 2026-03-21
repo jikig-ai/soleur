@@ -14,6 +14,7 @@ semver: patch
 **Research sources used:** Renovate official docs (Docker, GitHub Actions, regex manager, scheduling, onboarding), CLA workflow analysis, institutional learnings (3 applied)
 
 ### Key Improvements
+
 1. **Corrected npm-in-Dockerfile claim**: Renovate's Dockerfile manager only handles `FROM` image references, not `RUN npm install` -- added `customManagers` regex config to cover this gap
 2. **CLA compatibility already solved**: `renovate[bot]` is pre-allowlisted in `.github/workflows/cla.yml` line 34 -- risk downgraded from Medium to None
 3. **Fixed JSON comment syntax**: `renovate.json` does not support comments -- switched to `renovate.json5` format or removed comments
@@ -22,6 +23,7 @@ semver: patch
 6. **Applied institutional learnings**: CLA ruleset behavior, bypass actor limitations, and synthetic status check patterns from project knowledge base
 
 ### New Considerations Discovered
+
 - Renovate onboarding PR can be skipped by committing config before app installation
 - Claude Code Review workflow (`.github/workflows/claude-code-review.yml`) will run on all Renovate PRs, consuming API credits on trivial digest changes
 - The `customManagers` regex approach for npm pins inside Dockerfiles requires explicit `matchStrings` patterns -- not auto-discovered
@@ -39,6 +41,7 @@ Digest-pinned Docker images and SHA-pinned GitHub Actions are immutable referenc
 ### Research Insights
 
 **Supply-chain attack surface inventory:**
+
 - `apps/web-platform/Dockerfile:1` -- `node:22-slim@sha256:4f77a690...` (pinned in #814)
 - `apps/telegram-bridge/Dockerfile:1` -- `oven/bun:1.3.11@sha256:0733e503...` (pinned in #801)
 - `apps/web-platform/Dockerfile:4` -- `npm install -g @anthropic-ai/claude-code@2.1.79` (pinned in #803)
@@ -79,6 +82,7 @@ Renovate wins on custom regex manager flexibility and built-in auto-merge. Both 
 Renovate runs as a GitHub App, not a GitHub Actions workflow. The org admin must install the Renovate app from [github.com/apps/renovate](https://github.com/apps/renovate) and grant it access to `jikig-ai/soleur`. This is a one-time manual step -- Renovate cannot be installed programmatically (requires OAuth consent).
 
 After installation, Renovate will:
+
 1. Open an onboarding PR with the detected dependency inventory -- OR skip onboarding if `renovate.json5` is already committed to the default branch
 2. Begin opening update PRs according to configuration
 
@@ -136,6 +140,7 @@ After installation, Renovate will:
 ```
 
 Key design choices:
+
 - **Extends `config:recommended`**: Sensible defaults, enables minor/patch updates
 - **`docker:pinDigests`**: Ensures new Dockerfile images get pinned and existing pins are rotated
 - **`helpers:pinGitHubActionDigests`**: Keeps Actions SHA pins current, preserves `# vX.Y.Z` comments
@@ -207,6 +212,7 @@ To cover the `@anthropic-ai/claude-code@2.1.79` npm version pins in both Dockerf
 ```
 
 This regex:
+
 - Matches `npm install -g @scope/package@version` patterns
 - Uses ECMAScript regex flavor (Renovate requirement)
 - Extracts `depName` (e.g., `@anthropic-ai/claude-code`) and `currentValue` (e.g., `2.1.79`)

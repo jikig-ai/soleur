@@ -153,5 +153,6 @@ This is the consolidated checklist for future product additions. Each step refer
 Legal document updates that add a new product have two orthogonal dimensions of completeness: *structural* (new sections in the right order) and *referential* (existing text updated everywhere). Plans naturally focus on the structural dimension because new sections are the visible deliverable. The referential dimension is invisible until grep makes it visible. Running the exhaustive grep BEFORE implementation -- and classifying every match with an explicit action or justification -- is the single highest-leverage prevention step. It converts an unbounded "did I miss anything?" question into a bounded checklist.
 
 ## Tags
+
 category: legal-compliance
 module: legal-docs

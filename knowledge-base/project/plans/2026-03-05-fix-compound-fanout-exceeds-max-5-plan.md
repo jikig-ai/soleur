@@ -60,6 +60,7 @@ Merge subagent #5 (Category Classifier) into subagent #6 (Documentation Writer).
 ### Research Insights
 
 **Prior art confirms this pattern.** The project has three documented cases of plan review reducing scope by merging components:
+
 - `2026-03-03-deviation-analyst-scope-reduction.md`: 7+ files reduced to ~60 lines in 1 file (60% reduction)
 - `2026-02-22-plan-review-collapses-agent-architecture.md`: 3 agents collapsed to 23 lines of inline instructions
 - `2026-02-09-parallel-subagent-fan-out-in-work-command.md`: established the "max 5 groups" pattern that compound adopted

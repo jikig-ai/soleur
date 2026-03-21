@@ -41,6 +41,7 @@ Keep `soleur/` core at command root, domain dirs only for additions. Rejected fo
 1. **Single plugin, namespaced by domain** -- No separate plugins per domain. Everything stays in `plugins/soleur/` but organized under domain subdirectories.
 
 2. **Domain-first with shared tier** -- The target structure:
+
    ```
    agents/
      shared/           # Cross-domain agents
@@ -93,25 +94,31 @@ Keep `soleur/` core at command root, domain dirs only for additions. Rejected fo
 ## Classification Guide
 
 ### Shared Components (cross-domain)
+
 - **Agents:** learnings-researcher, repo-research-analyst, best-practices-researcher, framework-docs-researcher, git-history-analyzer, pr-comment-resolver, spec-flow-analyzer
 - **Commands:** brainstorm, plan, work, review, sync, compound, changelog, triage, lfg, ship, help, deepen-plan, plan-review
 - **Skills:** brainstorming, git-worktree, spec-templates, compound-docs, file-todos, rclone, agent-browser, skill-creator, create-agent-skills, user-story-writer, gemini-imagegen, every-style-editor
 
 ### Engineering Components
+
 - **Agents:** All review/* agents (code-quality-analyst, security-sentinel, performance-oracle, etc.), ddd-architect, architecture-strategist, legacy-code-expert
 - **Commands:** resolve_parallel, resolve_pr_parallel, resolve_todo_parallel, test-browser, agent-native-audit, deploy-docs, release-docs, xcode-test, reproduce-bug
 - **Skills:** dhh-rails-style, atdd-developer, andrew-kane-gem-writer, frontend-design, dspy-ruby, agent-native-architecture
 
 ### Product Components
+
 - Empty initially. Will house design, branding, user research, and prototyping tools.
 
 ### Growth Components
+
 - Empty initially. Will house marketing, sales, content, SEO, and analytics tools.
 
 ### Operations Components
+
 - Empty initially. Will house finance, legal, HR, admin, and compliance tools.
 
 ### Support Components
+
 - Empty initially. Will house customer success, onboarding, and retention tools.
 
 ## Open Questions

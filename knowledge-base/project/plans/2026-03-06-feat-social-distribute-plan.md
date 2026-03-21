@@ -54,6 +54,7 @@ User invokes /soleur:social-distribute <blog-path>
 ### Template Variable Handling
 
 Blog posts contain Nunjucks variables (`{{ stats.agents }}`, `{{ site.url }}`). Rather than reimplementing template resolution, the skill:
+
 1. Runs simple shell commands to get current counts: `find agents -name '*.md' | wc -l` etc.
 2. Reads `plugins/soleur/docs/_data/site.json` for `site.url`
 3. Passes the raw article content plus current stats as context to the LLM generation prompt
@@ -81,6 +82,7 @@ Same curl pattern as discord-content but with `allowed_mentions`:
 ### Brand Guide Channel Notes (New Sections)
 
 Exact heading strings (skill parses by heading contract):
+
 - `### X/Twitter` — Thread format, 280-char limit, hook-first, numbering convention, link placement
 - IndieHackers, Reddit, HN channel notes deferred until posting history exists (v2)
 
@@ -101,6 +103,7 @@ Exact heading strings (skill parses by heading contract):
 ### File Registration (6-file checklist)
 
 New skill requires updates to:
+
 1. `plugins/soleur/skills/social-distribute/SKILL.md` — Skill definition
 2. `plugins/soleur/docs/_data/skills.js` — Add to `SKILL_CATEGORIES` map
 3. `plugins/soleur/README.md` — Update skill count and add to skill table

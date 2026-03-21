@@ -15,11 +15,13 @@ closes: "#571"
 **Research method:** Local codebase verification (grep, file existence checks)
 
 ### Key Improvements
+
 1. Verified all 6 target files exist at their new locations -- path mapping confirmed correct
 2. Clarified that #569 is an open issue (not yet merged) -- the overview/ directory still exists; stale refs are exclusively from #566
 3. Quantified out-of-scope stale references: 40+ additional stale refs exist in plans/, specs/, plugins/, and AGENTS.md -- filed as a follow-up concern
 
 ### New Considerations Discovered
+
 - The `pricing-strategy.md` footer (line 208) also references source files by bare name without path -- these are not broken but could become ambiguous as files spread across domains
 - The `competitive-intelligence.md` Cascade Results table (lines 213-214) records historical agent output paths -- updating these is technically a history rewrite, but the paths serve as current cross-references, not audit logs, so updating is correct
 
@@ -50,6 +52,7 @@ Two files contain outdated `knowledge-base/overview/` path references:
 ### Verification Results
 
 All 6 target files confirmed to exist at their new locations:
+
 - `knowledge-base/marketing/brand-guide.md` -- exists
 - `knowledge-base/marketing/marketing-strategy.md` -- exists
 - `knowledge-base/marketing/content-strategy.md` -- exists

@@ -14,6 +14,7 @@ semver: patch
 **Research sources used:** 6 learnings (gemini-sdk-error-handling, pencil-desktop-three-tier, pencil-mcp-auto-registration, pencil-desktop-ships-mcp-binary, pencil-editor-operational-requirements, check-deps-pattern-for-gui-apps), SDK module inspection, live environment probes
 
 ### Key Improvements
+
 1. Added forward-compatibility edge case: `_error_handling.py` has a fallback guard for unknown `APIError` subclasses (`UnknownApiResponseError`, `FunctionInvocationError`) -- the unit tests do not cover these; added a verification step
 2. Added `claude mcp add` idempotency trap from learning: always `remove` then `add` (SKILL.md already does this, but the plan step 2.5 should verify the remove-then-add pattern)
 3. Added `parse_image_response` empty-list edge case: `response.parts = []` is falsy in Python, same path as `None` -- unit tests cover this but it is worth a live sanity check
@@ -21,6 +22,7 @@ semver: patch
 5. Added verification for `detect_extension` platform filter -- a prior bug returned Windows binary on Linux via alphabetical `sort -V`; verify the OS-prefix filter is in place
 
 ### New Considerations Discovered
+
 - The `google.genai.errors` module includes `UnknownApiResponseError` and `FunctionInvocationError` subclasses not tested by the unit tests -- the forward-compatibility guard in `handle_api_error` should catch these but is untested
 - `multi_turn_chat.py` intentionally catches `NoImageError` in the chat loop (text-only responses are normal in interactive chat) -- this is correct behavior, not a bug, but should be verified as a separate acceptance criterion
 - The fake evolus/pencil test (2.4) creates files in `/tmp` -- ensure cleanup runs even if the test fails (use `trap` or explicit cleanup)
@@ -41,6 +43,7 @@ PR #498 replaced generic "check your prompt" errors with specific error categori
 ## Environment State
 
 Pre-dogfood environment (as surveyed by the plan subagent):
+
 - `GEMINI_API_KEY`: set with image quota (plan subagent reported "not set" but it was available at runtime)
 - `google-genai` SDK: installed system-wide (confirmed: `google.genai.errors` module has `APIError`, `ClientError`, `ServerError`, `UnknownApiResponseError`, `FunctionInvocationError`)
 - Pencil Desktop: **extracted AppImage found** at `~/Applications/squashfs-root/` with executable MCP binary (plan subagent incorrectly reported "not installed" -- the extracted AppImage was not detected during environment probing)
@@ -75,6 +78,7 @@ cd plugins/soleur/skills/gemini-imagegen/scripts && python3 -m unittest test_err
 
 **SDK Error Hierarchy (verified via live inspection):**
 The `google.genai.errors` module exposes these error classes:
+
 - `APIError` (base)
 - `ClientError` (4xx)
 - `ServerError` (5xx)
@@ -246,6 +250,7 @@ PREFERRED_APP=pencil
 ```
 
 **Key verifications:**
+
 - [x] Tier 1 (CLI) is skipped silently (no `pencil` in PATH)
 - [x] Tier 2 (Desktop binary) succeeds -- extracted AppImage found at `~/Applications/squashfs-root/`
 - [N/A] Tier 3 (IDE) not reached -- Tier 2 won first
@@ -317,6 +322,7 @@ rm -rf /tmp/fake-pencil
 ```
 
 **Expected:**
+
 - `[info] pencil CLI found but is not pencil.dev (possible evolus/pencil)` message appears
 - Tier 1 (CLI) is skipped, falls through to next available tier
 
@@ -326,6 +332,7 @@ rm -rf /tmp/fake-pencil
 
 **Collision guard mechanism (from code inspection):**
 `detect_pencil_cli()` first checks `command -v pencil`, then verifies with two checks:
+
 1. `pencil --version 2>&1 | grep -qi "pencil\.dev\|pencil v"` -- version string
 2. `pencil mcp-server --help` -- subcommand existence
 
@@ -367,6 +374,7 @@ After verifying registration, clean up with `claude mcp remove pencil -s user` t
 **Actual result:** Desktop binary WAS found. An extracted AppImage at `~/Applications/squashfs-root/` contained the MCP binary. The `find_extracted_mcp_binary()` function correctly detected it at `$HOME/Applications/squashfs-root/resources/app.asar.unpacked/out/mcp-server-linux-x64`.
 
 The script does not support sourcing (it runs main flow on source), so platform paths verified via code inspection:
+
 - macOS checks `/Applications/Pencil.app/Contents/Resources/app.asar.unpacked/out/mcp-server-darwin-*`
 - Linux checks `/usr/lib/pencil/resources/app.asar.unpacked/out/mcp-server-linux-*` (deb) and extracted AppImage paths via `find_extracted_mcp_binary`
 

@@ -27,5 +27,6 @@ Absent-data handling via `jq '.data // []'` normalizes output for both zero-resu
 OAuth 1.0a signatures for GET requests MUST include query parameters in the signature base string alongside `oauth_*` params. Signing only the base URL produces a valid-looking Authorization header that the server rejects with 401. For any CLI tool that interpolates user input into URL query strings, validate against strict patterns before interpolation -- even when the "user" is another script.
 
 ## Tags
+
 category: integration-issues
 module: community

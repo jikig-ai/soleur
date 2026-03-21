@@ -17,6 +17,7 @@ Replaced both `sed` operations with `awk` using a counter variable `c` that incr
 **Extraction:** `awk '/^---$/{c++; next} c==1'`
 
 **Update pass:**
+
 ```bash
 awk -v iter="$NEXT_ITERATION" -v sc="$STUCK_COUNT" '
   /^---$/ { c++; print; next }
@@ -41,5 +42,6 @@ Test 13 initially asserted that a bare `---` line in the prompt body would appea
 - `knowledge-base/project/learnings/2026-03-05-bulk-yaml-frontmatter-migration-patterns.md`
 
 ## Tags
+
 category: logic-errors
 module: ralph-loop

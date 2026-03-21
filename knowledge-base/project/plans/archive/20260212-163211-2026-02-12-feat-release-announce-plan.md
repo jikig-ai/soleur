@@ -96,11 +96,13 @@ description: This skill should be used when announcing a new plugin release
 2. If unset: warn "DISCORD_WEBHOOK_URL not set, skipping Discord", continue
 3. Build Discord message:
    ```
+
    **Soleur vX.Y.Z released!**
 
    <summary truncated to 1900 chars>
 
-   Full release notes: https://github.com/jikig-ai/soleur/releases/tag/vX.Y.Z
+   Full release notes: <https://github.com/jikig-ai/soleur/releases/tag/vX.Y.Z>
+
    ```
 4. POST via curl: curl -H "Content-Type: application/json" \
      -d '{"content": "<message>"}' "$DISCORD_WEBHOOK_URL"
@@ -171,11 +173,13 @@ This is ~5 lines added to an existing phase. Minimal change.
 ## Dependencies & Risks
 
 **Dependencies:**
+
 - `gh` CLI must be authenticated (already required by `/ship`)
 - `curl` must be available (standard on all supported platforms)
 - `DISCORD_WEBHOOK_URL` env var for Discord posting
 
 **Risks:**
+
 - Discord webhook URL could be invalid -> mitigated by HTTP response checking
 - GitHub Release could fail due to permissions -> mitigated by warning and continuing
 - Discord message could exceed 2000-char limit -> mitigated by truncating summary to 1900 chars + appending release link

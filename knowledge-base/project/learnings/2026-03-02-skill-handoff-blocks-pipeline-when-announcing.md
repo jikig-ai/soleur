@@ -33,5 +33,6 @@ See also: `2026-02-26-decouple-work-from-ship-review-before-merge.md` (the archi
 4. **Work skill Phase 4 blocked the pipeline** -- The main bug. "Announce to the user" caused the model to stop, preventing one-shot from continuing to review/compound/ship steps.
 
 ## Tags
+
 category: logic-errors
 module: plugins/soleur/skills/work

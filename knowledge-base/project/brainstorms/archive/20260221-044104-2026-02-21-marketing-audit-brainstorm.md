@@ -35,12 +35,14 @@ A comprehensive marketing audit and alignment pass across all public-facing surf
 **Overall grade:** Technically excellent product with pre-launch marketing maturity.
 
 **Key metrics:**
+
 - 465 unique cloners in 14 days -- strong adoption signal
 - 3 stars -- 99.4% silent users (critical conversion gap)
 - 2 organic search visits in 14 days -- SEO is non-functional despite solid infrastructure
 - Zero social media presence, zero blog content, zero email capture
 
 **What's working:**
+
 - Brand guide is comprehensive and well-structured (B+)
 - Website design faithfully executes brand guide (B)
 - Technical SEO infrastructure is ahead of most projects (B+)
@@ -49,6 +51,7 @@ A comprehensive marketing audit and alignment pass across all public-facing surf
 - Product velocity is real (51 releases)
 
 **What's broken:**
+
 - Brand voice leaks: "meant to be" (hedging), "AI-powered" (prohibited), "plugin" (prohibited)
 - GitHub homepage URL is blank
 - Root README mixes vision manifesto with install docs
@@ -128,7 +131,7 @@ A comprehensive marketing audit and alignment pass across all public-facing surf
 | 12 | Comparison pages | "Soleur vs X" competitive positioning |
 | 13 | Programmatic SEO | "Soleur for [framework]" pages |
 | 14 | GitHub topics optimization | Add high-traffic tags |
-| 15 | URL canonical alignment | Verify soleur.ai vs www.soleur.ai |
+| 15 | URL canonical alignment | Verify soleur.ai vs <www.soleur.ai> |
 
 ## Open Questions
 

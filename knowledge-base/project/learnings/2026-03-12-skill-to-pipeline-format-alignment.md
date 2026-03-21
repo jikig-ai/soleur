@@ -3,6 +3,7 @@
 ## Problem
 
 When updating a skill to write output files that feed into an existing automated pipeline, the content file template did not match the format of existing files in the target directory. Specifically:
+
 - IndieHackers sections in existing files used `**Title:**` and `**Body:**` labels; the new template omitted them
 - Reddit sections used `**Body:**` labels; the template omitted it
 - Existing files used `NN-<slug>.md` naming; the skill generated `<slug>.md` without detecting the mismatch
@@ -20,5 +21,6 @@ When updating a skill to write output files that feed into an existing automated
 When a skill writes files consumed by another system (cron pipeline, publisher script), verify the output contract against existing files in the target directory, not just the consumer's parsing logic. The consumer may parse correctly, but inconsistent file formats create confusion and duplicate-detection failures.
 
 ## Tags
+
 category: integration-issues
 module: social-distribute, content-publisher

@@ -40,7 +40,7 @@ Refresh the Codex capability baseline so classifications are accurate.
 |---|-----------|-------------|------------|
 | 1 | AskUserQuestion | `AskUserQuestion` | HIGH |
 | 2 | Skill tool / inter-skill | `skill:` or `Skill tool` | HIGH |
-| 3 | Task / subagent | `Task ` (with space) or `subagent_type` | HIGH |
+| 3 | Task / subagent | `Task` (with space) or `subagent_type` | HIGH |
 | 4 | $ARGUMENTS | `\$ARGUMENTS` | MEDIUM |
 | 5 | TodoWrite | `TodoWrite` | MEDIUM |
 | 6 | hookSpecificOutput | `hookSpecificOutput` | HIGH |

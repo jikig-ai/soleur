@@ -36,6 +36,7 @@ Updated AGENTS.md Workflow Completion Protocol to explicitly gate review and com
 ## Secondary Learning: Anti-Sycophancy Split
 
 When adding behavioral guidance (like anti-sycophancy), split by scope:
+
 - **Skill-specific guidance** (e.g., "challenge assumptions in brainstorming") goes in the skill's SKILL.md
 - **Project-wide guidance** (e.g., "don't flatter, challenge reasoning") goes in AGENTS.md
 

@@ -13,11 +13,13 @@ date: 2026-03-19
 **Research sources:** 3 institutional learnings, full-repo grep audit, agent/skill/docs-data file inventory
 
 ### Key Improvements
+
 1. Added `git add` pre-step for Phase 1 (from learning `git-add-before-git-mv-for-untracked-files`) -- prevents `fatal: not under version control` if the file was modified in the current session
 2. Confirmed no GitHub Actions workflows, `docs/_data/*.js`, or `.github/` files reference the old filename -- no CI breakage risk
 3. Validated Non-Goals exhaustively: all `data-processing-agreement` matches in `plugins/soleur/docs/pages/legal/` are Buttondown's external URL, not internal references
 
 ### Applicable Learnings
+
 - **`git-add-before-git-mv-for-untracked-files`**: Always `git add` before `git mv` -- already in the tasks.md, confirmed as critical
 - **`legal-doc-bulk-consistency-fix-pattern`**: When fixing dual-location legal docs, edit source first, mirror to Eleventy -- not applicable here (Eleventy copy already correct, only source needs renaming)
 - **`dpd-processor-table-dual-file-sync`**: The dual-file naming mismatch is the exact problem this PR fixes -- after this PR lands, the sync trap documented in this learning is eliminated
@@ -29,11 +31,13 @@ The source legal document at `docs/legal/data-processing-agreement.md` has the w
 ## Problem Statement
 
 The filename `data-processing-agreement.md` contradicts the document's own content:
+
 - **Frontmatter title:** "Data Protection Disclosure"
 - **H1 heading:** "Data Protection Disclosure"
 - **Introduction paragraph:** "Because Soleur is not a data processor (see Section 2), this is not a Data Processing Agreement under Article 28. It is a disclosure document that clarifies data handling responsibilities."
 
 This creates:
+
 1. **Confusion for contributors** who see two different filenames for the same document across locations
 2. **Sync errors** when editors update one file but grep for the wrong filename to find the other
 3. **Misleading legal semantics** -- "Data Processing Agreement" implies an Article 28 controller-processor DPA, which this document explicitly disclaims
@@ -119,6 +123,7 @@ These are **historical plan/spec/learning files** that reference the old filenam
 ### Research Insights -- Non-Goals Validation
 
 **Exhaustive grep audit confirmed these exclusions are correct:**
+
 - `plugins/soleur/docs/pages/legal/privacy-policy.md:252` -- Buttondown's external DPA URL
 - `plugins/soleur/docs/pages/legal/gdpr-policy.md:195, 274` -- Buttondown's DPA references
 - `plugins/soleur/docs/pages/legal/data-protection-disclosure.md:207` -- generic "data processing agreements" (lowercase, plural, referring to third-party vendor agreements)

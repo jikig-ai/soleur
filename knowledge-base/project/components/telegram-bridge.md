@@ -32,6 +32,7 @@ Telegram App --> (Bot API, long polling) --> Bridge Server (Bun + grammY)
 ```
 
 **Infrastructure:** Hetzner Cloud CX22 with Terraform provisioning:
+
 - `infra/main.tf` - Hetzner provider and network
 - `infra/server.tf` - CX22 instance with cloud-init
 - `infra/firewall.tf` - SSH + health check firewall rules

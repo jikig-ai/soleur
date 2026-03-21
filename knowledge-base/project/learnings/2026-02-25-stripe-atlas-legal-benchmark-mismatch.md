@@ -22,5 +22,6 @@ The valuable kernel: audit documents against **regulatory checklists** (GDPR Art
 When users ask to "benchmark against $FAMOUS_COMPANY," challenge the premise before building. The brand association may not match the actual document type or scope. Stripe Atlas = corporate formation. Stripe's own policies = financial services compliance at massive scale. Neither is the right benchmark for a SaaS plugin's customer-facing legal docs. The right benchmarks are: (1) the regulation itself (GDPR Art 13/14 has 13 enumerated disclosure requirements), and (2) peer companies at a similar stage and product category.
 
 ## Tags
+
 category: integration-issues
 module: legal-agents

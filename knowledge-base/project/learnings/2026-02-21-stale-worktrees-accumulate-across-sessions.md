@@ -28,6 +28,7 @@ The existing learning from 2026-02-09 identified this gap and added Phase 8 to `
 Added a **Session-Start Hygiene** section to AGENTS.md that runs `cleanup-merged` at the start of every session before any other work. This is the recovery mechanism -- it catches any worktrees that were orphaned by prior sessions regardless of how the PR was merged.
 
 Supporting changes:
+
 - Updated AGENTS.md step 10 to name the merge-then-session-end gap explicitly
 - Added constitution rule enforcing session-start cleanup
 - Added safety note to ship/SKILL.md Phase 8 about deferred cleanup being handled by the next session

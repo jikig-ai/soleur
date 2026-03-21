@@ -45,5 +45,6 @@ Dedicated script files are preferable to inline checks when the check logic is r
 - Do not assume a file is at its expected version at session start. Fetch and inspect before editing.
 
 ## Tags
+
 category: integration-issues
 module: feature-video

@@ -24,6 +24,7 @@ This complements (not replaces) the existing stack-gap detection in agent-finder
 Rationale: Clean separation of concerns. The agent-finder stays focused on stack gaps. A new `functional-discovery` agent handles keyword-based overlap detection. Both share registry query infrastructure via an extracted script.
 
 Alternative considered and rejected:
+
 - **Extending agent-finder with a mode parameter** -- simpler, but risks overloading a single agent prompt. The "split when it hurts" principle was weighed, but the different trigger mechanisms (file signatures vs. keyword extraction) and different presentation needs (informational vs. actionable) justified separation from the start.
 
 ## Key Decisions

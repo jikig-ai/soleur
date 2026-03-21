@@ -48,16 +48,19 @@ No adapter interface. No changes to working scripts. `x-community.sh` follows th
 **The brainstorm assumed "monitoring (read-only) is unlimited on Free tier." This is likely incorrect.**
 
 X API Free tier (as of early 2025) includes:
+
 - POST /2/tweets (50 tweets/month)
 - DELETE /2/tweets/:id
 - GET /2/users/me (self-lookup only)
 
 Free tier likely does **not** include:
+
 - GET /2/users/:id/mentions
 - GET /2/users/:id/tweets
 - Search endpoints
 
 **Phase 1 includes a hard verification gate.** If Free tier lacks read endpoints, `x-community.sh` ships with only:
+
 - `fetch-metrics` — GET /2/users/me (follower/following/tweet counts)
 - `post-tweet` — POST /2/tweets (for manual engagement when given a tweet ID)
 
@@ -72,6 +75,7 @@ Requires `openssl` for HMAC-SHA1. **Spec TR2 must be updated** from "curl + jq" 
 ### Platform Detection in SKILL.md
 
 Detection validates **all** required env vars per platform:
+
 - Discord: `DISCORD_BOT_TOKEN` + `DISCORD_GUILD_ID`
 - X: `X_API_KEY` + `X_API_SECRET` + `X_ACCESS_TOKEN` + `X_ACCESS_TOKEN_SECRET`
 - GitHub: Always enabled via `gh` CLI
@@ -99,14 +103,17 @@ Partial config reported: "X partially configured. Missing: X_ACCESS_TOKEN."
 Create `x-community.sh` and `x-setup.sh`. Requires X Developer Portal credentials (manual founder action).
 
 **Files created:**
+
 - `plugins/soleur/skills/community/scripts/x-community.sh`
 - `plugins/soleur/skills/community/scripts/x-setup.sh`
 
 **Files modified:**
+
 - `knowledge-base/project/specs/feat-community-agent-x/spec.md` — update TR2 to include `openssl`
 - `.gitignore` — add any X-related local state files if needed
 
 **Tasks:**
+
 1. **Update spec TR2** to include `openssl` in allowed dependencies
 2. **Verify X API Free tier endpoints.** Hard gate — do not build commands for endpoints that are unavailable. Document actual Free tier scope.
 3. Create `x-setup.sh` following `discord-setup.sh` pattern:
@@ -121,6 +128,7 @@ Create `x-community.sh` and `x-setup.sh`. Requires X Developer Portal credential
 6. Implement `x_request` helper with retry depth limit (max 3 retries on 429)
 
 **Acceptance:**
+
 - `x-setup.sh validate-credentials` verifies X API access
 - `x-community.sh fetch-metrics` returns follower count
 - `x-community.sh post-tweet "test"` posts a tweet (manual test with real credentials)
@@ -131,14 +139,17 @@ Create `x-community.sh` and `x-setup.sh`. Requires X Developer Portal credential
 Create the missing SKILL.md and update the community-manager agent to mention X.
 
 **Files created:**
+
 - `plugins/soleur/skills/community/SKILL.md`
 
 **Files modified:**
+
 - `plugins/soleur/agents/support/community-manager.md` — add X as a data source, update description
 - `plugins/soleur/agents/support/cco.md` — update delegation table
 - `plugins/soleur/docs/_data/skills.js` — register community skill
 
 **Tasks:**
+
 1. Create SKILL.md with frontmatter (`name: community`, third-person description)
 2. Implement sub-commands:
    - `digest` — detect enabled platforms, collect data from each (Discord via `discord-community.sh`, GitHub via `github-community.sh`, X via `x-community.sh`), write unified digest to `knowledge-base/community/YYYY-MM-DD-digest.md`
@@ -172,6 +183,7 @@ Create the missing SKILL.md and update the community-manager agent to mention X.
 Existing headings preserved. New platform-specific sections added at the end. Digests note: "Contributor counts are per-platform and may include duplicates across platforms."
 
 **Acceptance:**
+
 - `/soleur:community digest` produces a multi-platform digest
 - `/soleur:community health` displays cross-platform metrics
 - `/soleur:community platforms` shows configured platform status
@@ -189,6 +201,7 @@ Existing headings preserved. New platform-specific sections added at the end. Di
 ## Rollback Plan
 
 All changes are additive:
+
 - `x-community.sh` and `x-setup.sh` are new files — delete to roll back
 - `SKILL.md` is new — delete to roll back
 - `community-manager.md` changes can be reverted with `git revert`

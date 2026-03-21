@@ -14,15 +14,18 @@
 **Command:** `x-community.sh fetch-mentions [--max-results N] [--since-id ID]`
 
 **Arguments:**
+
 - `--max-results N` -- Optional. Number of mentions to fetch. Default: 10. Valid range: 5-100. Must be numeric.
 - `--since-id ID` -- Optional. Only return mentions newer than this tweet ID. Must be numeric.
 
 **Exit codes:**
+
 - `0` -- Success, JSON output on stdout
 - `1` -- Error (missing credentials, invalid arguments, API error, malformed JSON)
 - `2` -- Rate limit exceeded after 3 retries
 
 **Error behavior:**
+
 - Missing credentials (`X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET`): exits 1 with "Missing X API credentials" on stderr
 - `--max-results` non-numeric: exits 1 with usage error on stderr
 - `--max-results` out of range (< 5 or > 100): exits 1 with range error on stderr
@@ -52,6 +55,7 @@
 ```
 
 **Implementation notes:**
+
 - Uses `get_authenticated_user_id` internal helper (calls `GET /2/users/me`, returns `.data.id` to stdout)
 - Calls `GET /2/users/{id}/mentions` with query params: `max_results`, `since_id` (if provided), `tweet.fields=author_id,created_at,conversation_id`, `expansions=author_id`, `user.fields=username,name`
 - Query params included in OAuth signature base string (same pattern as `cmd_fetch_metrics`)

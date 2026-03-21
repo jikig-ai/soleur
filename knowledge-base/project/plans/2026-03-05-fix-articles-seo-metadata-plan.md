@@ -75,6 +75,7 @@ Google treats instant meta-refresh (`content="0"`) as equivalent to a permanent 
 Delayed meta-refresh redirects (`content="5"` or higher) are treated as weaker signals and may result in the source page being indexed. Pages with delayed refresh AND visible content should still be validated for SEO metadata.
 
 **References:**
+
 - [Google: Redirects and Search](https://developers.google.com/search/docs/crawling-indexing/301-redirects) -- treats instant meta-refresh as permanent redirect
 - [Conductor: Are meta refresh redirects bad for SEO?](https://www.conductor.com/academy/redirects/faq/html-meta-redirect-bad-seo/) -- instant refresh passes authority
 
@@ -154,6 +155,7 @@ bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site
 ```
 
 Confirm:
+
 - Exit code is 0
 - Output shows `PASS: pages/articles.html is a redirect (skipped SEO checks)`
 - All other pages still pass their four checks
@@ -178,26 +180,31 @@ Confirm all tests pass, including the new redirect test.
 ### Given/When/Then
 
 **Scenario 1: Redirect page skipped during validation**
+
 - Given: `_site/pages/articles.html` contains `meta http-equiv="refresh"`
 - When: `validate-seo.sh` runs
 - Then: The page is logged as "redirect (skipped SEO checks)" and the script exits 0
 
 **Scenario 2: Non-redirect pages still validated**
+
 - Given: `_site/pages/changelog.html` does not contain `meta http-equiv="refresh"`
 - When: `validate-seo.sh` runs
 - Then: All four SEO checks (canonical, JSON-LD, og:title, twitter:card) are applied
 
 **Scenario 3: CI deploy-docs passes**
+
 - Given: The fix is merged to main
 - When: deploy-docs workflow triggers
 - Then: Step "Validate SEO" passes, deployment completes
 
 **Scenario 4: Future redirect pages auto-handled**
+
 - Given: A new redirect page `_site/pages/old-page.html` is added with `meta http-equiv="refresh" content="0;url=/new-page/"`
 - When: `validate-seo.sh` runs
 - Then: The new redirect is also skipped automatically
 
 **Scenario 5: Delayed meta-refresh pages are still validated**
+
 - Given: `_site/pages/slow-redirect.html` contains `meta http-equiv="refresh" content="5;url=/blog/"` and visible content
 - When: `validate-seo.sh` runs
 - Then: All four SEO checks are applied (page is NOT skipped because the redirect is delayed)

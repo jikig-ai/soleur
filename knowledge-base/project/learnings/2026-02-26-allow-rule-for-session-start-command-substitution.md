@@ -33,6 +33,7 @@ There are two categories of `$()` in Claude Code workflows:
 Session-start commands fall into category 2. They run before any skill context exists, and the `$(git rev-parse --show-toplevel)` pattern is the standard cross-platform way to resolve repo root regardless of CWD.
 
 ## Tags
+
 category: integration-issues
 module: .claude/settings.json
 symptoms: "Command contains $() command substitution" prompt on every session start

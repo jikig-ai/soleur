@@ -14,12 +14,14 @@ semver: patch
 **Research sources:** Plausible DPA (plausible.io/dpa), Plausible Privacy Policy (plausible.io/privacy), GitHub Pages documentation (docs.github.com), institutional learnings (5 files), legal-compliance-auditor agent spec
 
 ### Key Improvements
+
 1. Verified Plausible's DPA confirms processor status and EU-only hosting (Hetzner Germany, BunnyWay Slovenia) -- strengthens the case for listing in processor table
 2. Verified GitHub Pages documentation confirms IP address logging for all visitors -- confirms processor classification
 3. Added grep verification step from institutional learnings to catch any remaining blanket statements
 4. Added Plausible sub-processor details (BunnyWay, Hetzner) for completeness in the "Sub-processor List" column link text
 
 ### New Considerations Discovered
+
 - The Plausible DPA explicitly states Plausible is a "data processor" under GDPR despite processing only anonymous data -- this removes the ambiguity noted in the original plan about whether listing Plausible is strictly necessary (it is, per their own DPA)
 - Plausible hashes IP addresses with salts rotated every 24 hours -- this detail should be reflected in the "Data Processed" column to be precise about what "IP addresses are not stored" means
 
@@ -53,10 +55,12 @@ Additionally, the `docs/legal/data-protection-disclosure.md` source copy is enti
 ### Option Analysis
 
 The issue suggests two approaches:
+
 1. Add GitHub Pages and Plausible rows to the Section 4.2 table
 2. Add a clarifying note explaining why they are excluded
 
 **Decision: Option 1 (add rows)** -- for three reasons:
+
 - GitHub Pages collects IP addresses and browser metadata on Jikigai's behalf (it is a data processor under GDPR). GitHub Pages documentation confirms: "the visitor's IP address is logged and stored for security purposes, regardless of whether the visitor has signed into GitHub or not."
 - Plausible's own DPA (plausible.io/dpa) explicitly states: "The parties agree that customer is the data controller and that Plausible Analytics is its data processor." This removes the ambiguity about whether Plausible qualifies as a processor -- Plausible itself asserts processor status. Although it processes only anonymous aggregated data, listing it with a note about anonymous data is more transparent than omitting it.
 - Adding rows is consistent with the GDPR Policy's Article 30 register (Section 10.1) which already enumerates both as processing activities
@@ -78,6 +82,7 @@ Bump "Last Updated" date.
 ### Changes to `docs/legal/data-protection-disclosure.md`
 
 Synchronize the entire Section 4 with the Eleventy source:
+
 - Replace Section 4.1 "No Sub-processors" with "Plugin Sub-processors" (scoped to Plugin only)
 - Replace Section 4.2 "Third-Party Services Used by Users" with "Docs Site Processors" containing the full three-row table
 - Add Section 4.3 "Third-Party Services Used by Users" with the user-initiated services table (without Buttondown, which moved to 4.2)
@@ -131,6 +136,7 @@ Synchronize the entire Section 4 with the Eleventy source:
 **GitHub Pages "Sub-processor List" column:** GitHub does not publish a standalone sub-processor list for Pages. The GitHub Privacy Statement (docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement) is the appropriate reference, consistent with how the GDPR Policy Section 2.2 already references it.
 
 **Post-edit grep verification** (from learning `2026-03-10-first-pii-collection-legal-update-pattern.md`): After applying edits, run grep verification across all legal docs to confirm no blanket statements were missed:
+
 - `grep -r "no Sub-processors" docs/legal/ plugins/soleur/docs/pages/legal/` -- should return zero matches after fix
 - `grep -r "No Sub-processors" docs/legal/ plugins/soleur/docs/pages/legal/` -- should return zero matches after fix
 - `grep -r "no.*sub-processor" docs/legal/ plugins/soleur/docs/pages/legal/` -- verify only scoped "no Plugin-level Sub-processors" remains
@@ -142,6 +148,7 @@ Synchronize the entire Section 4 with the Eleventy source:
 **GitHub Pages DPA availability on free plans:** GitHub's formal Data Protection Agreement applies only to paid plans (Enterprise Cloud, Teams). Jikigai's free-plan organization is covered by GitHub's standard Terms of Service, under which GitHub acknowledges processor obligations and maintains EU-US Data Privacy Framework certification and SCCs. The "Sub-processor List" column should link to the GitHub Privacy Statement rather than a DPA that Jikigai cannot access. The GDPR Policy Section 2.2 already documents this limitation -- no change needed there.
 
 **Frontmatter differences between file locations** (from learning `2026-03-02-legal-doc-bulk-consistency-fix-pattern.md`):
+
 - `docs/legal/`: Has `type`, `jurisdiction`, `generated-date` YAML frontmatter; uses `.md` relative links
 - `plugins/soleur/docs/pages/legal/`: Has `layout`, `permalink`, `description` YAML frontmatter; uses `/pages/legal/*.html` absolute links; wrapped in `<section>` HTML tags
 - Body content (Section 4) should be identical in both files; only frontmatter and link format differ

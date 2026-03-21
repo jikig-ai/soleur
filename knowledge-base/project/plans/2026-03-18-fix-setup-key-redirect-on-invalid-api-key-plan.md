@@ -13,12 +13,14 @@ date: 2026-03-18
 **Research sources used:** Context7 (Next.js middleware patterns), Vercel React Best Practices skill, security-sentinel agent analysis, code-simplicity-reviewer analysis, agent-native-architecture skill, codebase pattern analysis
 
 ### Key Improvements
+
 1. Replaced free-form `errorCode: string` with a typed union `WSErrorCode` to prevent typos and enable exhaustive checking
 2. Added a `return` statement after `window.location.href` assignment to prevent post-redirect state updates (JS execution continues after location assignment)
 3. Identified that the `ws-handler.ts` catch block at line 134 also needs the `errorCode` propagation (not just `agent-runner.ts`) -- the plan's original MVP missed this path
 4. Dropped Approach B (middleware guard) from scope -- it violates YAGNI and adds latency to every dashboard request for a problem that only surfaces during chat
 
 ### New Considerations Discovered
+
 - The `ws-handler.ts` `start_session` catch block (line 134-139) is a second error path where key errors surface -- the agent-runner throws, ws-handler catches and re-sends the error. The `errorCode` must be preserved through this relay.
 - `window.location.href = "/setup-key"` does not halt JS execution -- code after the assignment runs until the browser navigates. A `return` is needed to prevent `setMessages` from firing.
 - The string fallback `msg.message.includes("No valid API key")` should be removed once `errorCode` is deployed, not kept permanently as a dual detection path. The plan should scope this as a temporary migration aid.
@@ -38,6 +40,7 @@ Two gaps exist in the key-validity flow:
 ### Research Insights
 
 **Error propagation path analysis:** The error flows through two catch blocks:
+
 1. `agent-runner.ts:255-261` -- catches the `getUserApiKey` throw and calls `sendToClient`
 2. `ws-handler.ts:134-139` -- catches errors from `startAgentSession` and calls `sendToClient` again
 
@@ -94,6 +97,7 @@ Combine the client-side redirect with typed error codes in a single change. This
 ### Research Insights
 
 **Edge cases identified:**
+
 - **Rapid-fire errors:** If the server sends multiple `key_invalid` errors before the redirect fires (e.g., from concurrent agent sessions), the cleanup code runs multiple times. This is safe because `mountedRef.current = false` is idempotent, `clearTimeout(undefined)` is a no-op, and `ws.close()` on an already-closed socket is a no-op.
 - **Component unmount during redirect:** If React unmounts the component during the `window.location.href` navigation, the `useEffect` cleanup runs and closes the socket again. This is harmless -- the cleanup is idempotent.
 - **Stale closure:** The `msg` variable in the error handler is captured fresh on each `onmessage` event, so there is no stale closure risk.

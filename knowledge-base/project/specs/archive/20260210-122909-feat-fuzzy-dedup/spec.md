@@ -50,6 +50,7 @@ The `/sync` command currently only detects exact duplicates when adding new entr
 **So that** I can avoid adding redundant rules
 
 **Acceptance criteria:**
+
 - Findings with >0.8 word similarity show "Skip duplicate?" prompt
 - User can skip or proceed to standard review
 - Dissimilar findings proceed directly to Accept/Skip/Edit
@@ -69,6 +70,7 @@ jaccard(a, b) = |intersection(words_a, words_b)| / |union(words_a, words_b)|
 ### Integration Point
 
 Modify sync.md Phase 2 (Review):
+
 1. Before presenting finding, compute similarity against existing entries
 2. If max similarity > 0.8, show duplicate prompt
 3. If user skips, continue to next finding

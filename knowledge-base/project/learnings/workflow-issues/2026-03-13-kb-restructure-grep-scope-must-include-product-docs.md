@@ -25,6 +25,7 @@ When restructuring knowledge-base paths, the grep scope must include ALL of `kno
 ## Prevention
 
 For future path restructures, use this grep scope:
+
 ```bash
 grep -r 'old-path/' plugins/ scripts/ .github/ AGENTS.md knowledge-base/ --exclude-dir=archive
 ```
@@ -32,5 +33,6 @@ grep -r 'old-path/' plugins/ scripts/ .github/ AGENTS.md knowledge-base/ --exclu
 Then filter out matches in the moved directories themselves (those are self-referential and don't need updating).
 
 ## Tags
+
 category: workflow-issues
 module: knowledge-base

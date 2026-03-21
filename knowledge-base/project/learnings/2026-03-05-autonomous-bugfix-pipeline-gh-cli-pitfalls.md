@@ -144,5 +144,6 @@ When building autonomous CI pipelines that merge code without human review, ever
 - `plugins/soleur/skills/fix-issue/SKILL.md` -- Phase 5.5 eligibility check
 
 ## Tags
+
 category: integration-issues
 module: ci-cd

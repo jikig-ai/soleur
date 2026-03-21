@@ -14,12 +14,14 @@ semver: patch
 **Research sources:** 6 project learnings applied, weekly analytics workflow pattern, GitHub Statuses API docs, failed run log analysis (run IDs 23200184350, 23300396759)
 
 ### Key Improvements
+
 1. Added precise `if` condition fix with `always()` guard to handle the GitHub Actions expression evaluation edge case where `failure()` prevents step output access
 2. Added GITHUB_TOKEN cascade limitation analysis -- bot PRs will NOT trigger the CLA workflow, so synthetic status is the only path (confirmed by learning `2026-02-12-github-actions-auto-release-permissions`)
 3. Added stale branch cleanup consideration -- `ci/content-publisher-*` branches accumulate unless auto-deleted or manually pruned
 4. Added `2026-03-16-soleur-vs-anthropic-cowork.md` to the stale files list (was missed in initial analysis -- publish_date 2026-03-16 predates both failures)
 
 ### New Considerations Discovered
+
 - The current `if: success() || steps.publish.outputs.exit_code == '0'` condition is incorrect for the partial failure case -- when the publish step exits with code 2, the workflow wrapper catches it and exits 0 (line 67 of the workflow), so `success()` is true. But if the script exits with code 1 (fatal), the step fails and `steps.publish.outputs.exit_code` is available only if `always()` is used in the condition
 - The `2026-03-16-soleur-vs-anthropic-cowork.md` file has `publish_date: 2026-03-16` and `status: scheduled` -- it was published on March 16 (before the first failure), meaning it was published successfully and its status was committed before the CLA ruleset broke pushes. Need to verify against run logs whether March 16 succeeded
 
@@ -107,6 +109,7 @@ if: success() || steps.publish.outputs.exit_code == '0'
 This condition has a subtle interaction with the exit code handling:
 
 **Current exit code flow (lines 61-68 of the workflow):**
+
 ```yaml
 run: |
   exit_code=0

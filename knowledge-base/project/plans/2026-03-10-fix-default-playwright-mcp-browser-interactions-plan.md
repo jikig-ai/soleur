@@ -69,6 +69,7 @@ Restructure the Setup, Configure, and Verify sections:
 ### Research Insights (agent-prompt-sharp-edges principle)
 
 Per learning `2026-02-13-agent-prompt-sharp-edges-only.md`: agent instructions should contain only what the model would get wrong without them. Claude already knows how to use `browser_navigate`, `browser_snapshot`, `browser_click`, and `browser_fill_form` from training data. The instructions should focus on:
+
 - **Sharp edge 1:** MCP path resolution from repo root (already in Sharp Edges section)
 - **Sharp edge 2:** Never enter credentials/payments (already in Safety Rules)
 - **Sharp edge 3:** The fallback hierarchy (Playwright MCP > agent-browser > manual)
@@ -109,11 +110,13 @@ The community-manager agent does not perform browser-based verification workflow
 ### Research Insights
 
 **Institutional learnings applied:**
+
 - `2026-02-14-pencil-mcp-local-binary-constraint.md`: Confirms Playwright MCP (like Pencil MCP) is a stdio binary that cannot be bundled in plugin.json. The graceful degradation check pattern (check tool availability, degrade with clear message) applies identically.
 - `2026-02-13-agent-prompt-sharp-edges-only.md`: Agent instructions should contain only what the model would get wrong without them. The Playwright tool usage steps are a quick-reference hierarchy declaration, not a tutorial. Claude already knows how to use these tools.
 - `2026-03-09-x-provisioning-playwright-automation.md`: Validates the Playwright MCP provisioning pattern in production. The credential pairing gotcha is already captured in ops-provisioner's Sharp Edges section.
 
 **Edge cases:**
+
 - Playwright MCP tools may be unavailable in CI environments or when running Claude Code headlessly (no browser process). The three-tier fallback ensures the agent does not hard-fail.
 - When multiple browser tabs are open, `browser_snapshot` returns the active tab only. For multi-page verification flows (e.g., visit project site then check analytics dashboard), use `browser_navigate` to switch between pages rather than assuming both are visible.
 

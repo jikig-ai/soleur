@@ -51,5 +51,6 @@ This is a common pattern with managed auth services: the client SDK provides the
 3. **Cloudflare domain-connect auto-configure failed silently.** Attempted to use Cloudflare's domain-connect feature to auto-configure DNS records for Resend. The API call returned success but no records were created. No error message or diagnostic information was provided. Fallback: configured all DNS records explicitly via Terraform, which succeeded on the first attempt. This reinforces the AGENTS.md rule to use Terraform for DNS provisioning rather than vendor-specific automation features.
 
 ## Tags
+
 category: infrastructure
 module: apps/web-platform/infra/

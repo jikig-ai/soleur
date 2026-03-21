@@ -9,6 +9,7 @@ The `discord_request` function in `discord-community.sh` and `discord-setup.sh` 
 Added a `depth` parameter to `discord_request` in both scripts (default 0), with a max retry count of 3 -- matching the existing `x_request` convention. When the limit is reached, the function prints a clear error to stderr and exits with code 2. The retry log message now includes `(attempt N/3)` for observability. A missing jq fallback (`|| echo "5"`) was also added to `discord-community.sh` to handle cases where `retry_after` parsing fails entirely.
 
 Key changes per file:
+
 - `discord-community.sh`: Added `depth` param, depth guard, jq fallback, attempt logging, recursive depth propagation.
 - `discord-setup.sh`: Added `depth` param, depth guard, attempt logging, recursive depth propagation. (This file already had a manual `retry_after` fallback.)
 

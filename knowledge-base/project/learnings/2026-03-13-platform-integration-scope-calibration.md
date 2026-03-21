@@ -40,5 +40,6 @@ The dual-variant decision was particularly instructive: SpecFlow identified that
 3. `replace_all` on tasks.md accidentally marked incomplete items as done — always scope replacements to specific text blocks, not global patterns
 
 ## Tags
+
 category: integration-issues
 module: plugins/soleur/skills/social-distribute

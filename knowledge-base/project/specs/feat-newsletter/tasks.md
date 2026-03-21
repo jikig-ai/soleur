@@ -4,7 +4,7 @@
 
 - [x] 1.1 Create Buttondown account at buttondown.com
 - [x] 1.2 Verify double opt-in is enabled (default)
-- [ ] 1.3 Request DPA with SCCs from justin@buttondown.email
+- [ ] 1.3 Request DPA with SCCs from <justin@buttondown.email>
 - [ ] 1.4 Confirm EU-US data transfer mechanism
 - [x] 1.5 Add `"newsletter"` key to `plugins/soleur/docs/_data/site.json` with Buttondown username
 

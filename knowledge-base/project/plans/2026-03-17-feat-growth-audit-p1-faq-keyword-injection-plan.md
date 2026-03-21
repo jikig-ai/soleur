@@ -42,6 +42,7 @@ These are the two highest-impact, lowest-effort fixes identified by the audit. F
 ### Research Insights
 
 **AEO Impact Data:**
+
 - Pages with FAQ schema markup are 2.7x more likely to be cited in AI-generated answers (source: [Amsive AEO Guide](https://www.amsive.com/insights/seo/answer-engine-optimization-aeo-evolving-your-seo-strategy-in-the-age-of-ai-search/))
 - FAQ schema with prompt-matched questions drives 3.1x higher answer extraction rates (source: [GenOptima AEO Techniques](https://www.gen-optima.com/geo/best-answer-engine-optimization-aeo-techniques-for-2026/))
 - Google restricted FAQPage rich results to authoritative sites in 2023, but FAQ schema remains critical for AI engine discoverability, which is the primary goal here (source: [Search Engine Land](https://searchengineland.com/faq-schema-rise-fall-seo-today-463993))
@@ -73,12 +74,14 @@ Add a FAQ section and corresponding `<script type="application/ld+json">` FAQPag
 11. `plugins/soleur/docs/blog/case-study-operations-management.md` -- Questions about operations automation
 
 **Pattern to follow:** The existing FAQ implementation on `index.njk` is the reference pattern:
+
 - HTML: `<details class="faq-item">` with `<summary class="faq-question">` and `<p class="faq-answer">`
 - Schema: `<script type="application/ld+json">` with `@type: FAQPage` and `mainEntity` array
 - CSS: Already exists in `plugins/soleur/docs/css/style.css` (lines 964-978) -- no CSS changes needed
 - For blog posts (markdown): Use raw HTML `<details>` blocks (matching `what-is-company-as-a-service.md` pattern) plus `<script type="application/ld+json">` FAQPage block
 
 **FAQ content guidelines per page:**
+
 - 3-5 questions per page (enough for AEO, not bloated)
 - Questions must match real search queries (what/how/is/does format)
 - Answers must be factual, quotable, and self-contained (an AI engine should be able to extract a complete answer from any single FAQ entry)
@@ -97,6 +100,7 @@ Each page must have its own unique FAQ content. Copying identical questions acro
 
 **Brand Voice Compliance:**
 Per the brand guide, FAQ answers must:
+
 - Use "platform" not "plugin" or "tool" (exception: literal CLI commands like `claude plugin install soleur`)
 - Be declarative, not hedging ("Soleur deploys..." not "Soleur can help you...")
 - Use concrete numbers when available ("{{ stats.agents }} agents across {{ stats.departments }} departments")
@@ -183,6 +187,7 @@ Add the exact phrase "solo founder AI tools" to at least 3 strategic locations. 
 5. `plugins/soleur/docs/blog/case-study-brand-guide-creation.md` or another case study -- Natural inclusion in a FAQ answer about who the case study is relevant to.
 
 **Injection approach:** Natural prose integration, not keyword stuffing. The phrase should read as part of a meaningful sentence. Examples:
+
 - "Soleur provides the most comprehensive set of solo founder AI tools available as a Claude Code platform."
 - "Among solo founder AI tools, Soleur is the only platform that compounds institutional knowledge across every business department."
 

@@ -128,6 +128,7 @@ Options:
    ```
 
    End brainstorm execution after displaying this message.
+
 ```
 
 ### Version Bump Files

@@ -11,9 +11,10 @@
 Jikigai (25 rue de Ponthieu, 75008 Paris) must maintain an Article 30 processing register. The SME exemption (Article 30(5)) does not apply because continuous web hosting is not "occasional" processing.
 
 Three processing activities need documenting:
+
 1. Documentation website hosting (soleur.ai via GitHub Pages)
 2. Open-source repository management (GitHub)
-3. Legal/GDPR inquiry handling (legal@jikigai.com)
+3. Legal/GDPR inquiry handling (<legal@jikigai.com>)
 
 No CNIL registration or notification is required (abolished in 2018 reform).
 
@@ -40,8 +41,8 @@ No CNIL registration or notification is required (abolished in 2018 reform).
 ## Recommendations for Counsel
 
 1. **Create the Article 30 register** -- Store privately (not in the public repo). Template provided as `article-30-register-template.md`.
-2. **Verify GitHub DPA** -- Confirm Jikigai has accepted GitHub's Data Protection Agreement at https://github.com/customer-terms.
-3. **Clarify email provider** -- Verify DPA with email provider for legal@jikigai.com. **Resolved:** Proton AG (Proton Mail) confirmed via DNS MX records; DPA at https://proton.me/legal/dpa applies automatically; Switzerland adequacy decision 2000/518/CE covers international transfers. See #204.
+2. **Verify GitHub DPA** -- Confirm Jikigai has accepted GitHub's Data Protection Agreement at <https://github.com/customer-terms>.
+3. **Clarify email provider** -- Verify DPA with email provider for <legal@jikigai.com>. **Resolved:** Proton AG (Proton Mail) confirmed via DNS MX records; DPA at <https://proton.me/legal/dpa> applies automatically; Switzerland adequacy decision 2000/518/CE covers international transfers. See #204.
 4. **Consider breach notification procedure** -- Document internal procedure for handling a potential data breach (Article 33/34).
 5. **No CNIL registration needed** -- The 2018 reform eliminated the declaration system entirely.
 

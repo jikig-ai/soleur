@@ -13,12 +13,14 @@ date: 2026-03-14
 **Research sources:** GitHub Actions secrets best practices (2025-2026), community-router-deduplication learning, platform-integration-scope-calibration learning, shell-script-defensive-patterns learning, SpecFlow edge case analysis, security sentinel review, code simplicity review
 
 ### Key Improvements
+
 1. Added partial-secret edge case handling (only one of two LinkedIn env vars set)
 2. Added explicit `## LinkedIn Metrics` digest section guidance to prompt instructions
 3. Strengthened security analysis with GitHub Actions secrets best practices
 4. Added SpecFlow-identified edge cases to test scenarios (partial config, agent misinterpretation, concurrent token expiry)
 
 ### New Considerations Discovered
+
 - Partial secret configuration (one of two vars set) degrades gracefully -- community-router checks both, reports `disabled` if either is missing
 - Bluesky scripts exist but are not in the workflow -- separate issue, not in scope here
 - The `LINKEDIN_PERSON_URN` value contains a colon (`urn:li:person:{id}`) which is safe in GitHub Actions `${{ secrets.* }}` expressions but worth noting for documentation
@@ -87,17 +89,20 @@ Same pattern as Discord and X/Twitter: secrets are stored in GitHub repository s
 ### Research Insights
 
 **GitHub Actions Secrets Best Practices (2025-2026):**
+
 - Secrets use Libsodium sealed boxes -- encrypted before reaching GitHub. The `${{ secrets.* }}` expression pattern used here is the recommended approach.
 - The Claude Code Action is already pinned to a commit SHA (`@1dd74842...`), preventing supply-chain attacks from mutable tags. No change needed.
 - Secrets not set in GitHub resolve to empty strings at runtime. The community-router's `check_auth()` function handles this correctly by testing `[[ -n "${!var:-}" ]]` for each required env var.
 - The `LINKEDIN_PERSON_URN` value format (`urn:li:person:{id}`) contains colons, which are safe in `${{ secrets.* }}` expressions -- GitHub does not interpret colons in secret values.
 
 **Institutional Learnings Applied:**
+
 - **Community router deduplication** (`2026-03-13`): The router is the single source of truth for platform detection. Adding LinkedIn to the workflow requires only env vars (for the router to detect) and prompt instructions (for the agent to act). No platform detection logic in the prompt itself.
 - **Platform integration scope calibration** (`2026-03-13`): This plan touches 1 file with 2 discrete additions. Well under the "flag if >3 new files" heuristic.
 - **Shell script defensive patterns** (`2026-03-13`): The `linkedin-community.sh` script already follows all 5 defensive patterns (parameterized request handler, trap-based temp cleanup, HTTPS-only API endpoint, URN validation, catch-all command dispatch). No additional hardening needed in the workflow.
 
 **SpecFlow Edge Cases Identified:**
+
 - **Partial secret configuration:** If only `LINKEDIN_ACCESS_TOKEN` is set but `LINKEDIN_PERSON_URN` is not (or vice versa), the community-router checks both comma-separated env vars and reports `disabled`. This is the correct behavior -- partial credentials cannot authenticate against the LinkedIn API.
 - **Agent prompt misinterpretation:** The agent could interpret "post-content is available" as an invitation to call it. The prompt must use imperative prohibition ("do NOT post") rather than descriptive language. The current phrasing is correct.
 - **Digest contract alignment:** The community-manager digest file contract has an optional `## LinkedIn Metrics` heading. Since `fetch-metrics` is stubbed, the agent should note LinkedIn's platform status in `## Activity Summary` rather than creating an empty `## LinkedIn Metrics` section.

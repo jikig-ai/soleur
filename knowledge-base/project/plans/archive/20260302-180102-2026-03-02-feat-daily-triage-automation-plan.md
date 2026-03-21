@@ -130,6 +130,7 @@ DOMAIN:
 ## Rollback Plan
 
 If the daily triage mislabels issues or causes problems:
+
 1. Disable the cron by commenting out the `schedule:` trigger in the workflow file
 2. Remove bad labels in bulk: `gh issue list --label "priority/p0-critical" --json number --jq '.[].number' | xargs -I{} gh issue edit {} --remove-label "priority/p0-critical"`
 3. If needed, delete the workflow file entirely and revert the agent changes
@@ -139,9 +140,11 @@ If the daily triage mislabels issues or causes problems:
 ### Phase 1: Update ticket-triage Agent (minimal)
 
 Files to modify:
+
 - `plugins/soleur/agents/support/ticket-triage.md`
 
 Changes:
+
 1. Rewrite description in third person (fix convention violation: "Use this agent..." -> "Classifies and routes...")
 2. Add disambiguation: "For automated daily triage via GitHub Actions, see `scheduled-daily-triage.yml`."
 3. No behavioral changes -- the agent stays read-only for interactive use. The workflow prompt embeds its own classification instructions.
@@ -149,9 +152,11 @@ Changes:
 ### Phase 2: Create Workflow
 
 Files to create:
+
 - `.github/workflows/scheduled-daily-triage.yml`
 
 Copy `scheduled-competitive-analysis.yml` and adapt:
+
 - Cron: `0 6 * * *` (daily at 06:00 UTC)
 - Concurrency: `schedule-daily-triage`, cancel-in-progress: false
 - Permissions: `contents: read`, `issues: write`, `id-token: write`
@@ -165,6 +170,7 @@ Copy `scheduled-competitive-analysis.yml` and adapt:
 - Resolve action SHAs via `gh api` (two-step for annotated tags)
 
 Also update:
+
 - `plugins/soleur/skills/triage/SKILL.md` -- add disambiguation sentence pointing to daily triage workflow
 
 ### Phase 3: Version Bump and Documentation
@@ -172,6 +178,7 @@ Also update:
 Version bump: MINOR (new workflow). Count skills/agents from disk.
 
 Files to modify:
+
 - `plugins/soleur/.claude-plugin/plugin.json` -- bump version, verify counts
 - `plugins/soleur/CHANGELOG.md` -- add entry
 - `plugins/soleur/README.md` -- verify counts
@@ -182,6 +189,7 @@ Files to modify:
 ### Deferred: Schedule Skill Template Fixes
 
 File a separate GitHub issue to track the 6 known template gaps:
+
 1. `--max-turns` parameter
 2. Label pre-creation step
 3. `timeout-minutes` on the job

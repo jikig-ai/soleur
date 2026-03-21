@@ -6,17 +6,20 @@
 ## Phase 1: X/Twitter Integration
 
 ### 1.0 Pre-work
+
 - [x] Update spec.md TR2 to include `openssl` in allowed dependencies
 - [x] Verify X API Free tier endpoints (hard gate -- scope depends on result)
 - [x] Document actual Free tier scope vs. brainstorm assumptions
 
 ### 1.1 Create x-setup.sh
+
 - [x] Implement `validate-credentials` (GET /2/users/me with OAuth 1.0a)
 - [x] Implement `write-env` (write 4 env vars to `.env` with chmod 600)
 - [x] Implement `verify` (round-trip API check)
 - [x] Suppress curl stderr during auth requests
 
 ### 1.2 Create x-community.sh
+
 - [x] Implement OAuth 1.0a signing helper function (HMAC-SHA1 via openssl)
 - [x] Implement `x_request` helper (HTTP status capture, 429 retry with max 3 depth, auth error handling)
 - [x] Implement `fetch-metrics` (GET /2/users/me -- follower/following/tweet counts)
@@ -27,6 +30,7 @@
 ## Phase 2: Community SKILL.md + Agent Update
 
 ### 2.1 Create SKILL.md
+
 - [x] Write frontmatter (name: community, third-person description)
 - [x] Implement platform detection (check all required env vars per platform)
 - [x] Implement `digest` sub-command (multi-platform data collection, unified digest file)
@@ -36,9 +40,11 @@
 - [x] Add `$ARGUMENTS` passthrough for programmatic callers
 
 ### 2.2 Register skill
+
 - [x] Add `community` to `SKILL_CATEGORIES` in `docs/_data/skills.js`
 
 ### 2.3 Update community-manager.md
+
 - [x] Update description to mention X alongside Discord and GitHub
 - [x] Add social-distribute disambiguation sentence
 - [x] Add X env var requirements to prerequisites
@@ -49,10 +55,12 @@
 - [x] Note X channel notes from brand guide for tone
 
 ### 2.4 Update supporting files
+
 - [x] Update CCO delegation table in cco.md (unconditional -- capabilities expanded)
 - [x] Run agent description token budget check (under 2500 words)
 
 ### 2.5 Verification
+
 - [ ] Test X credentials and API access with real account (blocked: account not registered)
 - [ ] Test multi-platform digest generation (blocked: X account not registered)
 - [x] Test platform detection with partial env vars (missing creds → clear error)

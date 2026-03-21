@@ -42,6 +42,7 @@ Reddit gets `utm_source=reddit` only to avoid spam filter risk.
 ### FR3: Existing Content Updates
 
 Update 4 unpublished distribution-content files with UTM-tagged URLs:
+
 - `02-operations-management.md`
 - `03-competitive-intelligence.md`
 - `04-brand-guide-creation.md`

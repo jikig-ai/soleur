@@ -36,6 +36,7 @@ When a monorepo uses multiple release tag prefixes (`v*`, `web-v*`, `telegram-v*
 2. Attempted `git checkout` in bare repo — failed with "fatal: this operation must be run in a work tree"
 
 ## Tags
+
 category: build-errors
 module: ci-release
 tags: [github-actions, versioning, gh-cli, multi-component-releases, monorepo]

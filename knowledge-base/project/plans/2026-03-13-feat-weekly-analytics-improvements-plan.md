@@ -145,12 +145,14 @@ detect_phase() {
 After writing the individual snapshot file, append a row to `knowledge-base/marketing/analytics/trend-summary.md`:
 
 1. If the file does not exist, create it with a header row:
+
    ```markdown
    # Weekly Analytics Trend Summary
 
    | Week | Date | Visitors | WoW % | Target % | Status |
    |------|------|----------|-------|----------|--------|
    ```
+
 2. Append a row with the current week's data:
    - **Week**: Calculate week number as `((snapshot_epoch - phase1_start_epoch) / SECONDS_PER_WEEK) + 1`
    - **Date**: `SNAPSHOT_DATE`

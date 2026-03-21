@@ -266,6 +266,7 @@ export default function (eleventyConfig) {
 ### Phase 5: Content-Writer Alignment + Blog CSS + Build Verification
 
 **Update** `plugins/soleur/skills/content-writer/SKILL.md`:
+
 - Change default layout from `post.njk` to `blog-post.njk`
 - Change default output path to `plugins/soleur/docs/blog/`
 - Change schema type from `Article` to `BlogPosting`

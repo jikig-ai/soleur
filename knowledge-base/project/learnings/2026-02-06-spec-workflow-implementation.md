@@ -28,6 +28,7 @@ Implemented a spec-driven workflow system for the Soleur plugin, enabling struct
 ### 2. Human-in-the-Loop for v1
 
 **Original:** Automatic behaviors planned:
+
 - Auto-cleanup on merge detection
 - Auto-update spec from implementation
 - Automatic divergence detection
@@ -40,6 +41,7 @@ Implemented a spec-driven workflow system for the Soleur plugin, enabling struct
 ### 3. Fall-back Patterns Ensure Backward Compatibility
 
 All commands check for `knowledge-base/` existence before using it:
+
 - If exists: Use new workflow
 - If not: Fall back to `docs/` patterns
 
@@ -48,6 +50,7 @@ All commands check for `knowledge-base/` existence before using it:
 ### 4. Convention Over Configuration
 
 Branch naming convention: `feat-<name>` automatically maps to:
+
 - Spec directory: `knowledge-base/project/specs/feat-<name>/`
 - Worktree path: `.worktrees/feat-<name>/`
 
@@ -56,6 +59,7 @@ Branch naming convention: `feat-<name>` automatically maps to:
 ### 5. Skill-Based Architecture Promotes Reuse
 
 Created reusable skills:
+
 - `spec-templates` - provides spec.md and tasks.md templates
 - `git-worktree` - manages worktrees with `create-for-feature` function
 

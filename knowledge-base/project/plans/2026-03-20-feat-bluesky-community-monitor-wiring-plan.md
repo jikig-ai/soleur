@@ -12,12 +12,14 @@ deepened: 2026-03-20
 **Research sources:** AT Protocol docs, Bluesky rate limit docs, project learnings (CI patterns, CLA ruleset, synthetic status checks)
 
 ### Key Improvements
+
 1. Added edge case: `bsky-community.sh` `create-session` call counts against rate limit (5,000 points/hour) -- negligible for daily runs but noted for awareness
 2. Added security note: secrets are already confirmed to exist in the repo via the content publisher workflow reference pattern
 3. Added consideration: the monitor's PR-based commit pattern (step 5 in prompt) already handles CLA ruleset and synthetic status checks correctly -- no additional work needed for Bluesky addition
 4. Identified future enhancement opportunity: `getAuthorFeed` API could enrich digest with recent post engagement data (deferred -- out of scope for #852)
 
 ### New Considerations Discovered
+
 - The AT Protocol `getProfile` endpoint used by `get-metrics` is publicly accessible and does not require authentication, but the existing script authenticates anyway for consistency with other commands -- this is fine
 - Bluesky rate limits (5,000 points/hour, 35,000/day) are generous; one `getProfile` call per daily run is negligible
 - App password auth is the current standard; OAuth for AT Protocol is the future direction but not yet required
@@ -81,6 +83,7 @@ Note: `BSKY_ALLOW_POST` is intentionally omitted -- the community monitor is rea
 2. Update the prompt's data collection instructions. Currently Batch 1 covers Discord + X. Add Bluesky to Batch 1 since it's a single fast API call:
 
 In the prompt section under "Batch 1 (Discord + X)":
+
 - Add: `bash $ROUTER bsky get-metrics` to the batch, separated by `;`
 - Update the batch label from "Discord + X" to "Discord + X + Bluesky"
 

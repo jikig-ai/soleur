@@ -33,12 +33,14 @@ This is advisory only -- no agents/skills are installed during brainstorm. Insta
 ## Scope
 
 ### In Scope
+
 - Add gap detection instructions to all 5 domain leader agent .md files
 - Add gap consolidation step to brainstorm command after domain leader assessments
 - Add brainstorm gap reference to `/plan` Phase 1.5
 - Update brainstorm document template to include "Capability Gaps" section (when domain leaders participate)
 
 ### Out of Scope
+
 - Agent/skill installation during brainstorm
 - New agents or skills for gap detection
 - Structured gap protocols or tokens
@@ -52,6 +54,7 @@ None -- all key decisions resolved during brainstorm dialogue.
 ## CTO Assessment Summary
 
 The CTO identified that:
+
 - The existing plan.md flow already handles discovery well via Phase 1.5/1.5b
 - Moving installation to brainstorm would create duplicate discovery paths, token budget pressure, and session-boundary visibility issues
 - Option A (advisory only) is the lowest-risk approach that addresses the core need: surfacing gaps earlier in the workflow

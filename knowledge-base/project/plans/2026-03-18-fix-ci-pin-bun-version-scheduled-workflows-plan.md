@@ -13,6 +13,7 @@ date: 2026-03-18
 **Research sources:** Context7 `oven-sh/setup-bun` docs, repo grep audit, institutional learnings
 
 ### Key Improvements
+
 1. Added `bun-version-file` as a future consolidation option (single source of truth)
 2. Confirmed `scheduled-bug-fixer.yml` also lacks `bun install` -- added acceptance criterion
 3. Verified full workflow inventory -- no other files use `setup-bun`
@@ -32,14 +33,17 @@ Two scheduled workflows use `oven-sh/setup-bun` without specifying `bun-version`
 ### Research Insights
 
 **`oven-sh/setup-bun` default behavior (from Context7 docs):**
+
 - When `bun-version` is omitted, the action defaults to `latest` -- this means every workflow run could install a different Bun version depending on when it runs.
 - The action also supports `bun-version-file` which reads from `.bun-version`, `.tool-versions`, or `package.json`. This is a cleaner long-term solution for keeping all workflows in sync (single source of truth), but out of scope for this fix.
 
 **Audit results:**
+
 - Only 3 workflow files reference `oven-sh/setup-bun`: `ci.yml`, `scheduled-ship-merge.yml`, `scheduled-bug-fixer.yml`. No other workflows install Bun via action or script.
 - All three use the same pinned SHA `3d267786b128fe76c2f16a390aa2448b815359f3`, but `scheduled-ship-merge.yml` has an inconsistent version comment (`# v2` vs `# v2.1.2`).
 
 **Edge case -- `scheduled-bug-fixer.yml` lacks `bun install`:**
+
 - `ci.yml` runs `bun install` before `bun test`. `scheduled-ship-merge.yml` runs `bun install --frozen-lockfile`. But `scheduled-bug-fixer.yml` has no explicit `bun install` step -- it relies on the `claude-code-action` agent to install deps as needed. This is acceptable since the agent runs arbitrary commands, but worth noting as a divergence from `ci.yml`.
 
 ## Test Scenarios
@@ -55,9 +59,11 @@ Found during security review of #715 (commit `83ddb2b`). The learning `knowledge
 ### Research Insights
 
 **Institutional learning applied:**
+
 - `2026-03-18-bun-test-segfault-missing-deps.md`: Bun 1.3.5 segfaults with missing `node_modules/`. CI hardening layer 3 pinned `ci.yml` to 1.3.11 but missed the two scheduled workflows. This fix closes that gap.
 
 **Future improvement (out of scope):**
+
 - Consider creating a `.bun-version` file at repo root containing `1.3.11` and switching all three workflows to `bun-version-file: ".bun-version"`. This eliminates version drift between workflow files. File a follow-up issue if desired.
 
 ## MVP
@@ -65,12 +71,14 @@ Found during security review of #715 (commit `83ddb2b`). The learning `knowledge
 ### `.github/workflows/scheduled-ship-merge.yml` (lines 42-44)
 
 **Before:**
+
 ```yaml
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
 ```
 
 **After:**
+
 ```yaml
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
@@ -81,12 +89,14 @@ Found during security review of #715 (commit `83ddb2b`). The learning `knowledge
 ### `.github/workflows/scheduled-bug-fixer.yml` (lines 47-48)
 
 **Before:**
+
 ```yaml
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
 ```
 
 **After:**
+
 ```yaml
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
@@ -106,4 +116,4 @@ Found during security review of #715 (commit `83ddb2b`). The learning `knowledge
 - Related PR: #715 (where this gap was found)
 - Learning: `knowledge-base/project/learnings/2026-03-18-bun-test-segfault-missing-deps.md`
 - CI reference: `.github/workflows/ci.yml:17-19` (canonical pinned version)
-- Action docs: https://github.com/oven-sh/setup-bun (Context7: `/oven-sh/setup-bun`)
+- Action docs: <https://github.com/oven-sh/setup-bun> (Context7: `/oven-sh/setup-bun`)

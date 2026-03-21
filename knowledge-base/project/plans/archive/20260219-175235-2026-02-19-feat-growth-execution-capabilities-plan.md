@@ -62,6 +62,7 @@ Important:
 **File:** `plugins/soleur/skills/growth/SKILL.md`
 
 Changes:
+
 1. Add `growth fix` row to sub-commands table
 2. Add `## Sub-command: fix` section following the existing pattern
 3. Update Important Guidelines to remove "no files written" constraint (line 119)
@@ -85,6 +86,7 @@ Audit existing content and apply fixes to source files. Combines analysis and ex
    ```
 
 3. Launch the growth-strategist agent via the Task tool:
+
    ```
    Task growth-strategist: "Audit the content at <path> for keyword alignment,
    search intent match, readability, and AEO gaps. For each issue found, apply
@@ -97,6 +99,7 @@ Audit existing content and apply fixes to source files. Combines analysis and ex
 
 4. Present the agent's report showing changes made.
 5. If build failed, show the error and suggest: "Run `git checkout -- <file>` to revert changes, or fix the build error manually."
+
 ```
 
 **Effort:** Medium. ~40 lines of new content, update existing guidelines.
@@ -120,16 +123,19 @@ description: "This skill should be used when generating full article drafts with
 **Phases:**
 
 Phase 0: Prerequisites
+
 - Check brand guide exists at `knowledge-base/overview/brand-guide.md`. Hard fail if missing.
 - Check blog infrastructure exists (Eleventy config file). If missing, display: "No Eleventy config found. Run the docs-site skill to scaffold blog infrastructure first."
 
 Phase 1: Parse Input
+
 - `<topic>` (required): article topic
 - `--outline "..."`: article outline as inline text (Markdown list format)
 - `--keywords "kw1, kw2, kw3"`: target keywords (comma-separated)
 - `--path <output-path>`: where to write the file. Default: auto-generate from topic slug as `blog/posts/YYYY-MM-DD-<slug>.md`
 
 Phase 2: Generate Draft
+
 - Read brand guide `## Voice` section (tone, do's and don'ts)
 - Read brand guide `## Channel Notes > ### Blog` section if it exists
 - Generate full article with:
@@ -139,6 +145,7 @@ Phase 2: Generate Draft
   - FAQ section with FAQPage schema if topic warrants it (2+ natural questions)
 
 Phase 3: User Approval
+
 - Present draft with word count displayed
 - Use AskUserQuestion with three options:
   - **Accept** -- Write article to disk
@@ -146,10 +153,12 @@ Phase 3: User Approval
   - **Reject** -- Discard and exit
 
 Phase 4: Write to Disk
+
 - On Accept, write to the output path
 - Report: "Article written to `<path>`. Review and commit when ready."
 
 **Important Guidelines:**
+
 - All content requires explicit user approval before writing -- no auto-write
 - Brand guide is a hard prerequisite. Without it, skill cannot generate brand-consistent content.
 - Read brand guide Voice section during draft generation, not as a separate validation pass

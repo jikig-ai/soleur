@@ -14,6 +14,7 @@ semver: patch
 **Research sources used:** Next.js v15 docs (Context7), Supabase SSR docs (Context7), 4 institutional learnings, 3 web research sources
 
 ### Key Improvements
+
 1. Added `next.config.ts` `serverActions.allowedOrigins` configuration for future-proofing (Next.js built-in CSRF for Server Actions)
 2. Strengthened `validateOrigin` with log sanitization pattern from existing `resolveOrigin` (prevents log injection via crafted Origin headers)
 3. Added explicit SECURITY comments on cookie config options per learning from adjacent-config-audit pattern (prevents accidental removal during refactors)
@@ -21,6 +22,7 @@ semver: patch
 5. Added negative-space test for attack surface enumeration per institutional learning
 
 ### New Considerations Discovered
+
 - `app/api/workspace/route.ts` has `POST()` with no `request` parameter -- it cannot read headers without a signature change
 - Next.js `serverActions.allowedOrigins` config should be set as defense-in-depth even though no Server Actions exist yet
 - The `console.warn` in origin rejection should sanitize the logged origin value (same pattern as `resolve-origin.ts` line 14)
@@ -111,11 +113,13 @@ This mirrors what Next.js Server Actions do internally (compare Origin to Host/X
 ### Research Insights
 
 **Best Practices:**
+
 - Next.js official proxy middleware example uses `request.headers.get('origin')` with an allowlist array and `includes()` check -- our `Set.has()` approach is equivalent but O(1) lookup instead of O(n)
 - The Next.js authentication guide recommends cookie options: `httpOnly: true, secure: true, sameSite: 'lax', path: '/'` -- we match all except `httpOnly` which breaks Supabase client
 - Log sanitization: the existing `resolveOrigin` sanitizes logged values with `.slice(0, 100).replace(/[\x00-\x1f]/g, "")` -- the new `validateOrigin` must use the same pattern to prevent log injection attacks via crafted Origin headers
 
 **Edge Cases from Framework Docs:**
+
 - Next.js `serverActions.allowedOrigins` accepts wildcard patterns (e.g., `*.my-proxy.com`) -- but our custom validation uses exact string matching, which is stricter and correct for our use case
 - `@supabase/ssr` chunks large tokens across multiple cookies (named `key.0`, `key.1`, etc.) -- the `cookieOptions` apply to all chunks automatically via `setAll`
 

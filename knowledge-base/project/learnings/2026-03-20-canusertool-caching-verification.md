@@ -19,6 +19,7 @@ The web platform uses BYOK keys (not bridge auth), so `canUseTool` fires for eve
 The SDK's permission chain has 5 steps: (1) hooks, (2) deny rules, (3) permission mode, (4) allow rules, (5) canUseTool. Each step can resolve a tool permission without consulting later steps. When testing canUseTool behavior, use `settingSources: []` to prevent settings.json from loading, and provide an explicit API key to avoid the bridge auth path.
 
 Evidence that caching does not exist:
+
 - Each canUseTool invocation receives a unique `toolUseID`
 - The `suggestions` field externalizes caching to the host (SDK delegates persistence)
 - The `updatedInput` response would be broken under caching (cached allow can't carry per-invocation input changes)
@@ -34,5 +35,6 @@ Defense-in-depth recommendation: migrate sandbox enforcement from canUseTool (st
 - Cyrillic characters in branch name caused git pathspec issues — use proper quoting from worktree root.
 
 ## Tags
+
 category: security-verification
 module: agent-sdk

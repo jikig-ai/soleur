@@ -41,6 +41,7 @@ Legal domain (v2.20.0) has two agents, two skills, no real usage. Need to valida
 ### Soleur-Specific Data Practice Clarifications
 
 Since the plugin runs locally with no cloud data collection, each document should emphasize:
+
 - "Data stored on your local filesystem is not transmitted to Soleur servers"
 - GitHub Pages hosting disclosure (GitHub may collect IP addresses for the docs site)
 - Knowledge-base files are local-only; Soleur has no access to user data

@@ -12,11 +12,13 @@ semver: patch
 **Research sources:** google-genai SDK source (errors.py), google-api-core exceptions docs, SDK issue #2024 (IMAGE_SAFETY hang), Gemini safety settings docs
 
 ### Key Improvements
+
 1. **Corrected exception classes:** The plan originally proposed catching `google.api_core.exceptions.ResourceExhausted` -- this is wrong. The `google-genai` SDK uses its own `google.genai.errors.ClientError` (HTTP 429) and `google.genai.errors.APIError` hierarchy, not `google.api_core` exceptions.
 2. **Discovered SDK hang bug:** Accessing `response.candidates[0].finish_reason` on IMAGE_SAFETY responses causes an indefinite hang (SDK issue #2024). Safety detection must avoid direct `finish_reason` access or use a timeout guard.
 3. **Simplified error detection:** Since `google.genai.errors.ClientError` carries a `.code` attribute (HTTP status), detection reduces to `e.code == 429` (quota) and `e.code == 403` (permission) -- no need for separate exception class imports.
 
 ### New Considerations Discovered
+
 - The SDK's `ClientError.code` attribute gives the HTTP status code directly -- check `429` for quota, `403` for permission, `400` for invalid request
 - `ClientError.message` contains the API's error description which should be forwarded to the user
 - IMAGE_SAFETY finish reasons can hang the SDK indefinitely -- do not access `finish_reason` without a timeout or guard
@@ -44,11 +46,13 @@ Catch `google.genai.errors.ClientError` and inspect `.code` to differentiate quo
 ### Research Insights
 
 **Correct exception hierarchy** (from `google/genai/errors.py` source):
+
 - `google.genai.errors.APIError` -- base class, has `.code` (HTTP status), `.message`, `.status`
 - `google.genai.errors.ClientError(APIError)` -- 4xx errors (quota, permission, invalid request)
 - `google.genai.errors.ServerError(APIError)` -- 5xx errors (service unavailable)
 
 **Error detection pattern:**
+
 ```python
 from google.genai import errors
 
@@ -72,6 +76,7 @@ except errors.ServerError as e:
 When no exception is thrown but no image part is returned, check for safety filter indicators in the response text parts before defaulting to a generic message.
 
 **Warning -- SDK hang bug (issue #2024):** Accessing `response.candidates[0].finish_reason` when the API returns `IMAGE_SAFETY` or `NO_IMAGE` causes an indefinite hang due to an unrecognized enum value in the SDK's validation logic. Safety detection must NOT access `finish_reason` directly. Instead, check:
+
 1. Whether `response.parts` is empty or None
 2. Whether any text part contains safety-related keywords ("blocked", "safety", "policy")
 3. Whether `response.text` is available without hanging (text access is safe)
@@ -286,6 +291,7 @@ def check_quota(client, model: str = "gemini-2.5-flash-image") -> None:
 ## References & Research
 
 ### Internal References
+
 - Issue #494: This issue
 - PR #489: Docs-level fix (SKILL.md Phase 0 pre-flight, constitution rule)
 - `knowledge-base/project/learnings/2026-03-10-x-banner-session-error-prevention.md`: Error 3 documents the root cause
@@ -293,6 +299,7 @@ def check_quota(client, model: str = "gemini-2.5-flash-image") -> None:
 - `plugins/soleur/skills/gemini-imagegen/scripts/gemini_images.py:107-113`: Silent failure in library class
 
 ### External References
+
 - [google-genai SDK errors.py source](https://github.com/googleapis/python-genai/blob/main/google/genai/errors.py): Defines `APIError`, `ClientError`, `ServerError` with `.code`, `.message`, `.status` attributes
 - [google-api-core exceptions docs](https://googleapis.dev/python/google-api-core/latest/exceptions.html): Documents `ResourceExhausted` (429) and `PermissionDenied` (403) -- these are NOT used by google-genai SDK
 - [SDK issue #2024 -- IMAGE_SAFETY hang](https://github.com/googleapis/python-genai/issues/2024): Accessing `finish_reason` on IMAGE_SAFETY responses hangs indefinitely

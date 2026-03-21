@@ -33,5 +33,6 @@ Environment variable isolation for subprocesses must be deny-by-default (allowli
 - GitHub issue #878 -- follow-up to gate Bash tool in canUseTool
 
 ## Tags
+
 category: security-issues
 module: web-platform/agent-runner

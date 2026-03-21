@@ -55,6 +55,7 @@ agents/support/
 ### Adapter Interface (per platform script)
 
 Each `*-community.sh` script implements:
+
 - `fetch-mentions [--since TIMESTAMP]` — Recent mentions/messages
 - `fetch-metrics` — Follower count, engagement rate, activity summary
 - `post-reply MESSAGE [--in-reply-to ID]` — Reply to a specific message/tweet

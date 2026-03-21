@@ -33,6 +33,7 @@ This mirrors the GitHub Pages URL structure (`/soleur/`) so the `<base href="/so
 ## Prevention
 
 When adding `<base href>` to any static site:
+
 1. Document the local testing setup in a README or comment
 2. Consider a Makefile target: `make serve` that handles the path setup
 3. Alternative: use a conditional base href that detects localhost vs production (adds JS complexity though)

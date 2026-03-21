@@ -18,6 +18,7 @@ Separately, the initial design required users to manually set `CLAUDE_CODE_EXPER
 **Version conflict:** Defer the version bump decision until implementation time, not planning time. The agent-team plan was updated from 1.12.0 to 1.13.0 after rebasing onto main revealed the conflict. Always check `plugin.json` on the target branch before committing a version number in a plan.
 
 **Flag lifecycle:** Auto-manage the experimental flag within the execution scope:
+
 - `export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` when user accepts Agent Teams (Step A2)
 - `unset CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` on shutdown (Step A4) or `spawnTeam` failure
 

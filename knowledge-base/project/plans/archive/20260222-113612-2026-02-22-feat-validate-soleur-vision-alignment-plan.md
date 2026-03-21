@@ -37,10 +37,13 @@ Before starting the gates, read `knowledge-base/overview/brand-guide.md` if it e
 **Change B -- Make Gate 6 vision-aware** (modify existing Gate 6)
 
 Change question 1 from:
+
 ```
 "What is the ONE core thing your product must do to test the value proposition?"
 ```
+
 To:
+
 ```
 "What is the core value proposition your MVP must demonstrate?"
 ```
@@ -82,11 +85,13 @@ In the Assess phase, after the bullet that reads business-validation.md, add:
 **File:** `plugins/soleur/.claude-plugin/plugin.json`
 
 Change description to:
+
 ```
 "A full AI organization across engineering, marketing, legal, operations, and product. 50 agents, 8 commands, and 46 skills that compound your company knowledge over time."
 ```
 
 Update keywords:
+
 ```json
 "keywords": ["soleur", "claude-code", "ai-agents", "company-as-a-service", "solo-founder", "orchestration"]
 ```
@@ -98,6 +103,7 @@ Note: Verify agent/skill/command counts from actual files at implementation time
 **File:** `README.md`
 
 Replace line 5 ("Currently: an orchestration engine for Claude Code -- agents, workflows, and compounding knowledge.") with:
+
 ```
 50 agents across engineering, marketing, legal, operations, and product -- compounding your company knowledge with every session.
 ```
@@ -156,6 +162,7 @@ Note: Use actual entry points that exist. `/soleur:brainstorm` routes to brand-a
 **File:** `plugins/soleur/docs/llms.txt.njk`
 
 Replace line 9 with:
+
 ```
 {{ site.name }} is a Company-as-a-Service platform with {{ stats.agents }} AI agents across engineering, marketing, legal, operations, and product. {{ stats.skills }} skills and {{ stats.commands }} commands that compound company knowledge over time. It orchestrates the full business lifecycle from idea validation to shipping and scaling.
 ```
@@ -165,6 +172,7 @@ Replace line 9 with:
 **File:** `plugins/soleur/README.md`
 
 Change line 3 to:
+
 ```
 A full AI organization across engineering, marketing, legal, operations, and product. Every decision you make teaches the system. Every project gets better and faster than the last.
 ```
@@ -215,6 +223,7 @@ Cross-reference every section against brand-guide.md before committing.
 PATCH bump (documentation and agent prompt fixes, no new components).
 
 Files to update:
+
 - `plugins/soleur/.claude-plugin/plugin.json` (version)
 - `plugins/soleur/CHANGELOG.md`
 - `plugins/soleur/README.md` (verify counts)

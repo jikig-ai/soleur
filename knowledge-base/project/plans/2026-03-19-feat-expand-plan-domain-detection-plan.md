@@ -85,6 +85,7 @@ Modify `plugins/soleur/skills/brainstorm/SKILL.md` Phase 3.5 (lines 178-191) to 
 - **Relationship to `## Capability Gaps`:** These sections coexist. `## Domain Assessments` is structured carry-forward data for plan Phase 2.5. `## Capability Gaps` remains for missing capabilities. Plan reads only `## Domain Assessments` for carry-forward.
 
 **Files modified:**
+
 - `plugins/soleur/skills/brainstorm/SKILL.md` — Phase 3.5 capture instructions (lines 178-191)
 
 #### Phase 2: Replace Phase 2.5 with Domain Review Gate (FR1-FR5, TR3)
@@ -172,6 +173,7 @@ New text:
 **TR5 (cross-domain disambiguation):** No new agents are added and no overlapping scope changes occur — existing domain leader disambiguation is unaffected. TR5 is satisfied by existing disambiguation sentences.
 
 **Files modified:**
+
 - `plugins/soleur/skills/plan/SKILL.md` — Phase 2.5 section (lines 194-244)
 - `plugins/soleur/skills/work/SKILL.md` — backstop check (line 73)
 - `knowledge-base/project/constitution.md` — enforcement annotation (line 122)
@@ -216,6 +218,7 @@ No cross-domain implications detected — orchestration/skill instruction change
 ## Dependencies & Risks
 
 **Dependencies:**
+
 - All 8 domain leaders already exist (confirmed: cto, clo, cmo, coo, cpo, cfo, cro, cco)
 - `brainstorm-domain-config.md` already has all 8 domain rows with assessment questions and task prompts
 - No new agents, scripts, or hooks needed

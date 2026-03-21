@@ -78,6 +78,7 @@ Four groups, not three. Files with `status: scheduled` and `publish_date < today
 From learning `2026-02-22-skill-count-propagation-locations.md`:
 
 New skill must be registered in 5 locations:
+
 1. `docs/_data/skills.js` — add to `SKILL_CATEGORIES`
 2. `plugins/soleur/README.md` — update components table count
 3. `README.md` (root) — update skill count
@@ -119,11 +120,13 @@ This plan implements `feat-unified-marketing-campaign/spec.md` FR4 ("CMO-maintai
 ## Dependencies & Risks
 
 **Dependencies:**
+
 - #549 (unified marketing campaign) — CLOSED, landed. Content files have frontmatter.
 - `claude-code-action` v1 — for CI invocation. Must pin to SHA.
 - `ANTHROPIC_API_KEY` repo secret — already configured for content-publisher.
 
 **Risks:**
+
 - GitHub Actions cron has ~15-minute timing variance — acceptable for weekly refresh
 - Token cost per run: ~1 Sonnet invocation (no sub-agent spawn) — low cost
 

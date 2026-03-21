@@ -62,5 +62,6 @@ A secondary lesson: `grep` in a pipeline under `set -euo pipefail` exits 1 on no
 1. **`worktree-manager.sh draft-pr` failed 3 times.** The bare-repo detection logic in the worktree manager incorrectly identifies worktree CWD as the bare repo root, causing `draft-pr` to fail when invoked from inside a worktree. The fallback was to use `gh pr create` directly. This is a pre-existing bug in the worktree manager's CWD detection, not related to the stop-hook fix itself.
 
 ## Tags
+
 category: runtime-errors
 module: plugins/soleur/hooks/stop-hook.sh

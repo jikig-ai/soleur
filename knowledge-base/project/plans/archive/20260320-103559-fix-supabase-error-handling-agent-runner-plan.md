@@ -75,6 +75,7 @@ Add `const { error }` destructuring and throw on error in both functions, matchi
 **Supabase JS Client Error Contract (v2.58.0, confirmed via Context7):**
 
 The Supabase JS client consistently returns `{ data, error }` from all query operations. The `error` object, when present, contains:
+
 - `message` (string) -- human-readable description
 - `code` (string) -- PostgreSQL/PostgREST error code (e.g., `"23505"` for unique violation, `"42P01"` for undefined table)
 - `details` (string) -- additional context

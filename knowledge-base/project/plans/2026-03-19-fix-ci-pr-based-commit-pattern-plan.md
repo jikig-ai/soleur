@@ -159,12 +159,15 @@ Where `<timestamp>` = `$(date -u +%Y-%m-%d-%H%M%S)` and `<date>` = `$(date -u +%
 ### Additional Prompt Changes
 
 1. **Remove the "authorized to push to main" override.** Each workflow currently starts with:
+
    ```
    IMPORTANT: This is an automated CI workflow. The AGENTS.md rule
    "Never commit directly to main" does NOT apply here. You are
    explicitly authorized to commit and push to main in this context.
    ```
+
    Replace with:
+
    ```
    IMPORTANT: This is an automated CI workflow. Do NOT push directly to main.
    Use the PR-based commit pattern in the MANDATORY FINAL STEP.

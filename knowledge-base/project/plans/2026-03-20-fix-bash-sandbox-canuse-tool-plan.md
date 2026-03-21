@@ -54,6 +54,7 @@ Use the **Agent SDK's built-in sandbox** (`sandbox` option in `query()`) as the 
 ### Research Insights -- Proposed Solution
 
 **Best Practices (Agent SDK sandbox docs, [Claude Code sandboxing](https://code.claude.com/docs/en/sandboxing)):**
+
 - The Agent SDK provides a native `sandbox` option that uses **bubblewrap (bwrap) on Linux** for OS-level filesystem and network isolation. This enforces restrictions at the kernel level -- all child processes inherit the sandbox, and no amount of shell trickery (hex escapes, variable indirection, base64 encoding) can bypass it.
 - The sandbox supports `filesystem.denyRead` and `filesystem.denyWrite` path patterns, and `network.allowedDomains` for network restrictions.
 - `autoAllowBashIfSandboxed: true` (default) auto-approves Bash commands when the sandbox is enabled, eliminating the need for `canUseTool` to handle Bash at all.
@@ -124,6 +125,7 @@ sandbox: {
 ```
 
 This provides OS-level enforcement via bubblewrap:
+
 - Bash commands can only write to the user's workspace directory
 - Bash commands cannot read other users' workspaces
 - Bash commands cannot make outbound network requests (no `curl` exfiltration)
@@ -229,6 +231,7 @@ const DEFAULT_SETTINGS = {
 ### Alternative considered: `canUseTool` string-matching only (original plan)
 
 The original plan proposed parsing Bash commands via regex to detect dangerous patterns. This approach is fundamentally fragile because shell syntax is Turing-complete:
+
 - Hex escapes: `$'\x63\x61\x74' /etc/passwd`
 - Variable indirection: `x=ca; y=t; $x$y /etc/passwd`
 - Base64: `echo Y2F0IC9ldGMvcGFzc3dk | base64 -d | sh`
@@ -284,6 +287,7 @@ Per the learning at `knowledge-base/project/learnings/2026-03-16-agent-sdk-spike
 The workspace's `.claude/settings.json` (provisioned by `server/workspace.ts` line 22) currently sets `permissions.allow: ["Read", "Glob", "Grep"]`. Per the SDK's permission evaluation order: Hooks > Deny rules > Permission mode > Allow rules > `canUseTool`. Tools in `permissions.allow` are auto-approved at the "Allow rules" step, bypassing `canUseTool`.
 
 This means **Read, Glob, and Grep bypass the workspace path validation in `canUseTool`**. This is a separate but related vulnerability:
+
 - `Read` with `file_path: "/etc/passwd"` would be auto-approved by settings.json
 - `Grep` with `path: "/workspaces/other-user/"` would be auto-approved
 

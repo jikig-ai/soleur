@@ -32,6 +32,7 @@ This gives one-shot an explicit instruction to watch for the marker and keep goi
 LLM pipeline continuation depends on **explicit gates, not structural inference**. A model will not automatically continue past a sub-skill's output just because the skill instructions say "proceed to the next step." Conclusive-sounding output -- even a heading like `## Work Phase Complete` -- can be interpreted as a turn boundary unless the *caller* explicitly tells the model what to do when it sees that marker.
 
 The fix pattern for any multi-step pipeline where one step hands off to the next:
+
 - The sub-skill outputs a *structured marker* (not a natural-language completion phrase)
 - The orchestrator has an explicit CONTINUATION GATE that names the marker and says "this is your signal to keep going"
 
@@ -45,5 +46,6 @@ See also: `2026-03-02-skill-handoff-blocks-pipeline-when-announcing.md` (earlier
 2. **Pipeline stall itself** -- One-shot ran the work skill but stopped after it returned, never proceeding to review or ship. Root cause: missing CONTINUATION GATE in one-shot and overly conclusive language in work Phase 4.
 
 ## Tags
+
 category: workflow-patterns
 module: plugins/soleur/skills/one-shot

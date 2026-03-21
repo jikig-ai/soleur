@@ -15,12 +15,14 @@ deepened: 2026-03-16
 **Review perspectives applied:** SpecFlow analysis, code simplicity, architecture/defense-in-depth
 
 ### Key Improvements
+
 1. Identified that growth skill `plan` sub-command has no `--headless` flag -- prompt must handle this via inline instructions rather than a flag
 2. Flagged turn budget risk (`--max-turns 40`) on the fallback path which chains two skill invocations
 3. Simplified MVP by removing redundant brand-guide/content-strategy pre-reads (growth-strategist already reads brand guide internally)
 4. Added queue format specification for the auto-discovered topics section
 
 ### New Considerations Discovered
+
 - Growth plan `--site` flag triggers external site fetch via WebFetch, adding latency for marginal value in topic discovery -- recommend omitting
 - The fallback path adds ~15-20 turns (growth plan Task + content-writer Task + fact-checker sub-Task), pushing close to the 40-turn limit
 
@@ -130,12 +132,14 @@ The fallback path flows through the same content-writer pipeline as the normal q
 ### `.github/workflows/scheduled-content-generator.yml` changes
 
 **1. Bump limits (lines 28, 54):**
+
 - `timeout-minutes: 45` -> `timeout-minutes: 60`
 - `--max-turns 40` -> `--max-turns 50`
 
 **2. Replace STEP 1 queue-exhausted block (lines 66-70 of the prompt):**
 
 Current:
+
 ```
 If ALL items already have a generated_date, create a GitHub issue
 titled "[Scheduled] Content Generator - <today's date in YYYY-MM-DD format>"
@@ -145,6 +149,7 @@ Add more topics to the queue." Then stop.
 ```
 
 Proposed:
+
 ```
 If ALL items already have a generated_date:
 

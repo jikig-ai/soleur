@@ -29,17 +29,20 @@ Expand the existing Phase 0 "If requirements are already clear" block to also as
 ### Research Insights
 
 **From code-simplicity-reviewer:**
+
 - A separate "Phase 0.5" is unnecessary -- this is a refinement of the existing clarity check, not a new stage
 - A scored heuristic checklist (6 items, 2+ threshold) adds false precision that an LLM will not apply consistently. A qualitative question works better and is more robust
 - "Plan only" already exists in the current Phase 0 behavior. Adding it again duplicates existing functionality
 
 **From architecture-strategist:**
+
 - Phase 0 / Phase 0.5 ordering conflict: if Phase 0 fires first with a plan suggestion, Phase 0.5 never runs. Merging into a single triage eliminates this bypass
 - Drop "under 30 minutes" heuristic -- unverifiable at assessment time before any codebase research
 - Keep the brainstorming skill independent -- do not add one-shot references to SKILL.md. The skill should remain command-agnostic process knowledge
 - Accept downstream friction (one-shot -> plan -> refinement) for now. Plan's own skip logic will fire quickly on simple features
 
 **From learnings:**
+
 - `parallel-plan-review-catches-overengineering.md`: Plans consistently shrink 70-90% after review. This plan's original Phase 0.5 with scored heuristics was itself over-engineered for an 8-line change
 - `command-vs-skill-selection-criteria.md`: Routing to a different command is definitively an orchestration concern -- belongs in the command, not the skill
 

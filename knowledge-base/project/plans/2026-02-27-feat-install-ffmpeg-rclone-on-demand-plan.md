@@ -14,12 +14,14 @@ version_bump: PATCH
 **Research sources:** Project learnings (5), web research (cross-platform install patterns), codebase patterns (worktree-manager.sh, pencil-setup, rclone skill)
 
 ### Key Improvements
+
 1. Concrete script skeleton with OS detection pattern matching existing codebase conventions
 2. `read -r` interactive prompt pattern from worktree-manager.sh (line 84) -- proven in this codebase
 3. Explicit resolution of `set -e` exception with per-command error guards
 4. One-shot `--auto` mechanism documented with SKILL.md `$ARGUMENTS` bypass pattern
 
 ### Applicable Learnings
+
 - **pencil-mcp-auto-registration-via-skill**: Skills with ~5 sequential commands don't need script abstractions. However, `check_deps.sh` already exists as a script, so extending it is the right call (no new abstraction).
 - **command-substitution-in-plugin-markdown**: All `$()` logic stays in the script. SKILL.md uses angle-bracket placeholders only.
 - **extract-command-substitution-into-scripts**: Confirms the script-as-boundary pattern -- SKILL.md invokes `bash ./path/to/script.sh`, script handles all shell features internally.
@@ -84,6 +86,7 @@ detect_os() {
 ```
 
 **Interactive Prompt Pattern (from worktree-manager.sh:84):**
+
 ```bash
 echo "  ffmpeg not installed. Install it? (y/N)"
 read -r response
@@ -321,4 +324,4 @@ echo "=== Check Complete ==="
 - Pattern: `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh:84` -- `read -r` interactive prompt pattern
 - External: [Cross-platform bash install automation](https://dev.to/devopsking/automation-with-bash-creating-a-script-to-install-and-configure-applications-on-multiple-flavours-of-os-4o0k)
 - External: [Bash dependency installation best practices](https://www.linuxbash.sh/post/installing-software-and-managing-dependencies-in-scripts)
-- rclone official install: https://rclone.org/install.sh
+- rclone official install: <https://rclone.org/install.sh>

@@ -20,6 +20,7 @@ grep -rn '\bNN skills\b' . --include='*.md' --include='*.js' --include='*.json' 
 ```
 
 The canonical list of files containing skill counts:
+
 1. `plugins/soleur/.claude-plugin/plugin.json` (description field)
 2. `plugins/soleur/README.md` (components table)
 3. `README.md` (root, "What is Soleur?" section)

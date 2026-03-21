@@ -21,11 +21,11 @@ On 2026-03-16, Buttondown published a [legal docs refresh](https://buttondown.co
 
 | Document | URL | Last Updated |
 |----------|-----|-------------|
-| GDPR & EU Compliance | https://buttondown.com/legal/gdpr-eu-compliance | March 16, 2026 |
-| Data Processing Agreement | https://buttondown.com/legal/data-processing-agreement | March 16, 2026 |
-| Privacy Policy | https://buttondown.com/legal/privacy | March 16, 2026 |
-| Sub-Processor List | https://buttondown.com/legal/subprocessors | March 16, 2026 |
-| Cookie Policy | https://buttondown.com/legal/cookies | March 16, 2026 (new) |
+| GDPR & EU Compliance | <https://buttondown.com/legal/gdpr-eu-compliance> | March 16, 2026 |
+| Data Processing Agreement | <https://buttondown.com/legal/data-processing-agreement> | March 16, 2026 |
+| Privacy Policy | <https://buttondown.com/legal/privacy> | March 16, 2026 |
+| Sub-Processor List | <https://buttondown.com/legal/subprocessors> | March 16, 2026 |
+| Cookie Policy | <https://buttondown.com/legal/cookies> | March 16, 2026 (new) |
 
 ## 3. Article 28(3) Compliance Matrix
 
@@ -102,7 +102,7 @@ On 2026-03-16, Buttondown published a [legal docs refresh](https://buttondown.co
 
 ~~2019 privacy policy mentions third-party advertising, contradicting GDPR compliance page.~~
 
-**March 17 update:** Privacy policy updated March 16, 2026. Advertising references removed. Contact email changed to support@buttondown.com. Explicit statement: "Buttondown doesn't do anything weird with your data."
+**March 17 update:** Privacy policy updated March 16, 2026. Advertising references removed. Contact email changed to <support@buttondown.com>. Explicit statement: "Buttondown doesn't do anything weird with your data."
 
 ### Gap 5: Plan Tier Scope — RESOLVED
 
@@ -111,6 +111,7 @@ On 2026-03-16, Buttondown published a [legal docs refresh](https://buttondown.co
 **March 19 update (Steph's email):** Confirmed that the DPA applies to **all plans — both free and paid**. Steph noted that paid plans expose additional data via Stripe (billing contact name, billing address), documented at [buttondown.com/legal/gdpr-eu-compliance](https://buttondown.com/legal/gdpr-eu-compliance).
 
 **Data by tier (from GDPR compliance page):**
+
 - Free authors: email address, subscriber emails, newsletter content
 - Paid authors: + billing contact name, billing address (via Stripe)
 - Free readers/subscribers: email address, IP address, referrer metadata
@@ -240,6 +241,7 @@ Jikigai — soleur.ai
 ## 9. Precedent Reference
 
 This review follows the pattern established by the GitHub DPA verification (`knowledge-base/project/specs/archive/2026-02-22-165750-feat-github-dpa-verify/dpa-verification-memo.md`):
+
 - Verify DPA scope for actual plan tier
 - Document findings in structured memo
 - Update legal docs to reflect reality, not aspirations

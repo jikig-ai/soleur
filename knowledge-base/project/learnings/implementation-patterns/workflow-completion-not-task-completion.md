@@ -48,6 +48,7 @@ Tasks complete → Done (WRONG)
 **Definition of Done is "PR submitted," not "code written" or "tasks checked off."**
 
 A feature isn't done until:
+
 - Code is committed with proper message
 - Changes are pushed to origin
 - PR is created with description

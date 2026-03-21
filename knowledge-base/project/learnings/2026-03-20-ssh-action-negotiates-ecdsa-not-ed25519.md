@@ -31,6 +31,7 @@ gh secret set WEB_PLATFORM_HOST_FINGERPRINT --body "SHA256:<ecdsa-hash>"
 The SSH host key algorithm negotiation is independent of the deploy key algorithm. Even with an ED25519 deploy key, the Go `crypto/ssh` library may negotiate ECDSA for the host key based on server/client algorithm preference ordering. The `appleboy/ssh-action` does not expose control over host key algorithm selection.
 
 When pinning host key fingerprints for CI/CD:
+
 1. Retrieve fingerprints for ALL key types (`ssh-keyscan -t ed25519,ecdsa,rsa`)
 2. Try ED25519 first (most commonly expected)
 3. If mismatch, try ECDSA (confirmed working on Hetzner Ubuntu with Go SSH)
@@ -41,6 +42,7 @@ The error `ssh: host key fingerprint mismatch` means the stored fingerprint does
 ## Additional Fix: Deploy User Setup
 
 During verification, we discovered the `deploy` user didn't exist on the server (cloud-init only runs at provisioning). Manual setup required:
+
 - Creating the deploy user with docker group membership
 - Installing SSH authorized_keys with forced command restriction
 - Uploading `ci-deploy.sh` forced command script
@@ -76,5 +78,6 @@ For future reprovisioning, cloud-init handles all of this automatically.
 - Learning: `2026-03-20-premature-ssh-user-migration-breaks-ci-deploys.md`
 
 ## Tags
+
 category: integration-issues
 module: CI/CD release workflows

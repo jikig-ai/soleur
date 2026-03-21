@@ -76,7 +76,7 @@ The harder sub-problem is non-existent paths. Write and Edit targets may not exi
 - Issue #877 (original symlink escape report)
 - PR #884 (this fix)
 - Issue #891 (LS/NotebookRead bypass `isPathInWorkspace` -- filed during architecture review)
-- CWE-59: https://cwe.mitre.org/data/definitions/59.html
+- CWE-59: <https://cwe.mitre.org/data/definitions/59.html>
 - CVE-2025-55130: Node.js Permissions Model symlink bypass (same vulnerability class)
 - Prior fix: PR #873 (CWE-22 path traversal -- `path.resolve` + trailing separator)
 

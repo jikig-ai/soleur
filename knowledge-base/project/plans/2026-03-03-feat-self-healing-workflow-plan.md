@@ -28,6 +28,7 @@ The Deviation Analyst:
 5. Hook proposals are shown inline in Constitution Promotion — the user can Accept (copy to `.claude/hooks/` manually after testing), Skip, or Edit
 
 **File modified:**
+
 - `plugins/soleur/skills/compound/SKILL.md` — add Phase 1.5 "Deviation Analyst" (~30-50 lines)
 
 **No schema changes.** The existing `workflow_issue` problem type and `missing_workflow_step` root cause in compound-capture already cover deviation tracking. No new fields needed.
@@ -39,12 +40,14 @@ The Deviation Analyst:
 ### Context Compaction
 
 The Deviation Analyst runs after context may have been compacted. Strategy:
+
 - Use the existing `session-state.md` error forwarding pattern (compound Phase 0.5 already reads this)
 - Analyst reads both: (a) session-state.md for pre-compaction deviations, (b) current context for post-compaction actions
 
 ### Hook Proposal Safety
 
 Hook proposals are presented inline during Constitution Promotion — never auto-installed.
+
 - A buggy hook that exits non-zero on all inputs blocks all tool calls
 - The user must manually copy accepted proposals to `.claude/hooks/` after testing
 - This matches "design for v2, implement for v1" (constitution.md line 146)
@@ -52,6 +55,7 @@ Hook proposals are presented inline during Constitution Promotion — never auto
 ### Enforcement Hierarchy
 
 The analyst proposes the strongest viable enforcement for each deviation:
+
 1. **PreToolUse hook** (preferred) — mechanical prevention, can't be bypassed
 2. **Skill instruction** — checked when skill runs, but can be overridden
 3. **Prose rule** (last resort) — requires agent compliance, weakest enforcement
@@ -76,10 +80,12 @@ The analyst proposes the strongest viable enforcement for each deviation:
 ## Dependencies and Risks
 
 **Dependencies:**
+
 - Existing compound skill must not change its parallel fan-out structure
 - session-state.md must be writable by earlier pipeline phases
 
 **Risks:**
+
 - **False positives:** Mitigated by user gate (Accept/Skip/Edit) — bad proposals get skipped
 - **Context budget:** Analyst reads AGENTS.md + constitution.md — adds ~3k tokens. Acceptable since it runs once per compound invocation.
 - **Scope creep:** v1 is deliberately minimal. Resist adding schema fields, staging directories, or automation until the basic loop proves useful.

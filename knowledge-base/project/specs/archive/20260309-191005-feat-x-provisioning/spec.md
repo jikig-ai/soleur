@@ -47,20 +47,24 @@ The X/Twitter integration (PR #466) is code-complete but inert — all scripts a
 ## Provisioning Stages
 
 ### Stage 1: Handle Availability Check
+
 - Verify `@soleur` availability on X (fallback: `@soleur_ai`)
 
 ### Stage 2: Account Registration
+
 - Agent-browser opens signup page
 - Pre-fills: display name "Soleur"
 - Manual: email, phone, CAPTCHA, password
 
 ### Stage 3: Developer Portal + API Keys
+
 - Agent-browser opens developer.x.com
 - Pre-fills: app name, description
 - Manual: terms, identity verification, credential copy
 - Automated: `x-setup.sh write-env` + `verify`
 
 ### Stage 4: Expense Recording
+
 - Ops-advisor records tier and costs in expense ledger
 - Reconcile stale ledger entries (15 days overdue)
 

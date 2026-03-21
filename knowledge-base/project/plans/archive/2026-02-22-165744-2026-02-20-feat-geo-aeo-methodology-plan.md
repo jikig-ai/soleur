@@ -114,8 +114,8 @@ Revert the single commit. No data migrations, schema changes, or external servic
 
 ## References
 
-- Princeton GEO paper: https://arxiv.org/abs/2311.09735 (KDD 2024)
-- resciencelab/seo-geo: https://github.com/resciencelab/seo-geo (329 stars, implements all 9 Princeton methods)
+- Princeton GEO paper: <https://arxiv.org/abs/2311.09735> (KDD 2024)
+- resciencelab/seo-geo: <https://github.com/resciencelab/seo-geo> (329 stars, implements all 9 Princeton methods)
 - Issue: #164
 - Current files:
   - `plugins/soleur/agents/marketing/growth-strategist.md`

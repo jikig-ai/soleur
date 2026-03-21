@@ -181,5 +181,5 @@ After merging, archive these two learnings (their root cause will be resolved):
 - Existing learning: `knowledge-base/project/learnings/build-errors/eleventy-v3-passthrough-and-nunjucks-gotchas.md`
 - Existing learning: `knowledge-base/project/learnings/2026-03-10-eleventy-build-fails-in-worktree.md`
 - Existing learning: `knowledge-base/project/learnings/2026-03-15-eleventy-build-must-run-from-repo-root.md`
-- Node.js ESM `import.meta.url` docs: https://nodejs.org/api/esm.html#importmetaurl
+- Node.js ESM `import.meta.url` docs: <https://nodejs.org/api/esm.html#importmetaurl>
 - Eleventy config: `eleventy.config.js`

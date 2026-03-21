@@ -15,11 +15,13 @@ deepened: 2026-03-09
 **Review perspectives applied:** security-sentinel, code-quality, code-simplicity, spec-flow-analyzer
 
 ### Key Improvements
+
 1. **Critical: Fix 4 float arithmetic bug** -- Discord returns `retry_after` as a float (e.g., `1.234`), and bash `(( ))` arithmetic fails on non-integers under `set -euo pipefail`. Changed to `printf '%.0f'` truncation.
 2. Added negative `retry_after` clamping (floor at 1s) to prevent `sleep 0` or `sleep -1`.
 3. Added three missing test scenarios for float, negative, and zero `retry_after` values.
 
 ### New Considerations Discovered
+
 - The `set -euo pipefail` float trap is documented in `knowledge-base/project/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md` -- same class of bug (arithmetic on values that may not be pure integers).
 - `sleep` accepts floats natively, so non-clamped float values like `1.5` work fine. Only the comparison/clamping code needs integer handling.
 
@@ -44,11 +46,13 @@ Closes #476
 ### Fix 1: jq fallback in catch-all error (discord-community.sh)
 
 **Current** (line 107):
+
 ```bash
 message=$(echo "$body" | jq -r '.message // "Unknown error"' 2>/dev/null)
 ```
 
 **Fixed:**
+
 ```bash
 message=$(echo "$body" | jq -r '.message // "Unknown error"' 2>/dev/null || echo "Unknown error")
 ```
@@ -58,6 +62,7 @@ The jq `// "Unknown error"` handles missing `.message` keys, but if jq itself fa
 ### Fix 2: curl stderr suppression (discord-community.sh)
 
 **Current** (lines 71-74):
+
 ```bash
 response=$(curl -s -w "\n%{http_code}" \
   -H "Authorization: Bot ${DISCORD_BOT_TOKEN}" \
@@ -66,6 +71,7 @@ response=$(curl -s -w "\n%{http_code}" \
 ```
 
 **Fixed:**
+
 ```bash
 if ! response=$(curl -s -w "\n%{http_code}" \
   -H "Authorization: Bot ${DISCORD_BOT_TOKEN}" \
@@ -81,6 +87,7 @@ Matches `discord-setup.sh:78` and `x-community.sh:192`. This also adds a connect
 ### Fix 3: JSON validation on 2xx (discord-setup.sh)
 
 **Current** (lines 88-89):
+
 ```bash
 2[0-9][0-9])
   echo "$body"
@@ -88,6 +95,7 @@ Matches `discord-setup.sh:78` and `x-community.sh:192`. This also adds a connect
 ```
 
 **Fixed:**
+
 ```bash
 2[0-9][0-9])
   # Validate JSON
@@ -106,6 +114,7 @@ Matches `discord-community.sh:82-86` and `x-community.sh:203-207`.
 **Critical edge case:** Discord returns `retry_after` as a float (e.g., `1.234`). Bash `(( ))` arithmetic fails on non-integer values with `syntax error: invalid arithmetic operator`, which is fatal under `set -euo pipefail`. The `sleep` command accepts floats natively, so only the comparison needs integer handling.
 
 **Pattern to apply in each 429 handler:**
+
 ```bash
 # After extracting retry_after, clamp to sane range [1, 60]
 # Use printf to truncate float to integer for arithmetic comparison
@@ -120,6 +129,7 @@ fi
 ```
 
 Apply to:
+
 - `discord-community.sh:100` (after `retry_after` extraction)
 - `discord-setup.sh:102-106` (after `retry_after` extraction and null check)
 - `x-community.sh:227` (after `retry_after` extraction)
@@ -141,6 +151,7 @@ validate_channel_id() {
 ```
 
 Apply to:
+
 - `discord-community.sh:cmd_messages` (line 117, after extracting `channel_id`)
 - `discord-setup.sh:cmd_list_channels` (line 154, `guild_id` parameter -- already validated at env level but not at command level)
 - `discord-setup.sh:cmd_create_webhook` (line 162, `channel_id` parameter)

@@ -83,6 +83,7 @@ The post must demonstrate Soleur's superiority even within engineering (not just
 ## Content Strategy Alignment
 
 This post maps to **P1.3 pillar article** in `knowledge-base/overview/content-strategy.md`:
+
 - Topic: "Agentic Engineering: Beyond Vibe Coding"
 - Target keywords: agentic engineering, compound engineering, AI coding workflow, knowledge compounding
 - Planned comparison table: vibe coding vs. agentic engineering vs. compound engineering
@@ -90,6 +91,7 @@ This post maps to **P1.3 pillar article** in `knowledge-base/overview/content-st
 ## User Research Context
 
 A WhatsApp conversation with an ex-colleague (2026-03-12) surfaced the exact problem this post addresses:
+
 - Colleague's company starting AI-driven BSS project
 - Boss already using AI, April workshop to evaluate in-house vs vendor
 - Colleague recognizes that "vibe coding" doesn't work for enterprise-scale projects

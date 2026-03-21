@@ -62,12 +62,14 @@ Both endpoints support OAuth 1.0a User Context (already implemented in `oauth_si
 ### Endpoint Details (from X API v2 OpenAPI schema)
 
 **GET /2/users/{id}/mentions:**
+
 - Scopes: `tweet.read`, `users.read`
 - Parameters: `max_results` (**5-100**, no documented default), `start_time`, `end_time`, `since_id`, `until_id`, `pagination_token`, `tweet.fields`, `expansions`, `user.fields`
 - Returns: `data` array of Tweet objects (schema: `minItems: 1` -- **field is absent when zero results**, not an empty array) + `meta` object (result_count, next_token, newest_id, oldest_id)
 - 403 error body: `{"type": "...client-forbidden", "reason": "client-not-enrolled", "title": "..."}`
 
 **GET /2/users/{id}/tweets:**
+
 - Scopes: `tweet.read`, `users.read`
 - Parameters: same as mentions plus `exclude` (retweets, replies); `max_results` also **5-100**
 - Returns: same structure as mentions (data absent when zero results)
@@ -94,6 +96,7 @@ Both endpoints require the authenticated user's numeric ID (`{id}`), not the use
 ### Error Handling
 
 Both endpoints may return:
+
 - **401** -- credentials expired or invalid (existing handling in `x_request`)
 - **403** -- insufficient API access level (endpoint requires paid credits)
 - **429** -- rate limit (existing retry logic in `x_request`, depth-limited to 3)
@@ -101,7 +104,7 @@ Both endpoints may return:
 The **403 case is critical** -- this is the expected failure when the user has Free tier without purchased credits. The existing `x_request` 403 handler says "Your app may lack the required permissions or your account may be suspended." For the new `get_request` helper, enhance the 403 handling:
 
 1. Extract the `reason` field from the 403 response body: `jq -r '.reason // "unknown"'`
-2. If `reason` is `client-not-enrolled`, include paid access guidance: "X API returned 403 for {endpoint}: client not enrolled. This endpoint requires paid API access. Visit https://developer.x.com to purchase credits."
+2. If `reason` is `client-not-enrolled`, include paid access guidance: "X API returned 403 for {endpoint}: client not enrolled. This endpoint requires paid API access. Visit <https://developer.x.com> to purchase credits."
 3. If `reason` is `official-client-forbidden`, use existing message about permissions
 4. Always include the endpoint path for differentiation
 
@@ -139,6 +142,7 @@ get_request() {
 ### Shell Script Conventions
 
 Per constitution.md and existing patterns:
+
 - `set -euo pipefail` already declared
 - `local` for all function variables
 - Errors to stderr
@@ -195,6 +199,7 @@ Per constitution.md and existing patterns:
 ### Phase 3: Update Agent and Skill Docs
 
 **Files modified:**
+
 - `plugins/soleur/agents/support/community-manager.md`
 - `plugins/soleur/skills/community/SKILL.md`
 
@@ -237,6 +242,7 @@ Per constitution.md and existing patterns:
 ## Rollback Plan
 
 All changes are within existing files -- revert with `git revert`:
+
 - `x-community.sh`: new helper functions (`get_request`, `resolve_user_id`), two new command functions, refactored `cmd_fetch_metrics`. Note: `cmd_fetch_metrics` refactor changes implementation but not behavior -- verify output equivalence before shipping.
 - `community-manager.md`: additional script references and paid access note
 - `SKILL.md`: parenthetical text update

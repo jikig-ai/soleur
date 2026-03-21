@@ -14,6 +14,7 @@ semver: patch
 **Research sources:** content-writer skill, growth skill, seo-aeo skill, frontend-design skill, 4 institutional learnings, 5 web searches, competitive intelligence document
 
 ### Key Improvements
+
 1. Added verified external source URLs with exact quotation text for GEO compliance
 2. Added content-writer skill constraint: do NOT add `layout` or `ogType` to frontmatter (inherited from blog.json), and do NOT generate inline BlogPosting JSON-LD (layout handles it)
 3. Added pillar page SEO statistics: 30% organic traffic increase, 50% more likely to rank top 10
@@ -22,6 +23,7 @@ semver: patch
 6. Refined article outline with specific word count targets per section and prose intro paragraph guidance
 
 ### New Considerations Discovered
+
 - The `blog-post.njk` layout already generates BlogPosting JSON-LD -- only FAQ JSON-LD should be inline in the article body
 - Instagram co-founder Mike Krieger quote adds a third quotation source for GEO compliance
 - Pillar content strategy research validates the topic cluster approach as a 2026 SEO best practice
@@ -40,16 +42,19 @@ The marketing strategy assessment (2026-03-03) documents a critical gap: **zero 
 ### Research Insights
 
 **Pillar Page SEO Impact (2026 data):**
+
 - Websites that implement a pillar content strategy see a **30% increase in organic traffic** compared to those that do not ([Bloghunter](https://bloghunter.se/blog/pillar-content-strategy-stats-facts-for-2026-data-driven-insights))
 - Pillar pages are **50% more likely to rank in the top 10** search results for their target keywords
 - The topic cluster model (pillar page + cluster content articles) builds topical authority, which is the primary ranking signal in 2026
 - E-E-A-T (Experience, Expertise, Authoritativeness, Trust) is the foundation of modern SEO -- content backed by real insights, references, and structured clarity stands out
 
 **Category Creation Timing:**
+
 - Zero competition for "company as a service" as a search term (content strategy confirmed)
 - Amodei's prediction places the one-person billion-dollar company timeline at 2026, making this the optimal moment to define the category
 
 **What has already been done (prior sessions):**
+
 - Blog infrastructure built (blog.json collection, blog-post.njk layout, BlogPosting JSON-LD, RSS feed, blog index page)
 - FAQ section and FAQPage JSON-LD added to homepage
 - "What is Soleur?" section added to Getting Started page
@@ -58,6 +63,7 @@ The marketing strategy assessment (2026-03-03) documents a critical gap: **zero 
 - Blog CSS styles added (prose, blog-tags, blog-post-meta)
 
 **What remains:**
+
 - Homepage H2s still use decorative text ("This Is the Way", "Your AI Organization") instead of keyword-bearing headings
 - Agents page has no introductory prose paragraph with target keywords
 - Skills page has no introductory prose paragraph with target keywords
@@ -108,6 +114,7 @@ tags:
 ```
 
 **Do NOT include:**
+
 - `layout:` (inherited from blog.json)
 - `ogType:` (inherited from blog.json)
 - Inline `<script type="application/ld+json">` for BlogPosting (layout handles it)
@@ -123,6 +130,7 @@ Nunjucks does not resolve template variables (`{{ }}`) in YAML frontmatter. All 
 ### Brand Voice Constraints
 
 From `knowledge-base/overview/brand-guide.md`:
+
 - Prohibited terms: "AI-powered", "leverage AI", "just/simply", "assistant/copilot" (in marketing), startup jargon ("disrupt", "synergy", "move the needle")
 - Declarative voice, no hedging
 - Founder as decision-maker, system as executor
@@ -138,6 +146,7 @@ Apply inline brand voice validation during content generation, not as a separate
 ### Princeton GEO/AEO Requirements
 
 From `knowledge-base/project/learnings/2026-02-20-geo-aeo-methodology-incorporation.md`:
+
 - Cite sources: +30-40% visibility uplift
 - Add quotations: +30-40%
 - Add statistics: up to +40%
@@ -147,6 +156,7 @@ From `knowledge-base/project/learnings/2026-02-20-geo-aeo-methodology-incorporat
 ### Research Insights: 2026 SEO Landscape
 
 From web research on 2026 SEO best practices:
+
 - **E-E-A-T matters more than ever:** Google prioritizes content that shows real understanding -- Experience, Expertise, Authoritativeness, Trust ([Young Urban Project](https://www.youngurbanproject.com/how-to-write-seo-friendly-blog-posts/))
 - **AI Overviews change the game:** Search engines now read context, not phrases -- clarity and intent matter more than keyword density
 - **Schema markup is critical:** JSON-LD structured data drives rich snippets and AI engine citations ([12AM Agency](https://12amagency.com/blog/why-schema-markup-is-critical-for-seo-success/))
@@ -155,6 +165,7 @@ From web research on 2026 SEO best practices:
 ### CSS/Layout Constraints
 
 From institutional learnings:
+
 - **Use existing CSS classes only** (`2026-02-13-parallel-subagent-css-class-mismatch.md`): When adding HTML content to existing pages, use the established CSS classes (`.prose`, `.container`, `.content`, `.section-label`, `.section-title`, `.section-desc`). Do not invent new class names.
 - **Grid orphan check** (`2026-02-22-landing-page-grid-orphan-regression.md`): If prose intro sections add any new card grids, verify `card_count % column_count == 0` at every responsive breakpoint.
 - **Getting Started page pattern**: The getting-started.md page uses `<section class="content"><div class="container"><div class="prose">` to wrap Markdown prose. Use this same pattern for agents and skills page introductions.
@@ -271,15 +282,15 @@ All URLs verified via web search on 2026-03-05:
 
 | Source | URL | Use In Article |
 |--------|-----|---------------|
-| Amodei prediction (Inc.com) | https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609 | Section 7: CaaS Future |
-| Altman prediction (Fello AI) | https://felloai.com/2025/09/sam-altman-other-ai-leaders-the-next-1b-startup-will-be-a-one-person-company/ | Section 7: CaaS Future |
-| AI one-person unicorn (TechCrunch) | https://techcrunch.com/2025/02/01/ai-agents-could-birth-the-first-one-person-unicorn-but-at-what-societal-cost/ | Section 2: Problem |
-| Princeton GEO paper | https://arxiv.org/abs/2311.09735 | Not cited in article (methodology reference for author) |
-| Cursor $29.3B / $1B ARR (CNBC) | https://www.cnbc.com/2026/02/24/cursor-announces-major-update-as-ai-coding-agent-battle-heats-up.html | Section 2: Problem (market context) |
-| Devin $20/month (VentureBeat) | https://venturebeat.com/programming-development/devin-2-0-is-here-cognition-slashes-price-of-ai-software-engineer-to-20-per-month-from-500 | Section 4: CaaS vs SaaS |
-| Notion Custom Agents (Notion) | https://www.notion.com/releases/2026-02-24 | Section 5: Technology |
-| Anthropic Cowork (TechCrunch) | https://techcrunch.com/2026/02/24/anthropic-launches-new-push-for-enterprise-agents-with-plugins-for-finance-engineering-and-design/ | Section 2: Problem |
-| One-person unicorn guide (NxCode) | https://www.nxcode.io/resources/news/one-person-unicorn-context-engineering-solo-founder-guide-2026 | Section 7: CaaS Future |
+| Amodei prediction (Inc.com) | <https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609> | Section 7: CaaS Future |
+| Altman prediction (Fello AI) | <https://felloai.com/2025/09/sam-altman-other-ai-leaders-the-next-1b-startup-will-be-a-one-person-company/> | Section 7: CaaS Future |
+| AI one-person unicorn (TechCrunch) | <https://techcrunch.com/2025/02/01/ai-agents-could-birth-the-first-one-person-unicorn-but-at-what-societal-cost/> | Section 2: Problem |
+| Princeton GEO paper | <https://arxiv.org/abs/2311.09735> | Not cited in article (methodology reference for author) |
+| Cursor $29.3B / $1B ARR (CNBC) | <https://www.cnbc.com/2026/02/24/cursor-announces-major-update-as-ai-coding-agent-battle-heats-up.html> | Section 2: Problem (market context) |
+| Devin $20/month (VentureBeat) | <https://venturebeat.com/programming-development/devin-2-0-is-here-cognition-slashes-price-of-ai-software-engineer-to-20-per-month-from-500> | Section 4: CaaS vs SaaS |
+| Notion Custom Agents (Notion) | <https://www.notion.com/releases/2026-02-24> | Section 5: Technology |
+| Anthropic Cowork (TechCrunch) | <https://techcrunch.com/2026/02/24/anthropic-launches-new-push-for-enterprise-agents-with-plugins-for-finance-engineering-and-design/> | Section 2: Problem |
+| One-person unicorn guide (NxCode) | <https://www.nxcode.io/resources/news/one-person-unicorn-context-engineering-solo-founder-guide-2026> | Section 7: CaaS Future |
 
 ### Verified Quotations (GEO Compliance)
 
@@ -319,16 +330,19 @@ These are suggestions -- the implementer should refine for brand voice. The H2 s
 ### Prose Introduction Guidance for Agents and Skills Pages
 
 **Agents page intro (2-3 paragraphs):**
+
 - Paragraph 1: Define what agentic engineering means in the context of Soleur -- AI agents that operate as specialist team members across every business domain
 - Paragraph 2: Explain the cross-domain coherence advantage -- agents share context (brand guide informs marketing, competitive analysis shapes product, legal audit references privacy policy)
 - Paragraph 3: Scale statement (agent count, department count) with invitation to explore
 
 **Skills page intro (2-3 paragraphs):**
+
 - Paragraph 1: Define what agentic engineering skills are -- multi-step workflow orchestration that chains agents, tools, and knowledge
 - Paragraph 2: Explain the compound engineering lifecycle (brainstorm > plan > implement > review > compound) and how each stage feeds the next
 - Paragraph 3: Skill count with invitation to explore categories
 
 **HTML wrapper pattern (from getting-started.md):**
+
 ```html
 <section class="content">
   <div class="container">
@@ -354,11 +368,13 @@ These are suggestions -- the implementer should refine for brand voice. The H2 s
 ## Dependencies and Risks
 
 **Dependencies:**
+
 - Blog infrastructure is already built (confirmed: blog.json, blog-post.njk, blog index, RSS feed all exist)
 - Brand guide and content strategy documents exist (confirmed)
 - Competitive intelligence provides source material for citations (confirmed)
 
 **Risks:**
+
 - **Keyword stuffing trap:** The content strategy lists many keywords. The article must use them naturally, not force them. Princeton GEO shows keyword stuffing reduces AI visibility by 10%. Mitigation: limit primary keyword ("company as a service") to 8-12 natural occurrences in a 3,000-word article (0.3-0.4% density).
 - **Build breakage:** New markdown file in blog/ could expose edge cases in the blog-post.njk template or Eleventy config. Mitigated by building and validating before commit.
 - **Nunjucks frontmatter limitation:** Template variables in frontmatter will not resolve. All frontmatter must use literal strings. Template variables in the body work fine.
@@ -399,11 +415,11 @@ These are suggestions -- the implementer should refine for brand voice. The H2 s
 
 ### External References
 
-- Princeton GEO paper: https://arxiv.org/abs/2311.09735 (KDD 2024)
-- Eleventy blog collection docs: https://www.11ty.dev/docs/collections/
-- Pillar content strategy: https://www.semrush.com/blog/pillar-page/
-- 2026 SEO best practices: https://www.youngurbanproject.com/how-to-write-seo-friendly-blog-posts/
-- Schema markup for blogs: https://12amagency.com/blog/why-schema-markup-is-critical-for-seo-success/
-- Amodei prediction: https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609
-- Altman prediction: https://felloai.com/2025/09/sam-altman-other-ai-leaders-the-next-1b-startup-will-be-a-one-person-company/
-- One-person unicorn (TechCrunch): https://techcrunch.com/2025/02/01/ai-agents-could-birth-the-first-one-person-unicorn-but-at-what-societal-cost/
+- Princeton GEO paper: <https://arxiv.org/abs/2311.09735> (KDD 2024)
+- Eleventy blog collection docs: <https://www.11ty.dev/docs/collections/>
+- Pillar content strategy: <https://www.semrush.com/blog/pillar-page/>
+- 2026 SEO best practices: <https://www.youngurbanproject.com/how-to-write-seo-friendly-blog-posts/>
+- Schema markup for blogs: <https://12amagency.com/blog/why-schema-markup-is-critical-for-seo-success/>
+- Amodei prediction: <https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609>
+- Altman prediction: <https://felloai.com/2025/09/sam-altman-other-ai-leaders-the-next-1b-startup-will-be-a-one-person-company/>
+- One-person unicorn (TechCrunch): <https://techcrunch.com/2025/02/01/ai-agents-could-birth-the-first-one-person-unicorn-but-at-what-societal-cost/>

@@ -104,5 +104,5 @@ MINOR bump. 8 new agents added, 2 expanded.
 - Spec: `knowledge-base/project/specs/feat-marketing-skills-merge/spec.md`
 - Overlap analysis: `knowledge-base/project/learnings/2026-02-20-marketingskills-overlap-analysis.md`
 - CMO exploration (deferred): #154
-- marketingskills repo: https://github.com/coreyhaines31/marketingskills (MIT)
+- marketingskills repo: <https://github.com/coreyhaines31/marketingskills> (MIT)
 - Issue: #174

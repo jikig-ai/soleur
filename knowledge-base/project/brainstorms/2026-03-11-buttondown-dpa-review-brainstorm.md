@@ -44,6 +44,7 @@ Our Privacy Policy Section 5.3 asserts "International data transfers are covered
 ## Decision
 
 **Do NOT sign the standard DPA as-is.** Contact Buttondown's DPO to request:
+
 1. SCCs (Module 2) or DPF certification confirmation
 2. DPA Annex with processing details
 3. Formal sub-processor list
@@ -72,7 +73,7 @@ On 2026-03-16, Buttondown published a [legal docs refresh](https://buttondown.co
 | Document | Changes |
 |----------|---------|
 | DPA | Added Annex 1 (processing details), sub-processor list reference in Section 5, GDPR precedence clause in Section 12, updated Section 8 referencing SCCs |
-| Privacy Policy | First update since October 2019. Removed misleading advertising references. Contact email → support@buttondown.com |
+| Privacy Policy | First update since October 2019. Removed misleading advertising references. Contact email → <support@buttondown.com> |
 | Sub-Processor List | Now a dedicated page at `/legal/subprocessors` with 12 vendors (was 3 informally listed). Added: AWS, Betterstack, Cloudflare, Google Workspace, Heroku, Plain, Seline, Sentry, Slack |
 | Cookie Policy | New document categorizing cookies as essential, functional, or analytics. No advertising cookies. |
 | GDPR Compliance Page | Updated language, linked to sub-processor list and DPA |

@@ -13,6 +13,7 @@ deepened: 2026-03-19
 **Research sources:** 3 learnings, security-sentinel review, constitution audit, repo pattern analysis
 
 ### Key Improvements
+
 1. Added implementation constraint: Edit tool is blocked for workflow files by `security_reminder_hook.py` -- must use `sed` via Bash
 2. Added `sed` one-liner for bulk replacement across all 9 files
 3. Added pre-merge hook workaround note for commands containing "merge" text
@@ -20,6 +21,7 @@ deepened: 2026-03-19
 5. Confirmed indentation variations across workflows are handled by the sed pattern
 
 ### New Considerations Discovered
+
 - The `security_reminder_hook.py` PreToolUse hook blocks Edit tool calls on `.github/workflows/*.yml` files -- this is a hard block, not advisory
 - The `pre-merge-rebase.sh` hook may trigger false positives on Bash commands containing "merge" in string context -- externalize to temp files if needed
 - Some workflows use different indentation levels for the `gh pr merge` line (spaces vary from 10 to 15) -- the sed pattern must match regardless of leading whitespace
@@ -160,6 +162,7 @@ The squash fallback creates a privilege escalation path:
 2. **Fallback path**: `gh pr merge --squash` performs an immediate merge. This succeeds if the actor (`GITHUB_TOKEN`) has write permission, regardless of check status.
 
 In the current configuration, the fallback only triggers when `--auto` fails. `--auto` can fail due to:
+
 - Auto-merge disabled on repo (configuration error)
 - PR has merge conflicts (should not happen for fresh branches)
 - Rate limiting or transient API errors
@@ -169,6 +172,7 @@ In all these cases, the correct response is to fail loudly, not to bypass the me
 ### Defense-in-Depth Alignment
 
 Removing the fallback aligns with three layers of defense:
+
 1. **Rulesets**: Required `cla-check` status enforced by GitHub (cannot be bypassed by workflow code)
 2. **Auto-merge**: GitHub manages the merge lifecycle, waiting for all requirements
 3. **Failure notifications**: Discord alerts on step failure, enabling human investigation
@@ -181,7 +185,7 @@ AGENTS.md hard rule states: "Use `gh pr merge <number> --squash --auto`, then po
 
 ## References
 
-- GitHub auto-merge documentation: https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/incorporating-changes-from-a-pull-request/automatically-merging-a-pull-request
+- GitHub auto-merge documentation: <https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/incorporating-changes-from-a-pull-request/automatically-merging-a-pull-request>
 - Repository rulesets API: `gh api repos/jikig-ai/soleur/rulesets`
 - AGENTS.md hard rule: "Use `gh pr merge <number> --squash --auto`, then poll"
 - GitHub branch protection and rulesets: auto-merge respects all required status checks and dequeues if requirements change mid-flight

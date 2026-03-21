@@ -13,6 +13,7 @@ date: 2026-03-10
 **Research sources:** Hootsuite brand safety guide, Avenue Z X organic guide, Willow brand rules, Brand Safety Institute, 5 institutional learnings, constitution.md, existing codebase patterns
 
 ### Key Improvements
+
 1. Added "brand association risk" as a skip criterion -- any interaction with an account ties Soleur's brand to that account's content (Hootsuite brand safety research)
 2. Added anti-automation pacing guidance -- X's algorithm penalizes rapid-fire bursts that look automated, validating the cadence guardrail with platform-specific reasoning (Avenue Z 2026 guide)
 3. Added "religion and sex" to topics-to-avoid alongside politics -- industry standard per Willow/Brand Safety Institute research
@@ -20,6 +21,7 @@ date: 2026-03-10
 5. Added exception rule pattern for topic bans -- learning `2026-02-21-marketing-audit-brand-violation-cascade.md` shows that blanket prohibitions without exception rules break legitimate contexts
 
 ### Applied Learnings
+
 - `2026-02-12-brand-guide-contract-and-inline-validation.md` -- heading contract preserved, inline validation pattern means no separate enforcement agent needed
 - `2026-02-21-marketing-audit-brand-violation-cascade.md` -- term bans need boundary exception rules; guardrails should state exceptions at the same time as prohibitions
 - `2026-02-22-agent-context-blindness-vision-misalignment.md` -- agents that produce content must read canonical sources; guardrails become part of the canonical source the community-manager reads
@@ -38,6 +40,7 @@ Add an `#### Engagement Guardrails` subsection under `### X/Twitter` in `knowled
 The community-manager agent's Capability 4 (Mention Engagement) drafts replies using brand voice from `## Voice` and `## Channel Notes > ### X/Twitter`. However, the brand guide currently provides only positive guidance (what to say, how to say it) with no negative guardrails (what to avoid, when to stay silent).
 
 Without guardrails:
+
 - The agent has no signal for when NOT to reply (spam, rage-bait, political topics)
 - Reply cadence is unbounded -- rapid consecutive replies look automated
 - Tone matching is undefined -- a casual mention and a formal complaint get the same reply style
@@ -48,14 +51,17 @@ The guardrails section gives both the community-manager agent and the human revi
 ### Research Insights: Motivation
 
 **Best Practices (from Hootsuite brand safety guide):**
+
 - Brand safety is defined as "a set of measures taken to protect a brand's image and reputation from being associated with inappropriate, offensive, or harmful content." This applies to engagement replies, not just ad placement -- any interaction ties the brand to the content being replied to.
 - The "dirty dozen" industry-standard exclusion categories (military conflict, hate speech, terrorism, fake news, etc.) provide a baseline, but "not every category applies equally to every brand." Soleur should define its own boundaries.
 
 **Best Practices (from Willow brand rules):**
+
 - Brands must "avoid the robotic tone" -- engagement must sound human, which is especially relevant for AI-generated drafts.
 - Cultural sensitivity is paramount: "be cautious when discussing sensitive topics such as religion, sex, and politics."
 
 **Platform Behavior (from Avenue Z 2026 guide):**
+
 - X's algorithm filters aggressively for patterns that look automated: "repetitive posting, copy-paste threads, engagement bait, or rapid-fire bursts." This provides a platform-level reason for the cadence guardrail beyond brand safety -- X may suppress replies that come too fast.
 
 ## Proposed Solution
@@ -67,6 +73,7 @@ Add a single `#### Engagement Guardrails` heading under the existing `### X/Twit
 ### 1. Topics to Avoid
 
 Explicit list of topics the account does not engage with on X:
+
 - Political, partisan, or religiously divisive topics
 - Competitor criticism or comparisons (state what Soleur does, never what others lack)
 - Unverified claims or speculation about roadmap dates
@@ -78,17 +85,20 @@ Explicit list of topics the account does not engage with on X:
 ### Research Insights: Topics to Avoid
 
 **Best Practices:**
+
 - The Hootsuite "dirty dozen" provides an industry baseline of 12 content categories to exclude from brand association. For a developer-tools brand like Soleur, the most relevant exclusions are: hate speech, fake news, military conflict, and terrorism. Categories like adult content and drugs are unlikely to intersect with Soleur's mention stream but should still trigger a skip if encountered.
 - Willow's research emphasizes that some brands (like Nike) have taken calculated risks on controversial topics. This is a deliberate strategic choice, not a default. For an early-stage brand, the cost of a misaligned engagement far outweighs the visibility benefit.
 - Learning `2026-02-21-marketing-audit-brand-violation-cascade.md` demonstrates that term bans need exception rules written at the same time as the prohibition. The plan's "Exception" paragraph above follows this pattern.
 
 **Edge Cases:**
+
 - A mention asking "How does Soleur compare to [competitor]?" is a comparison question, not competitor criticism. The guardrail applies to Soleur's reply content (do not criticize the competitor), not to the question topic itself. The reply should focus on what Soleur does without referencing the competitor.
 - A trending hashtag (#buildinpublic) that temporarily becomes controversial does not permanently ban engagement with that hashtag. Evaluate per-session.
 
 ### 2. When to Skip Mentions/Threads
 
 Criteria for skipping a mention rather than replying:
+
 - Abusive, harassing, or spam content
 - Off-topic mentions with no connection to Soleur or solo-founder topics
 - Rage-bait or provocative threads designed to generate outrage
@@ -100,17 +110,20 @@ Criteria for skipping a mention rather than replying:
 ### Research Insights: When to Skip
 
 **Best Practices:**
+
 - Hootsuite: "Any interaction with a creator -- whether a paid collaboration or a simple comment -- ties your brand to their content." Before replying, glance at the account's recent posts. If the account's content includes hate speech, misinformation, or inflammatory material, replying creates a visible association.
 - Willow: "For trolls: the best policy is often not to engage. Do not get into a public argument." The existing brand guide already says "Never argue or debate" -- the skip criteria operationalize this for the pre-reply decision.
 - X's "Hide Reply" feature can be used for replies on Soleur's own tweets that are abusive, but this is a reactive tool, not a replacement for the skip decision on mentions.
 
 **Edge Cases:**
+
 - A legitimate user asks a genuine question but their account also has unrelated controversial content. Judgment call: reply if the mention itself is on-topic and professional. The skip criterion targets accounts that are primarily provocative, not accounts that occasionally post opinions.
 - A mention @-tags Soleur alongside other accounts in a group complaint. Replying enters a multi-party thread where control is lost. Default to skip unless the complaint is specifically about Soleur.
 
 ### 3. Reply Cadence
 
 Guardrails for reply pacing:
+
 - Maximum 10 replies per engagement session (matches `--max-results` default in `fetch-mentions`)
 - Default to skipping when unsure -- silence is safer than a misaligned reply
 - One reply per thread -- do not enter extended back-and-forth conversations on X (escalate to Discord or docs for complex questions)
@@ -119,19 +132,23 @@ Guardrails for reply pacing:
 ### Research Insights: Reply Cadence
 
 **Best Practices:**
+
 - Avenue Z 2026 guide: X's algorithm filters aggressively for "rapid-fire bursts that feel automated." Even if the content is high-quality, posting many replies in quick succession triggers algorithmic suppression. This validates spacing replies rather than posting all 10 immediately.
 - The community skill's `--max-results` default of 10 aligns with the cadence guardrail. If the user overrides with `--max-results 50`, the cadence guardrail (max 10 replies per session) takes precedence over the fetch count. The extra mentions are presented for review but most should be skipped.
 
 **Performance Considerations:**
+
 - X API credit conservation (learning `2026-03-09-external-api-scope-calibration.md`): On the pay-per-use tier, each reply costs credits. The 10-reply cap also serves as an implicit cost control. On the Free tier (manual mode), the cap prevents rapid manual posting that looks automated.
 
 **Edge Cases:**
+
 - If all 10 fetched mentions are from the same user (e.g., a bug report thread), reply to the most recent one and skip the rest. Multiple replies to the same user in a session looks like spam.
 - "One reply per thread" means the first engagement in a thread. If the user had previously replied in a thread in a past session, it is acceptable to reply again in a new session -- the guideline prevents same-session back-and-forth, not lifetime thread participation.
 
 ### 4. Tone Matching
 
 Additional tone guidance specific to engagement replies:
+
 - Match the register of the original tweet (technical question gets a technical answer, casual mention gets a concise acknowledgment)
 - Never argue or debate -- state the position once, then disengage
 - Redirect complex questions to docs or Discord rather than attempting a 280-character answer
@@ -141,11 +158,13 @@ Additional tone guidance specific to engagement replies:
 ### Research Insights: Tone Matching
 
 **Best Practices:**
+
 - Willow: "Avoid the robotic tone! Speak as a human would." This is especially critical for AI-drafted replies. The community-manager agent generates drafts, and the human reviewer must verify the draft does not sound like a chatbot response.
 - Willow: "B2C brands can be warm and welcoming; B2B companies in serious sectors should maintain professionalism while remaining approachable." Soleur sits in between -- it is a developer tool (B2B-adjacent) but targets solo founders (B2C energy). The existing brand voice ("declarative, concrete, no hedging") already captures the right balance.
 - Hootsuite: "Conduct a background check on [content] and associations" before engaging. For tone matching, this means: if the mention is from a well-known developer or community figure, the reply's register should reflect awareness of that context (concise and respectful, not over-explained).
 
 **Edge Cases:**
+
 - A sarcastic mention ("Oh great, another AI tool") can be read as dismissive or as genuine skepticism. Default to treating it as genuine skepticism and replying with a concrete differentiator. Do not match sarcasm with sarcasm.
 - Feature requests phrased as complaints ("Why doesn't Soleur do X?") should receive the same treatment as genuine feature suggestions. Acknowledge, file if valid, redirect to docs if it already exists.
 
@@ -160,10 +179,12 @@ The community-manager agent already reads `## Channel Notes > ### X/Twitter` for
 ### Research Insights: Heading Contract
 
 **Best Practices:**
+
 - Learning `2026-02-12-brand-guide-contract-and-inline-validation.md`: "Contracts beat schemas for human-produced documents." The `####` level heading is below the contract threshold (`##`), so it can be added, renamed, or restructured without breaking downstream consumers.
 - Learning `2026-02-22-agent-context-blindness-vision-misalignment.md`: Agents that produce content must read canonical sources before making decisions. The guardrails section becomes part of the canonical source the community-manager agent reads at Step 2 (Read Brand Guide). No code changes are needed because the agent reads the full `### X/Twitter` section, not specific sub-headings within it.
 
 **Edge Cases:**
+
 - If the `### X/Twitter` section grows too large for the agent's context window, the guardrails could be the content that pushes it over. Current `### X/Twitter` is ~30 lines; the guardrails add ~25-30 lines. At ~60 lines total, this is well within a single context read. Monitor if future additions to the X/Twitter section approach 100+ lines.
 
 ### Downstream Consumers

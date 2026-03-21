@@ -39,5 +39,6 @@ Three-layer pattern:
 - `2026-03-14-content-publisher-channel-extension-pattern.md` — Multi-channel content automation
 
 ## Tags
+
 category: ci-cd
 module: scheduled-workflows, marketing-automation

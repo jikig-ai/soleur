@@ -48,6 +48,7 @@ A new user who runs `claude plugin install soleur` gets zero feedback. They must
 2. **"After Installing" section on Getting Started page:** Add a prominent callout section immediately after the Installation code block, telling users their recommended first action is `/soleur:sync` for existing projects or `/soleur:go` for new ones. This catches users who miss the SessionStart message or who read the docs site directly.
 
 **Files:**
+
 - `plugins/soleur/hooks/hooks.json` -- add SessionStart hook entry with `startup` matcher
 - `plugins/soleur/hooks/welcome-hook.sh` -- new script (sentinel check + welcome message using `additionalContext`)
 - `plugins/soleur/docs/pages/getting-started.md` -- add "After Installing" section
@@ -56,6 +57,7 @@ A new user who runs `claude plugin install soleur` gets zero feedback. They must
 #### Research Insights (P0)
 
 **SessionStart hook API (from Claude Code docs):**
+
 - SessionStart hooks run on 4 event types: `startup` (new session), `resume` (continued session), `clear` (`/clear`), `compact` (context compaction). Use `"matcher": "startup"` to fire only on new sessions.
 - For SessionStart, any text printed to stdout is added as context that Claude can see. JSON output with `hookSpecificOutput.additionalContext` is the structured way to inject context.
 - The `systemMessage` field on `hookSpecificOutput` shows a warning to the user but is NOT the correct field for SessionStart context injection -- use `additionalContext` instead.
@@ -63,6 +65,7 @@ A new user who runs `claude plugin install soleur` gets zero feedback. They must
 - Exit code 0 = success (stdout parsed for JSON). Exit code 2 = blocking error (stderr shown to user). Any other code = non-blocking error (continue).
 
 **Sentinel file considerations:**
+
 - `.claude/soleur-welcomed.local` uses the `.local` convention but is NOT covered by the current `.gitignore` (which only has `.claude/settings.local.json`). Must add an explicit entry.
 - The sentinel is per-project (relative path), so users who install Soleur in multiple projects get the welcome once per project. This is correct behavior.
 - If `.claude/` directory does not exist, `mkdir -p` creates it. If the filesystem is read-only, the hook should fail gracefully (exit 0 with no output, no welcome).
@@ -76,12 +79,14 @@ A new user who runs `claude plugin install soleur` gets zero feedback. They must
 3. **Add "Try this first" callout:** Add a new `.callout` CSS class to `style.css` under `@layer components` for a visually distinct callout. Do NOT use inline styles (constitution rule: "Add CSS classes to `style.css` `@layer components` instead of inline styles in Nunjucks templates").
 
 **Files:**
+
 - `plugins/soleur/docs/pages/getting-started.md`
 - `plugins/soleur/docs/css/style.css` -- add `.callout` class to `@layer components`
 
 #### Research Insights (P1)
 
 **Docs site patterns (from learnings):**
+
 - Reuse existing CSS classes (`.page-hero`, `.catalog-grid`, `.component-card`, `.category-section`) where possible -- the docs-site learnings emphasize minimal custom CSS.
 - The `.command-item` class already provides the card-like appearance. The `.callout` class needs only a left border accent and slightly different background.
 - No existing callout/alert/tip classes exist in `style.css`. A new `.callout` class is needed.
@@ -89,6 +94,7 @@ A new user who runs `claude plugin install soleur` gets zero feedback. They must
 - Per the adding-docs-pages pattern, use existing HTML structure patterns. The page is `.md` not `.njk`, so template features are limited.
 
 **Information architecture (from constitution):**
+
 - "Audit information architecture separately from visual polish -- check navigation order matches user journey" -- the merged workflow section should order examples by likelihood of first use, not by domain.
 - Suggested order: sync (first action) -> build a feature -> fix a bug -> generate legal docs -> define brand -> review PR. This follows the new-user journey from onboarding through exploration.
 
@@ -112,21 +118,25 @@ The key change: "generate" intent signals are distinguished from "build" by chec
 **Why brainstorm and not a direct skill?** Brainstorm's Phase 0.5 domain detection already has the full routing table for all 8 domains. Adding a parallel routing system in `go.md` would duplicate this logic. Instead, the generate intent routes to brainstorm with context that signals "this is a domain-specific generation request" so brainstorm can fast-track through domain detection without the full exploration flow.
 
 **Files:**
+
 - `plugins/soleur/commands/go.md` -- add generate intent row, update classification logic
 
 #### Research Insights (P2)
 
 **Routing architecture (from learnings):**
+
 - Per `2026-02-22-simplify-workflow-command-routing.md`: The go command was deliberately reduced from 7 intents to 3. Adding a 4th intent (generate) is a minimal extension that maintains the thin-router philosophy.
 - Per `2026-02-22-simplify-workflow-thin-router-over-migration.md`: "The simplification users want is in the experience (fewer entry points), not the architecture (fewer files)." The generate intent improves the experience without architectural changes.
 - Per `2026-02-13-brainstorm-domain-routing-pattern.md`: "Route through an existing command rather than creating a new skill or command. The brainstorm command becomes a router." This validates routing generate through brainstorm.
 - Per `2026-02-22-domain-prerequisites-refactor-table-driven-routing.md`: Brainstorm's domain routing was refactored to a table-driven config. Adding a new domain now requires one table row. The go command should NOT duplicate this table.
 
 **Semantic intent classification (from constitution):**
+
 - "Prefer semantic assessment questions over keyword substring matching" -- the go command uses LLM-based classification, not grep. The intent description should be semantic ("the user wants to create a non-code business artifact") rather than a keyword list ("generate", "create", "draft", "write"). The LLM understands intent from context, not from trigger words.
 - The existing go.md uses trigger signal keywords as guidance for the LLM's semantic understanding, not as literal matching rules. The generate intent should follow this same pattern.
 
 **Step 4 delegation (from current go.md):**
+
 - The generate intent delegates to brainstorm with the original user input text. Brainstorm's Phase 0.5 domain assessment then detects the relevant domain (legal, marketing, etc.) and routes to the appropriate domain leader.
 - The user input should be passed unmodified -- brainstorm does its own parsing.
 
@@ -371,8 +381,8 @@ Add after the `.claude/settings.local.json` line:
 
 - Issue: #432
 - Parent issue: #430
-- Claude Code hooks reference: https://code.claude.com/docs/en/hooks
-- PostInstall hook feature request: https://github.com/anthropics/claude-code/issues/9394
+- Claude Code hooks reference: <https://code.claude.com/docs/en/hooks>
+- PostInstall hook feature request: <https://github.com/anthropics/claude-code/issues/9394>
 - Learning: `knowledge-base/project/learnings/2026-02-22-simplify-workflow-command-routing.md` (go command routing design decisions)
 - Learning: `knowledge-base/project/learnings/2026-02-22-simplify-workflow-thin-router-over-migration.md` (thin router philosophy)
 - Learning: `knowledge-base/project/learnings/2026-02-13-brainstorm-domain-routing-pattern.md` (route through existing commands)

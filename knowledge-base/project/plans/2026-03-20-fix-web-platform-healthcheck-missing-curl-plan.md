@@ -13,11 +13,13 @@ date: 2026-03-20
 **Research sources:** Docker healthcheck best practices, Node.js fetch timeout behavior, distroless container patterns, project learnings
 
 ### Key Improvements
+
 1. Added explicit `AbortSignal.timeout()` to the fetch call for deterministic timeout behavior independent of Docker's `--timeout`
 2. Identified and documented Node.js unhandled promise rejection edge case (Node 15+ terminates on unhandled rejections -- our `.catch()` handles this correctly)
 3. Added test scenario for timeout behavior and shell quoting validation
 
 ### New Considerations Discovered
+
 - The `node -e` approach uses Docker's shell form (`CMD command`), which runs under `/bin/sh -c` -- this is fine for `node:22-slim` which includes a shell, but would not work for distroless images (not applicable here, but worth noting for future reference)
 - Native `fetch()` has no default timeout -- without `AbortSignal.timeout()`, the fetch could hang indefinitely if the server accepts the connection but never responds, though Docker's `--timeout=5s` would kill the process at the container level
 
@@ -59,22 +61,26 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 ### Research Insights
 
 **Best Practices (from Docker healthcheck literature):**
+
 - Use the application's native runtime for health checks instead of adding external binaries -- this is the consensus recommendation from both [Elton Stoneman's analysis](https://blog.sixeyed.com/docker-healthchecks-why-not-to-use-curl-or-iwr/) and [Matt Knight's distroless guide](https://www.mattknight.io/blog/docker-healthchecks-in-distroless-node-js)
 - curl adds ~2.5 MB on Alpine and ~5-10 MB on Debian slim, plus expands the attack surface with libcurl dependencies
 - Health checks should validate that the application can serve requests, not just that a process is alive
 
 **Timeout Handling:**
+
 - Node.js native `fetch()` has no default timeout -- if the server accepts the TCP connection but hangs, fetch waits indefinitely
 - `AbortSignal.timeout(4_000)` provides a 4-second application-level timeout, giving 1 second of headroom before Docker's 5-second `--timeout` kills the process
 - Docker's `--timeout` is a hard kill (SIGKILL) with no cleanup -- the `AbortSignal.timeout()` allows the `.catch()` handler to run and exit cleanly with code 1
 - `AbortSignal.timeout()` is available in Node.js 17.3+ (well within our Node 22 baseline)
 
 **Error Handling:**
+
 - The `.catch(() => process.exit(1))` handles three failure modes: connection refused (server not started), DNS resolution failure, and timeout (via AbortSignal)
 - In Node.js 15+, unhandled promise rejections terminate the process with a non-zero exit code -- our explicit `.catch()` is the safer pattern since it guarantees exit code 1 specifically (not an arbitrary non-zero code)
 - The `.then(r => { if(!r.ok) process.exit(1) })` catches HTTP error responses (4xx, 5xx) that would not trigger a network error
 
 **Shell Form vs Exec Form:**
+
 - The `CMD` in shell form (`CMD node -e "..."`) runs under `/bin/sh -c`, which is available in `node:22-slim`
 - For distroless images, the exec form (`CMD ["/usr/local/bin/node", "-e", "..."]`) would be required -- not applicable here but noted for future reference
 

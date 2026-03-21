@@ -21,6 +21,7 @@ related_issues:
 The `version-bump-and-release.yml` workflow wrote untrusted values (commit messages, PR titles) to `$GITHUB_OUTPUT` using `echo "key=value"`. Since `$GITHUB_OUTPUT` uses a `key=value\n` format, a value containing embedded newlines creates additional key=value pairs — allowing an attacker with merge access to forge step outputs like `labels=semver:major`.
 
 Two attack vectors confirmed via shell testing:
+
 1. **`\r` (carriage return)** passes through `head -1` and may be treated as a line separator on some runners
 2. **`\n` in `jq -r` output** — a PR title containing a literal newline causes `echo "title=..."` to write two separate lines to `$GITHUB_OUTPUT`
 
@@ -37,6 +38,7 @@ printf 'title=%s\n' "$(echo "$PR_JSON" | jq -r '.title' | tr -d '\n\r')" >> "$GI
 ```
 
 Three specific changes:
+
 1. Line 77 (give_up fallback): `head -1 | tr -d '\n\r'` for commit message title
 2. Line 118 (PR title from API): `jq -r '.title' | tr -d '\n\r'`
 3. Line 119 (PR labels from API): `jq -r '...' | tr -d '\n\r'`
@@ -62,5 +64,6 @@ GitHub's heredoc/delimiter syntax for multiline outputs is NOT a solution here �
 - `2026-03-03-serialize-version-bumps-to-merge-time.md` — workflow architecture and design decisions
 
 ## Tags
+
 category: security-issues
 module: ci-cd

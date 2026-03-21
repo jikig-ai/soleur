@@ -67,6 +67,7 @@ If creation fails (name taken, rate limited, etc.), the human completes manually
 **Edit:** `plugins/soleur/docs/_data/site.json`
 
 Add two fields after existing `"x"` field:
+
 ```json
 "linkedin": "",
 "linkedinCompany": "<captured-url>"
@@ -101,10 +102,13 @@ Add two fields after existing `"x"` field:
 | LinkedIn Company Page | linkedin-company | social | `<slug>` |
 
 3. **Update Phase 4 (Read Brand Guide)** — replace the existing line:
+
    ```
    Read `## Channel Notes > ### LinkedIn`
    ```
+
    with two lines:
+
    ```
    Read `## Channel Notes > ### LinkedIn Personal`
    Read `## Channel Notes > ### LinkedIn Company Page`
@@ -131,9 +135,11 @@ Generate a LinkedIn company page variant:
 6. **Update Phase 5 header text** — replace "generate all 6 variants" with "generate all platform-specific variants"
 
 7. **Update Phase 6 (Present All Variants)** — add LinkedIn Company Page to display list with format:
+
    ```
    ## LinkedIn Company Page (NNNN/1300 optimal, NNNN/3000 max)
    ```
+
    Replace "all 6 variants" with "all variants"
 
 8. **Update content file template (Phase 9)** — rename `## LinkedIn` to `## LinkedIn Personal`, add `## LinkedIn Company Page` section after it:
@@ -316,5 +322,6 @@ Then only the company section content is returned
 ## Rollback Plan
 
 Each commit is independently revertable:
+
 - Commit 2 (channel mapping + tests + community.njk): `git revert` — content-publisher returns to 2-channel mapping, community page loses LinkedIn card
 - Commit 1 (social-distribute + brand guide + site.json): `git revert` — reverts to single LinkedIn variant

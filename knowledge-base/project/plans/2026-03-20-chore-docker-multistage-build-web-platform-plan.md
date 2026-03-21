@@ -15,6 +15,7 @@ deepened: 2026-03-20
 **Research sources:** Next.js deployment docs (Context7), esbuild API docs (Context7), Docker security hardening guides, web search (5 queries), 3 institutional learnings
 
 ### Key Improvements
+
 1. **esbuild path alias resolution confirmed** -- `@/*` aliases are automatically resolved when using `--bundle` mode; no plugins or extra tooling needed
 2. **`--packages=external` default was reverted** -- esbuild 0.22 briefly defaulted to externalizing all packages for `--platform=node`, but this was reverted due to AWS CDK breakage; explicit `--external:` flags remain necessary
 3. **Non-root user added** -- production image should run as non-root for defense-in-depth, following the telegram-bridge pattern
@@ -23,6 +24,7 @@ deepened: 2026-03-20
 6. **Healthcheck improved** -- using `node -e` with native `fetch` is the recommended approach for `node:22-slim`; `http` module fallback documented as alternative
 
 ### New Considerations Discovered
+
 - esbuild automatically reads `tsconfig.json` `paths` during bundling -- the `@/*` alias concern is a non-issue
 - The `--packages=external` default was reverted in esbuild -- explicit externals are required
 - `node:22-slim` images include a built-in `node` user (uid 1000) -- no need to `useradd`
@@ -144,6 +146,7 @@ The custom server uses `@/*` path aliases (e.g., `import { KeyInvalidError } fro
 Per [esbuild documentation](https://esbuild.github.io/getting-started/), `--bundle` mode inlines all imported files into the output. Since esbuild reads `tsconfig.json` `paths` during resolution, `@/*` aliases are resolved to their actual file paths before bundling. The output `dist/server/index.js` contains no unresolved aliases.
 
 **Alternative approaches (not recommended):**
+
 - `tsc-alias` post-processor: adds a build step and a devDependency
 - `esbuild-plugin-tsconfig-paths`: unnecessary when `--bundle` is used (only needed for non-bundled builds)
 - Manual relative path refactoring: fragile and degrades DX
@@ -171,6 +174,7 @@ Debian's `apt-get install` pulls "recommended" packages by default, which can ad
 
 **Layer ordering for cache efficiency:**
 The proposed stage ordering maximizes Docker layer cache hits:
+
 1. `deps` stage: Only invalidated when `package.json` or `package-lock.json` changes (rare)
 2. `builder` stage: Invalidated on any source change (frequent), but deps layer is cached
 3. `runner` stage: Production deps (`npm ci --omit=dev`) cached independently from build deps
@@ -190,9 +194,11 @@ Per [Docker Healthchecks: Why Not To Use curl or iwr](https://blog.sixeyed.com/d
 Node 22 includes a stable, unflagged `fetch` API (based on undici). The one-liner `node -e "fetch(...).then(...).catch(...)"` is the cleanest approach for `node:22-slim` images.
 
 **Alternative (http module) for broader compatibility:**
+
 ```dockerfile
 HEALTHCHECK CMD node -e "require('http').get('http://localhost:3000/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"
 ```
+
 This works on all Node.js versions (including those without native fetch). Not needed here since we target Node 22, but documented for reference.
 
 ## Acceptance Criteria
@@ -216,7 +222,7 @@ This works on all Node.js versions (including those without native fetch). Not n
 ## Test Scenarios
 
 - Given a clean build, when `docker build` runs, then all three stages complete without errors
-- Given the built image, when `docker run` starts the container, then the custom server starts and logs "Ready on http://localhost:3000"
+- Given the built image, when `docker run` starts the container, then the custom server starts and logs "Ready on <http://localhost:3000>"
 - Given a running container, when `GET /health` is requested, then it returns `{"status":"ok"}`
 - Given a running container, when the Docker healthcheck runs, then `node -e fetch(...)` succeeds (exit 0)
 - Given a running container, when a WebSocket connection is opened to `/ws`, then the upgrade succeeds
@@ -231,6 +237,7 @@ This works on all Node.js versions (including those without native fetch). Not n
 
 **Verify no devDependencies leak:**
 Beyond `npm ls --omit=dev`, also check that specific binary entrypoints are absent:
+
 ```bash
 docker run --rm <image> sh -c "which vitest || echo 'vitest not found: OK'"
 docker run --rm <image> sh -c "which tsc || echo 'tsc not found: OK'"
@@ -239,12 +246,14 @@ docker run --rm <image> sh -c "which eslint || echo 'eslint not found: OK'"
 
 **Verify esbuild output correctness:**
 The bundled `dist/server/index.js` should import from `next`, `ws`, `@supabase/supabase-js`, etc. (external requires) but NOT contain inlined copies of those packages. Check with:
+
 ```bash
 docker run --rm <image> head -20 dist/server/index.js
 # Should see require("next"), require("ws"), etc. -- not inlined module code
 ```
 
 **Verify signal handling:**
+
 ```bash
 docker run --rm -d --name test-signals <image>
 docker stop test-signals  # Should stop within 1-2 seconds (not 10s timeout)

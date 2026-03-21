@@ -163,6 +163,7 @@ Solo developer. No external teams affected. The change modifies the compound wor
 **Dependencies:** None. All changes are to prompt instruction files.
 
 **Risks:**
+
 - Detection quality: The LLM might not reliably identify which skill was active. Mitigation: the user confirms the target, so misdetection is correctable.
 - Instruction bloat: Over time, definitions accumulate bullets. Mitigation: "sharp edges only" principle + user confirmation gate. A warning threshold can be added in v2 if definitions get crowded.
 

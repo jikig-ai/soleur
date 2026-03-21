@@ -14,6 +14,7 @@ deepened: 2026-02-16
 **Sections enhanced:** 2 (Verification, Implementation notes)
 
 ### Key Improvements
+
 1. Added local verification steps from documented base-href learning
 2. Added post-edit verification command to catch missed files
 3. Noted accessibility considerations for external links

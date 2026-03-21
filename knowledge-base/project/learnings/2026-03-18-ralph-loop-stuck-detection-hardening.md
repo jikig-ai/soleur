@@ -26,5 +26,6 @@ When building loop detection for LLM agents, exact-match detection (hashing) cat
 - `replace_all` in Edit tool was more aggressive than expected — matched all instances of a substring across the file rather than the intended subset. Result was correct but unintentional.
 
 ## Tags
+
 category: runtime-errors
 module: ralph-loop

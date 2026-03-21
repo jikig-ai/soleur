@@ -17,6 +17,7 @@ The `encrypted_key` column in the `api_keys` table is declared as `bytea` (binar
 ### Chosen Approach: Migrate `encrypted_key` to `text` + Harden
 
 A single migration aligns `encrypted_key` with how `iv` and `auth_tag` already work. Additionally:
+
 - Fix the `ApiKey` TypeScript type to include `iv` and `auth_tag` fields
 - Add tests for `encryptKey` / `decryptKey` round-trip
 - File a follow-up issue for Supabase Vault migration

@@ -20,6 +20,7 @@ Also update `.github/ISSUE_TEMPLATE/bug_report.yml` placeholder version.
 ### SKILL.md Authoring Pattern
 
 Follow the `atdd-developer` pattern:
+
 - YAML frontmatter: `name` (kebab-case), `description` (third person: "This skill should be used when...")
 - Markdown headings for phases (Phase 0, Phase 1, etc.)
 - XML semantic tags (`<critical_sequence>`, `<decision_gate>`) for complex control flow
@@ -38,6 +39,7 @@ After running `git merge origin/main`, any previously-read files that changed in
 Skill creation is a registration-heavy operation (6 files minimum). The skill content itself is usually straightforward if you follow an existing skill as a template. The risk is in the registration steps, not the skill logic. Use the versioning triad checklist and verify counts match across all files.
 
 ## Tags
+
 category: implementation-patterns
 module: plugins/soleur/skills
 symptoms: missing skill registration, version mismatch, file cache invalidation

@@ -21,5 +21,6 @@ Review agents (pattern-recognition-specialist) caught the gap. Fixed by updating
 When planning a directory rename, enumerate ALL files in the directory being renamed as potential self-reference holders — not just the files that are known to contain path references. Directory tree diagrams and conceptual prose derived from the directory name are easy to miss because they don't match a simple `grep` for the path pattern.
 
 ## Tags
+
 category: implementation-patterns
 module: knowledge-base

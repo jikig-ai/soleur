@@ -11,12 +11,14 @@ date: 2026-03-18
 **Research sources:** Bun official docs (Context7), worktree-manager.sh code review, institutional learnings (3 relevant), CI workflow analysis
 
 ### Key Improvements
+
 1. Corrected `bunfig.toml` config -- `root = "."` is a no-op (already the default); replaced with actionable comment-only config since Bun has no test-discovery exclusion mechanism
 2. Identified that `scheduled-ship-merge.yml` and `scheduled-bug-fixer.yml` also use setup-bun without pinning -- should be pinned for consistency
 3. Provided concrete implementation for `install_deps()` function in worktree-manager.sh, positioned after `copy_env_files` in both `create_worktree()` and `create_for_feature()`
 4. Added edge case: `bun` may not be on PATH in all environments -- the dep install must degrade gracefully
 
 ### New Considerations Discovered
+
 - The prior learning `2026-02-26-worktree-missing-node-modules-silent-hang.md` already recommended adding `npm install` to worktree creation -- this fix finally implements that recommendation
 - Bun's `root` test config option defaults to `.` (current directory), so setting it explicitly is redundant -- the only value is as documentation
 
@@ -31,12 +33,14 @@ The original hypothesis was that Bun recursively discovers duplicate test files 
 ### Research Insights
 
 **Bun test discovery behavior (from official docs):**
+
 - Bun ignores `node_modules` directories and hidden directories (starting with `.`) by default during test discovery
 - The only discovery-scoping option is `[test] root` in `bunfig.toml`, which defaults to `.` (current directory)
 - There is NO `pathIgnorePatterns` or `testPathIgnorePatterns` equivalent for test discovery (unlike Jest)
 - `coveragePathIgnorePatterns` only affects coverage reporting, not file discovery
 
 **Crash characteristics observed:**
+
 - RSS spikes to 1.09GB before the allocator panic, suggesting Bun attempts to load/parse all discovered files before failing
 - The crash is deterministic when `node_modules/` is absent (100% reproduction rate)
 - After `bun install`, tests pass reliably across multiple consecutive runs (0% failure rate)
@@ -55,6 +59,7 @@ bun test
 **After `bun install`, tests pass reliably** -- 1136 tests across 13 files in ~3 seconds.
 
 **Impact:**
+
 - Every new worktree starts without `node_modules`, so the first `bun test` always crashes
 - CI is unaffected (runs `bun install` before `bun test` in `ci.yml`)
 - Developers lose time debugging a segfault that is actually "missing dependencies"
@@ -71,11 +76,13 @@ bun test
 ### Research Insights
 
 **Institutional learnings applied:**
+
 - `2026-02-26-worktree-missing-node-modules-silent-hang.md`: Documents that `npx` with missing local packages silently hangs in non-TTY contexts. That learning explicitly recommended: "the `worktree-manager.sh feature` subcommand could run `npm install` (or detect `package.json` and warn) after creating the worktree." This fix implements that long-standing recommendation.
 - `2026-02-12-bun-coverage-threshold-config.md`: Confirms `bunfig.toml` is directory-scoped and Bun picks it up automatically from the working directory. The root config will not conflict with `apps/telegram-bridge/bunfig.toml` -- Bun merges the configs.
 - `2026-03-03-no-unified-test-runner-from-repo-root.md`: Documents that CI runs both test suites separately with different `working-directory` values. The root `bun test` is a developer convenience, not the CI path.
 
 **Why the original `.worktrees/` hypothesis was wrong:**
+
 - This repo uses `core.bare=true` with `.worktrees/` at the bare repo root
 - Individual worktree checkouts at `.worktrees/feat-<name>/` do NOT contain a nested `.worktrees/` directory
 - Even if they did, Bun's default behavior ignores dot-prefixed directories during test discovery
@@ -100,11 +107,13 @@ Add a root-level `bunfig.toml` as a standard location for future test configurat
 ### Research Insights
 
 **Best practices for `bunfig.toml`:**
+
 - Keep the root config minimal; per-app configs handle coverage thresholds and app-specific settings
 - Bun merges configs: a root `bunfig.toml` does NOT override `apps/telegram-bridge/bunfig.toml` -- both apply when running from their respective directories
 - Setting `root = "."` is a no-op since that's already the default. Omitting it avoids confusion about what it actually changes.
 
 **Edge case: `root` option semantics:**
+
 - `root = "."` means "start discovery from the directory containing `bunfig.toml`" -- which is the default behavior
 - `root = "test"` would restrict discovery to only the `test/` directory, which would miss `apps/*/test/` and `plugins/soleur/test/`
 - For a monorepo with test files in multiple directories, the only correct `root` is `.` (the default)
@@ -125,16 +134,19 @@ Update the CI workflow to pin the latest stable version instead of `latest` (whi
 ### Research Insights
 
 **CI version pinning best practices:**
+
 - `bun-version: latest` in CI is a reproducibility risk -- a Bun release with breaking changes could fail CI for unrelated PRs
 - Pin to a specific version and upgrade intentionally via dedicated PRs
 - The SHA-pinned action ref (`@3d267786b...`) is good practice per `2026-02-21-github-actions-workflow-security-patterns.md` (already in place)
 
 **Other workflows to consider:**
+
 - `scheduled-ship-merge.yml` uses `setup-bun` without `bun-version` (defaults to `latest`)
 - `scheduled-bug-fixer.yml` uses `setup-bun` without `bun-version` (defaults to `latest`)
 - These workflows don't run `bun test`, so the crash doesn't affect them, but pinning for consistency is recommended as a separate follow-up
 
 **Local Bun upgrade:**
+
 - Local Bun is 1.3.5 (installed via system package manager or `bun upgrade`)
 - Run `bun upgrade` locally to get 1.3.11 -- this may independently fix the crash, but the worktree dep-install guard is still needed as defense-in-depth
 
@@ -149,6 +161,7 @@ The worktree-manager script should run `bun install` automatically after creatin
 **Implementation approach (from code review of worktree-manager.sh):**
 
 The script has two creation paths that need the dep-install hook:
+
 1. `create_worktree()` (line 118) -- generic worktree creation
 2. `create_for_feature()` (line 188) -- feature-specific creation with spec directory
 
@@ -193,16 +206,19 @@ install_deps() {
 ```
 
 **Insertion points in worktree-manager.sh:**
+
 - After `copy_env_files "$worktree_path"` in `create_worktree()` (~line 177)
 - After `copy_env_files "$worktree_path"` in `create_for_feature()` (~line 237)
 
 **Edge cases:**
+
 - Network unavailable: `bun install` fails gracefully with a warning, doesn't block worktree creation
 - `bun` not on PATH: falls back to `npm`, then warns
 - Multiple `package.json` files (app-level): root install is sufficient since root `package.json` has the devDependencies needed by root-level test files. App-level deps can be installed on demand.
 - `bun.lock` vs `package-lock.json`: `bun install` uses `bun.lock` if present (this repo has one), `npm install` would generate a `package-lock.json` -- prefer bun
 
 **Convention compliance:**
+
 - Function uses `local` for all variables per constitution.md shell convention
 - Error messages go to stdout (not stderr) to match existing `copy_env_files` pattern
 - Uses `echo -e` with color codes consistent with existing script style
@@ -216,6 +232,7 @@ Document that Bun 1.3.5 segfaults on missing dependencies instead of reporting a
 ### Research Insights
 
 **Learning structure (from existing patterns):**
+
 - Follow the Problem / Solution / Key Insight format used by all other learnings
 - Include YAML frontmatter with `title`, `date`, `category`, `tags`, `severity`
 - Category should be `runtime-errors` (segfault is a runtime crash)
@@ -244,12 +261,14 @@ Document that Bun 1.3.5 segfaults on missing dependencies instead of reporting a
 ## Context
 
 **Existing patterns:**
+
 - `apps/telegram-bridge/bunfig.toml` -- per-app test config with coverage thresholds (keep as-is, Bun merges configs)
 - `.github/workflows/ci.yml` -- currently uses `bun-version: latest`
 - Learning: `2026-02-26-worktree-missing-node-modules-silent-hang.md` -- related prior incident (recommended this fix)
 - `worktree-manager.sh` already has post-creation hooks (`copy_env_files`) -- `install_deps` follows the same pattern
 
 **Relevant files:**
+
 - `package.json` (root) -- devDependencies needed by tests
 - `bun.lock` (root) -- lockfile for deterministic installs
 - `.gitignore` -- already ignores `.worktrees`

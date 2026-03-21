@@ -164,6 +164,7 @@ Knowledge artifacts follow a lifecycle: **create** during brainstorm/plan, **use
 ### Convention Over Configuration
 
 Paths follow predictable patterns:
+
 - Feature branches: `feat-<name>`
 - Specs: `knowledge-base/project/specs/feat-<name>/`
 - Worktrees: `.worktrees/feat-<name>/`

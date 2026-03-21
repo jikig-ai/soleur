@@ -13,11 +13,13 @@ deepened: 2026-03-10
 **Research sources:** Nunjucks block inheritance learning, Eleventy worktree build learning, base.njk template verification
 
 ### Key Improvements
+
 1. Added worktree-safe verification alternative -- Eleventy build fails in worktrees due to relative path bug in `agents.js` (documented in `knowledge-base/project/learnings/2026-03-10-eleventy-build-fails-in-worktree.md`); added grep-based source file verification as primary method
 2. Verified template inheritance claim against actual `base.njk` source: `{% block content %}` ends at line 91, footer newsletter is at lines 94-95 -- confirmed outside the block
 3. Confirmed `index.njk` does NOT use `{% block content %}` override -- its content flows through the default `{{ content | safe }}` rendering in the parent block, meaning the in-page newsletter is injected as body content while the footer newsletter renders independently
 
 ### New Considerations Discovered
+
 - The `newsletter-form.njk` JS handler in `base.njk` (lines 118-146) uses `document.querySelectorAll('.newsletter-form').forEach(...)` -- reducing from 2 forms to 1 on the homepage means the forEach still works correctly (iterates over 1 element instead of 2)
 - After this change, `newsletter-form.njk` has exactly one caller (`base.njk` line 95). The `location` variable and `id="newsletter-{{ location }}"` mechanism becomes single-use but is harmless to keep
 

@@ -55,6 +55,7 @@ Closes #725
 **SDK Permission Chain (from [Claude Agent SDK docs](https://platform.claude.com/docs/en/agent-sdk/permissions)):**
 
 The SDK evaluates permissions in this order:
+
 1. Hooks (can allow, deny, or pass through)
 2. Deny rules (`disallowed_tools` + settings.json deny)
 3. Permission mode (`bypassPermissions` approves all; `acceptEdits` approves file ops)
@@ -68,6 +69,7 @@ The current workspace `.claude/settings.json` has `permissions.allow: ["Read", "
 **Node.js Path Traversal Best Practices (CWE-22):**
 
 The standard secure pattern is:
+
 ```typescript
 const safePath = path.resolve(basePath, userInput);
 if (!safePath.startsWith(path.resolve(basePath) + path.sep)) {
@@ -76,6 +78,7 @@ if (!safePath.startsWith(path.resolve(basePath) + path.sep)) {
 ```
 
 Key considerations:
+
 - `path.resolve()` normalizes `..` segments and converts to absolute -- this is the primary defense
 - Always append `path.sep` (or `/` on Linux) to the base path before `startsWith` to prevent prefix collisions
 - URL-encoded traversal (`..%2F`) is NOT a vector here because the Agent SDK passes JSON-parsed strings, not URL-encoded paths; `path.resolve` does not decode percent-encoding
@@ -84,6 +87,7 @@ Key considerations:
 **Symlink Considerations (CVE-2025-55130):**
 
 `path.resolve()` does not follow symlinks. If an attacker can create a symlink inside the workspace pointing outside it, `path.resolve` would approve the path but the actual file operation would follow the symlink to an external location. Mitigations:
+
 - The workspace directory is server-provisioned (`workspace.ts`), not user-writable via the filesystem directly
 - The only symlink is `plugins/soleur -> /app/shared/plugins/soleur` (read-only, server-controlled)
 - Agent tool calls go through the SDK, which resolves paths relative to `cwd` -- the agent cannot create arbitrary symlinks without using Bash
@@ -102,6 +106,7 @@ Key considerations:
 ### Research Insights
 
 **Test Design:**
+
 - The `..%2F` (URL-encoded traversal) test case from the original plan should be removed. Verified experimentally: `path.resolve('/workspaces/user1/..%2F..%2Fetc/passwd')` returns `/workspaces/user1/..%2F..%2Fetc/passwd` -- the percent-encoded dots are treated as literal directory names, not traversal sequences. The Agent SDK delivers tool input as JSON-parsed objects, so URL encoding is not a relevant attack vector.
 - Add a deeply nested traversal case (`/a/b/../../../../etc/passwd`) to verify `path.resolve` handles multiple `..` segments at varying depths.
 
@@ -153,6 +158,7 @@ if (filePath && !isPathInWorkspace(filePath, workspacePath)) {
 ### Research Insights
 
 **Implementation refinements from research:**
+
 - The `resolvedWorkspace + "/"` pattern is the Node.js standard for preventing prefix collisions (e.g., `/workspaces/user1` vs `/workspaces/user10`). Using `path.sep` instead of hardcoded `"/"` is unnecessary since the server runs on Linux (Docker), but for portability the constant `"/"` is acceptable since `path.resolve` produces POSIX paths on Linux.
 - The original MVP used `resolvedWorkspace.slice(0, -1)` for the exact-match case -- simplified to direct equality check (`resolved === resolvedWorkspace`) for clarity.
 - `path.resolve` handles all normalization: multiple slashes (`//`), dot segments (`.`), parent references (`..`), and trailing slashes. No additional sanitization is needed.

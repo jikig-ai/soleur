@@ -27,6 +27,7 @@ Scan all 122 components for Claude Code-specific primitive references: AskUserQu
 ### FR2: Traffic Light Classification
 
 Assign each component a portability rating:
+
 - **Green**: No Claude Code-specific primitives; ports to Codex SKILL.md/AGENTS.md format as-is
 - **Yellow**: Contains Claude Code-specific primitives that have partial Codex equivalents; needs adaptation
 - **Red**: Depends on Claude Code primitives with no Codex equivalent; requires rewrite or is non-portable
@@ -34,6 +35,7 @@ Assign each component a portability rating:
 ### FR3: Gap Annotations
 
 For each yellow/red component, document:
+
 - Which Claude Code primitives are used
 - What the Codex equivalent is (or "none exists")
 - Estimated adaptation complexity (trivial / moderate / significant)
@@ -51,6 +53,7 @@ Hybrid approach: automated grep-based scan for primitive references, followed by
 ### TR2: Output Format
 
 Markdown document in `knowledge-base/project/specs/feat-codex-portability-inventory/` with:
+
 - Summary statistics (green/yellow/red counts and percentages)
 - Full component inventory table
 - Gap analysis per non-portable primitive

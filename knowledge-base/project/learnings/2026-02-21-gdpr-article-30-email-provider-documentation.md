@@ -52,5 +52,5 @@ Proton's DPA is not limited to business/enterprise accounts. It applies to "any 
 
 - Issue #204
 - PR #200 (GDPR Article 30 compliance fixes)
-- Proton DPA: https://proton.me/legal/dpa
+- Proton DPA: <https://proton.me/legal/dpa>
 - EU adequacy decision for Switzerland: Commission Decision 2000/518/EC

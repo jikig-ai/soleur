@@ -32,6 +32,7 @@ Additionally: two new GitHub Actions scheduled workflows (ship-merge and compoun
 ### 1. Detection Mechanism: Explicit `--headless` flag
 
 Skills check `$ARGUMENTS` for `--headless`. When present:
+
 - All AskUserQuestion calls are bypassed with sensible defaults
 - Compound auto-promotes learnings to constitution.md using LLM judgment
 - Ship auto-derives PR title/body from branch name and diff summary

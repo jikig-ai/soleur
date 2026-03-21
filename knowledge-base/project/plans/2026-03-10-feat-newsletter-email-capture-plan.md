@@ -118,11 +118,11 @@ Works without JS (falls back to plain POST to Buttondown). Progressive enhanceme
 
 ## Prerequisites
 
-Verify Buttondown offers a DPA with SCCs before proceeding. Email DPO (justin@buttondown.email). If they cannot provide adequate GDPR transfer mechanism, evaluate Loops as backup.
+Verify Buttondown offers a DPA with SCCs before proceeding. Email DPO (<justin@buttondown.email>). If they cannot provide adequate GDPR transfer mechanism, evaluate Loops as backup.
 
 - [x] Create Buttondown account at buttondown.com
 - [x] Verify double opt-in is enabled (default)
-- [ ] Request DPA with SCCs from justin@buttondown.email
+- [ ] Request DPA with SCCs from <justin@buttondown.email>
 - [ ] Confirm EU-US data transfer mechanism
 - [x] Add `"newsletter"` key to `plugins/soleur/docs/_data/site.json` with Buttondown username
 

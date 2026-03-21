@@ -11,6 +11,7 @@ A fix to the `/soleur:brainstorm` command to prevent duplicate GitHub issues whe
 ## Problem Statement
 
 When a brainstorm session starts with a reference to an existing GitHub issue:
+
 - The workflow currently creates a **new** GitHub issue in Phase 3.6
 - This results in duplicate issues (e.g., #10/#15, #14/#16)
 - The original issue becomes orphaned while the new issue tracks the work
@@ -20,6 +21,7 @@ When a brainstorm session starts with a reference to an existing GitHub issue:
 **Detection-based skip:** Parse the feature description for issue references and skip issue creation if one exists.
 
 This approach:
+
 - Requires minimal changes to the brainstorm command
 - Works for the common pattern of `github issue #N` in arguments
 - Links artifacts to the existing issue rather than creating duplicates
@@ -42,6 +44,7 @@ None - requirements are clear.
 Modify `plugins/soleur/commands/soleur/brainstorm.md`:
 
 In Phase 3.6, before creating a new issue:
+
 1. Parse feature_description for issue reference pattern
 2. If found, extract issue number and verify it exists (`gh issue view #N`)
 3. Skip creation, use existing issue number for all subsequent references

@@ -9,6 +9,7 @@
 Migrate from CI-committed version files to tag-only versioning. The version-bump-and-release workflow currently computes the version, updates 6 files, commits, and pushes to main. This push fails because the CLA Required ruleset blocks `github-actions[bot]`. Instead of fixing the bypass, we eliminate the push entirely.
 
 **After this change:**
+
 - Version is derived from git tags / GitHub Releases, not committed files
 - CI never pushes commits to main
 - The docs site computes version and component counts at build time
@@ -31,6 +32,7 @@ Migrate from CI-committed version files to tag-only versioning. The version-bump
 ### Why Not Just Fix the Bypass?
 
 The push-to-main pattern is the root problem, not the CLA ruleset. Any bypass fix (GitHub App, PAT) treats the symptom. Tag-only versioning:
+
 - Eliminates the need for CI to write to main at all
 - Removes 6 files from version drift risk
 - Simplifies the release workflow (fewer steps, no commit/push)
@@ -55,15 +57,18 @@ The CTO assessment confirmed that `github-actions[bot]` cannot be added as a rul
 ## Scope of Changes
 
 ### Workflow (`version-bump-and-release.yml`)
+
 - Remove: "Update version files" step
 - Remove: "Verify version consistency" step
 - Remove: "Commit and push" step
 - Keep: version computation, GitHub Release creation, Discord notification, docs deploy trigger
 
 ### Files to Delete
+
 - `plugins/soleur/CHANGELOG.md`
 
 ### Files to Modify
+
 - `plugins/soleur/docs/_data/changelog.js` -- rewrite to fetch from GitHub Releases API
 - `plugins/soleur/docs/_data/plugin.js` -- add version derivation from latest release tag
 - `plugins/soleur/.claude-plugin/plugin.json` -- freeze version to sentinel value
@@ -74,6 +79,7 @@ The CTO assessment confirmed that `github-actions[bot]` cannot be added as a rul
 - `plugins/soleur/AGENTS.md` -- update "Versioning Requirements" section
 
 ### Docs Site Changes
+
 - `changelog.js`: Fetch releases from `https://api.github.com/repos/jikig-ai/soleur/releases` at build time
 - `plugin.js`: Derive version from latest release tag
 - Add build-time component count computation

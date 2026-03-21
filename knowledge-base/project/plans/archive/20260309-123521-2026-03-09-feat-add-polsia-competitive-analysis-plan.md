@@ -14,12 +14,14 @@ semver: patch
 **Research sources:** WebFetch (polsia.com), WebSearch (Product Hunt, TeamDay interview, Mixergy, X/Twitter), institutional learnings (competitive-intelligence-agent-implementation, platform-risk-cowork-plugins, business-validation-agent-pattern)
 
 ### Key Improvements
+
 1. Refined domain coverage from 3 to 5+ domains based on TeamDay interview (adds customer support, cold outreach, social media, Meta ads)
 2. Added revenue model details ($50/month subscription + 20% revenue share + 20% ad spend) -- directly relevant to Soleur's pricing strategy assessment
 3. Upgraded convergence risk assessment from Medium-High to **High** based on $1M ARR traction, 1,100+ managed companies, and explicit "company of one" positioning
 4. Added technology stack detail (Claude Opus 4.6, Claude Agent SDK) -- Polsia is built on the same model family as Soleur
 
 ### New Considerations Discovered
+
 - Polsia uses a revenue-share model (20% of revenue + 20% of ad spend) that creates fundamentally different alignment incentives than Soleur's planned flat-rate subscription
 - Polsia's founder (Ben Cera) uses Polsia itself for customer support, investor relations, and feature development -- a dogfooding signal comparable to Soleur's
 - Polsia's autonomous execution quality is reportedly basic (apps are basic, outreach can annoy people, AI video ads look AI-generated) -- Soleur's human-in-the-loop model is a quality differentiator, not just a design choice
@@ -121,6 +123,7 @@ Run `skill: soleur:competitive-analysis` with `--tiers 0,3` to produce a fresh s
 ### Research Insights: Scan Execution
 
 Per the `competitive-intelligence.md` agent specification:
+
 - The agent MUST read `brand-guide.md` and `business-validation.md` before any research
 - For each competitor in scope, it runs WebSearch for news/updates and WebFetch on their marketing site
 - The output uses the overlap matrix format (Competitor, Our Equivalent, Overlap, Differentiation, Convergence Risk)
@@ -167,9 +170,9 @@ Confirm that `knowledge-base/overview/competitive-intelligence.md` contains a Po
 - Learning: `knowledge-base/project/learnings/2026-02-27-competitive-intelligence-agent-implementation.md`
 - Learning: `knowledge-base/project/learnings/2026-02-25-platform-risk-cowork-plugins.md`
 - Learning: `knowledge-base/project/learnings/2026-03-02-multi-agent-cascade-orchestration-checklist.md`
-- Polsia Product Hunt: https://www.producthunt.com/products/polsia
-- Polsia website: https://polsia.com
-- TeamDay interview ($1M ARR): https://www.teamday.ai/ai/polsia-solo-founder-million-arr-self-running-companies
-- Mixergy interview: https://mixergy.com/interviews/this-ai-generates-689k/
-- Andreas Klinger review: https://x.com/andreasklinger/status/2029932031002415163
-- Ben Cera on AI equity: https://x.com/bencera_/status/2028559535825416425
+- Polsia Product Hunt: <https://www.producthunt.com/products/polsia>
+- Polsia website: <https://polsia.com>
+- TeamDay interview ($1M ARR): <https://www.teamday.ai/ai/polsia-solo-founder-million-arr-self-running-companies>
+- Mixergy interview: <https://mixergy.com/interviews/this-ai-generates-689k/>
+- Andreas Klinger review: <https://x.com/andreasklinger/status/2029932031002415163>
+- Ben Cera on AI equity: <https://x.com/bencera_/status/2028559535825416425>

@@ -19,12 +19,14 @@ The Soleur Claude Code plugin maintained 5 heavyweight command files (`brainstor
 ## Root Cause Analysis
 
 **Baseline consumption problem:**
+
 - All 5 command files are loaded as system context on every command invocation
 - Heavy content includes: Phase-by-phase instructions, detailed process flows, branching logic, constitution references, reference tables, and framework examples
 - Constitution.md was loaded **separately in both plan.md and work.md**, creating duplication
 - When user context + agent descriptions + constitution + 5 commands exceed ~90% window, Claude triggers compaction, which **silently truncates the command body**, causing mid-pipeline failures
 
 **Subagent isolation gap:**
+
 - The one-shot pipeline spawned plan+deepen as isolated Task subagents (correct), but when their context compacted, the error was lost
 - Compound command had no mechanism to receive error forwarding from prior phases
 - Result: Missing learnings and undocumented constitution updates when plan errors were silently truncated
@@ -51,11 +53,13 @@ Created 10 reference files loaded on-demand via Read tool. Originally placed in 
 | | work-subagent-fanout.md | Subagent parallelization strategy |
 
 **Deduplication fix:**
+
 - Constitution.md loaded once in Phase 0 of plan.md
 - Work.md Phase 0 now reads the same constitution via reference rather than reloading
 - Eliminates redundant system context on two-phase workflows
 
 **Results:**
+
 - Static word count: 13,292 → 9,794 words (26% reduction, ~3.5k token savings)
 - Runtime savings higher due to conditional loading (references loaded only when phases execute)
 - Baseline fits comfortably within 85% threshold with typical user context and agent descriptions
@@ -67,6 +71,7 @@ Created 10 reference files loaded on-demand via Read tool. Originally placed in 
 **Solution:** Establish return contract + session-state.md error forwarding:
 
 **In one-shot.md (Plan Phase):**
+
 ```markdown
 ### Phase X.Y: Spawn plan+deepen subagent
 - Create isolated Task subagent with full plan command copy
@@ -77,6 +82,7 @@ Created 10 reference files loaded on-demand via Read tool. Originally placed in 
 ```
 
 **In compound.md (Inventory Phase 1):**
+
 ```markdown
 ### Check for session-state.md
 - Run: git branch --show-current
@@ -86,11 +92,13 @@ Created 10 reference files loaded on-demand via Read tool. Originally placed in 
 ```
 
 **Failure modes handled:**
+
 1. **Plan compaction:** Subagent writes error + component inventory → compound reads on Phase 1
 2. **Deepen compaction:** Subagent includes components invoked in session-state.md → compound merges into inventory
 3. **Network/timeout in subagent:** Return contract with fallback (incomplete plan noted, recovery path suggested)
 
 **Result:**
+
 - Errors no longer silent; forward visible to compound step
 - Learnings captured even if plan phase had truncation
 - Multi-phase workflows remain debuggable and auditable
@@ -122,6 +130,7 @@ Created 10 reference files loaded on-demand via Read tool. Originally placed in 
 ## Files Modified
 
 **Commands (body reduction):**
+
 - `plugins/soleur/commands/soleur/brainstorm.md` (1,711w → ~1,500w)
 - `plugins/soleur/commands/soleur/plan.md` (2,280w → ~1,850w)
 - `plugins/soleur/commands/soleur/work.md` (2,291w → ~1,900w)
@@ -130,6 +139,7 @@ Created 10 reference files loaded on-demand via Read tool. Originally placed in 
 - `plugins/soleur/commands/soleur/one-shot.md` (432w → ~450w, +error forwarding contract)
 
 **References (new):**
+
 - `plugins/soleur/commands/soleur/references/brainstorm-brand-workshop.md`
 - `plugins/soleur/commands/soleur/references/brainstorm-domain-config.md`
 - `plugins/soleur/commands/soleur/references/brainstorm-validation-workshop.md`
@@ -162,6 +172,7 @@ Created 10 reference files loaded on-demand via Read tool. Originally placed in 
 ## Testing & Rollout
 
 **Verification steps:**
+
 1. Measure static word count pre/post: `wc -w plugins/soleur/commands/soleur/*.md`
 2. Test reference loading: Run brainstorm with brand workshop triggered; verify reference file is read
 3. Test error forwarding: Simulate compaction in plan subagent; verify compound reads session-state.md on Phase 1

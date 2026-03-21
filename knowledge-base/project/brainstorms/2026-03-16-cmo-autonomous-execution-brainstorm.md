@@ -42,6 +42,7 @@ Cascading (Approach 3 — event-driven pipeline) can be layered on top once the 
 | **Tools** | Bash, Read, Write, Edit, Glob, Grep |
 
 **What it fixes autonomously:**
+
 - JSON-LD validity and @type correctness
 - Meta tags (canonical, OG, Twitter cards, descriptions)
 - AI discoverability (llms.txt, robots.txt AI crawler rules)
@@ -65,6 +66,7 @@ Cascading (Approach 3 — event-driven pipeline) can be layered on top once the 
 | **Tools** | Bash, Read, Write, Edit, Glob, Grep, WebSearch, WebFetch, Task |
 
 **Full pipeline per run:**
+
 1. Read `seo-refresh-queue.md`, identify highest-priority item not yet written
 2. Run `content-writer` with topic, reading brand guide for voice alignment
 3. Fact-check via fact-checker agent (built into content-writer Phase 2.5)
@@ -88,6 +90,7 @@ Cascading (Approach 3 — event-driven pipeline) can be layered on top once the 
 | **Tools** | Bash, Read, Write, Edit, Glob, Grep, WebSearch |
 
 **What it does:**
+
 - Reads SEO refresh queue for "Update immediately" items
 - Runs `growth fix` on each page (keyword injection, meta description rewrite, FAQ addition)
 - Validates changes against brand guide voice
@@ -108,6 +111,7 @@ Cascading (Approach 3 — event-driven pipeline) can be layered on top once the 
 | **Tools** | Bash, Read, Write, Edit, Glob, Grep, WebSearch, WebFetch, Task |
 
 **Remediation cascade (on KPI miss):**
+
 1. Run `growth fix` on the 3-5 highest-traffic pages (improve existing content)
 2. Generate a new article targeting the weakest content gap (drive new traffic)
 3. Run `seo-aeo fix` on all docs pages (technical SEO sweep)

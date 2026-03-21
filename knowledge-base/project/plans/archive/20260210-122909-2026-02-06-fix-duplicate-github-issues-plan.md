@@ -56,12 +56,14 @@ Modify Phase 3.6 to add issue detection before creation:
    ```
 
 2. **Create GitHub issue (only if no valid existing issue):**
+
    ```bash
    gh issue create --title "feat: <Feature Title>" --body "..."
    ```
 
 3. **Update existing issue with artifact links:**
    When using an existing issue, append to its body:
+
    ```bash
    existing_body=$(gh issue view "$existing_issue" --json body --jq .body)
    new_body="${existing_body}
@@ -74,6 +76,7 @@ Modify Phase 3.6 to add issue detection before creation:
    "
    gh issue edit "$existing_issue" --body "$new_body"
    ```
+
 ```
 
 **Output Summary changes:**
@@ -81,7 +84,9 @@ Modify Phase 3.6 to add issue detection before creation:
 Update the Output Summary template to distinguish existing vs created:
 
 ```
+
 Issue: #N (using existing) | Issue: #N (created) | Issue: none
+
 ```
 
 **Key changes:**

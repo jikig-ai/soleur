@@ -22,6 +22,7 @@ Vulnerability #1 in business-validation.md stated "Anthropic could build multi-d
 **Thesis vs. revenue plan are separable.** A platform owner entering your market can invalidate the revenue plan while strengthening the thesis. Cowork's stateless templates will demonstrate the limitation of siloed domain automation, validating Soleur's integrated-organization thesis. But the standalone web dashboard revenue plan competes against free bundled templates on the platform owner's surface -- a losing position.
 
 **Three moats that survive platform competition (converged finding from 4 independent domain leaders):**
+
 - Compounding knowledge base (stateless templates cannot replicate)
 - Cross-domain coherence (siloed templates cannot replicate)
 - Workflow orchestration depth (template marketplaces are request-response, not pipeline-oriented)
@@ -35,5 +36,6 @@ Vulnerability #1 in business-validation.md stated "Anthropic could build multi-d
 - Multi-agent convergence (4/4 domain leaders reaching the same conclusion independently) is a strong validation signal for strategic assessments. Use parallel domain leader analysis for future competitive threats.
 
 ## Tags
+
 category: workflow-patterns
 module: business-validation

@@ -5,7 +5,7 @@ review_cadence: monthly
 owner: CPO
 depends_on:
   - knowledge-base/product/pricing-strategy.md
-  - knowledge-base/specs/feat-web-platform-ux/tasks.md
+  - knowledge-base/project/specs/feat-web-platform-ux/tasks.md
 ---
 
 # Product Roadmap: Web Platform (app.soleur.ai)
@@ -165,7 +165,7 @@ The business validation verdict is PIVOT: stop building features, start validati
 | This roadmap depends on | Path | Why |
 |------------------------|------|-----|
 | Pricing strategy | `knowledge-base/product/pricing-strategy.md` | Pricing gates, tier structure, competitive pricing context. |
-| Web platform spec and tasks | `knowledge-base/specs/feat-web-platform-ux/tasks.md` | Phase 1 task list, Phase 2-3 task definitions. |
+| Web platform spec and tasks | `knowledge-base/project/specs/feat-web-platform-ux/tasks.md` | Phase 1 task list, Phase 2-3 task definitions. |
 | Business validation | `knowledge-base/product/business-validation.md` | PIVOT verdict, demand evidence, customer definition. |
 | Competitive intelligence | `knowledge-base/product/competitive-intelligence.md` | Tier 0 threats, pricing anchors, differentiation axis. |
 

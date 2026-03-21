@@ -103,10 +103,12 @@ Create the tunnel, webhook listener, and server provisioning. Deploy alongside e
 **cloud-init changes (`apps/web-platform/infra/cloud-init.yml`):**
 
 New write_files:
+
 - `/etc/webhook/hooks.json` — HMAC config with `trigger-rule-mismatch-http-response-code: 403`, `include-command-output-in-response: true`, `http-methods: ["POST"]`, `SSH_ORIGINAL_COMMAND` env injection
 - `/etc/systemd/system/webhook.service` — hardened systemd unit (runs as `deploy` user, `Restart=on-failure`, `RestartSec=5`, `NoNewPrivileges=true`, `ProtectSystem=strict`)
 
 New runcmd:
+
 - Install `cloudflared` via pkg.cloudflare.com apt repository (automatic updates)
 - `cloudflared service install <tunnel_token>`
 - Install `webhook` binary v2.8.2 from GitHub releases with SHA256 checksum verification
@@ -117,9 +119,11 @@ New runcmd:
 - Add `tunnel_token` and `webhook_deploy_secret` variables
 
 **Files to create:**
+
 - `apps/web-platform/infra/tunnel.tf`
 
 **Files to modify:**
+
 - `apps/web-platform/infra/main.tf` — add `random` provider
 - `apps/web-platform/infra/dns.tf` — add deploy CNAME
 - `apps/web-platform/infra/variables.tf` — add new variables
@@ -185,6 +189,7 @@ WantedBy=multi-user.target
 Note: `TimeoutStopSec=180` accounts for synchronous ci-deploy.sh execution (telegram-bridge health check can take 120s).
 
 **Acceptance criteria:**
+
 - [ ] `terraform plan` shows tunnel, DNS, and access resources
 - [ ] `cloudflared` running, tunnel connected
 - [ ] `webhook` listening on `localhost:9000`
@@ -316,6 +321,7 @@ Note: Also removes port 3000 rule (was "for development" — should not be open 
 5. `nmap -Pn -p 22 <server-ip>` from non-admin IP → filtered
 
 **Acceptance criteria:**
+
 - [ ] Both release workflows deploy via webhook successfully
 - [ ] ci-deploy.sh health checks pass through webhook path
 - [ ] `0.0.0.0/0` SSH rule removed from firewall
@@ -413,7 +419,7 @@ If the tunnel or webhook fails post-deployment:
 
 ### Internal
 
-- **Brainstorm:** `knowledge-base/brainstorms/2026-03-20-cloudflare-tunnel-deploy-brainstorm.md`
+- **Brainstorm:** `knowledge-base/project/brainstorms/2026-03-20-cloudflare-tunnel-deploy-brainstorm.md`
 - **Spec:** `knowledge-base/project/specs/feat-webhook-deploy/spec.md`
 - **ci-deploy.sh:** `apps/web-platform/infra/ci-deploy.sh`
 - **ci-deploy.test.sh:** `apps/web-platform/infra/ci-deploy.test.sh`

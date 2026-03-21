@@ -21,6 +21,7 @@ When introducing Nunjucks block inheritance to an Eleventy layout that uses `{{ 
 Both changes are backwards-compatible — existing templates that don't define these blocks work unchanged because Nunjucks falls through to the default block content.
 
 Child templates then use:
+
 ```njk
 {% block extraHead %}
 <meta property="og:type" content="article" />
@@ -37,5 +38,6 @@ Child templates then use:
 Nunjucks block inheritance is all-or-nothing per layout. You cannot selectively inject into `<head>` via `{% block %}` while keeping the body as `{{ content | safe }}`. The body must also use `{% block content %}` to enable the inheritance mechanism. This is a Nunjucks constraint, not an Eleventy one.
 
 ## Tags
+
 category: build-errors
 module: eleventy-templates

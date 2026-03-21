@@ -44,6 +44,7 @@
 `plugin.json` registers the plugin with 3 MCP servers and all skills/agents. No install hooks exist (only a Stop hook for ralph-loop). After `claude plugin install soleur`, the user gets zero feedback -- no welcome message, no suggested first action. They must already know to type `/soleur:go` or `/soleur:help`.
 
 **What would fix it:**
+
 - Add a PostInstall hook (if supported by Claude Code plugin spec) that prints a welcome message
 - Alternatively, document the expected first action more prominently
 
@@ -94,18 +95,21 @@ Reachable via `/soleur:competitive-analysis` (direct skill). Not reachable from 
 **Status: FAIL**
 
 **What happens today:**
+
 1. Install completes silently. No guidance.
 2. User tries random commands or eventually finds `/soleur:help`.
 3. If they start with `/soleur:go`, engineering tasks route well but non-engineering tasks hit routing friction.
 4. `/soleur:sync` is the natural first step but nothing suggests it.
 
 **What should happen:**
+
 1. Install -> welcome message suggesting `/soleur:sync` as first step
 2. Sync analyzes project, creates knowledge-base
 3. User picks a task (engineering or non-engineering)
 4. First task completes and shows value in under 5 minutes
 
 **Critical gaps:**
+
 - Silent install with no guidance (highest priority)
 - No suggested first action
 - No "quick win" -- shortest non-engineering paths (legal, brand) take 5-10 minutes of interactive dialogue
@@ -118,10 +122,12 @@ Reachable via `/soleur:competitive-analysis` (direct skill). Not reachable from 
 Structure: Why Soleur -> Installation -> The Workflow -> Commands -> Common Workflows -> Beyond Engineering -> Learn More.
 
 **Passes:**
+
 - First action (install) is clear and prominently displayed
 - Non-engineering domains are mentioned in a "Beyond Engineering" section with 4 examples
 
 **Issues:**
+
 - `/soleur:sync` not positioned as the recommended first action for existing projects
 - The 5-step workflow section is engineering-centric (brainstorm -> plan -> work -> review -> compound uses engineering language throughout)
 - "Common Workflows" only shows engineering examples (Build Feature, Fix Bug, Review PR)
@@ -135,15 +141,18 @@ Structure: Why Soleur -> Installation -> The Workflow -> Commands -> Common Work
 ## Recommended Fixes
 
 ### P0: Post-install guidance
+
 - Investigate whether Claude Code plugin spec supports PostInstall hooks
 - If yes, add a hook that prints: "Soleur installed. Run /soleur:sync to analyze your project, or /soleur:help to see all commands."
 - If no, add a prominent "After Installing" section to the Getting Started page
 
 ### P1: Getting Started page restructure
+
 - Position `/soleur:sync` as Step 1 after install
 - Merge "Common Workflows" and "Beyond Engineering" into a single "What You Can Do" section with mixed engineering/non-engineering examples
 - Add a "Try this first" callout with one 30-second command
 
 ### P2: `/soleur:go` routing for non-engineering tasks
+
 - Add a "generate" or "create" intent that routes directly to domain-specific skills (legal-generate, brand workshop, etc.)
 - Or add domain detection to the go command itself, bypassing brainstorm for direct-action requests

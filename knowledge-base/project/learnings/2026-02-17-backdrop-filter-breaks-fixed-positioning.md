@@ -55,6 +55,7 @@ Replace `bottom: 0` with explicit viewport-relative height using `calc(100vh - v
 When using `backdrop-filter` on a parent, never rely on `inset` properties (`top`/`bottom` or `left`/`right` pairs) for fixed-position children. Use explicit `width`/`height` with viewport units instead.
 
 Properties that create containing blocks for fixed descendants:
+
 - `transform` (any non-none value)
 - `filter` (any non-none value)
 - `backdrop-filter` (any non-none value)

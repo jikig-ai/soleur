@@ -91,11 +91,11 @@ Document the compliance gap and present options to counsel:
 
 ## References
 
-- Issue #203: https://github.com/jikig-ai/soleur/issues/203
+- Issue #203: <https://github.com/jikig-ai/soleur/issues/203>
 - Prior audit: #187 (resolved in #200, commit db2f89f)
-- GitHub DPA: https://github.com/customer-terms/github-data-protection-agreement
-- GitHub Privacy Statement: https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement
-- GitHub Community Discussion #22277: https://github.com/orgs/community/discussions/22277
+- GitHub DPA: <https://github.com/customer-terms/github-data-protection-agreement>
+- GitHub Privacy Statement: <https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement>
+- GitHub Community Discussion #22277: <https://github.com/orgs/community/discussions/22277>
 - Audit report: `knowledge-base/project/specs/archive/20260221-044654-feat-cnil-article-30/audit-report.md`
 - GDPR policy: `docs/legal/gdpr-policy.md`
 - Constitution: Legal documents exist in two locations and must be synced

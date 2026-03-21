@@ -39,10 +39,12 @@ The "thin router over migration" pattern (from learning `2026-02-22-simplify-wor
 `replace_all` is unsafe when the search string appears in its own definition. Always verify: `grep -n '=.*OLD_PATTERN' file` before using `replace_all`. If matches exist, do targeted replacements instead.
 
 ## Tags
+
 category: integration-issues
 module: plugins/soleur/skills/community
 issue: 470
 related:
-  - knowledge-base/project/learnings/2026-02-22-simplify-workflow-thin-router-over-migration.md
-  - knowledge-base/project/learnings/2026-03-12-plan-review-scope-reduction.md
-  - knowledge-base/project/learnings/2026-03-13-platform-integration-scope-calibration.md
+
+- knowledge-base/project/learnings/2026-02-22-simplify-workflow-thin-router-over-migration.md
+- knowledge-base/project/learnings/2026-03-12-plan-review-scope-reduction.md
+- knowledge-base/project/learnings/2026-03-13-platform-integration-scope-calibration.md

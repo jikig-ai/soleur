@@ -58,6 +58,7 @@ This is a potential GDPR Art. 13 transparency violation and blocks the web platf
 **GDPR enforcement context (2025-2026):** Over EUR 1.6 billion in fines issued in 2024 alone. GDPR enforcement is intensifying, especially for SaaS platforms handling personal data. Article 13 requires controllers to disclose processing details at the point of data collection -- this cannot be deferred for beta status.
 
 **Article 13 minimum disclosures required in T&C or linked Privacy Policy:**
+
 1. Identity and contact details of the controller
 2. Purposes of processing and legal basis for each
 3. Recipients or categories of recipients of personal data
@@ -86,6 +87,7 @@ Update the scope definition. Currently references "the Plugin" and "the Service"
 #### Section 2: Definitions
 
 Add new definitions:
+
 - **"Web Platform"** -- the Soleur cloud-hosted service at app.soleur.ai, including account management, workspace environments, and subscription services.
 - **"Subscription"** -- a paid plan for Web Platform access, managed through Stripe Checkout.
 - **"Account Data"** -- email address, authentication tokens, session data, and other information provided during Web Platform registration and use.
@@ -157,7 +159,7 @@ For comprehensive data processing details, legal bases, retention periods, and y
 >
 > For the Plugin, these rights are inherently satisfied by your local control over Plugin-generated data.
 >
-> For the Web Platform, you may exercise these rights against Jikigai by contacting legal@jikigai.com. See the [GDPR Policy](gdpr-policy.md) Section 5 for full details on how to exercise each right.
+> For the Web Platform, you may exercise these rights against Jikigai by contacting <legal@jikigai.com>. See the [GDPR Policy](gdpr-policy.md) Section 5 for full details on how to exercise each right.
 >
 > For any GDPR-related inquiries concerning the documentation site or third-party integrations, please contact us through the channels listed in Section 16.
 
@@ -254,6 +256,7 @@ grep -n "does not collect\|does not operate\|does not store\|does not transmit" 
 All matches must be scoped to "the Plugin" or "Plugin itself" (not blanket "Soleur").
 
 **Additional grep checks (from learning):**
+
 ```bash
 # Check for stale conditional language about cloud features
 grep -n "if cloud features\|when cloud\|future cloud" docs/legal/terms-and-conditions.md
@@ -287,7 +290,7 @@ grep -n "Soleur does not" docs/legal/terms-and-conditions.md
 - [x] T&C Section 4.3 describes Web Platform service (account, payment, workspace, BYOK)
 - [x] T&C Section 7.1 retains Plugin scoping, adds cross-reference to Section 7.1b
 - [x] T&C Section 7.1b describes Web Platform data practices with processor summary
-- [x] T&C Section 7.4 split into Plugin (local control) and Web Platform (exercisable via legal@jikigai.com) GDPR rights
+- [x] T&C Section 7.4 split into Plugin (local control) and Web Platform (exercisable via <legal@jikigai.com>) GDPR rights
 - [x] T&C Section 9.1 covers both Plugin and Web Platform
 - [x] T&C Section 10 liability language covers both Plugin and Web Platform
 - [x] T&C Section 10.2 has EUR 100 floor for liability cap

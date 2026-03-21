@@ -14,12 +14,14 @@ deepened: 2026-03-18
 **Research methods:** Manual code analysis, bash correctness testing, test coverage audit
 
 ### Key Improvements from Deepening
+
 1. **Critical test scope correction:** Original plan identified 3 tests needing updates; deepening found **12 must-update** and **7 semantically affected** tests (19 total). Every "substantive" test response is under 150 stripped chars.
 2. **`comm` union correctness verified:** The `comm | sort -u | wc -l` approach for Jaccard union is correct (each word appears in exactly one `comm` column), confirmed by empirical testing.
 3. **`awk -v` safety verified:** The word tokenizer strips all non-alphanumeric chars, so `awk -v` backslash-escape interpretation is a non-issue. Confirmed by testing.
 4. **Idle pattern test isolation gap:** Tests 22 and 24 test idle patterns on <150-char strings. After the threshold change, these strings are caught by both the length check AND the idle pattern. To truly test idle detection in isolation, need one test with a 150-199 char idle response.
 
 ### New Considerations Discovered
+
 - State file `last_response_words` field grows to ~200-1700 bytes depending on response vocabulary. Empirically verified up to 200 unique words (1718 bytes) with successful grep/awk round-trip.
 - `create_state_file` helper in tests needs new parameters for `similarity_count` and `last_response_words`.
 
@@ -44,16 +46,19 @@ Three operational gaps in the current ralph loop stuck detection:
 **File:** `plugins/soleur/hooks/stop-hook.sh` (line 175)
 
 Current:
+
 ```bash
 if [[ "$IS_IDLE" == "true" ]] || [[ $RESPONSE_LENGTH -lt 20 ]]; then
 ```
 
 Proposed:
+
 ```bash
 if [[ "$IS_IDLE" == "true" ]] || [[ $RESPONSE_LENGTH -lt 150 ]]; then
 ```
 
 Also update the comment tiers (lines 170-174):
+
 ```bash
 # Three tiers:
 #   < 150 chars: definitely minimal (raised from 20)
@@ -66,6 +71,7 @@ Also update the comment tiers (lines 170-174):
 ### Research Insights: Threshold Choice
 
 **Why 150 and not 100 or 200?**
+
 - Empirical analysis of the test corpus shows "substantive" test strings (intended to simulate real work) range from 45-128 stripped chars. The longest non-substantive responses in production are formulaic acknowledgments like "I'll check on that and get back to you shortly" (~40 chars stripped).
 - 100 would still allow many formulaic responses through ("I've reviewed the codebase and everything looks good" = 45 chars).
 - 200 would be too aggressive -- a single sentence of genuine work output can be 150-199 chars.
@@ -130,6 +136,7 @@ fi
 ```
 
 **New frontmatter fields** in state file:
+
 - `similarity_count: 0` -- consecutive similar (>=80% Jaccard) responses
 - `last_response_words:` -- space-delimited sorted unique words from previous response
 
@@ -147,6 +154,7 @@ The plan's approach of `comm <(A) <(B) | sort -u | wc -l` for computing Jaccard 
 **Frontmatter storage size:** Empirical testing shows `last_response_words` ranges from ~50 bytes (short response, ~10 unique words) to ~1700 bytes (very long response, ~200 unique words). Grep/awk round-trip parsing works correctly at all tested sizes.
 
 **Edge cases to handle:**
+
 - Empty `LAST_OUTPUT` (tool-use-only responses): `CURRENT_WORDS` will be empty, similarity_count resets to 0. Correct behavior -- we should not penalize tool-use responses.
 - Very short responses (< 5 unique words): Jaccard on tiny sets is unreliable (removing/adding 1 word swings the score dramatically). Mitigated because responses under 150 chars are already caught by the length threshold.
 - First iteration (empty `last_response_words`): Falls into the `else` branch, similarity_count stays 0. Correct.
@@ -154,6 +162,7 @@ The plan's approach of `comm <(A) <(B) | sort -u | wc -l` for computing Jaccard 
 ### Change 3: Hard max iterations ceiling (50) -- already implemented
 
 The hard cap is already at line 110-115 of `stop-hook.sh`:
+
 ```bash
 HARD_CAP=50
 if [[ $ITERATION -ge $HARD_CAP ]]; then
@@ -202,6 +211,7 @@ The 150-char threshold change affects **19 of 41 existing tests**. Every "substa
 | 35 | 66 | Asserts loop continues and prompt text preserved |
 
 **6 tests must also change boundary value:**
+
 | Test | Change |
 |------|--------|
 | 5 | Change from exactly 20 chars to exactly 150 chars |
@@ -336,6 +346,7 @@ The `comm`/`sort` pipeline adds ~5ms per iteration on a modern machine. The ralp
 ### plugins/soleur/hooks/stop-hook.sh
 
 Changes at 4 locations:
+
 1. Line 175: `$RESPONSE_LENGTH -lt 20` to `$RESPONSE_LENGTH -lt 150`
 2. Lines 170-174: Update tier comments
 3. After line 194: Insert similarity detection block (~30 lines) including frontmatter parsing, word tokenization, Jaccard computation, and threshold check
@@ -344,12 +355,14 @@ Changes at 4 locations:
 ### plugins/soleur/scripts/setup-ralph-loop.sh
 
 Changes at 2 locations:
+
 1. Lines 144-158: Add `similarity_count: 0` and `last_response_words:` to state file template
 2. Lines 52-58: Update help text for 150-char threshold and similarity detection
 
 ### plugins/soleur/test/ralph-loop.test.sh
 
 Changes (significant scope):
+
 1. Add `SUBSTANTIVE_RESPONSE` constant near top of file (~220 stripped chars)
 2. Replace response strings in Tests 3, 7, 12, 13, 14, 15, 17, 26, 30, 35 with `"$SUBSTANTIVE_RESPONSE"`
 3. Update Test 5 boundary from 20 chars to 150 chars

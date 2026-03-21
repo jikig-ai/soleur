@@ -21,22 +21,30 @@ The risk is not theoretical. During this session's audit, the `@v4` tag for `act
 **Audit process:**
 
 1. Grep all workflow files for `uses:` lines to find every action reference:
+
    ```
    grep -rn "uses:" .github/workflows/
    ```
+
 2. Separate already-pinned (40-char SHA) from mutable-tag entries. Note the version comment on pinned ones to detect drift.
 3. For each mutable action, resolve the current SHA via the GitHub API:
+
    ```
    gh api repos/<owner>/<repo>/git/ref/tags/<tag> --jq '.object.sha'
    ```
+
    If the tag points to an annotated tag object (type `tag`), a second call dereferences to the commit:
+
    ```
    gh api repos/<owner>/<repo>/git/tags/<sha> --jq '.object.sha'
    ```
+
 4. Replace every mutable reference with the pinned format:
+
    ```
    uses: actions/checkout@<40-char-sha> # vX.Y.Z
    ```
+
    The version comment is essential — it is the only human-readable indicator of what version is pinned.
 
 **Consistency upgrade:** Any already-pinned workflow that references an older SHA for the same action should be updated to the current SHA so all workflows stay in sync. In this session, 2 workflows were upgraded from v4.2.2 to v4.3.1 for `actions/checkout`.
@@ -71,11 +79,13 @@ How to avoid: on subsequent workflow-editing sessions, expect the first Edit on 
 **2. Ralph loop setup script path miss**
 
 The one-shot loop setup was invoked with the wrong path:
+
 - Tried: `./plugins/soleur/skills/one-shot/scripts/setup-ralph-loop.sh` (does not exist)
 - Correct: `./plugins/soleur/scripts/setup-ralph-loop.sh`
 
 The skill directory for `one-shot` does not contain a `scripts/` subdirectory — setup scripts live at the plugin root `scripts/` level. Check `ls ./plugins/soleur/scripts/` before invoking setup scripts rather than guessing the path from the skill name.
 
 ## Tags
+
 category: security
 module: ci-cd

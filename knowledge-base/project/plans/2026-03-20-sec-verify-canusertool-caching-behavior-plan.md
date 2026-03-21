@@ -52,6 +52,7 @@ Closes #876
 The official SDK documentation at `platform.claude.com/docs/en/agent-sdk` does NOT mention any caching of `canUseTool` results. Key evidence against caching:
 
 1. **`toolUseID` parameter**: The `CanUseTool` type signature includes a unique `toolUseID: string` per invocation, suggesting the SDK treats each call as distinct:
+
    ```typescript
    type CanUseTool = (
      toolName: string,
@@ -180,6 +181,7 @@ No permission-related changes. Version bumping is warranted for the parallel too
 ### Research Insights
 
 **Test design considerations:**
+
 - Integration tests calling the real SDK are inherently non-deterministic because the LLM decides which tools to use and in what order. Use `greaterThanOrEqual` assertions and create real files to maximize the chance of Read tool usage.
 - The `toolUseID` uniqueness check is the strongest anti-caching signal. If the SDK cached permission decisions per tool name, it would either reuse the `toolUseID` or skip calling the callback entirely. Unique IDs confirm per-invocation evaluation.
 - `settingSources: []` is critical. Without it, the SDK may discover a `.claude/settings.json` in the test workspace or user directory that pre-approves tools, reproducing the original spike's misleading observation.
@@ -208,6 +210,7 @@ No permission-related changes. Version bumping is warranted for the parallel too
 ### Research Insights
 
 **Test Design Improvements:**
+
 - **`settingSources: []`**: Explicitly pass empty array to prevent the SDK from loading any `.claude/settings.json` files that could pre-approve tools and bypass `canUseTool`. This was the root cause of the spike's misleading observation.
 - **Create test files first**: Use `beforeAll` to create deterministic test files so the agent has real targets. Without real files, the agent may use `Glob` or `Bash` instead of `Read`, making callback counts unpredictable.
 - **`toolUseID` tracking**: Record the `toolUseID` from the options parameter to verify uniqueness across invocations -- if the SDK caches, it would reuse or skip generating unique IDs.
@@ -349,6 +352,7 @@ Update `apps/web-platform/package.json` to `"@anthropic-ai/claude-agent-sdk": "^
 ### Research Insights
 
 **Documentation update strategy:**
+
 - Each document that references caching uses hedging language ("may cache", "Likely the SDK caches"). Replace with definitive language citing the empirical test results and the `toolUseID` uniqueness evidence.
 - The `suggestions` field design intent should be documented as the SDK's intended externalized caching mechanism: the host decides whether to persist permission decisions, not the SDK.
 - Cross-reference the test file (`canusertool-caching.test.ts`) as the authoritative verification artifact.

@@ -50,13 +50,16 @@ describe("CSRF coverage", () => {
 **When you add a new route handler in `app/api/`:**
 
 #### Pre-Coding Checklist
+
 - [ ] Does this route mutate state (POST, PUT, DELETE)? If no, skip to "Code Complete."
 - [ ] Is this route unauthenticated (e.g., webhook signature-based)? If yes, document in `EXEMPT_ROUTES` with justification; skip to "Code Complete."
 - [ ] Does this route rely on Supabase auth (cookie-based)? If yes, proceed.
 
 #### During Coding
+
 - [ ] Import `validateOrigin` and `rejectCsrf` from `@/lib/auth/validate-origin`
 - [ ] Call at the **top** of your handler, before any auth check:
+
   ```typescript
   export async function POST(request: Request) {
     const { valid, origin } = validateOrigin(request);
@@ -64,9 +67,11 @@ describe("CSRF coverage", () => {
     // ... rest of handler
   }
   ```
+
 - [ ] Never add your route to `EXEMPT_ROUTES` unless it is truly exempt (non-cookie auth, explicit signature verification, etc.)
 
 #### Post-Coding
+
 - [ ] Run the test suite: `npm test -- csrf-coverage.test.ts`
 - [ ] If the test fails, add the route to `EXEMPT_ROUTES` **only** with a justification comment explaining why it bypasses Origin validation
 - [ ] Include the failing test failure in your PR description so reviewers understand what changed
@@ -110,6 +115,7 @@ The current solution uses **Origin validation + SameSite=Lax cookies**. CSRF tok
 ### 3. Cookie Configuration Review Triggers
 
 Cookie security drifts when:
+
 - Upgrading `@supabase/ssr` (defaults may change)
 - Refactoring auth flow (e.g., adding custom session management)
 - Changing deployment infrastructure (e.g., from Cloudflare to AWS CloudFront)
@@ -192,21 +198,25 @@ Cookie security drifts when:
 Use this template when defending a new attack surface:
 
 ### Phase 1: Identify the Boundary
+
 - [ ] What code paths can be exploited? (enumerate fully, not just the reported case)
 - [ ] Which code paths are intentionally excluded? (document with justification)
 - [ ] What's the minimal check that catches 100% of violations?
 
 ### Phase 2: Implement the Check
+
 - [ ] Write a reusable utility function (e.g., `validateOrigin`, `checkRateLimit`)
 - [ ] Add inline `SECURITY:` comments on security-critical config options
 - [ ] Create a negative-space test that scans the entire codebase
 
 ### Phase 3: Enforce at Merge Time
+
 - [ ] Add the test to CI (runs on every PR)
 - [ ] Document exemptions in code with justification
 - [ ] Train the team on the checklist (this document)
 
 ### Phase 4: Monitor & Iterate
+
 - [ ] Track if new routes are added and caught by the test (prove it's working)
 - [ ] If exemptions grow beyond 2-3 routes, revisit the design (exemptions are a code smell)
 - [ ] After 1-2 quarters, review for false positives (overly broad test) or false negatives (bypassed checks)
@@ -216,6 +226,7 @@ Use this template when defending a new attack surface:
 ## Real-World Attack Scenarios Prevented
 
 ### Scenario 1: Refactor Without Thinking
+
 A developer refactors `api/keys/route.ts` to use a new Supabase helper function. Accidentally, they remove the call to `validateOrigin` while reorganizing the code.
 
 **Without negative-space test:** Merged and deployed. The route is now vulnerable to CSRF.
@@ -223,6 +234,7 @@ A developer refactors `api/keys/route.ts` to use a new Supabase helper function.
 **With negative-space test:** CI fails. The test reports "api/keys/route.ts POST handler missing validateOrigin". Developer adds it back before merge.
 
 ### Scenario 2: Copy-Paste Mistake
+
 A developer copies `api/checkout/route.ts` to `api/webhooks/invoice/route.ts`. They forget to update it from webhook to authenticated route. They don't realize the Origin validation code is incorrect for a webhook.
 
 **Without negative-space test:** Merged. The route is now vulnerable or rejects legitimate webhooks.
@@ -230,6 +242,7 @@ A developer copies `api/checkout/route.ts` to `api/webhooks/invoice/route.ts`. T
 **With negative-space test:** Test fails. The new route must either have `validateOrigin` or be explicitly added to `EXEMPT_ROUTES` with justification. The developer realizes the route is a webhook and adds the justification, or fixes the code if it was supposed to be authenticated.
 
 ### Scenario 3: Cookie Config Drift During Upgrade
+
 A developer upgrades `@supabase/ssr`. The new version introduces a different default for `secure`. The developer merges without checking if cookie options are still set.
 
 **Without negative-space test:** The `secure` flag silently defaults to the new value, potentially breaking or weakening security.
@@ -241,13 +254,17 @@ A developer upgrades `@supabase/ssr`. The new version introduces a different def
 ## FAQ
 
 ### Q: Why not just use linting rules?
+
 **A:** Linting is pattern-based. It can verify syntax (e.g., "this function exists in the file") but not semantics (e.g., "this function is called at the right time for the right reason"). A negative-space test understands your business logic and can fail with a message like "api/keys/route.ts POST handler missing validateOrigin — add protection or add to EXEMPT_ROUTES with justification."
 
 ### Q: What if a route legitimately doesn't need CSRF protection?
+
 **A:** Add it to `EXEMPT_ROUTES` with a comment explaining why. The test still passes. The exemption is now documented and visible to future developers. If someone accidentally adds a new exempt route, they have to explicitly edit the list, which draws attention during code review.
 
 ### Q: How does this scale to multiple attack surfaces?
+
 **A:** Create one test per attack surface. For example:
+
 - `csrf-coverage.test.ts` — Origin validation
 - `rate-limit-coverage.test.ts` — Rate limiting on expensive endpoints
 - `authentication-coverage.test.ts` — All routes check auth before mutations

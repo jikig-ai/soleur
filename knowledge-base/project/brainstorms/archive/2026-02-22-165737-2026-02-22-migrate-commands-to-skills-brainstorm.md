@@ -9,17 +9,20 @@
 Migrating 6 internal pipeline commands (`brainstorm`, `plan`, `work`, `review`, `compound`, `one-shot`) from `commands/soleur/` to `skills/`, so the `/` autocomplete menu shows only the 3 user-facing commands: `go`, `sync`, `help`. This also makes the workflow stages agent-discoverable (skills are visible to agents, commands are not).
 
 Two existing skills with name conflicts will be renamed to free up the clean names:
+
 - `brainstorming` -> `brainstorm-techniques`
 - `compound-docs` -> `compound-capture`
 
 ## Why This Approach
 
 **Three motivations converge:**
+
 1. **User friction** -- 9 commands in autocomplete when users only need `/go`
 2. **Agent discoverability** -- Skills are agent-visible; commands aren't. Making workflows skills means agents can invoke them autonomously.
 3. **Cleanliness** -- The router (`/go`) proved the concept; this is the natural follow-through.
 
 **Prior exploration (2026-02-22 learnings)** flagged this as high-cost due to ~80-100 cross-references. New analysis shows the cost is lower than estimated:
+
 - `skill: soleur:<name>` invocations resolve identically for both commands and skills (plugin namespace handles it)
 - Only `/soleur:<name>` slash-syntax references need updating (~30-40, not 80-100)
 - Historical references in CHANGELOG.md don't need updating
@@ -62,12 +65,14 @@ Two existing skills with name conflicts will be renamed to free up the clean nam
 ### Files Requiring Cross-Reference Updates
 
 **Migrated commands (internal references):**
+
 - `one-shot` chains: plan -> work -> review -> compound
 - `brainstorm` hands off to: one-shot, plan
 - `plan` hands off to: work
 - `work` references: review, compound
 
 **External skills referencing these commands:**
+
 - `ship/SKILL.md` -> compound
 - `deepen-plan/SKILL.md` -> plan, work, compound
 - `git-worktree/SKILL.md` -> review, work
@@ -78,9 +83,11 @@ Two existing skills with name conflicts will be renamed to free up the clean nam
 - `file-todos/SKILL.md` -> review
 
 **Agents:**
+
 - `agents/engineering/research/learnings-researcher.md` -> plan
 
 **Documentation (update prose, not functional):**
+
 - `AGENTS.md` command naming section
 - `README.md` command/skill counts
 - `docs/pages/getting-started.md`

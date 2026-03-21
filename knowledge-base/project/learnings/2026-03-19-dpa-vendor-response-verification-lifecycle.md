@@ -38,5 +38,6 @@ None detected.
 - Issue: #529 (original DPA verification tracking)
 
 ## Tags
+
 category: integration-issues
 module: legal-docs

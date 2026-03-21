@@ -29,7 +29,7 @@ A shared `reusable-release.yml` encapsulates the bump/release/build/deploy/notif
 |----------|--------|-----------|
 | Version scheme | Semver (`web-vX.Y.Z`, `telegram-vX.Y.Z`) | Consistent with plugin pattern. Communicates breaking/feature/fix intent. |
 | Workflow architecture | Reusable workflow + per-app callers | Clean separation, independently configurable, reusable for future apps |
-| Label strategy | Shared `semver:*` labels + `app:web-platform` / `app:telegram-bridge` tags | Simpler label set. `/ship` applies semver:* (shared) + app:* (scoped). Release workflow uses both to determine what to bump. |
+| Label strategy | Shared `semver:*` labels + `app:web-platform` / `app:telegram-bridge` tags | Simpler label set. `/ship` applies semver:*(shared) + app:* (scoped). Release workflow uses both to determine what to bump. |
 | Multi-component PRs | Separate releases per component | A single merge can produce up to 3 releases with independent version histories |
 | Deploy scope | Full pipeline (version + build + deploy) | End-to-end automation: bump version → build Docker image with version tag → deploy to server |
 | Starting version | `v0.1.0` for both apps | Signals pre-1.0 status. Apps are in production but API/behavior may change. |
@@ -99,6 +99,7 @@ PR merges to main
 ### Docker image tagging
 
 Each app's Docker image gets three tags per release:
+
 - `:web-v0.1.0` (version — for rollback and audit)
 - `:<short-sha>` (commit — for debugging)
 - `:latest` (convenience — for fresh deploys)

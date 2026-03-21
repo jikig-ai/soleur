@@ -11,6 +11,7 @@ A secondary gap emerged: the spec only had 3 status groups (upcoming, draft, pub
 **LLM-as-script:** When a CI workflow's job is reading markdown and generating markdown, the LLM running via `claude-code-action` IS the script. The skill (SKILL.md) contains the instructions; the LLM reads files, classifies entries, and writes output directly. No bash intermediary.
 
 **Dual-context skills:** Skills that run in both manual (worktree) and CI (direct-to-main) contexts need different commit behavior:
+
 - CI mode (`GITHUB_ACTIONS` env var): write file, commit with `[skip ci]`, push with rebase-retry
 - Manual mode: write file only, print `gh workflow run` suggestion
 
@@ -31,6 +32,7 @@ Plan review convergence (3/3 reviewers flagging the same simplification) is stro
 5. **Stale skill counts** — README.md had 56 (actual 57), brand-guide.md had 50. Required correction across 4 files.
 
 ## Tags
+
 category: implementation-patterns
 module: campaign-calendar
 related: 2026-03-02-github-actions-auto-push-vs-pr-for-bot-content.md, 2026-03-02-claude-code-action-token-revocation-breaks-persist-step.md, 2026-02-22-skill-count-propagation-locations.md, 2026-02-06-parallel-plan-review-catches-overengineering.md

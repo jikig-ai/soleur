@@ -14,6 +14,7 @@ deepened: 2026-03-18
 **Research approach:** Targeted verification -- confirmed fix correctness, checked for similar issues across docs
 
 ### Key Findings
+
 1. Only one `See Section` cross-reference exists in the entire privacy policy -- the broken one on line 101
 2. No other files in `plugins/soleur/docs/` reference "Section 5.4" -- blast radius is zero
 3. Section numbering is stable (5.1 Anthropic, 5.2 GitHub, 5.3 Buttondown, 5.4 Other) -- no renumbering needed

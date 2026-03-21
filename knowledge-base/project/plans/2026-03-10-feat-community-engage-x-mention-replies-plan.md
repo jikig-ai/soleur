@@ -13,6 +13,7 @@ date: 2026-03-10
 **Research sources:** X API v2 live documentation, 8 institutional learnings, constitution.md, existing codebase patterns
 
 ### Key Improvements
+
 1. OAuth 1.0a signing for query params must match `cmd_fetch_metrics` pattern exactly -- query params go into signature base string, then appended to URL separately
 2. Mentions endpoint caps at 800 most recent posts and returns empty (not error) beyond volume limits -- handle gracefully
 3. Retweets over 140 characters appear truncated; need `referenced_tweets.id` expansion to get full text of quote tweets mentioning the account
@@ -20,6 +21,7 @@ date: 2026-03-10
 5. Agent markdown must avoid `$()` in bash blocks (command-substitution learning) -- use prose placeholders instead
 
 ### Applied Learnings
+
 - `2026-03-09-shell-api-wrapper-hardening-patterns.md` -- 5-layer defense for API wrappers
 - `2026-03-09-external-api-scope-calibration.md` -- verify API capabilities before spec
 - `2026-03-09-depth-limited-api-retry-pattern.md` -- retry depth limit (already in `x_request`)
@@ -73,10 +75,12 @@ User runs: /soleur:community engage
 ### Research Insights: Architecture
 
 **Best Practices:**
+
 - The brand guide inline validation pattern (learning `2026-02-12`) is the correct approach: read `## Voice` and `## Channel Notes > ### X/Twitter` directly in the agent, do not create a separate brand-voice-reviewer agent
 - Skill-to-agent invocation is the established pattern: SKILL.md spawns `community-manager` agent, which does the actual work. The skill handles platform detection and argument parsing only
 
 **Edge Cases:**
+
 - If `knowledge-base/overview/brand-guide.md` does not exist, the agent should still draft replies but warn that brand voice alignment is not available. Do not block engagement on brand guide absence.
 
 ### X API Details
@@ -93,6 +97,7 @@ User runs: /soleur:community engage
 ### Research Insights: X API
 
 **Best Practices (from live X API docs):**
+
 - Include `conversation_id` in `tweet.fields` to enable threaded reply context -- helps the agent understand whether a mention is part of an existing conversation or a standalone mention
 - Use `since_id` for incremental fetching rather than `start_time` -- ID-based filtering is more precise and avoids timezone edge cases
 - Retweets over 140 characters appear truncated in the response. Add `referenced_tweets.id` to `expansions` if full quote-tweet text is needed. For v1, skip this -- truncated text is sufficient for reply context.
@@ -100,6 +105,7 @@ User runs: /soleur:community engage
 - Non-public metrics (impression_count, etc.) require author authentication and only work within 30 days. Do not request `non_public_metrics` -- use `public_metrics` only.
 
 **Pitfalls:**
+
 - The mentions endpoint returns tweets that **mention** the authenticated user, not tweets **by** the user. This is the correct behavior for engagement.
 - Empty data arrays mean no mentions in the requested range -- return cleanly, do not treat as error.
 - The `includes.users` array may not have a 1:1 mapping with mentions if the same user mentioned the account multiple times. Match by `author_id` field, not by array index.
@@ -208,6 +214,7 @@ This is optional for v1 -- the skill can run without it (processes last 10 menti
 ### Research Insights: Since-ID State
 
 **Best Practices:**
+
 - Resolve repo root with `git rev-parse --show-toplevel` (same pattern as `x-setup.sh` after the path fix documented in learning `2026-03-09-x-provisioning-playwright-automation.md`)
 - Create the `.soleur/` directory with `mkdir -p` before writing
 - Set file permissions with `chmod 600` before writing content (learning `2026-02-18-token-env-var-not-cli-arg.md` -- while not a secret, applying secure defaults to local state files is good practice)
@@ -220,6 +227,7 @@ This is optional for v1 -- the skill can run without it (processes last 10 menti
 ### 4. Brand Voice Draft Generation
 
 The community-manager agent reads `knowledge-base/overview/brand-guide.md` sections:
+
 - `## Voice` -- overall brand voice
 - `## Channel Notes > ### X/Twitter` -- X-specific tone: "Declarative, concrete, no hedging"
 
@@ -228,17 +236,20 @@ The agent drafts replies within 280 characters, following the brand guide's inst
 ### Research Insights: Brand Voice
 
 **From brand-guide.md `### X/Twitter` section:**
+
 - Full brand voice: "Declarative, concrete, no hedging. Every tweet should read like a statement, not a question."
 - Hook-first: "the first tweet must deliver a complete, compelling idea that works even if nobody clicks 'Show more.'"
 - No "I just wrote about..." openers
 - 280-character limit enforced per tweet during generation, not as a post-hoc trim
 
 **Inline validation pattern (learning `2026-02-12`):**
+
 - Read the brand guide headings directly in the agent context
 - Validate the draft against `## Voice` do's/don'ts before presenting to user
 - No separate brand-voice-reviewer agent needed -- inline validation is faster and simpler
 
 **Draft quality guidelines:**
+
 - Address the mention's question or statement directly
 - Include a concrete actionable next step when applicable (e.g., "Run `/soleur:community platforms` to check your setup")
 - Do not start with "Thanks for reaching out" or similar pleasantries -- brand voice is declarative
@@ -269,6 +280,7 @@ If `--headless` is set, skip all mentions (no autonomous posting).
 ### Research Insights: Approval Flow
 
 **Headless mode convention (learning `2026-03-03`):**
+
 - Strip `--headless` from `$ARGUMENTS` before processing remaining args
 - Forward `--headless` to any child Skill tool invocations
 - In headless mode: skip all mentions with a summary message ("Skipped N mentions in headless mode -- engage requires interactive approval")
@@ -276,6 +288,7 @@ If `--headless` is set, skip all mentions (no autonomous posting).
 
 **Edit flow detail:**
 When user selects "Edit", present a free-text input prompt. The agent should:
+
 1. Accept the user's edited text
 2. Validate it is within 280 characters
 3. If over 280: report the character count and ask for a shorter version
@@ -295,14 +308,17 @@ After presenting the first mention, add a 4th option: "Skip all remaining -- end
 ### Research Insights: Security
 
 **From learning `2026-02-18-token-env-var-not-cli-arg.md`:**
+
 - The since-id is not a secret, but the `.soleur/` directory could later hold other local state. Adding it to `.gitignore` prevents accidental commit of any future sensitive state.
 - Never echo token values in error messages -- the existing `x_request` function already follows this pattern.
 
 **From learning `2026-03-09-shell-api-wrapper-hardening-patterns.md`:**
+
 - The `cmd_fetch_mentions` function inherits all 5 hardening layers from `x_request` -- no additional security measures needed at the command level.
 - Input validation on `--since-id` and `--max-results` prevents URL path injection (same pattern as snowflake ID validation in Discord scripts).
 
 **Agent markdown security (learning `2026-02-22-command-substitution-in-plugin-markdown.md`):**
+
 - The Capability 4 section in `community-manager.md` must NOT use `$()` in bash code blocks
 - Use angle-bracket prose placeholders (e.g., `<user_id>`, `<since_id>`) with substitution instructions instead
 - Or use separate bash blocks for each individual command
@@ -420,7 +436,7 @@ After presenting the first mention, add a 4th option: "Skip all remaining -- end
 - `knowledge-base/project/learnings/2026-02-12-brand-guide-contract-and-inline-validation.md` -- inline brand validation
 - `knowledge-base/project/learnings/2026-02-22-command-substitution-in-plugin-markdown.md` -- no `$()` in markdown
 - `knowledge-base/project/learnings/2026-03-10-require-jq-startup-check-consistency.md` -- startup check parity
-- X API docs: `GET /2/users/{id}/mentions` -- https://docs.x.com/x-api/users/get-mentions
-- X API timelines integration guide -- https://docs.x.com/x-api/posts/timelines/integrate
+- X API docs: `GET /2/users/{id}/mentions` -- <https://docs.x.com/x-api/users/get-mentions>
+- X API timelines integration guide -- <https://docs.x.com/x-api/posts/timelines/integrate>
 - Issue: #469
 - Parent: #127 (closed)

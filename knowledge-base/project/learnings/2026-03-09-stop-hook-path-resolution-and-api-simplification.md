@@ -19,6 +19,7 @@ Three targeted fixes:
 2. Moved the state file existence check (`if [[ ! -f "$RALPH_STATE_FILE" ]]; then exit 0; fi`) before `HOOK_INPUT=$(cat)` so the hook exits immediately when no loop is active.
 
 3. Replaced transcript parsing with a single line:
+
    ```bash
    LAST_OUTPUT=$(echo "$HOOK_INPUT" | jq -r '.last_assistant_message // ""')
    ```
@@ -36,5 +37,6 @@ When a framework API provides data directly, use it instead of reconstructing it
 - PR #229: bundle ralph-loop into Soleur plugin
 
 ## Tags
+
 category: runtime-errors
 module: plugins/soleur/hooks

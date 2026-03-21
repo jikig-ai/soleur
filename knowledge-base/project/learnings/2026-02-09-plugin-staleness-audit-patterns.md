@@ -10,6 +10,7 @@ tags: [maintenance, plugin, stale-references, count-mismatch, unused-agents]
 ## Problem
 
 After rapid iteration on the Soleur plugin (1.0 to 1.7 in 4 days), accumulated technical debt:
+
 - 10 agents defined but never invoked by any command
 - 7 references to agents that never existed (aspirational names left in commands)
 - Component counts in 3 READMEs diverged from reality
@@ -19,6 +20,7 @@ After rapid iteration on the Soleur plugin (1.0 to 1.7 in 4 days), accumulated t
 ## Solution
 
 Systematic three-pronged audit using parallel research agents:
+
 1. **Agent audit**: Cross-reference every agent definition against all commands/skills for actual usage
 2. **Skill audit**: Check each SKILL.md for external dependencies, duplicates, and stale content
 3. **Config audit**: Verify counts, versions, and references across all config and documentation files
@@ -34,6 +36,7 @@ Key technique: `grep` for agent names across commands/ directory to determine wh
 **Count verification is a triad obligation.** Every time agents/commands/skills change, three READMEs and the plugin.json must be updated. Automate or enforce this in the /ship checklist.
 
 ## Tags
+
 category: maintenance
 module: plugin
 symptoms: stale-references, count-mismatch, unused-agents

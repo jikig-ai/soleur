@@ -13,12 +13,14 @@ date: 2026-03-10
 **Research sources:** Pencil docs, community articles, institutional learnings, codebase analysis
 
 ### Key Improvements
+
 1. Discovered two distinct Desktop MCP registration paths: `pencil` CLI command (`pencil mcp-server`) and direct binary path -- the CLI path eliminates binary-hunting entirely
 2. Found that `--app` flag uses `visual_studio_code` (not `code`) for VS Code -- existing `check_deps.sh` likely uses wrong value
 3. Pencil Desktop auto-detects compatible AI CLIs and may auto-register MCP -- Phase 1 must test whether manual registration is even needed
 4. Linux now has `.deb` package option (not just AppImage) -- `detect_pencil_desktop()` needs `dpkg` check added back
 
 ### New Considerations Discovered
+
 - The `pencil` CLI (`File > Install pencil command into PATH`) may be the simplest Desktop MCP path -- register as `pencil mcp-server` instead of binary path
 - Pencil docs state "MCP server runs automatically when you use Pencil" -- if Desktop auto-registers, the skill just needs to verify it is running
 - The existing learning `2026-02-27-pencil-desktop-not-required-for-mcp.md` documents the exact inverse assumption; this feature inverts that relationship
@@ -80,6 +82,7 @@ The proposed hierarchy is:
 
 **Three-tier hierarchy rationale:**
 The `pencil` CLI path is preferred over the direct binary path because:
+
 - No platform-specific binary resolution (macOS/Linux paths differ)
 - No AppImage extraction requirement on Linux
 - `pencil mcp-server` is version-agnostic (the CLI resolves internally)
@@ -140,6 +143,7 @@ File: `plugins/soleur/skills/pencil-setup/scripts/check_deps.sh`
 ### Research Insights
 
 **Shell script conventions to preserve:**
+
 - The script deliberately omits `set -euo pipefail` because soft dependency checks must not abort on missing dependencies. Per `2026-03-03-set-euo-pipefail-upgrade-pitfalls.md`, do not upgrade this script's strict mode.
 - Continue using `[ok]`, `[MISSING]`, `[installing]`, `[FAILED]`, `[info]` status tag convention per `2026-02-27-check-deps-pattern-for-gui-apps.md`.
 - `--auto` flag scope remains narrow: auto-install IDE extension, auto-launch Desktop. Never auto-download Desktop itself.
@@ -149,6 +153,7 @@ The [Pencil installation docs](https://docs.pencil.dev/getting-started/installat
 
 **Process detection for auto-launch:**
 Use `pgrep -f "[Pp]encil"` (case-insensitive bracket trick) rather than `pgrep -fi Pencil` -- the `-i` flag is not POSIX and not available on all Linux distributions. Verify the process name against multiple possible formats:
+
 - macOS: process name may be `Pencil` or `Pencil.app`
 - Linux AppImage: process name may include the AppImage filename
 - Linux .deb: process name may be `pencil` (lowercase)

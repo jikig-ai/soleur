@@ -15,6 +15,7 @@ deepened: 2026-02-18
 **Agents used:** security-sentinel, Discord API researcher, plan reviewers (DHH, code-simplicity)
 
 ### Key Improvements
+
 1. Token passed via env var (`DISCORD_BOT_TOKEN_INPUT`), never as CLI argument (prevents ps/history leakage)
 2. .env written with chmod 600 permissions (owner-only)
 3. Concrete curl patterns for all 6 Discord API operations
@@ -32,6 +33,7 @@ The community skill requires three environment variables (DISCORD_BOT_TOKEN, DIS
 A bash script (`discord-setup.sh`) with thin sub-commands. The SKILL.md orchestrates user interaction (AskUserQuestion, agent-browser) and calls script sub-commands for API operations. Token is passed via `DISCORD_BOT_TOKEN_INPUT` environment variable, never as a CLI argument.
 
 Flow:
+
 1. Check if vars already exist -> prompt to reconfigure
 2. Open Discord Developer Portal via agent-browser -> print instructions -> user pastes token
 3. Validate token via API call (skip regex -- API is the source of truth)
@@ -78,6 +80,7 @@ set -euo pipefail
 **Why sub-commands:** The skill (SKILL.md) needs to interject AskUserQuestion prompts between API calls (guild selection, channel selection). A monolithic script cannot pause for AI-mediated user input. Sub-commands are the minimal API boundary.
 
 **Security model:**
+
 - Token in `DISCORD_BOT_TOKEN_INPUT` env var (not CLI arg -- invisible to `ps aux`)
 - curl stderr suppressed during token operations (prevents debug leakage)
 - .env created with umask 077 / chmod 600 (owner read/write only)
@@ -197,7 +200,7 @@ Check if DISCORD_BOT_TOKEN, DISCORD_GUILD_ID, and DISCORD_WEBHOOK_URL are all se
 
 ## References
 
-- Discord API v10: https://discord.com/developers/docs
+- Discord API v10: <https://discord.com/developers/docs>
 - Permissions integer 536939520 = VIEW_CHANNEL (1<<10) + SEND_MESSAGES (1<<11) + READ_MESSAGE_HISTORY (1<<16) + MANAGE_WEBHOOKS (1<<29)
 - Existing: `plugins/soleur/skills/community/scripts/discord-community.sh`
 - Learning: `knowledge-base/project/learnings/runtime-errors/2026-02-13-bash-operator-precedence-ssh-deploy-fallback.md`

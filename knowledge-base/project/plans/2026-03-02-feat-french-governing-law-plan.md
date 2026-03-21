@@ -30,7 +30,7 @@ Replace the current 3-subsection structure (14.1 US / 14.2 EU / 14.3 Other) with
 
 **14.3 EU/EEA Consumers** -- Preserved explicit rights + ODR reference:
 
-> If you are a consumer in the EU/EEA, nothing in these Terms affects your rights under mandatory EU or member state consumer protection laws, including your right to bring proceedings in the courts of your country of habitual residence. The European Commission provides an Online Dispute Resolution (ODR) platform at https://ec.europa.eu/consumers/odr. We are not obligated to participate in ODR procedures but will consider doing so on a case-by-case basis.
+> If you are a consumer in the EU/EEA, nothing in these Terms affects your rights under mandatory EU or member state consumer protection laws, including your right to bring proceedings in the courts of your country of habitual residence. The European Commission provides an Online Dispute Resolution (ODR) platform at <https://ec.europa.eu/consumers/odr>. We are not obligated to participate in ODR procedures but will consider doing so on a case-by-case basis.
 
 ### New Section 8 Structure (Disclaimer)
 

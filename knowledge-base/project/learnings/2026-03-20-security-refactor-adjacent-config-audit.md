@@ -29,6 +29,7 @@ git diff path/to/file.ts
 ```
 
 Check that every key in the original block is either:
+
 1. Present in the new block (preserved)
 2. Explicitly moved to a different location (migrated)
 3. Documented as intentionally removed with a rationale (deleted)
@@ -50,6 +51,7 @@ const runner = new AgentRunner({
 Adjacent config options are collateral damage in refactors. When you remove or move a block of code, everything visually adjacent to that block is at risk -- not because it is logically related, but because human attention is focused on the code being moved. The developer mentally categorizes the surrounding code as "part of the thing I'm changing" rather than evaluating each option independently.
 
 This is especially dangerous for security configuration because:
+
 1. Security options are often single-line settings with no visible effect on functionality (tests still pass without `settingSources: []`)
 2. Their removal does not cause errors, warnings, or test failures -- the system works correctly but with weaker security
 3. The original developer who added the option may not be the one refactoring, so the institutional knowledge of why it exists is not present

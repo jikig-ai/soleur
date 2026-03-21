@@ -44,6 +44,7 @@ Soleur has 5 business domains (Engineering, Legal, Marketing, Operations, Produc
 ### PR #1: Table-driven domain routing refactor + token audit
 
 **Files to modify:**
+
 - `commands/soleur/brainstorm.md` -- Replace Phase 0.5 hardcoded blocks with table-driven routing
 - `agents/**/*.md` -- Trim bloated descriptions to get under 2500-word budget
 - Version files (plugin.json, CHANGELOG.md, README.md)
@@ -51,12 +52,14 @@ Soleur has 5 business domains (Engineering, Legal, Marketing, Operations, Produc
 ### PR #2: Sales domain
 
 **Files to create:**
+
 - `agents/sales/cro.md` -- Domain leader
 - `agents/sales/outbound-strategist.md` -- Prospecting and cadence design
 - `agents/sales/deal-architect.md` -- Proposals, battlecards, negotiation
 - `agents/sales/pipeline-analyst.md` -- Pipeline metrics and forecasting
 
 **Files to modify:**
+
 - `commands/soleur/brainstorm.md` -- Add one table row for Sales domain
 - `docs/_data/agents.js` -- Add Sales to DOMAIN_LABELS, DOMAIN_CSS_VARS, domainOrder
 - `docs/_data/skills.js` -- Update SKILL_CATEGORIES if needed

@@ -32,6 +32,7 @@ Task({
 ```
 
 **Naming convention:** Agents are named by their directory path under `agents/`:
+
 - Domain agents: `soleur:<domain>:<name>` (e.g., `soleur:finance:cfo`)
 - Nested agents: `soleur:<domain>:<function>:<name>` (e.g., `soleur:engineering:review:security-sentinel`)
 

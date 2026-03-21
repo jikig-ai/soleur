@@ -3,6 +3,7 @@
 ## Problem
 
 `startAgentSession()` was called fire-and-forget (no `await`, no `.catch()`) in two locations:
+
 - `apps/web-platform/server/ws-handler.ts:130` (WebSocket `start_session` handler)
 - `apps/web-platform/server/agent-runner.ts:296` (`sendUserMessage` function)
 
@@ -57,6 +58,7 @@ startAgentSession(
 ```
 
 Key details:
+
 - The `.catch()` handlers are defense-in-depth: `startAgentSession` has an internal try/catch, so the `.catch()` only fires for rejections that escape before the try block
 - Double error delivery cannot happen because the internal catch resolves (not rejects) the promise
 - `KeyInvalidError` is checked with `instanceof` (not string matching) to attach `errorCode: "key_invalid"`, which the client uses for redirect logic
@@ -68,6 +70,7 @@ Key details:
 An internal try/catch inside an async function does not make fire-and-forget calls safe. The `.catch()` on the returned promise is a separate error boundary that catches rejections escaping *before* the function's try block. Every fire-and-forget promise needs an explicit `.catch()` -- not because the current code can throw there, but because the promise boundary is the contract, and future refactors can silently introduce pre-try-block throwing code. Enable `@typescript-eslint/no-floating-promises` to enforce this statically.
 
 ## Tags
+
 category: reliability
 module: web-platform
 tags: promises, error-handling, node, fire-and-forget, defense-in-depth

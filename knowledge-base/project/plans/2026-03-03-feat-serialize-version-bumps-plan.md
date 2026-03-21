@@ -31,6 +31,7 @@ Main is **not protected** — the Action can push commits directly using GITHUB_
 ### GITHUB_TOKEN Cascade
 
 Commits pushed by GITHUB_TOKEN don't trigger other `on: push` workflows. This means:
+
 - `auto-release.yml` can't be a separate downstream workflow (already solved: unified workflow)
 - `deploy-docs.yml` won't fire for the version commit → docs site misses the CHANGELOG update
 - **Fix:** Add `workflow_run` trigger to `deploy-docs.yml` that fires after `version-bump-and-release` completes
@@ -38,6 +39,7 @@ Commits pushed by GITHUB_TOKEN don't trigger other `on: push` workflows. This me
 ### Concurrency Control
 
 Two PRs merging within seconds both trigger the Action. Without control, both compute the same next version.
+
 - **Fix:** `concurrency: { group: "version-bump", cancel-in-progress: false }` — queues rather than races
 
 ### PR Lookup Mechanism
@@ -55,6 +57,7 @@ The merge commit triggers deploy-docs before the version bump. The version commi
 ### Component Count Methodology
 
 Exact commands to match current counts (61 agents, 3 commands, 55 skills):
+
 - Agents: `find plugins/soleur/agents -name '*.md' ! -name 'README.md' ! -name 'AGENTS.md' | wc -l`
 - Skills: `find plugins/soleur/skills -name 'SKILL.md' | wc -l`
 - Commands: `find plugins/soleur/commands -name '*.md' | wc -l`
@@ -104,6 +107,7 @@ Line numbers in this plan (e.g., "constitution.md line 50") are from the time of
 #### `.github/workflows/version-bump-and-release.yml`
 
 Workflow steps:
+
 1. Trigger: `on: push: branches: [main]` (no path filter — the Action itself decides whether to bump) + `workflow_dispatch` with `bump_type` choice input (escape hatch for manual releases)
 2. Concurrency: `group: "version-bump"`, `cancel-in-progress: false`
 3. Permissions: `contents: write`
@@ -125,6 +129,7 @@ Workflow steps:
     - `bug_report.yml`: update placeholder (via `sed`)
 14. **Verify consistency:** Check all 6 files now contain the same version string before committing. If any mismatch, abort without pushing.
 15. **Commit and push:** Stage only the 6 explicit sync target files (never `git add -A`):
+
     ```bash
     git add plugins/soleur/.claude-plugin/plugin.json \
            plugins/soleur/CHANGELOG.md \
@@ -135,6 +140,7 @@ Workflow steps:
     git commit -m "chore(release): vX.Y.Z"
     git push
     ```
+
 16. **Create GitHub Release:** `gh release create "vNEXT" --notes-file /tmp/changelog.md`
 17. **Post to Discord:** Same pattern as current auto-release.yml (with secret check, truncation, jq payload)
 
@@ -158,6 +164,7 @@ Workflow steps:
 **File:** `plugins/soleur/skills/ship/SKILL.md`
 
 Changes:
+
 - **Remove Phase 3.5** (merge main before version bump) — no longer needed
 - **Remove Phase 5** (version bump sealing operation) — moved to CI
 - **Remove version conflict resolution from Phase 7.5** — version files are never modified in feature branches, so conflict routing strategies for plugin.json/README badge/bug_report.yml are dead code
@@ -173,6 +180,7 @@ Changes:
 ### Phase 3: Update Related Skills
 
 **File:** `plugins/soleur/skills/merge-pr/SKILL.md`
+
 - Remove Phase 4 (Version Bump) entirely (lines 222-281)
 - Update Phase 3 conflict resolution table — remove version file routing strategies
 - Update description frontmatter — remove "bumping version" reference
@@ -180,26 +188,32 @@ Changes:
 - Update rollback section — remove "merge + version bump" reference
 
 **File:** `plugins/soleur/skills/one-shot/SKILL.md`
+
 - Update line 98 ship phase description — remove Phase 5 reference
 
 **File:** `plugins/soleur/skills/compound-capture/SKILL.md`
+
 - Line 308: remove "or version-bump" from "Do NOT commit or version-bump"
 
 **File:** `plugins/soleur/skills/release-announce/SKILL.md`
+
 - Add note that this is now a manual fallback — the Action handles releases automatically
 
 ### Phase 4: Convention Documentation Updates
 
 **File:** `AGENTS.md` (root)
+
 - Line 24: Rewrite "Every plugin change: bump version..." → "Every plugin change: CI auto-bumps version at merge time. Feature branches must NOT touch version files."
 
 **File:** `plugins/soleur/AGENTS.md`
+
 - Rewrite "Versioning Requirements" section — explain new CI-driven model
 - Keep MAJOR/MINOR/PATCH definitions (still relevant for PR labels)
 - Replace Pre-Commit Checklist — remove all version-related items, add: "Ensure `## Changelog` section in PR body for plugin changes"
 - Add note: "Version bumping, CHANGELOG updates, count reconciliation, and release creation are handled by `version-bump-and-release.yml` at merge time"
 
 **File:** `knowledge-base/overview/constitution.md`
+
 - Line 50: Update docs version grep → "CI handles version propagation at merge time"
 - Line 63: Rewrite three-file rule → "CI auto-updates version files at merge time"
 - Line 64: Remove "Always fetch and check main before version bumps"
@@ -211,10 +225,13 @@ Changes:
 ### Phase 5: Remove auto-release.yml and Update deploy-docs.yml
 
 **File:** `.github/workflows/auto-release.yml`
+
 - Delete entirely (replaced by version-bump-and-release.yml)
 
 **File:** `.github/workflows/deploy-docs.yml`
+
 - Add `workflow_run` trigger with success check:
+
   ```yaml
   on:
     workflow_run:
@@ -224,6 +241,7 @@ Changes:
     deploy:
       if: ${{ github.event.workflow_run.conclusion == 'success' }}
   ```
+
 - This ensures docs rebuild after a successful version commit (not after failed bumps)
 
 ### Phase 6: Fix Pre-Existing Drift
@@ -234,9 +252,11 @@ Changes:
 ### Phase 7: Migration Notes
 
 - Document in PR description that existing worktrees (`feat-standardize-shebang`, `feat-migrate-hooks-json`) must revert version file changes before merging:
+
   ```bash
   git checkout origin/main -- plugins/soleur/.claude-plugin/plugin.json plugins/soleur/CHANGELOG.md plugins/soleur/README.md .claude-plugin/marketplace.json README.md .github/ISSUE_TEMPLATE/bug_report.yml
   ```
+
 - First merge after this lands will be the real test
 
 ## Dependencies & Risks
@@ -253,13 +273,16 @@ Changes:
 ## File Hit List (Complete)
 
 ### New Files (2)
+
 - `.github/workflows/version-bump-and-release.yml`
 - `.github/PULL_REQUEST_TEMPLATE.md`
 
 ### Files to Delete (1)
+
 - `.github/workflows/auto-release.yml`
 
 ### Files to Modify (10)
+
 - `plugins/soleur/skills/ship/SKILL.md` — remove Phase 3.5 + 5 + 7.5 version conflict routing, add label + changelog
 - `plugins/soleur/skills/merge-pr/SKILL.md` — remove Phase 4
 - `plugins/soleur/skills/one-shot/SKILL.md` — update ship description
@@ -272,6 +295,7 @@ Changes:
 - `plugins/soleur/docs/index.njk` — optional: reword marketing copy line 116
 
 ### CI Sync Targets (6 files the Action writes)
+
 - `plugins/soleur/.claude-plugin/plugin.json`
 - `plugins/soleur/CHANGELOG.md`
 - `plugins/soleur/README.md`

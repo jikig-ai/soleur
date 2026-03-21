@@ -19,6 +19,7 @@ A strategy document exists but execution stalled. Multiple root causes often com
 ### Why This Happens
 
 Two mechanisms:
+
 - **Parallel stagnation**: Everyone assumes someone else will consolidate the fragments → no one does
 - **Capacity mismatch**: Strategy assumes T=0 execution but actual resources only allow T=2+ execution → documents sit in feature branches waiting for capacity that never arrives
 
@@ -31,24 +32,28 @@ For Soleur specifically: content plan (Feb 19) was detailed but unexecuted; 7 ca
 Instead of manually merging fragments, delegate the unification to a domain expert (Chief Marketing Officer / Product Strategy Lead) who:
 
 ### Stage 1: Assessment
+
 - Read all existing artifacts: brand guide, content plan, competitive intelligence, business validation, content audit, SEO audits
 - Identify what is current and what is stale
 - Diagnose the capacity bottleneck (blog infrastructure? team bandwidth? unclear priorities?)
 - Surface open strategic questions
 
 ### Stage 2: Recommendation
+
 - Produce a unified positioning and messaging hierarchy
 - Identify the 3-5 validated moats that should inform all messaging
 - Define realistic phased execution plan given actual constraints (not aspirational)
 - Specify which cascade documents are needed and why
 
 ### Stage 3: Delegation
+
 - Assign cascade document generation to specialist agents (growth-strategist, pricing-strategist, SEO-specialist, sales-architect)
 - Each specialist reads the unified strategy and existing foundational docs
 - Specialists generate their cascade documents aligned to the unified narrative
 - CMO reviews for cross-domain consistency before commit
 
 ### Stage 4: Integration
+
 - All documents link to each other via YAML `depends_on` fields
 - Unified strategy includes a `review_cadence` field (e.g., quarterly) for future maintenance
 - Documents carry `last_reviewed` and `last_updated` timestamps to prevent staleness
@@ -58,12 +63,15 @@ Instead of manually merging fragments, delegate the unification to a domain expe
 ## Key Design Decisions
 
 ### 1. **Unified Strategy ≠ New Strategy**
+
 The existing strategy is not wrong. The unified document accounts for why execution stalled and produces a realistic plan that is achievable with current constraints.
 
 For Soleur: The Feb 19 content plan had high-quality keyword research and gap analysis. The unified strategy reframes execution as "capacity-constrained" and identifies infrastructure gaps (blog not built, email not wired) rather than strategy gaps.
 
 ### 2. **Cascade Documents Are Not Optional**
+
 A unified strategy without supporting details is not actionable. Cascade documents are required:
+
 - **Content strategy**: Translates the unified narrative into specific content gaps and execution sequencing
 - **Pricing strategy**: Operationalizes the positioning into a revenue model
 - **Competitive battlecards**: Arms sales and partnership teams with credible comparison narratives
@@ -72,7 +80,9 @@ A unified strategy without supporting details is not actionable. Cascade documen
 Without these, the unified strategy stays abstract.
 
 ### 3. **Capacity Constraints Are Explicit**
+
 The strategy must name what is missing:
+
 - Blog infrastructure blocks all content marketing execution
 - Email capture system blocks lead nurture workflows
 - Pricing decision blocks pricing content
@@ -81,9 +91,11 @@ The strategy must name what is missing:
 These become line items in the execution plan, not hidden roadblocks.
 
 ### 4. **Three Validated Moats Inform All Messaging**
+
 All cascade documents ladder up to at least one structural moat (not feature-based positioning).
 
 For Soleur:
+
 1. Compounding knowledge base (cross-domain institutional memory)
 2. Cross-domain coherence (61 agents share context across 8 domains)
 3. Workflow orchestration depth (brainstorm-plan-implement-review-compound lifecycle)
@@ -91,7 +103,9 @@ For Soleur:
 Every piece of content, every battlecard, every pricing page references one of these.
 
 ### 5. **Specialist Agents Regenerate Cascade Documents**
+
 Rather than the CMO writing all cascade documents, they delegate:
+
 - Growth-strategist writes content strategy (identifies content gaps, sequencing, pillar articles)
 - Pricing-strategist writes pricing strategy (operationalizes the positioning, models revenue)
 - SEO-specialist writes the refresh queue (maps content gaps to keywords, search volume, difficulty)
@@ -206,6 +220,7 @@ last_competitor_mention: YYYY-MM-DD
 ## What This Pattern Solves
 
 ### Before (Fragmented)
+
 - Brand guide is current; content plan is stale
 - Blog infrastructure doesn't exist; content calendar assumes it does
 - Competitive intelligence identifies moats; but messaging doesn't reference them
@@ -215,6 +230,7 @@ last_competitor_mention: YYYY-MM-DD
 **Result:** Founder must manually stitch these together. Execution stalls because the gap between "what the content plan says to do" and "what we can actually build" is never explicitly named.
 
 ### After (Unified)
+
 - One strategy document that accounts for current competitive context, product growth, and capacity constraints
 - Cascade documents all reference the unified strategy
 - Infrastructure blockers are explicitly named (blog not built, email not wired) so they don't become surprise roadblocks
@@ -228,20 +244,25 @@ last_competitor_mention: YYYY-MM-DD
 ## Anti-Patterns
 
 ### 1. CMO Writes All Cascade Documents Alone
+
 This defeats the purpose of the pattern. Cascade documents require specialist expertise (SEO-specialist understands keyword research, growth-strategist understands content sequencing). CMO's job is orchestration, not authorship.
 
 ### 2. Cascade Documents Are Optional
+
 If you only produce a unified strategy with no cascade documents, you have a map but no navigation instructions. Content strategy explains which content gaps are critical, how to sequence them, and what moats they reinforce.
 
 ### 3. Unifying Strategy Without Diagnosing Why Execution Stalled
+
 If you don't name the capacity blockers or the market shift that made the old plan obsolete, you'll reproduce the same stall with the new strategy.
 
 For Soleur: The old content plan assumed blog infrastructure existed. The unified strategy names "blog infrastructure" as a blocker and adjusts execution plan accordingly. Without this, a founder would start writing content and discover mid-way "oh, we can't publish this without a blog."
 
 ### 4. Unified Strategy Is Too Abstract
+
 All strategic documents must have a phased execution plan with explicit assumptions. "Here is what we should do" without "here is what Phase 1 looks like given we have 10 hours/week" is not useful.
 
 ### 5. Forgetting to Set Review Cadence
+
 Strategies become stale. Include `last_reviewed`, `last_updated`, and `review_cadence` fields in every document. Quarterly is typical for marketing strategy. If it's not reviewed quarterly, it will ossify.
 
 ---
@@ -263,6 +284,7 @@ Strategies become stale. Include `last_reviewed`, `last_updated`, and `review_ca
 ## Soleur Case Study
 
 ### Input State (March 3, 2026)
+
 - Brand guide: current, strong, consistent
 - Content plan: 15 pieces detailed, 0% executed, 14 days old, assumptions outdated
 - Content audit: 0/10 actual informational content, 2/10 SEO score, 1.6/10 AEO score
@@ -271,6 +293,7 @@ Strategies become stale. Include `last_reviewed`, `last_updated`, and `review_ca
 - Blockers: blog infrastructure doesn't exist, email capture not wired, pricing undecided
 
 ### Process
+
 1. CMO agent reads all input artifacts
 2. CMO produces unified marketing strategy (executive summary + positioning + target audience + execution plan)
 3. CMO delegates to specialist agents:
@@ -281,6 +304,7 @@ Strategies become stale. Include `last_reviewed`, `last_updated`, and `review_ca
 4. All committed to feat-marketing-strategy-review branch with dependencies declared in YAML
 
 ### Output Artifacts
+
 - `knowledge-base/overview/marketing-strategy.md` (executive summary, 3 moats, positioning, messaging hierarchy, phased execution)
 - `knowledge-base/overview/content-strategy.md` (5 content gaps, sequencing, pillar articles, schema requirements)
 - `knowledge-base/overview/pricing-strategy.md` (freemium model, future pricing, justification framework)
@@ -289,6 +313,7 @@ Strategies become stale. Include `last_reviewed`, `last_updated`, and `review_ca
 - `knowledge-base/sales/battlecards/tier-3-*.md` (Notion, Tanka battlecards)
 
 ### Result
+
 - Unified narrative across all marketing domains
 - Explicit acknowledgment of capacity constraints and infrastructure blockers
 - Phased execution plan that is achievable given 10 hours/week founder bandwidth

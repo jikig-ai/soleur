@@ -11,11 +11,13 @@ date: 2026-03-18
 **Research sources:** Context7 Supabase docs, PostgreSQL ALTER TABLE behavior, existing migration patterns in codebase
 
 ### Key Improvements
+
 1. Clarified that PostgreSQL `SET NOT NULL` is naturally idempotent -- removed unnecessary acceptance criterion
 2. Added comment explaining transactional safety (DO block + ALTER run in same Supabase migration transaction)
 3. Noted `ACCESS EXCLUSIVE` lock requirement -- negligible for this small table but documented for awareness
 
 ### New Considerations Discovered
+
 - The DO block safety check and the ALTER run atomically because Supabase migrations execute each file in a single transaction -- no TOCTOU risk
 - `SET NOT NULL` on a column that already has the constraint is a silent no-op in PostgreSQL, so no `IF NOT EXISTS` guard is needed
 - This is the first migration in the project using a PL/pgSQL DO block -- the pattern is valid with Supabase's `db push`

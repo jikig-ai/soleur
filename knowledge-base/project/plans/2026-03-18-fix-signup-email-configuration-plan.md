@@ -11,6 +11,7 @@ date: 2026-03-18
 **Research sources used:** Supabase docs (Context7), Resend docs, web search (email deliverability best practices), codebase analysis
 
 ### Key Improvements
+
 1. Concrete Resend SMTP credentials (host: `smtp.resend.com`, port: `465`, user: `resend`, password: API key) -- no more placeholders
 2. Corrected email template to use `{{ .ConfirmationURL }}` (correct for PKCE flow with `exchangeCodeForSession`) rather than `{{ .RedirectTo }}` which would break the auth flow
 3. Added all Supabase Management API field names for programmatic email template updates (`mailer_templates_magic_link_content`, `mailer_subjects_magic_link`, etc.)
@@ -20,6 +21,7 @@ date: 2026-03-18
 7. Added Supabase Management API automation script for all three configuration changes in a single `curl` call
 
 ### New Considerations Discovered
+
 - The app uses PKCE flow (`exchangeCodeForSession` in callback) -- `{{ .ConfirmationURL }}` is the correct template variable, not `{{ .RedirectTo }}`
 - Resend has a native Supabase integration (one-click setup from Resend dashboard) that auto-configures SMTP
 - Supabase default magic link expiry is 24 hours, but Resend recommends 1 hour for security
@@ -65,6 +67,7 @@ The client-side code (`apps/web-platform/app/(auth)/signup/page.tsx:21` and `app
 **PKCE Flow Confirmation:** The app uses PKCE auth flow, confirmed by `exchangeCodeForSession(code)` in `apps/web-platform/app/(auth)/callback/route.ts:11`. The callback expects a `code` query parameter. This means `{{ .ConfirmationURL }}` is the correct template variable -- it generates a URL that goes through Supabase's verification server, which then redirects to the app's callback with `?code=...` for PKCE exchange. Using `{{ .RedirectTo }}` or manual `{{ .TokenHash }}` construction would break this flow.
 
 **Supabase email template variables available:**
+
 - `{{ .ConfirmationURL }}` -- Pre-built URL with auth verification (correct for PKCE flow)
 - `{{ .SiteURL }}` -- The Site URL from project config
 - `{{ .RedirectTo }}` -- The redirect URL passed from client code
@@ -81,6 +84,7 @@ Three configuration changes in the Supabase dashboard, plus email template HTML 
 **Provider: [Resend](https://resend.com)** -- chosen for: native Supabase integration, simple API-key-based auth, good deliverability, custom domain support, generous free tier (100 emails/day).
 
 **Resend SMTP credentials:**
+
 - **Host:** `smtp.resend.com`
 - **Port:** `465` (SSL/TLS). If connection issues arise, try `587` (STARTTLS).
 - **Username:** `resend`
@@ -90,7 +94,7 @@ Three configuration changes in the Supabase dashboard, plus email template HTML 
 
 **Setup steps:**
 
-1. Create Resend account at https://resend.com (or use existing account)
+1. Create Resend account at <https://resend.com> (or use existing account)
 2. Add `soleur.ai` as a sending domain in Resend dashboard
 3. Resend will provide DNS records (SPF, DKIM) -- collect these for Phase 2
 4. Generate an API key in Resend dashboard -- this becomes the SMTP password
@@ -114,16 +118,18 @@ curl -X PATCH "https://api.supabase.com/v1/projects/$PROJECT_REF/config/auth" \
   }'
 ```
 
-**Alternative:** Resend offers a one-click Supabase integration from their dashboard (https://resend.com/supabase) that auto-configures SMTP settings without manual credential entry.
+**Alternative:** Resend offers a one-click Supabase integration from their dashboard (<https://resend.com/supabase>) that auto-configures SMTP settings without manual credential entry.
 
 ### Research Insights: SMTP Configuration
 
 **Best Practices:**
+
 - Use a dedicated API key for Supabase SMTP (not your main Resend API key) so it can be rotated independently
 - Set up a subdomain like `mail.soleur.ai` as the sending domain rather than the root `soleur.ai` to isolate email reputation from the main domain
 - Resend provides webhook events for bounces and complaints -- consider configuring these for monitoring
 
 **Edge Cases:**
+
 - Some corporate firewalls block port 465. Port 587 with STARTTLS is more universally accepted.
 - Resend rate limits: Free tier is 100 emails/day, 10/second. For production, the Pro plan ($20/month) provides 50,000 emails/month.
 - If Resend goes down, Supabase falls back to its built-in SMTP. This is actually desirable for auth emails -- users can still sign in, just from a different sender domain.
@@ -148,11 +154,13 @@ curl -X PATCH "https://api.supabase.com/v1/projects/$PROJECT_REF/config/auth" \
 ### Research Insights: Redirect Configuration
 
 **Best Practices:**
+
 - Use wildcard patterns (`/**`) in redirect URLs to cover all paths, not just specific routes
 - The `site_url` is the **default** redirect when no `redirectTo` is passed from client code. Setting it to the production URL is correct.
 - For staging environments, add the staging URL to `uri_allow_list` as well
 
 **Edge Cases:**
+
 - If `uri_allow_list` does not include the production URL, Supabase silently falls back to `site_url`. Since we're fixing `site_url` to be production, this fallback is actually correct behavior now.
 - The `window.location.origin` approach in the client code resolves correctly in both dev (`http://localhost:3000`) and production (`https://app.soleur.ai`), so no client code changes needed.
 
@@ -232,6 +240,7 @@ Template file to commit for version control: `apps/web-platform/supabase/templat
 ### Research Insights: Email Template
 
 **Best Practices:**
+
 - Use `role="presentation"` on layout tables for accessibility (screen readers skip them)
 - Include a preheader (hidden `<div>`) for email preview text in inbox list views
 - Add `<!--[if mso]>` conditionals for Outlook desktop client compatibility
@@ -241,11 +250,13 @@ Template file to commit for version control: `apps/web-platform/supabase/templat
 - Include a footer with company name and website link (CAN-SPAM compliance, even for transactional emails)
 
 **Performance Considerations:**
+
 - Keep email HTML under 100KB to avoid Gmail clipping
 - Inline all CSS (no `<style>` blocks) for maximum email client compatibility
 - Avoid images where possible -- text-based emails have higher deliverability and load faster
 
 **Edge Cases:**
+
 - **Email prefetching by corporate security scanners** (Barracuda, Mimecast, Microsoft ATP): These systems follow links in emails to scan for malware, which can consume one-time magic links before the user clicks. Supabase handles this by using a verification endpoint that requires a proper browser redirect chain (not a simple GET request), which mitigates most prefetch scanners. However, consider adding the OTP code as a secondary option: `<p style="...">Or enter this code: {{ .Token }}</p>`. This requires updating the signup/login pages to accept OTP code input.
 - **Gmail image proxy**: Gmail proxies all images through its servers. If adding a Soleur logo image later, host it on a reliable CDN and use HTTPS.
 - **Dark mode inversion**: Some email clients invert colors in dark mode. The template already uses a dark theme, which prevents unexpected inversions.
@@ -301,12 +312,14 @@ resource "cloudflare_record" "dmarc" {
 ### Research Insights: DNS & Deliverability
 
 **Best Practices:**
+
 - Use `~all` (soft fail) instead of `-all` (hard fail) in SPF during initial setup. Switch to `-all` after confirming everything works.
 - DMARC `pct=100` means 100% of failing messages are subject to the policy. Start with `p=none` and `pct=100` for monitoring, then escalate to `p=quarantine` after confirming no legitimate emails fail.
 - Set up a `rua` (reporting) address to receive DMARC aggregate reports. Use a service like DMARCian or Postmark's DMARC monitoring to parse these.
 - Resend uses Amazon SES under the hood, so the SPF include is `amazonses.com`, not a Resend-specific domain.
 
 **Edge Cases:**
+
 - **Existing SPF record conflict**: If `soleur.ai` already has an SPF record (e.g., from Google Workspace for company email), adding a second SPF record will cause both to fail. DNS allows only one SPF record per domain. Merge includes into a single record: `v=spf1 include:_spf.google.com include:amazonses.com ~all`.
 - **Cloudflare proxied records**: TXT records cannot be proxied by Cloudflare (they're always DNS-only). No `proxied` attribute needed.
 - **DKIM as CNAME vs TXT**: Resend uses CNAME records for DKIM (delegating to their infrastructure), not TXT records with raw keys. This allows Resend to rotate keys without requiring DNS changes.

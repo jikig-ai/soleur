@@ -37,6 +37,7 @@ Three text replacements across four files (dual-file sync: `docs/legal/` source 
 ### 1. GDPR Policy -- server type removal
 
 **Files:**
+
 - `docs/legal/gdpr-policy.md` (line ~268)
 - `plugins/soleur/docs/pages/legal/gdpr-policy.md` (line ~277)
 
@@ -48,6 +49,7 @@ Three text replacements across four files (dual-file sync: `docs/legal/` source 
 ### 2. Privacy Policy -- datacenter zone removal
 
 **Files:**
+
 - `docs/legal/privacy-policy.md` (line ~169)
 - `plugins/soleur/docs/pages/legal/privacy-policy.md` (line ~178)
 
@@ -59,6 +61,7 @@ Three text replacements across four files (dual-file sync: `docs/legal/` source 
 ### 3. GDPR Policy -- authentication stack removal
 
 **Files:**
+
 - `docs/legal/gdpr-policy.md` (line ~266)
 - `plugins/soleur/docs/pages/legal/gdpr-policy.md` (line ~275)
 
@@ -95,6 +98,7 @@ The following legal documents were verified clean of the three targeted identifi
 **T&C alignment verification:**
 
 The T&C uses two patterns for Hetzner references:
+
 - Line 76: "Hetzner servers in Helsinki, Finland (EU)" -- matches our target
 - Line 141: "Hetzner (Helsinki, Finland, EU)" -- exact match for our replacement text
 
@@ -103,6 +107,7 @@ The replacement `Hetzner (Helsinki, Finland, EU)` aligns with the T&C line 141 p
 **Dual-file sync considerations (from learning `2026-03-18-dpd-processor-table-dual-file-sync.md`):**
 
 Both file locations must be updated in the same commit. Key differences between locations:
+
 - `docs/legal/`: Has `type`, `jurisdiction`, `generated-date` frontmatter; uses `.md` relative links
 - `plugins/soleur/docs/pages/legal/`: Has `layout`, `permalink`, `description` frontmatter; uses `/pages/legal/*.html` absolute links; wrapped in `<section>` HTML tags
 

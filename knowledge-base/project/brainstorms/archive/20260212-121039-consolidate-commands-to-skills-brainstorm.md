@@ -19,6 +19,7 @@ This follows the pattern Amp adopted -- eliminating the command/skill duality wh
 ## Key Decisions
 
 ### Convert to Skills (10 commands)
+
 These become skill directories with SKILL.md files. The command files are deleted.
 
 | Command | New Skill Name | Rationale |
@@ -35,10 +36,13 @@ These become skill directories with SKILL.md files. The command files are delete
 | `resolve_parallel` | `resolve-parallel` | Workflow agents can use for TODO cleanup |
 
 ### Delete Pure Wrapper (1 command)
+
 - `create-agent-skill` command -- the `create-agent-skills` skill already handles this
 
 ### Keep as Commands (7)
+
 These require user intent/judgment and stay as-is:
+
 - `deploy-docs` -- production deployment decision
 - `generate_command` -- meta-command requiring design decisions
 - `heal-skill` -- requires human judgment about correctness
@@ -48,13 +52,16 @@ These require user intent/judgment and stay as-is:
 - `lfg` -- deliberate "let's go" trigger
 
 ### Keep as Orchestration Commands (8)
+
 These compose multiple skills and are NOT redundant:
+
 - `soleur:brainstorm`, `soleur:plan`, `soleur:work`, `soleur:review`
 - `soleur:compound`, `soleur:sync`, `triage`, `agent-native-audit`
 
 ## Migration Pattern
 
 For each command being converted:
+
 1. Create `plugins/soleur/skills/<name>/SKILL.md`
 2. Add YAML frontmatter (name, description in third person with trigger keywords)
 3. Move command content into the skill, adapting format

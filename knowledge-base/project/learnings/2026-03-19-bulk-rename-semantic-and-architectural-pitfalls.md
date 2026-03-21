@@ -37,5 +37,6 @@ The common failure mode is treating a rename as a mechanical text substitution w
 3. **Missed file in plan**: The CLA plan file (`knowledge-base/project/plans/2026-02-26-feat-cla-contributor-agreements-plan.md`) contained a stale reference to the old filename but was not in the plan's file list. Caught by post-edit verification grep. Fix: always grep the full repo after bulk renames, not just the planned file list.
 
 ## Tags
+
 category: process-errors
 module: documentation, legal-documents, agents

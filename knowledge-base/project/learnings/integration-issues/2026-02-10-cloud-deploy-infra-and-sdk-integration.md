@@ -60,6 +60,7 @@ Strict initialization order:
 4. Only relay Telegram messages when state is "ready"
 
 Key protocol details:
+
 - Protocol is NDJSON (newline-delimited JSON)
 - CLI sends `system/init` as first message (handshake)
 - Permission `control_response` MUST include `updatedInput` field for allow

@@ -18,6 +18,7 @@ When designing the community skill with a `post` sub-command, the initial plan h
 Changed the `post` sub-command to inform the user to run `/soleur:discord-content <topic>` directly, rather than attempting programmatic invocation.
 
 For cases where a skill needs functionality from another skill:
+
 1. **Inform and redirect:** Tell the user to invoke the other skill directly
 2. **Duplicate the logic:** Copy the essential behavior inline (if small enough)
 3. **Extract to a shared script:** Move common logic to a script both skills can call via Bash
@@ -26,6 +27,7 @@ For cases where a skill needs functionality from another skill:
 ## Key Insight
 
 The Soleur architecture has a clear invocation hierarchy:
+
 - **Users** invoke skills (via `/soleur:<name>`) and commands
 - **Skills** can spawn agents (via Task tool) and run scripts (via Bash)
 - **Agents** can spawn other agents (via Task tool) and run scripts

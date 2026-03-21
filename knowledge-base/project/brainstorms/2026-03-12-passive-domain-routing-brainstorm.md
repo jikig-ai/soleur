@@ -14,6 +14,7 @@ This also includes removing the existing `AskUserQuestion` confirmation gate fro
 ## Why This Approach
 
 The project already has:
+
 - 8 domain leaders with standardized 3-phase contracts (Assess, Recommend/Delegate, Sharp Edges)
 - A domain config table (`brainstorm-domain-config.md`) mapping domains to assessment questions and task prompts
 - Proven LLM semantic assessment that outperforms keyword matching (documented in learnings from v1→v2 evolution)

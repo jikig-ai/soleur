@@ -51,6 +51,7 @@ Forms must work on the static Eleventy site hosted on GitHub Pages. No server-si
 ### TR2: Legal Document Updates
 
 Update three documents before the form goes live:
+
 - **Privacy Policy** — Add section for newsletter email collection (data category, purpose, lawful basis, retention, third-party processor)
 - **GDPR Policy** — Add processing activity entry, update "data NOT collected" section, add Article 30 register entry
 - **Data Protection Disclosure** — Add Buttondown as third-party processor

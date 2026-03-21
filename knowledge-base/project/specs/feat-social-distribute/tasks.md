@@ -26,21 +26,25 @@ issue: 458
 ## Phase 2: Social Distribute Skill (Core)
 
 ### 2.1 Skill Setup
+
 - [x] 2.1.1 Create `plugins/soleur/skills/social-distribute/` directory
 - [x] 2.1.2 Write SKILL.md with frontmatter (name: social-distribute, third-person description, trigger keywords)
 
 ### 2.2 Prerequisites Phase (in SKILL.md)
+
 - [x] 2.2.1 Check brand guide exists at `knowledge-base/overview/brand-guide.md`
 - [x] 2.2.2 Check `DISCORD_WEBHOOK_URL` env var (warn if missing, don't block -- Discord becomes manual too)
 - [x] 2.2.3 Validate blog post path argument exists and is a `.md` file
 
 ### 2.3 Content Input
+
 - [x] 2.3.1 Read blog post markdown file
 - [x] 2.3.2 Parse YAML frontmatter (extract title, description, date, tags)
 - [x] 2.3.3 Get current stats via shell: count agents, skills, commands, departments; read site.url from site.json
 - [x] 2.3.4 Pass raw article content + stats values as context to LLM generation (LLM handles template vars, strips markup)
 
 ### 2.4 Content Generation
+
 - [x] 2.4.1 Read brand guide `## Voice` section and `## Channel Notes` for Discord and X/Twitter
 - [x] 2.4.2 Generate Discord announcement post (<=2000 chars, include article URL)
 - [x] 2.4.3 Generate X/Twitter thread (hook tweet + numbered thread + final tweet with article link, <=280 chars each)
@@ -49,21 +53,25 @@ issue: 458
 - [x] 2.4.6 Generate HN submission title (<=80 chars, no marketing language) + URL
 
 ### 2.5 Approval Flow
+
 - [x] 2.5.1 Display all 5 variants in a summary view
 - [x] 2.5.2 For Discord (if webhook configured): AskUserQuestion Accept/Edit/Skip
 - [x] 2.5.3 Handle "Edit" by regenerating Discord variant with user feedback
 - [x] 2.5.4 For all other platforms: output formatted text to terminal
 
 ### 2.6 Posting (Discord)
+
 - [x] 2.6.1 Post via curl to `DISCORD_WEBHOOK_URL` with `username: "Sol"`, `avatar_url`, `allowed_mentions: {parse: []}`
 - [x] 2.6.2 Handle HTTP errors: show error, output draft text as fallback
 - [x] 2.6.3 Report success
 
 ### 2.7 Manual Platform Output
+
 - [x] 2.7.1 Print X/Twitter thread, IndieHackers, Reddit, HN content to terminal with clear headers
 - [x] 2.7.2 Include article URL in each output
 
 ### 2.8 Distribution Summary
+
 - [x] 2.8.1 Display summary: which platform was posted, which are manual output
 
 ## Phase 3: Registration & Counts

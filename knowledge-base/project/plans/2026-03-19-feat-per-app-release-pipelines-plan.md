@@ -113,15 +113,18 @@ on:
 #### Phase 1: Prerequisites and Cleanup
 
 Tasks:
+
 - [ ] **1.1** Normalize GHCR org in telegram-bridge: update `apps/telegram-bridge/scripts/deploy.sh` and `apps/telegram-bridge/infra/variables.tf` to use `ghcr.io/jikig-ai/soleur-telegram-bridge` (lowercase)
 - [ ] **1.2** Fix `docker restart` bug in `apps/telegram-bridge/scripts/deploy.sh:16` — replace `docker restart soleur-bridge` with `{ docker stop soleur-bridge || true; } && { docker rm soleur-bridge || true; } && docker run -d --name soleur-bridge ...`
 - [ ] **1.3** Create repository secrets via `gh secret set`:
+
   ```bash
   gh secret set TELEGRAM_BRIDGE_HOST --body "$(terraform -chdir=apps/telegram-bridge/infra output -raw server_ip)"
   gh secret set TELEGRAM_BRIDGE_SSH_KEY < ~/.ssh/telegram_bridge_key  # or appropriate key path
   ```
 
 **Deferred to separate issues:**
+
 - GitHub labels `app:web-platform` / `app:telegram-bridge` — created in Phase 4 alongside `/ship` changes (not a blocker for release workflows)
 - Telegram-bridge Docker build test in CI — file as separate issue (out of scope for #739)
 
@@ -307,11 +310,13 @@ jobs:
 - [ ] **4.0** Create GitHub labels (prerequisite for `/ship`): `gh label create "app:web-platform" --color "6f42c1" --description "PR touches web-platform app"` and `gh label create "app:telegram-bridge" --color "6f42c1" --description "PR touches telegram-bridge app"`
 - [ ] **4.1** Update `plugins/soleur/skills/ship/SKILL.md` Phase 6 ("Semver Label and Changelog"):
   - After the existing plugin diff analysis, add app path detection:
+
     ```
     # Check for app changes
     git diff --name-only $MERGE_BASE...HEAD -- apps/web-platform/ | head -1
     git diff --name-only $MERGE_BASE...HEAD -- apps/telegram-bridge/ | head -1
     ```
+
   - Apply `app:web-platform` label if web paths changed
   - Apply `app:telegram-bridge` label if telegram paths changed
   - Keep existing `semver:*` logic — analyze ALL changed component dirs for the highest bump level
@@ -324,17 +329,21 @@ jobs:
 #### Phase 5: Seed Releases and Verification
 
 - [ ] **5.1** Create seed releases manually to establish the starting version for each app:
+
   ```bash
   gh release create "web-v0.1.0" --title "web-v0.1.0" --notes "Initial release tracking for Soleur Web Platform"
   gh release create "telegram-v0.1.0" --title "telegram-v0.1.0" --notes "Initial release tracking for Soleur Telegram Bridge"
   ```
+
   This sets the baseline so the first automated bump computes from v0.1.0.
 
 - [ ] **5.2** After merging, trigger each workflow manually via `workflow_dispatch` and verify:
+
   ```bash
   gh workflow run web-platform-release.yml -f bump_type=patch -f skip_deploy=true
   gh workflow run telegram-bridge-release.yml -f bump_type=patch
   ```
+
   Poll with `gh run view <id> --json status,conclusion` until complete. Verify releases `web-v0.1.1` and `telegram-v0.1.1` are created.
 
 - [ ] **5.3** Verify Docker images on GHCR have all 3 tags: `v0.1.1`, `<sha>`, `latest`

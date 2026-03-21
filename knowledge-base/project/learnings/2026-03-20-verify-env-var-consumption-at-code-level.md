@@ -28,5 +28,6 @@ Infrastructure artifacts (cloud-init, CI pipelines, Docker Compose) declare vari
 - `2026-03-20-docker-nonroot-user-with-volume-mounts.md` -- prior plan-phase error that propagated contradictory instructions
 
 ## Tags
+
 category: documentation-accuracy
 module: apps/telegram-bridge, apps/web-platform

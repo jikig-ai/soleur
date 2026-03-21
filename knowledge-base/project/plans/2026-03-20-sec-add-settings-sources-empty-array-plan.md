@@ -122,7 +122,7 @@ Keep `patchWorkspacePermissions()` as defense-in-depth. Update its comment to ex
 - **Issue:** #895
 - **Discovery:** Security review of PR #881 (#876)
 - **SDK version:** `@anthropic-ai/claude-agent-sdk@^0.2.80` (post-v0.1.0, defaults to `settingSources: []`)
-- **SDK docs:** https://platform.claude.com/docs/en/agent-sdk/typescript (settingSources), https://platform.claude.com/docs/en/agent-sdk/migration-guide (v0.1.0 change)
+- **SDK docs:** <https://platform.claude.com/docs/en/agent-sdk/typescript> (settingSources), <https://platform.claude.com/docs/en/agent-sdk/migration-guide> (v0.1.0 change)
 - **Learning:** `knowledge-base/project/learnings/2026-03-20-canusertool-caching-verification.md`
 - **Learning:** `knowledge-base/project/learnings/2026-03-20-canuse-tool-sandbox-defense-in-depth.md`
 - **Learning:** `knowledge-base/project/learnings/2026-03-20-security-fix-attack-surface-enumeration.md`
@@ -133,5 +133,5 @@ Keep `patchWorkspacePermissions()` as defense-in-depth. Update its comment to ex
 
 - Related issue: #895
 - Prior security PRs: #881, #876, #725
-- SDK documentation: https://platform.claude.com/docs/en/agent-sdk/typescript
-- SDK migration guide: https://platform.claude.com/docs/en/agent-sdk/migration-guide
+- SDK documentation: <https://platform.claude.com/docs/en/agent-sdk/typescript>
+- SDK migration guide: <https://platform.claude.com/docs/en/agent-sdk/migration-guide>

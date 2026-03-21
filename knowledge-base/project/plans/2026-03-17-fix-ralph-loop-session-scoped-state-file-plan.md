@@ -15,6 +15,7 @@ deepened: 2026-03-17
 **Research sources:** Codebase analysis (stop-hook.sh, setup-ralph-loop.sh, test suite), 5 institutional learnings, engineering review patterns
 
 ### Key Improvements
+
 1. Added concrete implementation snippets for the glob-based TTL cleanup loop in stop-hook.sh
 2. Identified PPID stability risk with `bash -c` subshells and added mitigation (use `$$` fallback)
 3. Added trap-based cleanup pattern for temp files in the TTL loop (from shell-script-defensive-patterns learning)
@@ -22,6 +23,7 @@ deepened: 2026-03-17
 5. Identified that the test file uses `run_hook` via subshell `(cd "$dir" && ...)` which means `$PPID` inside the hook during tests will be the test shell's PID, not the subshell's -- tests need to account for this
 
 ### New Considerations Discovered
+
 - The `run_hook` test helper wraps the hook in a subshell `(cd "$dir" && bash "$HOOK")`. The `bash "$HOOK"` creates a new bash process, so `$PPID` inside the hook will be the subshell's PID. This is different from the test script's `$$`. Tests must create state files using the PID that the hook will see, not `$$`.
 - The `setup-ralph-loop.sh` help text includes hardcoded `ralph-loop.local.md` in examples -- these need updating too.
 
@@ -61,6 +63,7 @@ PPID is the only reliable, environment-available, session-stable identifier. The
 ### Research Insights
 
 **PPID behavior in subshells and pipelines:**
+
 - `$PPID` is set once when bash starts and never changes (unlike `$BASHPID` which reflects the current subshell). This is desirable -- subshells within the hook still see the Claude Code PID.
 - `bash -c '...'` creates a new process with its own `$PPID` pointing to the invoking shell, not the Claude Code process. This does not affect us because Claude Code invokes hooks via `bash stop-hook.sh`, not `bash -c`.
 - Pipelines: in `echo "$input" | bash stop-hook.sh`, the pipe creates a subshell for the right side. `$PPID` inside the hook still points to the Claude Code process (the pipe's parent).
@@ -143,6 +146,7 @@ done
 ```
 
 Key defensive patterns applied:
+
 - `[[ -f "$state_file" ]] || continue` -- handles empty glob (no files match)
 - `|| true` on grep/date commands -- prevents `set -euo pipefail` abort on missing fields
 - `$(basename "$state_file")` in the log message -- shows which PID's file was removed
@@ -252,6 +256,7 @@ create_state_file() {
 **New tests to add:**
 
 Test N: State file from foreign PID does not block exit
+
 ```bash
 # Create state file with a PID that is NOT what the hook will see
 echo "Test N: Foreign PID state file does not block exit"
@@ -272,6 +277,7 @@ assert_file_exists "$TEST_DIR/.claude/ralph-loop.99999.local.md" "foreign PID fi
 ```
 
 Test M: TTL glob cleanup removes stale file from other PID
+
 ```bash
 echo "Test M: TTL glob cleanup removes stale file from other PID"
 TEST_DIR=$(setup_test)
@@ -335,21 +341,27 @@ To cancel: rm .claude/ralph-loop.*.local.md
 ## Edge Cases
 
 ### PID reuse after reboot
+
 A new session could get the same PPID as a previously crashed session. The TTL check (1-hour) handles this: if the old file is stale, it gets auto-removed before the new session's setup creates a fresh one. Even if the PID is reused within the TTL window, setup-ralph-loop.sh overwrites the file with fresh state (iteration: 1, new started_at), so the new session gets a clean start.
 
 ### Multiple loops in same session
+
 Not supported (existing limitation). Setup overwrites the previous state file for the same PPID. This is unchanged behavior.
 
 ### PPID stability across hook invocations
+
 The stop hook is invoked as a child of the Claude Code process. `$PPID` in the hook is the Claude Code process PID, which is stable for the lifetime of the session. The setup script is also invoked as a child of the same Claude Code process. Both scripts see the same `$PPID`.
 
 ### Glob-based TTL cleanup performance
+
 The `.claude/` directory is small (a handful of files). Iterating over `ralph-loop.*.local.md` with a for loop is negligible overhead. The `date -d` parsing per file is the most expensive operation, but with <10 files it is sub-millisecond.
 
 ### Empty glob with `set -euo pipefail`
+
 In bash, `for f in pattern*; do` iterates once with the literal pattern if no files match. The `[[ -f "$state_file" ]] || continue` guard handles this. No `shopt -s nullglob` needed (and modifying shell options in a script with `set -euo pipefail` is risky -- per the bare-repo-helper-extraction-patterns learning).
 
 ### macOS `date` compatibility
+
 The current TTL code uses `date -d "$STARTED_AT"` which is GNU date syntax. macOS uses BSD date (`date -j -f`). This is a pre-existing limitation -- the fix does not change the date parsing logic, just moves it into a loop. If macOS support is needed later, a `to_epoch()` helper function should be extracted (per bash-arithmetic-and-test-sourcing-patterns learning).
 
 ## References

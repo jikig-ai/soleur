@@ -14,6 +14,7 @@ issue: "#826"
 **Research sources:** GitHub Rulesets docs, GitHub Well-Architected Framework, GitHub community discussions, 4 institutional learnings, security-sentinel review patterns
 
 ### Key Improvements
+
 1. Added implementation constraint: `security_reminder_hook` blocks Edit/Write tools on workflow files -- must use `sed`/Python via Bash
 2. Confirmed via GitHub docs that `[skip ci]` causes workflow-level skip, leaving required checks in "Pending" state forever (not "Success")
 3. Added OrganizationAdmin bypass actor to match CLA Required ruleset pattern (was missing from original payload)
@@ -21,6 +22,7 @@ issue: "#826"
 5. Added future-proofing: documented synthetic status pattern as a convention for all new bot workflows
 
 ### New Considerations Discovered
+
 - The `security_reminder_hook.py` PreToolUse hook blocks both Edit and Write tools on `.github/workflows/*.yml` files -- all 9 workflow edits must use `sed` via Bash
 - GitHub distinguishes between job-level skips (report "Success") and workflow-level skips from `[skip ci]` (remain "Pending" forever)
 - The CLA Required ruleset includes an OrganizationAdmin bypass and an Integration bypass (ID 1236702) in addition to RepositoryRole -- the new ruleset should mirror this
@@ -46,11 +48,13 @@ Neither ruleset requires the `test` status check.
 ### Research Insights
 
 **GitHub's Well-Architected Framework (2025) recommends:**
+
 - Start with Evaluate mode to surface friction before enforcement -- but this repo's pattern is to go directly to `active` (both existing rulesets are `active`), and the risk of evaluate-only is that it provides no protection during the evaluation period
 - Tier protection via custom properties -- not applicable for a single-repo setup
 - Ensure a designated bypass team for break-glass scenarios
 
 **GitHub Status Check Behavior (confirmed via docs and community):**
+
 - When a workflow is skipped via `[skip ci]` commit message, the required status check remains in **"Pending" state forever** -- it is NOT automatically marked as passed or skipped ([GitHub Community Discussion #26698](https://github.com/orgs/community/discussions/26698))
 - When a job within a workflow is skipped due to a conditional (`if:` expression), it reports **"Success"** -- but workflow-level skips from `[skip ci]` do NOT
 - This distinction is critical: the synthetic status pattern is the only way to unblock bot PRs that use `[skip ci]`
@@ -132,6 +136,7 @@ gh api repos/jikig-ai/soleur/rulesets -X POST --input /tmp/ci-required-ruleset.j
 - Auto-merge blocks indefinitely
 
 **Affected workflows:**
+
 - `scheduled-content-publisher.yml`
 - `scheduled-content-generator.yml`
 - `scheduled-weekly-analytics.yml`
@@ -181,6 +186,7 @@ Renovate PRs trigger the CI workflow normally (no `[skip ci]`). The `test` job r
 ### Terraform Consideration
 
 AGENTS.md mandates Terraform for infrastructure provisioning. However:
+
 - No GitHub Terraform provider is configured in this repo
 - Both existing rulesets (CLA Required, Force Push Prevention) were created via `gh api`
 - Adding a GitHub Terraform provider for a single ruleset would be out of pattern
@@ -194,6 +200,7 @@ AGENTS.md mandates Terraform for infrastructure provisioning. However:
 **Status spoofing prevention:** The `integration_id: 15368` constraint ensures only the `github-actions` app (which powers `GITHUB_TOKEN`) can satisfy the `test` check. Without this, any GitHub App or user with `statuses:write` permission could post a fake passing `test` status.
 
 **Synthetic status risk:** Bot workflows posting synthetic `test: success` statuses bypass the actual test execution. This is an accepted risk because:
+
 1. Bot PRs only modify non-code files (markdown, YAML metadata)
 2. The `[skip ci]` pattern is already established and accepted
 3. The alternative (running full CI on every bot PR) wastes compute for no security benefit

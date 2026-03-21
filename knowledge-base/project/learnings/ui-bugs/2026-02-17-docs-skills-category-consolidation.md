@@ -36,6 +36,7 @@ Consolidated 8 categories into 4 broader groups:
 All 4 categories ordered alphabetically to match the Agents page convention.
 
 Also updated:
+
 - Plugin README skill tables (same 4 categories)
 - release-docs SKILL.md (category reference on line 89)
 - Added 2 skills missing from README (brainstorming, spec-templates)
@@ -55,7 +56,7 @@ When a catalog page has more than ~5 top-level categories, consolidate until eac
 - [2026-02-17-ux-review-gap-visual-polish-vs-information-architecture.md](../2026-02-17-ux-review-gap-visual-polish-vs-information-architecture.md) -- earlier agents page consolidation
 - [2026-02-13-static-docs-site-from-brand-guide.md](../2026-02-13-static-docs-site-from-brand-guide.md) -- docs site build pattern
 - [2026-02-12-overview-docs-stale-after-restructure.md](../2026-02-12-overview-docs-stale-after-restructure.md) -- keeping docs in sync after restructures
-- PR #121: https://github.com/jikig-ai/soleur/pull/121
+- PR #121: <https://github.com/jikig-ai/soleur/pull/121>
 
 ## Tags
 

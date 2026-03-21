@@ -16,11 +16,13 @@ Closes #692
 **Research agents used:** None (trivial one-line fix; local analysis sufficient)
 
 ### Key Improvements
+
 1. Verified all three failure paths in `resolve-git-root.sh` (lines 34-37, 41-44, and potential line 49 failure) are caught by the `|| { exit 0; }` guard
 2. Confirmed `source` propagates `return 1` from the sourced script as a non-zero exit status, which triggers the `||` guard under `set -e`
 3. Added edge case for stderr suppression -- `resolve-git-root.sh` prints to stderr on failure, which is acceptable for hooks (stderr does not interfere with JSON hook output on stdout)
 
 ### Verification Notes
+
 - The `|| { ... }` guard on `source` catches both `return 1` paths and any command substitution failures within the sourced script
 - Under `set -euo pipefail`, the bare `source` on line 6 currently causes immediate script termination on any failure -- the guard converts this to a controlled exit 0
 - No new edge cases beyond what the issue describes; the fix is pattern-identical to `stop-hook.sh:14-17`
@@ -30,6 +32,7 @@ Closes #692
 `plugins/soleur/hooks/welcome-hook.sh` sources `resolve-git-root.sh` on line 6 without an `|| { exit 0; }` error guard. Under `set -euo pipefail`, if `resolve-git-root.sh` returns 1 (not inside a git repo), the hook aborts with a non-zero exit code, which blocks Claude Code session startup.
 
 Both sibling scripts that source the same helper already have guards:
+
 - `stop-hook.sh:14` -- `|| { exit 0; }` (allows session exit)
 - `setup-ralph-loop.sh:13` -- `|| { exit 1; }` (fails explicitly)
 

@@ -15,7 +15,7 @@ deepened: 2026-03-21
 
 ### Key Improvements
 
-1. Fixed Lefthook glob pattern -- `**` in gobwas requires 1+ directory levels, so files directly in `knowledge-base/brainstorms/*.md` would silently pass the proposed guard. Corrected to use array glob with both `*` and `**/*` patterns.
+1. Fixed Lefthook glob pattern -- `**` in gobwas requires 1+ directory levels, so files directly in `knowledge-base/project/brainstorms/*.md` would silently pass the proposed guard. Corrected to use array glob with both `*` and `**/*` patterns.
 2. Added git mv edge case handling for nested subdirectories (`build-errors/`, `archive/`) that need `mkdir -p` before move.
 3. Added sed dry-run verification step to catch false-positive replacements before committing.
 
@@ -35,10 +35,10 @@ Despite this, **144 files** still exist at the old top-level locations on `main`
 
 | Directory | File Count |
 |-----------|-----------|
-| `knowledge-base/brainstorms/` | 8 |
-| `knowledge-base/learnings/` | 30 |
-| `knowledge-base/plans/` | 39 |
-| `knowledge-base/specs/` (56 subdirs) | 67 |
+| `knowledge-base/project/brainstorms/` | 8 |
+| `knowledge-base/project/learnings/` | 30 |
+| `knowledge-base/project/plans/` | 39 |
+| `knowledge-base/project/specs/` (56 subdirs) | 67 |
 | **Total** | **144** |
 
 ### Root Cause
@@ -75,7 +75,7 @@ path and `tasks.md` at the new path. These need merging.
 ### Internal References to Update
 
 - **92 cross-references** within the 144 misplaced files reference old paths
-  (e.g., `knowledge-base/plans/...` instead of `knowledge-base/project/plans/...`)
+  (e.g., `knowledge-base/project/plans/...` instead of `knowledge-base/project/plans/...`)
 - **0 references** in `knowledge-base/project/` files point to old paths
 - **1 reference** in `spike/agent-sdk-test.ts` uses an old test path
 
@@ -103,6 +103,7 @@ Use `git mv` for all 144 files to preserve history:
      (the existing `tasks.md` stays)
 
 Script approach:
+
 ```bash
 # Move each artifact type
 for type in brainstorms learnings plans specs; do
@@ -129,6 +130,7 @@ done
 ### Research Insights (Phase 1)
 
 **Edge Cases:**
+
 - **Nested subdirectories**: `learnings/build-errors/` and `plans/archive/` are
   nested within their parent. The `mkdir -p` ensures the target parent exists
   before `git mv`. Without it, `git mv` will fail with "destination does not exist".
@@ -149,21 +151,22 @@ After moving, update the 92 stale references within the moved files:
 find knowledge-base/project/brainstorms knowledge-base/project/learnings \
      knowledge-base/project/plans knowledge-base/project/specs \
      -name '*.md' -exec sed -i \
-     -e 's|knowledge-base/brainstorms/|knowledge-base/project/brainstorms/|g' \
-     -e 's|knowledge-base/learnings/|knowledge-base/project/learnings/|g' \
-     -e 's|knowledge-base/plans/|knowledge-base/project/plans/|g' \
-     -e 's|knowledge-base/specs/|knowledge-base/project/specs/|g' \
+     -e 's|knowledge-base/project/brainstorms/|knowledge-base/project/brainstorms/|g' \
+     -e 's|knowledge-base/project/learnings/|knowledge-base/project/learnings/|g' \
+     -e 's|knowledge-base/project/plans/|knowledge-base/project/plans/|g' \
+     -e 's|knowledge-base/project/specs/|knowledge-base/project/specs/|g' \
      {} +
 ```
 
 **Important**: The sed patterns must NOT match `knowledge-base/project/` (which
 already contains the correct path). The replacement patterns are safe because
-`knowledge-base/brainstorms/` will NOT match `knowledge-base/project/brainstorms/`
+`knowledge-base/project/brainstorms/` will NOT match `knowledge-base/project/brainstorms/`
 -- the `project/` segment breaks the match.
 
 Also fix `spike/agent-sdk-test.ts`:
+
 ```bash
-sed -i 's|knowledge-base/brainstorms/|knowledge-base/project/brainstorms/|g' \
+sed -i 's|knowledge-base/project/brainstorms/|knowledge-base/project/brainstorms/|g' \
   spike/agent-sdk-test.ts
 ```
 
@@ -177,10 +180,10 @@ modifying files:
 ```bash
 find knowledge-base/project/{brainstorms,learnings,plans,specs} \
      -name '*.md' -exec grep -l \
-     -e 'knowledge-base/brainstorms/' \
-     -e 'knowledge-base/learnings/' \
-     -e 'knowledge-base/plans/' \
-     -e 'knowledge-base/specs/' {} + \
+     -e 'knowledge-base/project/brainstorms/' \
+     -e 'knowledge-base/project/learnings/' \
+     -e 'knowledge-base/project/plans/' \
+     -e 'knowledge-base/project/specs/' {} + \
      | grep -v 'knowledge-base/project/' \
      | head -5
 ```
@@ -188,10 +191,10 @@ find knowledge-base/project/{brainstorms,learnings,plans,specs} \
 If this returns 0 files, all references are already correct and Phase 2 can be
 skipped. If it returns files, those are the ones sed needs to touch.
 
-**Double-prefix safety (verified):** Tested empirically -- `sed 's|knowledge-base/brainstorms/|knowledge-base/project/brainstorms/|g'`
+**Double-prefix safety (verified):** Tested empirically -- `sed 's|knowledge-base/project/brainstorms/|knowledge-base/project/brainstorms/|g'`
 applied to the string `knowledge-base/project/brainstorms/foo.md` produces
 `knowledge-base/project/brainstorms/foo.md` (unchanged). The pattern
-`knowledge-base/brainstorms/` is NOT a substring of `knowledge-base/project/brainstorms/`
+`knowledge-base/project/brainstorms/` is NOT a substring of `knowledge-base/project/brainstorms/`
 because `project/` sits between the two segments.
 
 ### Phase 3: Remove Empty Directories
@@ -199,9 +202,9 @@ because `project/` sits between the two segments.
 After all files are moved, remove the now-empty top-level directories:
 
 ```bash
-rmdir knowledge-base/brainstorms knowledge-base/learnings/build-errors \
-      knowledge-base/learnings knowledge-base/plans/archive \
-      knowledge-base/plans knowledge-base/specs/* knowledge-base/specs \
+rmdir knowledge-base/brainstorms knowledge-base/project/learnings/build-errors \
+      knowledge-base/learnings knowledge-base/project/plans/archive \
+      knowledge-base/plans knowledge-base/project/specs/* knowledge-base/specs \
       2>/dev/null
 ```
 
@@ -238,8 +241,9 @@ a silent failure mode. Lefthook's default glob matcher (gobwas/glob) requires
 `**` to match 1+ directory levels, unlike bash/ripgrep where `**` matches 0+.
 
 This means:
-- `knowledge-base/brainstorms/**` matches `knowledge-base/brainstorms/subdir/file.md`
-- `knowledge-base/brainstorms/**` does NOT match `knowledge-base/brainstorms/file.md`
+
+- `knowledge-base/project/brainstorms/**` matches `knowledge-base/project/brainstorms/subdir/file.md`
+- `knowledge-base/project/brainstorms/**` does NOT match `knowledge-base/project/brainstorms/file.md`
 
 75 of the 144 files sit directly in their type directory (no subdirectory), so
 the original glob would miss them entirely. The hook would run but match zero
@@ -255,15 +259,16 @@ glob:
 ```
 
 **Testing the guard:** After adding the hook, verify with:
+
 ```bash
 # Create a dummy file at an old path
-touch knowledge-base/brainstorms/test-guard.md
-git add knowledge-base/brainstorms/test-guard.md
+touch knowledge-base/project/brainstorms/test-guard.md
+git add knowledge-base/project/brainstorms/test-guard.md
 # This should fail with the guard error
 git commit -m "test: verify kb-structure-guard"
 # Clean up
-git reset HEAD knowledge-base/brainstorms/test-guard.md
-rm knowledge-base/brainstorms/test-guard.md
+git reset HEAD knowledge-base/project/brainstorms/test-guard.md
+rm knowledge-base/project/brainstorms/test-guard.md
 ```
 
 **Reference:** `knowledge-base/project/learnings/2026-03-21-lefthook-gobwas-glob-double-star.md`
@@ -271,7 +276,7 @@ rm knowledge-base/brainstorms/test-guard.md
 ### Phase 5: Update spike test reference
 
 Fix the stale reference in `spike/agent-sdk-test.ts` (line 37) from
-`knowledge-base/brainstorms/` to `knowledge-base/project/brainstorms/`.
+`knowledge-base/project/brainstorms/` to `knowledge-base/project/brainstorms/`.
 
 ### Phase 6: Verification
 

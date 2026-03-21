@@ -27,6 +27,7 @@ Phase 0 scans the feature description for brand/marketing keywords. If matched, 
 ### 3. Flow Control: Handoff + worktree only
 
 When brand workshop is selected:
+
 1. Create worktree + GitHub issue (Phase 3/3.6)
 2. Hand off to brand-architect agent via Task tool inside the worktree
 3. Brand guide (`knowledge-base/overview/brand-guide.md`) is the output artifact

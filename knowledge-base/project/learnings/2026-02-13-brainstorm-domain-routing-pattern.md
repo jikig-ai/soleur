@@ -19,6 +19,7 @@ The brand-architect agent was only accessible via Task tool (assistant-initiated
 Added a "Specialized Domain Routing" section to `/soleur:brainstorm` Phase 0 that detects domain-specific keywords in the feature description and offers to route to the appropriate agent.
 
 The pattern:
+
 1. Define keywords per domain (e.g., "brand, brand identity, brand guide, voice and tone, brand workshop")
 2. Scan feature description for keyword matches (case-insensitive substring matching)
 3. If match: AskUserQuestion confirming the routing (user always decides)
