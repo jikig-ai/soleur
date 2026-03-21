@@ -153,14 +153,14 @@ doppler secrets set CF_API_TOKEN <value> --project soleur --config prd_terraform
 
 ## Acceptance Criteria
 
-- [ ] Doppler `prd_terraform` config exists with all Terraform-required secrets for both stacks
-- [ ] `cloudflare_api_token` renamed to `cf_api_token` in web-platform `variables.tf`, `main.tf`, and all referencing `.tf` files
-- [ ] `cloudflare_zone_id` renamed to `cf_zone_id` in web-platform `variables.tf`, `dns.tf` (5 refs), `tunnel.tf` (1 ref)
-- [ ] `cloudflare_account_id` renamed to `cf_account_id` in web-platform `variables.tf`, `tunnel.tf` (3 refs)
-- [ ] `doppler run --project soleur --config prd_terraform --name-transformer tf-var -- terraform plan` succeeds with no `.tfvars` file for both stacks
-- [ ] `admin_ips` list type works via Doppler (HCL-encoded JSON string)
-- [ ] `.gitignore` entries for `*.tfvars` preserved as defense-in-depth
-- [ ] Header comment in `variables.tf` documents the Doppler workflow command
+- [x] Doppler `prd_terraform` config exists with all Terraform-required secrets for both stacks
+- [x] `cloudflare_api_token` renamed to `cf_api_token` in web-platform `variables.tf`, `main.tf`, and all referencing `.tf` files
+- [x] `cloudflare_zone_id` renamed to `cf_zone_id` in web-platform `variables.tf`, `dns.tf` (5 refs), `tunnel.tf` (1 ref)
+- [x] `cloudflare_account_id` renamed to `cf_account_id` in web-platform `variables.tf`, `tunnel.tf` (3 refs)
+- [x] `doppler run --project soleur --config prd_terraform --name-transformer tf-var -- terraform plan` succeeds with no `.tfvars` file for both stacks
+- [x] `admin_ips` list type works via Doppler (HCL-encoded JSON string)
+- [x] `.gitignore` entries for `*.tfvars` preserved as defense-in-depth
+- [x] Header comment in `variables.tf` documents the Doppler workflow command
 
 ## Test Scenarios
 
