@@ -54,7 +54,7 @@ variable "volume_size" {
 }
 
 variable "cf_api_token" {
-  description = "Cloudflare API token with DNS edit permissions"
+  description = "Cloudflare API token (Tunnel, Access, DNS, Notifications permissions)"
   type        = string
   sensitive   = true
 }
