@@ -14,6 +14,11 @@ on:
           - patch
           - minor
           - major
+      skip_deploy:
+        description: "Skip deployment after release"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -35,37 +40,36 @@ jobs:
 
   deploy:
     needs: release
-    if: needs.release.outputs.version != ''
+    if: needs.release.outputs.version != '' && (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
     runs-on: ubuntu-latest
     concurrency:
-      group: deploy-production
+      group: deploy-telegram-bridge
       cancel-in-progress: false
     steps:
       - name: Deploy via webhook
         env:
-          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET_BRIDGE }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID_BRIDGE }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET_BRIDGE }}
           VERSION: ${{ needs.release.outputs.version }}
         run: |
           PAYLOAD=$(printf '{"command":"deploy telegram-bridge ghcr.io/jikig-ai/soleur-telegram-bridge v%s"}' "$VERSION")
           SIGNATURE=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
-          RESPONSE=$(mktemp)
-          HTTP_CODE=$(curl -s -o "$RESPONSE" -w '%{http_code}' \
-            --max-time 150 \
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            --max-time 30 \
             -X POST \
             -H "Content-Type: application/json" \
             -H "X-Signature-256: sha256=$SIGNATURE" \
             -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
             -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
             -d "$PAYLOAD" \
-            "https://deploy.soleur.ai/hooks/deploy")
-          if [[ ! "$HTTP_CODE" =~ ^2 ]]; then
-            echo "::error::Deploy webhook failed (HTTP $HTTP_CODE)"
-            cat "$RESPONSE"
-            rm -f "$RESPONSE"
+            "https://deploy-bridge.soleur.ai/hooks/deploy")
+          if [[ "$HTTP_CODE" != "202" ]]; then
+            echo "::error::Deploy webhook rejected (HTTP $HTTP_CODE)"
             exit 1
           fi
-          echo "Deploy completed (HTTP $HTTP_CODE)"
-          cat "$RESPONSE"
-          rm -f "$RESPONSE"
+          echo "Deploy initiated (HTTP 202)"
+
+      - name: Verify deploy health
+        run: |
+          echo "::warning::Bridge health endpoint is localhost-only -- automated verification not available. Check: ssh root@bridge 'journalctl -u webhook -t ci-deploy --since 5min'"
