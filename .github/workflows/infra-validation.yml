@@ -1,5 +1,9 @@
-# Security: No secrets required. All validation is offline (cloud-init schema,
-# terraform fmt/validate with -backend=false).
+# Security: DOPPLER_TOKEN from repository secrets injects Terraform credentials
+# for the plan job. All Doppler secrets are scoped to prd_terraform config.
+# Plan output is posted as a PR comment -- sensitive variables are marked
+# sensitive = true in variables.tf and redacted by Terraform.
+# Fork PRs cannot access secrets -- plan job gracefully skips.
+# Offline jobs (validate, deploy-script-tests) require no secrets.
 # Inputs: only paths from the PR diff (not user-controlled content).
 # All action references are SHA-pinned.
 name: Infra Validation
@@ -13,6 +17,9 @@ on:
 
 permissions:
   contents: read
+
+env:
+  TERRAFORM_VERSION: "1.10.5"
 
 jobs:
   detect-changes:
@@ -65,7 +72,7 @@ jobs:
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
-          terraform_version: "1.10.5"
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
 
       - name: Terraform format check
         run: terraform fmt -check -recursive .
@@ -85,3 +92,119 @@ jobs:
 
       - name: Run ci-deploy.sh tests
         run: bash apps/web-platform/infra/ci-deploy.test.sh
+
+  check-secrets:
+    runs-on: ubuntu-24.04
+    outputs:
+      has-doppler-token: ${{ steps.check.outputs.has_token }}
+    steps:
+      - name: Check DOPPLER_TOKEN availability
+        id: check
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          if [[ -n "${DOPPLER_TOKEN_CHECK}" ]]; then
+            printf 'has_token=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'has_token=false\n' >> "$GITHUB_OUTPUT"
+          fi
+
+  plan:
+    needs: [detect-changes, validate, check-secrets]
+    if: |
+      needs.detect-changes.outputs.directories != '[]' &&
+      needs.check-secrets.outputs.has-doppler-token == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    strategy:
+      matrix:
+        directory: ${{ fromJSON(needs.detect-changes.outputs.directories) }}
+      fail-fast: false
+    concurrency:
+      group: terraform-plan-${{ github.event.number || github.run_id }}-${{ matrix.directory }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Generate CI SSH key
+        run: ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain)
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        run: terraform init -input=false
+        working-directory: ${{ matrix.directory }}
+
+      - name: Terraform plan
+        id: plan
+        continue-on-error: true
+        working-directory: ${{ matrix.directory }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          PLAN_OUTPUT=$(doppler run --name-transformer tf-var -- \
+            terraform plan -no-color -input=false \
+            -var="ssh_key_path=/tmp/ci_ssh_key.pub" 2>&1)
+          PLAN_EXIT=$?
+
+          if [[ ${#PLAN_OUTPUT} -gt 60000 ]]; then
+            PLAN_OUTPUT="${PLAN_OUTPUT:0:60000}
+
+          ... (plan output truncated -- exceeded 60,000 chars)"
+          fi
+
+          DELIMITER="PLAN_EOF_$(openssl rand -hex 8)"
+          {
+            printf 'plan<<%s\n' "$DELIMITER"
+            printf '%s\n' "$PLAN_OUTPUT"
+            printf '%s\n' "$DELIMITER"
+          } >> "$GITHUB_OUTPUT"
+
+          printf 'exit_code=%d\n' "$PLAN_EXIT" >> "$GITHUB_OUTPUT"
+          exit "$PLAN_EXIT"
+
+      - name: Post plan comment
+        if: always() && steps.plan.outcome != 'skipped'
+        uses: marocchino/sticky-pull-request-comment@70d2764d1a7d5d9560b100cbea0077fc8f633987 # v3.0.2
+        with:
+          header: terraform-plan-${{ matrix.directory }}
+          message: |
+            ### Terraform Plan: `${{ matrix.directory }}`
+
+            **Result:** ${{ steps.plan.outcome == 'success' && '✅ Success' || '❌ Failed' }} (exit code: ${{ steps.plan.outputs.exit_code }})
+
+            <details>
+            <summary>Plan output</summary>
+
+            ```
+            ${{ steps.plan.outputs.plan }}
+            ```
+
+            </details>
+
+      - name: Fail job on plan failure
+        if: steps.plan.outputs.exit_code != '0'
+        run: exit 1

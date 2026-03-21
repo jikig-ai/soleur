@@ -1,6 +1,12 @@
 resource "hcloud_ssh_key" "default" {
   name       = "soleur-web-platform"
   public_key = file(var.ssh_key_path)
+
+  # public_key is a create-time attribute that never changes via Terraform.
+  # CI drift checks use a dummy key, so ignore to prevent false positives.
+  lifecycle {
+    ignore_changes = [public_key]
+  }
 }
 
 resource "hcloud_server" "web" {
