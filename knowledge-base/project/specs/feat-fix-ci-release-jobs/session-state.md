@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/fix-ci-release-jobs/knowledge-base/plans/2026-03-21-fix-ci-release-deploy-failures-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/fix-ci-release-jobs/knowledge-base/project/plans/2026-03-21-fix-ci-release-deploy-failures-plan.md
 - Status: complete
 
 ### Errors

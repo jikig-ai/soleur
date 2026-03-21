@@ -209,7 +209,7 @@ All TF variable renames were completed in PR #970. This issue is purely Doppler 
 
 ### Knowledge base
 
-- `knowledge-base/learnings/2026-03-21-doppler-tf-var-naming-alignment.md` -- update with R2 credential conflict workaround
+- `knowledge-base/project/learnings/2026-03-21-doppler-tf-var-naming-alignment.md` -- update with R2 credential conflict workaround
 
 ## MVP
 
@@ -264,9 +264,9 @@ doppler secrets set DEPLOY_SSH_PUBLIC_KEY "<ssh-rsa ...>" --project soleur --con
 - Closes #978
 - Follow-up from #970 (PR that renamed TF variables)
 - Deferred from #973 (R2 migration, session error #5)
-- Learning: `knowledge-base/learnings/2026-03-21-doppler-tf-var-naming-alignment.md`
-- Learning: `knowledge-base/learnings/2026-03-21-terraform-state-r2-migration.md` (session error #4, #5)
-- Learning: `knowledge-base/learnings/2026-03-20-doppler-secrets-manager-setup-patterns.md`
-- Prior plan: `knowledge-base/plans/2026-03-21-ops-doppler-terraform-integration-plan.md`
+- Learning: `knowledge-base/project/learnings/2026-03-21-doppler-tf-var-naming-alignment.md`
+- Learning: `knowledge-base/project/learnings/2026-03-21-terraform-state-r2-migration.md` (session error #4, #5)
+- Learning: `knowledge-base/project/learnings/2026-03-20-doppler-secrets-manager-setup-patterns.md`
+- Prior plan: `knowledge-base/project/plans/2026-03-21-ops-doppler-terraform-integration-plan.md`
 - [Doppler Terraform integration docs](https://docs.doppler.com/docs/terraform)
 - [Terraform S3 backend docs](https://developer.hashicorp.com/terraform/language/backend/s3)

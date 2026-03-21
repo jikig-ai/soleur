@@ -75,7 +75,7 @@ This provides defense-in-depth: if the Cloudflare notification is missed (email 
 
 ### 3. Rotation runbook in knowledge-base
 
-Document the rotation procedure as a learning in `knowledge-base/learnings/` so it's discoverable by agents in future sessions.
+Document the rotation procedure as a learning in `knowledge-base/project/learnings/` so it's discoverable by agents in future sessions.
 
 ## Technical Approach
 
@@ -230,7 +230,7 @@ jobs:
              \`\`\`
           3. Verify: \`gh workflow run web-platform-release.yml\`
 
-          **References:** #974, knowledge-base/learnings/2026-03-21-cloudflare-service-token-rotation.md
+          **References:** #974, knowledge-base/project/learnings/2026-03-21-cloudflare-service-token-rotation.md
           ISSUE_BODY
           )
 
@@ -293,7 +293,7 @@ jobs:
 
 ### Phase 3: Rotation runbook
 
-Create `knowledge-base/learnings/2026-03-21-cloudflare-service-token-rotation.md` documenting:
+Create `knowledge-base/project/learnings/2026-03-21-cloudflare-service-token-rotation.md` documenting:
 
 1. **Refresh (extend expiry):** Change or add the `duration` attribute on the service token resource in Terraform + `terraform apply`. This extends the expiry without regenerating credentials. No secret rotation needed. The `expires_at` output updates automatically.
 
@@ -377,8 +377,8 @@ Create `knowledge-base/learnings/2026-03-21-cloudflare-service-token-rotation.md
 - Pattern reference for scheduled token checks: [`.github/workflows/scheduled-linkedin-token-check.yml`](.github/workflows/scheduled-linkedin-token-check.yml)
 - Cloudflare notification types: [Terraform `cloudflare_notification_policy` (v4)](https://registry.terraform.io/providers/cloudflare/cloudflare/latest/docs/resources/notification_policy)
 - Cloudflare service token docs: [Service tokens](https://developers.cloudflare.com/cloudflare-one/identity/service-tokens/)
-- Learning: [Cloudflare Terraform v4 vs v5 resource names](knowledge-base/learnings/2026-03-20-cloudflare-terraform-v4-v5-resource-names.md)
-- Learning: [Doppler tf-var naming alignment](knowledge-base/learnings/2026-03-21-doppler-tf-var-naming-alignment.md)
-- Learning: [Cloudflare tunnel server provisioning](knowledge-base/learnings/2026-03-21-cloudflare-tunnel-server-provisioning.md)
+- Learning: [Cloudflare Terraform v4 vs v5 resource names](knowledge-base/project/learnings/2026-03-20-cloudflare-terraform-v4-v5-resource-names.md)
+- Learning: [Doppler tf-var naming alignment](knowledge-base/project/learnings/2026-03-21-doppler-tf-var-naming-alignment.md)
+- Learning: [Cloudflare tunnel server provisioning](knowledge-base/project/learnings/2026-03-21-cloudflare-tunnel-server-provisioning.md)
 - Parent issue: #974
 - Originating PR: #971 / #967

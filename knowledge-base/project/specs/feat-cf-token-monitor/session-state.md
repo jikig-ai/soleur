@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/cf-token-monitor/knowledge-base/plans/2026-03-21-infra-monitor-cf-access-service-token-expiration-plan.md
+- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/cf-token-monitor/knowledge-base/project/plans/2026-03-21-infra-monitor-cf-access-service-token-expiration-plan.md
 - Status: complete
 
 ### Errors

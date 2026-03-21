@@ -30,7 +30,7 @@
 
 ## Phase 3: Rotation Runbook
 
-- [ ] 3.1 Create `knowledge-base/learnings/2026-03-21-cloudflare-service-token-rotation.md`
+- [ ] 3.1 Create `knowledge-base/project/learnings/2026-03-21-cloudflare-service-token-rotation.md`
   - [ ] 3.1.1 Document refresh procedure (extend expiry via `duration` attribute change)
   - [ ] 3.1.2 Document zero-downtime rotation (`client_secret_version` + `previous_client_secret_expires_at`)
   - [ ] 3.1.3 Document hard-cut rotation (`terraform apply -replace=` -- NOT deprecated `terraform taint`)
