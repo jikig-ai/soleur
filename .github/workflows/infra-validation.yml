@@ -18,6 +18,9 @@ on:
 permissions:
   contents: read
 
+env:
+  TERRAFORM_VERSION: "1.10.5"
+
 jobs:
   detect-changes:
     runs-on: ubuntu-24.04
@@ -69,7 +72,7 @@ jobs:
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
-          terraform_version: "1.10.5"
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
 
       - name: Terraform format check
         run: terraform fmt -check -recursive .
@@ -121,23 +124,20 @@ jobs:
         directory: ${{ fromJSON(needs.detect-changes.outputs.directories) }}
       fail-fast: false
     concurrency:
-      group: terraform-plan-${{ github.event.number }}-${{ matrix.directory }}
-      cancel-in-progress: false
+      group: terraform-plan-${{ github.event.number || github.run_id }}-${{ matrix.directory }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
-          terraform_version: "1.10.5"
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
       - name: Install Doppler CLI
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
 
       - name: Generate CI SSH key
-        run: |
-          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
-          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+        run: ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
 
       - name: Extract backend credentials
         env:
@@ -145,8 +145,12 @@ jobs:
           DOPPLER_PROJECT: soleur
           DOPPLER_CONFIG: prd_terraform
         run: |
-          printf 'AWS_ACCESS_KEY_ID=%s\n' "$(doppler secrets get AWS_ACCESS_KEY_ID --plain)" >> "$GITHUB_ENV"
-          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)" >> "$GITHUB_ENV"
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain)
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
 
       - name: Terraform init
         run: terraform init -input=false
@@ -163,7 +167,7 @@ jobs:
         run: |
           PLAN_OUTPUT=$(doppler run --name-transformer tf-var -- \
             terraform plan -no-color -input=false \
-            -var="ssh_key_path=${CI_SSH_PUB}" 2>&1)
+            -var="ssh_key_path=/tmp/ci_ssh_key.pub" 2>&1)
           PLAN_EXIT=$?
 
           if [[ ${#PLAN_OUTPUT} -gt 60000 ]]; then
@@ -172,10 +176,11 @@ jobs:
           ... (plan output truncated -- exceeded 60,000 chars)"
           fi
 
+          DELIMITER="PLAN_EOF_$(openssl rand -hex 8)"
           {
-            printf 'plan<<PLAN_EOF\n'
+            printf 'plan<<%s\n' "$DELIMITER"
             printf '%s\n' "$PLAN_OUTPUT"
-            printf 'PLAN_EOF\n'
+            printf '%s\n' "$DELIMITER"
           } >> "$GITHUB_OUTPUT"
 
           printf 'exit_code=%d\n' "$PLAN_EXIT" >> "$GITHUB_OUTPUT"
@@ -199,3 +204,7 @@ jobs:
             ```
 
             </details>
+
+      - name: Fail job on plan failure
+        if: steps.plan.outputs.exit_code != '0'
+        run: exit 1
