@@ -246,6 +246,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `heal-skill` | Fix skill documentation issues |
 | `plan` | Create structured implementation plans |
 | `plan-review` | Multi-agent plan review in parallel |
+| `product-roadmap` | Define and operationalize product roadmaps through CPO-grade workshop |
 | `review` | Run comprehensive code review with specialized agents |
 
 ### Workflow
