@@ -129,6 +129,8 @@ Lead with your recommendation and explain why. Apply YAGNI—prefer simpler solu
 
 Use **AskUserQuestion tool** to ask which approach the user prefers.
 
+**Domain re-assessment.** If the scope has materially changed from the original feature description (e.g., from internal tooling to user-facing product feature, or from a single-domain change to a cross-domain capability), re-run Phase 0.5 domain assessment for any domains not already consulted. Scope pivots during brainstorming are common — the domain assessment must reflect the final scope, not just the initial description.
+
 ### Phase 3: Create Worktree (if knowledge-base/ exists)
 
 **IMPORTANT:** Create the worktree BEFORE writing any files so all artifacts go on the feature branch.
