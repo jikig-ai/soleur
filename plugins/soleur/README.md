@@ -41,7 +41,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 |-----------|-------|
 | Agents | 62 |
 | Commands | 3 |
-| Skills | 58 |
+| Skills | 59 |
 | MCP Servers | 3 |
 
 ## Agents
