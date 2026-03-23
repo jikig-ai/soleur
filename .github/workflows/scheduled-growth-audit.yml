@@ -141,10 +141,8 @@ jobs:
             git diff --cached --quiet && echo "No changes to commit" && exit 0
             BRANCH="ci/growth-audit-$(date -u +%Y-%m-%d-%H%M%S)"
             git checkout -b "$BRANCH"
-            git commit -m "docs: weekly growth audit $(date -u +%Y-%m-%d) [skip ci]"
+            git commit -m "docs: weekly growth audit $(date -u +%Y-%m-%d)"
             git push -u origin "$BRANCH"
-            SHA=$(git rev-parse HEAD)
-            bash scripts/post-bot-statuses.sh "$SHA"
             gh pr create \
               --title "docs: weekly growth audit $(date -u +%Y-%m-%d)" \
               --body "Automated weekly growth audit commit." \

@@ -120,10 +120,8 @@ jobs:
                git diff --cached --quiet && echo "No changes to commit" && exit 0
                BRANCH="ci/community-digest-$(date -u +%Y-%m-%d-%H%M%S)"
                git checkout -b "$BRANCH"
-               git commit -m "docs: daily community digest [skip ci]"
+               git commit -m "docs: daily community digest"
                git push -u origin "$BRANCH"
-               SHA=$(git rev-parse HEAD)
-               bash scripts/post-bot-statuses.sh "$SHA"
                gh pr create \
                  --title "docs: daily community digest $(date -u +%Y-%m-%d)" \
                  --body "Automated daily community digest commit." \
