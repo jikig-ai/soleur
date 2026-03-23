@@ -14,6 +14,8 @@ Evaluate current operational state before making recommendations.
 
 - Read `knowledge-base/operations/expenses.md` if it exists. Report: total recurring spend, upcoming renewals (within 30 days), stale entries (no update in 90+ days).
 - Read `knowledge-base/operations/domains.md` if it exists. Report: domain count, upcoming renewals, missing DNS records.
+- Check `knowledge-base/project/specs/` for existing operational work artifacts (vendor reviews, provisioning memos). Do not assert that operational work "has not been done" without checking these paths.
+- If the task references a GitHub issue (`#N`), verify its state via `gh issue view <N> --json state` before asserting whether work is pending or complete.
 - If either file does not exist, report the gap and suggest initializing it via ops-advisor.
 - Output: structured table of operational health (area, status, action needed).
 
