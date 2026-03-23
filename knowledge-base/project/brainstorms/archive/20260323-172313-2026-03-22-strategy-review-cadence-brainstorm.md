@@ -21,6 +21,7 @@ Approach: frontmatter standard first, then use it to drive the validation update
 ### The problem
 
 Most strategy documents have no review metadata or scheduled cadence. Of 11 strategy docs audited:
+
 - 6 have `review_cadence` in frontmatter, 5 have none
 - Only 1 has an `owner` field (roadmap.md → CPO)
 - Only 5 have `depends_on` fields
@@ -29,6 +30,7 @@ Most strategy documents have no review metadata or scheduled cadence. Of 11 stra
 ### User research finding (2026-03-22)
 
 From 5+ conversations with solo founders:
+
 - **Plugin too limiting**: Users want capabilities beyond what a CLI plugin can offer (visual UI, dashboards, mobile access)
 - **Don't use Claude Code**: Many aren't Claude Code users — the plugin assumes a tool they don't use
 - **Want standalone product**: Users want a standalone app/platform accessible anywhere, not tied to a specific dev tool
@@ -75,6 +77,7 @@ business-validation.md
 ## CI Cron Design
 
 Scheduled workflow (`scheduled-strategy-review.yml`):
+
 - Runs weekly (e.g., Monday 08:00 UTC)
 - Scans all .md files in knowledge-base/product/, marketing/, sales/
 - Parses frontmatter for `review_cadence` and `last_reviewed`
