@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-12
-last_reviewed: 2026-03-12
+last_updated: 2026-03-22
+last_reviewed: 2026-03-22
 review_cadence: quarterly
 owner: CPO
 depends_on:
@@ -15,6 +15,16 @@ depends_on:
 ## Status
 
 **Pricing is undecided.** This document provides the analysis framework and recommendation for when the founder is ready to commit. Per the business validation verdict (PIVOT), pricing should follow validated adoption, not precede it. Commit to a model after 50+ active users, informed by observed behavior.
+
+### Business Validation Update (2026-03-22)
+
+5+ founder conversations confirmed the CaaS thesis but rejected CLI/plugin delivery. Founders expect a standalone web/mobile product. This changes the pricing strategy in three ways:
+
+1. **The open-core model inverts.** The current model assumes the free plugin is the distribution mechanism and the paid platform is the monetization layer. User research reveals that most target customers do not use the free plugin's host (Claude Code). The platform is the distribution mechanism AND the monetization layer. The plugin becomes an optional power-user interface, not the funnel. The "Open Source" free tier in the tier structure below may need redefinition -- it currently assumes terminal-first usage as the free experience.
+
+2. **Cost structure escalates.** A platform-first product requires cloud infrastructure, API costs per user, frontend engineering, mobile development, and user authentication as table stakes. These costs were previously categorized as "Pro tier infrastructure" -- optional, built after validation. Under the delivery pivot, they are pre-revenue requirements. The infrastructure cost gate (Gate 4) becomes more urgent: per-user costs must be modeled before beta, not after.
+
+3. **Competitive framing shifts.** The replacement-stack comparison (Soleur at $49/mo vs. $765-3,190/mo in separate tools) remains valid, but the comparison set now includes web-native competitors: Polsia ($29-59/mo, web dashboard), Notion AI ($10/mo + credits, web/mobile), and Tanka ($0 for small teams, mobile apps). Founders will compare Soleur's platform against these surfaces, not against terminal tools. The "you keep 100% of revenue" argument against Polsia's revenue share and the cross-domain knowledge compounding argument remain the strongest differentiators.
 
 ---
 
@@ -110,7 +120,7 @@ Even at 10% of replacement value, the justified price is $75-320/month.
 
 | Tier | Price | Target | Includes |
 |------|-------|--------|----------|
-| **Open Source** | Free (Apache-2.0) | All users | Full plugin: 61 agents, 56 skills, 3 commands. Local knowledge base. Terminal-first workflow. Self-hosted. |
+| **Open Source** | Free (Apache-2.0) | All users | Full plugin: 61 agents, 56 skills, 3 commands. Local knowledge base. Terminal-first workflow. Self-hosted. **[2026-03-22 note: User research shows most target customers do not use the CLI host. This tier's value as a distribution mechanism is weaker than assumed. Consider whether a free web tier (limited conversations/domains) is needed as the new top-of-funnel.]** |
 | **Pro** | $49/month | Solo founders with active products | Cloud-synced knowledge base (access from any machine). Hosted agent execution (background tasks). Priority model access. Analytics dashboard. Email support. |
 | **Team** | $99/month (up to 3 seats) | Small founding teams | Everything in Pro + shared knowledge base across team members. Role-based agent permissions. Collaboration features. |
 
@@ -206,4 +216,4 @@ When pricing launches, the page must frame the value correctly. Draft messaging:
 
 ---
 
-_Updated: 2026-03-12. Sources: competitive-intelligence.md (2026-03-12), business-validation.md (2026-03-12), brand-guide.md (2026-02-21)._
+_Updated: 2026-03-22 (business validation delivery pivot annotation). Sources: competitive-intelligence.md (2026-03-22), business-validation.md (2026-03-22), brand-guide.md (2026-02-21)._

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-20
-last_reviewed: 2026-03-20
+last_updated: 2026-03-22
+last_reviewed: 2026-03-22
 review_cadence: quarterly
 owner: CMO
 depends_on:
@@ -20,6 +20,8 @@ Soleur is the Company-as-a-Service platform -- 61 agents, 56 skills, 3 commands 
 **Current state:** Strong brand identity, growing content foundation. Content score 6/10 (8 blog posts, 3 comparison articles, 5 case studies). AEO 6.8/10 (68/100, Grade C+) -- blog content scores 80%, catalog pages 40%. Blog infrastructure live (Eleventy collection, templates, JSON-LD, sitemap). 89% direct traffic -- organic search discovery still near-zero. Zero third-party listicle appearances.
 
 **Strategic imperative:** The business validation verdict is PIVOT -- pause feature development and source 10 solo founders for problem interviews. Marketing exists to support that pivot, not to generate vanity traffic. Every marketing action must serve one of two goals: (1) find and recruit validation participants, or (2) establish category authority for "Company-as-a-Service" before competitors define the term differently.
+
+> **[2026-03-22 Business Validation Review -- Executive Summary Update]** The pivot is now two-dimensional: thesis validated (problem resonates with 5+ founders), delivery invalidated (CLI plugin rejected in favor of web/mobile access). The strategic imperative gains a third goal: (3) position Soleur as a platform, not a plugin, across all marketing surfaces. Channel strategy, ICP, and product-led distribution assumptions require revision. The category authority goal is more urgent -- founders confirmed the pain but expect a standalone product, and competitors like Polsia already deliver via web.
 
 **Competitive context:** The window is narrowing. Anthropic Cowork now covers 6+ domains with first-party plugins. Notion 3.3 shipped Custom Agents. Tanka claims memory compounding. The differentiation axis is not domain coverage -- it is cross-domain orchestration with compounding institutional memory. Marketing must make this moat visible and understood.
 
@@ -67,11 +69,13 @@ Soleur is the Company-as-a-Service platform -- 61 agents, 56 skills, 3 commands 
 
 For **solo founders building real companies** who are frustrated that AI helps with code but not with the other 70% of running a business, **Soleur** is the **Company-as-a-Service platform** that provides a full AI organization -- 61 agents across engineering, marketing, legal, operations, product, finance, sales, and support -- with compounding institutional memory. Unlike **Anthropic Cowork Plugins** (stateless, siloed per domain), **Cursor** (engineering-only), or **Notion Custom Agents** (workspace-scoped, no engineering), Soleur orchestrates workflows across every business domain while every decision the founder makes teaches the system, making the 100th session dramatically more productive than the first.
 
+> **[2026-03-22 Business Validation Review]** This positioning statement holds at the message level but requires one delivery-related adjustment. The statement currently implies no delivery mechanism, which is correct -- it focuses on value, not form factor. However, when expanded for specific channels, the positioning must explicitly state web/mobile accessibility. The differentiator against Cowork and Notion should shift from "terminal-first" to "founder-controlled with compounding memory" since the delivery surface is no longer a distinguishing axis once Soleur also ships as a web product.
+
 ### Three Validated Moats
 
 These are the structural advantages that competitors cannot replicate by shipping features. All marketing messaging must ladder up to at least one.
 
-1. **Compounding knowledge base.** Cross-domain institutional memory that persists across sessions. The brand guide informs marketing content. The competitive analysis shapes product positioning. The legal audit references the privacy policy. No competitor -- not Cowork, not Notion, not Tanka -- has this across business domains within a terminal-first workflow.
+1. **Compounding knowledge base.** Cross-domain institutional memory that persists across sessions. The brand guide informs marketing content. The competitive analysis shapes product positioning. The legal audit references the privacy policy. No competitor -- not Cowork, not Notion, not Tanka -- has this across business domains within a terminal-first workflow. **[2026-03-22]** The moat itself is validated by user research -- founders described cross-domain pain unprompted. The "terminal-first workflow" qualifier should be removed in the next rewrite; the compounding knowledge base moat is delivery-agnostic.
 
 2. **Cross-domain coherence.** 61 agents share context across 8 domains. A decision in product strategy propagates to engineering planning, marketing copy, and legal review. Competitors are either deep in one domain (Cursor, Devin) or broad but stateless across many (Cowork).
 
@@ -108,8 +112,8 @@ These are the structural advantages that competitors cannot replicate by shippin
 - Solo founders or very small teams (1-3 people)
 - Building SaaS products, developer tools, creative businesses, or consulting-turned-product companies
 - Pre-revenue through early revenue stage
-- Already using Claude Code as their primary development interface
-- Technical background (can read code, use terminal)
+- Already using Claude Code as their primary development interface **[2026-03-22: INVALIDATED -- majority of interviewed founders do not use Claude Code. Remove this criterion. Replace with: "Uses AI tools for some business tasks but lacks cross-domain integration."]**
+- Technical background (can read code, use terminal) **[2026-03-22: SOFTEN -- technical background is the beachhead but not a hard requirement for the web platform. Founders interviewed included non-terminal users.]**
 
 **Psychographics:**
 

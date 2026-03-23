@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-20
-last_reviewed: 2026-03-20
+last_updated: 2026-03-22
+last_reviewed: 2026-03-22
 review_cadence: quarterly
 owner: CMO
 depends_on:
@@ -18,6 +18,8 @@ depends_on:
 ## Purpose
 
 This document defines what content Soleur needs, why, in what order, and how it connects to the marketing strategy. It synthesizes findings from the content audit (2026-03-17), AEO audit (2026-03-17), SEO audit (2026-03-17), keyword research (2026-03-17), and competitive intelligence (2026-03-12).
+
+> **[2026-03-22 Business Validation Review]** The delivery pivot (users reject CLI/plugin, want web/mobile) has three implications for content strategy: (1) Content targeting "Claude Code plugin" users as the primary audience must broaden to "solo founders using AI tools" -- the beachhead is the problem, not the tool. (2) Pillar 3 keyword "Claude Code plugins" is still valid for SEO capture but is no longer the primary ICP entry point. (3) The "Built with Soleur" case study angle strengthens -- showing Soleur building itself demonstrates the product regardless of delivery surface. No content gaps are invalidated; several gain urgency (Gap 5 Polsia comparison becomes delivery-parity, Gap 9 price justification must account for platform costs).
 
 ---
 
@@ -49,11 +51,11 @@ Twelve content gaps block Soleur's organic discovery and category authority. Ran
 - ~~FAQ schema on the article~~ FAQPage JSON-LD with 5 questions
 - ~~Internal linking from homepage badge~~ Active
 
-### Gap 3: IDE Positioning (High) [UPDATED 2026-03-20]
+### Gap 3: IDE Positioning (High) [UPDATED 2026-03-20] **[2026-03-22: REFRAME]**
 
 **What is missing:** Three comparison articles now address the "and" positioning directly: Soleur vs. Cowork (2026-03-16), Soleur vs. Cursor (2026-03-19), Soleur vs. Notion Custom Agents (2026-03-17). The remaining gap is a standalone position paper articulating why an agent platform is fundamentally different from an AI organization -- the conceptual argument, not a product comparison.
 
-**Why it matters:** Individual comparisons address specific competitors. The position paper captures the category-level argument that applies to all competitors and emerging entrants.
+**Why it matters:** Individual comparisons address specific competitors. The position paper captures the category-level argument that applies to all competitors and emerging entrants. **[2026-03-22]** The "IDE Positioning" label is now misleading -- Soleur's delivery surface is shifting from IDE to web platform. The position paper should frame the distinction as "agent platform vs. AI organization" without anchoring to any specific delivery surface. Existing comparison articles remain valid -- they compare capabilities, not form factors.
 
 **Content remaining:**
 
@@ -82,7 +84,7 @@ Twelve content gaps block Soleur's organic discovery and category authority. Ran
 **Content needed:**
 
 - Pillar article: "Autopilot vs. Decision-Maker: Two Models for AI Company Operation"
-- Comparison page: "Soleur vs. Polsia" (audit P2-3, score 16/20)
+- Comparison page: "Soleur vs. Polsia" (audit P2-3, score 16/20) **[2026-03-22: PRIORITY ELEVATED -- Polsia delivers via web dashboard, which is now Soleur's target delivery surface. The comparison shifts from "terminal vs. cloud" to "founder-controlled vs. autonomous" since the delivery format is no longer a differentiator.]**
 - Blog post: "Why Human Judgment Compounds Better Than Full Autonomy"
 
 ### Gap 6: Cursor Agent Platform Positioning (Critical) [COMPLETED 2026-03-19]
@@ -206,7 +208,7 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 
 **Audience:** Founders evaluating tools, comparing options.
 **Search intent:** Commercial investigation.
-**Keywords:** Claude Code plugins, AI agent comparison, Soleur vs CrewAI, best AI coding agents 2026, solopreneur AI stack.
+**Keywords:** Claude Code plugins, AI agent comparison, Soleur vs CrewAI, best AI coding agents 2026, solopreneur AI stack. **[2026-03-22: "Claude Code plugins" remains a valid SEO capture keyword but is no longer the primary ICP discovery path. Add "AI company platform", "AI business operations" as keywords when the web platform launches.]**
 **Voice:** Direct, honest, data-driven. No FUD. Acknowledge competitor strengths.
 
 | Piece | Type | Words | Priority | Status |
@@ -286,7 +288,7 @@ All content must pass these checks before publication:
 - [ ] Founder framed as decision-maker, system as executor
 - [ ] Concrete numbers when available (61 agents, 56 skills, 420+ PRs)
 - [ ] Short, punchy sentences in marketing copy
-- [ ] Never called a "plugin" or "tool" (exception: literal CLI commands and technical docs)
+- [ ] Never called a "plugin" or "tool" (exception: literal CLI commands and technical docs) **[2026-03-22: This rule gains even more force under the delivery pivot. The product is a platform, not a plugin. "Plugin" should only appear in historical context or when referring to the Claude Code plugin specifically as one access surface.]**
 
 ### SEO
 
@@ -377,4 +379,4 @@ All article URLs distributed via social-distribute use platform-specific UTM par
 
 ---
 
-_Updated: 2026-03-20. Sources: content-plan.md (2026-03-17), content-audit.md (2026-03-17), aeo-audit.md (2026-03-17), seo-audit.md (2026-03-17), competitive-intelligence.md (2026-03-12), brand-guide.md (2026-02-21)._
+_Updated: 2026-03-22 (business validation delivery pivot annotation). Sources: content-plan.md (2026-03-17), content-audit.md (2026-03-17), aeo-audit.md (2026-03-17), seo-audit.md (2026-03-17), competitive-intelligence.md (2026-03-22), brand-guide.md (2026-03-22), business-validation.md (2026-03-22)._

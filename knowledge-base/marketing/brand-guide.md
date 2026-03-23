@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-02-21
-last_reviewed: 2026-03-02
+last_updated: 2026-03-22
+last_reviewed: 2026-03-22
 review_cadence: quarterly
 owner: CMO
 depends_on:
@@ -28,6 +28,8 @@ Soleur is not a copilot. Not an assistant. It is a full AI organization -- 61 ag
 **Tagline:** The Company-as-a-Service Platform
 
 **Thesis:** "The first billion-dollar company run by one person isn't science fiction. It's an engineering problem. We're solving it."
+
+> **[2026-03-22 Business Validation Review]** The positioning statement, tagline, and thesis remain valid -- user research confirmed the CaaS vision resonates strongly with founders. However, "terminal-first workflow" is no longer a positioning asset. The positioning must be delivery-agnostic: accessible from any device, not tied to a specific development environment. The phrase "operates as every department from strategy to shipping" holds. What changes is the access surface, not the mission. When the web platform ships, positioning language should emphasize "accessible anywhere" alongside the existing "full AI organization" framing. No changes to mission or thesis required.
 
 ## Voice
 
@@ -64,6 +66,7 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 - Say "AI-powered" or "leverage AI" -- the entire platform is AI; saying it is redundant
 - Use "just" or "simply" -- these minimize the ambition
 - Say "assistant" or "copilot" -- Soleur is an organization, not a helper
+- Say "terminal-first" or "CLI-native" as a positioning advantage -- the delivery pivot requires device-agnostic language [added 2026-03-22, per business validation]
 - Hedge with "might," "could," or "potentially"
 - Use startup jargon ("disrupt," "synergy," "move the needle")
 - Over-explain -- trust the reader's intelligence
@@ -297,3 +300,5 @@ Same guardrails as X/Twitter apply (see above), with these Bluesky-specific addi
 - Stats should feel monumental: large numbers, minimal labels.
 - The footer tagline is always: "Designed, built, and shipped by Soleur -- using Soleur."
 - Final CTA: "Ready to build at scale?" / "Your AI organization is ready. Are you?" / Start Building.
+
+> **[2026-03-22 Business Validation Review]** When the web platform launches, the website CTA must shift from plugin installation to platform signup/login. The hero pattern, visual identity, and brand energy transfer directly -- the Solar Forge aesthetic is delivery-agnostic. The stats line ("61 agents, 8 departments, 1 founder") remains valid. CTA copy candidates: "Start Building" (current, still works), "Open Your Dashboard", "Meet Your Organization." Do not reference CLI installation as the primary CTA in any new landing page content.
