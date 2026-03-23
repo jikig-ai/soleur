@@ -30,7 +30,34 @@ This roadmap pivots from plugin-first to **cloud-first**. The CLI plugin remains
 
 The platform ships as a Progressive Web App. One Next.js codebase covers web browsers, mobile (installable PWA), and desktop (installable PWA). Native apps (Electron, React Native) are deferred unless PWA hits real limits reported by users.
 
-Server-side Playwright handles browser automation (third-party signups, service configuration). Screenshots stream into the chat UI. The founder handles CAPTCHA/OAuth steps in their own browser.
+**Known iOS limitations (CTO review):** Push notifications require iOS 16.4+ and home-screen installation. No background execution — WebSocket drops when app is backgrounded. Service worker caches evicted after ~14 days of non-use. Email fallback needed for review gate notifications.
+
+### Architecture Decision: Browser Automation (approach TBD)
+
+Founders validated browser automation as a high-value feature (agents automating third-party service signups). The implementation approach requires a dedicated brainstorm due to cross-domain risk:
+
+- **CTO:** HIGH risk — 2-3 weeks, 500MB RAM per instance, SSRF surface, brittle selectors
+- **CLO:** HIGH risk — undisclosed agency liability, third-party ToS violations, CFAA exposure
+- **CFO:** HIGH risk — only item that can force 2-4x infrastructure cost increase
+
+The value is confirmed. The approach needs rethinking. Alternatives to evaluate: guided-instructions with deep linking, hybrid (agent fills forms + user confirms), browser extension, remote browser embed. Brainstorm before building.
+
+---
+
+## Domain Review Summary (2026-03-23)
+
+This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
+
+| Domain | Key Finding | Impact on Roadmap |
+|--------|------------|-------------------|
+| **CTO** | Multi-turn conversation is broken (agent has amnesia between turns). Not "partial" — functionally absent. | Promoted multi-turn to P1. Reordered P3. |
+| **CTO** | Pin Agent SDK to exact version (`0.2.80`, not `^0.2.80`). Add basic WS rate limiting to P2. | Added to P1 and P2 respectively. |
+| **CLO** | Conversation history is a new PII category not in privacy docs. AUP and Cookie Policy not updated for Web Platform. | Added legal updates to P2. |
+| **CLO** | Browser automation creates undisclosed agency liability. Needs dedicated legal framework before shipping. | Playwright deferred pending brainstorm + legal architecture. |
+| **CFO** | Break-even at 1-2 paying users. EUR 35-44/month burn. BYOK eliminates per-user LLM cost. | No structural change. Confirmed pricing gate sequencing is correct. |
+| **CFO** | No finance artifacts exist. Need cost model. Plausible trial expires 2026-03-24. | Flagged for immediate action. |
+| **CMO** | Every public surface says "plugin." Roadmap says "cloud platform." Live contradiction. | Added marketing positioning gate before P4 recruitment. |
+| **CMO** | At least 3/10 recruited founders must NOT be Claude Code users. | Added recruitment mix constraint to P4. |
 
 ---
 
@@ -52,7 +79,7 @@ Server-side Playwright handles browser automation (third-party signups, service 
 
 ### Phase 1: Close the Loop (Mobile-First, PWA)
 
-**Objective:** A new user signs up from any device, stores an API key, talks to a domain leader, and sees agent output without errors. The app is installable as a PWA.
+**Objective:** A new user signs up from any device, has a real multi-turn conversation with a domain leader, and sees agent output without errors. The app is installable as a PWA.
 
 | # | Feature | Priority | Issue | Status |
 |---|---------|----------|-------|--------|
@@ -60,13 +87,18 @@ Server-side Playwright handles browser automation (third-party signups, service 
 | 1.2 | Integration tests (WebSocket, auth, session) | P1 | [#668](https://github.com/jikig-ai/soleur/issues/668) | Done |
 | 1.3 | KB 404 placeholder (graceful empty state) | P2 | [#669](https://github.com/jikig-ai/soleur/issues/669) | Done |
 | 1.4 | Vendor DPA review (Supabase, Stripe, Hetzner, Cloudflare) | P1 | [#670](https://github.com/jikig-ai/soleur/issues/670) | Done |
-| 1.5 | Mobile-first responsive UI audit | P1 | New | Not started |
-| 1.6 | PWA manifest + service worker + installability | P1 | New | Not started |
+| 1.5 | Mobile-first responsive UI (sidebar → hamburger menu, touch-optimized nav) | P1 | New | Not started |
+| 1.6 | PWA manifest + service worker + installability (app shell caching only, no offline mode) | P1 | New | Not started |
 | 1.7 | Verify production deployment (end-to-end loop) | P1 | -- | Needs verification |
+| 1.8 | **Multi-turn conversation continuity** (session persistence, message history injection) | P1 | New | **Broken** — agent has amnesia between turns (CTO review) |
+| 1.9 | Pin Agent SDK to exact version (`0.2.80`) | P1 | New | Not started |
+
+**Why 1.8 is P1 (CTO review):** "A chat product where the agent forgets everything after one turn is not viable even for beta. It will be the first thing every user notices." Each message currently spawns a fresh agent with no memory of prior exchange. `persistSession: false` is explicitly set. This is the most critical gap.
 
 **Exit criteria:**
 
-- New user completes signup, BYOK, first conversation on mobile browser
+- New user completes signup, BYOK, multi-turn conversation on mobile browser
+- Agent remembers context across turns within a conversation
 - PWA installable on iOS, Android, desktop Chrome/Edge
 - Lighthouse mobile score > 80
 
@@ -74,17 +106,22 @@ Server-side Playwright handles browser automation (third-party signups, service 
 
 ### Phase 2: Secure for Beta
 
-**Objective:** Defensible security posture. No external user touches the platform until every P1 item passes.
+**Objective:** Defensible security, legal, and UX posture. No external user touches the platform until every must-pass gate clears.
 
-| # | Feature | Priority | Issue | Status |
-|---|---------|----------|-------|--------|
+| # | Feature | Priority | Source | Status |
+|---|---------|----------|--------|--------|
 | 2.1 | Security audit (OWASP top 10, BYOK handling, workspace isolation, path traversal) | P1 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
 | 2.2 | CSP + CORS headers on all routes | P1 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Partially done |
 | 2.3 | Session timeout + WebSocket expiry on idle | P1 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
 | 2.4 | Account deletion + data purge (GDPR) | P1 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
-| 2.5 | Error + empty states (agent failure, network loss, rate limit) | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
-| 2.6 | First-time onboarding walkthrough | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
-| 2.7 | UX audit of all Phase 1 screens | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
+| 2.5 | Basic WebSocket rate limiting (per-IP connection throttle) | P1 | CTO review | Not started |
+| 2.6 | Add `/proc` to sandbox deny list | P1 | CTO review | Not started |
+| 2.7 | Update AUP for Web Platform scope | P1 | CLO review | Not started |
+| 2.8 | Update Cookie Policy for app.soleur.ai | P1 | CLO review | Not started |
+| 2.9 | Add conversation history to Privacy Policy, DPD, GDPR register | P1 | CLO review | Not started |
+| 2.10 | Error + empty states (agent failure, network loss, rate limit) | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
+| 2.11 | First-time onboarding walkthrough (include PWA install guidance for iOS) | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
+| 2.12 | UX audit of all Phase 1 screens | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
 
 **Exit criteria (beta launch gate):**
 
@@ -94,6 +131,8 @@ Server-side Playwright handles browser automation (third-party signups, service 
 | CSP + CORS deployed | Must pass | Headers present on all routes |
 | Session timeout active | Must pass | Idle sessions expire, WebSocket connections close |
 | Account deletion works | Must pass | User can delete account and all data (GDPR) |
+| WS rate limiting active | Must pass | IP-based throttle prevents auth exhaustion |
+| Legal docs updated | Must pass | AUP, Cookie Policy, and privacy docs cover Web Platform + conversation data |
 | Error states visible | Must pass | Agent failure, network loss, empty states render meaningful messages |
 | Onboarding walkthrough | Should pass | First-time user completes the loop without external docs |
 | Integration tests green | Must pass | Auth, WebSocket, session tests pass in CI |
@@ -102,32 +141,49 @@ Server-side Playwright handles browser automation (third-party signups, service 
 
 ### Phase 3: Make it Sticky
 
-**Objective:** Turn "I tried it" into "I use it daily." The features that close the review loop and make the compounding moat visible.
+**Objective:** Turn "I tried it" into "I use it daily." Close the review loop and make the compounding moat visible.
+
+**Sequencing (per CTO review):** KB API and viewer before inbox. Browser automation last (pending brainstorm).
 
 | # | Feature | Priority | Issue | Status |
 |---|---------|----------|-------|--------|
 | 3.1 | KB REST API (file tree, content, search) | P1 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
 | 3.2 | KB viewer UI (sidebar tree, markdown rendering, search) | P1 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Stub only |
 | 3.3 | Conversation inbox with status badges | P1 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
-| 3.4 | Multi-turn conversation continuity | P1 | New | Partial |
-| 3.5 | Server-side Playwright with screenshot streaming | P1 | New | Not started |
-| 3.6 | Usage/cost indicator (BYOK spending) | P2 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
-| 3.7 | Push notifications for review gates (PWA) | P2 | New | Not started |
-| 3.8 | Pricing page (soleur.ai) | Deferred | [#656](https://github.com/jikig-ai/soleur/issues/656) | Not started |
+| 3.4 | Usage/cost indicator (BYOK spending) | P2 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
+| 3.5 | Review gate notifications (PWA push + email fallback for iOS) | P2 | New | Not started |
+| 3.6 | **Browser automation for third-party signups** (approach TBD — brainstorm required) | P1 | New | Blocked on approach decision |
+| 3.7 | Pricing page (soleur.ai) | Deferred | [#656](https://github.com/jikig-ai/soleur/issues/656) | Not started |
 
 **Why 3.1-3.2 matter:** The knowledge base is the compounding moat. If founders cannot see plans, brainstorms, brand guides, and competitive analyses their agents produced, the value is invisible. The KB viewer closes the review loop.
 
 **Why 3.3 matters:** A solo founder triggers agents, steps away, returns later. The inbox is the landing page that shows what happened and what needs attention.
 
-**Why 3.5 matters:** Founders need agents to automate third-party service signups (Cloudflare, Plausible, Stripe, Buttondown, etc.). Server-side Playwright drives a headless browser, streams screenshots into chat, and hands off for CAPTCHA/OAuth only.
+**Why 3.6 matters:** Founders specifically validated this as a high-value feature — agents automating Cloudflare, Plausible, Stripe, Buttondown signups. However, all four domain reviews flagged the server-side Playwright approach as HIGH risk. A dedicated brainstorm must evaluate alternative approaches before building. **Prerequisites:** approach brainstorm complete, legal framework for agent automation written (CLO), concurrency limits designed (CTO + CFO).
 
 **Exit criteria:**
 
 - User can browse KB artifacts produced by agents
 - User can see conversation history with status badges (active, waiting, completed, failed)
-- User can resume multi-turn conversations
-- Agent can drive third-party signups with screenshot streaming
-- PWA push notifications fire on review gates (when user is offline)
+- Review gate notifications reach the user even when offline (push or email)
+- Browser automation approach decided and implemented (or consciously deferred to P4)
+
+---
+
+### Pre-Phase 4: Marketing Positioning Gate (CMO review)
+
+Before recruiting founders, all public surfaces must reflect the cloud platform positioning. ~5 hours of work.
+
+| # | Item | Effort | Status |
+|---|------|--------|--------|
+| M1 | Update brand guide positioning (remove plugin framing, cloud platform as primary) | 30 min | Not started |
+| M2 | Update homepage hero subtitle + meta description | 30 min | Not started |
+| M3 | Update marketing strategy for cloud pivot | 2 hours | Not started |
+| M4 | Draft recruitment messaging templates per channel | 2 hours | Not started |
+| M5 | Update Getting Started page (cloud platform primary, CLI plugin secondary) | 2 hours | Not started |
+| M6 | Standardize agent/skill counts across all surfaces | 2 hours | Not started |
+
+**Gate:** No recruitment outreach until M1-M4 complete.
 
 ---
 
@@ -137,17 +193,20 @@ Server-side Playwright handles browser automation (third-party signups, service 
 
 | # | Feature | Priority | Trigger | Status |
 |---|---------|----------|---------|--------|
-| 4.1 | Recruit 10 solo founders (mixed channels) | P1 | Phase 2 complete | Not started |
+| 4.1 | Recruit 10 solo founders (mixed channels) | P1 | Phase 2 + Marketing Gate complete | Not started |
 | 4.2 | Problem interviews (no demo) | P1 | 10 founders recruited | Not started |
 | 4.3 | Guided onboarding with top 5 | P1 | 5+ pass problem interviews | Not started |
 | 4.4 | 2-week unassisted usage tracking | P1 | Onboarding complete | Not started |
 | 4.5 | Exit interviews + willingness-to-pay | P1 | 2 weeks elapsed | Not started |
 | 4.6 | Container-per-workspace isolation | P1 | 5+ concurrent users | [#673](https://github.com/jikig-ai/soleur/issues/673) |
 | 4.7 | Rate limiting (per-user concurrency, API rate) | P1 | Before public launch | [#673](https://github.com/jikig-ai/soleur/issues/673) |
-| 4.8 | Monitoring + error tracking | P2 | 10+ users | [#673](https://github.com/jikig-ai/soleur/issues/673) |
-| 4.9 | Stripe live mode activation | P1 | 4 of 5 pricing gates pass | Not started |
+| 4.8 | Resource monitoring (CPU/RAM per workspace) | P1 | Before beta invites | [#673](https://github.com/jikig-ai/soleur/issues/673) |
+| 4.9 | Monitoring + error tracking | P2 | 10+ users | [#673](https://github.com/jikig-ai/soleur/issues/673) |
+| 4.10 | Stripe live mode activation | P1 | 4 of 5 pricing gates pass | Not started |
 
-**Recruitment channels:** Claude Code Discord, GitHub (developers with business-operations repos), IndieHackers, direct network.
+**Recruitment channels:** Claude Code Discord, GitHub (developers with business-operations repos), IndieHackers, X/Twitter solopreneur network, direct network.
+
+**Recruitment mix constraint (CMO review):** At least 3 of 10 founders must NOT be current Claude Code users. If all recruits come from the Claude Code ecosystem, you validate the plugin-to-cloud migration path, not the cloud platform value proposition from cold.
 
 **Validation protocol:**
 
@@ -180,10 +239,19 @@ Server-side Playwright handles browser automation (third-party signups, service 
 | Demand validation | 10+ solo founders used the platform for 2+ weeks | Not started |
 | Multi-domain validation | 5+ users engaged with 2+ non-engineering domains | Not started |
 | Willingness-to-pay signal | 3+ founders say they would pay $49/month | Not started |
-| Infrastructure cost model | Hosting costs per-user understood, margin positive | Not assessed |
+| Infrastructure cost model | Hosting costs per-user understood, margin positive | CFO assessed: EUR 35-44/month burn, break-even at 1-2 users |
 | Cowork differentiation clear | Users articulate why Soleur is worth paying for vs. free Cowork plugins | Not started |
 
 Full analysis: `knowledge-base/product/pricing-strategy.md`.
+
+---
+
+## Immediate Actions
+
+| Action | Owner | Deadline | Notes |
+|--------|-------|----------|-------|
+| Decide Plausible Analytics (keep at EUR 9/month or switch to Cloudflare Web Analytics) | COO | 2026-03-24 | Trial expires tomorrow |
+| Create `knowledge-base/finance/cost-model.md` | CFO/budget-analyst | Before P4 | No finance artifacts exist. Pricing Gate #4 partially addressed by CFO review. |
 
 ---
 
@@ -209,4 +277,4 @@ Next review: 2026-04-23.
 
 ---
 
-_Generated: 2026-03-23. Sources: business-validation.md (2026-03-12), competitive-intelligence.md (2026-03-12), pricing-strategy.md (2026-03-12), brand-guide.md (2026-02-21). Workshop conducted via /soleur:product-roadmap skill._
+_Generated: 2026-03-23. Domain review: CTO, CLO, CFO, CMO (2026-03-23). Sources: business-validation.md (2026-03-12), competitive-intelligence.md (2026-03-12), pricing-strategy.md (2026-03-12), brand-guide.md (2026-02-21). Workshop conducted via /soleur:product-roadmap skill._

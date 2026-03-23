@@ -70,6 +70,49 @@ For each phase, propose measurable exit criteria. Ask to adjust.
 
 In headless mode for all workshop topics: use KB-derived defaults (themes from validation verdict, 3 phases based on issue priorities, issues assigned by label proximity, generic exit criteria based on phase objectives).
 
+## Phase 1.5: Domain Review Gate
+
+Before generating the roadmap, assess which domain leaders should review the proposed phases. Read [brainstorm-domain-config.md](../../skills/brainstorm/references/brainstorm-domain-config.md) for the domain assessment table.
+
+### Auto-Detection
+
+For each proposed phase, evaluate against the assessment questions in the domain config table:
+
+| Phase Content Signal | Domain | Leader |
+|---------------------|--------|--------|
+| Infrastructure, architecture, tech stack, performance, scaling | Engineering | CTO |
+| PII, GDPR, payments, vendor agreements, compliance, terms of service | Legal | CLO |
+| Vendor costs, pricing decisions, budget, burn rate, revenue model | Finance | CFO |
+| Positioning changes, launch content, recruitment channels, brand | Marketing | CMO |
+| Vendor selection, tool provisioning, hosting, procurement | Operations | COO |
+| Sales pipeline, outbound, pricing communication, deal structure | Sales | CRO |
+| User support, documentation, community, onboarding | Support | CCO |
+
+A domain is relevant if **any** proposed phase matches its content signals.
+
+### Spawn Domain Leaders
+
+For each relevant domain, spawn the domain leader as a parallel background Agent using the Task Prompt from the domain config table. Pass the full workshop output (themes, phases, features, exit criteria) as context via `{desc}`.
+
+Example prompt format: "Assess the [domain] implications of this product roadmap: {full workshop summary}. Identify risks, blockers, complexity concerns, and questions the founder should consider. Output a brief structured assessment with risk levels (low/medium/high) per phase."
+
+Spawn all relevant leaders in parallel (`run_in_background: true`). Present each assessment as it completes.
+
+### In headless mode
+
+Skip the domain review gate. Generate the roadmap with a footer note: "Domain review was skipped (headless mode). Run interactively to include domain leader assessments."
+
+### Present and Adjust
+
+After all assessments complete, present a consolidated summary table:
+
+| Domain | Key Finding | Risk | Recommended Change |
+|--------|------------|------|--------------------|
+
+Use AskUserQuestion to ask: "Domain leaders have reviewed the roadmap. Adjust any phases before generating?"
+
+Incorporate accepted changes into the phase definitions before proceeding to Generate.
+
 ## Phase 2: Generate
 
 Write `knowledge-base/product/roadmap.md` with the following structure:
