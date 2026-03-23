@@ -99,8 +99,12 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 1.8 | **Multi-turn conversation continuity** (session persistence, message history injection) | P1 | New | **Broken** — agent has amnesia between turns (CTO review) |
 | 1.9 | Pin Agent SDK to exact version (`0.2.80`) | P1 | New | Not started |
 | 1.10 | Design conversation data model for tag-and-route extensibility (not per-domain pages) | P1 | [#1059](https://github.com/jikig-ai/soleur/issues/1059) | Not started |
+| 1.11 | **Project repo connection** — clone/link founder's git repo into workspace, install latest Soleur plugin, keep plugin updated | P1 | New | Not started |
+| 1.12 | **Telegram bridge integration** — connect the Telegram bridge to the founder's workspace so agents are reachable via Telegram | P1 | New | Not started |
 
 **Why 1.8 is P1 (CTO review):** "A chat product where the agent forgets everything after one turn is not viable even for beta. It will be the first thing every user notices." Each message currently spawns a fresh agent with no memory of prior exchange. `persistSession: false` is explicitly set. This is the most critical gap.
+
+**Why 1.11-1.12 are P1:** Without the founder's actual project repo and the Soleur plugin installed, agents operate in a vacuum — no codebase context, no skills, no domain leaders, no institutional memory. The workspace must be the founder's real project, not an empty shell. Similarly, the Telegram bridge extends the platform's reach — founders can interact with domain leaders from Telegram, not just the web UI. Both are essential for the CaaS experience to work.
 
 **Why 1.10 is P1:** The north star UX is tag-and-route — founders talk from any context and domain leaders are auto-detected or tagged (@CTO, @CLO). P1 must design the conversation model to support this (context associations, multi-leader threads, non-page-specific routing) even if the full UI is P3. Building dedicated domain leader pages now means tearing them down later.
 
@@ -112,8 +116,10 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 **Exit criteria:**
 
 - New user completes signup, BYOK, multi-turn conversation on mobile browser
+- Agent runs against the founder's actual project repo with Soleur plugin installed
 - Agent remembers context across turns within a conversation
 - Conversation data model supports context association and multi-leader threads
+- Telegram bridge connects to workspace (founder can talk to agents from Telegram)
 - PWA installable on iOS, Android, desktop Chrome/Edge
 - Lighthouse mobile score > 80
 
