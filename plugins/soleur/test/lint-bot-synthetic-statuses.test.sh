@@ -27,8 +27,8 @@ setup_wf_dir() {
 
 # --- Tests ---
 
-# Test 1: File with gh pr create and both contexts passes
-echo "Test 1: File with gh pr create and both contexts passes"
+# Test 1: File with gh pr create and no [skip ci] passes
+echo "Test 1: File with gh pr create and no [skip ci] passes"
 WF=$(setup_wf_dir "test1")
 cat > "$WF/scheduled-good.yml" << 'YAML'
 name: Good
@@ -37,77 +37,55 @@ jobs:
   run:
     steps:
       - run: |
-          gh api repos/foo/statuses/$SHA -f state=success -f context=cla-check -f description="ok"
-          gh api repos/foo/statuses/$SHA -f state=success -f context=test -f description="ok"
+          git commit -m "docs: weekly audit"
           gh pr create --title "test" --base main
 YAML
 output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
 rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
-assert_eq "0" "$rc" "exits 0 when both contexts present"
+assert_eq "0" "$rc" "exits 0 when no [skip ci] present"
 assert_contains "$output" "ok:" "reports passing file"
 assert_contains "$output" "All 1 scheduled" "reports summary"
 echo ""
 
-# Test 2: Missing context=test fails
-echo "Test 2: File missing context=test fails"
+# Test 2: File with [skip ci] in commit message fails
+echo "Test 2: File with [skip ci] in commit message fails"
 WF=$(setup_wf_dir "test2")
-cat > "$WF/scheduled-no-test.yml" << 'YAML'
-name: NoTest
+cat > "$WF/scheduled-skip-ci.yml" << 'YAML'
+name: SkipCI
 on: schedule
 jobs:
   run:
     steps:
       - run: |
-          gh api repos/foo/statuses/$SHA -f context=cla-check
+          git commit -m "docs: weekly audit [skip ci]"
           gh pr create --title "test"
 YAML
 output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
 rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
-assert_eq "1" "$rc" "exits 1 when context=test missing"
-assert_contains "$output" "context=test" "reports missing context=test"
+assert_eq "1" "$rc" "exits 1 when [skip ci] present"
+assert_contains "$output" "[skip ci]" "reports [skip ci] as the problem"
 echo ""
 
-# Test 3: Missing context=cla-check fails
-echo "Test 3: File missing context=cla-check fails"
+# Test 3: File with [skip ci] but no gh pr create is skipped
+echo "Test 3: File with [skip ci] but no gh pr create is skipped"
 WF=$(setup_wf_dir "test3")
-cat > "$WF/scheduled-no-cla.yml" << 'YAML'
-name: NoCla
+cat > "$WF/scheduled-no-pr.yml" << 'YAML'
+name: NoPR
 on: schedule
 jobs:
   run:
     steps:
       - run: |
-          gh api repos/foo/statuses/$SHA -f context=test
-          gh pr create --title "test"
+          git commit -m "ci: update [skip ci]"
+          echo "no PR creation"
 YAML
-output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
 rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
-assert_eq "1" "$rc" "exits 1 when context=cla-check missing"
-assert_contains "$output" "context=cla-check" "reports missing context=cla-check"
+assert_eq "0" "$rc" "exits 0 when no gh pr create present"
 echo ""
 
-# Test 4: Missing both contexts fails
-echo "Test 4: File missing both contexts fails"
+# Test 4: File without gh pr create is skipped
+echo "Test 4: File without gh pr create is skipped"
 WF=$(setup_wf_dir "test4")
-cat > "$WF/scheduled-no-both.yml" << 'YAML'
-name: NoBoth
-on: schedule
-jobs:
-  run:
-    steps:
-      - run: gh pr create --title "test"
-YAML
-output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
-rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
-assert_eq "1" "$rc" "exits 1 when both contexts missing"
-assert_contains "$output" "context=cla-check" "reports missing cla-check"
-assert_contains "$output" "context=test" "reports missing test"
-assert_contains "$output" "2 missing" "reports correct failure count"
-echo ""
-
-# Test 5: File without gh pr create is skipped (passes)
-echo "Test 5: File without gh pr create is skipped"
-WF=$(setup_wf_dir "test5")
 cat > "$WF/scheduled-no-pr.yml" << 'YAML'
 name: NoPR
 on: schedule
@@ -120,16 +98,16 @@ rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
 assert_eq "0" "$rc" "exits 0 when no gh pr create present"
 echo ""
 
-# Test 6: Empty directory (no scheduled-*.yml files) passes
-echo "Test 6: Empty workflow directory passes"
-WF=$(setup_wf_dir "test6")
+# Test 5: Empty directory (no scheduled-*.yml files) passes
+echo "Test 5: Empty workflow directory passes"
+WF=$(setup_wf_dir "test5")
 rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
 assert_eq "0" "$rc" "exits 0 when no scheduled-*.yml files exist"
 echo ""
 
-# Test 7: Multi-file aggregation (one passing, one failing)
-echo "Test 7: Multi-file directory aggregates failures correctly"
-WF=$(setup_wf_dir "test7")
+# Test 6: Multi-file directory aggregates failures correctly
+echo "Test 6: Multi-file directory aggregates failures correctly"
+WF=$(setup_wf_dir "test6")
 cat > "$WF/scheduled-good.yml" << 'YAML'
 name: Good
 on: schedule
@@ -137,8 +115,7 @@ jobs:
   run:
     steps:
       - run: |
-          gh api repos/foo/statuses/$SHA -f context=cla-check
-          gh api repos/foo/statuses/$SHA -f context=test
+          git commit -m "docs: weekly audit"
           gh pr create --title "test"
 YAML
 cat > "$WF/scheduled-bad.yml" << 'YAML'
@@ -147,33 +124,44 @@ on: schedule
 jobs:
   run:
     steps:
-      - run: gh pr create --title "test"
+      - run: |
+          git commit -m "docs: weekly audit [skip ci]"
+          gh pr create --title "test"
 YAML
 output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
 rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
-assert_eq "1" "$rc" "exits 1 when one file fails in multi-file directory"
+assert_eq "1" "$rc" "exits 1 when one file has [skip ci] in multi-file directory"
 assert_contains "$output" "ok:" "reports passing file"
 assert_contains "$output" "scheduled-bad.yml" "names the failing file"
 echo ""
 
-# Test 8: File using shared post-bot-statuses.sh script passes
-echo "Test 8: File using shared post-bot-statuses.sh passes"
-WF=$(setup_wf_dir "test8")
-cat > "$WF/scheduled-shared.yml" << 'YAML'
-name: Shared
+# Test 7: Multiple [skip ci] files reports correct count
+echo "Test 7: Multiple [skip ci] files reports correct count"
+WF=$(setup_wf_dir "test7")
+cat > "$WF/scheduled-bad1.yml" << 'YAML'
+name: Bad1
 on: schedule
 jobs:
   run:
     steps:
       - run: |
-          SHA=$(git rev-parse HEAD)
-          bash scripts/post-bot-statuses.sh "$SHA"
-          gh pr create --title "test" --base main
+          git commit -m "docs: audit [skip ci]"
+          gh pr create --title "test"
+YAML
+cat > "$WF/scheduled-bad2.yml" << 'YAML'
+name: Bad2
+on: schedule
+jobs:
+  run:
+    steps:
+      - run: |
+          git commit -m "ci: update [skip ci]"
+          gh pr create --title "test"
 YAML
 output=$(WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" 2>&1) || true
 rc=0; WORKFLOW_DIR="$WF" bash "$LINT_SCRIPT" >/dev/null 2>&1 || rc=$?
-assert_eq "0" "$rc" "exits 0 when using shared script"
-assert_contains "$output" "ok:" "reports passing file"
+assert_eq "1" "$rc" "exits 1 when multiple files have [skip ci]"
+assert_contains "$output" "2 workflow(s)" "reports correct failure count"
 echo ""
 
 print_results
