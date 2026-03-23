@@ -52,7 +52,16 @@ gh api repos/{owner}/{repo}/milestones --jq '.[] | {title, open_issues, closed_i
 
 Spawn the CPO agent as a background task with all context gathered in Phase 0 (KB artifacts, GitHub state, existing roadmap if any). The CPO produces a **draft roadmap proposal** before the interactive workshop begins.
 
-**CPO task prompt:** "You are the CPO. Analyze the following knowledge-base artifacts and GitHub state to produce a draft product roadmap proposal. Include: (1) 2-4 strategic themes with rationale grounded in business validation, competitive intelligence, and current product state, (2) 3-5 proposed phases with objectives, scope, and feature lists drawn from open GitHub issues, (3) gaps and risks you identified — things the founder may not have considered (onboarding flows, infrastructure requirements, missing integrations, legal prerequisites), (4) prioritization rationale explaining why you ordered the phases this way, (5) open questions for the founder. Challenge assumptions. Be opinionated — propose a direction, don't just list options. Context: {all Phase 0 findings}"
+**CPO task prompt:** "You are the CPO. Analyze the following knowledge-base artifacts and GitHub state to produce a draft product roadmap proposal. Include: (1) 2-4 strategic themes with rationale grounded in business validation, competitive intelligence, and current product state, (2) 3-5 proposed phases with objectives, scope, and feature lists drawn from open GitHub issues, (3) gaps and risks you identified — missing phases, features, strategic directions, or unaddressed risks the founder may not have considered, (4) prioritization rationale explaining why you ordered the phases this way, (5) open questions for the founder. Challenge assumptions. Be opinionated — propose a direction, don't just list options.
+
+**Scope boundaries for the CPO analysis:**
+
+- Flag roadmap-level gaps (missing features, phases, strategic risks) NOT planning-level details (UX flows, screen designs, onboarding step sequences). 'No onboarding exists' is a valid gap. 'The onboarding should have 3 screens' is not — that belongs in spec/planning.
+- Verify technical claims before asserting them. Check the codebase for actual architecture (git-backed? containerized? replicated?) before flagging durability, infrastructure, or scaling concerns. False alarms waste founder time.
+- Do not ask implementation-choice questions (which SDK mode, which framework, which protocol). Flag the NEED ('multi-turn is broken'), not the HOW ('use persistSession vs history injection'). Route HOW questions to the CTO.
+- Do not propose scope that conflicts with the product maturity stage. A pre-beta product with 0 users does not need subscription management, multi-user support, or enterprise features. Flag these as explicit deferrals, not gaps.
+
+Context: {all Phase 0 findings}"
 
 Wait for the CPO analysis to complete, then present it to the founder.
 
