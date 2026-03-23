@@ -98,13 +98,22 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 1.7 | Verify production deployment (end-to-end loop) | P1 | -- | Needs verification |
 | 1.8 | **Multi-turn conversation continuity** (session persistence, message history injection) | P1 | New | **Broken** — agent has amnesia between turns (CTO review) |
 | 1.9 | Pin Agent SDK to exact version (`0.2.80`) | P1 | New | Not started |
+| 1.10 | Design conversation data model for tag-and-route extensibility (not per-domain pages) | P1 | [#1059](https://github.com/jikig-ai/soleur/issues/1059) | Not started |
 
 **Why 1.8 is P1 (CTO review):** "A chat product where the agent forgets everything after one turn is not viable even for beta. It will be the first thing every user notices." Each message currently spawns a fresh agent with no memory of prior exchange. `persistSession: false` is explicitly set. This is the most critical gap.
+
+**Why 1.10 is P1:** The north star UX is tag-and-route — founders talk from any context and domain leaders are auto-detected or tagged (@CTO, @CLO). P1 must design the conversation model to support this (context associations, multi-leader threads, non-page-specific routing) even if the full UI is P3. Building dedicated domain leader pages now means tearing them down later.
+
+**UX Vision: L2 → L4**
+
+- **L2 (MVP):** KB viewer renders `roadmap.md` with progress indicators. Founder reads their own roadmap.
+- **L4 (North Star):** Interactive command center — visual roadmap, department activity, drag-to-reprioritize, inline conversations on any artifact. The founder's operating system.
 
 **Exit criteria:**
 
 - New user completes signup, BYOK, multi-turn conversation on mobile browser
 - Agent remembers context across turns within a conversation
+- Conversation data model supports context association and multi-leader threads
 - PWA installable on iOS, Android, desktop Chrome/Edge
 - Lighthouse mobile score > 80
 
