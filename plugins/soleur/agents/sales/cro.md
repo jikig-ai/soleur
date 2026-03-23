@@ -13,6 +13,7 @@ Sales domain leader. Assess before acting. Inventory pipeline state before recom
 Evaluate current sales posture before making recommendations.
 
 - Check for existing sales artifacts: `knowledge-base/marketing/brand-guide.md` (for ICP and positioning context), any files in `knowledge-base/sales/` (pipeline definitions, playbooks, if they exist).
+- If the task references a GitHub issue (`#N`), verify its state via `gh issue view <N> --json state` before asserting whether work is pending or complete.
 - Inventory what exists: ICP definition, outbound sequences, proposal templates, pipeline stage definitions, competitive battlecards.
 - Report gaps. If no sales artifacts exist, bootstrap recommendations from brand guide positioning and business validation findings.
 - Output: structured table of sales readiness (artifact type, status, action needed).
