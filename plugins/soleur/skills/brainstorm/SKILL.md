@@ -51,6 +51,7 @@ Evaluate whether brainstorming is needed based on the feature description.
 Use **AskUserQuestion tool** to suggest: "Your requirements seem clear enough to skip brainstorming. How would you like to proceed?"
 
 Options:
+
 1. **One-shot it** - Use the **Skill tool**: `skill: soleur:one-shot` for full autonomous execution (plan, deepen, implement, review, resolve todos, browser test, feature video, PR). Best for simple, single-session tasks like bug fixes or small improvements.
 2. **Plan first** - Use the **Skill tool**: `skill: soleur:plan` to create a plan before implementing
 3. **Brainstorm anyway** - Continue exploring the idea
@@ -96,6 +97,7 @@ Run these agents **in parallel** to gather context before dialogue:
 - Task learnings-researcher(feature_description)
 
 **What to look for:**
+
 - **Repo research:** existing patterns, similar features, CLAUDE.md guidance
 - **Learnings:** documented solutions in `knowledge-base/project/learnings/` -- past gotchas, patterns, lessons learned that might inform WHAT to build
 
@@ -283,6 +285,8 @@ Ensure the brainstorms directory exists before writing.
 - No spec or issue created
 
 ### Phase 4: Handoff
+
+**Execute concluded actions first.** If the brainstorm concluded with an immediate actionable step (subscribe to a service, configure a tool, open a page), execute it via Playwright, `xdg-open`, CLI, or API before presenting handoff options. Do not list it as a prose "action item."
 
 **Context headroom notice:** Before presenting options, display: "All artifacts are on disk. Starting a new session for `/soleur:plan` will give you maximum context headroom."
 
