@@ -59,7 +59,7 @@ Spawn the CPO agent as a background task with all context gathered in Phase 0 (K
 - Flag roadmap-level gaps (missing features, phases, strategic risks) NOT planning-level details (UX flows, screen designs, onboarding step sequences). 'No onboarding exists' is a valid gap. 'The onboarding should have 3 screens' is not — that belongs in spec/planning.
 - Verify technical claims before asserting them. Check the codebase for actual architecture (git-backed? containerized? replicated?) before flagging durability, infrastructure, or scaling concerns. False alarms waste founder time.
 - Do not ask implementation-choice questions (which SDK mode, which framework, which protocol). Flag the NEED ('multi-turn is broken'), not the HOW ('use persistSession vs history injection'). Route HOW questions to the CTO.
-- Do not propose scope that conflicts with the product maturity stage. A pre-beta product with 0 users does not need subscription management, multi-user support, or enterprise features. Flag these as explicit deferrals, not gaps.
+- Do not propose features for a maturity stage the product has no plan to reach. However, if a later phase explicitly depends on a capability (e.g., Phase N activates Stripe live mode), the prerequisite features (pricing page, subscription management, invoice handling) ARE roadmap gaps even if the product is pre-beta today. Distinguish between premature features (no plan needs them) and prerequisite features (a planned phase requires them).
 
 Context: {all Phase 0 findings}"
 

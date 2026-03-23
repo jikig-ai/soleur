@@ -178,8 +178,10 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 3.8 | Guided instructions fallback (deep links + review gates for services without API/MCP) | P2 | New | Not started |
 | 3.9 | Tag-and-route UX (@-mentions, auto-routing, multi-leader threads) | P1 | [#1059](https://github.com/jikig-ai/soleur/issues/1059) | Not started |
 | 3.10 | CI/CD integration (agents trigger deploys, run tests, open PRs on founder's repo) | P1 | New | Not started |
-| 3.11 | Product analytics instrumentation for P4 validation metrics (domain engagement, session frequency, KB growth) | P1 | New | Not started |
-| 3.12 | Pricing page (soleur.ai) | Deferred | [#656](https://github.com/jikig-ai/soleur/issues/656) | Not started |
+| 3.11 | Product analytics instrumentation for P4 validation metrics (domain engagement, session frequency, KB growth) | P1 | [#1063](https://github.com/jikig-ai/soleur/issues/1063) | Not started |
+| 3.12 | Pricing page (soleur.ai) | P1 | [#656](https://github.com/jikig-ai/soleur/issues/656) | Not started |
+| 3.13 | Subscription management (cancel, upgrade/downgrade) | P1 | New | Not started |
+| 3.14 | Invoice history + failed payment handling | P2 | New | Not started |
 
 **Why 3.1-3.2 matter:** The knowledge base is the compounding moat. If founders cannot see plans, brainstorms, brand guides, and competitive analyses their agents produced, the value is invisible. The KB viewer closes the review loop.
 
@@ -193,6 +195,8 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 - User can see conversation history with status badges (active, waiting, completed, failed)
 - Agent can provision Cloudflare zones, Stripe accounts, and Plausible sites via API/MCP
 - Review gate notifications reach the user even when offline (push or email)
+- Pricing page live, subscription management works (cancel, upgrade), failed payment handling in place
+- Product analytics tracking domain engagement, session frequency, and KB growth per user
 
 ---
 
