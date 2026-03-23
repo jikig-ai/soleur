@@ -93,20 +93,22 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 1.2 | Integration tests (WebSocket, auth, session) | P1 | [#668](https://github.com/jikig-ai/soleur/issues/668) | Done |
 | 1.3 | KB 404 placeholder (graceful empty state) | P2 | [#669](https://github.com/jikig-ai/soleur/issues/669) | Done |
 | 1.4 | Vendor DPA review (Supabase, Stripe, Hetzner, Cloudflare) | P1 | [#670](https://github.com/jikig-ai/soleur/issues/670) | Done |
-| 1.5 | Mobile-first responsive UI (sidebar → hamburger menu, touch-optimized nav) | P1 | New | Not started |
-| 1.6 | PWA manifest + service worker + installability (app shell caching only, no offline mode) | P1 | New | Not started |
+| 1.5 | Mobile-first responsive UI (sidebar → hamburger menu, touch-optimized nav) | P1 | [#1041](https://github.com/jikig-ai/soleur/issues/1041) | Not started |
+| 1.6 | PWA manifest + service worker + installability (app shell caching only, no offline mode) | P1 | [#1042](https://github.com/jikig-ai/soleur/issues/1042) | Not started |
 | 1.7 | Verify production deployment (end-to-end loop) | P1 | -- | Needs verification |
-| 1.8 | **Multi-turn conversation continuity** (session persistence, message history injection) | P1 | New | **Broken** — agent has amnesia between turns (CTO review) |
-| 1.9 | Pin Agent SDK to exact version (`0.2.80`) | P1 | New | Not started |
-| 1.10 | Design conversation data model for tag-and-route extensibility (not per-domain pages) | P1 | [#1059](https://github.com/jikig-ai/soleur/issues/1059) | Not started |
-| 1.11 | **Project repo connection** — clone/link founder's git repo into workspace, install latest Soleur plugin, keep plugin updated | P1 | New | Not started |
-| 1.12 | **Telegram bridge integration** — connect the Telegram bridge to the founder's workspace so agents are reachable via Telegram | P1 | New | Not started |
+| 1.8 | **Multi-turn conversation continuity** (architecture choice deferred to CTO during spec) | P1 | [#1044](https://github.com/jikig-ai/soleur/issues/1044) | **Broken** — agent has amnesia between turns (CTO review) |
+| 1.9 | Pin Agent SDK to exact version (`0.2.80`) | P1 | [#1045](https://github.com/jikig-ai/soleur/issues/1045) | Not started |
+| 1.10 | **Project repo connection** — clone founder's public git repo, install latest Soleur plugin, keep plugin updated | P1 | [#1060](https://github.com/jikig-ai/soleur/issues/1060) | Not started |
 
-**Why 1.8 is P1 (CTO review):** "A chat product where the agent forgets everything after one turn is not viable even for beta. It will be the first thing every user notices." Each message currently spawns a fresh agent with no memory of prior exchange. `persistSession: false` is explicitly set. This is the most critical gap.
+**Why 1.8 is P1 (CTO review):** "A chat product where the agent forgets everything after one turn is not viable even for beta. It will be the first thing every user notices." Each message currently spawns a fresh agent with no memory of prior exchange. `persistSession: false` is explicitly set. **Dependency note:** The multi-turn architecture choice (CTO decision during spec) has downstream implications for 2.4 (GDPR account deletion — what conversation data must be purged?), 2.9 (privacy docs — what is stored?), and 3.3 (conversation inbox — what is displayed?).
 
-**Why 1.11-1.12 are P1:** Without the founder's actual project repo and the Soleur plugin installed, agents operate in a vacuum — no codebase context, no skills, no domain leaders, no institutional memory. The workspace must be the founder's real project, not an empty shell. Similarly, the Telegram bridge extends the platform's reach — founders can interact with domain leaders from Telegram, not just the web UI. Both are essential for the CaaS experience to work.
+**Why 1.10 is P1:** Without the founder's actual project repo and the Soleur plugin installed, agents operate in a vacuum — no codebase context, no skills, no domain leaders, no institutional memory. The workspace must be the founder's real project, not an empty shell. Scoped to **public repos only** for P1 — private repo support (OAuth/deploy keys) deferred to a later phase.
 
-**Why 1.10 is P1:** The north star UX is tag-and-route — founders talk from any context and domain leaders are auto-detected or tagged (@CTO, @CLO). P1 must design the conversation model to support this (context associations, multi-leader threads, non-page-specific routing) even if the full UI is P3. Building dedicated domain leader pages now means tearing them down later.
+**Deferred from P1:**
+
+- ~~1.10 Tag-and-route data model~~ → Moved to Phase 3. Zero users have tested per-leader chat. Let user behavior inform the data model.
+- ~~1.12 Telegram bridge~~ → Deferred to a later phase. Reach is meaningless with 0 users.
+- Private repo support for 1.10 → Deferred. Public repos prove the pattern in 3 days.
 
 **UX Vision: L2 → L4**
 
@@ -118,8 +120,6 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 - New user completes signup, BYOK, multi-turn conversation on mobile browser
 - Agent runs against the founder's actual project repo with Soleur plugin installed
 - Agent remembers context across turns within a conversation
-- Conversation data model supports context association and multi-leader threads
-- Telegram bridge connects to workspace (founder can talk to agents from Telegram)
 - PWA installable on iOS, Android, desktop Chrome/Edge
 - Lighthouse mobile score > 80
 
@@ -176,7 +176,10 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 3.6 | Usage/cost indicator (BYOK spending) | P2 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
 | 3.7 | Review gate notifications (PWA push + email fallback for iOS) | P2 | [#1049](https://github.com/jikig-ai/soleur/issues/1049) | Not started |
 | 3.8 | Guided instructions fallback (deep links + review gates for services without API/MCP) | P2 | New | Not started |
-| 3.9 | Pricing page (soleur.ai) | Deferred | [#656](https://github.com/jikig-ai/soleur/issues/656) | Not started |
+| 3.9 | Tag-and-route UX (@-mentions, auto-routing, multi-leader threads) | P1 | [#1059](https://github.com/jikig-ai/soleur/issues/1059) | Not started |
+| 3.10 | CI/CD integration (agents trigger deploys, run tests, open PRs on founder's repo) | P1 | New | Not started |
+| 3.11 | Product analytics instrumentation for P4 validation metrics (domain engagement, session frequency, KB growth) | P1 | New | Not started |
+| 3.12 | Pricing page (soleur.ai) | Deferred | [#656](https://github.com/jikig-ai/soleur/issues/656) | Not started |
 
 **Why 3.1-3.2 matter:** The knowledge base is the compounding moat. If founders cannot see plans, brainstorms, brand guides, and competitive analyses their agents produced, the value is invisible. The KB viewer closes the review loop.
 
@@ -210,13 +213,27 @@ Before recruiting founders, all public surfaces must reflect the cloud platform 
 
 ---
 
+### Pre-Phase 4: Multi-User Readiness Gate (CPO review)
+
+Before recruiting founders, the platform must handle multiple users signing up and getting their own workspaces.
+
+| # | Item | Status |
+|---|------|--------|
+| MU1 | Signup provisions a workspace (git clone + plugin install per user) | Depends on P1 item 1.10 |
+| MU2 | BYOK encryption works per-tenant (each user's API key isolated) | Existing — verify |
+| MU3 | Workspace isolation at process level (container isolation is P4 hardening, but basic isolation must work) | Existing bubblewrap sandbox — verify with cross-workspace integration test |
+
+**Gate:** All three must pass before any recruitment outreach.
+
+---
+
 ### Phase 4: Validate + Scale
 
 **Objective:** Recruit founders, prove the CaaS thesis with real usage, activate payments. Triggered by readiness, not calendar.
 
 | # | Feature | Priority | Trigger | Status |
 |---|---------|----------|---------|--------|
-| 4.1 | Recruit 10 solo founders (mixed channels) | P1 | Phase 2 + Marketing Gate complete | Not started |
+| 4.1 | Recruit 10 solo founders (mixed channels) | P1 | Phase 2 + Marketing Gate + Multi-User Gate complete | Not started |
 | 4.2 | Problem interviews (no demo) | P1 | 10 founders recruited | Not started |
 | 4.3 | Guided onboarding with top 5 | P1 | 5+ pass problem interviews | Not started |
 | 4.4 | 2-week unassisted usage tracking | P1 | Onboarding complete | Not started |
