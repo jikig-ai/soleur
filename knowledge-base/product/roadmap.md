@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-17
-last_reviewed: 2026-03-17
+last_updated: 2026-03-22
+last_reviewed: 2026-03-22
 review_cadence: monthly
 owner: CPO
 depends_on:
@@ -23,6 +23,16 @@ depends_on:
 | Vendor compliance | No DPA review for Supabase, Stripe, Hetzner, or Cloudflare. #670. |
 
 **Product maturity stage:** Building (Phase 1 deployed, pre-beta, zero external users).
+
+### Business Validation Update (2026-03-22)
+
+5+ founder conversations confirmed the CaaS thesis (multi-domain pain resonates) but rejected CLI/plugin delivery. Founders expect a standalone web/mobile product with visual dashboards and cross-device access. Most interviewed founders do not use Claude Code. This has three implications for the roadmap:
+
+1. **The web platform is no longer a validation surface -- it is the product.** The existing Phase 1-3 structure already builds toward app.soleur.ai, which is correct. But the framing must shift: the platform is not "where beta testers onboard because they don't use Claude Code locally." It is the primary delivery mechanism for all users, including technical ones. The CLI plugin becomes a power-user addon, not the core product.
+
+2. **Phase 2 (Visibility) becomes more urgent.** If the platform is the product, the KB viewer (2.1-2.2) and conversation inbox (2.3) are not "nice to have after beta feedback" -- they are the minimum viable surface for the product the market expects. Founders described wanting dashboards and review queues unprompted. Phase 2 scope should be re-evaluated for promotion into the beta gate.
+
+3. **Recruitment criteria must change.** The Validation Plan currently prefers "founders already using Claude Code or similar AI tools." The user research invalidates this filter. Recruitment should select for founders with multi-domain pain, regardless of their current development tool. The beachhead is defined by the problem (running a company solo), not the tool (Claude Code).
 
 ---
 
@@ -179,8 +189,8 @@ Monthly CPO review. More frequent than marketing's quarterly cadence because the
 - **After each beta cohort:** Update validation findings. Adjust Phase 2 scope. Re-evaluate pricing gates.
 - **Quarterly:** Full roadmap revision. Cross-reference with competitive intelligence and marketing strategy.
 
-Next review: 2026-04-17.
+Next review: 2026-04-17. The 2026-03-22 business validation update warrants an interim review before the next scheduled monthly date if Phase 2 scope decisions are needed sooner.
 
 ---
 
-_Generated: 2026-03-17. Sources: business-validation.md (2026-03-12), pricing-strategy.md (2026-03-12), tasks.md (2026-03-16), marketing-strategy.md (2026-03-13)._
+_Generated: 2026-03-17. Updated: 2026-03-22 (business validation delivery pivot annotation). Sources: business-validation.md (2026-03-22), pricing-strategy.md (2026-03-22), tasks.md (2026-03-16), marketing-strategy.md (2026-03-13)._

@@ -1,3 +1,12 @@
+---
+last_updated: 2026-03-02
+last_reviewed: 2026-03-02
+review_cadence: quarterly
+owner: CMO
+depends_on:
+  - knowledge-base/product/business-validation.md
+---
+
 # Problem Interview Outreach Template
 
 **Purpose:** Recruit solo founders and small-team builders for 15-minute problem interviews to validate Soleur's positioning and feature priorities.
@@ -45,9 +54,11 @@ Happy to share what I've learned so far with anyone who responds.
 ## Interview Guide (15 min)
 
 **Opening (2 min):**
+
 - Thanks for the time. I'm trying to understand the biggest pain points for solo founders running their company. No pitch — this is research.
 
 **Problem Exploration (8 min):**
+
 1. Walk me through a typical week. What tasks outside of core product work take the most time?
 2. Which of those tasks do you wish you could hand off entirely?
 3. Have you tried using AI tools for any operational work? What was the experience?
@@ -58,5 +69,6 @@ Happy to share what I've learned so far with anyone who responds.
 6. What would "good enough" look like for [their pain point] handled by AI?
 
 **Wrap-up (2 min):**
+
 - Anything else about running solo that I should be thinking about?
 - Can I follow up if we build something relevant to what you described?

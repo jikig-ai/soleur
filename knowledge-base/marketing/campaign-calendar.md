@@ -1,5 +1,10 @@
 ---
 last_updated: 2026-03-16
+last_reviewed: 2026-03-16
+review_cadence: monthly
+owner: CMO
+depends_on:
+  - knowledge-base/marketing/content-strategy.md
 ---
 
 # Campaign Calendar
