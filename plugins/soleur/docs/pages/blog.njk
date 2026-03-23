@@ -12,8 +12,24 @@ permalink: blog/index.html
   </div>
 </section>
 
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "CollectionPage",
+  "name": "{{ title }} - {{ site.name }}",
+  "description": "{{ description }}",
+  "url": "{{ site.url }}/blog/",
+  "publisher": {
+    "@type": "Organization",
+    "name": "{{ site.name }}",
+    "url": "{{ site.url }}"
+  }
+}
+</script>
+
 <div class="container">
   {% if collections.blog and collections.blog.length > 0 %}
+  <h2 class="sr-only">Posts</h2>
   <div class="catalog-grid">
     {% for post in collections.blog | reverse %}
     <a href="{{ post.url }}" class="component-card">
