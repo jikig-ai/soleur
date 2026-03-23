@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-12
-last_reviewed: 2026-03-02
+last_updated: 2026-03-22
+last_reviewed: 2026-03-22
 review_cadence: quarterly
 owner: CPO
 depends_on: []
@@ -43,7 +43,9 @@ The user can name 2-3 real contacts who fit the profile, falling short of the 5-
 - Solo founder growth statistics (23.7% to 36.3% of new companies)
 - Active communities (IndieHackers, Claude Code Discord, Twitter/X solopreneur networks)
 
-**Assessment:** CONDITIONAL PASS. The customer segment is specific, passionate, and reachable. The risk is that the definition is broad (technical solo founders across all stages) and the named contacts fall below the 5-person threshold. The external market signals are strong but do not substitute for a tight initial segment. The recommendation is to narrow to a specific sub-segment for initial validation (e.g., Claude Code power users who have already pushed beyond coding into broader workflows).
+**Assessment:** CONDITIONAL PASS [Updated 2026-03-22]. The customer segment is specific, passionate, and reachable. The risk is that the definition is broad (technical solo founders across all stages) and the named contacts fall below the 5-person threshold. The external market signals are strong but do not substitute for a tight initial segment.
+
+**User research update (2026-03-22):** 5+ conversations with solo founders revealed a critical beachhead assumption failure. The original recommendation was to narrow to "Claude Code power users who have already pushed beyond coding into broader workflows." However, the majority of founders interviewed do not use Claude Code at all. They want AI business operations but through a visual UI accessible from any device -- not through a terminal-based plugin. The beachhead must be redefined around the problem (running a company solo) rather than the tool (Claude Code). See Gate 4 Demand Evidence for full findings.
 
 ## Competitive Landscape
 
@@ -113,15 +115,27 @@ The competitive landscape spans six tiers, from platform-native competition to l
 2. **Breadth vs. depth trade-off:** 65+ agents across 8 domains means each domain gets fewer resources than a dedicated tool. Mitigation: The integration IS the product -- a mediocre-but-connected marketing agent is more valuable to a solo founder than an excellent-but-isolated marketing tool. [Updated 2026-02-25]: Anthropic is now commoditizing horizontal domain breadth. The differentiation axis must shift from domain count to orchestration depth and compounding knowledge.
 3. **Revenue model collision (2026-02-25).** The hosted web platform revenue plan (issue #297) faces a distribution asymmetry problem. Anthropic controls the surface, the model, and the marketplace. The pricing math collapses when the comparison set shifts from "Soleur vs. hiring an agency" to "Soleur's hosted platform vs. Anthropic's free bundled templates." See brainstorm for strategic options (knowledge infrastructure pivot, multi-platform, ride Cowork distribution).
 
-**Assessment:** CONDITIONAL PASS [Updated 2026-02-25, was PASS]. The six-tier competitive landscape validates the thesis but reveals a Tier 0 threat that did not exist at prior assessment. Anthropic's Cowork Plugins represent platform-native competition across 5 of 8 Soleur domains. The structural advantages (compounding knowledge, cross-domain coherence, workflow orchestration) remain genuine moats -- Cowork templates are stateless and siloed. However, the revenue model assumption (standalone web dashboard) is directly challenged. The competitive assessment now requires distinguishing between the thesis (valid) and the revenue plan (threatened). Engineering workflow remains Soleur's strongest differentiated position -- Anthropic has no first-party engineering plugin.
+**Assessment:** CONDITIONAL PASS [Updated 2026-03-22, was PASS]. The six-tier competitive landscape validates the thesis but reveals a Tier 0 threat that did not exist at prior assessment. Anthropic's Cowork Plugins represent platform-native competition across 5 of 8 Soleur domains. The structural advantages (compounding knowledge, cross-domain coherence, workflow orchestration) remain genuine moats -- Cowork templates are stateless and siloed. However, the revenue model assumption (standalone web dashboard) is directly challenged. The competitive assessment now requires distinguishing between the thesis (valid) and the revenue plan (threatened). Engineering workflow remains Soleur's strongest differentiated position -- Anthropic has no first-party engineering plugin.
+
+**Delivery format shift (2026-03-22):** User research confirms a broader competitive dynamic -- solo founders compare Soleur not just against other CLI tools but against any accessible business automation surface. Polsia ($29-59/month, 2,000+ companies) and Notion AI (35M+ users, custom agents) deliver through web/mobile interfaces. Founders explicitly rejected CLI/plugin delivery in favor of visual dashboards and cross-device access. The competitive question is shifting from "which agent platform has the best capabilities?" to "which agent platform is accessible where founders actually work?"
 
 ## Demand Evidence
 
 **Direct demand signals:**
 
-- 1-2 informal conversations about the multi-domain pain with people in the founder's network. Not zero, but well below the 5+ threshold for confidence.
-- Soleur is in active daily use by its creator for running a real company. The "dogfooding" signal is genuine -- the creator uses all domains and has iterated through 280+ merged PRs.
+- 5+ problem interviews with solo founders (2026-03-22). See user research finding below.
+- Soleur is in active daily use by its creator for running a real company. The "dogfooding" signal is genuine -- the creator uses all domains and has iterated through 420+ merged PRs.
 - The plugin is published to the Claude Code registry and installable via `claude plugin install soleur`.
+
+**User research finding (2026-03-22):** 5+ conversations with solo founders surfaced three consistent themes:
+
+1. **Plugin delivery rejected.** Founders want a visual UI with dashboards, not a CLI plugin. The plugin model assumes the user already lives in Claude Code -- most don't. Even technical founders want a standalone product accessible from any device.
+2. **Claude Code not in their stack.** The majority of interviewed founders do not use Claude Code as their primary development interface. They use Cursor, VS Code with Copilot, or no AI coding tool at all. The plugin distribution channel reaches a fraction of the target market.
+3. **Standalone product expected.** Founders want to access their AI organization from a browser or mobile device -- checking on agent work during commutes, reviewing dashboards between meetings. A terminal-only product is incompatible with how they actually work.
+
+**What this validates:** The core thesis (solo founders need AI business operations beyond coding) resonated strongly. Every founder described multi-domain pain unprompted. The problem is real and acute.
+
+**What this invalidates:** The delivery mechanism. A Claude Code plugin is the wrong vehicle for reaching the target market. The product must be accessible as a standalone web/mobile application, not embedded in a developer tool that most target customers don't use.
 
 **Indirect demand signals:**
 
@@ -141,7 +155,7 @@ The competitive landscape spans six tiers, from platform-native competition to l
 
 > WARNING: Kill criterion triggered at Gate 4 -- user chose to proceed. Direct customer validation is thin. The strong external signals (market trends, thought leader predictions, competitor funding) provide directional confidence but do not substitute for hearing real founders describe this pain in their own words.
 
-**Assessment:** FLAG. Builder conviction is high but external validation is thin. The critical next step is conducting 10+ customer discovery conversations with solo founders -- testing whether they independently describe multi-domain pain, not whether they like the solution when shown a demo.
+**Assessment:** FLAG [Updated 2026-03-22, was FLAG]. Builder conviction is validated by external evidence -- 5+ founders independently described multi-domain pain. The demand evidence threshold is now partially met: the problem resonates, but the delivery mechanism does not. The critical next step shifts from "do founders have this pain?" (yes) to "will founders adopt a web-based version?" (untested). The 10+ conversation target should continue with a focus on testing the web platform concept.
 
 ## Business Model
 
@@ -165,7 +179,9 @@ The competitive landscape spans six tiers, from platform-native competition to l
 
 **Willingness-to-pay hypothesis:** Solo founders already pay $20-40/month for AI coding tools. If Soleur delivers the value of a marketing agency ($5k+), a legal advisor ($300/hour), and an ops manager -- even at 10% of that value -- a $49-99/month price point is justified. No direct evidence of willingness to pay at this stage.
 
-**Assessment:** CONDITIONAL PASS. The business model is plausible but uncommitted. The thesis points to a viable freemium path (open source core, paid hosted platform with non-engineering domains as the differentiator). Monetization should follow validated adoption, not precede it. The open question in issue #287 is appropriate -- committing to a model before validating demand would be premature.
+**Assessment:** CONDITIONAL PASS [Updated 2026-03-22]. The business model is plausible but uncommitted. The thesis points to a viable freemium path (open source core, paid hosted platform with non-engineering domains as the differentiator). Monetization should follow validated adoption, not precede it.
+
+**Cost structure implication (2026-03-22):** User research confirms the hosted platform direction but escalates its urgency. If the delivery mechanism must be a standalone web/mobile product (not a CLI plugin), the cost structure changes materially: cloud infrastructure, API costs per user, frontend engineering, mobile development, and user authentication become table stakes -- not optional enhancements. The "free plugin + paid platform" hybrid may need to become "platform-first" with the CLI plugin as a power-user addon. This shifts the business model conversation from "when do we build a platform?" to "the platform IS the product."
 
 ## Minimum Viable Scope
 
@@ -188,7 +204,9 @@ The Company-as-a-Service thesis requires demonstrating that an integrated AI org
 - At least 5 of 10 report that the integrated experience is more valuable than using separate tools
 - At least 3 of 10 express willingness to pay for the hosted version
 
-**Assessment:** PASS. The product already exceeds MVP scope in depth but matches MVP scope in breadth. The validation should test breadth transfer (do non-engineering domains deliver value to external users?) rather than depth (do we need more engineering agents?). The breadth-coherence check passes -- all domains connect through the shared knowledge base and cross-domain agent context.
+**Assessment:** PASS [Updated 2026-03-22, breadth validated, delivery challenged]. The product already exceeds MVP scope in depth but matches MVP scope in breadth. User research confirms: every founder interviewed described pain across multiple domains unprompted. The breadth thesis is validated by external evidence, not just builder conviction.
+
+**Delivery challenge (2026-03-22):** The MVP scope assumed CLI/plugin delivery. User research reveals that the minimum viable scope must include a web-accessible interface for non-terminal interactions (dashboards, review queues, knowledge base browsing). The agent capabilities are sufficient; the access surface is not. The MVP definition needs to expand from "multi-domain agents" to "multi-domain agents accessible from any device."
 
 ## Validation Verdict
 
@@ -239,3 +257,27 @@ The pivot is not a change in direction. It is a change in activity: from buildin
 7. **Commit to a business model after 50+ active users.** Build the revenue model around observed behavior, not hypotheses. Issue #287 should be informed by validation data.
 
 The core insight is sound: a solo founder needs more than a coding assistant -- they need an AI organization. But a sound insight with zero external validation is still an untested hypothesis. The verdict is PIVOT because the product and the thesis are strong enough to warrant aggressive validation -- not because anything needs to be rebuilt.
+
+### User Research Update (2026-03-22): Two-Dimensional Pivot
+
+The 5+ founder conversations confirm the PIVOT verdict but add a second dimension. The original pivot was one-dimensional: stop building, start validating. The research reveals a two-dimensional pivot:
+
+1. **Thesis pivot (original):** From building features to validating with users. Status: VALIDATED. The problem resonates. Founders describe multi-domain pain independently and urgently.
+2. **Delivery pivot (new):** From CLI plugin to standalone web platform. Status: REQUIRED. The plugin delivery mechanism is rejected by the target market. Founders want visual dashboards, mobile access, and a product that doesn't assume they use Claude Code.
+
+**Impact on "What to do next":**
+
+- Steps 1-2 (pause features, source founders) remain correct.
+- Steps 3-6 (interviews, onboarding, usage tracking, willingness to pay) must be conducted with a web platform prototype, not the CLI plugin.
+- Step 7 (commit business model after 50+ users) is now more urgent -- the platform is the product, not an optional revenue layer.
+
+**Gate-by-gate impact summary:**
+
+| Gate | Original | After Research (2026-03-22) |
+|------|----------|---------------------------|
+| Problem | PASS | PASS (confirmed by 5+ conversations) |
+| Customer | CONDITIONAL PASS | CONDITIONAL PASS (beachhead redefined: problem-first, not tool-first) |
+| Competitive | CONDITIONAL PASS | CONDITIONAL PASS (delivery format is now a competitive dimension) |
+| Demand Evidence | FLAG | FLAG (problem validated, delivery mechanism invalidated) |
+| Business Model | CONDITIONAL PASS | CONDITIONAL PASS (platform-first, not plugin+platform) |
+| Minimum Viable Scope | PASS | PASS (breadth validated, access surface must expand) |
