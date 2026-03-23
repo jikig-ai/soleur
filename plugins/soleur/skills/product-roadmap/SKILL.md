@@ -48,27 +48,41 @@ gh api repos/{owner}/{repo}/milestones --jq '.[] | {title, open_issues, closed_i
 
 **Fill gaps.** For each missing critical artifact, ask a brief targeted question or suggest running the relevant specialist agent (competitive-intelligence for competitive gaps, business-validator for validation gaps). In headless mode: skip gap-filling, proceed with available context.
 
-## Phase 1: Workshop
+## Phase 0.5: CPO Pre-Analysis
 
-Multi-turn dialogue covering four topics. Present a synthesis from KB artifacts, then ask the user to confirm, modify, or reject.
+Spawn the CPO agent as a background task with all context gathered in Phase 0 (KB artifacts, GitHub state, existing roadmap if any). The CPO produces a **draft roadmap proposal** before the interactive workshop begins.
+
+**CPO task prompt:** "You are the CPO. Analyze the following knowledge-base artifacts and GitHub state to produce a draft product roadmap proposal. Include: (1) 2-4 strategic themes with rationale grounded in business validation, competitive intelligence, and current product state, (2) 3-5 proposed phases with objectives, scope, and feature lists drawn from open GitHub issues, (3) gaps and risks you identified — things the founder may not have considered (onboarding flows, infrastructure requirements, missing integrations, legal prerequisites), (4) prioritization rationale explaining why you ordered the phases this way, (5) open questions for the founder. Challenge assumptions. Be opinionated — propose a direction, don't just list options. Context: {all Phase 0 findings}"
+
+Wait for the CPO analysis to complete, then present it to the founder.
+
+**In headless mode:** Use the CPO proposal as the final roadmap without interactive refinement (skip Phase 1 workshop).
+
+## Phase 1: Workshop (CPO-Facilitated)
+
+The CPO's draft proposal is the starting point. The workshop refines it through multi-turn dialogue. The CPO role is to **facilitate and challenge** — not just present options, but push back on choices, identify gaps the founder may have missed, and advocate for the user's perspective.
 
 ### 1.1 Strategic Themes
 
-Present 2-4 candidate strategic themes, each with a name and rationale grounded in the artifacts read. Ask which resonate and what to change.
+Present the CPO's proposed themes. For each, show the rationale grounded in KB artifacts. Ask the founder which resonate and what to change. If the founder proposes a theme the CPO didn't include, the CPO should either support it with evidence or challenge it with a counter-argument.
 
 ### 1.2 Phase Definitions
 
-Propose 3-5 phases. For each phase, provide a name ("Phase N: Title"), objective, scope, and estimated duration if timeline context exists. If updating an existing roadmap, present current phases and suggest modifications based on progress data. Ask to adjust.
+Present the CPO's proposed phases. For each phase, show the objective, scope, and estimated duration if timeline context exists. If updating an existing roadmap, present current phases and suggest modifications based on progress data. The CPO should flag any phase that seems overloaded, underspecified, or missing prerequisites. Ask to adjust.
 
 ### 1.3 Feature Prioritization
 
-For each phase, list candidate features from open GitHub issues, feature specs, and workshop discussion. Apply P1 (must-have for phase exit) / P2 (important but not blocking) / Deferred. Present as a table per phase. Ask to reorder.
+For each phase, present the CPO's feature list drawn from open GitHub issues, specs, and the analysis. Apply P1 (must-have for phase exit) / P2 (important but not blocking) / Deferred. Present as a table per phase. The CPO should challenge any feature that seems premature or missing. Ask to reorder.
 
 ### 1.4 Success Criteria
 
-For each phase, propose measurable exit criteria. Ask to adjust.
+For each phase, present the CPO's proposed measurable exit criteria. Ask to adjust.
 
-In headless mode for all workshop topics: use KB-derived defaults (themes from validation verdict, 3 phases based on issue priorities, issues assigned by label proximity, generic exit criteria based on phase objectives).
+### 1.5 Gap Check
+
+Before moving to Domain Review, the CPO presents any gaps identified during pre-analysis that were not addressed in the workshop: missing onboarding flows, infrastructure requirements, integration dependencies, legal prerequisites, UX considerations. The founder decides which gaps to address now and which to defer.
+
+In headless mode for all workshop topics: use CPO-derived defaults from the pre-analysis.
 
 ## Phase 1.5: Domain Review Gate
 
