@@ -2,6 +2,7 @@
 last_updated: 2026-03-20
 last_reviewed: 2026-03-20
 review_cadence: quarterly
+owner: CMO
 depends_on:
   - knowledge-base/marketing/brand-guide.md
   - knowledge-base/product/competitive-intelligence.md
@@ -103,6 +104,7 @@ These are the structural advantages that competitors cannot replicate by shippin
 ### Ideal Customer Profile
 
 **Firmographics:**
+
 - Solo founders or very small teams (1-3 people)
 - Building SaaS products, developer tools, creative businesses, or consulting-turned-product companies
 - Pre-revenue through early revenue stage
@@ -110,6 +112,7 @@ These are the structural advantages that competitors cannot replicate by shippin
 - Technical background (can read code, use terminal)
 
 **Psychographics:**
+
 - Think in terms of businesses, not just products
 - Frustrated that AI handles code but not the other 70% of running a company
 - Refuse to accept that scale requires headcount
@@ -120,6 +123,7 @@ These are the structural advantages that competitors cannot replicate by shippin
 ### Beachhead Segment (Validation Phase)
 
 For the PIVOT validation, narrow to:
+
 - **Claude Code power users** who have already pushed beyond coding into broader workflows
 - **IndieHackers / solopreneur community members** actively building products
 - **GitHub signal**: developers with repos that show business operations (marketing content, legal docs, product specs) alongside code
@@ -148,6 +152,7 @@ No paid acquisition until organic channels prove the thesis. The validation phas
 **Goal:** Establish category authority for "Company-as-a-Service" and capture informational search traffic.
 
 **Priority actions:**
+
 1. Build blog infrastructure (Eleventy collection, article layout, JSON-LD Article schema)
 2. Publish category-defining pillar: "What Is Company-as-a-Service?"
 3. Publish thought leadership: "The Billion-Dollar Solo Company"
@@ -162,6 +167,7 @@ No paid acquisition until organic channels prove the thesis. The validation phas
 **Goal:** Build trust with solo founders through direct engagement, recruit validation participants.
 
 **Priority actions:**
+
 1. Active participation in Claude Code Discord -- answer questions, share Soleur workflows, recruit beta testers
 2. GitHub engagement -- respond to issues, contribute to related projects, signal competence
 3. IndieHackers -- share transparent building updates (revenue: $0, users: 1, agents: 61)
@@ -174,6 +180,7 @@ No paid acquisition until organic channels prove the thesis. The validation phas
 **Goal:** Capture informational and commercial search traffic for target keywords.
 
 **Priority actions:**
+
 1. Fix keyword vacuum on existing pages (zero target keywords in body copy today)
 2. Publish pillar content targeting "company as a service", "agentic engineering", "solo founder AI"
 3. Add FAQ schemas to all pages for AI engine consumability
@@ -187,6 +194,7 @@ No paid acquisition until organic channels prove the thesis. The validation phas
 **Goal:** Let the product itself be the distribution mechanism.
 
 **Priority actions:**
+
 1. Optimize Claude Code plugin registry listing (description, keywords, categories)
 2. Ensure `claude plugin install soleur` experience is clean and immediate
 3. Build onboarding flow that demonstrates cross-domain value in the first 10 minutes
@@ -357,6 +365,7 @@ Weekly snapshots are generated automatically by CI (`scheduled-weekly-analytics.
 **Threat level:** Existential. This eliminates the compounding knowledge base moat.
 
 **Response:**
+
 1. Accelerate content establishing Soleur as the original CaaS platform (category ownership)
 2. Emphasize workflow orchestration depth (brainstorm-plan-implement-review-compound lifecycle)
 3. Emphasize open-source transparency vs. proprietary platform lock-in
@@ -367,6 +376,7 @@ Weekly snapshots are generated automatically by CI (`scheduled-weekly-analytics.
 **Threat level:** High. Notion has massive distribution (35M+ users) and would become the closest full-stack competitor.
 
 **Response:**
+
 1. Publish immediate comparison content: "Soleur vs. Notion Custom Agents"
 2. Emphasize terminal-first workflow vs. workspace-first (different audiences)
 3. Emphasize compounding knowledge base scoped to solo founder operations vs. team collaboration
@@ -377,6 +387,7 @@ Weekly snapshots are generated automatically by CI (`scheduled-weekly-analytics.
 **Threat level:** High. First-mover advantage on CaaS category naming is time-limited.
 
 **Response:**
+
 1. Category authority content must already exist (Phase 1 deliverables)
 2. "Built with Soleur" case studies demonstrate operational maturity
 3. Open-source core means community can be a moat

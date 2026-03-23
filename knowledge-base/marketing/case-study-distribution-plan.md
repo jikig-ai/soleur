@@ -1,3 +1,13 @@
+---
+last_updated: 2026-03-12
+last_reviewed: 2026-03-12
+review_cadence: monthly
+owner: CMO
+depends_on:
+  - knowledge-base/marketing/content-strategy.md
+  - knowledge-base/product/business-validation.md
+---
+
 # Case Study Distribution Plan
 
 **Goal:** 5+ expressions of interest from solo technical founders for the product validation plan (#430).
@@ -101,6 +111,7 @@
 ### Community Skill Integration
 
 Run `community` skill digest weekly (Fridays) to:
+
 - Fetch X mention activity
 - Assess engagement health
 - Identify top-performing content for iteration

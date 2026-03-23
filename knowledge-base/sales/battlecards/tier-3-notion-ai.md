@@ -2,6 +2,9 @@
 last_updated: 2026-03-12
 last_reviewed: 2026-03-12
 review_cadence: monthly
+owner: CRO
+depends_on:
+  - knowledge-base/product/competitive-intelligence.md
 competitor: Notion AI (Custom Agents)
 tier: 3
 convergence_risk: Medium-High

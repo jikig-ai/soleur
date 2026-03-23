@@ -2,6 +2,8 @@
 last_updated: 2026-03-12
 last_reviewed: 2026-03-02
 review_cadence: quarterly
+owner: CPO
+depends_on: []
 ---
 
 # Business Validation: Soleur -- Company-as-a-Service Platform

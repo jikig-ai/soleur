@@ -2,6 +2,9 @@
 last_updated: 2026-02-21
 last_reviewed: 2026-03-02
 review_cadence: quarterly
+owner: CMO
+depends_on:
+  - knowledge-base/product/business-validation.md
 ---
 
 # Soleur Brand Guide
@@ -47,6 +50,7 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 ### Do's and Don'ts
 
 **Do:**
+
 - Lead with what becomes possible, not what the tool does
 - Use declarative statements ("Build at scale" not "Try building at scale")
 - Frame the founder as the decision-maker, the system as the executor
@@ -56,6 +60,7 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 - Keep sentences short and punchy in marketing copy
 
 **Don't:**
+
 - Say "AI-powered" or "leverage AI" -- the entire platform is AI; saying it is redundant
 - Use "just" or "simply" -- these minimize the ambition
 - Say "assistant" or "copilot" -- Soleur is an organization, not a helper
@@ -68,21 +73,25 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 ### Example Phrases
 
 **Announcements:**
+
 - "Every department. From idea to shipped."
 - "Your AI organization just got smarter."
 - "One founder. Full-stack AI. No compromises."
 
 **Product descriptions:**
+
 - "You decide. Agents execute. Knowledge compounds."
 - "Not a copilot. Not an assistant. A full AI organization that reviews, plans, builds, remembers, and self-improves."
 - "Designed, built, and shipped by Soleur -- using Soleur."
 
 **Community replies:**
+
 - "Shipped. Let us know what you build with it."
 - "Good catch. Fix is in, deploying now."
 - "That's the right instinct. Here's how to wire it up."
 
 **Error / system messages:**
+
 - "Agent failed on step 3. Logs attached. Retrying with fallback."
 - "Knowledge base updated. 4 new learnings captured."
 
@@ -169,6 +178,7 @@ The visual identity follows the **Solar Forge** direction: raw power being shape
 These guardrails apply in both automatic mode (fetch-mentions) and manual mode (Free tier 403 fallback). The human reviewer is the enforcement mechanism.
 
 **Topics to avoid:**
+
 - Political, partisan, or religiously divisive topics
 - Competitor criticism or comparisons -- state what Soleur does, never what others lack
 - Unverified claims or speculation about roadmap dates
@@ -191,6 +201,7 @@ These guardrails apply in both automatic mode (fetch-mentions) and manual mode (
 - Example post: "Most AI coding tools solve 30% of running a company. The other 70% -- marketing, legal, finance, ops -- is still manual.\n\nI spent the last 6 months building an AI organization that handles all of it. 40+ agents across 8 departments, sharing a compounding knowledge base.\n\nThe surprising part: the hardest problem wasn't the AI. It was getting agents to share context across departments.\n\n[link to article]\n\n#solofounder #buildinpublic"
 
 **When to skip a mention:**
+
 - Abusive, harassing, or spam content
 - Off-topic mentions with no connection to Soleur or solo-founder topics
 - Mentions that are themselves rage-bait or provocative in tone (thread-level context review is a human reviewer responsibility during the approval step)
@@ -200,12 +211,14 @@ These guardrails apply in both automatic mode (fetch-mentions) and manual mode (
 - Accounts whose mention content creates brand association risk (full account history review is a human reviewer responsibility during the approval step)
 
 **Reply cadence:**
+
 - Maximum 10 replies per engagement session
 - Minimum 2-minute gap between posting replies. X's algorithm penalizes rapid-fire bursts that look automated.
 - One reply per thread -- do not enter extended back-and-forth. Escalate complex questions to Discord or docs.
 - Default to skipping when unsure -- silence is safer than a misaligned reply
 
 **Tone in replies:**
+
 - Match the register of the original tweet (technical question gets a technical answer, casual mention gets a concise acknowledgment)
 - Never argue or debate -- state the position once, then disengage
 - Credit insight in feature suggestions ("Solid idea. Filed as #N." not "Thanks for the feedback!")
@@ -258,6 +271,7 @@ These guardrails apply in both automatic mode (fetch-mentions) and manual mode (
 Same guardrails as X/Twitter apply (see above), with these Bluesky-specific additions:
 
 **Bluesky-specific:**
+
 - Maximum 5 replies per engagement session (smaller community, higher visibility per reply)
 - No rapid-fire posting. Space posts at least 3 minutes apart. The small community notices automated patterns quickly.
 - Engage authentically in AT Protocol and decentralization discussions -- this is native territory for Soleur's builder audience.
