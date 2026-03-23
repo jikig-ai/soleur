@@ -84,11 +84,8 @@ jobs:
           git diff --cached --quiet && echo "No changes to commit" && exit 0
           BRANCH="ci/content-publisher-$(date -u +%Y-%m-%d-%H%M%S)"
           git checkout -b "$BRANCH"
-          git commit -m "ci: update content distribution status [skip ci]"
+          git commit -m "ci: update content distribution status"
           git push -u origin "$BRANCH"
-          # Post synthetic statuses for branch protection (see scripts/post-bot-statuses.sh)
-          SHA=$(git rev-parse HEAD)
-          bash scripts/post-bot-statuses.sh "$SHA"
           gh pr create \
             --title "ci: update content distribution status $(date -u +%Y-%m-%d)" \
             --body "Automated status update from content publisher workflow." \

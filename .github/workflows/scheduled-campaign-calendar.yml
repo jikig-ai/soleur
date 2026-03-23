@@ -66,10 +66,8 @@ jobs:
             git diff --cached --quiet && echo "No changes to commit" && exit 0
             BRANCH="ci/campaign-calendar-$(date -u +%Y-%m-%d-%H%M%S)"
             git checkout -b "$BRANCH"
-            git commit -m "ci: update campaign calendar [skip ci]"
+            git commit -m "ci: update campaign calendar"
             git push -u origin "$BRANCH"
-            SHA=$(git rev-parse HEAD)
-            bash scripts/post-bot-statuses.sh "$SHA"
             gh pr create \
               --title "ci: update campaign calendar $(date -u +%Y-%m-%d)" \
               --body "Automated commit from campaign calendar workflow." \

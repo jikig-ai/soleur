@@ -603,22 +603,26 @@ cleanup_merged_worktrees() {
       # Auto-sync stale on-disk files so the next session reads current versions
       sync_bare_files
     else
-      # Only check tracked file changes (staged + unstaged) -- untracked files cannot
-      # conflict with a fast-forward pull and should not block the update
+      # Auto-reset stale index/working tree on main checkout.
+      # Direct commits to main are prohibited (hook-enforced), so staged or
+      # unstaged changes are always stale debris from index drift (e.g., fetch
+      # moved HEAD but index was never updated). Reset to HEAD before pulling.
       if ! git -C "$GIT_ROOT" diff --quiet HEAD 2>/dev/null || ! git -C "$GIT_ROOT" diff --cached --quiet 2>/dev/null; then
-        echo -e "${YELLOW}Warning: Main checkout has uncommitted changes to tracked files -- skipping pull${NC}"
+        local stale_count
+        stale_count=$(git -C "$GIT_ROOT" diff --cached --stat HEAD 2>/dev/null | tail -1 | grep -oE '[0-9]+ file' | grep -oE '[0-9]+' || echo "0")
+        echo -e "${YELLOW}Resetting stale main checkout ($stale_count staged files)${NC}"
+        git -C "$GIT_ROOT" reset --hard HEAD >/dev/null 2>&1
+      fi
+      local current_branch
+      current_branch=$(git -C "$GIT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)
+      if [[ "$current_branch" != "main" && "$current_branch" != "master" ]]; then
+        git -C "$GIT_ROOT" checkout main 2>/dev/null || git -C "$GIT_ROOT" checkout master 2>/dev/null || true
+      fi
+      local pull_output
+      if pull_output=$(git -C "$GIT_ROOT" pull --ff-only origin main 2>&1); then
+        echo -e "${GREEN}Updated main to latest${NC}"
       else
-        local current_branch
-        current_branch=$(git -C "$GIT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)
-        if [[ "$current_branch" != "main" && "$current_branch" != "master" ]]; then
-          git -C "$GIT_ROOT" checkout main 2>/dev/null || git -C "$GIT_ROOT" checkout master 2>/dev/null || true
-        fi
-        local pull_output
-        if pull_output=$(git -C "$GIT_ROOT" pull --ff-only origin main 2>&1); then
-          echo -e "${GREEN}Updated main to latest${NC}"
-        else
-          echo -e "${YELLOW}Warning: Could not pull latest main: $pull_output${NC}"
-        fi
+        echo -e "${YELLOW}Warning: Could not pull latest main: $pull_output${NC}"
       fi
     fi
   fi

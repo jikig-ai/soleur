@@ -533,6 +533,7 @@ main() {
     echo "Publishing: $CASE_NAME ($(basename "$file"))"
 
     local file_failures=0
+    local file_successes=0
 
     # Publish to each declared channel
     local channel section
@@ -551,36 +552,59 @@ main() {
           local discord_content
           discord_content=$(extract_section "$file" "$section")
           if [[ -n "$discord_content" ]]; then
-            post_discord "$discord_content" || {
+            if post_discord "$discord_content"; then
+              file_successes=$((file_successes + 1))
+            else
               echo "Warning: Discord posting failed. Creating fallback issue." >&2
-              create_discord_fallback_issue "$discord_content" || file_failures=1
-              file_failures=1
-            }
+              create_discord_fallback_issue "$discord_content" || true
+              file_failures=$((file_failures + 1))
+            fi
           else
             echo "Warning: No $section content found in $(basename "$file"). Skipping Discord." >&2
           fi
           ;;
         x)
-          post_x_thread "$file" || file_failures=1
+          if post_x_thread "$file"; then
+            file_successes=$((file_successes + 1))
+          else
+            file_failures=$((file_failures + 1))
+          fi
           ;;
         linkedin-personal)
-          post_linkedin "$file" "LinkedIn Personal" || file_failures=1
+          if post_linkedin "$file" "LinkedIn Personal"; then
+            file_successes=$((file_successes + 1))
+          else
+            file_failures=$((file_failures + 1))
+          fi
           ;;
         linkedin-company)
-          post_linkedin_company "$file" || file_failures=1
+          if post_linkedin_company "$file"; then
+            file_successes=$((file_successes + 1))
+          else
+            file_failures=$((file_failures + 1))
+          fi
           ;;
         bluesky)
-          post_bluesky "$file" || file_failures=1
+          if post_bluesky "$file"; then
+            file_successes=$((file_successes + 1))
+          else
+            file_failures=$((file_failures + 1))
+          fi
           ;;
       esac
     done < <(echo "$channels" | tr ',' '\n')
 
-    if [[ "$file_failures" -eq 0 ]]; then
-      # Update status in-place
+    if [[ "$file_successes" -gt 0 ]]; then
+      # At least one channel succeeded — mark as published.
+      # Failed channels already have fallback issues created above.
       sed -i 's/^status: scheduled/status: published/' "$file"
-      echo "[ok] Published and status updated: $(basename "$file")"
+      if [[ "$file_failures" -gt 0 ]]; then
+        echo "[partial] Published to $file_successes channel(s), $file_failures failed. Status updated: $(basename "$file")"
+      else
+        echo "[ok] Published and status updated: $(basename "$file")"
+      fi
       published=$((published + 1))
-    else
+    elif [[ "$file_failures" -gt 0 ]]; then
       failures=$((failures + 1))
     fi
 

@@ -77,10 +77,8 @@ jobs:
             git diff --cached --quiet && echo "No changes to commit" && exit 0
             BRANCH="ci/seo-aeo-audit-$(date -u +%Y-%m-%d-%H%M%S)"
             git checkout -b "$BRANCH"
-            git commit -m "fix(seo): weekly SEO/AEO audit fixes [skip ci]"
+            git commit -m "fix(seo): weekly SEO/AEO audit fixes"
             git push -u origin "$BRANCH"
-            SHA=$(git rev-parse HEAD)
-            bash scripts/post-bot-statuses.sh "$SHA"
             gh pr create \
               --title "fix(seo): weekly SEO/AEO audit fixes $(date -u +%Y-%m-%d)" \
               --body "Automated commit from SEO/AEO audit workflow." \

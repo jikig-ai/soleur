@@ -66,10 +66,8 @@ jobs:
             git diff --cached --quiet && echo "No changes to commit" && exit 0
             BRANCH="ci/competitive-analysis-$(date -u +%Y-%m-%d-%H%M%S)"
             git checkout -b "$BRANCH"
-            git commit -m "docs: update competitive intelligence report [skip ci]"
+            git commit -m "docs: update competitive intelligence report"
             git push -u origin "$BRANCH"
-            SHA=$(git rev-parse HEAD)
-            bash scripts/post-bot-statuses.sh "$SHA"
             gh pr create \
               --title "docs: update competitive intelligence report $(date -u +%Y-%m-%d)" \
               --body "Automated commit from competitive analysis workflow." \

@@ -136,8 +136,8 @@ jobs:
 
             MANDATORY FINAL STEP — persist via PR (do not push directly to main):
             Use the appropriate commit message based on which path was taken:
-            - If STEP 1b was used: "feat(content): auto-generate article via growth plan discovery [skip ci]"
-            - If a queue item was used: "feat(content): auto-generate article from SEO queue [skip ci]"
+            - If STEP 1b was used: "feat(content): auto-generate article via growth plan discovery"
+            - If a queue item was used: "feat(content): auto-generate article from SEO queue"
             Run these bash commands:
             ```
             git config user.name "github-actions[bot]"
@@ -148,8 +148,6 @@ jobs:
             git checkout -b "$BRANCH"
             git commit -m "<appropriate commit message from above>"
             git push -u origin "$BRANCH"
-            SHA=$(git rev-parse HEAD)
-            bash scripts/post-bot-statuses.sh "$SHA"
             gh pr create \
               --title "feat(content): auto-generate article $(date -u +%Y-%m-%d)" \
               --body "Automated commit from content generator workflow." \
