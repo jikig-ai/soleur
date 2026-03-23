@@ -96,11 +96,8 @@ jobs:
           git diff --cached --quiet && echo "No changes to commit" && exit 0
           BRANCH="ci/weekly-analytics-$(date -u +%Y-%m-%d)"
           git checkout -b "$BRANCH"
-          git commit -m "ci: weekly analytics snapshot [skip ci]"
+          git commit -m "ci: weekly analytics snapshot"
           git push -u origin "$BRANCH"
-          # Post synthetic statuses for branch protection (see scripts/post-bot-statuses.sh)
-          SHA=$(git rev-parse HEAD)
-          bash scripts/post-bot-statuses.sh "$SHA"
           gh pr create \
             --title "ci: weekly analytics snapshot $(date -u +%Y-%m-%d)" \
             --body "Automated weekly analytics snapshot from Plausible API." \

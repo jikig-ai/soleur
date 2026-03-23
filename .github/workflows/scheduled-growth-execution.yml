@@ -92,10 +92,8 @@ jobs:
             git diff --cached --quiet && echo "No changes to commit" && exit 0
             BRANCH="ci/growth-execution-$(date -u +%Y-%m-%d-%H%M%S)"
             git checkout -b "$BRANCH"
-            git commit -m "fix(growth): biweekly keyword optimization [skip ci]"
+            git commit -m "fix(growth): biweekly keyword optimization"
             git push -u origin "$BRANCH"
-            SHA=$(git rev-parse HEAD)
-            bash scripts/post-bot-statuses.sh "$SHA"
             gh pr create \
               --title "fix(growth): biweekly keyword optimization $(date -u +%Y-%m-%d)" \
               --body "Automated commit from growth execution workflow." \
