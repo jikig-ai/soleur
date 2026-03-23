@@ -32,15 +32,21 @@ The platform ships as a Progressive Web App. One Next.js codebase covers web bro
 
 **Known iOS limitations (CTO review):** Push notifications require iOS 16.4+ and home-screen installation. No background execution — WebSocket drops when app is backgrounded. Service worker caches evicted after ~14 days of non-use. Email fallback needed for review gate notifications.
 
-### Architecture Decision: Browser Automation (approach TBD)
+### Architecture Decision: 3-Tier Service Automation (Brainstorm 2026-03-23)
 
-Founders validated browser automation as a high-value feature (agents automating third-party service signups). The implementation approach requires a dedicated brainstorm due to cross-domain risk:
+Founders validated service automation as a high-value feature. Server-side Playwright was rejected (HIGH risk from CTO, CLO, CFO). Brainstorm produced a 3-tier architecture:
 
-- **CTO:** HIGH risk — 2-3 weeks, 500MB RAM per instance, SSRF surface, brittle selectors
-- **CLO:** HIGH risk — undisclosed agency liability, third-party ToS violations, CFAA exposure
-- **CFO:** HIGH risk — only item that can force 2-4x infrastructure cost increase
+| Tier | Platform | Coverage | How |
+|------|----------|----------|-----|
+| **API + MCP** | All (web, mobile, desktop) | ~80% of services | Direct API calls and MCP server integrations. User provides API tokens, stored with BYOK-grade encryption. Deterministic, versioned, no browser needed. |
+| **Local Playwright** | Desktop native app only | ~15% (no API/MCP available) | Electron/Tauri desktop app runs Playwright on user's machine. Same pattern as CLI plugin. User's own browser, credentials, and session. |
+| **Guided instructions** | Web + mobile (fallback) | ~5% remainder | Agent provides step-by-step with deep links and review gates. |
 
-The value is confirmed. The approach needs rethinking. Alternatives to evaluate: guided-instructions with deep linking, hybrid (agent fills forms + user confirms), browser extension, remote browser embed. Brainstorm before building.
+MCP is a first-class integration tier alongside REST APIs. Services that publish MCP servers (and this list is growing rapidly) get zero-config integration — the agent connects to the service's MCP server directly, no custom API wrapper needed.
+
+The desktop native app earns its existence specifically because browser automation is impossible on PWA, iOS, or Android. This is not "wrapping the web app" — it provides a capability no other surface can.
+
+Full brainstorm: `knowledge-base/project/brainstorms/2026-03-23-browser-automation-cloud-platform-brainstorm.md`
 
 ---
 
@@ -143,30 +149,32 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 
 **Objective:** Turn "I tried it" into "I use it daily." Close the review loop and make the compounding moat visible.
 
-**Sequencing (per CTO review):** KB API and viewer before inbox. Browser automation last (pending brainstorm).
+**Sequencing (per CTO review):** KB API and viewer before inbox.
 
 | # | Feature | Priority | Issue | Status |
 |---|---------|----------|-------|--------|
 | 3.1 | KB REST API (file tree, content, search) | P1 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
 | 3.2 | KB viewer UI (sidebar tree, markdown rendering, search) | P1 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Stub only |
 | 3.3 | Conversation inbox with status badges | P1 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
-| 3.4 | Usage/cost indicator (BYOK spending) | P2 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
-| 3.5 | Review gate notifications (PWA push + email fallback for iOS) | P2 | New | Not started |
-| 3.6 | **Browser automation for third-party signups** (approach TBD — brainstorm required) | P1 | New | Blocked on approach decision |
-| 3.7 | Pricing page (soleur.ai) | Deferred | [#656](https://github.com/jikig-ai/soleur/issues/656) | Not started |
+| 3.4 | API + MCP service integrations (Cloudflare, Stripe, Plausible first) | P1 | [#1050](https://github.com/jikig-ai/soleur/issues/1050) | Not started |
+| 3.5 | Secure token storage for third-party APIs (BYOK-grade encryption) | P1 | New | Not started |
+| 3.6 | Usage/cost indicator (BYOK spending) | P2 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
+| 3.7 | Review gate notifications (PWA push + email fallback for iOS) | P2 | [#1049](https://github.com/jikig-ai/soleur/issues/1049) | Not started |
+| 3.8 | Guided instructions fallback (deep links + review gates for services without API/MCP) | P2 | New | Not started |
+| 3.9 | Pricing page (soleur.ai) | Deferred | [#656](https://github.com/jikig-ai/soleur/issues/656) | Not started |
 
 **Why 3.1-3.2 matter:** The knowledge base is the compounding moat. If founders cannot see plans, brainstorms, brand guides, and competitive analyses their agents produced, the value is invisible. The KB viewer closes the review loop.
 
 **Why 3.3 matters:** A solo founder triggers agents, steps away, returns later. The inbox is the landing page that shows what happened and what needs attention.
 
-**Why 3.6 matters:** Founders specifically validated this as a high-value feature — agents automating Cloudflare, Plausible, Stripe, Buttondown signups. However, all four domain reviews flagged the server-side Playwright approach as HIGH risk. A dedicated brainstorm must evaluate alternative approaches before building. **Prerequisites:** approach brainstorm complete, legal framework for agent automation written (CLO), concurrency limits designed (CTO + CFO).
+**Why 3.4-3.5 matter:** Founders validated service automation as a high-value feature. The 3-tier architecture (API + MCP everywhere, local Playwright on desktop, guided fallback) delivers both guidance and automation. API + MCP integrations cover ~80% of services with zero browser overhead. MCP is a first-class integration tier — services publishing MCP servers get zero-config integration.
 
 **Exit criteria:**
 
 - User can browse KB artifacts produced by agents
 - User can see conversation history with status badges (active, waiting, completed, failed)
+- Agent can provision Cloudflare zones, Stripe accounts, and Plausible sites via API/MCP
 - Review gate notifications reach the user even when offline (push or email)
-- Browser automation approach decided and implemented (or consciously deferred to P4)
 
 ---
 
@@ -227,6 +235,31 @@ Before recruiting founders, all public surfaces must reflect the cloud platform 
 - 3+ express willingness to pay $49/month
 - Container isolation handles 5+ concurrent users
 - Rate limiting prevents abuse
+
+---
+
+### Phase 5: Desktop Native App (Browser Automation)
+
+**Objective:** Ship a desktop app (Electron or Tauri) that provides local Playwright browser automation — the one capability PWA cannot deliver. Triggered by user demand, not calendar.
+
+| # | Feature | Priority | Trigger | Status |
+|---|---------|----------|---------|--------|
+| 5.1 | Electron/Tauri app wrapping the web platform | P1 | Beta users request browser automation | Not started |
+| 5.2 | Local Playwright integration for third-party service setup | P1 | Desktop app shipped | Not started |
+| 5.3 | Reuse ops-provisioner guided setup pattern (3-phase: Setup, Configure, Verify) | P1 | Playwright integrated | Not started |
+| 5.4 | Auto-update mechanism | P2 | Desktop app shipped | Not started |
+| 5.5 | Code signing (macOS + Windows) | P1 | Before distribution | Not started |
+
+**Why this phase exists:** Browser automation is impossible on PWA, iOS, and Android due to platform sandboxing. Only a native desktop app can run Playwright locally on the user's machine. This is the desktop app's reason to exist — not wrapping the web app, but providing a capability no other surface can.
+
+**Electron vs. Tauri:** Decision deferred to planning. Electron is heavier (~200MB) but mature ecosystem. Tauri is lighter (~10MB) but uses system webview.
+
+**Exit criteria:**
+
+- Desktop app installable on macOS + Windows
+- Agent can automate Cloudflare/Stripe/Plausible signup via local Playwright
+- Pause at CAPTCHA/OAuth, user handles in their own browser
+- Auto-updates work
 
 ---
 
