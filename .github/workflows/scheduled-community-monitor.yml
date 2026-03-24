@@ -95,7 +95,7 @@ jobs:
                - Bluesky (if enabled): append `bash $ROUTER bsky get-metrics` to the same call.
                - LinkedIn (if enabled): skip — log "enabled (posting only)".
                Batch 2 (GitHub + HN — single Bash call):
-               - `bash $ROUTER github activity 1; bash $ROUTER github contributors 1; bash $ROUTER github discussions 1; bash $ROUTER hn mentions --query soleur --limit 20; bash $ROUTER hn trending --limit 30`
+               - `bash $ROUTER github activity 1; bash $ROUTER github contributors 1; bash $ROUTER github discussions 1; bash $ROUTER github repo-stats 1; bash $ROUTER hn mentions --query soleur --limit 20; bash $ROUTER hn trending --limit 30`
                If any command in a batch fails, log the error and continue.
 
             3. **Read brand guide** at knowledge-base/marketing/brand-guide.md (section ## Voice)
@@ -107,6 +107,9 @@ jobs:
                ## Period, ## Activity Summary, ## Top Contributors, and optional sections
                ## Trending Topics, ## GitHub Activity, ## X/Twitter Metrics,
                ## Bluesky Metrics, ## LinkedIn Activity, ## Hacker News Activity.
+               The ## GitHub Activity section must include a **Repository Stats** sub-section
+               with a table showing Stars, Forks, and Watchers counts, plus a list of
+               new stargazers in the period (username and starred date) from the repo-stats data.
                Summarize and aggregate -- do not store raw message transcripts. Brief
                contextual quotes (under 100 chars) with attribution are acceptable.
                If the file already exists for today, overwrite it.

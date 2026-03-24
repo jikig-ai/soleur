@@ -37,7 +37,7 @@ Platform scripts are located at `plugins/soleur/skills/community/scripts/`:
 - [community-router.sh](./scripts/community-router.sh) -- Platform dispatch router (single source of truth for platform detection)
 - [discord-community.sh](./scripts/discord-community.sh) -- Discord Bot API wrapper (messages, members, guild-info, channels)
 - [discord-setup.sh](./scripts/discord-setup.sh) -- Discord credential setup and validation
-- [github-community.sh](./scripts/github-community.sh) -- GitHub API wrapper (activity, contributors, discussions)
+- [github-community.sh](./scripts/github-community.sh) -- GitHub API wrapper (activity, contributors, discussions, repo-stats)
 - [x-community.sh](./scripts/x-community.sh) -- X/Twitter API v2 wrapper (fetch-metrics, fetch-mentions, fetch-timeline, fetch-user-timeline, post-tweet)
 - [x-setup.sh](./scripts/x-setup.sh) -- X/Twitter credential setup and validation
 - [bsky-community.sh](./scripts/bsky-community.sh) -- Bluesky AT Protocol wrapper (create-session, post, get-metrics, get-notifications)
@@ -135,6 +135,7 @@ If no sub-command is provided, present options using the AskUserQuestion tool:
 **Question:** "Which community operation would you like to run?"
 
 **Options:**
+
 1. **digest** -- Generate a multi-platform community digest
 2. **health** -- Display community health metrics
 3. **platforms** -- List platform configuration status
