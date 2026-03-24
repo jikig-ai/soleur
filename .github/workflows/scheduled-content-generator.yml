@@ -110,6 +110,13 @@ jobs:
             If the build fails, do NOT commit. Create a GitHub issue documenting
             the build error and stop.
 
+            Then validate all distribution content URLs against the build output:
+            ```
+            bash scripts/validate-blog-links.sh _site
+            ```
+            If any links are broken, do NOT commit. Create a GitHub issue
+            documenting the broken links and stop.
+
             STEP 5 — Record topic in queue:
             If STEP 1b was used (topic was auto-discovered via growth plan):
               Append the discovered topic to

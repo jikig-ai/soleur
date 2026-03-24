@@ -23,7 +23,7 @@ Solo founders have none of those redundancies. Agentic engineering is how you re
 
 Full breakdown -- what changes, when to use each approach, and why compound knowledge matters most for founders building alone:
 
-https://soleur.ai/blog/2026-03-24-vibe-coding-vs-agentic-engineering/?utm_source=discord&utm_medium=community&utm_campaign=2026-03-24-vibe-coding-vs-agentic-engineering
+https://soleur.ai/blog/vibe-coding-vs-agentic-engineering/?utm_source=discord&utm_medium=community&utm_campaign=vibe-coding-vs-agentic-engineering
 
 ---
 
@@ -39,7 +39,7 @@ Vibe coding got you building fast. Agentic engineering keeps you building better
 
 Full breakdown -- the difference, when to use each, and why compound knowledge is the solo founder's multiplier:
 
-https://soleur.ai/blog/2026-03-24-vibe-coding-vs-agentic-engineering/?utm_source=x&utm_medium=social&utm_campaign=2026-03-24-vibe-coding-vs-agentic-engineering
+https://soleur.ai/blog/vibe-coding-vs-agentic-engineering/?utm_source=x&utm_medium=social&utm_campaign=vibe-coding-vs-agentic-engineering
 
 #solofounder
 
@@ -64,7 +64,7 @@ Three structural changes made the difference:
 
 A team absorbs the memory problem through human coordination. Solo founders don't have that. Agentic engineering is how you replace it.
 
-Full breakdown: https://soleur.ai/blog/2026-03-24-vibe-coding-vs-agentic-engineering/?utm_source=indiehackers&utm_medium=community&utm_campaign=2026-03-24-vibe-coding-vs-agentic-engineering
+Full breakdown: https://soleur.ai/blog/vibe-coding-vs-agentic-engineering/?utm_source=indiehackers&utm_medium=community&utm_campaign=vibe-coding-vs-agentic-engineering
 
 ---
 
@@ -84,14 +84,14 @@ I mapped out what actually changes between the two approaches and why it matters
 
 The key insight for solo founders: a team absorbs the "no memory" problem through human coordination. The senior dev remembers architecture. QA catches regressions. Code review creates accountability. When you're building alone, you have none of that. Agentic engineering replaces those structural redundancies.
 
-Full comparison with a breakdown table for each dimension: https://soleur.ai/blog/2026-03-24-vibe-coding-vs-agentic-engineering/?utm_source=reddit
+Full comparison with a breakdown table for each dimension: https://soleur.ai/blog/vibe-coding-vs-agentic-engineering/?utm_source=reddit
 
 ---
 
 ## Hacker News
 
 **Title:** Vibe coding vs. agentic engineering: the structural difference and why it matters
-**URL:** https://soleur.ai/blog/2026-03-24-vibe-coding-vs-agentic-engineering/?utm_source=hackernews&utm_medium=community&utm_campaign=2026-03-24-vibe-coding-vs-agentic-engineering
+**URL:** https://soleur.ai/blog/vibe-coding-vs-agentic-engineering/?utm_source=hackernews&utm_medium=community&utm_campaign=vibe-coding-vs-agentic-engineering
 
 ---
 
@@ -112,7 +112,7 @@ Three changes made the difference in my workflow:
 
 Full breakdown with a comparison table and the specific workflow changes that matter for solo builders:
 
-https://soleur.ai/blog/2026-03-24-vibe-coding-vs-agentic-engineering/?utm_source=linkedin-personal&utm_medium=social&utm_campaign=2026-03-24-vibe-coding-vs-agentic-engineering
+https://soleur.ai/blog/vibe-coding-vs-agentic-engineering/?utm_source=linkedin-personal&utm_medium=social&utm_campaign=vibe-coding-vs-agentic-engineering
 
 #solofounder #buildinpublic
 
@@ -130,7 +130,7 @@ For teams, those redundancies already exist through human coordination. For solo
 
 Soleur's latest article breaks down the comparison -- when vibe coding is the right tool, where it breaks, and why compound knowledge is the solo founder's multiplier:
 
-https://soleur.ai/blog/2026-03-24-vibe-coding-vs-agentic-engineering/?utm_source=linkedin-company&utm_medium=social&utm_campaign=2026-03-24-vibe-coding-vs-agentic-engineering
+https://soleur.ai/blog/vibe-coding-vs-agentic-engineering/?utm_source=linkedin-company&utm_medium=social&utm_campaign=vibe-coding-vs-agentic-engineering
 
 #solofounder #AIagents
 
@@ -138,4 +138,4 @@ https://soleur.ai/blog/2026-03-24-vibe-coding-vs-agentic-engineering/?utm_source
 
 ## Bluesky
 
-Vibe coding resets each session. Agentic engineering compounds. Solo founders feel this most -- no team to absorb the gaps. https://soleur.ai/blog/2026-03-24-vibe-coding-vs-agentic-engineering/?utm_source=bluesky&utm_medium=social&utm_campaign=2026-03-24-vibe-coding-vs-agentic-engineering
+Vibe coding resets each session. Agentic engineering compounds. Solo founders feel this most -- no team to absorb the gaps. https://soleur.ai/blog/vibe-coding-vs-agentic-engineering/?utm_source=bluesky&utm_medium=social&utm_campaign=vibe-coding-vs-agentic-engineering

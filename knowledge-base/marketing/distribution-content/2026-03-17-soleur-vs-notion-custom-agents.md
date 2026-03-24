@@ -21,7 +21,7 @@ The deeper difference: Notion agents read from your workspace. Rich, but scoped 
 Pricing: Notion is Business plan ($20/seat) + credits ($10/1,000) after the beta ends May 3. Soleur is open source, Apache-2.0, free.
 
 Full breakdown:
-https://soleur.ai/blog/2026-03-17-soleur-vs-notion-custom-agents/?utm_source=discord&utm_medium=community&utm_campaign=2026-03-17-soleur-vs-notion-custom-agents
+https://soleur.ai/blog/soleur-vs-notion-custom-agents/?utm_source=discord&utm_medium=community&utm_campaign=soleur-vs-notion-custom-agents
 
 ---
 
@@ -39,7 +39,7 @@ Notion Custom Agents automates standups, triage, and reports on a trigger. Soleu
 **Tweet 4:** (248/280 chars)
 4/ Notion: $10/1,000 credits after May 3 + $20/seat. Soleur: open source, free.
 
-https://soleur.ai/blog/2026-03-17-soleur-vs-notion-custom-agents/?utm_source=x&utm_medium=social&utm_campaign=2026-03-17-soleur-vs-notion-custom-agents
+https://soleur.ai/blog/soleur-vs-notion-custom-agents/?utm_source=x&utm_medium=social&utm_campaign=soleur-vs-notion-custom-agents
 
 #solofounder
 
@@ -67,7 +67,7 @@ Notion agents read from your workspace. That's valuable context. But it's scoped
 
 These aren't the same category. Notion is for teams that want recurring operational overhead automated. Soleur is for a solo founder running an entire company who needs cross-domain knowledge compounding.
 
-Full comparison: https://soleur.ai/blog/2026-03-17-soleur-vs-notion-custom-agents/?utm_source=indiehackers&utm_medium=community&utm_campaign=2026-03-17-soleur-vs-notion-custom-agents
+Full comparison: https://soleur.ai/blog/soleur-vs-notion-custom-agents/?utm_source=indiehackers&utm_medium=community&utm_campaign=soleur-vs-notion-custom-agents
 
 ---
 
@@ -96,14 +96,14 @@ Notion Custom Agents: teams managing recurring operational overhead (standups, t
 
 Company-as-a-Service: solo founders running an entire company who need cross-domain knowledge compounding and complete business lifecycle orchestration.
 
-Full comparison: https://soleur.ai/blog/2026-03-17-soleur-vs-notion-custom-agents/?utm_source=reddit
+Full comparison: https://soleur.ai/blog/soleur-vs-notion-custom-agents/?utm_source=reddit
 
 ---
 
 ## Hacker News
 
 **Title:** Notion Custom Agents vs. full company orchestration: different architectures (73/80 chars)
-**URL:** https://soleur.ai/blog/2026-03-17-soleur-vs-notion-custom-agents/?utm_source=hackernews&utm_medium=community&utm_campaign=2026-03-17-soleur-vs-notion-custom-agents
+**URL:** https://soleur.ai/blog/soleur-vs-notion-custom-agents/?utm_source=hackernews&utm_medium=community&utm_campaign=soleur-vs-notion-custom-agents
 
 ---
 
@@ -125,7 +125,7 @@ Pricing: Notion transitions from free beta to $20/seat/month + credits ($10/1,00
 
 These are not the same category. Notion is for teams automating operational overhead. Soleur is for one founder running an entire company who needs knowledge compounding across 62 agents and 9 departments.
 
-Full comparison: https://soleur.ai/blog/2026-03-17-soleur-vs-notion-custom-agents/?utm_source=linkedin-personal&utm_medium=social&utm_campaign=2026-03-17-soleur-vs-notion-custom-agents
+Full comparison: https://soleur.ai/blog/soleur-vs-notion-custom-agents/?utm_source=linkedin-personal&utm_medium=social&utm_campaign=soleur-vs-notion-custom-agents
 
 #solofounder #buildinpublic
 
@@ -145,6 +145,6 @@ Soleur orchestrates complete business lifecycle workflows for solo founders with
 
 Workspace automation and company orchestration are different problems. Notion Custom Agents is the right choice for teams managing recurring operational overhead. Soleur is the right choice for a solo founder who needs cross-domain knowledge compounding and full company orchestration.
 
-Full comparison: https://soleur.ai/blog/2026-03-17-soleur-vs-notion-custom-agents/?utm_source=linkedin-company&utm_medium=social&utm_campaign=2026-03-17-soleur-vs-notion-custom-agents
+Full comparison: https://soleur.ai/blog/soleur-vs-notion-custom-agents/?utm_source=linkedin-company&utm_medium=social&utm_campaign=soleur-vs-notion-custom-agents
 
 #solofounder #AIagents
