@@ -6,6 +6,7 @@
 #   activity [days]      - Recent issues, PRs, and comments
 #   contributors [days]  - Active contributors in period
 #   discussions [days]   - Recent discussions (if enabled)
+#   repo-stats [days]    - Stars, forks, watchers, new stargazers
 #
 # Prerequisites: gh CLI authenticated
 # Output: JSON to stdout
@@ -225,6 +226,53 @@ cmd_discussions() {
   }'
 }
 
+cmd_repo_stats() {
+  local days="${1:-7}"
+  local repo
+  repo=$(detect_repo)
+  local since
+  since=$(date_n_days_ago "$days")
+
+  # Fetch repo metadata
+  local repo_data
+  repo_data=$(gh api "repos/${repo}" 2>&1) || {
+    echo "Error: Failed to fetch repo metadata: ${repo_data}" >&2
+    exit 1
+  }
+  check_rate_limit "$repo_data"
+
+  # Fetch stargazers with timestamps (custom Accept header).
+  # --paginate outputs separate arrays per page; jq -s 'add' merges them.
+  local stargazers
+  stargazers=$(gh api "repos/${repo}/stargazers?per_page=100" \
+    -H "Accept: application/vnd.github.star+json" \
+    --paginate 2>&1 | jq -s 'add // []') || {
+    echo "Error: Failed to fetch stargazers: ${stargazers}" >&2
+    exit 1
+  }
+  check_rate_limit "$stargazers"
+
+  # Combine and filter
+  jq -n \
+    --argjson repo_data "$repo_data" \
+    --argjson stargazers "$stargazers" \
+    --arg since "$since" \
+    --arg repo "$repo" \
+    --argjson days "$days" \
+    '([$stargazers[] | select(.starred_at >= $since) | {login: .user.login, starred_at}]) as $new
+    | {
+      repo: $repo,
+      since: $since,
+      stargazers_count: $repo_data.stargazers_count,
+      forks_count: $repo_data.forks_count,
+      watchers_count: $repo_data.watchers_count,
+      subscribers_count: $repo_data.subscribers_count,
+      new_stargazers: $new,
+      new_stargazers_count: ($new | length),
+      period_days: $days
+    }'
+}
+
 # --- Main ---
 
 main() {
@@ -238,6 +286,7 @@ main() {
     echo "  activity [days]      - Recent issues, PRs, and comments" >&2
     echo "  contributors [days]  - Active contributors in period" >&2
     echo "  discussions [days]   - Recent discussions (if enabled)" >&2
+    echo "  repo-stats [days]   - Stars, forks, watchers, new stargazers" >&2
     exit 1
   fi
 
@@ -247,6 +296,7 @@ main() {
     activity)     cmd_activity "$@" ;;
     contributors) cmd_contributors "$@" ;;
     discussions)  cmd_discussions "$@" ;;
+    repo-stats)   cmd_repo_stats "$@" ;;
     *)
       echo "Error: Unknown command '${command}'" >&2
       echo "Run 'github-community.sh' without arguments for usage." >&2
