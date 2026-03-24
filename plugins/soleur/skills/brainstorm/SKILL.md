@@ -87,7 +87,7 @@ Assess whether the feature description has implications for specific business do
 
 #### 1.0 External Platform Verification (if applicable)
 
-If the feature description references an external platform, marketplace, or service, **WebFetch the URL first** before launching any research agents. Classify by: (1) self-service or waitlist? (2) discovery surface or procurement layer? (3) does it accept the product category? This 30-second gate prevents spawning agents that analyze a false premise.
+If the feature description references an external platform, marketplace, or service, **WebFetch the URL first** before launching any research agents. Classify by: (1) self-service or waitlist? (2) discovery surface or procurement layer? (3) does it accept the product category? (4) what are the per-plan quantitative limits? (number of tasks, storage, API calls, concurrent sessions) (5) does the limit cover the migration/feature scope? This 30-second gate prevents spawning agents that analyze a false premise. **Why:** In #1094, a 9-workflow migration plan was built before discovering the Max plan allows only 3 Cloud scheduled tasks — a limit only discoverable by attempting to create the 4th task or checking via the `RemoteTrigger` API.
 
 #### 1.1 Research (Context Gathering)
 
