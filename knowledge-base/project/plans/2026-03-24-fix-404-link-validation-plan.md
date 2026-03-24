@@ -292,12 +292,12 @@ run_suite "blog-link-validation" bash scripts/validate-blog-links.sh
 
 ## Acceptance Criteria
 
-- [ ] `social-distribute` skill constructs correct URLs for date-prefixed blog filenames (`plugins/soleur/skills/social-distribute/SKILL.md`)
-- [ ] All 4 existing distribution content files have corrected URLs (`knowledge-base/marketing/distribution-content/2026-03-{16,17,19,24}-*.md`)
-- [ ] `scripts/validate-blog-links.sh` exists and validates distribution content URLs against Eleventy build output
-- [ ] `scheduled-content-generator.yml` runs link validation before creating the PR
-- [ ] CI runs link validation on PRs that modify blog or distribution content
-- [ ] A learning document captures the Eleventy `fileSlug` date-stripping behavior and the exact regex from `TemplateFileSlug.js`
+- [x] `social-distribute` skill constructs correct URLs for date-prefixed blog filenames (`plugins/soleur/skills/social-distribute/SKILL.md`)
+- [x] All 4 existing distribution content files have corrected URLs (`knowledge-base/marketing/distribution-content/2026-03-{16,17,19,24}-*.md`)
+- [x] `scripts/validate-blog-links.sh` exists and validates distribution content URLs against Eleventy build output
+- [x] `scheduled-content-generator.yml` runs link validation before creating the PR
+- [x] CI runs link validation on PRs that modify blog or distribution content
+- [x] A learning document captures the Eleventy `fileSlug` date-stripping behavior and the exact regex from `TemplateFileSlug.js`
 
 ## Test Scenarios
 
