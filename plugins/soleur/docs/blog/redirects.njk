@@ -1,0 +1,19 @@
+---
+pagination:
+  data: blogRedirects
+  size: 1
+  alias: redirect
+layout: false
+tags: []
+eleventyExcludeFromCollections: true
+permalink: "blog/{{ redirect.dateSlug }}/index.html"
+---
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="0;url=/blog/{{ redirect.canonicalSlug }}/">
+<link rel="canonical" href="/blog/{{ redirect.canonicalSlug }}/">
+<title>Redirecting...</title>
+</head><body>
+<p>Redirecting to <a href="/blog/{{ redirect.canonicalSlug }}/">/blog/{{ redirect.canonicalSlug }}/</a></p>
+</body></html>

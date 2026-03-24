@@ -136,17 +136,17 @@ Two changes to prevent this class of issue from recurring:
 
 ## Acceptance Criteria
 
-- [ ] Visiting `https://soleur.ai/blog/2026-03-24-vibe-coding-vs-agentic-engineering/` redirects to `https://soleur.ai/blog/vibe-coding-vs-agentic-engineering/`
-- [ ] Visiting `https://soleur.ai/blog/2026-03-16-soleur-vs-anthropic-cowork/` redirects to `https://soleur.ai/blog/soleur-vs-anthropic-cowork/`
-- [ ] Visiting `https://soleur.ai/blog/2026-03-17-soleur-vs-notion-custom-agents/` redirects to `https://soleur.ai/blog/soleur-vs-notion-custom-agents/`
-- [ ] Visiting `https://soleur.ai/blog/2026-03-19-soleur-vs-cursor/` redirects to `https://soleur.ai/blog/soleur-vs-cursor/`
-- [ ] Future blog posts with date-prefixed filenames automatically get redirect pages (no manual intervention)
-- [ ] Redirect pages include `<link rel="canonical">` pointing to the correct URL
-- [ ] Redirect pages are excluded from sitemap and collections
-- [ ] `validate-blog-links.sh` checks for redirect page existence for date-prefixed blog posts
-- [ ] Eleventy build passes (`npx @11ty/eleventy`)
-- [ ] SEO validation passes (`bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site`)
-- [ ] No existing blog URLs are broken by the change
+- [x] Visiting `https://soleur.ai/blog/2026-03-24-vibe-coding-vs-agentic-engineering/` redirects to `https://soleur.ai/blog/vibe-coding-vs-agentic-engineering/`
+- [x] Visiting `https://soleur.ai/blog/2026-03-16-soleur-vs-anthropic-cowork/` redirects to `https://soleur.ai/blog/soleur-vs-anthropic-cowork/`
+- [x] Visiting `https://soleur.ai/blog/2026-03-17-soleur-vs-notion-custom-agents/` redirects to `https://soleur.ai/blog/soleur-vs-notion-custom-agents/`
+- [x] Visiting `https://soleur.ai/blog/2026-03-19-soleur-vs-cursor/` redirects to `https://soleur.ai/blog/soleur-vs-cursor/`
+- [x] Future blog posts with date-prefixed filenames automatically get redirect pages (no manual intervention)
+- [x] Redirect pages include `<link rel="canonical">` pointing to the correct URL
+- [x] Redirect pages are excluded from sitemap and collections
+- [x] `validate-blog-links.sh` checks for redirect page existence for date-prefixed blog posts
+- [x] Eleventy build passes (`npx @11ty/eleventy`)
+- [x] SEO validation passes (`bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site`)
+- [x] No existing blog URLs are broken by the change
 
 ## Domain Review
 

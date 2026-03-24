@@ -70,6 +70,25 @@ for url_path in "${urls[@]}"; do
   fi
 done
 
+# --- Redirect page validation ---
+# For each date-prefixed blog file, verify a redirect page exists with meta-refresh
+# Date-prefix glob must match regex in plugins/soleur/docs/_data/blogRedirects.js
+BLOG_DIR="$REPO_ROOT/plugins/soleur/docs/blog"
+for md_file in "$BLOG_DIR"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md; do
+  [[ -f "$md_file" ]] || continue
+  slug=$(basename "$md_file" .md)
+  redirect_path="$SITE_DIR/blog/$slug/index.html"
+  if [[ -f "$redirect_path" ]]; then
+    if grep -q 'http-equiv="refresh"' "$redirect_path"; then
+      pass "redirect: /blog/$slug/"
+    else
+      fail "redirect: /blog/$slug/ exists but missing meta-refresh"
+    fi
+  else
+    fail "redirect: /blog/$slug/ missing (expected for date-prefixed file)"
+  fi
+done
+
 echo ""
 if [[ $FAILURES -eq 0 ]]; then
   echo "All blog links valid."
