@@ -48,27 +48,93 @@ gh api repos/{owner}/{repo}/milestones --jq '.[] | {title, open_issues, closed_i
 
 **Fill gaps.** For each missing critical artifact, ask a brief targeted question or suggest running the relevant specialist agent (competitive-intelligence for competitive gaps, business-validator for validation gaps). In headless mode: skip gap-filling, proceed with available context.
 
-## Phase 1: Workshop
+## Phase 0.5: CPO Pre-Analysis
 
-Multi-turn dialogue covering four topics. Present a synthesis from KB artifacts, then ask the user to confirm, modify, or reject.
+Spawn the CPO agent as a background task with all context gathered in Phase 0 (KB artifacts, GitHub state, existing roadmap if any). The CPO produces a **draft roadmap proposal** before the interactive workshop begins.
+
+**CPO task prompt:** "You are the CPO. Analyze the following knowledge-base artifacts and GitHub state to produce a draft product roadmap proposal. Include: (1) 2-4 strategic themes with rationale grounded in business validation, competitive intelligence, and current product state, (2) 3-5 proposed phases with objectives, scope, and feature lists drawn from open GitHub issues, (3) gaps and risks you identified — missing phases, features, strategic directions, or unaddressed risks the founder may not have considered, (4) prioritization rationale explaining why you ordered the phases this way, (5) open questions for the founder. Challenge assumptions. Be opinionated — propose a direction, don't just list options.
+
+**Scope boundaries for the CPO analysis:**
+
+- Flag roadmap-level gaps (missing features, phases, strategic risks) NOT planning-level details (UX flows, screen designs, onboarding step sequences). 'No onboarding exists' is a valid gap. 'The onboarding should have 3 screens' is not — that belongs in spec/planning.
+- Verify technical claims before asserting them. Check the codebase for actual architecture (git-backed? containerized? replicated?) before flagging durability, infrastructure, or scaling concerns. False alarms waste founder time.
+- Do not ask implementation-choice questions (which SDK mode, which framework, which protocol). Flag the NEED ('multi-turn is broken'), not the HOW ('use persistSession vs history injection'). Route HOW questions to the CTO.
+- Do not propose features for a maturity stage the product has no plan to reach. However, if a later phase explicitly depends on a capability (e.g., Phase N activates Stripe live mode), the prerequisite features (pricing page, subscription management, invoice handling) ARE roadmap gaps even if the product is pre-beta today. Distinguish between premature features (no plan needs them) and prerequisite features (a planned phase requires them).
+
+Context: {all Phase 0 findings}"
+
+Wait for the CPO analysis to complete, then present it to the founder.
+
+**In headless mode:** Use the CPO proposal as the final roadmap without interactive refinement (skip Phase 1 workshop).
+
+## Phase 1: Workshop (CPO-Facilitated)
+
+The CPO's draft proposal is the starting point. The workshop refines it through multi-turn dialogue. The CPO role is to **facilitate and challenge** — not just present options, but push back on choices, identify gaps the founder may have missed, and advocate for the user's perspective.
 
 ### 1.1 Strategic Themes
 
-Present 2-4 candidate strategic themes, each with a name and rationale grounded in the artifacts read. Ask which resonate and what to change.
+Present the CPO's proposed themes. For each, show the rationale grounded in KB artifacts. Ask the founder which resonate and what to change. If the founder proposes a theme the CPO didn't include, the CPO should either support it with evidence or challenge it with a counter-argument.
 
 ### 1.2 Phase Definitions
 
-Propose 3-5 phases. For each phase, provide a name ("Phase N: Title"), objective, scope, and estimated duration if timeline context exists. If updating an existing roadmap, present current phases and suggest modifications based on progress data. Ask to adjust.
+Present the CPO's proposed phases. For each phase, show the objective, scope, and estimated duration if timeline context exists. If updating an existing roadmap, present current phases and suggest modifications based on progress data. The CPO should flag any phase that seems overloaded, underspecified, or missing prerequisites. Ask to adjust.
 
 ### 1.3 Feature Prioritization
 
-For each phase, list candidate features from open GitHub issues, feature specs, and workshop discussion. Apply P1 (must-have for phase exit) / P2 (important but not blocking) / Deferred. Present as a table per phase. Ask to reorder.
+For each phase, present the CPO's feature list drawn from open GitHub issues, specs, and the analysis. Apply P1 (must-have for phase exit) / P2 (important but not blocking) / Deferred. Present as a table per phase. The CPO should challenge any feature that seems premature or missing. Ask to reorder.
 
 ### 1.4 Success Criteria
 
-For each phase, propose measurable exit criteria. Ask to adjust.
+For each phase, present the CPO's proposed measurable exit criteria. Ask to adjust.
 
-In headless mode for all workshop topics: use KB-derived defaults (themes from validation verdict, 3 phases based on issue priorities, issues assigned by label proximity, generic exit criteria based on phase objectives).
+### 1.5 Gap Check
+
+Before moving to Domain Review, the CPO presents any gaps identified during pre-analysis that were not addressed in the workshop: missing onboarding flows, infrastructure requirements, integration dependencies, legal prerequisites, UX considerations. The founder decides which gaps to address now and which to defer.
+
+In headless mode for all workshop topics: use CPO-derived defaults from the pre-analysis.
+
+## Phase 1.5: Domain Review Gate
+
+Before generating the roadmap, assess which domain leaders should review the proposed phases. Read [brainstorm-domain-config.md](../../skills/brainstorm/references/brainstorm-domain-config.md) for the domain assessment table.
+
+### Auto-Detection
+
+For each proposed phase, evaluate against the assessment questions in the domain config table:
+
+| Phase Content Signal | Domain | Leader |
+|---------------------|--------|--------|
+| Infrastructure, architecture, tech stack, performance, scaling | Engineering | CTO |
+| PII, GDPR, payments, vendor agreements, compliance, terms of service | Legal | CLO |
+| Vendor costs, pricing decisions, budget, burn rate, revenue model | Finance | CFO |
+| Positioning changes, launch content, recruitment channels, brand | Marketing | CMO |
+| Vendor selection, tool provisioning, hosting, procurement | Operations | COO |
+| Sales pipeline, outbound, pricing communication, deal structure | Sales | CRO |
+| User support, documentation, community, onboarding | Support | CCO |
+
+A domain is relevant if **any** proposed phase matches its content signals.
+
+### Spawn Domain Leaders
+
+For each relevant domain, spawn the domain leader as a parallel background Agent using the Task Prompt from the domain config table. Pass the full workshop output (themes, phases, features, exit criteria) as context via `{desc}`.
+
+Example prompt format: "Assess the [domain] implications of this product roadmap: {full workshop summary}. Identify risks, blockers, complexity concerns, and questions the founder should consider. Output a brief structured assessment with risk levels (low/medium/high) per phase."
+
+Spawn all relevant leaders in parallel (`run_in_background: true`). Present each assessment as it completes.
+
+### In headless mode
+
+Skip the domain review gate. Generate the roadmap with a footer note: "Domain review was skipped (headless mode). Run interactively to include domain leader assessments."
+
+### Present and Adjust
+
+After all assessments complete, present a consolidated summary table:
+
+| Domain | Key Finding | Risk | Recommended Change |
+|--------|------------|------|--------------------|
+
+Use AskUserQuestion to ask: "Domain leaders have reviewed the roadmap. Adjust any phases before generating?"
+
+Incorporate accepted changes into the phase definitions before proceeding to Generate.
 
 ## Phase 2: Generate
 
@@ -127,6 +193,25 @@ Assign issues to their phase milestones. Use `-F` (not `-f`) for numeric milesto
 
 ## Phase 4: Handoff
 
-Present an output summary listing the document path, milestones created, issues assigned, and strategic themes. Suggest `/soleur:plan` for individual features.
+Present an output summary listing the document path, milestones created, issues assigned, and strategic themes.
 
-Proceed to the next step in the orchestrator's sequence.
+**Ship and merge the roadmap.** The roadmap is a product decision, not a code change. Once the founder agrees, ship it through to merge:
+
+1. Run compound (`skill: soleur:compound`) to capture any learnings from the session.
+2. Use `/ship` to commit, push, and open a PR with the roadmap and any skill/agent changes.
+3. After the PR is created, queue auto-merge: `gh pr merge <number> --squash --auto`.
+4. Poll `gh pr view <number> --json state --jq .state` until MERGED.
+5. Run `cleanup-merged` to remove the worktree.
+
+Do not stop at "PR created" or "waiting for CI." The roadmap is not shipped until it is merged to main.
+
+**Next steps for the founder:** When ready to build a specific feature from the roadmap, run `/soleur:plan` on that individual feature (not the entire phase). Each feature gets its own plan, work, review, and ship cycle.
+
+```
+/soleur:product-roadmap → agree on roadmap → commit + PR + merge
+                                              ↓
+                          then per feature:
+                          /soleur:plan → /soleur:work → /soleur:review → /soleur:ship
+```
+
+Do NOT suggest running `/soleur:plan` on an entire phase. Phases contain multiple independent features, each with their own scope, spec, and implementation. Planning a whole phase produces an unwieldy mega-plan.

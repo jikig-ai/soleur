@@ -1,172 +1,326 @@
 ---
-last_updated: 2026-03-22
-last_reviewed: 2026-03-22
+last_updated: 2026-03-23
+last_reviewed: 2026-03-23
 review_cadence: monthly
 owner: CPO
 depends_on:
+  - knowledge-base/product/business-validation.md
+  - knowledge-base/product/competitive-intelligence.md
   - knowledge-base/product/pricing-strategy.md
-  - knowledge-base/project/specs/feat-web-platform-ux/tasks.md
 ---
 
-# Product Roadmap: Web Platform (app.soleur.ai)
+# Product Roadmap: Soleur Cloud Platform
 
-## Current State
+## Strategic Context
+
+The CaaS thesis is validated: solo founders want an AI organization that runs every department. The delivery surface is wrong: no one wants to install a Claude Code plugin. The market wants a **cross-platform cloud service** accessible from web, mobile, and desktop.
+
+This roadmap pivots from plugin-first to **cloud-first**. The CLI plugin remains as a power-user option. The cloud platform (app.soleur.ai) becomes the primary product.
+
+### Strategic Themes
+
+| # | Theme | Rationale |
+|---|-------|-----------|
+| **T1** | **Ship the Cloud Platform** | The web platform is the product. Mobile-first, PWA for all three surfaces (web, mobile, desktop). No native apps for MVP. |
+| **T2** | **Secure Before Beta** | No external user touches PII or API keys on an unaudited platform. Security is table stakes, not a feature. |
+| **T3** | **Make the Moat Visible** | Compounding cross-domain knowledge is the structural advantage. If users cannot see what agents produced (plans, brainstorms, brand guides), the value is invisible. |
+| **T4** | **Validate + Scale** | Recruit founders, prove the thesis with real usage, activate payments. Triggered by user count, not calendar. |
+
+### Architecture Decision: PWA-First
+
+The platform ships as a Progressive Web App. One Next.js codebase covers web browsers, mobile (installable PWA), and desktop (installable PWA). Native apps (Electron, React Native) are deferred unless PWA hits real limits reported by users.
+
+**Known iOS limitations (CTO review):** Push notifications require iOS 16.4+ and home-screen installation. No background execution — WebSocket drops when app is backgrounded. Service worker caches evicted after ~14 days of non-use. Email fallback needed for review gate notifications.
+
+### Architecture Decision: 3-Tier Service Automation (Brainstorm 2026-03-23)
+
+Founders validated service automation as a high-value feature. Server-side Playwright was rejected (HIGH risk from CTO, CLO, CFO). Brainstorm produced a 3-tier architecture:
+
+| Tier | Platform | Coverage | How |
+|------|----------|----------|-----|
+| **API + MCP** | All (web, mobile, desktop) | ~80% of services | Direct API calls and MCP server integrations. User provides API tokens, stored with BYOK-grade encryption. Deterministic, versioned, no browser needed. |
+| **Local Playwright** | Desktop native app only | ~15% (no API/MCP available) | Electron/Tauri desktop app runs Playwright on user's machine. Same pattern as CLI plugin. User's own browser, credentials, and session. |
+| **Guided instructions** | Web + mobile (fallback) | ~5% remainder | Agent provides step-by-step with deep links and review gates. |
+
+MCP is a first-class integration tier alongside REST APIs. Services that publish MCP servers (and this list is growing rapidly) get zero-config integration — the agent connects to the service's MCP server directly, no custom API wrapper needed.
+
+The desktop native app earns its existence specifically because browser automation is impossible on PWA, iOS, or Android. This is not "wrapping the web app" — it provides a capability no other surface can.
+
+Full brainstorm: `knowledge-base/project/brainstorms/2026-03-23-browser-automation-cloud-platform-brainstorm.md`
+
+---
+
+## Domain Review Summary (2026-03-23)
+
+This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
+
+| Domain | Key Finding | Impact on Roadmap |
+|--------|------------|-------------------|
+| **CTO** | Multi-turn conversation is broken (agent has amnesia between turns). Not "partial" — functionally absent. | Promoted multi-turn to P1. Reordered P3. |
+| **CTO** | Pin Agent SDK to exact version (`0.2.80`, not `^0.2.80`). Add basic WS rate limiting to P2. | Added to P1 and P2 respectively. |
+| **CLO** | Conversation history is a new PII category not in privacy docs. AUP and Cookie Policy not updated for Web Platform. | Added legal updates to P2. |
+| **CLO** | Browser automation creates undisclosed agency liability. Needs dedicated legal framework before shipping. | Playwright deferred pending brainstorm + legal architecture. |
+| **CFO** | Break-even at 1-2 paying users. EUR 35-44/month burn. BYOK eliminates per-user LLM cost. | No structural change. Confirmed pricing gate sequencing is correct. |
+| **CFO** | No finance artifacts exist. Need cost model. Plausible trial expires 2026-03-24. | Flagged for immediate action. |
+| **CMO** | Every public surface says "plugin." Roadmap says "cloud platform." Live contradiction. | Added marketing positioning gate before P4 recruitment. |
+| **CMO** | At least 3/10 recruited founders must NOT be Claude Code users. | Added recruitment mix constraint to P4. |
+
+---
+
+## Current State (2026-03-23)
 
 | Dimension | Status |
 |-----------|--------|
-| Phase 1 (Working Loop) | Deployed. All 15 tasks complete. Auth, BYOK, chat, agent execution, Stripe, Hetzner infra. |
-| BYOK decryption | Broken. #667 blocks all agent execution for new users. Nothing works until this is fixed. |
-| Integration tests | None. #668. No automated coverage for WebSocket, auth, or session flows. |
-| Beta users | 0. No external user has completed the auth-to-chat loop. |
-| Pricing | $49/mo + BYOK hypothesis. 0 of 5 pricing gates passed. Stripe in test mode. |
-| Security posture | Unaudited. No CSP, no CORS policy, no session timeout, no OWASP review. |
-| Vendor compliance | No DPA review for Supabase, Stripe, Hetzner, or Cloudflare. #670. |
-
-**Product maturity stage:** Building (Phase 1 deployed, pre-beta, zero external users).
-
-### Business Validation Update (2026-03-22)
-
-5+ founder conversations confirmed the CaaS thesis (multi-domain pain resonates) but rejected CLI/plugin delivery. Founders expect a standalone web/mobile product with visual dashboards and cross-device access. Most interviewed founders do not use Claude Code. This has three implications for the roadmap:
-
-1. **The web platform is no longer a validation surface -- it is the product.** The existing Phase 1-3 structure already builds toward app.soleur.ai, which is correct. But the framing must shift: the platform is not "where beta testers onboard because they don't use Claude Code locally." It is the primary delivery mechanism for all users, including technical ones. The CLI plugin becomes a power-user addon, not the core product.
-
-2. **Phase 2 (Visibility) becomes more urgent.** If the platform is the product, the KB viewer (2.1-2.2) and conversation inbox (2.3) are not "nice to have after beta feedback" -- they are the minimum viable surface for the product the market expects. Founders described wanting dashboards and review queues unprompted. Phase 2 scope should be re-evaluated for promotion into the beta gate.
-
-3. **Recruitment criteria must change.** The Validation Plan currently prefers "founders already using Claude Code or similar AI tools." The user research invalidates this filter. Recruitment should select for founders with multi-domain pain, regardless of their current development tool. The beachhead is defined by the problem (running a company solo), not the tool (Claude Code).
-
----
-
-## Strategic Recommendation
-
-**Option A (recommended): Fix + Secure + Validate**
-
-Ship the smallest surface that a beta tester can use without encountering broken flows or security gaps. Do not build visibility features (Phase 2) until real users ask for them. Promote security hardening from Phase 3 to Phase 1.5 because shipping an unaudited platform to beta users -- even 5 founders -- creates reputational and legal risk disproportionate to the time saved.
-
-| Option | Risk | Scope | Trade-off |
-|--------|------|-------|-----------|
-| A: Fix + Secure + Validate | Low | Medium (2-3 weeks) | Delays beta invites by ~2 weeks. Users arrive to a platform that works and is safe. |
-| B: Fix + Invite immediately | High | Small (days) | Faster to first user. Unaudited security, no error states, no onboarding. First impression is rough. |
-| C: Build Phase 2 first | Medium | Large (4-6 weeks) | KB viewer and inbox are useful but premature. No evidence users need them yet. |
-
-Recommendation: Option A. The BYOK fix (#667) is a blocker measured in hours. The security audit and polish are measured in days. The cost of doing them now is small; the cost of a security incident with beta users is large.
+| Phase 1.0 (Working Loop) | Complete. All blocking issues closed (#667, #668, #669, #670, #671). |
+| Phase 1.5 (Secure + Polish) | Open (#674). 7 tasks unchecked. |
+| Phase 2 (Visibility) | Open (#672). Not started. |
+| Phase 3 (Hardening) | Open (#673). Not started. |
+| Beta users | 0 |
+| Pricing gates passed | 0 of 5 |
+| Milestones | 0 |
 
 ---
 
 ## Phases
 
-### Phase 1.0: Fix What's Broken (in progress)
+### Phase 1: Close the Loop (Mobile-First, PWA)
 
-Unblock the deployed platform. Every item here prevents a new user from completing the core loop.
+**Objective:** A new user signs up from any device, has a real multi-turn conversation with a domain leader, and sees agent output without errors. The app is installable as a PWA.
 
-| # | Item | Issue | Priority | Status |
-|---|------|-------|----------|--------|
-| 1 | BYOK decryption fix -- key retrieval fails after storage | [#667](https://github.com/jikig-ai/soleur/issues/667) | P1 | In progress |
-| 2 | Integration tests for WebSocket, auth, and session flows | [#668](https://github.com/jikig-ai/soleur/issues/668) | P1 | Not started |
-| 3 | Knowledge base page 404 placeholder (graceful empty state) | [#669](https://github.com/jikig-ai/soleur/issues/669) | P2 | Not started |
-| 4 | Vendor DPA review + expense recording (Supabase, Stripe, Hetzner, Cloudflare) | [#670](https://github.com/jikig-ai/soleur/issues/670) | P1 | Not started |
+| # | Feature | Priority | Issue | Status |
+|---|---------|----------|-------|--------|
+| 1.1 | BYOK decryption fix | P1 | [#667](https://github.com/jikig-ai/soleur/issues/667) | Done |
+| 1.2 | Integration tests (WebSocket, auth, session) | P1 | [#668](https://github.com/jikig-ai/soleur/issues/668) | Done |
+| 1.3 | KB 404 placeholder (graceful empty state) | P2 | [#669](https://github.com/jikig-ai/soleur/issues/669) | Done |
+| 1.4 | Vendor DPA review (Supabase, Stripe, Hetzner, Cloudflare) | P1 | [#670](https://github.com/jikig-ai/soleur/issues/670) | Done |
+| 1.5 | Mobile-first responsive UI (sidebar → hamburger menu, touch-optimized nav) | P1 | [#1041](https://github.com/jikig-ai/soleur/issues/1041) | Not started |
+| 1.6 | PWA manifest + service worker + installability (app shell caching only, no offline mode) | P1 | [#1042](https://github.com/jikig-ai/soleur/issues/1042) | Not started |
+| 1.7 | Verify production deployment (end-to-end loop) | P1 | -- | Needs verification |
+| 1.8 | **Multi-turn conversation continuity** (architecture choice deferred to CTO during spec) | P1 | [#1044](https://github.com/jikig-ai/soleur/issues/1044) | **Broken** — agent has amnesia between turns (CTO review) |
+| 1.9 | Pin Agent SDK to exact version (`0.2.80`) | P1 | [#1045](https://github.com/jikig-ai/soleur/issues/1045) | Not started |
+| 1.10 | **Project repo connection** — clone founder's public git repo, install latest Soleur plugin, keep plugin updated | P1 | [#1060](https://github.com/jikig-ai/soleur/issues/1060) | Not started |
 
-**Exit criteria:** A new user can sign up, store a BYOK key, start a conversation with a domain leader, and receive streamed agent output without errors.
+**Why 1.8 is P1 (CTO review):** "A chat product where the agent forgets everything after one turn is not viable even for beta. It will be the first thing every user notices." Each message currently spawns a fresh agent with no memory of prior exchange. `persistSession: false` is explicitly set. **Dependency note:** The multi-turn architecture choice (CTO decision during spec) has downstream implications for 2.4 (GDPR account deletion — what conversation data must be purged?), 2.9 (privacy docs — what is stored?), and 3.3 (conversation inbox — what is displayed?).
 
-### Phase 1.5: Secure + Polish (beta gate) -- [#674](https://github.com/jikig-ai/soleur/issues/674)
+**Why 1.10 is P1:** Without the founder's actual project repo and the Soleur plugin installed, agents operate in a vacuum — no codebase context, no skills, no domain leaders, no institutional memory. The workspace must be the founder's real project, not an empty shell. Scoped to **public repos only** for P1 — private repo support (OAuth/deploy keys) deferred to a later phase.
 
-Items promoted from Phase 3 (security) and added (UX polish) to create a defensible beta experience. Nothing ships to external users until this phase passes.
+**Deferred from P1:**
 
-| # | Item | Origin | Priority | Notes |
-|---|------|--------|----------|-------|
-| 1 | Security audit: workspace isolation, BYOK key handling, OWASP Top 10 | Promoted from Phase 3 (was 3.1) | P1 | Non-negotiable before beta invites. |
-| 2 | CSP headers + CORS policy | Promoted from Phase 3 (was 3.6) | P1 | Prevents XSS and unauthorized API access. |
-| 3 | Session timeout + WebSocket expiry | Promoted from Phase 3 (was 3.7) | P1 | Stale sessions are a security and resource leak. |
-| 4 | UX audit of Phase 1 screens | [#671](https://github.com/jikig-ai/soleur/issues/671) | P2 | Login, BYOK setup, domain selector, chat. Identify broken flows before users hit them. |
-| 5 | User settings page: API key rotation, account deletion | New (GDPR requirement) | P1 | Account deletion is a legal requirement, not a feature. Key rotation is a security baseline. |
-| 6 | Error and empty states in chat and dashboard | New | P2 | No conversation yet, agent error, network disconnect, rate limit -- all need visible handling. |
-| 7 | First-time onboarding walkthrough | New | P2 | Guide the user from login to first successful agent conversation. Reduce time-to-value. |
+- ~~1.10 Tag-and-route data model~~ → Moved to Phase 3. Zero users have tested per-leader chat. Let user behavior inform the data model.
+- ~~1.12 Telegram bridge~~ → Deferred to a later phase. Reach is meaningless with 0 users.
+- Private repo support for 1.10 → Deferred. Public repos prove the pattern in 3 days.
 
-**Exit criteria (beta launch checklist):**
+**UX Vision: L2 → L4**
+
+- **L2 (MVP):** KB viewer renders `roadmap.md` with progress indicators. Founder reads their own roadmap.
+- **L4 (North Star):** Interactive command center — visual roadmap, department activity, drag-to-reprioritize, inline conversations on any artifact. The founder's operating system.
+
+**Exit criteria:**
+
+- New user completes signup, BYOK, multi-turn conversation on mobile browser
+- Agent runs against the founder's actual project repo with Soleur plugin installed
+- Agent remembers context across turns within a conversation
+- PWA installable on iOS, Android, desktop Chrome/Edge
+- Lighthouse mobile score > 80
+
+---
+
+### Phase 2: Secure for Beta
+
+**Objective:** Defensible security, legal, and UX posture. No external user touches the platform until every must-pass gate clears.
+
+| # | Feature | Priority | Source | Status |
+|---|---------|----------|--------|--------|
+| 2.1 | Security audit (OWASP top 10, BYOK handling, workspace isolation, path traversal) | P1 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
+| 2.2 | CSP + CORS headers on all routes | P1 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Partially done |
+| 2.3 | Session timeout + WebSocket expiry on idle | P1 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
+| 2.4 | Account deletion + data purge (GDPR) | P1 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
+| 2.5 | Basic WebSocket rate limiting (per-IP connection throttle) | P1 | CTO review | Not started |
+| 2.6 | Add `/proc` to sandbox deny list | P1 | CTO review | Not started |
+| 2.7 | Update AUP for Web Platform scope | P1 | CLO review | Not started |
+| 2.8 | Update Cookie Policy for app.soleur.ai | P1 | CLO review | Not started |
+| 2.9 | Add conversation history to Privacy Policy, DPD, GDPR register | P1 | CLO review | Not started |
+| 2.10 | Error + empty states (agent failure, network loss, rate limit) | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
+| 2.11 | First-time onboarding walkthrough (include PWA install guidance for iOS) | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
+| 2.12 | UX audit of all Phase 1 screens | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
+
+**Exit criteria (beta launch gate):**
 
 | Gate | Pass/Fail | Criteria |
 |------|-----------|----------|
-| BYOK works end-to-end | Must pass | New user stores key, key decrypts, agent executes. |
-| Security audit complete | Must pass | No critical or high findings open. |
-| CSP + CORS deployed | Must pass | Headers present on all routes. |
-| Session timeout active | Must pass | Idle sessions expire. WebSocket connections close after inactivity. |
-| Account deletion works | Must pass | User can delete account and all associated data. GDPR compliance. |
-| Error states visible | Must pass | Agent failure, network loss, and empty states all render a meaningful message. |
-| Onboarding walkthrough | Should pass | First-time user can complete the loop without external documentation. |
-| Integration tests green | Must pass | Auth, WebSocket, and session tests pass in CI. |
-| DPA review complete | Must pass | Data processing terms reviewed for all vendors. |
+| Security audit complete | Must pass | 0 critical or high findings open |
+| CSP + CORS deployed | Must pass | Headers present on all routes |
+| Session timeout active | Must pass | Idle sessions expire, WebSocket connections close |
+| Account deletion works | Must pass | User can delete account and all data (GDPR) |
+| WS rate limiting active | Must pass | IP-based throttle prevents auth exhaustion |
+| Legal docs updated | Must pass | AUP, Cookie Policy, and privacy docs cover Web Platform + conversation data |
+| Error states visible | Must pass | Agent failure, network loss, empty states render meaningful messages |
+| Onboarding walkthrough | Should pass | First-time user completes the loop without external docs |
+| Integration tests green | Must pass | Auth, WebSocket, session tests pass in CI |
 
-### Phase 2: Visibility (essential for beta) -- [#672](https://github.com/jikig-ai/soleur/issues/672)
+---
 
-The features that make the platform useful beyond a single conversation. Phase 2 is the difference between "I tried it" and "I use it." Build after Phase 1.5 passes, but scope should be shaped by observed user behavior during beta.
+### Phase 3: Make it Sticky
 
-| # | Item | Priority | Notes |
-|---|------|----------|-------|
-| 2.1 | KB REST API (file tree, content, search) | P1 | The data layer for the review loop. |
-| 2.2 | KB viewer UI (sidebar tree, markdown rendering, search) | P1 | The founder reviews plans, brainstorms, and domain leader outputs here. |
-| 2.3 | Conversation inbox with status badges | P1 | The action loop. Which conversations need attention, which are complete, which are blocked on review gates. |
-| 2.4 | Usage/cost indicator for BYOK spending | P2 | Users pay Anthropic directly. They need visibility into what their agents cost. |
-| 2.5 | Email notifications for offline review gates (Resend) | Deferred | Build only if users report missing review gates. |
-| 2.6 | Execution history (completed conversations with outcomes) | Deferred | Build only if users want to revisit past sessions. |
+**Objective:** Turn "I tried it" into "I use it daily." Close the review loop and make the compounding moat visible.
 
-**Why 2.1-2.2 matter:** The knowledge base is Soleur's compounding moat. If users cannot see what their agents produced -- plans, brainstorms, brand guides, competitive analyses -- the value is invisible. The KB viewer closes the review loop: agent produces artifact, founder reviews it, founder refines it, knowledge compounds.
+**Sequencing (per CTO review):** KB API and viewer before inbox.
 
-**Why 2.3 matters:** Without an inbox, the user has no sense of what happened while they were away. For a solo founder who triggers agents and returns later, the inbox is the landing page.
+| # | Feature | Priority | Issue | Status |
+|---|---------|----------|-------|--------|
+| 3.1 | KB REST API (file tree, content, search) | P1 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
+| 3.2 | KB viewer UI (sidebar tree, markdown rendering, search) | P1 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Stub only |
+| 3.3 | Conversation inbox with status badges | P1 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
+| 3.4 | API + MCP service integrations (Cloudflare, Stripe, Plausible first) | P1 | [#1050](https://github.com/jikig-ai/soleur/issues/1050) | Not started |
+| 3.5 | Secure token storage for third-party APIs (BYOK-grade encryption) | P1 | New | Not started |
+| 3.6 | Usage/cost indicator (BYOK spending) | P2 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
+| 3.7 | Review gate notifications (PWA push + email fallback for iOS) | P2 | [#1049](https://github.com/jikig-ai/soleur/issues/1049) | Not started |
+| 3.8 | Guided instructions fallback (deep links + review gates for services without API/MCP) | P2 | New | Not started |
+| 3.9 | Tag-and-route UX (@-mentions, auto-routing, multi-leader threads) | P1 | [#1059](https://github.com/jikig-ai/soleur/issues/1059) | Not started |
+| 3.10 | CI/CD integration (agents trigger deploys, run tests, open PRs on founder's repo) | P1 | New | Not started |
+| 3.11 | Product analytics instrumentation for P4 validation metrics (domain engagement, session frequency, KB growth) | P1 | [#1063](https://github.com/jikig-ai/soleur/issues/1063) | Not started |
+| 3.12 | Pricing page (soleur.ai) | P1 | [#656](https://github.com/jikig-ai/soleur/issues/656) | Not started |
+| 3.13 | Subscription management (cancel, upgrade/downgrade) | P1 | New | Not started |
+| 3.14 | Invoice history + failed payment handling | P2 | New | Not started |
 
-### Phase 3: Hardening -- [#673](https://github.com/jikig-ai/soleur/issues/673)
+**Why 3.1-3.2 matter:** The knowledge base is the compounding moat. If founders cannot see plans, brainstorms, brand guides, and competitive analyses their agents produced, the value is invisible. The KB viewer closes the review loop.
 
-Triggered by user count, not timeline. Each item has a concrete trigger condition.
+**Why 3.3 matters:** A solo founder triggers agents, steps away, returns later. The inbox is the landing page that shows what happened and what needs attention.
 
-| # | Item | Trigger | Notes |
-|---|------|---------|-------|
-| 3.1 | Container-per-workspace | 5+ concurrent users | Current shared-process model is fine for 1-3. Beyond that, isolation matters. |
-| 3.2 | Rate limiting (per-user concurrency, API rate) | Before public launch | Prevents abuse and runaway costs. Not needed during invite-only beta. |
-| 3.3 | Monitoring (execution metrics, error rates, uptime) | 10+ users | Operational visibility. Before this threshold, logs suffice. |
-| 3.4 | Error tracking (Sentry or equivalent) | 10+ users | Structured error tracking replaces grepping logs. |
-| 3.5 | Load testing (50+ concurrent users) | Before public launch | Validates that the architecture holds under real concurrency. |
+**Why 3.4-3.5 matter:** Founders validated service automation as a high-value feature. The 3-tier architecture (API + MCP everywhere, local Playwright on desktop, guided fallback) delivers both guidance and automation. API + MCP integrations cover ~80% of services with zero browser overhead. MCP is a first-class integration tier — services publishing MCP servers get zero-config integration.
+
+**Exit criteria:**
+
+- User can browse KB artifacts produced by agents
+- User can see conversation history with status badges (active, waiting, completed, failed)
+- Agent can provision Cloudflare zones, Stripe accounts, and Plausible sites via API/MCP
+- Review gate notifications reach the user even when offline (push or email)
+- Pricing page live, subscription management works (cancel, upgrade), failed payment handling in place
+- Product analytics tracking domain engagement, session frequency, and KB growth per user
+
+---
+
+### Pre-Phase 4: Marketing Positioning Gate (CMO review)
+
+Before recruiting founders, all public surfaces must reflect the cloud platform positioning. ~5 hours of work.
+
+| # | Item | Effort | Status |
+|---|------|--------|--------|
+| M1 | Update brand guide positioning (remove plugin framing, cloud platform as primary) | 30 min | Not started |
+| M2 | Update homepage hero subtitle + meta description | 30 min | Not started |
+| M3 | Update marketing strategy for cloud pivot | 2 hours | Not started |
+| M4 | Draft recruitment messaging templates per channel | 2 hours | Not started |
+| M5 | Update Getting Started page (cloud platform primary, CLI plugin secondary) | 2 hours | Not started |
+| M6 | Standardize agent/skill counts across all surfaces | 2 hours | Not started |
+
+**Gate:** No recruitment outreach until M1-M4 complete.
+
+---
+
+### Pre-Phase 4: Multi-User Readiness Gate (CPO review)
+
+Before recruiting founders, the platform must handle multiple users signing up and getting their own workspaces.
+
+| # | Item | Status |
+|---|------|--------|
+| MU1 | Signup provisions a workspace (git clone + plugin install per user) | Depends on P1 item 1.10 |
+| MU2 | BYOK encryption works per-tenant (each user's API key isolated) | Existing — verify |
+| MU3 | Workspace isolation at process level (container isolation is P4 hardening, but basic isolation must work) | Existing bubblewrap sandbox — verify with cross-workspace integration test |
+
+**Gate:** All three must pass before any recruitment outreach.
+
+---
+
+### Phase 4: Validate + Scale
+
+**Objective:** Recruit founders, prove the CaaS thesis with real usage, activate payments. Triggered by readiness, not calendar.
+
+| # | Feature | Priority | Trigger | Status |
+|---|---------|----------|---------|--------|
+| 4.1 | Recruit 10 solo founders (mixed channels) | P1 | Phase 2 + Marketing Gate + Multi-User Gate complete | Not started |
+| 4.2 | Problem interviews (no demo) | P1 | 10 founders recruited | Not started |
+| 4.3 | Guided onboarding with top 5 | P1 | 5+ pass problem interviews | Not started |
+| 4.4 | 2-week unassisted usage tracking | P1 | Onboarding complete | Not started |
+| 4.5 | Exit interviews + willingness-to-pay | P1 | 2 weeks elapsed | Not started |
+| 4.6 | Container-per-workspace isolation | P1 | 5+ concurrent users | [#673](https://github.com/jikig-ai/soleur/issues/673) |
+| 4.7 | Rate limiting (per-user concurrency, API rate) | P1 | Before public launch | [#673](https://github.com/jikig-ai/soleur/issues/673) |
+| 4.8 | Resource monitoring (CPU/RAM per workspace) | P1 | Before beta invites | [#673](https://github.com/jikig-ai/soleur/issues/673) |
+| 4.9 | Monitoring + error tracking | P2 | 10+ users | [#673](https://github.com/jikig-ai/soleur/issues/673) |
+| 4.10 | Stripe live mode activation | P1 | 4 of 5 pricing gates pass | Not started |
+
+**Recruitment channels:** Claude Code Discord, GitHub (developers with business-operations repos), IndieHackers, X/Twitter solopreneur network, direct network.
+
+**Recruitment mix constraint (CMO review):** At least 3 of 10 founders must NOT be current Claude Code users. If all recruits come from the Claude Code ecosystem, you validate the plugin-to-cloud migration path, not the cloud platform value proposition from cold.
+
+**Validation protocol:**
+
+1. Problem interview first (no demo). Does the founder independently describe multi-domain pain?
+2. Guided onboarding with top 5. Observe which domain leader they choose first.
+3. 2-week unassisted usage. Track: returns, KB growth, non-engineering agent usage.
+4. Exit interview. What worked? What's missing? Would they pay $49/month?
+
+**What we learn:**
+
+- If every user only uses the engineering domain, the CaaS thesis is wrong.
+- If users engage multiple domains but ignore the KB, the compounding thesis is wrong.
+- If users engage multiple domains AND return to the KB, the thesis holds.
+
+**Exit criteria:**
+
+- 10 founders recruited, 5+ use 2+ domains for 2+ weeks
+- 3+ express willingness to pay $49/month
+- Container isolation handles 5+ concurrent users
+- Rate limiting prevents abuse
+
+---
+
+### Phase 5: Desktop Native App (Browser Automation)
+
+**Objective:** Ship a desktop app (Electron or Tauri) that provides local Playwright browser automation — the one capability PWA cannot deliver. Triggered by user demand, not calendar.
+
+| # | Feature | Priority | Trigger | Status |
+|---|---------|----------|---------|--------|
+| 5.1 | Electron/Tauri app wrapping the web platform | P1 | Beta users request browser automation | Not started |
+| 5.2 | Local Playwright integration for third-party service setup | P1 | Desktop app shipped | Not started |
+| 5.3 | Reuse ops-provisioner guided setup pattern (3-phase: Setup, Configure, Verify) | P1 | Playwright integrated | Not started |
+| 5.4 | Auto-update mechanism | P2 | Desktop app shipped | Not started |
+| 5.5 | Code signing (macOS + Windows) | P1 | Before distribution | Not started |
+
+**Why this phase exists:** Browser automation is impossible on PWA, iOS, and Android due to platform sandboxing. Only a native desktop app can run Playwright locally on the user's machine. This is the desktop app's reason to exist — not wrapping the web app, but providing a capability no other surface can.
+
+**Electron vs. Tauri:** Decision deferred to planning. Electron is heavier (~200MB) but mature ecosystem. Tauri is lighter (~10MB) but uses system webview.
+
+**Exit criteria:**
+
+- Desktop app installable on macOS + Windows
+- Agent can automate Cloudflare/Stripe/Plausible signup via local Playwright
+- Pause at CAPTCHA/OAuth, user handles in their own browser
+- Auto-updates work
 
 ---
 
 ## Pricing
 
-**Current hypothesis:** $49/month subscription + BYOK (user provides their own Anthropic API key).
-
-**Status:** 0 of 5 pricing gates passed. Stripe is in test mode. Do not activate live payments until at least 4 gates pass.
+**Hypothesis:** $49/month + BYOK. Stripe in test mode until 4 of 5 pricing gates pass.
 
 | Gate | Criteria | Status |
 |------|----------|--------|
 | Demand validation | 10+ solo founders used the platform for 2+ weeks | Not started |
 | Multi-domain validation | 5+ users engaged with 2+ non-engineering domains | Not started |
 | Willingness-to-pay signal | 3+ founders say they would pay $49/month | Not started |
-| Infrastructure cost model | Hosting costs understood per-user, margin is positive | Not assessed |
+| Infrastructure cost model | Hosting costs per-user understood, margin positive | CFO assessed: EUR 35-44/month burn, break-even at 1-2 users |
 | Cowork differentiation clear | Users articulate why Soleur is worth paying for vs. free Cowork plugins | Not started |
 
-**Decision:** Keep Stripe in test mode through Phase 1.5 and Phase 2. Revisit pricing after beta validation data exists. Full analysis in `knowledge-base/product/pricing-strategy.md`.
+Full analysis: `knowledge-base/product/pricing-strategy.md`.
 
 ---
 
-## Validation Plan
+## Immediate Actions
 
-The business validation verdict is PIVOT: stop building features, start validating with users. The web platform exists to make that validation possible -- it is the onboarding surface for beta testers who do not use Claude Code locally.
-
-### Recruitment
-
-- **Target:** 5-10 solo founders from mixed channels.
-- **Channels:** Claude Code Discord, GitHub (developers with business-operations repos), IndieHackers, direct network.
-- **Selection criteria:** Must be building a real product (not exploring). Must be willing to use the platform for 2+ weeks. Prefer founders already using Claude Code or similar AI tools.
-
-### Protocol
-
-1. **Problem interview first (no demo).** Does the founder independently describe multi-domain pain? If fewer than 5 of 10 describe it, the thesis does not resonate.
-2. **Guided onboarding with the top 5.** Walk them through auth, BYOK, first conversation. Observe which domain leader they choose first and why.
-3. **2-week unassisted usage.** Track: Do they return? Does the knowledge base grow? Do they use non-engineering agents without prompting?
-4. **Exit interview.** What worked? What was missing? Would they pay $49/month? What would it need to deliver?
-
-### What we learn
-
-- Phase 2 scope should be shaped by what users ask for, not what we assume they need.
-- If every user only uses the engineering domain leader, the CaaS thesis is wrong and the platform is a worse Cursor.
-- If users engage multiple domains but ignore the KB, the compounding thesis is wrong and the platform is a chatbot.
-- If users engage multiple domains AND return to the KB, the thesis holds and Phase 2 (KB viewer, inbox) becomes urgent.
+| Action | Owner | Deadline | Notes |
+|--------|-------|----------|-------|
+| Decide Plausible Analytics (keep at EUR 9/month or switch to Cloudflare Web Analytics) | COO | 2026-03-24 | Trial expires tomorrow |
+| Create `knowledge-base/finance/cost-model.md` | CFO/budget-analyst | Before P4 | No finance artifacts exist. Pricing Gate #4 partially addressed by CFO review. |
 
 ---
 
@@ -174,23 +328,22 @@ The business validation verdict is PIVOT: stop building features, start validati
 
 | This roadmap depends on | Path | Why |
 |------------------------|------|-----|
-| Pricing strategy | `knowledge-base/product/pricing-strategy.md` | Pricing gates, tier structure, competitive pricing context. |
-| Web platform spec and tasks | `knowledge-base/project/specs/feat-web-platform-ux/tasks.md` | Phase 1 task list, Phase 2-3 task definitions. |
-| Business validation | `knowledge-base/product/business-validation.md` | PIVOT verdict, demand evidence, customer definition. |
-| Competitive intelligence | `knowledge-base/product/competitive-intelligence.md` | Tier 0 threats, pricing anchors, differentiation axis. |
+| Business validation | `knowledge-base/product/business-validation.md` | PIVOT verdict, demand evidence, customer definition |
+| Competitive intelligence | `knowledge-base/product/competitive-intelligence.md` | Tier 0 threats, pricing anchors, differentiation |
+| Pricing strategy | `knowledge-base/product/pricing-strategy.md` | Pricing gates, tier structure, competitive pricing |
 
 ---
 
 ## Review Cadence
 
-Monthly CPO review. More frequent than marketing's quarterly cadence because the product is pre-product-market-fit -- the landscape changes faster than a quarter allows.
+Monthly CPO review. Pre-product-market-fit: the landscape changes faster than a quarter allows.
 
-- **Monthly:** Review phase progress against this roadmap. Update statuses. Re-assess priorities based on user signal (or lack of it).
-- **After each beta cohort:** Update validation findings. Adjust Phase 2 scope. Re-evaluate pricing gates.
+- **Monthly:** Review phase progress. Update statuses. Re-assess priorities based on user signal.
+- **After each beta cohort:** Update validation findings. Adjust Phase 3 scope.
 - **Quarterly:** Full roadmap revision. Cross-reference with competitive intelligence and marketing strategy.
 
-Next review: 2026-04-17. The 2026-03-22 business validation update warrants an interim review before the next scheduled monthly date if Phase 2 scope decisions are needed sooner.
+Next review: 2026-04-23.
 
 ---
 
-_Generated: 2026-03-17. Updated: 2026-03-22 (business validation delivery pivot annotation). Sources: business-validation.md (2026-03-22), pricing-strategy.md (2026-03-22), tasks.md (2026-03-16), marketing-strategy.md (2026-03-13)._
+_Generated: 2026-03-23. Domain review: CTO, CLO, CFO, CMO (2026-03-23). Sources: business-validation.md (2026-03-12), competitive-intelligence.md (2026-03-12), pricing-strategy.md (2026-03-12), brand-guide.md (2026-02-21). Workshop conducted via /soleur:product-roadmap skill._
