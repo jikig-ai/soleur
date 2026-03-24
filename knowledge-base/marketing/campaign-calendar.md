@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-03-23
+last_updated: 2026-03-24
 ---
 
 # Campaign Calendar
@@ -11,6 +11,7 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|-------------|----------|--------|
 | From Scattered Positioning to a Full Brand Guide in Two Sessions | case-study | 2026-03-24 | discord, x, bluesky, linkedin-company | scheduled |
+| Vibe Coding vs Agentic Engineering: What Solo Founders Need to Know | pillar | 2026-03-24 | discord, x, bluesky, linkedin-company | scheduled |
 | Running a Business Validation Workshop With AI Gates | case-study | 2026-03-26 | discord, x, bluesky, linkedin-company | scheduled |
 
 ## Published
@@ -18,9 +19,9 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|-------------|----------|--------|
 | How We Generated 9 Legal Documents in Days, Not Months | case-study | 2026-03-21 | bluesky, linkedin-company | published |
-| Why Most Agentic Engineering Tools Plateau | pillar | 2026-03-21 | bluesky, linkedin-company | published |
 | Building an Operations Department for a One-Person Company | case-study | 2026-03-21 | bluesky, linkedin-company | published |
 | Tracking 17 Competitors in One Session -- With Battlecards | case-study | 2026-03-21 | bluesky, linkedin-company | published |
+| Why Most Agentic Engineering Tools Plateau | pillar | 2026-03-21 | bluesky, linkedin-company | published |
 | Soleur vs. Cursor: When an AI Coding Tool Becomes an Agent Platform | comparison | 2026-03-19 | discord, x | published |
 | Soleur vs. Notion Custom Agents: Company-as-a-Service vs. Workspace Automation | comparison | 2026-03-17 | discord, x | published |
 | Soleur vs. Anthropic Cowork: Which AI Agent Platform Is Right for Solo Founders? | comparison | 2026-03-16 | discord, x | published |
