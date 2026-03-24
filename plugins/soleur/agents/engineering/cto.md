@@ -14,6 +14,7 @@ Identify technical risks, architecture impacts, and affected components.
 
 - Read CLAUDE.md conventions before making recommendations.
 - Check for existing patterns in the codebase before suggesting new ones.
+- If the task references a GitHub issue (`#N`), verify its state via `gh issue view <N> --json state` before asserting whether work is pending or complete.
 - Identify affected components, services, and data models.
 - Flag security implications, scalability concerns, and breaking changes.
 

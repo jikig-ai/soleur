@@ -1,5 +1,10 @@
 ---
-last_reviewed: 2026-03-12
+last_updated: 2026-03-22
+last_reviewed: 2026-03-22
+review_cadence: monthly
+owner: CPO
+depends_on:
+  - knowledge-base/product/business-validation.md
 tiers_scanned: [0, 3]
 ---
 
@@ -43,6 +48,7 @@ Platform-native competition represents the existential risk tier. These competit
 5. **Windsurf SWE-1.6 preview and Codemaps launch.** Cognition continues building the most complete engineering-only platform through model improvements and structural code understanding features ([source](https://cognition.ai/blog/1)).
 
 **Soleur's remaining Tier 0 advantages:**
+
 - Compounding cross-domain knowledge base (no competitor has this)
 - Workflow lifecycle orchestration (brainstorm > plan > implement > review > compound)
 - 60+ agents with shared institutional memory across 8 domains
@@ -91,6 +97,7 @@ Tier 3 competitors either offer AI-powered coding services or position as full-s
 6. **v0.app added custom MCP server support (March 6).** Programmatic agent configuration via API broadens v0's extensibility surface ([source](https://vercel.com/changelog)).
 
 **Soleur's remaining Tier 3 advantages:**
+
 - Only platform combining engineering depth with 8-domain business breadth
 - Compounding knowledge base across all domains (Polsia has no cross-domain knowledge compounding; Tanka has memory but communication-scoped; Paperclip has no knowledge layer)
 - Founder-as-decision-maker philosophy (vs. Polsia's fully autonomous approach)
@@ -151,10 +158,12 @@ Notion's free beta ends May 3, 2026. Credit-based pricing ($10/1,000 credits) wi
 _Generated: 2026-03-12_
 
 **Source documents:**
+
 - `knowledge-base/marketing/brand-guide.md` (last updated: 2026-02-21) -- **WARNING: 19 days since last update, approaching 30-day staleness threshold**
 - `knowledge-base/product/business-validation.md` (last updated: 2026-03-12)
 
 **Research sources:**
+
 - [Microsoft Copilot Cowork Launch (Microsoft 365 Blog, Mar 9 2026)](https://www.microsoft.com/en-us/microsoft-365/blog/2026/03/09/copilot-cowork-a-new-way-of-getting-work-done/)
 - [Microsoft Copilot Cowork Anthropic Integration (WinBuzzer, Mar 10 2026)](https://winbuzzer.com/2026/03/10/microsoft-copilot-cowork-anthropic-claude-m365-agent-xcxwbn/)
 - [Microsoft Copilot Cowork AI Agent (VentureBeat, Mar 2026)](https://venturebeat.com/orchestration/microsoft-announces-copilot-cowork-with-help-from-anthropic-a-cloud-powered)

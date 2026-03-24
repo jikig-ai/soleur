@@ -2,6 +2,7 @@
 last_updated: 2026-03-20
 last_reviewed: 2026-03-20
 review_cadence: monthly
+owner: CMO
 depends_on:
   - knowledge-base/product/competitive-intelligence.md
   - knowledge-base/marketing/content-strategy.md

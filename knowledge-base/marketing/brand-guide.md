@@ -1,7 +1,10 @@
 ---
-last_updated: 2026-02-21
-last_reviewed: 2026-03-02
+last_updated: 2026-03-22
+last_reviewed: 2026-03-22
 review_cadence: quarterly
+owner: CMO
+depends_on:
+  - knowledge-base/product/business-validation.md
 ---
 
 # Soleur Brand Guide
@@ -26,6 +29,8 @@ Soleur is not a copilot. Not an assistant. It is a full AI organization -- 61 ag
 
 **Thesis:** "The first billion-dollar company run by one person isn't science fiction. It's an engineering problem. We're solving it."
 
+> **[2026-03-22 Business Validation Review]** The positioning statement, tagline, and thesis remain valid -- user research confirmed the CaaS vision resonates strongly with founders. However, "terminal-first workflow" is no longer a positioning asset. The positioning must be delivery-agnostic: accessible from any device, not tied to a specific development environment. The phrase "operates as every department from strategy to shipping" holds. What changes is the access surface, not the mission. When the web platform ships, positioning language should emphasize "accessible anywhere" alongside the existing "full AI organization" framing. No changes to mission or thesis required.
+
 ## Voice
 
 ### Brand Voice
@@ -47,6 +52,7 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 ### Do's and Don'ts
 
 **Do:**
+
 - Lead with what becomes possible, not what the tool does
 - Use declarative statements ("Build at scale" not "Try building at scale")
 - Frame the founder as the decision-maker, the system as the executor
@@ -56,9 +62,11 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 - Keep sentences short and punchy in marketing copy
 
 **Don't:**
+
 - Say "AI-powered" or "leverage AI" -- the entire platform is AI; saying it is redundant
 - Use "just" or "simply" -- these minimize the ambition
 - Say "assistant" or "copilot" -- Soleur is an organization, not a helper
+- Say "terminal-first" or "CLI-native" as a positioning advantage -- the delivery pivot requires device-agnostic language [added 2026-03-22, per business validation]
 - Hedge with "might," "could," or "potentially"
 - Use startup jargon ("disrupt," "synergy," "move the needle")
 - Over-explain -- trust the reader's intelligence
@@ -68,21 +76,25 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 ### Example Phrases
 
 **Announcements:**
+
 - "Every department. From idea to shipped."
 - "Your AI organization just got smarter."
 - "One founder. Full-stack AI. No compromises."
 
 **Product descriptions:**
+
 - "You decide. Agents execute. Knowledge compounds."
 - "Not a copilot. Not an assistant. A full AI organization that reviews, plans, builds, remembers, and self-improves."
 - "Designed, built, and shipped by Soleur -- using Soleur."
 
 **Community replies:**
+
 - "Shipped. Let us know what you build with it."
 - "Good catch. Fix is in, deploying now."
 - "That's the right instinct. Here's how to wire it up."
 
 **Error / system messages:**
+
 - "Agent failed on step 3. Logs attached. Retrying with fallback."
 - "Knowledge base updated. 4 new learnings captured."
 
@@ -169,6 +181,7 @@ The visual identity follows the **Solar Forge** direction: raw power being shape
 These guardrails apply in both automatic mode (fetch-mentions) and manual mode (Free tier 403 fallback). The human reviewer is the enforcement mechanism.
 
 **Topics to avoid:**
+
 - Political, partisan, or religiously divisive topics
 - Competitor criticism or comparisons -- state what Soleur does, never what others lack
 - Unverified claims or speculation about roadmap dates
@@ -191,6 +204,7 @@ These guardrails apply in both automatic mode (fetch-mentions) and manual mode (
 - Example post: "Most AI coding tools solve 30% of running a company. The other 70% -- marketing, legal, finance, ops -- is still manual.\n\nI spent the last 6 months building an AI organization that handles all of it. 40+ agents across 8 departments, sharing a compounding knowledge base.\n\nThe surprising part: the hardest problem wasn't the AI. It was getting agents to share context across departments.\n\n[link to article]\n\n#solofounder #buildinpublic"
 
 **When to skip a mention:**
+
 - Abusive, harassing, or spam content
 - Off-topic mentions with no connection to Soleur or solo-founder topics
 - Mentions that are themselves rage-bait or provocative in tone (thread-level context review is a human reviewer responsibility during the approval step)
@@ -200,12 +214,14 @@ These guardrails apply in both automatic mode (fetch-mentions) and manual mode (
 - Accounts whose mention content creates brand association risk (full account history review is a human reviewer responsibility during the approval step)
 
 **Reply cadence:**
+
 - Maximum 10 replies per engagement session
 - Minimum 2-minute gap between posting replies. X's algorithm penalizes rapid-fire bursts that look automated.
 - One reply per thread -- do not enter extended back-and-forth. Escalate complex questions to Discord or docs.
 - Default to skipping when unsure -- silence is safer than a misaligned reply
 
 **Tone in replies:**
+
 - Match the register of the original tweet (technical question gets a technical answer, casual mention gets a concise acknowledgment)
 - Never argue or debate -- state the position once, then disengage
 - Credit insight in feature suggestions ("Solid idea. Filed as #N." not "Thanks for the feedback!")
@@ -258,6 +274,7 @@ These guardrails apply in both automatic mode (fetch-mentions) and manual mode (
 Same guardrails as X/Twitter apply (see above), with these Bluesky-specific additions:
 
 **Bluesky-specific:**
+
 - Maximum 5 replies per engagement session (smaller community, higher visibility per reply)
 - No rapid-fire posting. Space posts at least 3 minutes apart. The small community notices automated patterns quickly.
 - Engage authentically in AT Protocol and decentralization discussions -- this is native territory for Soleur's builder audience.
@@ -283,3 +300,5 @@ Same guardrails as X/Twitter apply (see above), with these Bluesky-specific addi
 - Stats should feel monumental: large numbers, minimal labels.
 - The footer tagline is always: "Designed, built, and shipped by Soleur -- using Soleur."
 - Final CTA: "Ready to build at scale?" / "Your AI organization is ready. Are you?" / Start Building.
+
+> **[2026-03-22 Business Validation Review]** When the web platform launches, the website CTA must shift from plugin installation to platform signup/login. The hero pattern, visual identity, and brand energy transfer directly -- the Solar Forge aesthetic is delivery-agnostic. The stats line ("61 agents, 8 departments, 1 founder") remains valid. CTA copy candidates: "Start Building" (current, still works), "Open Your Dashboard", "Meet Your Organization." Do not reference CLI installation as the primary CTA in any new landing page content.
