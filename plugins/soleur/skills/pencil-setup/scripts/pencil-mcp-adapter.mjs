@@ -115,7 +115,12 @@ class PencilProcess {
     this.buffer = "";
     this.nodeIdMap.clear();
 
-    this.child = nodeSpawn(binary, args, {
+    // Spawn pencil using the adapter's own Node binary (process.execPath)
+    // instead of relying on the pencil script's #!/usr/bin/env node shebang,
+    // which resolves to the system Node (potentially <22) and fails with
+    // ERR_REQUIRE_ESM. This guarantees the child process uses the same
+    // Node version (22+) that runs the adapter.
+    this.child = nodeSpawn(process.execPath, [binary, ...args], {
       stdio: ["pipe", "pipe", "pipe"],
       env: buildPencilEnv(),
     });
