@@ -87,6 +87,19 @@ import { spawn } from "node:child_process";
 - `open_document` — restart `pencil interactive` with new `--in`/`--out` file paths
 - `save` — explicit save (maps to `save()` REPL command)
 
+### Child Process Stdio Configuration (CRITICAL)
+
+The adapter's own stdio is consumed by MCP transport (StdioServerTransport reads from `process.stdin`, writes to `process.stdout`). The `pencil interactive` child process MUST use separate pipes:
+
+```javascript
+spawn(pencilBinary, ['interactive', '--out', filePath], {
+  stdio: ['pipe', 'pipe', 'pipe'],  // CRITICAL: never inherit
+  env: buildPencilEnv(),  // explicit allowlist, never { ...process.env }
+});
+```
+
+If child stdout inherits from the adapter's stdout, REPL output corrupts the MCP JSON-RPC stream. Child stderr should be logged to the adapter's stderr (which is safe — MCP only uses stdin/stdout).
+
 ### REPL Protocol Parsing
 
 The interactive shell has a specific response format:
@@ -98,11 +111,14 @@ pencil >
 
 The adapter needs to:
 
-1. Send a command line to stdin
-2. Buffer stdout until the next `pencil >` prompt appears
-3. Strip ANSI codes from output
-4. Parse JSON-like responses or structured text
-5. Handle `[ERROR]` prefixed lines as tool errors
+1. **Startup buffering** — consume the welcome banner and initial `pencil >` prompt before sending any commands
+2. **Command sender** — write a command line to child stdin, terminated by `\n`
+3. **Response buffering** — buffer child stdout until the next `\npencil >` prompt appears (anchored with newline prefix + trailing space to avoid false matches inside response content)
+4. **ANSI stripping** — strip escape sequences BEFORE prompt detection (order matters)
+5. **Error detection** — lines prefixed with `[ERROR]` or `[31mError:` indicate tool failures
+6. **Command queue** — MCP clients may send concurrent tool calls, but the REPL is serial. The adapter must queue commands and process them sequentially.
+7. **Per-command timeout** — if no prompt appears within 30 seconds, return an MCP error and optionally restart the pencil process
+8. **Node ID extraction** — parse `batch_design` responses to extract generated node IDs (e.g., "Inserted node 4jQbj") and maintain an in-memory binding-to-ID map for cross-call reference. CRITICAL: binding names are ephemeral within a single `batch_design` call.
 
 ### Node Version Management
 
@@ -219,11 +235,9 @@ The npm package name must not appear in public-facing code, issues, or docs unti
 6. Set `PREFERRED_MODE=headless_cli`, `PREFERRED_BINARY=<path to adapter>`, `PREFERRED_APP=""`
 7. Update cascade: `try_headless_cli_tier || try_cli_tier || try_desktop_tier || try_ide_tier`
 
-### Phase 3: Setup Skill Updates (`SKILL.md`)
+### Phase 3: Registration, Docs & Verification
 
-**File to modify:** `plugins/soleur/skills/pencil-setup/SKILL.md`
-
-**Changes:**
+**Setup Skill Updates** (`plugins/soleur/skills/pencil-setup/SKILL.md`):
 
 1. Add headless CLI mode to Phase 0 output variables documentation
 2. Add `### Headless CLI mode (PREFERRED_MODE=headless_cli)` registration section:
@@ -232,26 +246,22 @@ The npm package name must not appear in public-facing code, issues, or docs unti
 4. Update Sharp Edges (already partially done in brainstorm session)
 5. Add auth guidance: if `pencil status` shows unauthenticated, guide through `pencil login` or `PENCIL_CLI_KEY`
 
-### Phase 4: Constitution & Agent Updates
-
-**Files to modify:**
+**Constitution & Agent Updates** (same commit):
 
 1. `knowledge-base/project/constitution.md` line ~101 — add headless mode addendum:
    - No visible editor tab requirement
-   - `save()` works programmatically (no Ctrl+S needed)
+   - `save()` works programmatically — no Ctrl+S needed (reword "no programmatic save exists" to scope it to IDE/Desktop modes)
    - Read-before-write still applies
    - Auth required (PENCIL_CLI_KEY or pencil login)
+2. `plugins/soleur/agents/product/design/ux-design-lead.md` line ~11 — update prerequisites to mention headless option first
 
-2. `plugins/soleur/agents/product/design/ux-design-lead.md` line ~11 — update prerequisites to mention headless option:
-   - If Pencil MCP tools unavailable, suggest headless CLI as first option
-
-### Phase 5: Integration Verification
+**Integration Verification** (before PR):
 
 1. Register the adapter: `claude mcp add -s user pencil -- node pencil-mcp-adapter.mjs`
-2. Restart Claude Code
-3. Test `get_editor_state` via ux-design-lead
-4. Test `batch_design` + `get_screenshot` end-to-end
-5. Test `save()` auto-call after mutation
+2. Restart Claude Code, verify `mcp__pencil__*` tools appear
+3. Test `get_editor_state` returns document state
+4. Test `batch_design` creates nodes, node IDs tracked, auto-saves
+5. Test `get_screenshot` with tracked node ID
 6. Test fallback: unregister adapter, verify Desktop/IDE tiers still work
 
 ## References & Research
