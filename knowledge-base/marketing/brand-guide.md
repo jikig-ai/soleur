@@ -31,6 +31,14 @@ Soleur is not a copilot. Not an assistant. It is a full AI organization -- 61 ag
 
 > **[2026-03-22 Business Validation Review]** The positioning statement, tagline, and thesis remain valid -- user research confirmed the CaaS vision resonates strongly with founders. However, "terminal-first workflow" is no longer a positioning asset. The positioning must be delivery-agnostic: accessible from any device, not tied to a specific development environment. The phrase "operates as every department from strategy to shipping" holds. What changes is the access surface, not the mission. When the web platform ships, positioning language should emphasize "accessible anywhere" alongside the existing "full AI organization" framing. No changes to mission or thesis required.
 
+## Founder
+
+- **Name:** Jean Deruelle
+- **Role:** Founder & CEO
+- **Company:** Jikigai (legal entity), operating Soleur (product)
+
+Use this section as the authoritative source when any skill or agent needs to attribute content, generate About pages, produce author schema, or write LinkedIn Personal posts in the founder's voice. Never infer the founder's name from org names, GitHub handles, or domain slugs.
+
 ## Voice
 
 ### Brand Voice
