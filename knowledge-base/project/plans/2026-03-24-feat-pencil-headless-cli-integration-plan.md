@@ -100,25 +100,37 @@ spawn(pencilBinary, ['interactive', '--out', filePath], {
 
 If child stdout inherits from the adapter's stdout, REPL output corrupts the MCP JSON-RPC stream. Child stderr should be logged to the adapter's stderr (which is safe — MCP only uses stdin/stdout).
 
-### REPL Protocol Parsing
+### REPL Protocol Parsing [Updated 2026-03-24 — verified against pencil 0.2.3]
 
-The interactive shell has a specific response format:
+The interactive shell has a specific response format. The prompt contains ANSI codes:
 
 ```text
-pencil > [command response here - may be multiline]
-pencil >
+\x1b[36mpencil\x1b[39m \x1b[2m>\x1b[22m [response]\n\x1b[36mpencil\x1b[39m \x1b[2m>\x1b[22m
 ```
+
+After ANSI stripping, the prompt is `pencil >` (with trailing space).
+
+**Verified response formats:**
+
+- **batch_design success**: `# Successfully executed all operations.\n\n## Operation results:\n- Inserted node \`<ID>\`: \`{...json...}\`\n\n## The following bindings are NO LONGER AVAILABLE to use:\n\`<binding>\``
+- **batch_get**: JSON object `{"nodes": [...]}`
+- **get_editor_state**: Plain text with markdown headings (`## Currently active editor`, `## Document State:`)
+- **get_screenshot**: JSON object `{"image": "<base64-png>", "mimeType": "image/png"}`
+- **save()**: `Saved <path>` (with `[32m` green ANSI prefix)
+- **Error (tool-level)**: `Error: <message>` (with `[31m` red ANSI prefix)
+- **Error (batch_design)**: `[ERROR] <message>` prefix, followed by stack trace, then `Error: ## Failure during operation execution\n\nFailed to execute...\n\nAll operations in this block have been rolled back.`
+- **INFO lines**: `[INFO] Starting Pencil...` etc. — appear mixed with stdout during startup
 
 The adapter needs to:
 
-1. **Startup buffering** — consume the welcome banner and initial `pencil >` prompt before sending any commands
+1. **Startup buffering** — consume the welcome banner (`Pencil Interactive Shell`, file info, usage hints) and initial `pencil >` prompt before sending any commands. Also ignore `[INFO]` lines during startup.
 2. **Command sender** — write a command line to child stdin, terminated by `\n`
-3. **Response buffering** — buffer child stdout until the next `\npencil >` prompt appears (anchored with newline prefix + trailing space to avoid false matches inside response content)
-4. **ANSI stripping** — strip escape sequences BEFORE prompt detection (order matters)
-5. **Error detection** — lines prefixed with `[ERROR]` or `[31mError:` indicate tool failures
+3. **Response buffering** — buffer child stdout until the next prompt appears after ANSI stripping. Match `\npencil >` (newline + `pencil >`) or `^pencil >` at buffer start.
+4. **ANSI stripping** — strip escape sequences BEFORE prompt detection (order matters). Regex: `/\x1b\[[0-9;]*[a-zA-Z]/g`
+5. **Error detection** — after ANSI stripping, detect: (a) lines starting with `Error:` (tool-level), (b) lines starting with `[ERROR]` (batch operation errors). Both indicate tool failures. Return as MCP error responses with `isError: true`.
 6. **Command queue** — MCP clients may send concurrent tool calls, but the REPL is serial. The adapter must queue commands and process them sequentially.
 7. **Per-command timeout** — if no prompt appears within 30 seconds, return an MCP error and optionally restart the pencil process
-8. **Node ID extraction** — parse `batch_design` responses to extract generated node IDs (e.g., "Inserted node 4jQbj") and maintain an in-memory binding-to-ID map for cross-call reference. CRITICAL: binding names are ephemeral within a single `batch_design` call.
+8. **Node ID extraction** — parse `batch_design` responses for the pattern `Inserted node \`([A-Za-z0-9]+)\`` to extract generated node IDs. The response also includes the binding name in the operation results. Maintain an in-memory binding-to-ID map. CRITICAL: binding names are ephemeral within a single `batch_design` call — the response explicitly says "bindings are NO LONGER AVAILABLE."
 
 ### Node Version Management
 
