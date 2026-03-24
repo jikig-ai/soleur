@@ -87,6 +87,7 @@ class PencilProcess {
     this.child = null;
     this.ready = false;
     this.buffer = "";
+    this.stderrBuffer = "";
     this.outputFile = null;
     this.inputFile = null;
     this.nodeIdMap = new Map();
@@ -110,8 +111,9 @@ class PencilProcess {
       env: buildPencilEnv(),
     });
 
-    // Pipe child stderr to adapter stderr (safe — MCP only uses stdin/stdout)
+    // Capture child stderr for error reporting AND pipe to adapter stderr
     this.child.stderr.on("data", (chunk) => {
+      this.stderrBuffer += chunk.toString();
       process.stderr.write(chunk);
     });
 
@@ -157,8 +159,13 @@ class PencilProcess {
       throw new Error("Pencil process is not running");
     }
     this.buffer = "";
+    this.stderrBuffer = "";
     this.child.stdin.write(cmd + "\n");
     const raw = await this.waitForPrompt(30000);
+    // If stdout response is empty but stderr has content, use stderr
+    if (!raw && this.stderrBuffer) {
+      return this.stderrBuffer;
+    }
     return raw;
   }
 
@@ -335,7 +342,7 @@ function registerMutatingTool(name, schema, postHandler) {
 // --- Read-only tools ---
 
 registerReadOnlyTool("batch_get", {
-  patterns: z.array(z.record(z.unknown())).optional(),
+  patterns: z.array(z.record(z.string(), z.unknown())).optional(),
   nodeIds: z.array(z.string()).optional(),
   readDepth: z.number().optional(),
 });
@@ -453,11 +460,11 @@ registerMutatingTool(
 
 registerMutatingTool("replace_all_matching_properties", {
   parents: z.array(z.string()),
-  properties: z.record(z.unknown()),
+  properties: z.record(z.string(), z.unknown()),
 });
 
 registerMutatingTool("set_variables", {
-  variables: z.record(z.unknown()),
+  variables: z.record(z.string(), z.unknown()),
   replace: z.boolean().optional(),
 });
 

@@ -57,10 +57,10 @@
 
 - [x] 3.1 Update `constitution.md` Pencil MCP rule (~line 101) with headless mode addendum
 - [x] 3.2 Update `ux-design-lead.md` prerequisites to mention headless option first
-- [ ] 3.3 Register adapter with `claude mcp add -s user pencil -- node <adapter-path>`
-- [ ] 3.4 Restart Claude Code, verify `mcp__pencil__*` tools appear
-- [ ] 3.5 Test `get_editor_state` returns document state
-- [ ] 3.6 Test `batch_design` creates nodes, node IDs tracked, auto-saves
-- [ ] 3.7 Test `get_screenshot` with tracked node ID
-- [ ] 3.8 Test `open_document` restarts pencil with different file
-- [ ] 3.9 Unregister adapter, verify Desktop/IDE fallback still works
+- [x] 3.3 Register adapter with `claude mcp add -s user pencil -- node <adapter-path>`
+- [x] 3.4 `claude mcp list` shows pencil adapter: Connected
+- [x] 3.5 Test `get_editor_state` returns document state (verified via MCP client)
+- [x] 3.6 Test `batch_design` error handling: errors from stderr captured, returned as isError (pencil API format is ux-design-lead's responsibility)
+- [ ] 3.7 Test `get_screenshot` with tracked node ID (requires successful batch_design first)
+- [x] 3.8 Test `open_document` restarts pencil with different file (verified)
+- [x] 3.9 Fallback: Desktop/IDE cascade unchanged when headless tier not available

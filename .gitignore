@@ -28,6 +28,7 @@ __pycache__/
 .codex/
 .worktrees
 .claude/settings.local.json
+.mcp.json
 .claude/soleur-welcomed.local
 .claude/ralph-loop.*.local.md
 .playwright-mcp/
