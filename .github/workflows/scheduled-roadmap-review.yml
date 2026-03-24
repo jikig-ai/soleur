@@ -1,0 +1,69 @@
+name: "Scheduled: Monthly Roadmap Review"
+
+on:
+  schedule:
+    - cron: '0 9 1 * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: schedule-roadmap-review
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  run-schedule:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Ensure label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create "scheduled-roadmap-review" \
+            --description "Scheduled: Monthly Roadmap Review" \
+            --color "0E8A16" 2>/dev/null || true
+
+      - name: Run roadmap review
+        uses: anthropics/claude-code-action@ff9acae5886d41a99ed4ec14b7dc147d55834722 # v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
+          plugins: 'soleur@soleur'
+          claude_args: >-
+            --model claude-sonnet-4-6
+            --max-turns 40
+            --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch
+          prompt: |
+            You are the CPO performing a monthly roadmap consistency review.
+
+            1. Read knowledge-base/product/roadmap.md
+            2. Fetch all GitHub milestones: gh api repos/jikig-ai/soleur/milestones --jq '.[] | {number, title, open_issues, closed_issues}'
+            3. Fetch all open issues: gh issue list --state open --limit 100 --json number,title,labels,milestone
+            4. For each open issue, check:
+               - Is it assigned to the correct milestone per the roadmap?
+               - Is it stale (superseded by roadmap decisions, no activity in 30+ days, references deprecated features)?
+               - Does it have a priority label that matches its phase placement?
+            5. For each roadmap feature, check:
+               - Does a corresponding GitHub issue exist?
+               - Is the issue in the correct milestone?
+            6. Flag any inconsistencies found.
+
+            After your analysis, create a GitHub issue summarizing your findings.
+            Use the title format: [Scheduled] Monthly Roadmap Review - YYYY-MM-DD
+            Add the label: scheduled-roadmap-review
+
+            The issue body should contain:
+            - Summary table of findings (consistent, inconsistent, stale, missing)
+            - List of recommended actions (close, move, create, relabel)
+            - Any roadmap.md updates needed
+
+            If inconsistencies are found that can be fixed automatically (milestone reassignment, stale issue closure),
+            create a branch, apply the fixes, and open a PR. If only the review issue is needed, skip the PR.
