@@ -11,10 +11,20 @@ const HOOK_PATH = join(
   "pre-merge-rebase.sh"
 );
 
+// Strip git hook env vars (GIT_DIR, GIT_INDEX_FILE, GIT_WORK_TREE) that
+// git sets when running pre-commit hooks — these override GIT_CEILING_DIRECTORIES
+// and cause tests to use the parent repo instead of the temp repos.
+const {
+  GIT_DIR: _d,
+  GIT_INDEX_FILE: _i,
+  GIT_WORK_TREE: _w,
+  ...cleanEnv
+} = process.env;
 const GIT_ENV = {
-  ...process.env,
+  ...cleanEnv,
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CEILING_DIRECTORIES: tmpdir(),
 };
 
 function makeInput(command: string, cwd?: string): string {
