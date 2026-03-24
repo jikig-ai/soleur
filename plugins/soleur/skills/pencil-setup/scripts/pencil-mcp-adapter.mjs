@@ -8,7 +8,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { spawn as nodeSpawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 
 // --- Node version gate ---
@@ -40,6 +40,15 @@ function buildPencilEnv() {
     if (process.env[key] !== undefined) {
       env[key] = process.env[key];
     }
+  }
+  // Prepend the adapter's own Node directory to PATH so that pencil's
+  // `#!/usr/bin/env node` shebang resolves to the same Node version (22+)
+  // that runs the adapter, not an incompatible system Node.
+  const nodeDir = dirname(process.execPath);
+  if (env.PATH) {
+    env.PATH = `${nodeDir}:${env.PATH}`;
+  } else {
+    env.PATH = nodeDir;
   }
   return env;
 }
