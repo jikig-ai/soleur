@@ -47,16 +47,16 @@
   - [x] 2.2.4 Set output vars: `PREFERRED_MODE=headless_cli`, `PREFERRED_BINARY=<adapter-path>`, `PREFERRED_APP=""`, `PREFERRED_NODE=<node-bin>`
 - [x] 2.3 Update `detect_pencil_cli()` with negative guard: symlink target check prevents headless CLI matching Tier 1
 - [x] 2.4 Update cascade: headless CLI tried first, then cli, desktop, ide
-- [ ] 2.5 Update `SKILL.md` Phase 0 to document `headless_cli` mode output
-- [ ] 2.6 Add `### Headless CLI mode` registration section to Step 2 with env var config
-- [ ] 2.7 Update Step 1 (check registered) and Step 3 (verify) for headless mode
-- [ ] 2.8 Add auth guidance section: `pencil login` or PENCIL_CLI_KEY setup
+- [x] 2.5 Update `SKILL.md` Phase 0 to document `headless_cli` mode output
+- [x] 2.6 Add `### Headless CLI mode` registration section to Step 2 with env var config
+- [x] 2.7 Update Step 1 (check registered) and Step 3 (verify) for headless mode
+- [x] 2.8 Add auth guidance section: `pencil login` or PENCIL_CLI_KEY setup
 - [x] 2.9 Test: run `check_deps.sh` with headless CLI installed, verify Tier 0 selected
 
 ## Phase 3: Verify + Docs
 
-- [ ] 3.1 Update `constitution.md` Pencil MCP rule (~line 101) with headless mode addendum
-- [ ] 3.2 Update `ux-design-lead.md` prerequisites to mention headless option first
+- [x] 3.1 Update `constitution.md` Pencil MCP rule (~line 101) with headless mode addendum
+- [x] 3.2 Update `ux-design-lead.md` prerequisites to mention headless option first
 - [ ] 3.3 Register adapter with `claude mcp add -s user pencil -- node <adapter-path>`
 - [ ] 3.4 Restart Claude Code, verify `mcp__pencil__*` tools appear
 - [ ] 3.5 Test `get_editor_state` returns document state
