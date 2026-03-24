@@ -195,15 +195,20 @@ Assign issues to their phase milestones. Use `-F` (not `-f`) for numeric milesto
 
 Present an output summary listing the document path, milestones created, issues assigned, and strategic themes.
 
-**Ship the roadmap.** The roadmap is a product decision, not a code change. Once the founder agrees, commit and open a PR:
+**Ship and merge the roadmap.** The roadmap is a product decision, not a code change. Once the founder agrees, ship it through to merge:
 
 1. Run compound (`skill: soleur:compound`) to capture any learnings from the session.
 2. Use `/ship` to commit, push, and open a PR with the roadmap and any skill/agent changes.
+3. After the PR is created, queue auto-merge: `gh pr merge <number> --squash --auto`.
+4. Poll `gh pr view <number> --json state --jq .state` until MERGED.
+5. Run `cleanup-merged` to remove the worktree.
 
-**Next steps for the founder:** When ready to build a specific feature from the roadmap, run `/soleur:plan` on that individual feature (not the entire phase). Each feature gets its own plan → work → review → ship cycle.
+Do not stop at "PR created" or "waiting for CI." The roadmap is not shipped until it is merged to main.
+
+**Next steps for the founder:** When ready to build a specific feature from the roadmap, run `/soleur:plan` on that individual feature (not the entire phase). Each feature gets its own plan, work, review, and ship cycle.
 
 ```
-/soleur:product-roadmap → agree on roadmap → commit + PR
+/soleur:product-roadmap → agree on roadmap → commit + PR + merge
                                               ↓
                           then per feature:
                           /soleur:plan → /soleur:work → /soleur:review → /soleur:ship
