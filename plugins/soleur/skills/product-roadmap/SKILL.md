@@ -193,6 +193,20 @@ Assign issues to their phase milestones. Use `-F` (not `-f`) for numeric milesto
 
 ## Phase 4: Handoff
 
-Present an output summary listing the document path, milestones created, issues assigned, and strategic themes. Suggest `/soleur:plan` for individual features.
+Present an output summary listing the document path, milestones created, issues assigned, and strategic themes.
 
-Proceed to the next step in the orchestrator's sequence.
+**Ship the roadmap.** The roadmap is a product decision, not a code change. Once the founder agrees, commit and open a PR:
+
+1. Run compound (`skill: soleur:compound`) to capture any learnings from the session.
+2. Use `/ship` to commit, push, and open a PR with the roadmap and any skill/agent changes.
+
+**Next steps for the founder:** When ready to build a specific feature from the roadmap, run `/soleur:plan` on that individual feature (not the entire phase). Each feature gets its own plan → work → review → ship cycle.
+
+```
+/soleur:product-roadmap → agree on roadmap → commit + PR
+                                              ↓
+                          then per feature:
+                          /soleur:plan → /soleur:work → /soleur:review → /soleur:ship
+```
+
+Do NOT suggest running `/soleur:plan` on an entire phase. Phases contain multiple independent features, each with their own scope, spec, and implementation. Planning a whole phase produces an unwieldy mega-plan.
