@@ -33,6 +33,7 @@ If the script exits non-zero, no Pencil MCP source is available. Stop and
 inform the user with the printed instructions (both Desktop and IDE options).
 
 If all checks pass, capture three values from the script output:
+
 - `PREFERRED_MODE` -- `cli`, `desktop_binary`, or `ide`
 - `PREFERRED_BINARY` -- path to binary (or `pencil` for CLI mode)
 - `PREFERRED_APP` -- `--app` flag value (empty for CLI mode)
@@ -108,3 +109,5 @@ If it does not appear, tell the user the registration failed and suggest running
 - **No programmatic save**: After `batch_design` operations, changes exist in editor memory only. The user must Ctrl+S (IDE) or Cmd+S/Ctrl+S (Desktop) to flush to disk. Verify with `git status` after requesting save.
 - **Read before write**: Mockup property values (padding, colors, fonts) may diverge from live CSS. Always `batch_get` the current value before `batch_design` updates to avoid incorrect assumptions.
 - **pencil CLI collision**: The `pencil` binary name collides with evolus/pencil. The check_deps.sh script guards against this by verifying the version string contains "pencil.dev" or checking for the `mcp-server` subcommand.
+- **Headless CLI interactive mode is not MCP**: The Pencil npm headless CLI's `pencil interactive` command speaks a custom REPL format (`tool_name({ key: value })`), not MCP protocol. An adapter wrapper is needed to bridge it to Claude Code's MCP framework. The headless CLI also lacks the `mcp-server` subcommand that the Desktop-installed CLI exposes, and its version string (`pencil 0.2.3`) doesn't match existing detection patterns.
+- **Headless CLI has programmatic save**: Unlike Desktop/IDE modes, `pencil interactive --out` supports a `save()` command that writes to disk without manual Ctrl+S.
