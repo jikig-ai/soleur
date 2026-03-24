@@ -136,13 +136,13 @@ Update the digest format instructions (Step 4) to include a repository stats tab
 
 ## Acceptance Criteria
 
-- [ ] `github-community.sh repo-stats` returns JSON with `stargazers_count`, `forks_count`, `watchers_count`, and `new_stargazers` array
-- [ ] `github-community.sh repo-stats 1` filters new stargazers to the last 1 day
-- [ ] The scheduled community monitor workflow calls `github repo-stats` and includes the data in the digest
-- [ ] The daily digest `## GitHub Activity` section includes a repository stats table with star/fork/watcher counts
-- [ ] New stargazers (within the report period) are listed by username and date
-- [ ] Rate limit errors are handled gracefully (check_rate_limit pattern)
-- [ ] The `github-community.sh` usage text includes the new `repo-stats` command
+- [x] `github-community.sh repo-stats` returns JSON with `stargazers_count`, `forks_count`, `watchers_count`, and `new_stargazers` array
+- [x] `github-community.sh repo-stats 1` filters new stargazers to the last 1 day
+- [x] The scheduled community monitor workflow calls `github repo-stats` and includes the data in the digest
+- [x] The daily digest `## GitHub Activity` section includes a repository stats table with star/fork/watcher counts
+- [x] New stargazers (within the report period) are listed by username and date
+- [x] Rate limit errors are handled gracefully (check_rate_limit pattern)
+- [x] The `github-community.sh` usage text includes the new `repo-stats` command
 
 ## Domain Review
 
