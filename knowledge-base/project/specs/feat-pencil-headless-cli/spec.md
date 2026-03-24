@@ -6,13 +6,13 @@
 
 ## Problem Statement
 
-The current Pencil integration requires either Pencil Desktop running or an IDE with the Pencil extension. This blocks fully headless design sessions and CI/CD design workflows. The pencil.dev team has released a headless CLI (`@pencil.dev/cli`) that bundles its own Skia renderer and exposes the same design tools through an interactive shell.
+The current Pencil integration requires either Pencil Desktop running or an IDE with the Pencil extension. This blocks fully headless design sessions and CI/CD design workflows. The pencil.dev team has released a headless CLI (npm package) that bundles its own Skia renderer and exposes the same design tools through an interactive shell.
 
 ## Goals
 
 - G1: Add headless CLI as Tier 0 (highest priority) in the Pencil detection stack
 - G2: Write an MCP adapter that wraps `pencil interactive` so existing agents work unchanged
-- G3: Auto-install `@pencil.dev/cli` when headless tier is selected
+- G3: Auto-install `the Pencil npm CLI` when headless tier is selected
 - G4: Maintain backward compatibility with Desktop/IDE tiers
 - G5: Document friction points as feedback for the pencil.dev founder
 
@@ -25,8 +25,8 @@ The current Pencil integration requires either Pencil Desktop running or an IDE 
 
 ## Functional Requirements
 
-- **FR1:** `check_deps.sh` detects `@pencil.dev/cli` via `npm list -g` or local install check as Tier 0
-- **FR2:** `check_deps.sh` auto-installs `@pencil.dev/cli` to `~/.local/node_modules` when not found and auto-install is enabled
+- **FR1:** `check_deps.sh` detects `the Pencil npm CLI` via `npm list -g` or local install check as Tier 0
+- **FR2:** `check_deps.sh` auto-installs `the Pencil npm CLI` to `~/.local/node_modules` when not found and auto-install is enabled
 - **FR3:** `check_deps.sh` verifies Node >= 22.9.0 before attempting headless tier
 - **FR4:** MCP adapter spawns `pencil interactive --out <file.pen>` and speaks MCP protocol on stdio
 - **FR5:** MCP adapter translates all Pencil tools: batch_design, batch_get, export_nodes, find_empty_space_on_canvas, get_editor_state, get_guidelines, get_screenshot, get_style_guide, get_style_guide_tags, get_variables, replace_all_matching_properties, search_all_unique_properties, set_variables, snapshot_layout
@@ -47,7 +47,7 @@ The current Pencil integration requires either Pencil Desktop running or an IDE 
 ## Acceptance Criteria
 
 - [ ] `check_deps.sh` correctly identifies and prioritizes headless CLI as Tier 0
-- [ ] `check_deps.sh` auto-installs `@pencil.dev/cli` when missing and `--auto` flag is set
+- [ ] `check_deps.sh` auto-installs `the Pencil npm CLI` when missing and `--auto` flag is set
 - [ ] MCP adapter successfully translates batch_design, batch_get, and get_screenshot calls
 - [ ] ux-design-lead agent can create a .pen file end-to-end using the headless adapter
 - [ ] Existing Desktop/IDE paths still work unchanged when headless CLI is not available

@@ -6,12 +6,12 @@
 
 ## What We're Building
 
-Integrate the new `@pencil.dev/cli` headless CLI as Tier 0 (highest priority) in the Pencil MCP detection stack. This adds a fully headless design capability that doesn't require Pencil Desktop or an IDE, enabling CI/CD design workflows and frictionless agent-driven design sessions.
+Integrate the new Pencil headless CLI (npm package) as Tier 0 (highest priority) in the Pencil MCP detection stack. This adds a fully headless design capability that doesn't require Pencil Desktop or an IDE, enabling CI/CD design workflows and frictionless agent-driven design sessions.
 
 ### Components
 
 1. **MCP adapter wrapper** (`pencil-mcp-adapter.js`) — a Node.js MCP server that spawns `pencil interactive --out <file.pen>` and translates MCP protocol to/from the interactive shell format
-2. **Updated `check_deps.sh`** — adds Tier 0 detection for `@pencil.dev/cli` via `npm list -g` with auto-install capability
+2. **Updated `check_deps.sh`** — adds Tier 0 detection for the Pencil npm CLI via `npm list -g` with auto-install capability
 3. **Updated `pencil-setup` skill** — registers the adapter as the MCP server when headless CLI is available
 4. **Node version management** — the CLI requires Node `>=22.9.0`; detection script must verify this
 
@@ -42,7 +42,7 @@ The founder may add `--mcp` flag to `pencil interactive` in the future (see Feed
 
 1. **Tier 0 priority** — Headless CLI is checked first, before Desktop CLI, Desktop binary, and IDE extension
 2. **MCP adapter pattern** — Node.js MCP server wrapping `pencil interactive` over stdin/stdout
-3. **Auto-install** — `check_deps.sh` installs `@pencil.dev/cli` to `~/.local/node_modules` via npm if not found (no sudo needed)
+3. **Auto-install** — `check_deps.sh` installs the Pencil npm CLI to `~/.local/node_modules` via npm if not found (no sudo needed)
 4. **Auth requirement** — `pencil interactive` requires auth (PENCIL_CLI_KEY or `pencil login`). The setup flow guides users through this.
 5. **Node version gate** — The CLI requires Node >=22.9.0. Detection script checks this and skips Tier 0 if unavailable.
 6. **nvm/fnm awareness** — If system Node is too old but nvm/fnm has a compatible version, the adapter script should use it
@@ -69,7 +69,7 @@ The founder may add `--mcp` flag to `pencil interactive` in the future (see Feed
 
 ### Marketing (CMO)
 
-**Summary:** CONFIDENTIAL — the `@pencil.dev/cli` package URL must not be shared publicly until the founder announces it. No public marketing content should reference the headless CLI. Internally, this is a differentiator: "design with AI agents, no desktop app needed." When the package goes public, coordinate a co-announcement with the pencil.dev founder.
+**Summary:** CONFIDENTIAL — the Pencil headless CLI npm package URL must not be shared publicly until the founder announces it. No public marketing content should reference the headless CLI. Internally, this is a differentiator: "design with AI agents, no desktop app needed." When the package goes public, coordinate a co-announcement with the pencil.dev founder.
 
 ## Capability Gaps
 
