@@ -15,6 +15,13 @@ if [[ -f .bun-version ]]; then
   fi
 fi
 
+# --- Git Hook Isolation ---
+# When invoked as a lefthook pre-commit hook, git sets GIT_DIR, GIT_INDEX_FILE,
+# and GIT_WORK_TREE in the environment. These override GIT_CEILING_DIRECTORIES
+# and cause test-spawned git commands to operate on the parent repo instead of
+# their temp directories. Unsetting them restores normal git discovery behavior.
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE
+
 # --- Run Tests Per Directory ---
 failed=0
 suites=0

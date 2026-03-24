@@ -23,7 +23,7 @@ pre-commit:
     bun-test:
       priority: 5
       glob: "*.{ts,tsx,js,jsx}"
-      run: bun test
+      run: bash scripts/test-all.sh
     plugin-component-test:
       priority: 6
       glob: "plugins/soleur/**/*.md"

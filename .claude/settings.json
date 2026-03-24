@@ -1,5 +1,6 @@
 {
   "permissions": {
+    "defaultMode": "auto",
     "allow": [
       "Bash(git add -A && git commit:*)",
       "Bash(git add && git commit:*)",

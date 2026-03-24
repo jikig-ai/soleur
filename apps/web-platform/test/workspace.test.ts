@@ -1,6 +1,13 @@
 // Set env BEFORE any imports (module reads at load time)
+import { tmpdir } from "os";
 process.env.WORKSPACES_ROOT = "/tmp/soleur-test-workspaces";
 process.env.SOLEUR_PLUGIN_PATH = "/nonexistent";
+// Isolate git: ceiling prevents upward traversal, and deleting GIT_DIR/
+// GIT_INDEX_FILE/GIT_WORK_TREE prevents git hook env from overriding discovery.
+process.env.GIT_CEILING_DIRECTORIES = tmpdir();
+delete process.env.GIT_DIR;
+delete process.env.GIT_INDEX_FILE;
+delete process.env.GIT_WORK_TREE;
 
 import { describe, test, expect, afterEach } from "vitest";
 import { existsSync, readFileSync, rmSync } from "fs";
@@ -51,8 +58,8 @@ describe("workspace provisioning", () => {
     expect(settings.sandbox.enabled).toBe(true);
   });
 
-  // Git init test skipped: Bun's test runner inherits the parent git
-  // context, causing `git init` in /tmp to reference the worktree repo.
+  // Git init isolation: GIT_CEILING_DIRECTORIES (set at top of file)
+  // prevents git from discovering the parent worktree's .git directory.
   // Git init works in production (Docker container has no parent repo).
 
   test("is idempotent — running twice does not error", async () => {
