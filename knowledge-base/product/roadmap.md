@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-23
-last_reviewed: 2026-03-23
+last_updated: 2026-03-24
+last_reviewed: 2026-03-24
 review_cadence: monthly
 owner: CPO
 depends_on:
@@ -95,7 +95,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 1.4 | Vendor DPA review (Supabase, Stripe, Hetzner, Cloudflare) | P1 | [#670](https://github.com/jikig-ai/soleur/issues/670) | Done |
 | 1.5 | Mobile-first responsive UI (sidebar → hamburger menu, touch-optimized nav) | P1 | [#1041](https://github.com/jikig-ai/soleur/issues/1041) | Not started |
 | 1.6 | PWA manifest + service worker + installability (app shell caching only, no offline mode) | P1 | [#1042](https://github.com/jikig-ai/soleur/issues/1042) | Not started |
-| 1.7 | Verify production deployment (end-to-end loop) | P1 | -- | Needs verification |
+| 1.7 | Verify production deployment (end-to-end loop) | P1 | [#1075](https://github.com/jikig-ai/soleur/issues/1075) | Not started |
 | 1.8 | **Multi-turn conversation continuity** (architecture choice deferred to CTO during spec) | P1 | [#1044](https://github.com/jikig-ai/soleur/issues/1044) | **Broken** — agent has amnesia between turns (CTO review) |
 | 1.9 | Pin Agent SDK to exact version (`0.2.80`) | P1 | [#1045](https://github.com/jikig-ai/soleur/issues/1045) | Not started |
 | 1.10 | **Project repo connection** — clone founder's public git repo, install latest Soleur plugin, keep plugin updated | P1 | [#1060](https://github.com/jikig-ai/soleur/issues/1060) | Not started |
@@ -175,16 +175,16 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 3.2 | KB viewer UI (sidebar tree, markdown rendering, search) | P1 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Stub only |
 | 3.3 | Conversation inbox with status badges | P1 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
 | 3.4 | API + MCP service integrations (Cloudflare, Stripe, Plausible first) | P1 | [#1050](https://github.com/jikig-ai/soleur/issues/1050) | Not started |
-| 3.5 | Secure token storage for third-party APIs (BYOK-grade encryption) | P1 | New | Not started |
+| 3.5 | Secure token storage for third-party APIs (BYOK-grade encryption) | P1 | [#1076](https://github.com/jikig-ai/soleur/issues/1076) | Not started |
 | 3.6 | Usage/cost indicator (BYOK spending) | P2 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
 | 3.7 | Review gate notifications (PWA push + email fallback for iOS) | P2 | [#1049](https://github.com/jikig-ai/soleur/issues/1049) | Not started |
-| 3.8 | Guided instructions fallback (deep links + review gates for services without API/MCP) | P2 | New | Not started |
+| 3.8 | Guided instructions fallback (deep links + review gates for services without API/MCP) | P2 | [#1077](https://github.com/jikig-ai/soleur/issues/1077) | Not started |
 | 3.9 | Tag-and-route UX enhancements (@-mentions syntax, multi-leader threads, context-aware suggestions) | P2 | [#1059](https://github.com/jikig-ai/soleur/issues/1059) | Depends on P1 foundation |
 | 3.10 | CI/CD integration (agents trigger deploys, run tests, open PRs on founder's repo) | P1 | [#1062](https://github.com/jikig-ai/soleur/issues/1062) | Not started |
 | 3.11 | Product analytics instrumentation for P4 validation metrics (domain engagement, session frequency, KB growth) | P1 | [#1063](https://github.com/jikig-ai/soleur/issues/1063) | Not started |
 | 3.12 | Pricing page (soleur.ai) | P1 | [#656](https://github.com/jikig-ai/soleur/issues/656) | Not started |
-| 3.13 | Subscription management (cancel, upgrade/downgrade) | P1 | New | Not started |
-| 3.14 | Invoice history + failed payment handling | P2 | New | Not started |
+| 3.13 | Subscription management (cancel, upgrade/downgrade) | P1 | [#1078](https://github.com/jikig-ai/soleur/issues/1078) | Not started |
+| 3.14 | Invoice history + failed payment handling | P2 | [#1079](https://github.com/jikig-ai/soleur/issues/1079) | Not started |
 
 **Why 3.1-3.2 matter:** The knowledge base is the compounding moat. If founders cannot see plans, brainstorms, brand guides, and competitive analyses their agents produced, the value is invisible. The KB viewer closes the review loop.
 
