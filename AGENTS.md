@@ -30,6 +30,7 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 
 ## Workflow Gates
 
+- When moving GitHub issues between milestones, deferring features, changing priorities, or making any roadmap decision, update `knowledge-base/product/roadmap.md` in the same action. The roadmap document is the canonical product truth -- if it contradicts the issue tracker, neither can be trusted. Never change a milestone assignment without updating the corresponding roadmap phase table. **Why:** In the #1064 roadmap session, tag-and-route was deferred from P1 to P3 but the roadmap document was not updated, creating three conflicting sources of truth (roadmap, milestones, conversation). The CPO had to flag this on re-review.
 - Zero agents until user confirms direction. Present a concise summary first, ask if they want to go deeper, only then launch research. Exception: passive domain routing (see below).
 - Before every commit, run compound (`skill: soleur:compound`). Do not ask whether to run it -- just run it.
 - Never bump version files in feature branches. Version is derived from git tags — CI creates GitHub Releases with `vX.Y.Z` tags at merge time via semver labels. Set labels with `/ship`. Do NOT edit `plugin.json` version (frozen sentinel) or `marketplace.json` version.

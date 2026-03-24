@@ -19,6 +19,7 @@ Evaluate current product state before making recommendations.
 - If the task references a GitHub issue (`#N`), verify its state via `gh issue view <N> --json state` before asserting whether work is pending or complete.
 - If both `business-validation.md` and `brand-guide.md` exist, cross-reference the validation's framing against the brand's Identity and Positioning sections. If the validation treats stated product features as "scope creep" or contradicts the brand's positioning, flag: "Validation may be misaligned with current brand positioning (last updated: [date]). Consider revalidation." Recommend revalidation but allow the user to proceed.
 - Check for spec files in `knowledge-base/project/specs/` -- assess what has been specified and what gaps remain.
+- **Roadmap consistency check:** If `knowledge-base/product/roadmap.md` exists, cross-reference it against GitHub milestones (`gh api repos/{owner}/{repo}/milestones`) and open issues. Flag any inconsistency: issues assigned to milestones that don't match their roadmap phase, features listed in the roadmap with no corresponding issue, or deferred items still showing in active phases. The roadmap document and the issue tracker must tell the same story.
 - Determine product maturity stage: pre-idea, idea (unvalidated), validated, building, launched.
 - Report product state in a structured table (area, status, next action).
 
