@@ -8,7 +8,7 @@ date: 2026-03-24
 
 ## Overview
 
-Migrate 9 `claude-code-action` GitHub Actions workflows to Claude Code Cloud scheduled tasks, shifting AI workload costs from per-token API billing to the flat-rate Max subscription. Keep 2 complex workflows (bug-fixer, ship-merge) and 7 pure-bash workflows on GitHub Actions. Centralize secrets in Doppler to avoid duplication across platforms.
+Migrate 3 highest-value `claude-code-action` GitHub Actions workflows to Claude Code Cloud scheduled tasks, shifting AI workload costs from per-token API billing to the flat-rate Max subscription. Max plan limit: 3 Cloud task definitions (discovered during implementation). Selected by highest API cost savings: content-generator ($9/mo), community-monitor ($7.65/mo), growth-audit ($5.52/mo). Keep remaining 8 workflows + 7 pure-bash workflows on GitHub Actions. Centralize secrets in Doppler to avoid duplication across platforms. [Updated 2026-03-25]
 
 ## Problem Statement / Motivation
 

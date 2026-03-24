@@ -10,8 +10,8 @@ Soleur's 11 `claude-code-action` GitHub Actions workflows consume Anthropic API 
 
 ## Goals
 
-- G1: Migrate 8-9 simple workflows from API-billed GHA to Max-plan-billed Cloud scheduled tasks
-- G2: Reduce monthly Anthropic API spend by 60-80%
+- G1: Migrate 3 highest-value workflows from API-billed GHA to Max-plan-billed Cloud scheduled tasks (Max plan limit: 3 definitions) [Updated 2026-03-25]
+- G2: Reduce monthly Anthropic API spend by ~$22/mo (~20-50% of scheduled workflow costs) [Updated 2026-03-25]
 - G3: Simplify workflow creation (Cloud task prompt vs. 100+ line YAML)
 - G4: Preserve all orchestration safety for complex workflows (bug-fixer, ship-merge)
 
