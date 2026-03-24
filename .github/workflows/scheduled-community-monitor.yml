@@ -16,8 +16,10 @@ name: "Scheduled: Community Monitor"
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 8 * * *'
+  # MIGRATED TO CLOUD SCHEDULED TASK — 2026-03-25
+  # Uncomment schedule to revert to GHA execution
+  # schedule:
+  #   - cron: '0 8 * * *'
 
 concurrency:
   group: schedule-community-monitor
