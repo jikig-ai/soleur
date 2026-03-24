@@ -10,8 +10,8 @@ updated: 2026-03-25
 
 ## Phase 0: Setup
 
-- [ ] 0.1 Run `pencil-setup` skill to register headless MCP
-- [ ] 0.2 Verify MCP responds (`get_editor_state`)
+- [x] 0.1 Run `pencil-setup` skill to register headless MCP
+- [x] 0.2 Verify MCP connected (`claude mcp list` shows "Connected")
 
 ## Phase 1: Quick Wireframe in Pencil (15 min)
 
