@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# pencil-setup dependency checker with three-tier MCP detection
-# Priority: (1) pencil CLI, (2) Desktop binary, (3) IDE extension
+# pencil-setup dependency checker with four-tier MCP detection
+# Priority: (0) Headless CLI, (1) pencil CLI, (2) Desktop binary, (3) IDE extension
 # No set -euo pipefail: soft dependency checks and install failures
 # must not abort the script. Each check uses explicit if/then.
 
@@ -24,6 +24,7 @@ esac
 PREFERRED_BINARY=""
 PREFERRED_APP=""
 PREFERRED_MODE=""
+PREFERRED_NODE=""
 
 # Common AppImage search directories (single source of truth)
 APPIMAGE_DIRS=("$HOME/Applications" "$HOME/.local/bin" "/opt")
@@ -53,9 +54,77 @@ find_extracted_mcp_binary() {
 
 # -- Detection Functions --
 
+# Find a Node binary >= 22.9.0 (checks system, nvm, fnm)
+find_node22() {
+  local node_bin version major minor
+  # Check system node first
+  node_bin=$(command -v node 2>/dev/null)
+  if [[ -n "$node_bin" ]]; then
+    version=$("$node_bin" --version 2>/dev/null | sed 's/^v//')
+    major=${version%%.*}
+    minor=$(echo "$version" | cut -d. -f2)
+    if [[ "$major" -gt 22 || ("$major" -eq 22 && "$minor" -ge 9) ]]; then
+      echo "$node_bin"
+      return 0
+    fi
+  fi
+  # Check nvm
+  local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+  if [[ -d "$nvm_dir/versions/node" ]]; then
+    local nvm_node
+    for nvm_node in "$nvm_dir"/versions/node/v2[2-9]*/bin/node "$nvm_dir"/versions/node/v[3-9]*/bin/node; do
+      [[ -x "$nvm_node" ]] || continue
+      version=$("$nvm_node" --version 2>/dev/null | sed 's/^v//')
+      major=${version%%.*}
+      minor=$(echo "$version" | cut -d. -f2)
+      if [[ "$major" -gt 22 || ("$major" -eq 22 && "$minor" -ge 9) ]]; then
+        echo "$nvm_node"
+        return 0
+      fi
+    done
+  fi
+  # Check fnm
+  local fnm_dir="${FNM_DIR:-$HOME/.local/share/fnm}"
+  if [[ -d "$fnm_dir/node-versions" ]]; then
+    local fnm_node
+    for fnm_node in "$fnm_dir"/node-versions/v2[2-9]*/installation/bin/node "$fnm_dir"/node-versions/v[3-9]*/installation/bin/node; do
+      [[ -x "$fnm_node" ]] || continue
+      version=$("$fnm_node" --version 2>/dev/null | sed 's/^v//')
+      major=${version%%.*}
+      minor=$(echo "$version" | cut -d. -f2)
+      if [[ "$major" -gt 22 || ("$major" -eq 22 && "$minor" -ge 9) ]]; then
+        echo "$fnm_node"
+        return 0
+      fi
+    done
+  fi
+  return 1
+}
+
+# Detect headless CLI installed at ~/.local/node_modules/.bin/pencil
+# Does NOT run the binary (requires Node 22+) — checks existence and symlink target
+detect_headless_cli() {
+  local pencil_bin="$HOME/.local/node_modules/.bin/pencil"
+  [[ -e "$pencil_bin" ]] || return 1
+  # Verify it's the headless CLI package by checking the symlink target
+  # The headless CLI links to @pencil.dev/cli/dist/index.cjs
+  local target
+  target=$(readlink -f "$pencil_bin" 2>/dev/null) || return 1
+  # Must contain the pencil CLI package path (not Desktop CLI)
+  [[ "$target" == *"@pencil.dev/cli"* || "$target" == *"pencil-cli"* ]] || return 1
+  return 0
+}
+
 # Check if the pencil CLI in PATH is pencil.dev (not evolus/pencil)
 detect_pencil_cli() {
   command -v pencil >/dev/null 2>&1 || return 1
+  # Negative guard: if the PATH pencil resolves to the headless CLI package,
+  # skip it for Tier 1 (handled by Tier 0)
+  local resolved
+  resolved=$(readlink -f "$(command -v pencil)" 2>/dev/null)
+  if [[ "$resolved" == *"@pencil.dev/cli"* || "$resolved" == *"pencil-cli"* ]]; then
+    return 1
+  fi
   # Guard against evolus/pencil name collision
   if pencil --version 2>&1 | grep -qi "pencil\.dev\|pencil v"; then
     return 0
@@ -248,6 +317,65 @@ auto_launch_desktop() {
 
 # -- Tier Functions (early-exit pattern) --
 
+try_headless_cli_tier() {
+  detect_headless_cli || return 1
+  # Node version gate
+  local node_bin
+  node_bin=$(find_node22)
+  if [[ -z "$node_bin" ]]; then
+    echo "  [skip] Headless CLI found but Node >= 22.9.0 not available"
+    echo "    Install Node 22+ via nvm: nvm install 22"
+    return 1
+  fi
+  # Auth check — must use the found Node 22+ binary to run pencil
+  local pencil_bin="$HOME/.local/node_modules/.bin/pencil"
+  local pencil_target
+  pencil_target=$(readlink -f "$pencil_bin" 2>/dev/null)
+  if ! PENCIL_CLI_KEY="${PENCIL_CLI_KEY:-}" "$node_bin" "$pencil_target" status >/dev/null 2>&1; then
+    echo "  [skip] Headless CLI found but auth failed"
+    echo "    Run: $pencil_bin login"
+    echo "    Or set PENCIL_CLI_KEY environment variable"
+    return 1
+  fi
+  echo "  [ok] Headless CLI (Tier 0)"
+  # Adapter path is relative to check_deps.sh location
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  PREFERRED_MODE="headless_cli"
+  PREFERRED_BINARY="$script_dir/pencil-mcp-adapter.mjs"
+  PREFERRED_APP=""
+  PREFERRED_NODE="$node_bin"
+  return 0
+}
+
+# Auto-install headless CLI if --auto and not found
+attempt_headless_install() {
+  if [[ "$AUTO_INSTALL" != "true" ]]; then
+    return 1
+  fi
+  local node_bin
+  node_bin=$(find_node22)
+  if [[ -z "$node_bin" ]]; then
+    echo "  [skip] Cannot auto-install headless CLI: Node >= 22.9.0 not available"
+    return 1
+  fi
+  local npm_bin
+  npm_bin="$(dirname "$node_bin")/npm"
+  [[ -x "$npm_bin" ]] || npm_bin=$(command -v npm 2>/dev/null)
+  if [[ -z "$npm_bin" || ! -x "$npm_bin" ]]; then
+    echo "  [skip] Cannot auto-install headless CLI: npm not found"
+    return 1
+  fi
+  echo "  [installing] Headless CLI to ~/.local..."
+  if "$npm_bin" install --prefix "$HOME/.local" @anthropic-ai/pencil-cli 2>&1; then
+    detect_headless_cli && return 0
+    echo "  [FAILED] Install succeeded but binary not found"
+  else
+    echo "  [FAILED] npm install returned non-zero"
+  fi
+  return 1
+}
+
 try_cli_tier() {
   detect_pencil_cli || return 1
   echo "  [ok] pencil CLI (pencil.dev)"
@@ -311,12 +439,22 @@ echo "=== Pencil Setup Dependency Check ==="
 echo
 
 # Warn about evolus/pencil collision
-if ! detect_pencil_cli && command -v pencil >/dev/null 2>&1; then
+if ! detect_pencil_cli && ! detect_headless_cli && command -v pencil >/dev/null 2>&1; then
   echo "  [info] pencil CLI found but is not pencil.dev (possible evolus/pencil)"
 fi
 
 # Try tiers in priority order -- first success wins
-try_cli_tier || try_desktop_tier || try_ide_tier
+# Tier 0: Headless CLI (no GUI required)
+# Tier 1: Desktop CLI (needs Desktop running)
+# Tier 2: Desktop binary (needs Desktop running)
+# Tier 3: IDE extension
+if ! try_headless_cli_tier; then
+  # Auto-install headless CLI if --auto
+  if [[ "$AUTO_INSTALL" == "true" ]] && ! detect_headless_cli; then
+    attempt_headless_install && try_headless_cli_tier
+  fi
+fi
+[[ -n "$PREFERRED_MODE" ]] || try_cli_tier || try_desktop_tier || try_ide_tier
 
 # -- Result --
 echo
@@ -326,6 +464,7 @@ if [[ -n "$PREFERRED_MODE" ]]; then
   echo "PREFERRED_MODE=$PREFERRED_MODE"
   echo "PREFERRED_BINARY=$PREFERRED_BINARY"
   echo "PREFERRED_APP=$PREFERRED_APP"
+  [[ -n "$PREFERRED_NODE" ]] && echo "PREFERRED_NODE=$PREFERRED_NODE"
 else
   echo "=== Check Failed ==="
   echo
