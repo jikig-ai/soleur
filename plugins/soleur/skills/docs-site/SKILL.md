@@ -18,9 +18,10 @@ Ask the user:
 
 1. **Project name** -- Used in site title, footer, nav logo
 2. **Site URL** -- For meta tags, sitemap, og:url (e.g., `https://example.com`)
-3. **Docs input directory** -- Where docs source files live (e.g., `docs/`)
-4. **GitHub repository URL** -- For nav link and deployment
-5. **Pages to create** -- Which pages beyond index (e.g., getting-started, changelog, API reference)
+3. **Author name** -- For blog attribution, structured data, and E-E-A-T signals (e.g., `Jean Deruelle`)
+4. **Docs input directory** -- Where docs source files live (e.g., `docs/`)
+5. **GitHub repository URL** -- For nav link and deployment
+6. **Pages to create** -- Which pages beyond index (e.g., getting-started, changelog, API reference)
 
 ## Step 2: Install Dependencies
 
@@ -91,6 +92,10 @@ Add `_site/` to `.gitignore`.
 {
   "name": "<Project Name>",
   "url": "<site-url>",
+  "author": {
+    "name": "<Author Name>",
+    "url": "<site-url>"
+  },
   "nav": [
     { "label": "Get Started", "url": "pages/getting-started.html" }
   ]
@@ -100,6 +105,7 @@ Add `_site/` to `.gitignore`.
 ### `_includes/base.njk`
 
 Create a minimal HTML shell with:
+
 - Head: charset, viewport, description meta, title, CSS link
 - Header: logo linking to index.html, nav from `site.nav`
 - Main: `{{ content | safe }}`
@@ -191,6 +197,7 @@ npx @11ty/eleventy --serve
 ```
 
 Open `http://localhost:8080` and verify:
+
 - All pages render correctly
 - CSS loads
 - Navigation works with `aria-current="page"`
