@@ -36,22 +36,22 @@
 
 ## Phase 2: Detection + Registration
 
-- [ ] 2.1 Add `detect_headless_cli()` function to `check_deps.sh`
-  - [ ] 2.1.1 Check `~/.local/node_modules/.bin/pencil` exists and is executable
-  - [ ] 2.1.2 Verify it's the headless CLI (check for `interactive` subcommand, no `mcp-server`)
-  - [ ] 2.1.3 Node version gate: parse `node --version`, probe nvm/fnm if < 22.9.0
-- [ ] 2.2 Add `try_headless_cli_tier()` function
-  - [ ] 2.2.1 Call `detect_headless_cli()`
-  - [ ] 2.2.2 Auth check: `PENCIL_CLI_KEY=... pencil status` exits 0
-  - [ ] 2.2.3 Auto-install if `--auto` and not found: `npm install --prefix ~/.local <package>`
-  - [ ] 2.2.4 Set output vars: `PREFERRED_MODE=headless_cli`, `PREFERRED_BINARY=<adapter-path>`, `PREFERRED_APP=""`
-- [ ] 2.3 Update `detect_pencil_cli()` with negative guard: skip if `interactive` subcommand works but `mcp-server` doesn't (prevents headless CLI matching Tier 1)
-- [ ] 2.4 Update cascade: `try_headless_cli_tier || try_cli_tier || try_desktop_tier || try_ide_tier`
+- [x] 2.1 Add `detect_headless_cli()` function to `check_deps.sh`
+  - [x] 2.1.1 Check `~/.local/node_modules/.bin/pencil` exists (symlink target check, no execution)
+  - [x] 2.1.2 Verify it's the headless CLI (check symlink target contains @pencil.dev/cli)
+  - [x] 2.1.3 Node version gate: `find_node22()` probes system, nvm, fnm
+- [x] 2.2 Add `try_headless_cli_tier()` function
+  - [x] 2.2.1 Call `detect_headless_cli()`
+  - [x] 2.2.2 Auth check: `PENCIL_CLI_KEY=... pencil status` exits 0 (using Node 22+)
+  - [x] 2.2.3 Auto-install if `--auto` and not found: `attempt_headless_install()`
+  - [x] 2.2.4 Set output vars: `PREFERRED_MODE=headless_cli`, `PREFERRED_BINARY=<adapter-path>`, `PREFERRED_APP=""`, `PREFERRED_NODE=<node-bin>`
+- [x] 2.3 Update `detect_pencil_cli()` with negative guard: symlink target check prevents headless CLI matching Tier 1
+- [x] 2.4 Update cascade: headless CLI tried first, then cli, desktop, ide
 - [ ] 2.5 Update `SKILL.md` Phase 0 to document `headless_cli` mode output
 - [ ] 2.6 Add `### Headless CLI mode` registration section to Step 2 with env var config
 - [ ] 2.7 Update Step 1 (check registered) and Step 3 (verify) for headless mode
 - [ ] 2.8 Add auth guidance section: `pencil login` or PENCIL_CLI_KEY setup
-- [ ] 2.9 Test: run `check_deps.sh` with headless CLI installed, verify Tier 0 selected
+- [x] 2.9 Test: run `check_deps.sh` with headless CLI installed, verify Tier 0 selected
 
 ## Phase 3: Verify + Docs
 
