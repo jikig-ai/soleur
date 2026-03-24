@@ -37,6 +37,7 @@ run_suite "test/pre-merge-rebase" bun test test/pre-merge-rebase.test.ts
 run_suite "apps/web-platform" bun test apps/web-platform/
 run_suite "apps/telegram-bridge" bun test apps/telegram-bridge/
 run_suite "plugins/soleur" bun test plugins/soleur/
+run_suite "blog-link-validation" bash scripts/validate-blog-links.sh
 
 # Bash tests (not discovered by bun test; ci-deploy.test.sh runs in infra-validation.yml)
 for f in plugins/soleur/test/*.test.sh; do

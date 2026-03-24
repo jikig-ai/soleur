@@ -18,7 +18,7 @@ Soleur covers 9 departments with 63 agents. The compounding knowledge base is cr
 
 Cursor builds the product. Soleur runs the company. They don't compete — they stack. Cursor Pro at $20/month + Soleur (open-source, free) = full AI coding environment + full AI organization.
 
-Full comparison: https://soleur.ai/blog/2026-03-19-soleur-vs-cursor/?utm_source=discord&utm_medium=community&utm_campaign=2026-03-19-soleur-vs-cursor
+Full comparison: https://soleur.ai/blog/soleur-vs-cursor/?utm_source=discord&utm_medium=community&utm_campaign=soleur-vs-cursor
 
 ---
 
@@ -30,7 +30,7 @@ Full comparison: https://soleur.ai/blog/2026-03-19-soleur-vs-cursor/?utm_source=
 
 3/ Cursor automation memory improves within engineering workflows. Soleur's knowledge base is cross-domain — brand guide informs copy, competitive intel updates battlecards, legal decisions constrain engineering.
 
-4/ Cursor builds the product. Soleur runs the company. They stack cleanly — different layers of the stack. Full breakdown: https://soleur.ai/blog/2026-03-19-soleur-vs-cursor/?utm_source=x&utm_medium=social&utm_campaign=2026-03-19-soleur-vs-cursor #solofounder
+4/ Cursor builds the product. Soleur runs the company. They stack cleanly — different layers of the stack. Full breakdown: https://soleur.ai/blog/soleur-vs-cursor/?utm_source=x&utm_medium=social&utm_campaign=soleur-vs-cursor #solofounder
 
 ---
 
@@ -50,7 +50,7 @@ I updated the Soleur vs. Cursor comparison with this new reality. The honest bre
 
 **The pairing that emerged:** Cursor Pro at $20/month + Soleur (free) = AI coding environment + full AI organization. Different layers of the stack, no conflict.
 
-Full comparison: https://soleur.ai/blog/2026-03-19-soleur-vs-cursor/?utm_source=indiehackers&utm_medium=community&utm_campaign=2026-03-19-soleur-vs-cursor
+Full comparison: https://soleur.ai/blog/soleur-vs-cursor/?utm_source=indiehackers&utm_medium=community&utm_campaign=soleur-vs-cursor
 
 ---
 
@@ -74,14 +74,14 @@ For engineers focused on shipping code: Cursor is excellent and getting better f
 
 For solo founders running the whole company: the non-engineering 70% (marketing, legal, finance, sales) isn't covered by Cursor. That's a separate category of platform.
 
-Full writeup: https://soleur.ai/blog/2026-03-19-soleur-vs-cursor/?utm_source=reddit
+Full writeup: https://soleur.ai/blog/soleur-vs-cursor/?utm_source=reddit
 
 ---
 
 ## Hacker News
 
 **Title:** Cursor's Automations (March 2026) vs. full-organization AI platforms
-**URL:** https://soleur.ai/blog/2026-03-19-soleur-vs-cursor/?utm_source=hackernews&utm_medium=community&utm_campaign=2026-03-19-soleur-vs-cursor
+**URL:** https://soleur.ai/blog/soleur-vs-cursor/?utm_source=hackernews&utm_medium=community&utm_campaign=soleur-vs-cursor
 
 ---
 
@@ -97,7 +97,7 @@ I've been building Soleur as a Company-as-a-Service platform: 63 agents across 9
 
 The pairing that makes sense: Cursor Pro at $20/month for engineering, Soleur (open-source, free) for the other 8 departments. They operate at different layers. No conflict.
 
-Full comparison of what Cursor covers and what Soleur adds: https://soleur.ai/blog/2026-03-19-soleur-vs-cursor/?utm_source=linkedin-personal&utm_medium=social&utm_campaign=2026-03-19-soleur-vs-cursor
+Full comparison of what Cursor covers and what Soleur adds: https://soleur.ai/blog/soleur-vs-cursor/?utm_source=linkedin-personal&utm_medium=social&utm_campaign=soleur-vs-cursor
 
 #solofounder #buildinpublic
 
@@ -115,6 +115,6 @@ Soleur covers the 9 business departments Cursor does not touch: marketing, legal
 
 The result: Cursor Pro at $20/month + Soleur (open-source) stack cleanly. Different layers, no conflict.
 
-Full comparison: https://soleur.ai/blog/2026-03-19-soleur-vs-cursor/?utm_source=linkedin-company&utm_medium=social&utm_campaign=2026-03-19-soleur-vs-cursor
+Full comparison: https://soleur.ai/blog/soleur-vs-cursor/?utm_source=linkedin-company&utm_medium=social&utm_campaign=soleur-vs-cursor
 
 #solofounder #aiagents

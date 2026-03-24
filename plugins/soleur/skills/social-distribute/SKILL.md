@@ -14,6 +14,7 @@ If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true` and strip `--hea
 **Argument format:** `<blog-post-path> [--headless]`
 
 **Headless defaults for interactive gates:**
+
 - Phase 7 (Discord Approval): auto-selects **Skip** (never auto-post to external platforms without human approval). `channels` is always `discord, x, bluesky, linkedin-company`.
 - Phase 9 Step 2 (Overwrite Check): auto-selects **Overwrite** (content is regenerated from the same blog post, so overwriting is idempotent).
 
@@ -84,11 +85,13 @@ Extract: `agents` count, `skills` count, `commands` count, `departments` count, 
 ### Phase 3: Build Article URL
 
 Construct the article URL from `site.url` and the blog post path:
+
 - Strip `plugins/soleur/docs/` prefix from the path
 - Replace `.md` extension with `/`
+- Strip any leading `YYYY-MM-DD-` date prefix from the filename portion of the path (regex: `/\d{4}-\d{2}-\d{2}-(.*)/`). Eleventy's `page.fileSlug` strips this prefix, so URLs must match. If no date prefix exists, leave the path unchanged.
 - Prepend `site.url`
 
-Example: `plugins/soleur/docs/blog/what-is-company-as-a-service.md` becomes `https://soleur.ai/blog/what-is-company-as-a-service/`
+Example: `plugins/soleur/docs/blog/2026-03-24-vibe-coding-vs-agentic-engineering.md` becomes `https://soleur.ai/blog/vibe-coding-vs-agentic-engineering/`
 
 **UTM Tracking:** Derive the campaign slug from the article URL path — strip `/blog/` prefix and trailing `/`. Example: `/blog/caas-pillar/` → `caas-pillar`. If the slug contains characters other than `a-z`, `0-9`, hyphens, or underscores, replace them with hyphens.
 
@@ -293,6 +296,7 @@ Track that Discord was posted successfully -- this affects the `channels` field 
 > Failed to post to Discord (HTTP [status_code]).
 >
 > Draft content (copy-paste manually):
+>
 > ```
 > [full draft content]
 > ```
