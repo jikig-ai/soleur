@@ -47,9 +47,24 @@ The founder may add `--mcp` flag to `pencil interactive` in the future (see Feed
 5. **Node version gate** — The CLI requires Node >=22.9.0. Detection script checks this and skips Tier 0 if unavailable.
 6. **nvm/fnm awareness** — If system Node is too old but nvm/fnm has a compatible version, the adapter script should use it
 
+## Verification Results (2026-03-24)
+
+Tested with `PENCIL_CLI_KEY` from Doppler on Node 22.22.0:
+
+| Test | Result |
+|------|--------|
+| `pencil status` with CLI key | Active (authenticated as `jean.deruelle@jikigai.com`) |
+| `pencil interactive --out` starts headless | Works — no display server, no Desktop/IDE needed |
+| `batch_design` creates nodes | Works — same API surface as Desktop/IDE |
+| `save()` command | Works — programmatic save to disk (eliminates Ctrl+S constraint) |
+| Binding names across calls | NOT preserved — adapter must parse response to extract node IDs |
+| `get_screenshot` / `export_nodes` | Need actual node IDs, not binding names — adapter must track ID mapping |
+
+**Key discovery:** `save()` works programmatically in headless mode. This resolves the constitution line 101 "no programmatic save" constraint for headless sessions.
+
 ## Open Questions
 
-1. **PENCIL_CLI_KEY provisioning** — Can the founder provide a CI/CD key? Or must each user run `pencil login`?
+1. ~~**PENCIL_CLI_KEY provisioning**~~ — RESOLVED: Founder provided CLI key, stored in Doppler.
 2. **Interactive mode protocol stability** — Is the `tool_name({ args })` format a stable API? Could break across versions.
 3. **Concurrent sessions** — Can multiple `pencil interactive` sessions run simultaneously? (Relevant for parallel agent work)
 4. **Rate limits** — Does the Pencil API have rate limits that affect batch_design/get_screenshot calls?

@@ -203,23 +203,294 @@ The npm package name must not appear in public-facing code, issues, or docs unti
 
 ## Implementation Phases
 
-### Phase 1: MCP Adapter Core (`pencil-mcp-adapter.mjs`)
+### Phase 1: MCP Adapter Core (`pencil-mcp-adapter.mjs`) [Updated 2026-03-24]
 
 **Files to create:**
 
 - `plugins/soleur/skills/pencil-setup/scripts/pencil-mcp-adapter.mjs` — the MCP server
 - `plugins/soleur/skills/pencil-setup/scripts/package.json` — minimal deps (MCP SDK + zod)
 
-**Implementation:**
+#### 1a. package.json
 
-1. Set up McpServer with StdioServerTransport
-2. Implement child process manager (spawn/restart/shutdown `pencil interactive`)
-3. Implement REPL command sender (write to child stdin, buffer until prompt)
-4. Implement response parser (strip ANSI, detect errors, extract content)
-5. Register all 14 tools with Zod schemas matching pencil interactive's API
-6. Add auto-save after mutating operations (batch_design, replace_all_matching_properties, set_variables)
-7. Add `open_document` handler that restarts pencil with new file
-8. Add Node version check on startup
+```json
+{
+  "name": "pencil-mcp-adapter",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "zod": "^4.0.0"
+  }
+}
+```
+
+**Note:** The SDK is `@modelcontextprotocol/sdk` v1 (v2 `@modelcontextprotocol/server` is not yet published on npm as of 2026-03-24). Import paths use the v1 deep-import pattern:
+
+```javascript
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+```
+
+Zod 4 is used (`zod` ^4.0.0, SDK supports `^3.25 || ^4.0`). Import as:
+
+```javascript
+import { z } from "zod";
+```
+
+#### 1b. Adapter Module Structure
+
+The adapter file (`pencil-mcp-adapter.mjs`) should be organized into these sections in order:
+
+1. **Imports & constants** — MCP SDK, zod, node:child_process, node:path, node:fs
+2. **Node version gate** — check `process.version` >= 22.9.0, exit(1) if too old
+3. **Env allowlist builder** — `buildPencilEnv()` returns `{ HOME, PATH, NODE_ENV, LANG, TERM, USER, SHELL, TMPDIR, PENCIL_CLI_KEY }` from `process.env`
+4. **ANSI strip utility** — regex to remove escape sequences: `/\x1b\[[0-9;]*[a-zA-Z]/g`
+5. **REPL response parser** — `parseResponse(rawOutput)` strips ANSI, detects errors, extracts content
+6. **Node ID extractor** — `extractNodeIds(batchDesignResponse)` parses "Inserted node `<id>`" patterns
+7. **Child process manager class** — `PencilProcess` with spawn/kill/restart/sendCommand/waitForPrompt
+8. **Command queue** — serializes concurrent MCP tool calls through the single-threaded REPL
+9. **Tool registration** — all 14 tools + open_document + save
+10. **Server startup** — create McpServer, connect StdioServerTransport
+
+#### 1c. PencilProcess Class
+
+```javascript
+class PencilProcess {
+  constructor() {
+    this.child = null;
+    this.ready = false;        // true after initial prompt consumed
+    this.buffer = "";          // accumulates child stdout
+    this.outputFile = null;    // current --out path
+    this.inputFile = null;     // current --in path
+    this.nodeIdMap = new Map(); // binding -> actual node ID
+  }
+
+  async spawn(outFile, inFile = null) { /* ... */ }
+  async kill() { /* ... */ }
+  async restart(outFile, inFile = null) { /* ... */ }
+  async sendCommand(cmd) { /* returns parsed response string */ }
+  async waitForPrompt(timeoutMs = 30000) { /* ... */ }
+}
+```
+
+**spawn() contract:**
+
+- Resolves the pencil binary via `process.env.PENCIL_BINARY || findPencilBinary()` where `findPencilBinary()` checks: (1) `~/.local/node_modules/.bin/pencil`, (2) `which pencil`
+- Args: `['interactive', '--out', outFile]` plus `['--in', inFile]` if provided
+- stdio: `['pipe', 'pipe', 'pipe']` — CRITICAL: never inherit
+- env: `buildPencilEnv()` — explicit allowlist, never spread process.env
+- Pipes child.stderr to process.stderr (safe — MCP only uses stdin/stdout)
+- After spawn, calls `waitForPrompt()` to consume welcome banner + initial `pencil >` prompt
+- Sets `this.ready = true` after initial prompt consumed
+
+**sendCommand() contract:**
+
+- Writes `cmd + '\n'` to child.stdin
+- Calls `waitForPrompt(30000)` to collect response
+- Returns the stripped/parsed response text between the command echo and the next prompt
+- On timeout: throws error (caller decides whether to restart)
+
+**waitForPrompt() contract:**
+
+- Listens to child.stdout `data` events, appending to `this.buffer`
+- After each chunk: strip ANSI from buffer, check for `\npencil >` prompt (or `^pencil >` at buffer start)
+- When prompt found: extract everything before the prompt as response, clear buffer, resolve
+- On timeout: reject with descriptive error
+
+#### 1d. Command Queue
+
+```javascript
+class CommandQueue {
+  constructor(pencilProcess) {
+    this.process = pencilProcess;
+    this.queue = [];
+    this.running = false;
+  }
+
+  async enqueue(command) {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ command, resolve, reject });
+      if (!this.running) this._drain();
+    });
+  }
+
+  async _drain() {
+    this.running = true;
+    while (this.queue.length > 0) {
+      const { command, resolve, reject } = this.queue.shift();
+      try {
+        const result = await this.process.sendCommand(command);
+        resolve(result);
+      } catch (err) {
+        reject(err);
+      }
+    }
+    this.running = false;
+  }
+}
+```
+
+#### 1e. Tool Registration (All 14 + 2 Meta Tools)
+
+Each tool is registered via `server.tool(name, zodSchema, handler)`. The Zod schemas are derived from the `pencil interactive --help` output:
+
+**Read-only tools:**
+
+| Tool | Zod Schema | Notes |
+|------|-----------|-------|
+| `batch_get` | `{ patterns?: z.array(z.record(z.unknown())).optional(), nodeIds?: z.array(z.string()).optional(), readDepth?: z.number().optional() }` | Returns node data |
+| `get_editor_state` | `{ include_schema: z.boolean() }` | Call on startup to get document state |
+| `get_guidelines` | `{ topic: z.enum(["code","table","tailwind","landing-page","design-system","slides","mobile-app","web-app"]) }` | API call |
+| `get_screenshot` | `{ nodeId: z.string() }` | Returns image — see 1f |
+| `get_style_guide` | `{ name?: z.string().optional(), tags?: z.array(z.string()).optional() }` | API call |
+| `get_style_guide_tags` | `{}` (no params) | API call |
+| `get_variables` | `{}` (no params) | Returns theme/variable data |
+| `find_empty_space_on_canvas` | `{ direction: z.enum(["top","right","bottom","left"]), height: z.number(), width: z.number(), padding: z.number(), nodeId?: z.string().optional() }` | |
+| `search_all_unique_properties` | `{ parents: z.array(z.string()), properties: z.array(z.string()) }` | |
+| `snapshot_layout` | `{ parentId?: z.string().optional(), maxDepth?: z.number().optional(), problemsOnly?: z.boolean().optional() }` | |
+| `export_nodes` | `{ nodeIds: z.array(z.string()), outputDir: z.string(), format?: z.enum(["png","jpeg","webp","pdf"]).optional(), scale?: z.number().optional(), quality?: z.number().optional() }` | Returns file paths |
+
+**Mutating tools (auto-save after):**
+
+| Tool | Zod Schema | Notes |
+|------|-----------|-------|
+| `batch_design` | `{ operations: z.string() }` | The `operations` string is the REPL operation list format. After response, call `save()`. Parse node IDs from response. |
+| `replace_all_matching_properties` | `{ parents: z.array(z.string()), properties: z.record(z.unknown()) }` | After response, call `save()` |
+| `set_variables` | `{ variables: z.record(z.unknown()), replace?: z.boolean().optional() }` | After response, call `save()` |
+
+**Meta tools (adapter-level):**
+
+| Tool | Zod Schema | Notes |
+|------|-----------|-------|
+| `open_document` | `{ filePath: z.string(), inputPath?: z.string().optional() }` | Calls `pencilProcess.restart(filePath, inputPath)` |
+| `save` | `{}` (no params) | Sends `save()` to REPL |
+
+**Handler pattern for read-only tools:**
+
+```javascript
+server.tool("batch_get", { /* zod schema */ }, async (params) => {
+  const cmd = `batch_get(${JSON.stringify(params)})`;
+  const response = await commandQueue.enqueue(cmd);
+  return { content: [{ type: "text", text: response }] };
+});
+```
+
+**Handler pattern for mutating tools:**
+
+```javascript
+server.tool("batch_design", { operations: z.string() }, async ({ operations }) => {
+  const cmd = `batch_design({ operations: ${JSON.stringify(operations)} })`;
+  const response = await commandQueue.enqueue(cmd);
+  // Extract node IDs from response
+  const nodeIds = extractNodeIds(response);
+  for (const [binding, id] of nodeIds) {
+    pencilProcess.nodeIdMap.set(binding, id);
+  }
+  // Auto-save
+  await commandQueue.enqueue("save()");
+  return { content: [{ type: "text", text: response }] };
+});
+```
+
+**Handler pattern for open_document:**
+
+```javascript
+server.tool("open_document", { filePath: z.string(), inputPath: z.string().optional() },
+  async ({ filePath, inputPath }) => {
+    // Save current document first if process is running
+    if (pencilProcess.ready) {
+      await commandQueue.enqueue("save()");
+    }
+    await pencilProcess.restart(filePath, inputPath);
+    return { content: [{ type: "text", text: `Opened ${filePath}` }] };
+  }
+);
+```
+
+#### 1f. get_screenshot Image Handling
+
+The `get_screenshot` response from `pencil interactive` returns base64-encoded image data. The adapter must detect this and return it as MCP image content:
+
+```javascript
+server.tool("get_screenshot", { nodeId: z.string() }, async ({ nodeId }) => {
+  const cmd = `get_screenshot({ nodeId: ${JSON.stringify(nodeId)} })`;
+  const response = await commandQueue.enqueue(cmd);
+  // The REPL response includes base64 image data
+  // Parse and return as image content type
+  const base64Match = response.match(/data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)/);
+  if (base64Match) {
+    return {
+      content: [{
+        type: "image",
+        data: base64Match[2],
+        mimeType: `image/${base64Match[1]}`
+      }]
+    };
+  }
+  // Fallback: return as text if format is unexpected
+  return { content: [{ type: "text", text: response }] };
+});
+```
+
+**IMPORTANT:** The exact response format for `get_screenshot` needs verification during implementation. The REPL may return the image data differently (JSON object with base64 field, raw base64, etc.). Test with a real `get_screenshot` call and adjust parsing accordingly.
+
+#### 1g. Error Handling & Process Recovery
+
+```javascript
+// In PencilProcess class
+child.on('exit', (code, signal) => {
+  this.ready = false;
+  this.child = null;
+  // Log to stderr (safe for MCP)
+  process.stderr.write(`[pencil-adapter] pencil process exited: code=${code} signal=${signal}\n`);
+});
+
+// In command queue — wrap sendCommand with crash detection
+async enqueue(command) {
+  if (!this.process.ready && !this.process.child) {
+    // Process died — restart on the same file
+    if (this.process.outputFile) {
+      await this.process.spawn(this.process.outputFile, this.process.inputFile);
+    } else {
+      throw new Error("Pencil process not running and no file to restart with");
+    }
+  }
+  // ... normal queue logic
+}
+```
+
+#### 1h. Lazy Spawn Strategy
+
+The pencil process is NOT spawned at adapter startup. Instead:
+
+- Adapter starts, creates McpServer, connects StdioServerTransport
+- On first `open_document` call: spawn pencil with the given file
+- On first tool call that isn't `open_document`: spawn with a temp file (`/tmp/pencil-adapter-<pid>.pen`)
+- Rationale: the adapter must be registered before Claude Code starts. The pencil process should only run when actually needed.
+
+#### 1i. REPL Command Formatting
+
+The REPL expects commands in the format `tool_name({ key: value })` with JavaScript object syntax. The adapter must convert JSON-style params to this format:
+
+```javascript
+function formatReplCommand(toolName, params) {
+  if (!params || Object.keys(params).length === 0) {
+    return `${toolName}()`;
+  }
+  // For batch_design, operations is a string that goes directly into the call
+  if (toolName === "batch_design") {
+    return `batch_design({ operations: ${JSON.stringify(params.operations)} })`;
+  }
+  // For all other tools, serialize params as JS object literal
+  // JSON.stringify produces valid JS object literal for simple values
+  const paramStr = JSON.stringify(params);
+  // Convert outer braces — JSON objects are valid JS object literals
+  return `${toolName}(${paramStr})`;
+}
+```
+
+**Note:** JSON object syntax `{"key": "value"}` is valid JavaScript, so `JSON.stringify` output works as REPL input. The one exception is `batch_design.operations` which is already a string of REPL operation syntax and must be passed through as-is.
 
 ### Phase 2: Detection Script Updates (`check_deps.sh`)
 
@@ -270,5 +541,8 @@ The npm package name must not appear in public-facing code, issues, or docs unti
 - Spec: `knowledge-base/project/specs/feat-pencil-headless-cli/spec.md`
 - Learning: `knowledge-base/project/learnings/2026-03-24-pencil-headless-cli-interactive-mode-not-mcp.md`
 - Three-tier cascade learning: `knowledge-base/project/learnings/2026-03-10-pencil-desktop-standalone-mcp-three-tier-detection.md`
-- MCP SDK: `@modelcontextprotocol/sdk` with `McpServer` + `StdioServerTransport`
-- Pencil CLI: v0.2.3, Node >= 22.9.0, `pencil interactive --help` for full tool API
+- MCP Tool Design: `plugins/soleur/skills/agent-native-architecture/references/mcp-tool-design.md`
+- MCP SDK: `@modelcontextprotocol/sdk@1.27.1` (v1) with `McpServer` + `StdioServerTransport` (v1 deep-import paths)
+- Zod: `zod@4.x` (SDK peer dep supports `^3.25 || ^4.0`)
+- Pencil CLI: v0.2.3, Node >= 22.9.0 (verified on Node 22.22.0), `pencil interactive --help` for full tool API
+- Context7 MCP SDK docs: tool registration via `server.tool(name, zodSchema, handler)` pattern confirmed for v1
