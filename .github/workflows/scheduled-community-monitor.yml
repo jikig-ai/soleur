@@ -16,10 +16,8 @@ name: "Scheduled: Community Monitor"
 
 on:
   workflow_dispatch:
-  # MIGRATED TO CLOUD SCHEDULED TASK — 2026-03-25
-  # Uncomment schedule to revert to GHA execution
-  # schedule:
-  #   - cron: '0 8 * * *'
+  schedule:
+    - cron: '0 8 * * *'
 
 concurrency:
   group: schedule-community-monitor
@@ -48,21 +46,23 @@ jobs:
             --description "Daily community monitoring report" \
             --color "0E8A16" 2>/dev/null || true
 
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+
+      - name: Inject Doppler secrets
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          doppler secrets download --project soleur --config prd_scheduled --no-file --format env-no-quotes | while IFS='=' read -r key value; do
+            [ -z "$key" ] && continue
+            printf '::add-mask::%s\n' "$value"
+            printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
+          done
+
       - name: Run community monitor
         uses: anthropics/claude-code-action@df37d2f0760a4b5683a6e617c9325bc1a36443f6 # v1.0.75
         env:
           GH_TOKEN: ${{ github.token }}
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          X_API_KEY: ${{ secrets.X_API_KEY }}
-          X_API_SECRET: ${{ secrets.X_API_SECRET }}
-          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
-          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
-          LINKEDIN_ACCESS_TOKEN: ${{ secrets.LINKEDIN_ACCESS_TOKEN }}
-          LINKEDIN_PERSON_URN: ${{ secrets.LINKEDIN_PERSON_URN }}
-          BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
-          BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
@@ -139,32 +139,5 @@ jobs:
                with label "scheduled-community-monitor". Include a condensed summary:
                platform status, key metrics, notable items, and a link to the digest file.
 
-      - name: Discord notification (failure)
-        if: failure()
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-        run: |
-          if [[ -z "$DISCORD_WEBHOOK_URL" ]]; then
-            echo "DISCORD_WEBHOOK_URL not set, skipping failure notification"
-            exit 0
-          fi
-
-          RUN_URL="${REPO_URL}/actions/runs/${RUN_ID}"
-          MESSAGE=$(printf '**Community Monitor failed**\n\nWorkflow run: %s\n\nCheck logs for details.' \
-            "$RUN_URL")
-          PAYLOAD=$(jq -n \
-            --arg content "$MESSAGE" \
-            --arg username "Sol" \
-            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
-            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            "$DISCORD_WEBHOOK_URL")
-          if [[ "$HTTP_CODE" =~ ^2 ]]; then
-            echo "Discord failure notification sent (HTTP $HTTP_CODE)"
-          else
-            echo "::warning::Discord failure notification failed (HTTP $HTTP_CODE)"
-          fi
+      # Failure notifications: GitHub sends email on workflow failure.
+      # Discord community notifications removed per #1094 brainstorm decision.

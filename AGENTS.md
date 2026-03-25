@@ -41,6 +41,7 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 - When an audit identifies pre-existing issues, create GitHub issues to track them before fixing. Don't just note them in conversation -- file them.
 - When creating PRs that resolve a GitHub issue, include `Closes #N` in the PR **body** (not just the title). Parenthetical `(#N)` in titles creates a link but does NOT trigger auto-close.
 - After merging a PR that adds or modifies a GitHub Actions workflow, trigger a manual run (`gh workflow run <file>.yml`), poll until complete (`gh run view <id> --json status,conclusion`), and investigate failures before moving on. New workflows must be verified working, not just syntactically valid.
+- When a feature creates external resources (Cloud scheduled tasks, Doppler configs, Cloud environments, DNS records, infrastructure), validate each resource produces correct output BEFORE shipping. For Cloud tasks: `RemoteTrigger run` + verify the session creates expected artifacts (PRs, issues, files). For Doppler configs: `doppler secrets --only-names` to verify all expected keys exist. Never ship a migration without running each migrated service and comparing output with the previous implementation. **Why:** In #1094, 3 Cloud tasks were created and shipped without test runs. Community-monitor failed silently (Doppler secrets not accessible), discovered only when the user checked the output issue.
 
 ## Passive Domain Routing
 
