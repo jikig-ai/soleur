@@ -14,6 +14,7 @@ description: "This skill should be used when preparing a feature for production 
 If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headless` from `$ARGUMENTS` before processing remaining args.
 
 When `HEADLESS_MODE=true`:
+
 - Phase 2: auto-invoke `skill: soleur:compound --headless` (forward flag, no user prompt)
 - Phase 4: if test files are missing, continue without writing (CI gate catches this)
 - Phase 6: auto-accept generated PR title/body without user confirmation
@@ -422,19 +423,23 @@ Poll every 10 seconds until state is `MERGED`.
 
    If the workflow did not fire (e.g., no semver label was set), run `/release-announce` manually as a fallback.
 
-2. **Post-merge validation of new workflows.** If the PR added new GitHub Actions workflow files (`.github/workflows/*.yml`), validate them by triggering each new workflow via `workflow_dispatch` and polling for completion. This is mandatory — never leave validation as a manual step for the user.
+2. **Post-merge validation of new or modified workflows.** If the PR added or modified GitHub Actions workflow files (`.github/workflows/*.yml`), validate them by triggering each affected workflow via `workflow_dispatch` and polling for completion. This is mandatory — never leave validation as a manual step for the user.
 
-   **Step 1:** Detect new workflow files added in this PR. Use the merge base hash from Phase 3:
+   **Step 1:** Detect new or modified workflow files in this PR. Use the merge base hash from Phase 3:
 
    ```bash
-   git diff --name-only --diff-filter=A HASH..HEAD -- .github/workflows/
+   git diff --name-only --diff-filter=AM HASH..HEAD -- .github/workflows/
    ```
 
-   **Step 2:** For each new workflow file, trigger it:
+   Note: `--diff-filter=AM` catches both **A**dded and **M**odified files. A modified workflow is just as likely to break as a new one — both must be validated.
+
+   **Step 2:** For each affected workflow file, trigger it:
 
    ```bash
    gh workflow run <workflow-filename>
    ```
+
+   If a workflow has a long expected runtime (>10 minutes), note this to the user and continue polling. Do not skip validation because the workflow is slow.
 
    **Step 3:** Poll each triggered run until completion (check every 30 seconds):
 
@@ -448,9 +453,9 @@ Poll every 10 seconds until state is `MERGED`.
 
    **Step 4:** Report summary: "Post-merge validation: N/N workflows passed" or "Post-merge validation: X/N workflows failed — [details]"
 
-   **If no new workflow files were added:** Skip this step.
+   **If no new or modified workflow files were detected:** Skip this step.
 
-   **Why this matters:** The founder is a solo operator. Every "please run this manually" is a context switch. `gh workflow run` exists — use it. This rule already exists in AGENTS.md ("Exhaust all automated options before suggesting manual steps") but was not enforced in the ship skill until this fix.
+   **Why this matters:** The founder is a solo operator. Every "please run this manually" is a context switch. `gh workflow run` exists — use it. Modified workflows are equally risky — a prompt change, a new step, or a timeout bump can all cause failures that are invisible without a live run. **Why `AM` not just `A`:** In #1126, a modified workflow (new Steps 5.5/5.6 in growth audit) was merged without validation because the ship skill only checked for new files.
 
 3. Clean up worktree and local branch:
 
