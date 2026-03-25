@@ -51,7 +51,7 @@ jobs:
 
       - name: Inject Doppler secrets
         env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_SCHEDULED }}
         run: |
           doppler secrets download --project soleur --config prd_scheduled --no-file --format env-no-quotes | while IFS='=' read -r key value; do
             [ -z "$key" ] && continue
