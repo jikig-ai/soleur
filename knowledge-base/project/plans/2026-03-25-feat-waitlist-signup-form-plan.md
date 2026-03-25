@@ -4,9 +4,29 @@ type: feat
 date: 2026-03-25
 issue: 1139
 parent_issue: 656
+deepened: 2026-03-25
 ---
 
 # feat: implement waitlist signup form and subscriber storage for pricing page
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-25
+**Sections enhanced:** 6 (Proposed Solution, Technical Considerations, Implementation, Acceptance Criteria, Dependencies, References)
+**Research sources:** Buttondown API docs, MDN Web Docs, Plausible goals provisioning script, project learnings (3), codebase analysis
+
+### Key Improvements
+
+1. **Buttondown API confirmed** -- embed forms officially support `name="tag"` for tags and `name="metadata__<key>"` for custom metadata. Top two risks eliminated; tier interest capture is MVP, not enhancement.
+2. **Plausible goal provisioning automated** -- existing `scripts/provision-plausible-goals.sh` already provisions goals via PUT API. Add one line for `Waitlist Signup` event goal instead of manual dashboard configuration.
+3. **Concrete HTML/JS reference code** -- added copy-paste-ready form markup and submission handler adapted from the proven newsletter pattern, reducing implementation ambiguity.
+
+### New Considerations Discovered
+
+- Buttondown metadata keys are cached for up to 1 hour before appearing in dashboard filters -- do not treat missing metadata in the dashboard as a bug immediately after first submission.
+- The `.honeypot-trap` CSS class already exists in `style.css` accessibility layer -- reuse it directly, no new CSS needed for the honeypot.
+- `html { scroll-behavior: smooth; }` is already set in the site CSS -- the `#waitlist` anchor link will smooth-scroll natively with no additional JS. `prefers-reduced-motion` is also handled.
+- Multiple `<input name="tag">` fields are supported for multi-tag assignment -- future tier-specific tags can be added without architectural changes.
 
 ## Overview
 
@@ -45,16 +65,43 @@ Continue with Buttondown (already integrated for newsletter). Use tag-based segm
 
 #### 1. Waitlist form component (`plugins/soleur/docs/_includes/waitlist-form.njk`)
 
-Create a new Nunjucks partial for the waitlist form. Structure mirrors `newsletter-form.njk` but with waitlist-specific content:
+Create a new Nunjucks partial adapted from `newsletter-form.njk`. Reference markup:
 
-```text
-- Email input with validation and honeypot spam protection
-- Hidden field: tag = "pricing-waitlist"
-- Hidden field: metadata__tier_interest = (passed via Nunjucks variable from pricing page)
-- Submit button: "Join the Waitlist"
-- Privacy notice with link to privacy policy
-- Status area for success/error messages (aria-live="polite")
+```html
+<section class="waitlist-section">
+  <div class="container">
+    <h2>Get early access to Hosted Pro</h2>
+    <p>Be the first to know when the hosted platform launches. No spam, just a launch email.</p>
+    <form class="waitlist-form" id="waitlist-{{ location }}"
+      action="https://buttondown.com/api/emails/embed-subscribe/{{ site.newsletter.username }}"
+      method="post">
+      <label for="waitlist-email-{{ location }}" class="sr-only">Email address</label>
+      <input type="email" name="email" id="waitlist-email-{{ location }}"
+        placeholder="you@example.com" required autocomplete="email" inputmode="email"
+        aria-describedby="waitlist-privacy-{{ location }}" />
+      <input type="hidden" name="embed" value="1" />
+      <input type="hidden" name="tag" value="pricing-waitlist" />
+      <input type="hidden" name="metadata__tier_interest" value="{{ tier | default('hosted-pro') }}" />
+      <div class="honeypot-trap" aria-hidden="true">
+        <input type="text" name="url" tabindex="-1" autocomplete="off" />
+      </div>
+      <button type="submit" class="btn btn-primary">Join the Waitlist</button>
+      <p id="waitlist-privacy-{{ location }}" class="newsletter-privacy">
+        One email when we launch. Unsubscribe anytime.
+        <a href="/pages/legal/privacy-policy/">Privacy Policy</a>
+      </p>
+      <div class="waitlist-status" aria-live="polite" role="status"></div>
+    </form>
+  </div>
+</section>
 ```
+
+Key decisions:
+
+- Reuses `{{ site.newsletter.username }}` from `site.json` (same Buttondown account)
+- The `tier` Nunjucks variable defaults to `hosted-pro`; pricing card CTAs can override it
+- Reuses existing `.honeypot-trap` CSS class (already in `style.css` accessibility layer)
+- Reuses `.newsletter-privacy` class for the privacy notice (same styling as newsletter)
 
 #### 2. Pricing page updates (`plugins/soleur/docs/pages/pricing.njk`)
 
@@ -83,26 +130,137 @@ If tier interest capture is implemented (enhancement), each card's CTA passes th
 </section>
 ```
 
-#### 3. Form submission JavaScript (inline in `base.njk` or pricing page)
+#### 3. Form submission JavaScript (inline in `base.njk`)
 
-Adapt the existing newsletter form JS pattern. Key differences:
+Add a second `querySelectorAll` block after the existing newsletter handler in `base.njk` (line ~147). Reference implementation adapted from the newsletter pattern:
 
-- Selector: `.waitlist-form` instead of `.newsletter-form`
-- Plausible event: `Waitlist Signup` with props `{ location: "pricing-waitlist", tier: tierValue }`
-- Success message: "You're on the list! We'll email you when Hosted Pro launches."
-- Posts to Buttondown embed-subscribe endpoint with the `pricing-waitlist` tag
+```javascript
+document.querySelectorAll('.waitlist-form').forEach(function(form) {
+  form.addEventListener('submit', function(e) {
+    e.preventDefault();
+    var btn = form.querySelector('button[type="submit"]');
+    var status = form.querySelector('.waitlist-status');
+    var tier = form.querySelector('input[name="metadata__tier_interest"]');
+    btn.disabled = true;
+    fetch(form.action, {
+      method: 'POST',
+      body: new FormData(form)
+    }).then(function(res) {
+      if (res.ok) {
+        status.textContent = 'You are on the list! Check your email to confirm your spot.';
+        status.className = 'waitlist-status waitlist-success';
+        form.querySelector('input[type="email"]').value = '';
+        if (window.plausible) plausible('Waitlist Signup', {
+          props: { location: 'pricing-waitlist', tier: tier ? tier.value : 'unknown' }
+        });
+      } else {
+        status.textContent = 'Something went wrong. Please try again.';
+        status.className = 'waitlist-status waitlist-error';
+      }
+    }).catch(function() {
+      status.textContent = 'Something went wrong. Please try again.';
+      status.className = 'waitlist-status waitlist-error';
+    }).finally(function() {
+      btn.disabled = false;
+    });
+  });
+});
+```
+
+Key differences from newsletter handler:
+
+- Selector: `.waitlist-form`
+- Plausible event name: `Waitlist Signup` (distinct from `Newsletter Signup`)
+- Includes `tier` property in Plausible event props
+- Success message sets expectation: "Check your email to confirm your spot"
 
 #### 4. CSS additions (`plugins/soleur/docs/css/style.css`)
 
-Add styles for the waitlist form section. Reuse existing `.newsletter-*` pattern where possible. New classes:
+Minimal new CSS needed. Most styling is inherited from existing classes:
 
-- `.waitlist-section` -- styled like `.newsletter-section` but potentially with accent border to highlight
-- `.waitlist-form` -- mirrors `.newsletter-form` layout
-- `.waitlist-status`, `.waitlist-success`, `.waitlist-error` -- mirrors newsletter status classes
+**Reuse directly (no new CSS):**
 
-#### 5. Plausible analytics goal
+- `.honeypot-trap` -- already in accessibility layer (line 1244)
+- `.newsletter-privacy` -- reuse for the privacy notice
+- `.btn`, `.btn-primary` -- existing button styles
 
-Create a `Waitlist Signup` custom event goal in Plausible (via API or dashboard). This is distinct from the existing `Newsletter Signup` goal. Properties to track: `location`, `tier`.
+**New classes needed in the `@layer components` section (after `.newsletter-*` block, ~line 1070):**
+
+```css
+/* Waitlist signup form */
+.waitlist-section {
+  background: var(--color-bg-secondary);
+  border-top: 2px solid var(--color-accent);
+  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-8) 0;
+  text-align: center;
+}
+.waitlist-section h2 {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  color: var(--color-text);
+  margin-bottom: var(--space-2);
+}
+.waitlist-section p {
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-4);
+}
+.waitlist-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+  justify-content: center;
+  max-width: 480px;
+  margin: 0 auto;
+}
+.waitlist-form input[type="email"] {
+  flex: 1 1 220px;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text);
+  font-size: var(--text-base);
+}
+.waitlist-form input[type="email"]:focus {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+  border-color: var(--color-accent);
+}
+.waitlist-form input[type="email"]::placeholder {
+  color: var(--color-text-tertiary);
+}
+.waitlist-form button[type="submit"] {
+  cursor: pointer;
+  border: none;
+}
+.waitlist-form button[type="submit"]:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.waitlist-status { font-size: var(--text-sm); margin-top: var(--space-2); width: 100%; }
+.waitlist-success { color: var(--color-success, #22c55e); }
+.waitlist-error { color: var(--color-error, #ef4444); }
+```
+
+The accent top-border on `.waitlist-section` visually differentiates it from the newsletter section. All custom properties (`--color-*`, `--font-*`, etc.) are from the existing token layer.
+
+#### 5. Plausible analytics goal (`scripts/provision-plausible-goals.sh`)
+
+Add the `Waitlist Signup` event goal to the existing provisioning script. Insert after line 137 (`provision_goal "event" "Newsletter Signup"`):
+
+```bash
+provision_goal "event" "Waitlist Signup"
+```
+
+The script uses Plausible's PUT `/api/v1/sites/goals` endpoint with upsert semantics (find-or-create), making it safe to re-run. After adding the line, run the script to provision the goal:
+
+```bash
+PLAUSIBLE_API_KEY=<key> PLAUSIBLE_SITE_ID=soleur.ai bash scripts/provision-plausible-goals.sh
+```
+
+Properties to track: `location` (always `pricing-waitlist`) and `tier` (e.g., `hosted-pro`). Plausible auto-discovers custom properties from event payloads -- no separate property registration is needed.
 
 #### 6. Legal doc review
 
@@ -116,17 +274,21 @@ No new legal documents should be needed -- this is an additional use of an exist
 
 ## Technical Considerations
 
-### Buttondown API compatibility
+### Buttondown API compatibility (confirmed)
 
-The Buttondown embed-subscribe endpoint (`https://buttondown.com/api/emails/embed-subscribe/<username>`) accepts:
+The Buttondown embed-subscribe endpoint (`https://buttondown.com/api/emails/embed-subscribe/<username>`) accepts form-encoded POST data with these fields:
 
-- `email` -- subscriber email
-- `tag` -- tag to apply (e.g., `pricing-waitlist`)
-- `metadata` -- JSON object for custom fields (e.g., `{"tier_interest": "solo"}`)
+- `email` -- subscriber email (required)
+- `tag` -- tag to apply; use `<input type="hidden" name="tag" value="pricing-waitlist">`. Multiple tags supported via multiple `<input name="tag">` elements.
+- `metadata__<key>` -- custom metadata; use `<input type="hidden" name="metadata__tier_interest" value="solo">`. Keys follow the `metadata__` prefix convention.
+- `embed` -- set to `1` for embed mode (matches existing newsletter pattern)
+- `url` -- honeypot field (bots fill it; Buttondown rejects submissions with a non-empty `url` field)
 
-Verify the embed endpoint accepts `tag` and `metadata` fields via POST. If not, the form may need to use the authenticated API instead (requires a Buttondown API key, which would need to be exposed client-side or handled via a server-side proxy -- undesirable).
+**Source:** [Buttondown docs: Building your subscriber base](https://docs.buttondown.com/building-your-subscriber-base) -- confirmed 2026-03-25.
 
-**Fallback:** If the embed endpoint does not support tags/metadata, use the embed endpoint for email capture only, and apply tags manually in the Buttondown dashboard or via a post-signup webhook.
+**Caching note:** New metadata keys (e.g., `tier_interest`) are cached for up to 1 hour before appearing in Buttondown's dashboard filters and subscriber detail pages. First submissions will store the data correctly but the key will not be filterable in the UI until the cache refreshes.
+
+No authenticated API or server-side proxy is needed. The embed endpoint handles tags and metadata natively.
 
 ### Double opt-in
 
@@ -161,10 +323,12 @@ No additional JS libraries. The form uses vanilla JS and the browser's `fetch` A
 - [ ] Double opt-in confirmation email is sent by Buttondown
 - [ ] Legal docs reviewed -- no updates needed if existing coverage is sufficient
 
-### Enhancement (optional, can be deferred)
+### Tier interest capture (included in MVP -- API confirmed)
 
-- [ ] Tier interest is captured as Buttondown metadata when user clicks a specific tier's CTA
-- [ ] Plausible event includes `tier` property
+Since Buttondown embed forms natively support `metadata__<key>` fields, tier interest capture requires no extra infrastructure:
+
+- [ ] Hidden `metadata__tier_interest` field in waitlist form with value from Nunjucks `tier` variable
+- [ ] Plausible event includes `tier` property (already in the JS handler above)
 
 ## Test Scenarios
 
@@ -207,10 +371,12 @@ No additional JS libraries. The form uses vanilla JS and the browser's `fetch` A
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| Buttondown embed endpoint does not accept `tag` param | Medium | Medium | Test manually first; fallback to manual tagging |
-| Buttondown embed endpoint does not accept `metadata` param | Medium | Low | Defer tier interest capture to a post-MVP enhancement |
-| Double opt-in email looks like newsletter confirmation | Low | Low | Review Buttondown confirmation email customization |
-| Form is mistaken for newsletter signup | Low | Medium | Distinct section heading and copy differentiate it |
+| ~~Buttondown embed endpoint does not accept `tag` param~~ | ~~Medium~~ | ~~Medium~~ | **Eliminated** -- confirmed via [Buttondown docs](https://docs.buttondown.com/building-your-subscriber-base): `<input name="tag">` is officially supported |
+| ~~Buttondown embed endpoint does not accept `metadata` param~~ | ~~Medium~~ | ~~Low~~ | **Eliminated** -- confirmed via same docs: `<input name="metadata__<key>">` is officially supported |
+| Metadata key not visible in Buttondown dashboard immediately | Medium | Low | Expected behavior: new metadata keys are cached for up to 1 hour. Document in implementation notes. |
+| Double opt-in email looks like newsletter confirmation | Low | Low | Review Buttondown confirmation email customization settings |
+| Form is mistaken for newsletter signup | Low | Medium | Distinct section heading ("Get early access to Hosted Pro"), accent border, and different copy differentiate it |
+| Plausible Goals API returns 401 (Enterprise plan required) | Low | Low | Provisioning script handles 401 gracefully (exits 0 with skip message); goal can be created manually in dashboard |
 
 ## Success Metrics
 
@@ -226,11 +392,21 @@ No additional JS libraries. The form uses vanilla JS and the browser's `fetch` A
 - Newsletter form template: `plugins/soleur/docs/_includes/newsletter-form.njk`
 - Base template (inline JS): `plugins/soleur/docs/_includes/base.njk:119-147`
 - Site config (Buttondown username): `plugins/soleur/docs/_data/site.json:12-14`
-- CSS styles: `plugins/soleur/docs/css/style.css:1021-1070` (newsletter), `1098-1216` (pricing)
+- CSS styles: `plugins/soleur/docs/css/style.css:1021-1070` (newsletter), `1098-1216` (pricing), `1244` (honeypot-trap), `1252` (prefers-reduced-motion)
 - Privacy policy: `plugins/soleur/docs/pages/legal/privacy-policy.md:93-101`
+- Plausible goals provisioning: `scripts/provision-plausible-goals.sh:137` (add Waitlist Signup after Newsletter Signup)
 - Learning -- PII collection legal pattern: `knowledge-base/project/learnings/2026-03-10-first-pii-collection-legal-update-pattern.md`
 - Learning -- Buttondown GDPR: `knowledge-base/project/learnings/2026-03-18-buttondown-gdpr-transfer-mechanism-sccs-only.md`
 - Learning -- Plausible operationalization: `knowledge-base/project/learnings/integration-issues/2026-03-13-plausible-analytics-operationalization-pattern.md`
+- Learning -- Plausible goals API provisioning: `knowledge-base/project/learnings/2026-03-13-plausible-goals-api-provisioning-hardening.md`
+- Learning -- Adding docs pages pattern: `knowledge-base/project/learnings/docs-site/2026-02-19-adding-docs-pages-pattern.md`
+- Learning -- Auto-fill grid mobile grouping: `knowledge-base/project/learnings/ui-bugs/2026-02-19-auto-fill-grid-loses-semantic-grouping-on-mobile.md`
+
+### External References (confirmed 2026-03-25)
+
+- [Buttondown: Building your subscriber base](https://docs.buttondown.com/building-your-subscriber-base) -- tag and metadata embed form documentation
+- [Buttondown: Subscribers API](https://docs.buttondown.com/api-subscribers-create) -- authenticated API reference (not needed for embed forms)
+- [MDN: CSS scroll-behavior](https://developer.mozilla.org/en-US/docs/Web/CSS/scroll-behavior) -- baseline widely available since March 2022
 
 ### Related Issues
 
