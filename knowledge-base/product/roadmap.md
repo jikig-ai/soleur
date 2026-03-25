@@ -211,7 +211,7 @@ Before recruiting founders, all public surfaces must reflect the cloud platform 
 | # | Item | Effort | Status |
 |---|------|--------|--------|
 | M1 | Update brand guide positioning (remove plugin framing, cloud platform as primary) | 30 min | Not started |
-| M2 | Update homepage hero subtitle + meta description | 30 min | Not started |
+| M2 | Update homepage hero subtitle + meta description (remove "plugin" from meta descriptions) | 30 min | Not started — [#1129](https://github.com/jikig-ai/soleur/issues/1129) |
 | M3 | Update marketing strategy for cloud pivot | 2 hours | Not started |
 | M4 | Draft recruitment messaging templates per channel | 2 hours | Not started |
 | M5 | Update Getting Started page (cloud platform primary, CLI plugin secondary) | 2 hours | Not started |
@@ -219,6 +219,8 @@ Before recruiting founders, all public surfaces must reflect the cloud platform 
 | M7 | Exclude feed.xml from sitemap.xml | 15 min | Not started — [#1122](https://github.com/jikig-ai/soleur/issues/1122) |
 | M8 | Add case studies to Atom feed entries | 30 min | Not started — [#1123](https://github.com/jikig-ai/soleur/issues/1123) |
 | M9 | Fix author URL to point to About page (blocked by About page creation) | 30 min | Blocked — [#1124](https://github.com/jikig-ai/soleur/issues/1124) |
+| M10 | Add external source citations to homepage (AEO/GEO citability — zero citations currently) | 1 hour | Not started — [#1130](https://github.com/jikig-ai/soleur/issues/1130) |
+| M11 | Surface "open source" differentiator on homepage and key pages (absent from headings/meta) | 1 hour | Not started — [#1134](https://github.com/jikig-ai/soleur/issues/1134) |
 
 **Gate:** No recruitment outreach until M1-M4 complete.
 
@@ -303,6 +305,18 @@ Before recruiting founders, the platform must handle multiple users signing up a
 - Agent can automate Cloudflare/Stripe/Plausible signup via local Playwright
 - Pause at CAPTCHA/OAuth, user handles in their own browser
 - Auto-updates work
+
+---
+
+### Post-MVP / Later
+
+Low-priority improvements deferred until after validation. Revisit when the platform has active users.
+
+| # | Item | Priority | Issue | Status |
+|---|------|----------|-------|--------|
+| L1 | Vision page H1 rewrite (zero keyword value — "Vision" alone) | P1 | [#1131](https://github.com/jikig-ai/soleur/issues/1131) | Not started |
+| L2 | Add external citations to AI Agents for Solo Founders guide | P1 | [#1132](https://github.com/jikig-ai/soleur/issues/1132) | Not started |
+| L3 | Add source citations to case study cost comparisons (5 posts) | P1 | [#1133](https://github.com/jikig-ai/soleur/issues/1133) | Not started |
 
 ---
 
