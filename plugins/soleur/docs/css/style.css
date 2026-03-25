@@ -1236,6 +1236,7 @@
     letter-spacing: 3px;
     text-transform: uppercase;
     color: var(--color-accent);
+    text-align: center;
   }
   .pricing-card-price {
     font-family: var(--font-display);
@@ -1243,6 +1244,7 @@
     font-weight: 500;
     line-height: 1.1;
     margin-top: var(--space-4);
+    text-align: center;
   }
   .pricing-card-period {
     font-size: var(--text-xl);
@@ -1252,6 +1254,7 @@
     font-size: var(--text-base);
     color: var(--color-text-secondary);
     margin-top: var(--space-2);
+    text-align: center;
   }
   .pricing-card-divider {
     border: none;
@@ -1273,7 +1276,7 @@
   }
   .pricing-card-badge {
     display: inline-block;
-    align-self: flex-start;
+    align-self: center;
     font-family: var(--font-mono);
     font-size: 0.6875rem;
     font-weight: 600;
