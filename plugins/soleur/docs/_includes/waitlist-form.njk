@@ -1,8 +1,8 @@
-<section class="waitlist-section" id="waitlist">
+<section class="newsletter-section newsletter-section--waitlist" id="waitlist">
   <div class="container">
     <h2>Get early access to Hosted Pro</h2>
     <p>We&rsquo;ll email you when the hosted platform launches. No spam, just a launch email.</p>
-    <form class="waitlist-form" id="waitlist-{{ location }}"
+    <form class="newsletter-form waitlist-form" id="waitlist-{{ location }}"
       action="https://buttondown.com/api/emails/embed-subscribe/{{ site.newsletter.username }}"
       method="post">
       <label for="waitlist-email-{{ location }}" class="sr-only">Email address</label>
@@ -20,7 +20,7 @@
         One email when we launch. Unsubscribe anytime.
         <a href="/pages/legal/privacy-policy/">Privacy Policy</a>
       </p>
-      <div class="waitlist-status" aria-live="polite" role="status"></div>
+      <div class="newsletter-status" aria-live="polite" role="status"></div>
     </form>
   </div>
 </section>

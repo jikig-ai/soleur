@@ -117,12 +117,13 @@
   </footer>
 
   <script>
-  document.querySelectorAll('.newsletter-form').forEach(function(form) {
+  function handleSignupForm(form, opts) {
     form.addEventListener('submit', function(e) {
       e.preventDefault();
+      var honeypot = form.querySelector('input[name="url"]');
+      if (honeypot && honeypot.value) return;
       var btn = form.querySelector('button[type="submit"]');
       var status = form.querySelector('.newsletter-status');
-      var location = form.id.replace('newsletter-', '');
       btn.disabled = true;
       fetch(form.action, {
         method: 'POST',
@@ -130,52 +131,39 @@
         body: new URLSearchParams(new FormData(form))
       }).then(function(res) {
         if (res.ok) {
-          status.textContent = 'Check your email to confirm your subscription.';
+          status.textContent = opts.successMessage;
           status.className = 'newsletter-status newsletter-success';
           form.querySelector('input[type="email"]').value = '';
-          if (window.plausible) plausible('Newsletter Signup', { props: { location: location } });
+          if (window.plausible) plausible(opts.event, { props: opts.props(form) });
         } else {
           status.textContent = 'Something went wrong. Please try again.';
           status.className = 'newsletter-status newsletter-error';
         }
-      }).catch(function(err) {
+      }).catch(function() {
         status.textContent = 'Something went wrong. Please try again.';
         status.className = 'newsletter-status newsletter-error';
       }).finally(function() {
         btn.disabled = false;
       });
     });
+  }
+
+  document.querySelectorAll('.newsletter-form:not(.waitlist-form)').forEach(function(form) {
+    handleSignupForm(form, {
+      successMessage: 'Check your email to confirm your subscription.',
+      event: 'Newsletter Signup',
+      props: function(f) { return { location: f.id.replace('newsletter-', '') }; }
+    });
   });
 
   document.querySelectorAll('.waitlist-form').forEach(function(form) {
-    form.addEventListener('submit', function(e) {
-      e.preventDefault();
-      var btn = form.querySelector('button[type="submit"]');
-      var status = form.querySelector('.waitlist-status');
-      var tier = form.querySelector('input[name="metadata__tier_interest"]');
-      btn.disabled = true;
-      fetch(form.action, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams(new FormData(form))
-      }).then(function(res) {
-        if (res.ok) {
-          status.textContent = 'You\u2019re on the list! Check your email to confirm your spot.';
-          status.className = 'waitlist-status waitlist-success';
-          form.querySelector('input[type="email"]').value = '';
-          if (window.plausible) plausible('Waitlist Signup', {
-            props: { location: 'pricing-waitlist', tier: tier ? tier.value : 'unknown' }
-          });
-        } else {
-          status.textContent = 'Something went wrong. Please try again.';
-          status.className = 'waitlist-status waitlist-error';
-        }
-      }).catch(function() {
-        status.textContent = 'Something went wrong. Please try again.';
-        status.className = 'waitlist-status waitlist-error';
-      }).finally(function() {
-        btn.disabled = false;
-      });
+    handleSignupForm(form, {
+      successMessage: 'You\u2019re on the list! We\u2019ll email you when Hosted Pro launches.',
+      event: 'Waitlist Signup',
+      props: function(f) {
+        var tier = f.querySelector('input[name="metadata__tier_interest"]');
+        return { location: 'pricing-waitlist', tier: tier ? tier.value : 'unknown' };
+      }
     });
   });
   </script>

@@ -1090,65 +1090,10 @@
   .newsletter-success { color: #4ade80; }
   .newsletter-error { color: #f87171; }
 
-  /* Waitlist signup form */
-  .waitlist-section {
-    background: var(--color-bg-secondary);
+  /* Waitlist signup form -- reuses .newsletter-section/.newsletter-form classes */
+  .newsletter-section--waitlist {
     border-top: 2px solid var(--color-accent);
-    border-bottom: 1px solid var(--color-border);
-    padding: var(--space-8) 0;
-    text-align: center;
   }
-  .waitlist-section h2 {
-    font-family: var(--font-display);
-    font-size: var(--text-xl);
-    color: var(--color-text);
-    margin-bottom: var(--space-2);
-  }
-  .waitlist-section p {
-    color: var(--color-text-secondary);
-    margin-bottom: var(--space-4);
-  }
-  .waitlist-form {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-3);
-    justify-content: center;
-    align-items: flex-start;
-    max-width: 480px;
-    margin: 0 auto;
-  }
-  .waitlist-form input[type="email"] {
-    flex: 1 1 220px;
-    padding: var(--space-3) var(--space-4);
-    background: var(--color-bg);
-    border: 1px solid var(--color-border);
-    border-radius: 4px;
-    color: var(--color-text);
-    font-size: var(--text-base);
-  }
-  .waitlist-form input[type="email"]:focus {
-    outline: 2px solid var(--color-focus);
-    outline-offset: 2px;
-    border-color: var(--color-accent);
-  }
-  .waitlist-form input[type="email"]::placeholder {
-    color: var(--color-text-tertiary);
-  }
-  .waitlist-form button[type="submit"] {
-    cursor: pointer;
-    border: none;
-  }
-  .waitlist-form button[type="submit"]:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-  .waitlist-status {
-    flex-basis: 100%;
-    font-size: var(--text-sm);
-    min-height: 1.5em;
-  }
-  .waitlist-success { color: #4ade80; }
-  .waitlist-error { color: #f87171; }
 
   /* Pricing page: Tier cards */
   .pricing-grid {
