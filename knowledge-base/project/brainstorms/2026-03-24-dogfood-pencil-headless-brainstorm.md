@@ -36,26 +36,26 @@ The headless CLI integration added 16 MCP tools via a Node.js adapter bridging `
 
 ### Happy Path (must work)
 
-- [ ] `pencil-setup` skill registers headless MCP successfully
-- [ ] `get_guidelines("landing-page")` returns useful design guidance
-- [ ] `batch_design` creates page sections (hero, comparison table, FAQ)
-- [ ] `get_screenshot` captures the design for visual review
-- [ ] `export_nodes` generates PNG/WebP assets
+- [x] `pencil-setup` skill registers headless MCP successfully
+- [x] `get_guidelines("landing-page")` returns useful design guidance
+- [x] `batch_design` creates page sections (hero, comparison table, FAQ)
+- [x] `get_screenshot` captures the design for visual review
+- [x] `export_nodes` generates PNG/WebP assets
 
 ### Edge Cases (stress test)
 
-- [ ] Text nodes with `fill` (not `textColor`) render correctly
-- [ ] Auto-sized text width workaround (two-pass measure-then-position)
-- [ ] Concurrent tool calls serialize properly via command queue
-- [ ] Crash recovery: adapter restarts after simulated failure
-- [ ] `open_document` switches between .pen files cleanly
-- [ ] `get_screenshot` with tracked node ID from prior `batch_design`
+- [x] Text nodes with `fill` (not `textColor`) render correctly
+- [ ] Auto-sized text width workaround (two-pass measure-then-position) — used `alignItems:"center"` on parent frame instead
+- [ ] Concurrent tool calls serialize properly via command queue — not tested
+- [ ] Crash recovery: adapter restarts after simulated failure — not tested
+- [ ] `open_document` switches between .pen files cleanly — not tested
+- [x] `get_screenshot` with tracked node ID from prior `batch_design`
 
 ### Agent Workflow (UX validation)
 
-- [ ] ux-design-lead agent can use headless mode for design session
-- [ ] Brand guide colors translate to pencil design variables
-- [ ] Iterative design loop (design → screenshot → feedback → redesign) is productive
+- [ ] ux-design-lead agent can use headless mode for design session — not tested this session
+- [x] Brand guide colors translate to pencil design variables
+- [x] Iterative design loop (design → screenshot → feedback → redesign) is productive
 
 ## Open Questions
 

@@ -34,9 +34,9 @@ updated: 2026-03-25
 
 ## Phase 4: Validation and Issue Roundup
 
-- [ ] 4.1 Run Eleventy build
-- [ ] 4.2 Run SEO validation (`validate-seo.sh`)
-- [ ] 4.3 Screenshot at 3 breakpoints via Playwright
-- [ ] 4.4 Compile issue log and batch-create GitHub issues
-- [ ] 4.5 Update brainstorm test matrix
+- [x] 4.1 Run Eleventy build
+- [x] 4.2 Run SEO validation (`validate-seo.sh`)
+- [x] 4.3 Screenshot at 3 breakpoints via Playwright
+- [x] 4.4 Compile issue log and batch-create GitHub issues (#1116, #1117)
+- [x] 4.5 Update brainstorm test matrix
 - [ ] 4.6 Run compound to capture learnings
