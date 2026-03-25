@@ -38,7 +38,7 @@ permissions:
 jobs:
   fix-bug:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -123,7 +123,7 @@ jobs:
           plugins: 'soleur@soleur'
           claude_args: >-
             --model claude-sonnet-4-6
-            --max-turns 25
+            --max-turns 35
             --allowedTools Bash,Read,Write,Edit,Glob,Grep
           prompt: |
             Run /soleur:fix-issue ${{ steps.select.outputs.issue }}
@@ -133,7 +133,7 @@ jobs:
       # App token which is revoked in post-step cleanup).
 
       - name: Detect bot-fix PR
-        if: steps.select.outputs.issue
+        if: always() && steps.select.outputs.issue
         id: detect_pr
         env:
           GH_TOKEN: ${{ github.token }}
@@ -154,7 +154,7 @@ jobs:
           echo "pr_number=$PR_NUM" >> "$GITHUB_OUTPUT"
 
       - name: Auto-merge gate
-        if: steps.detect_pr.outputs.pr_number
+        if: always() && steps.detect_pr.outputs.pr_number
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUM: ${{ steps.detect_pr.outputs.pr_number }}
@@ -211,7 +211,7 @@ jobs:
           echo "Auto-merge queued for PR #$PR_NUM"
 
       - name: Discord notification (auto-merge queued)
-        if: steps.detect_pr.outputs.pr_number
+        if: always() && steps.detect_pr.outputs.pr_number
         env:
           GH_TOKEN: ${{ github.token }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

@@ -110,13 +110,13 @@ The `claude-code-action` post-step revokes the GitHub App installation token (pe
 
 ## Acceptance Criteria
 
-- [ ] `--max-turns` is set to 35 in the `Fix issue` step (`.github/workflows/scheduled-bug-fixer.yml`)
-- [ ] `timeout-minutes` is set to 30 at the job level (`.github/workflows/scheduled-bug-fixer.yml`)
-- [ ] "Detect bot-fix PR" step uses `if: always() && steps.select.outputs.issue`
-- [ ] "Auto-merge gate" step uses `if: always() && steps.detect_pr.outputs.pr_number`
-- [ ] "Discord notification" step uses `if: always() && steps.detect_pr.outputs.pr_number`
-- [ ] Workflow YAML passes GitHub Actions syntax validation (no invalid `if` expressions)
-- [ ] Update the learnings document `2026-03-20-claude-code-action-max-turns-budget.md` to reflect the new budget (25 -> 35)
+- [x] `--max-turns` is set to 35 in the `Fix issue` step (`.github/workflows/scheduled-bug-fixer.yml`)
+- [x] `timeout-minutes` is set to 30 at the job level (`.github/workflows/scheduled-bug-fixer.yml`)
+- [x] "Detect bot-fix PR" step uses `if: always() && steps.select.outputs.issue`
+- [x] "Auto-merge gate" step uses `if: always() && steps.detect_pr.outputs.pr_number`
+- [x] "Discord notification" step uses `if: always() && steps.detect_pr.outputs.pr_number`
+- [x] Workflow YAML passes GitHub Actions syntax validation (no invalid `if` expressions)
+- [x] Update the learnings document `2026-03-20-claude-code-action-max-turns-budget.md` to reflect the new budget (25 -> 35)
 
 ## Test Scenarios
 
