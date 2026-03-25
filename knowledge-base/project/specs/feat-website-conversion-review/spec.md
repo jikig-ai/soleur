@@ -28,7 +28,7 @@ The website still frames Soleur as a Claude Code plugin with CLI-install-first C
 
 - FR1: Homepage hero displays platform positioning with inline email waitlist form
 - FR2: Homepage hero CTA links to pricing page ("See Pricing & Join Waitlist")
-- FR3: Secondary CTA on homepage for self-hosted path ("Or try the open-source plugin")
+- FR3: Secondary CTA on homepage for self-hosted path ("Or try the open-source version")
 - FR4: Pricing link added to main navigation header
 - FR5: Getting Started page presents two paths: Cloud Platform (primary) with waitlist CTA, and Self-Hosted (secondary) with CLI install instructions
 - FR6: All pages with existing CTAs updated to point toward waitlist/pricing rather than CLI install
