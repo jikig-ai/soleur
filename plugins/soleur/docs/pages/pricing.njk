@@ -8,31 +8,43 @@ permalink: pages/pricing.html
     <!-- Hero -->
     <section class="page-hero">
       <div class="container">
-        <h1>Free. Open Source. No Catch.</h1>
-        <p>Soleur is a free Claude Code plugin. You pay only for your Claude API usage or subscription &mdash; we charge nothing.</p>
+        <p class="section-label">Pricing</p>
+        <h1>Every department. One price.</h1>
+        <p>Soleur is free. You pay for Claude. That&rsquo;s it.</p>
       </div>
     </section>
 
-    <!-- Cost Explainer -->
+    <!-- Tier Cards -->
     <section class="landing-section">
       <div class="landing-section-inner">
-        <p class="section-label">How It Works</p>
-        <h2 class="section-title">Your only cost is Claude</h2>
-        <div class="pricing-explainer">
-          <div class="pricing-explainer-item">
-            <div class="pricing-explainer-icon" aria-hidden="true">&#x2705;</div>
-            <h3>Soleur Plugin</h3>
-            <p>Free forever. Open source under MIT. {{ stats.agents }} agents, {{ stats.skills }} skills, {{ stats.departments }} departments.</p>
+        <p class="section-label">Choose Your Path</p>
+        <div class="pricing-grid">
+          <div class="pricing-card">
+            <span class="pricing-card-label">Open Source</span>
+            <div class="pricing-card-price">$0</div>
+            <p class="pricing-card-sub">Free forever. CLI plugin.</p>
+            <hr class="pricing-card-divider">
+            <ul class="pricing-card-features">
+              <li>{{ stats.agents }} agents across {{ stats.departments }} departments</li>
+              <li>{{ stats.skills }} skills, compounding knowledge</li>
+              <li>Full Claude Code integration</li>
+              <li>You pay only for Claude API or subscription</li>
+            </ul>
+            <a href="pages/getting-started.html" class="btn btn-primary pricing-card-cta">Install the Plugin</a>
           </div>
-          <div class="pricing-explainer-item">
-            <div class="pricing-explainer-icon" aria-hidden="true">&#x2705;</div>
-            <h3>Claude Code CLI</h3>
-            <p>Free to install. Requires an Anthropic API key or a Claude Max subscription.</p>
-          </div>
-          <div class="pricing-explainer-item">
-            <div class="pricing-explainer-icon" aria-hidden="true">&#x2705;</div>
-            <h3>Your Cost</h3>
-            <p>Only what you use. Claude API is pay-per-token. Claude Max is $100&ndash;$200/month for heavy usage.</p>
+          <div class="pricing-card pricing-card-featured">
+            <span class="pricing-card-label">Hosted Pro</span>
+            <div class="pricing-card-price">$49<span class="pricing-card-period">/mo</span></div>
+            <p class="pricing-card-sub">+ 10% revenue share. Web platform.</p>
+            <hr class="pricing-card-divider">
+            <ul class="pricing-card-features">
+              <li>Everything in Open Source</li>
+              <li>Web dashboard at app.soleur.ai</li>
+              <li>No terminal required</li>
+              <li>Managed infrastructure</li>
+            </ul>
+            <span class="pricing-card-badge">Coming Soon</span>
+            <button class="btn btn-secondary pricing-card-cta" disabled>Join the Waitlist</button>
           </div>
         </div>
       </div>
