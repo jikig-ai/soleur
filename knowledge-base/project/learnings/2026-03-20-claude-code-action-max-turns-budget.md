@@ -26,7 +26,7 @@ When setting `--max-turns` for `claude-code-action` workflows that load the Sole
 
 Current workflow turn budgets for reference:
 
-- Bug fixer: 25 (at risk — consider increasing)
+- Bug fixer: 35 (increased from 25 — was hitting max_turns)
 - Community monitor: 50 (fixed from 30)
 - Ship/merge: 40
 - Competitive analysis: 45
