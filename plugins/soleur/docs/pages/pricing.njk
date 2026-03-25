@@ -1,0 +1,220 @@
+---
+title: Pricing
+description: "Soleur is free and open source. You pay only for Claude usage. See how Soleur compares to Cursor, Devin, and GitHub Copilot."
+layout: base.njk
+permalink: pages/pricing.html
+ogImage: pricing-og.png
+ogImageAlt: "Soleur Pricing — Every department. One price. $0."
+---
+
+    <!-- Hero -->
+    <section class="page-hero">
+      <div class="container">
+        <p class="section-label">Pricing</p>
+        <h1>Every department. One price.</h1>
+        <p>Soleur is free. You pay for Claude. That&rsquo;s it.</p>
+      </div>
+    </section>
+
+    <!-- Tier Cards -->
+    <section class="landing-section">
+      <div class="landing-section-inner">
+        <p class="section-label">Choose Your Path</p>
+        <div class="pricing-grid">
+          <div class="pricing-card">
+            <span class="pricing-card-label">Open Source</span>
+            <div class="pricing-card-price">$0</div>
+            <p class="pricing-card-sub">Free forever. CLI plugin.</p>
+            <hr class="pricing-card-divider">
+            <ul class="pricing-card-features">
+              <li>{{ stats.agents }} agents across {{ stats.departments }} departments</li>
+              <li>{{ stats.skills }} skills, compounding knowledge</li>
+              <li>Full Claude Code integration</li>
+              <li>You pay only for Claude API or subscription</li>
+            </ul>
+            <a href="pages/getting-started.html" class="btn btn-primary pricing-card-cta">Install the Plugin</a>
+          </div>
+          <div class="pricing-card pricing-card-featured">
+            <span class="pricing-card-label">Hosted Pro</span>
+            <div class="pricing-card-price">$49<span class="pricing-card-period">/mo</span></div>
+            <p class="pricing-card-sub">+ 10% revenue share. Web platform.</p>
+            <hr class="pricing-card-divider">
+            <ul class="pricing-card-features">
+              <li>Everything in Open Source</li>
+              <li>Web dashboard at app.soleur.ai</li>
+              <li>No terminal required</li>
+              <li>Managed infrastructure</li>
+            </ul>
+            <span class="pricing-card-badge">Coming Soon</span>
+            <button class="btn btn-secondary pricing-card-cta" disabled>Join the Waitlist</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Comparison Table -->
+    <section class="landing-section">
+      <div class="landing-section-inner">
+        <p class="section-label">Compare</p>
+        <h2 class="section-title">Soleur vs. the alternatives</h2>
+        <div class="pricing-table-wrap">
+          <table class="pricing-table">
+            <thead>
+              <tr>
+                <th>Feature</th>
+                <th class="pricing-table-highlight">Soleur</th>
+                <th>Cursor</th>
+                <th>Devin</th>
+                <th>GitHub Copilot</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Price</td>
+                <td class="pricing-table-highlight"><strong>Free</strong></td>
+                <td>$20/mo</td>
+                <td>$20/mo</td>
+                <td>$10&ndash;39/mo</td>
+              </tr>
+              <tr>
+                <td>Open Source</td>
+                <td class="pricing-table-highlight">Yes</td>
+                <td>No</td>
+                <td>No</td>
+                <td>No</td>
+              </tr>
+              <tr>
+                <td>Engineering</td>
+                <td class="pricing-table-highlight">Full department</td>
+                <td>Code completion</td>
+                <td>Autonomous coding</td>
+                <td>Code completion</td>
+              </tr>
+              <tr>
+                <td>Marketing</td>
+                <td class="pricing-table-highlight">11 specialists</td>
+                <td>&mdash;</td>
+                <td>&mdash;</td>
+                <td>&mdash;</td>
+              </tr>
+              <tr>
+                <td>Legal</td>
+                <td class="pricing-table-highlight">Document generation &amp; audit</td>
+                <td>&mdash;</td>
+                <td>&mdash;</td>
+                <td>&mdash;</td>
+              </tr>
+              <tr>
+                <td>Finance</td>
+                <td class="pricing-table-highlight">Budget, revenue, reporting</td>
+                <td>&mdash;</td>
+                <td>&mdash;</td>
+                <td>&mdash;</td>
+              </tr>
+              <tr>
+                <td>Sales</td>
+                <td class="pricing-table-highlight">Pipeline &amp; outbound</td>
+                <td>&mdash;</td>
+                <td>&mdash;</td>
+                <td>&mdash;</td>
+              </tr>
+              <tr>
+                <td>Operations</td>
+                <td class="pricing-table-highlight">Expense &amp; infra management</td>
+                <td>&mdash;</td>
+                <td>&mdash;</td>
+                <td>&mdash;</td>
+              </tr>
+              <tr>
+                <td>Knowledge Compounding</td>
+                <td class="pricing-table-highlight">Yes &mdash; permanent</td>
+                <td>No</td>
+                <td>No</td>
+                <td>No</td>
+              </tr>
+              <tr>
+                <td>Total Agents</td>
+                <td class="pricing-table-highlight">{{ stats.agents }}</td>
+                <td>1</td>
+                <td>1</td>
+                <td>1</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- FAQ Section -->
+    <section class="landing-section">
+      <div class="landing-section-inner">
+        <p class="section-label">Common Questions</p>
+        <h2 class="section-title">Pricing FAQ</h2>
+        <div class="faq-list">
+          <details class="faq-item">
+            <summary class="faq-question">Is Soleur really free?</summary>
+            <p class="faq-answer">Yes. The Soleur plugin is open source and free to install. There is no paid tier, no usage limit on the plugin itself, and no vendor lock-in. You pay only for your Claude usage through Anthropic.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">What does Claude cost?</summary>
+            <p class="faq-answer">Claude Code requires either an Anthropic API key (pay-per-token, starting at $3/$15 per million input/output tokens for Sonnet) or a Claude Max subscription ($100&ndash;$200/month for heavy usage with higher rate limits). Most solo founders find the API option more cost-effective for moderate usage.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">Why is Soleur free when competitors charge $20+/month?</summary>
+            <p class="faq-answer">Soleur is built by a solo founder using Soleur itself. The project is open source because the company-as-a-service model works best when the community can extend, audit, and improve the platform. Revenue will come from optional managed services, not from the core plugin.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">Will there ever be a paid version?</summary>
+            <p class="faq-answer">The core plugin will remain free and open source. Future paid offerings may include managed hosting, team features, or premium integrations &mdash; but the {{ stats.agents }} agents and {{ stats.skills }} skills you see today will always be free.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "Is Soleur really free?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. The Soleur plugin is open source and free to install. There is no paid tier, no usage limit on the plugin itself, and no vendor lock-in. You pay only for your Claude usage through Anthropic."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What does Claude cost?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Claude Code requires either an Anthropic API key (pay-per-token, starting at $3/$15 per million input/output tokens for Sonnet) or a Claude Max subscription ($100-$200/month for heavy usage with higher rate limits). Most solo founders find the API option more cost-effective for moderate usage."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Why is Soleur free when competitors charge $20+/month?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Soleur is built by a solo founder using Soleur itself. The project is open source because the company-as-a-service model works best when the community can extend, audit, and improve the platform. Revenue will come from optional managed services, not from the core plugin."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Will there ever be a paid version?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "The core plugin will remain free and open source. Future paid offerings may include managed hosting, team features, or premium integrations — but the agents and skills you see today will always be free."
+          }
+        }
+      ]
+    }
+    </script>
+
+    <!-- Final CTA -->
+    <section class="landing-cta">
+      <h2>Start building. Pay nothing.</h2>
+      <p>Install in 10 seconds. No credit card. No signup.</p>
+      <a href="pages/getting-started.html" class="btn btn-primary">Get started for free</a>
+    </section>

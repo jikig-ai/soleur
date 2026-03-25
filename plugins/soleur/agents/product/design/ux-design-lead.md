@@ -59,6 +59,31 @@ When reviewing existing HTML pages (not creating new .pen designs), audit inform
 - **First-time user orientation** -- a new user can understand what to do within 30 seconds
 - **Category granularity** -- prefer fewer top-level categories with sub-headers over many granular categories
 
+## Wireframe-to-Implementation Handoff
+
+This workflow is invoked by the `/work` skill when design artifacts exist for UI tasks. It can also be invoked directly by passing `.pen` file paths.
+
+### When Creating Wireframes (Step 2 above)
+
+Use descriptive frame names that map to HTML sections (e.g., "Hero", "Tier Cards", "Comparison", "FAQ"). Include real content in text nodes (actual prices, feature lists, CTAs) rather than placeholder lorem ipsum — the implementation brief extracts this content directly.
+
+### Producing an Implementation Brief
+
+When given `.pen` file paths (from `/work` or directly), produce a structured **implementation brief** by reading the design file and extracting:
+
+1. **Page structure:** Ordered list of top-level sections with their frame names
+2. **Per section:**
+   - Section name and purpose
+   - Layout type (grid columns, flex direction, alignment)
+   - Content: all text content verbatim (headlines, prices, feature lists, CTAs, badges)
+   - Nested components (cards, tables, badges) with their structure
+   - Visual emphasis (which element has accent borders, highlighted backgrounds, etc.)
+3. **Conflicts with spec:** If a spec/tasks file is provided alongside the artifacts, flag any structural differences (e.g., spec says 3 tiers but wireframe shows 2)
+
+**Precedence rule:** The wireframe wins for visual structure (sections, cards, layout, component count). The spec wins for content accuracy (copy, URLs, data values). When they conflict on structure, the brief should note the conflict and default to the wireframe.
+
+Output the brief as a structured markdown list that the `/work` skill can implement section-by-section. Do not write HTML — the brief is an intermediate artifact consumed by `/work`.
+
 ## Design-Implementation Sync
 
 After HTML/CSS changes to pages that have corresponding .pen design files in `knowledge-base/product/design/`, update the .pen files to reflect the new structure. This keeps the design source of truth consistent with the live implementation. Check for matching .pen files by searching `knowledge-base/product/design/` for filenames related to the changed pages.

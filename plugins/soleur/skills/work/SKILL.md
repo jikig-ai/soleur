@@ -72,6 +72,10 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 6. Run `git diff --name-only HEAD...origin/main` to identify files that diverged between this branch and main. If output is non-empty, WARN: "Branch has diverged from main in [N] files: [file list]. Consider merging main before starting." If the git command fails (e.g., offline, no remote), skip this check silently.
 7. If a plan file was provided (check 5 passed), scan for a `## Domain Review` or `## UX Review` heading (both are accepted for backward compatibility). If NEITHER heading found: scan the plan content for UI file patterns (page.tsx, layout.tsx, template.tsx, .jsx, .vue, .svelte, .astro, +page.svelte, app/, pages/, components/, layouts/, routes/). If UI patterns found, WARN: "Plan references UI files but has no Domain Review section. Consider running /soleur:plan to add domain review before implementing." If either heading IS present: pass silently.
 
+**Design artifact checks:**
+
+8. Check if prior phases produced design artifacts. Search the repo for design files matching the feature name: `git ls-files '*.pen' '*.fig' '*.sketch' | grep -i "<feature-name>"` and check `knowledge-base/product/design/` for related files. If design artifacts exist AND the current tasks include UI/page implementation (patterns: `.njk`, `.html`, `.tsx`, `.jsx`, `.vue`, `.svelte`, `pages/`, `components/`, `layouts/`): store the artifact paths as `DESIGN_ARTIFACTS` for use in Phase 2.
+
 **On FAIL:** Display the failure message with remediation steps and stop. Do not proceed to Phase 1.
 
 **On WARN only:** Display all warnings together and proceed to Phase 1.
@@ -173,12 +177,15 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 2. **Task Execution Loop**
 
+   **Design Artifact Gate (before first UI task):** If `DESIGN_ARTIFACTS` was set in Phase 0.5, spawn the `ux-design-lead` agent with the artifact paths and ask it to produce an **implementation brief** (see ux-design-lead "Wireframe-to-Implementation Handoff" workflow). The brief is a structured description of every section, its content, and its layout — this becomes the binding input for all UI tasks. Do not write any markup until the brief is received.
+
    For each task in priority order:
 
    ```text
    while (tasks remain):
      - Mark task as in_progress in TodoWrite
      - Read any referenced files from the plan
+     - If task creates UI/pages: verify implementation brief exists (HARD GATE)
      - Look for similar patterns in codebase
      - RED: Write failing test(s) for this task's acceptance criteria
      - GREEN: Write minimum code to make the test(s) pass

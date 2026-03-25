@@ -69,21 +69,20 @@ claude mcp remove pencil -s user 2>/dev/null
 
 ### Headless CLI mode (`PREFERRED_MODE=headless_cli`)
 
+The adapter requires `PENCIL_CLI_KEY` in the MCP environment. Retrieve the key, then register with `-e` **before** the `--` separator:
+
 ```bash
-claude mcp add -s user pencil -- <PREFERRED_NODE> <PREFERRED_BINARY>
+# Retrieve the key (Doppler, or use pencil login token)
+PENCIL_KEY=$(doppler secrets get PENCIL_CLI_KEY -p soleur -c dev --plain 2>/dev/null)
+# If Doppler is not available, check for a stored login token:
+# PENCIL_KEY=$(cat ~/.config/pencil/auth.json 2>/dev/null | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
+
+claude mcp add pencil -s user -e PENCIL_CLI_KEY="$PENCIL_KEY" -- <PREFERRED_NODE> <PREFERRED_BINARY>
 ```
 
 Replace `<PREFERRED_NODE>` with the Node 22+ binary path and `<PREFERRED_BINARY>` with the adapter path from Phase 0.
 
-The adapter requires `PENCIL_CLI_KEY` in the environment. Set it in Claude Code settings or shell profile:
-
-```bash
-# Option 1: Set in shell profile (~/.bashrc or ~/.zshrc)
-export PENCIL_CLI_KEY="your-key-here"
-
-# Option 2: Authenticate via pencil login (stores token locally)
-~/.local/node_modules/.bin/pencil login
-```
+**Critical:** The `-e` flag must appear before `--`. Placing it after `--` passes it as a CLI arg to the adapter instead of setting an environment variable, causing silent auth failures.
 
 ### CLI mode (`PREFERRED_MODE=cli`)
 
@@ -132,3 +131,4 @@ If it does not appear, tell the user the registration failed and suggest running
 - **pencil CLI collision**: The `pencil` binary name collides with evolus/pencil. The check_deps.sh script guards against this by verifying the version string contains "pencil.dev" or checking for the `mcp-server` subcommand.
 - **Headless CLI interactive mode is not MCP**: The Pencil npm headless CLI's `pencil interactive` command speaks a custom REPL format (`tool_name({ key: value })`), not MCP protocol. An adapter wrapper is needed to bridge it to Claude Code's MCP framework. The headless CLI also lacks the `mcp-server` subcommand that the Desktop-installed CLI exposes, and its version string (`pencil 0.2.3`) doesn't match existing detection patterns.
 - **Headless CLI has programmatic save**: Unlike Desktop/IDE modes, `pencil interactive --out` supports a `save()` command that writes to disk without manual Ctrl+S.
+- **Adapter child process Node version**: The pencil CLI uses `#!/usr/bin/env node`, so the resolved Node depends on PATH, not on the binary that launched the adapter. The adapter's `buildPencilEnv()` must prepend `dirname(process.execPath)` to PATH to ensure child processes inherit the correct Node version (22+).

@@ -11,14 +11,14 @@
   <meta property="og:type" content="{{ ogType | default('website') }}">
   <meta property="og:site_name" content="{{ site.name }}">
   <meta property="og:locale" content="en_US">
-  <meta property="og:image" content="{{ site.url }}/images/og-image.png">
+  <meta property="og:image" content="{{ site.url }}/images/{{ ogImage | default('og-image.png') }}">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="{{ site.name }} - {{ site.tagline }}">
+  <meta property="og:image:alt" content="{{ ogImageAlt | default(site.name + ' - ' + site.tagline) }}">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="{{ title }}{% if title != site.name %} - {{ site.name }}{% endif %}">
   <meta name="twitter:description" content="{{ description }}">
-  <meta name="twitter:image" content="{{ site.url }}/images/og-image.png">
+  <meta name="twitter:image" content="{{ site.url }}/images/{{ ogImage | default('og-image.png') }}">
   <meta name="twitter:site" content="@soleur_ai">
   <meta name="twitter:creator" content="@soleur_ai">
   <script type="application/ld+json">

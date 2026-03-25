@@ -1,0 +1,42 @@
+---
+title: Tasks - Dogfood Pencil Headless CLI via Pricing Page
+issue: 656
+branch: dogfood-pencil-headless
+created: 2026-03-24
+updated: 2026-03-25
+---
+
+# Tasks
+
+## Phase 0: Setup
+
+- [x] 0.1 Run `pencil-setup` skill to register headless MCP
+- [x] 0.2 Verify MCP connected (`claude mcp list` shows "Connected")
+
+## Phase 1: Quick Wireframe in Pencil (15 min)
+
+- [x] 1.1 Set design variables via `set_variables` (brand tokens)
+- [x] 1.2 Create page sections via `batch_design` (hero, tiers, comparison, FAQ, CTA)
+- [x] 1.3 Screenshot via `get_screenshot` (full canvas + tracked node IDs)
+
+## Phase 2: HTML/Eleventy Implementation
+
+- [x] 2.1 Create `plugins/soleur/docs/pages/pricing.njk` with frontmatter
+- [x] 2.2 Implement page sections (hero, tier cards, comparison, cost explainer, FAQ, CTA)
+- [x] 2.3 Add `.pricing-grid` and `.pricing-card` CSS to `style.css`
+- [x] 2.4 Add FAQPage JSON-LD schema (4 questions)
+- [x] 2.5 Add "Pricing" to nav and footer in `site.json`
+
+## Phase 3: OG Image via Pencil
+
+- [x] 3.1 Design 1200x630 OG image in pencil
+- [x] 3.2 Export via `export_nodes` to `plugins/soleur/docs/images/pricing-og.png`
+
+## Phase 4: Validation and Issue Roundup
+
+- [x] 4.1 Run Eleventy build
+- [x] 4.2 Run SEO validation (`validate-seo.sh`)
+- [x] 4.3 Screenshot at 3 breakpoints via Playwright
+- [x] 4.4 Compile issue log and batch-create GitHub issues (#1116, #1117)
+- [x] 4.5 Update brainstorm test matrix
+- [x] 4.6 Run compound to capture learnings
