@@ -219,15 +219,18 @@ A plan that *discusses* UI concepts but *implements* orchestration changes (e.g.
 
 1. Run spec-flow-analyzer via Task with UI-flow-aware prompt: "Analyze the user flows in this plan. Map each screen, identify entry/exit points, dead ends, missing error states, and flows that drop the user. Focus on user journey completeness, not technical implementation."
 2. Run CPO via Task with scoped prompt: "Assess the product implications of this plan: {plan summary}. Cross-reference against brand-guide.md and constitution.md. Identify product strategy concerns, flow gaps, and positioning issues. Output a structured advisory — do not use AskUserQuestion."
-3. Invoke ux-design-lead via Task with scoped prompt: "Create wireframes for these user flows: {flow list}. Platform: desktop. Fidelity: wireframe." The agent has its own Pencil MCP prerequisite check — if Pencil is unavailable, the agent will stop with an installation message. If the Task returns without wireframes (agent self-stopped), write `Pencil available: no` in the Domain Review section and display: "ux-design-lead skipped (Pencil MCP not available). Consider running wireframes manually before implementation."
-4. Phase 3 SpecFlow is skipped (spec-flow-analyzer already ran in step 1 with UI-aware prompt — avoids duplicate invocation).
-5. If any agent in the pipeline fails (timeout, error), write partial findings with `Decision: reviewed (partial)` and proceed. Do not block the plan on agent failure.
+3. **Brainstorm carry-forward check.** Before invoking ux-design-lead, check the UX signal source. If the only UX validation is brainstorm carry-forward (brainstorm assessed the *idea*, not the *page design*), reject it: "Brainstorm validated the idea, not the page design. Proceeding to wireframes." Then continue to step 4. This check applies to BLOCKING tier only — ADVISORY and NONE tiers may still carry forward brainstorm UX findings.
+4. Invoke ux-design-lead via Task with scoped prompt: "Create wireframes for these user flows: {flow list}. Platform: desktop. Fidelity: wireframe." The agent has its own Pencil MCP prerequisite check — if Pencil is unavailable, the agent will stop with an installation message. If the Task returns without wireframes (agent self-stopped), write `Pencil available: no` in the Domain Review section, add `ux-design-lead` to `**Skipped specialists:**` with the user's justification, and display: "ux-design-lead skipped (Pencil MCP not available). Consider running wireframes manually before implementation."
+5. **Content Review Gate.** Check if any domain leader (CMO, CRO, CPO, or other) recommended a copywriter or content specialist in their Step 1 assessment. If yes: invoke copywriter agent via Task with prompt: "Review the planned page content for brand voice compliance, value proposition clarity, and messaging effectiveness. Reference brand-guide.md." If copywriter ran successfully, add `copywriter` to `**Agents invoked:**`. If user declines, add `copywriter` to `**Skipped specialists:**` with the user's reason. If copywriter agent fails (timeout, error), add `copywriter` to `**Skipped specialists:**` with note `(agent error — review manually)` and set `**Decision:** reviewed (partial)`. If no domain leader recommended a copywriter, skip this step silently. This gate also fires on ADVISORY tier when a domain leader recommended a copywriter — the recommendation is the signal, not the tier.
+6. Phase 3 SpecFlow is skipped (spec-flow-analyzer already ran in step 1 with UI-aware prompt — avoids duplicate invocation).
+7. If any agent in the pipeline fails (timeout, error), write partial findings with `Decision: reviewed (partial)` and proceed. Do not block the plan on agent failure.
 
 **On ADVISORY:**
 
 1. If in pipeline/subagent context (plan file path was provided as argument, not interactive): auto-accept, write Product/UX Gate subsection with `Tier: advisory, Decision: auto-accepted (pipeline)`, proceed silently.
 2. If interactive: display notice via AskUserQuestion: "This plan modifies existing UI. Run UX review?" Options: "Yes, run full review" / "Skip — I'll handle UX manually". Record choice.
 3. If user chooses full review, run the BLOCKING pipeline above.
+4. **Content Review Gate (ADVISORY).** Regardless of the UX review choice, if any domain leader recommended a copywriter or content specialist, run step 5 from the BLOCKING pipeline (Content Review Gate). The recommendation is the signal, not the tier — modifying existing copy still benefits from content review.
 
 **On NONE:** Skip — no Product/UX Gate subsection needed beyond the domain sweep finding.
 
@@ -253,7 +256,8 @@ After both steps complete, write the `## Domain Review` section to the plan file
 
 **Tier:** blocking | advisory
 **Decision:** reviewed | reviewed (partial) | skipped | auto-accepted (pipeline)
-**Agents invoked:** spec-flow-analyzer, cpo, ux-design-lead | spec-flow-analyzer, cpo | none
+**Agents invoked:** spec-flow-analyzer, cpo, ux-design-lead, copywriter | [subset] | none
+**Skipped specialists:** ux-design-lead (<reason>), copywriter (<reason>) | none
 **Pencil available:** yes | no | N/A
 
 #### Findings

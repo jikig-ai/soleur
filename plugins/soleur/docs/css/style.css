@@ -1095,6 +1095,125 @@
     border-top: 2px solid var(--color-accent);
   }
 
+  /* Pricing page: Hero stat line */
+  .hero-stat {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--color-accent);
+    margin-top: var(--space-4);
+    letter-spacing: 0.02em;
+  }
+
+  /* Pricing page: Section subtitle */
+  .section-subtitle {
+    font-size: var(--text-base);
+    color: var(--color-text-secondary);
+    max-width: 60ch;
+    margin: var(--space-2) auto var(--space-8);
+    text-align: center;
+  }
+
+  /* Pricing page: Hiring comparison table */
+  .hiring-scenario-col {
+    font-size: var(--text-xs);
+    color: var(--color-text-tertiary);
+  }
+  .hiring-total-row td {
+    border-top: 2px solid var(--color-accent);
+    font-size: var(--text-lg);
+  }
+  .hiring-footnote {
+    font-size: var(--text-xs);
+    color: var(--color-text-tertiary);
+    margin-top: var(--space-4);
+    text-align: center;
+  }
+
+  /* Pricing page: Department roster */
+  .department-roster {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--space-6);
+    max-width: 1200px;
+    margin-inline: auto;
+  }
+  .department-card {
+    padding: var(--space-6);
+    border: 1px solid var(--color-border);
+    border-radius: 0;
+  }
+  .department-icon {
+    font-size: var(--text-2xl);
+    display: block;
+    margin-bottom: var(--space-3);
+  }
+  .department-name {
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    font-weight: 500;
+    margin-bottom: var(--space-2);
+  }
+  .department-desc {
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    line-height: 1.5;
+  }
+
+  /* Pricing page: Scenario callouts */
+  .scenario-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-6);
+    max-width: 1200px;
+    margin-inline: auto;
+  }
+  .scenario-card {
+    padding: var(--space-6);
+    border: 1px solid var(--color-border);
+    border-radius: 0;
+  }
+  .scenario-title {
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    font-weight: 500;
+    margin-bottom: var(--space-3);
+    color: var(--color-accent);
+  }
+  .scenario-desc {
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    line-height: 1.6;
+  }
+
+  /* Pricing page: Claude note */
+  .pricing-claude-note {
+    font-size: var(--text-xs);
+    color: var(--color-text-tertiary);
+    text-align: center;
+    margin-top: var(--space-6);
+  }
+
+  /* Pricing page: Proof tagline */
+  .proof-tagline {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--color-text-tertiary);
+    letter-spacing: 0.02em;
+  }
+
+  /* Pricing page: Waitlist secondary CTA */
+  .waitlist-secondary {
+    margin-top: var(--space-4);
+    font-size: var(--text-sm);
+  }
+  .waitlist-secondary a {
+    color: var(--color-text-secondary);
+    text-decoration: underline;
+  }
+  .waitlist-secondary a:hover {
+    color: var(--color-accent);
+  }
+
   /* Pricing page: Tier cards */
   .pricing-grid {
     display: grid;
@@ -1122,6 +1241,7 @@
     letter-spacing: 3px;
     text-transform: uppercase;
     color: var(--color-accent);
+    text-align: center;
   }
   .pricing-card-price {
     font-family: var(--font-display);
@@ -1129,6 +1249,7 @@
     font-weight: 500;
     line-height: 1.1;
     margin-top: var(--space-4);
+    text-align: center;
   }
   .pricing-card-period {
     font-size: var(--text-xl);
@@ -1138,6 +1259,7 @@
     font-size: var(--text-base);
     color: var(--color-text-secondary);
     margin-top: var(--space-2);
+    text-align: center;
   }
   .pricing-card-divider {
     border: none;
@@ -1156,10 +1278,18 @@
     font-size: var(--text-sm);
     color: var(--color-text-secondary);
     line-height: 1.5;
+    padding-left: var(--space-4);
+    position: relative;
+  }
+  .pricing-card-features li::before {
+    content: "\2013";
+    color: var(--color-accent);
+    position: absolute;
+    left: 0;
   }
   .pricing-card-badge {
     display: inline-block;
-    align-self: flex-start;
+    align-self: center;
     font-family: var(--font-mono);
     font-size: 0.6875rem;
     font-weight: 600;
@@ -1213,12 +1343,19 @@
     color: var(--color-accent) !important;
   }
 
+  @media (max-width: 1024px) {
+    .department-roster { grid-template-columns: repeat(2, 1fr); }
+    .scenario-grid { grid-template-columns: repeat(2, 1fr); }
+    .hiring-scenario-col { display: none; }
+  }
   @media (max-width: 768px) {
     .pricing-grid { grid-template-columns: 1fr; }
     .pricing-card { padding: var(--space-6); }
     .pricing-table { font-size: var(--text-xs); }
     .pricing-table th,
     .pricing-table td { padding: var(--space-3) var(--space-2); }
+    .department-roster { grid-template-columns: 1fr; }
+    .scenario-grid { grid-template-columns: 1fr; }
   }
 }
 
