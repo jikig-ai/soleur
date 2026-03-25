@@ -311,24 +311,24 @@ No additional JS libraries. The form uses vanilla JS and the browser's `fetch` A
 
 ## Acceptance Criteria
 
-- [ ] "Join the Waitlist" button on Hosted Pro card scrolls to the waitlist form section
-- [ ] Waitlist form captures email and submits to Buttondown with `pricing-waitlist` tag
-- [ ] Honeypot spam protection field is present and hidden
-- [ ] Successful submission shows confirmation message and clears the input
-- [ ] Failed submission shows error message
-- [ ] Plausible `Waitlist Signup` event fires on successful submission with `location: pricing-waitlist`
-- [ ] Form is accessible: labels, aria attributes, keyboard navigation, color contrast
-- [ ] Mobile responsive: form layout works on screens as narrow as 320px
-- [ ] Privacy notice with link to privacy policy appears below the form
-- [ ] Double opt-in confirmation email is sent by Buttondown
-- [ ] Legal docs reviewed -- no updates needed if existing coverage is sufficient
+- [x] "Join the Waitlist" button on Hosted Pro card scrolls to the waitlist form section
+- [x] Waitlist form captures email and submits to Buttondown with `pricing-waitlist` tag
+- [x] Honeypot spam protection field is present and hidden
+- [x] Successful submission shows confirmation message and clears the input
+- [x] Failed submission shows error message
+- [x] Plausible `Waitlist Signup` event fires on successful submission with `location: pricing-waitlist`
+- [x] Form is accessible: labels, aria attributes, keyboard navigation, color contrast
+- [x] Mobile responsive: form layout works on screens as narrow as 320px
+- [x] Privacy notice with link to privacy policy appears below the form
+- [x] Double opt-in confirmation email is sent by Buttondown
+- [x] Legal docs reviewed -- no updates needed if existing coverage is sufficient
 
 ### Tier interest capture (included in MVP -- API confirmed)
 
 Since Buttondown embed forms natively support `metadata__<key>` fields, tier interest capture requires no extra infrastructure:
 
-- [ ] Hidden `metadata__tier_interest` field in waitlist form with value from Nunjucks `tier` variable
-- [ ] Plausible event includes `tier` property (already in the JS handler above)
+- [x] Hidden `metadata__tier_interest` field in waitlist form with value from Nunjucks `tier` variable
+- [x] Plausible event includes `tier` property (already in the JS handler above)
 
 ## Test Scenarios
 

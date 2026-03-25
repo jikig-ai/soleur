@@ -146,6 +146,38 @@
       });
     });
   });
+
+  document.querySelectorAll('.waitlist-form').forEach(function(form) {
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+      var btn = form.querySelector('button[type="submit"]');
+      var status = form.querySelector('.waitlist-status');
+      var tier = form.querySelector('input[name="metadata__tier_interest"]');
+      btn.disabled = true;
+      fetch(form.action, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(new FormData(form))
+      }).then(function(res) {
+        if (res.ok) {
+          status.textContent = 'You\u2019re on the list! Check your email to confirm your spot.';
+          status.className = 'waitlist-status waitlist-success';
+          form.querySelector('input[type="email"]').value = '';
+          if (window.plausible) plausible('Waitlist Signup', {
+            props: { location: 'pricing-waitlist', tier: tier ? tier.value : 'unknown' }
+          });
+        } else {
+          status.textContent = 'Something went wrong. Please try again.';
+          status.className = 'waitlist-status waitlist-error';
+        }
+      }).catch(function() {
+        status.textContent = 'Something went wrong. Please try again.';
+        status.className = 'waitlist-status waitlist-error';
+      }).finally(function() {
+        btn.disabled = false;
+      });
+    });
+  });
   </script>
 </body>
 </html>

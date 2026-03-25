@@ -46,7 +46,7 @@ ogImageAlt: "Soleur Pricing — Every department. One price. $0."
               <li>Managed infrastructure</li>
             </ul>
             <span class="pricing-card-badge">Coming Soon</span>
-            <button class="btn btn-secondary pricing-card-cta" disabled>Join the Waitlist</button>
+            <a href="#waitlist" class="btn btn-secondary pricing-card-cta">Join the Waitlist</a>
           </div>
         </div>
       </div>
@@ -211,6 +211,11 @@ ogImageAlt: "Soleur Pricing — Every department. One price. $0."
       ]
     }
     </script>
+
+    <!-- Waitlist Signup -->
+    {% set location = "pricing-waitlist" %}
+    {% set tier = "hosted-pro" %}
+    {% include "waitlist-form.njk" %}
 
     <!-- Final CTA -->
     <section class="landing-cta">
