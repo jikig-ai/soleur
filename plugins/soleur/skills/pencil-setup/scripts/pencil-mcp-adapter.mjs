@@ -7,7 +7,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { spawn as nodeSpawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 
@@ -19,6 +19,24 @@ if (major < 22 || (major === 22 && minor < 9)) {
     `[pencil-adapter] Node >= 22.9.0 required, got ${process.version}\n`
   );
   process.exit(1);
+}
+
+// --- Defense-in-depth: parse -e KEY=VALUE from argv ---
+// If `claude mcp add` passes -e flags as args instead of env vars
+// (e.g., -e placed after -- separator), inject them into process.env.
+
+for (let i = 2; i < process.argv.length; i++) {
+  if (process.argv[i] === "-e" && i + 1 < process.argv.length) {
+    const eqIdx = process.argv[i + 1].indexOf("=");
+    if (eqIdx > 0) {
+      const key = process.argv[i + 1].slice(0, eqIdx);
+      const val = process.argv[i + 1].slice(eqIdx + 1);
+      if (!process.env[key]) {
+        process.env[key] = val;
+      }
+    }
+    i++; // skip the value arg
+  }
 }
 
 // --- Env allowlist ---
@@ -78,6 +96,20 @@ function extractNodeIds(response) {
     entries.push(match[1]);
   }
   return entries;
+}
+
+// --- Screenshot persistence ---
+
+function saveScreenshot(base64Data, nodeId) {
+  const penFile = pencilProcess.outputFile;
+  if (!penFile) return null;
+  const screenshotDir = join(dirname(penFile), "screenshots");
+  mkdirSync(screenshotDir, { recursive: true });
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `${nodeId}-${timestamp}.png`;
+  const filePath = join(screenshotDir, filename);
+  writeFileSync(filePath, Buffer.from(base64Data, "base64"));
+  return filePath;
 }
 
 // --- Binary resolution ---
@@ -378,49 +410,48 @@ registerReadOnlyTool("get_guidelines", {
   ]),
 });
 
-// get_screenshot — special handling for base64 image data
-registerReadOnlyTool(
-  "get_screenshot",
-  { nodeId: z.string() },
-  (text, isError) => {
-    if (isError) {
-      return { content: [{ type: "text", text }], isError: true };
+// get_screenshot — special handling for base64 image data + auto-save to disk
+server.tool("get_screenshot", { nodeId: z.string() }, async ({ nodeId }) => {
+  await ensureProcess();
+  const cmd = formatReplCommand("get_screenshot", { nodeId });
+  const raw = await commandQueue.enqueue(cmd);
+  const { text, isError } = parseResponse(raw);
+  if (isError) {
+    return { content: [{ type: "text", text }], isError: true };
+  }
+
+  // Try parsing as JSON — pencil returns {"image":"<base64>","mimeType":"image/png"}
+  let base64Data = null;
+  let mimeType = "image/png";
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed.image && parsed.mimeType) {
+      base64Data = parsed.image;
+      mimeType = parsed.mimeType;
     }
-    // Try parsing as JSON — pencil returns {"image":"<base64>","mimeType":"image/png"}
-    try {
-      const parsed = JSON.parse(text);
-      if (parsed.image && parsed.mimeType) {
-        return {
-          content: [
-            {
-              type: "image",
-              data: parsed.image,
-              mimeType: parsed.mimeType,
-            },
-          ],
-        };
-      }
-    } catch {
-      // Not JSON — try data URI pattern
-      const base64Match = text.match(
-        /data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)/
-      );
-      if (base64Match) {
-        return {
-          content: [
-            {
-              type: "image",
-              data: base64Match[2],
-              mimeType: `image/${base64Match[1]}`,
-            },
-          ],
-        };
-      }
+  } catch {
+    // Not JSON — try data URI pattern
+    const base64Match = text.match(
+      /data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)/
+    );
+    if (base64Match) {
+      base64Data = base64Match[2];
+      mimeType = `image/${base64Match[1]}`;
     }
-    // Fallback to text
+  }
+
+  if (!base64Data) {
     return { content: [{ type: "text", text }] };
   }
-);
+
+  // Auto-save screenshot to disk
+  const savedPath = saveScreenshot(base64Data, nodeId);
+  const content = [{ type: "image", data: base64Data, mimeType }];
+  if (savedPath) {
+    content.push({ type: "text", text: `Screenshot saved: ${savedPath}` });
+  }
+  return { content };
+});
 
 registerReadOnlyTool("get_style_guide", {
   name: z.string().optional(),
@@ -477,10 +508,42 @@ registerMutatingTool("replace_all_matching_properties", {
   properties: z.record(z.string(), z.unknown()),
 });
 
-registerMutatingTool("set_variables", {
-  variables: z.record(z.string(), z.unknown()),
-  replace: z.boolean().optional(),
-});
+// set_variables — auto-coerce bare values into {type, value} objects
+server.tool(
+  "set_variables",
+  {
+    variables: z.record(z.string(), z.unknown()),
+    replace: z.boolean().optional(),
+  },
+  async ({ variables, replace }) => {
+    await ensureProcess();
+    // Coerce bare values: "#hex" → {type:"color"}, number → {type:"number"}, string → {type:"string"}
+    const coerced = {};
+    for (const [key, val] of Object.entries(variables)) {
+      if (val && typeof val === "object" && val.type && val.value !== undefined) {
+        coerced[key] = val; // already typed
+      } else if (typeof val === "string" && /^#[0-9a-fA-F]{3,8}$/.test(val)) {
+        coerced[key] = { type: "color", value: val };
+      } else if (typeof val === "number") {
+        coerced[key] = { type: "number", value: val };
+      } else if (typeof val === "string") {
+        coerced[key] = { type: "string", value: val };
+      } else {
+        coerced[key] = val; // pass through unknown shapes
+      }
+    }
+    const params = { variables: coerced };
+    if (replace !== undefined) params.replace = replace;
+    const cmd = formatReplCommand("set_variables", params);
+    const raw = await commandQueue.enqueue(cmd);
+    const { text, isError } = parseResponse(raw);
+    if (isError) {
+      return { content: [{ type: "text", text }], isError: true };
+    }
+    await commandQueue.enqueue("save()");
+    return { content: [{ type: "text", text }] };
+  }
+);
 
 // --- Meta tools ---
 

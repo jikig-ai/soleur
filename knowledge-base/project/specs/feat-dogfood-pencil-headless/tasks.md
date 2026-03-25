@@ -15,9 +15,9 @@ updated: 2026-03-25
 
 ## Phase 1: Quick Wireframe in Pencil (15 min)
 
-- [ ] 1.1 Set design variables via `set_variables` (brand tokens)
-- [ ] 1.2 Create page sections via `batch_design` (hero, tiers, comparison, FAQ, CTA)
-- [ ] 1.3 Screenshot via `get_screenshot` (full canvas + tracked node IDs)
+- [x] 1.1 Set design variables via `set_variables` (brand tokens)
+- [x] 1.2 Create page sections via `batch_design` (hero, tiers, comparison, FAQ, CTA)
+- [x] 1.3 Screenshot via `get_screenshot` (full canvas + tracked node IDs)
 
 ## Phase 2: HTML/Eleventy Implementation
 

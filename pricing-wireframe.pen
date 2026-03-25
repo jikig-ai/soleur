@@ -1,0 +1,1370 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "uoZHH",
+      "x": 0,
+      "y": 0,
+      "name": "Pricing Page",
+      "width": 1440,
+      "fill": "$--background",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "WB9lG",
+          "name": "Hero",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 24,
+          "padding": [
+            80,
+            120
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "daL2Z",
+              "name": "badge",
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "$--primary"
+              },
+              "padding": [
+                8,
+                16
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "EHVa5",
+                  "name": "badgeText",
+                  "fill": "$--primary",
+                  "content": "PRICING",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "600",
+                  "letterSpacing": 3
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "V21bu",
+              "name": "headline",
+              "fill": "$--foreground",
+              "content": "Every department. One price.",
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 56,
+              "fontWeight": "500"
+            },
+            {
+              "type": "text",
+              "id": "x6ohR",
+              "name": "subheadline",
+              "fill": "$--muted-foreground",
+              "content": "Soleur is free. You pay for Claude. That's it.",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 20,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "vpUrL",
+          "name": "Tier Cards",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 32,
+          "padding": [
+            60,
+            120
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "ddOEv",
+              "name": "tiersLabel",
+              "fill": "$--primary",
+              "content": "CHOOSE YOUR PATH",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "frame",
+              "id": "wVaiE",
+              "name": "Pricing Grid",
+              "width": 1000,
+              "gap": 32,
+              "justifyContent": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "mSyNo",
+                  "name": "Free Tier",
+                  "width": 460,
+                  "fill": "$--card",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--border"
+                  },
+                  "layout": "vertical",
+                  "gap": 20,
+                  "padding": 40,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "YjHNF",
+                      "name": "freeLabel",
+                      "fill": "$--primary",
+                      "content": "OPEN SOURCE",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "600",
+                      "letterSpacing": 3
+                    },
+                    {
+                      "type": "text",
+                      "id": "kQIEM",
+                      "name": "freePrice",
+                      "fill": "$--foreground",
+                      "content": "$0",
+                      "fontFamily": "Cormorant Garamond",
+                      "fontSize": 48,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "MY4Ti",
+                      "name": "freeSub",
+                      "fill": "$--muted-foreground",
+                      "content": "Free forever. CLI plugin.",
+                      "fontFamily": "Inter",
+                      "fontSize": 16,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "zh9UE",
+                      "name": "freeLine",
+                      "width": "fill_container",
+                      "height": 1,
+                      "fill": "$--border"
+                    },
+                    {
+                      "type": "text",
+                      "id": "GINTW",
+                      "name": "freeF1",
+                      "fill": "$--muted-foreground",
+                      "content": "61 agents across 8 departments",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "4tXQe",
+                      "name": "freeF2",
+                      "fill": "$--muted-foreground",
+                      "content": "59 skills, compounding knowledge",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "uGk8S",
+                      "name": "freeF3",
+                      "fill": "$--muted-foreground",
+                      "content": "Full Claude Code integration",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "6ChO1",
+                      "name": "freeCta",
+                      "width": "fill_container",
+                      "fill": "$--primary",
+                      "padding": [
+                        14,
+                        32
+                      ],
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "EYiAh",
+                          "name": "freeCtaText",
+                          "fill": "$--background",
+                          "content": "Install the Plugin",
+                          "fontFamily": "Inter",
+                          "fontSize": 16,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "qr2kK",
+                  "name": "Pro Tier",
+                  "width": 460,
+                  "fill": "$--card",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 2,
+                    "fill": "$--primary"
+                  },
+                  "layout": "vertical",
+                  "gap": 20,
+                  "padding": 40,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "kQxr0",
+                      "name": "proLabel",
+                      "fill": "$--primary",
+                      "content": "HOSTED PRO",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "600",
+                      "letterSpacing": 3
+                    },
+                    {
+                      "type": "text",
+                      "id": "5d10L",
+                      "name": "proPrice",
+                      "fill": "$--foreground",
+                      "content": "$49/mo",
+                      "fontFamily": "Cormorant Garamond",
+                      "fontSize": 48,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "4B4UH",
+                      "name": "proSub",
+                      "fill": "$--muted-foreground",
+                      "content": "+ 10% revenue share. Web platform.",
+                      "fontFamily": "Inter",
+                      "fontSize": 16,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "e8EzN",
+                      "name": "proLine",
+                      "width": "fill_container",
+                      "height": 1,
+                      "fill": "$--border"
+                    },
+                    {
+                      "type": "text",
+                      "id": "V7lW7",
+                      "name": "proF1",
+                      "fill": "$--muted-foreground",
+                      "content": "Everything in Open Source",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "kFklB",
+                      "name": "proF2",
+                      "fill": "$--muted-foreground",
+                      "content": "Web dashboard at app.soleur.ai",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "T2ons",
+                      "name": "proF3",
+                      "fill": "$--muted-foreground",
+                      "content": "No terminal required",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "8Fs2V",
+                      "name": "proBadge",
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "$--primary"
+                      },
+                      "padding": [
+                        6,
+                        12
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "jKGY8",
+                          "name": "proBadgeText",
+                          "fill": "$--primary",
+                          "content": "COMING SOON",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "600",
+                          "letterSpacing": 2
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "bzmHg",
+                      "name": "proCta",
+                      "width": "fill_container",
+                      "fill": "$--secondary",
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "$--border"
+                      },
+                      "padding": [
+                        14,
+                        32
+                      ],
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "vArF5",
+                          "name": "proCtaText",
+                          "fill": "$--muted-foreground",
+                          "content": "Join the Waitlist",
+                          "fontFamily": "Inter",
+                          "fontSize": 16,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "FAEzf",
+          "name": "Comparison",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 32,
+          "padding": [
+            60,
+            120
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "PewU1",
+              "name": "compLabel",
+              "fill": "$--primary",
+              "content": "HOW WE COMPARE",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "puSUe",
+              "name": "compTitle",
+              "fill": "$--foreground",
+              "content": "More than a coding tool.",
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 36,
+              "fontWeight": "500"
+            },
+            {
+              "type": "frame",
+              "id": "6fkrC",
+              "name": "Table",
+              "width": 1000,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "$--border"
+              },
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "o31Rj",
+                  "name": "hRow",
+                  "width": "fill_container",
+                  "fill": "$--card",
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "a1AgW",
+                      "name": "hc1",
+                      "width": 250,
+                      "height": "fit_content(0)"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "qxt1Y",
+                      "name": "hc2",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "80xJx",
+                          "name": "ht2",
+                          "fill": "$--primary",
+                          "content": "Soleur",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Dragn",
+                      "name": "hc3",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "gC2yw",
+                          "name": "ht3",
+                          "fill": "$--muted-foreground",
+                          "content": "Cursor",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "qwZv6",
+                      "name": "hc4",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "3Fh7j",
+                          "name": "ht4",
+                          "fill": "$--muted-foreground",
+                          "content": "Devin",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "gcSk7",
+                      "name": "hc5",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "T6EyU",
+                          "name": "ht5",
+                          "fill": "$--muted-foreground",
+                          "content": "Copilot",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "lz7rE",
+                  "name": "r1",
+                  "width": "fill_container",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": {
+                      "top": 1
+                    },
+                    "fill": "$--border"
+                  },
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "QEhUj",
+                      "name": "r1c1",
+                      "width": 250,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "YwUGQ",
+                          "name": "r1t1",
+                          "fill": "$--muted-foreground",
+                          "content": "Price",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "ZYRfP",
+                      "name": "r1c2",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "zygRr",
+                          "name": "r1t2",
+                          "fill": "$--primary",
+                          "content": "$0",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "WsWkY",
+                      "name": "r1c3",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "utgFt",
+                          "name": "r1t3",
+                          "fill": "$--muted-foreground",
+                          "content": "$20/mo",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "PtAIF",
+                      "name": "r1c4",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "qzdoE",
+                          "name": "r1t4",
+                          "fill": "$--muted-foreground",
+                          "content": "$20/mo",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "8ZKY3",
+                      "name": "r1c5",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "LPcIC",
+                          "name": "r1t5",
+                          "fill": "$--muted-foreground",
+                          "content": "$10-39/mo",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "DKnZL",
+                  "name": "r2",
+                  "width": "fill_container",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": {
+                      "top": 1
+                    },
+                    "fill": "$--border"
+                  },
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "SKchb",
+                      "name": "r2c1",
+                      "width": 250,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "neRDn",
+                          "name": "r2t1",
+                          "fill": "$--muted-foreground",
+                          "content": "Scope",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "JFvbb",
+                      "name": "r2c2",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "8EZw5",
+                          "name": "r2t2",
+                          "fill": "$--primary",
+                          "content": "Full company",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "zrmu4",
+                      "name": "r2c3",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "nL5ac",
+                          "name": "r2t3",
+                          "fill": "$--muted-foreground",
+                          "content": "Code only",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "IuePy",
+                      "name": "r2c4",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Jjkar",
+                          "name": "r2t4",
+                          "fill": "$--muted-foreground",
+                          "content": "Code only",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "33ZpZ",
+                      "name": "r2c5",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "sDzZL",
+                          "name": "r2t5",
+                          "fill": "$--muted-foreground",
+                          "content": "Code only",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "PLJvJ",
+                  "name": "r3",
+                  "width": "fill_container",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": {
+                      "top": 1
+                    },
+                    "fill": "$--border"
+                  },
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "J4G7g",
+                      "name": "r3c1",
+                      "width": 250,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "G4g27",
+                          "name": "r3t1",
+                          "fill": "$--muted-foreground",
+                          "content": "Departments",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "kvpg6",
+                      "name": "r3c2",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "oeYyo",
+                          "name": "r3t2",
+                          "fill": "$--primary",
+                          "content": "8",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "FJcJy",
+                      "name": "r3c3",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "drESA",
+                          "name": "r3t3",
+                          "fill": "$--muted-foreground",
+                          "content": "0",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "HTUW5",
+                      "name": "r3c4",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Nap04",
+                          "name": "r3t4",
+                          "fill": "$--muted-foreground",
+                          "content": "0",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "ZEkQZ",
+                      "name": "r3c5",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "SwOHo",
+                          "name": "r3t5",
+                          "fill": "$--muted-foreground",
+                          "content": "0",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "AjWRI",
+                  "name": "r4",
+                  "width": "fill_container",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": {
+                      "top": 1
+                    },
+                    "fill": "$--border"
+                  },
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "RiPQe",
+                      "name": "r4c1",
+                      "width": 250,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "uTjFq",
+                          "name": "r4t1",
+                          "fill": "$--muted-foreground",
+                          "content": "Knowledge base",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "pLVWg",
+                      "name": "r4c2",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "1HNFX",
+                          "name": "r4t2",
+                          "fill": "$--primary",
+                          "content": "Compounding",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "bT4gN",
+                      "name": "r4c3",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "dHJfV",
+                          "name": "r4t3",
+                          "fill": "$--muted-foreground",
+                          "content": "None",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "9vcP9",
+                      "name": "r4c4",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "EcmPt",
+                          "name": "r4t4",
+                          "fill": "$--muted-foreground",
+                          "content": "Limited",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "vBiCV",
+                      "name": "r4c5",
+                      "width": 188,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "PGeBj",
+                          "name": "r4t5",
+                          "fill": "$--muted-foreground",
+                          "content": "None",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "7hLMX",
+              "name": "footnote",
+              "fill": "$--text-tertiary",
+              "content": "Prices as of March 2026.",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "hjDrt",
+          "name": "Cost Explainer",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 24,
+          "padding": [
+            60,
+            120
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "1w2W4",
+              "name": "costLabel",
+              "fill": "$--primary",
+              "content": "THE REAL COST",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "urFab",
+              "name": "costTitle",
+              "fill": "$--foreground",
+              "content": "What does it actually cost?",
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 36,
+              "fontWeight": "500"
+            },
+            {
+              "type": "text",
+              "id": "RXbte",
+              "name": "costDesc",
+              "fill": "$--muted-foreground",
+              "content": "Soleur is free. You pay Anthropic for your Claude subscription or API usage. Solo founders typically spend $20-100/mo depending on usage intensity.",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 18,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "TMkpQ",
+          "name": "FAQ",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 32,
+          "padding": [
+            60,
+            200
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "U5kjl",
+              "name": "faqLabel",
+              "fill": "$--primary",
+              "content": "FREQUENTLY ASKED QUESTIONS",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "frame",
+              "id": "hIoyB",
+              "name": "q1",
+              "width": "fill_container",
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "$--border"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": [
+                0,
+                0,
+                24,
+                0
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "5ajc1",
+                  "name": "q1t",
+                  "fill": "$--foreground",
+                  "content": "What does Soleur cost?",
+                  "fontFamily": "Inter",
+                  "fontSize": 18,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "4usoi",
+                  "name": "q1a",
+                  "fill": "$--muted-foreground",
+                  "content": "The open-source plugin is free. You pay for your Claude subscription ($20/mo) or API usage.",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ozdbm",
+              "name": "q2",
+              "width": "fill_container",
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "$--border"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": [
+                0,
+                0,
+                24,
+                0
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "9LAiH",
+                  "name": "q2t",
+                  "fill": "$--foreground",
+                  "content": "How much does Claude cost for typical Soleur usage?",
+                  "fontFamily": "Inter",
+                  "fontSize": 18,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "C4eKP",
+                  "name": "q2a",
+                  "fill": "$--muted-foreground",
+                  "content": "Solo founders typically spend $20-100/mo depending on usage intensity.",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "z7C58",
+              "name": "q3",
+              "width": "fill_container",
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "$--border"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": [
+                0,
+                0,
+                24,
+                0
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Kfq45",
+                  "name": "q3t",
+                  "fill": "$--foreground",
+                  "content": "What is the Hosted Pro plan?",
+                  "fontFamily": "Inter",
+                  "fontSize": 18,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "dvIbA",
+                  "name": "q3a",
+                  "fill": "$--muted-foreground",
+                  "content": "$49/mo + 10% revenue share for the web platform experience. No terminal required. Coming soon.",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "V9hHV",
+              "name": "q4",
+              "width": "fill_container",
+              "stroke": {
+                "align": "inside",
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "$--border"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": [
+                0,
+                0,
+                24,
+                0
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "x00xn",
+                  "name": "q4t",
+                  "fill": "$--foreground",
+                  "content": "What is the revenue share?",
+                  "fontFamily": "Inter",
+                  "fontSize": 18,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "K31Gb",
+                  "name": "q4a",
+                  "fill": "$--muted-foreground",
+                  "content": "10% on revenue generated with Soleur's help, after a threshold. Aligns incentives — we succeed when you succeed.",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "nGf7n",
+          "name": "CTA",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 24,
+          "padding": [
+            80,
+            120
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "9cV99",
+              "name": "ctaTitle",
+              "fill": "$--foreground",
+              "content": "Your AI organization is ready.",
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 40,
+              "fontWeight": "500"
+            },
+            {
+              "type": "text",
+              "id": "vYYxb",
+              "name": "ctaSub",
+              "fill": "$--muted-foreground",
+              "content": "61 agents. 8 departments. One command.",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 18,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "1TcH3",
+              "name": "ctaBtns",
+              "gap": 16,
+              "justifyContent": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "ca9Ec",
+                  "name": "ctaPrimary",
+                  "fill": "$--primary",
+                  "padding": [
+                    16,
+                    32
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "HBaCS",
+                      "name": "ctaPrimaryText",
+                      "fill": "$--background",
+                      "content": "Install the Plugin",
+                      "fontFamily": "Inter",
+                      "fontSize": 16,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Pja3D",
+                  "name": "ctaSecondary",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--border"
+                  },
+                  "padding": [
+                    16,
+                    32
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "OXuAn",
+                      "name": "ctaSecondaryText",
+                      "fill": "$--muted-foreground",
+                      "content": "Try the Web Platform",
+                      "fontFamily": "Inter",
+                      "fontSize": 16,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Fo5Jm",
+          "name": "footer",
+          "width": "fill_container",
+          "layout": "vertical",
+          "padding": [
+            40,
+            120
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "qj5BC",
+              "name": "footerText",
+              "fill": "$--text-tertiary",
+              "content": "Designed, built, and shipped by Soleur — using Soleur.",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "--background": {
+      "type": "color",
+      "value": "#0A0A0A"
+    },
+    "--foreground": {
+      "type": "color",
+      "value": "#FFFFFF"
+    },
+    "--muted-foreground": {
+      "type": "color",
+      "value": "#848484"
+    },
+    "--card": {
+      "type": "color",
+      "value": "#141414"
+    },
+    "--border": {
+      "type": "color",
+      "value": "#2A2A2A"
+    },
+    "--primary": {
+      "type": "color",
+      "value": "#C9A962"
+    },
+    "--secondary": {
+      "type": "color",
+      "value": "#141414"
+    },
+    "--font-primary": {
+      "type": "string",
+      "value": "Cormorant Garamond"
+    },
+    "--font-secondary": {
+      "type": "string",
+      "value": "Inter"
+    },
+    "--radius-none": {
+      "type": "number",
+      "value": 0
+    },
+    "--radius-m": {
+      "type": "number",
+      "value": 0
+    },
+    "--radius-pill": {
+      "type": "number",
+      "value": 0
+    },
+    "--gold-gradient-start": {
+      "type": "color",
+      "value": "#D4B36A"
+    },
+    "--gold-gradient-end": {
+      "type": "color",
+      "value": "#B8923E"
+    },
+    "--text-tertiary": {
+      "type": "color",
+      "value": "#6A6A6A"
+    }
+  }
+}

@@ -69,21 +69,20 @@ claude mcp remove pencil -s user 2>/dev/null
 
 ### Headless CLI mode (`PREFERRED_MODE=headless_cli`)
 
+The adapter requires `PENCIL_CLI_KEY` in the MCP environment. Retrieve the key, then register with `-e` **before** the `--` separator:
+
 ```bash
-claude mcp add -s user pencil -- <PREFERRED_NODE> <PREFERRED_BINARY>
+# Retrieve the key (Doppler, or use pencil login token)
+PENCIL_KEY=$(doppler secrets get PENCIL_CLI_KEY -p soleur -c dev --plain 2>/dev/null)
+# If Doppler is not available, check for a stored login token:
+# PENCIL_KEY=$(cat ~/.config/pencil/auth.json 2>/dev/null | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
+
+claude mcp add pencil -s user -e PENCIL_CLI_KEY="$PENCIL_KEY" -- <PREFERRED_NODE> <PREFERRED_BINARY>
 ```
 
 Replace `<PREFERRED_NODE>` with the Node 22+ binary path and `<PREFERRED_BINARY>` with the adapter path from Phase 0.
 
-The adapter requires `PENCIL_CLI_KEY` in the environment. Set it in Claude Code settings or shell profile:
-
-```bash
-# Option 1: Set in shell profile (~/.bashrc or ~/.zshrc)
-export PENCIL_CLI_KEY="your-key-here"
-
-# Option 2: Authenticate via pencil login (stores token locally)
-~/.local/node_modules/.bin/pencil login
-```
+**Critical:** The `-e` flag must appear before `--`. Placing it after `--` passes it as a CLI arg to the adapter instead of setting an environment variable, causing silent auth failures.
 
 ### CLI mode (`PREFERRED_MODE=cli`)
 
