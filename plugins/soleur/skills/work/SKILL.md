@@ -76,6 +76,10 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 8. Check if prior phases produced design artifacts. Search the repo for design files matching the feature name: `git ls-files '*.pen' '*.fig' '*.sketch' | grep -i "<feature-name>"` and check `knowledge-base/product/design/` for related files. If design artifacts exist AND the current tasks include UI/page implementation (patterns: `.njk`, `.html`, `.tsx`, `.jsx`, `.vue`, `.svelte`, `pages/`, `components/`, `layouts/`): store the artifact paths as `DESIGN_ARTIFACTS` for use in Phase 2.
 
+**Specialist review checks:**
+
+9. If a plan file was provided (check 5 passed) and a `## Domain Review` section exists with a `### Product/UX Gate` subsection: check whether domain leader assessments recommended specialists (copywriter, ux-design-lead, conversion-optimizer) that are NEITHER listed in `**Agents invoked:**` NOR in `**Skipped specialists:**`. If the `**Decision:**` field says `reviewed (partial)`, WARN: "Domain review was partial — some specialist agents failed. Review the Domain Review section before proceeding." If any recommended specialist is missing from both fields: **Interactive mode:** FAIL with message listing the missing specialists and options: (a) "Run \<specialist\> now" — invoke the specialist agent directly, update the plan file's `**Agents invoked:**` field, then continue; (b) "Skip with justification" — prompt for reason, add to the plan file's `**Skipped specialists:**` field, then continue. **Pipeline mode (headless/one-shot):** auto-invoke each missing specialist agent. If the agent succeeds, add to `**Agents invoked:**`. If it fails, add to `**Skipped specialists:**` with note `(auto-skipped — agent unavailable in pipeline)` and WARN. Do not FAIL in pipeline mode. If all recommended specialists are accounted for (in `**Agents invoked:**` or `**Skipped specialists:**`): pass silently.
+
 **On FAIL:** Display the failure message with remediation steps and stop. Do not proceed to Phase 1.
 
 **On WARN only:** Display all warnings together and proceed to Phase 1.
