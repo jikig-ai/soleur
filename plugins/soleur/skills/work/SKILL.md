@@ -74,7 +74,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 **Design artifact checks:**
 
-8. Check if prior phases produced design artifacts that the current work should consume. Scan the tasks file for completed phases that reference design outputs (wireframes, mockups, screenshots). Search the repo for design files matching the feature name: `git ls-files '*.pen' '*.fig' '*.sketch' | grep -i "<feature-name>"` and check `knowledge-base/product/design/` for related files. If design artifacts exist AND the current tasks include UI/page implementation (patterns: `.njk`, `.html`, `.tsx`, `.jsx`, `.vue`, `.svelte`, `pages/`, `components/`, `layouts/`): store the artifact paths as `DESIGN_ARTIFACTS` for use in Phase 2. If artifacts exist but will not be consumed, WARN: "Design artifacts found from prior phases ([paths]) but current tasks include UI implementation. These MUST be read before writing any markup — the wireframe is the source of truth for page structure, not the spec text."
+8. Check if prior phases produced design artifacts. Search the repo for design files matching the feature name: `git ls-files '*.pen' '*.fig' '*.sketch' | grep -i "<feature-name>"` and check `knowledge-base/product/design/` for related files. If design artifacts exist AND the current tasks include UI/page implementation (patterns: `.njk`, `.html`, `.tsx`, `.jsx`, `.vue`, `.svelte`, `pages/`, `components/`, `layouts/`): store the artifact paths as `DESIGN_ARTIFACTS` for use in Phase 2.
 
 **On FAIL:** Display the failure message with remediation steps and stop. Do not proceed to Phase 1.
 
@@ -177,7 +177,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 2. **Task Execution Loop**
 
-   **Design Artifact Gate (before first UI task):** If `DESIGN_ARTIFACTS` was set in Phase 0.5, read every artifact before writing any markup or CSS. For `.pen` files (JSON), extract the component tree: section names, text content, layout structure, pricing tiers, feature lists, CTAs. The wireframe defines the page structure — the spec defines the requirements. When they conflict, the wireframe wins for visual structure (sections, cards, layout) and the spec wins for content accuracy (copy, data, links). Document any conflicts as comments in the implementation.
+   **Design Artifact Gate (before first UI task):** If `DESIGN_ARTIFACTS` was set in Phase 0.5, spawn the `ux-design-lead` agent with the artifact paths and ask it to produce an **implementation brief** (see ux-design-lead "Wireframe-to-Implementation Handoff" workflow). The brief is a structured description of every section, its content, and its layout — this becomes the binding input for all UI tasks. Do not write any markup until the brief is received.
 
    For each task in priority order:
 
@@ -185,7 +185,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    while (tasks remain):
      - Mark task as in_progress in TodoWrite
      - Read any referenced files from the plan
-     - If task creates UI/pages: verify design artifacts were read (HARD GATE)
+     - If task creates UI/pages: verify implementation brief exists (HARD GATE)
      - Look for similar patterns in codebase
      - RED: Write failing test(s) for this task's acceptance criteria
      - GREEN: Write minimum code to make the test(s) pass
