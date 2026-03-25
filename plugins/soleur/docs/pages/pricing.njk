@@ -1,171 +1,270 @@
 ---
 title: Pricing
-description: "Soleur is free and open source. You pay only for Claude usage. See how Soleur compares to Cursor, Devin, and GitHub Copilot."
+description: "Every department of your company — engineering, marketing, legal, finance, sales, operations, product, and support — from $49/month. Less than a single contractor."
 layout: base.njk
 permalink: pages/pricing.html
 ogImage: pricing-og.png
-ogImageAlt: "Soleur Pricing — Every department. One price. $0."
+ogImageAlt: "Soleur Pricing — Every department. One price."
 ---
 
     <!-- Hero -->
     <section class="page-hero">
       <div class="container">
         <p class="section-label">Pricing</p>
-        <h1>Every department. One price.</h1>
-        <p>Soleur is free. You pay for Claude. That&rsquo;s it.</p>
+        <h1>Every department.<br>One price.</h1>
+        <p>A full AI organization &mdash; strategy, marketing, legal, finance, operations, product, sales, and support &mdash; for less than a single contractor.</p>
+        <p class="hero-stat">{{ stats.agents }} Agents &middot; {{ stats.departments }} Departments &middot; {{ stats.skills }} Skills &middot; Compounding Knowledge</p>
+      </div>
+    </section>
+
+    <!-- Hiring Comparison Table -->
+    <section class="landing-section">
+      <div class="landing-section-inner">
+        <p class="section-label">What You Replace</p>
+        <h2 class="section-title">The team you need. Without the headcount.</h2>
+        <p class="section-subtitle">Every founder needs these eight roles. Most cannot afford any of them. Soleur fills all eight from day one.</p>
+        <div class="pricing-table-wrap">
+          <table class="pricing-table pricing-hiring-table">
+            <thead>
+              <tr>
+                <th>Role</th>
+                <th>Typical Cost</th>
+                <th class="pricing-table-highlight">With Soleur</th>
+                <th class="hiring-scenario-col">What Soleur Does</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>CTO / VP Engineering</strong></td>
+                <td>$18,000/mo</td>
+                <td class="pricing-table-highlight"><strong>Included</strong></td>
+                <td class="hiring-scenario-col">Code review, architecture decisions, security audits, deployment</td>
+              </tr>
+              <tr>
+                <td><strong>Marketing Director</strong></td>
+                <td>$10,000/mo</td>
+                <td class="pricing-table-highlight"><strong>Included</strong></td>
+                <td class="hiring-scenario-col">Brand strategy, SEO audits, content calendar, social distribution</td>
+              </tr>
+              <tr>
+                <td><strong>General Counsel</strong></td>
+                <td>$15,000/mo</td>
+                <td class="pricing-table-highlight"><strong>Included</strong></td>
+                <td class="hiring-scenario-col">Privacy policies, DPA review, compliance checks, contract drafting</td>
+              </tr>
+              <tr>
+                <td><strong>CFO</strong></td>
+                <td>$15,000/mo</td>
+                <td class="pricing-table-highlight"><strong>Included</strong></td>
+                <td class="hiring-scenario-col">Financial planning, burn rate analysis, board reporting, pricing scenarios</td>
+              </tr>
+              <tr>
+                <td><strong>Sales Director</strong></td>
+                <td>$12,000/mo</td>
+                <td class="pricing-table-highlight"><strong>Included</strong></td>
+                <td class="hiring-scenario-col">Competitive battlecards, outbound sequences, objection-handling playbooks</td>
+              </tr>
+              <tr>
+                <td><strong>Operations Manager</strong></td>
+                <td>$8,000/mo</td>
+                <td class="pricing-table-highlight"><strong>Included</strong></td>
+                <td class="hiring-scenario-col">Vendor management, expense tracking, infrastructure provisioning</td>
+              </tr>
+              <tr>
+                <td><strong>Product Manager</strong></td>
+                <td>$10,000/mo</td>
+                <td class="pricing-table-highlight"><strong>Included</strong></td>
+                <td class="hiring-scenario-col">Specs, competitive analysis, user flow design, business validation</td>
+              </tr>
+              <tr>
+                <td><strong>Support Lead</strong></td>
+                <td>$7,000/mo</td>
+                <td class="pricing-table-highlight"><strong>Included</strong></td>
+                <td class="hiring-scenario-col">Documentation, community management, FAQ maintenance, issue triage</td>
+              </tr>
+              <tr class="hiring-total-row">
+                <td><strong>Total (8 roles)</strong></td>
+                <td><strong>$95,000/mo</strong></td>
+                <td class="pricing-table-highlight"><strong>From $49/mo</strong></td>
+                <td class="hiring-scenario-col"><strong>All departments. Full access. One subscription.</strong></td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="hiring-footnote">Based on US market median fully-loaded compensation, 2025&ndash;2026.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Department Roster -->
+    <section class="landing-section">
+      <div class="landing-section-inner">
+        <p class="section-label">Your Organization</p>
+        <h2 class="section-title">Eight departments. {{ stats.agents }} specialists.</h2>
+        <div class="department-roster">
+          <div class="department-card">
+            <span class="department-icon">&#x1F4BB;</span>
+            <h3 class="department-name">Engineering</h3>
+            <p class="department-desc">Code review, architecture, security, quality testing. Production-grade code on your command.</p>
+          </div>
+          <div class="department-card">
+            <span class="department-icon">&#x1F4E3;</span>
+            <h3 class="department-name">Marketing</h3>
+            <p class="department-desc">Brand identity, SEO, content strategy, competitive positioning. Your public presence on autopilot.</p>
+          </div>
+          <div class="department-card">
+            <span class="department-icon">&#x2696;&#xFE0F;</span>
+            <h3 class="department-name">Legal</h3>
+            <p class="department-desc">Terms, privacy policies, compliance audits. Legal documents generated, reviewed, and kept current.</p>
+          </div>
+          <div class="department-card">
+            <span class="department-icon">&#x1F4CA;</span>
+            <h3 class="department-name">Finance</h3>
+            <p class="department-desc">Budget planning, revenue analysis, financial reporting. Data-driven financial oversight.</p>
+          </div>
+          <div class="department-card">
+            <span class="department-icon">&#x1F4B0;</span>
+            <h3 class="department-name">Sales</h3>
+            <p class="department-desc">Outbound campaigns, deal qualification, pipeline analytics. Revenue operations from outreach to closed-won.</p>
+          </div>
+          <div class="department-card">
+            <span class="department-icon">&#x2699;&#xFE0F;</span>
+            <h3 class="department-name">Operations</h3>
+            <p class="department-desc">Vendor research, expense tracking, tool provisioning. Operational infrastructure without overhead.</p>
+          </div>
+          <div class="department-card">
+            <span class="department-icon">&#x1F4DA;</span>
+            <h3 class="department-name">Product</h3>
+            <p class="department-desc">Competitive analysis, specs, UX design, business validation. From market insight to shipped experience.</p>
+          </div>
+          <div class="department-card">
+            <span class="department-icon">&#x1F6E0;&#xFE0F;</span>
+            <h3 class="department-name">Support</h3>
+            <p class="department-desc">Issue triage, community management, ticket routing. Customer-facing operations that scale.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Scenario Callouts -->
+    <section class="landing-section">
+      <div class="landing-section-inner">
+        <p class="section-label">In Practice</p>
+        <h2 class="section-title">What this looks like on a Tuesday.</h2>
+        <div class="scenario-grid">
+          <div class="scenario-card">
+            <h3 class="scenario-title">Enterprise prospect needs a DPA?</h3>
+            <p class="scenario-desc">Your CLO drafts it, your compliance auditor reviews it, and it lands in their inbox &mdash; formatted, footnoted, and ready to sign.</p>
+          </div>
+          <div class="scenario-card">
+            <h3 class="scenario-title">Competitor launches a new feature?</h3>
+            <p class="scenario-desc">Your competitive intelligence agent detects it, your CRO updates battlecards, and your CMO adjusts positioning &mdash; before you finish your coffee.</p>
+          </div>
+          <div class="scenario-card">
+            <h3 class="scenario-title">Board deck due Friday?</h3>
+            <p class="scenario-desc">Your CFO pulls the numbers, your revenue analyst builds the forecast, and your financial reporter assembles the slides &mdash; while you focus on the narrative.</p>
+          </div>
+        </div>
       </div>
     </section>
 
     <!-- Tier Cards -->
     <section class="landing-section">
       <div class="landing-section-inner">
-        <p class="section-label">Choose Your Path</p>
+        <p class="section-label">Plans</p>
+        <h2 class="section-title">Choose your scale. Keep every department.</h2>
+        <p class="section-subtitle">Every plan includes all {{ stats.departments }} departments and {{ stats.agents }} agents. No feature gating by domain. Pick the concurrency that matches your stage.</p>
         <div class="pricing-grid">
+
           <div class="pricing-card">
-            <span class="pricing-card-label">Open Source</span>
-            <div class="pricing-card-price">$0</div>
-            <p class="pricing-card-sub">Free forever. CLI plugin.</p>
-            <hr class="pricing-card-divider">
-            <ul class="pricing-card-features">
-              <li>{{ stats.agents }} agents across {{ stats.departments }} departments</li>
-              <li>{{ stats.skills }} skills, compounding knowledge</li>
-              <li>Full Claude Code integration</li>
-              <li>You pay only for Claude API or subscription</li>
-            </ul>
-            <a href="pages/getting-started.html" class="btn btn-primary pricing-card-cta">Install the Plugin</a>
-          </div>
-          <div class="pricing-card pricing-card-featured">
-            <span class="pricing-card-label">Hosted Pro</span>
+            <span class="pricing-card-label">Solo</span>
             <div class="pricing-card-price">$49<span class="pricing-card-period">/mo</span></div>
-            <p class="pricing-card-sub">+ 10% revenue share. Web platform.</p>
+            <p class="pricing-card-sub">For founders building alone.</p>
             <hr class="pricing-card-divider">
             <ul class="pricing-card-features">
-              <li>Everything in Open Source</li>
-              <li>Web dashboard at app.soleur.ai</li>
-              <li>No terminal required</li>
-              <li>Managed infrastructure</li>
+              <li>2 concurrent agent slots</li>
+              <li>All {{ stats.departments }} departments, full agent roster</li>
+              <li>Compounding knowledge base</li>
+              <li>Email support</li>
             </ul>
             <span class="pricing-card-badge">Coming Soon</span>
-            <button class="btn btn-secondary pricing-card-cta" disabled>Join the Waitlist</button>
+            <a href="#waitlist" class="btn btn-secondary pricing-card-cta">Join the Waitlist</a>
           </div>
-        </div>
-      </div>
-    </section>
 
-    <!-- Comparison Table -->
-    <section class="landing-section">
-      <div class="landing-section-inner">
-        <p class="section-label">Compare</p>
-        <h2 class="section-title">Soleur vs. the alternatives</h2>
-        <div class="pricing-table-wrap">
-          <table class="pricing-table">
-            <thead>
-              <tr>
-                <th>Feature</th>
-                <th class="pricing-table-highlight">Soleur</th>
-                <th>Cursor</th>
-                <th>Devin</th>
-                <th>GitHub Copilot</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>Price</td>
-                <td class="pricing-table-highlight"><strong>Free</strong></td>
-                <td>$20/mo</td>
-                <td>$20/mo</td>
-                <td>$10&ndash;39/mo</td>
-              </tr>
-              <tr>
-                <td>Open Source</td>
-                <td class="pricing-table-highlight">Yes</td>
-                <td>No</td>
-                <td>No</td>
-                <td>No</td>
-              </tr>
-              <tr>
-                <td>Engineering</td>
-                <td class="pricing-table-highlight">Full department</td>
-                <td>Code completion</td>
-                <td>Autonomous coding</td>
-                <td>Code completion</td>
-              </tr>
-              <tr>
-                <td>Marketing</td>
-                <td class="pricing-table-highlight">11 specialists</td>
-                <td>&mdash;</td>
-                <td>&mdash;</td>
-                <td>&mdash;</td>
-              </tr>
-              <tr>
-                <td>Legal</td>
-                <td class="pricing-table-highlight">Document generation &amp; audit</td>
-                <td>&mdash;</td>
-                <td>&mdash;</td>
-                <td>&mdash;</td>
-              </tr>
-              <tr>
-                <td>Finance</td>
-                <td class="pricing-table-highlight">Budget, revenue, reporting</td>
-                <td>&mdash;</td>
-                <td>&mdash;</td>
-                <td>&mdash;</td>
-              </tr>
-              <tr>
-                <td>Sales</td>
-                <td class="pricing-table-highlight">Pipeline &amp; outbound</td>
-                <td>&mdash;</td>
-                <td>&mdash;</td>
-                <td>&mdash;</td>
-              </tr>
-              <tr>
-                <td>Operations</td>
-                <td class="pricing-table-highlight">Expense &amp; infra management</td>
-                <td>&mdash;</td>
-                <td>&mdash;</td>
-                <td>&mdash;</td>
-              </tr>
-              <tr>
-                <td>Knowledge Compounding</td>
-                <td class="pricing-table-highlight">Yes &mdash; permanent</td>
-                <td>No</td>
-                <td>No</td>
-                <td>No</td>
-              </tr>
-              <tr>
-                <td>Total Agents</td>
-                <td class="pricing-table-highlight">{{ stats.agents }}</td>
-                <td>1</td>
-                <td>1</td>
-                <td>1</td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="pricing-card">
+            <span class="pricing-card-label">Startup</span>
+            <div class="pricing-card-price">$149<span class="pricing-card-period">/mo</span></div>
+            <p class="pricing-card-sub">For founding teams moving fast.</p>
+            <hr class="pricing-card-divider">
+            <ul class="pricing-card-features">
+              <li>5 concurrent agent slots</li>
+              <li>Priority execution queue</li>
+              <li>Team collaboration (up to 3 seats)</li>
+              <li>Shared knowledge base</li>
+            </ul>
+            <span class="pricing-card-badge">Coming Soon</span>
+            <a href="#waitlist" class="btn btn-secondary pricing-card-cta">Join the Waitlist</a>
+          </div>
+
+          <div class="pricing-card">
+            <span class="pricing-card-label">Scale</span>
+            <div class="pricing-card-price">$499<span class="pricing-card-period">/mo</span></div>
+            <p class="pricing-card-sub">For companies that never wait.</p>
+            <hr class="pricing-card-divider">
+            <ul class="pricing-card-features">
+              <li>Unlimited concurrent agents</li>
+              <li>Dedicated infrastructure</li>
+              <li>Unlimited seats</li>
+              <li>Custom agent configuration</li>
+            </ul>
+            <span class="pricing-card-badge">Coming Soon</span>
+            <a href="#waitlist" class="btn btn-secondary pricing-card-cta">Join the Waitlist</a>
+          </div>
+
+          <div class="pricing-card">
+            <span class="pricing-card-label">Enterprise</span>
+            <div class="pricing-card-price">Custom</div>
+            <p class="pricing-card-sub">Revenue share replaces subscription at scale.</p>
+            <hr class="pricing-card-divider">
+            <ul class="pricing-card-features">
+              <li>Everything in Scale</li>
+              <li>Sliding scale: 10% &rarr; 5% as you grow</li>
+              <li>Dedicated account management</li>
+              <li>Custom integrations &amp; SLA</li>
+            </ul>
+            <span class="pricing-card-badge">Coming Soon</span>
+            <a href="mailto:hello@soleur.ai" class="btn btn-secondary pricing-card-cta">Contact Us</a>
+          </div>
+
         </div>
+        <p class="pricing-claude-note">All plans require a Claude subscription or API key, billed separately through Anthropic.</p>
       </div>
     </section>
 
     <!-- FAQ Section -->
     <section class="landing-section">
       <div class="landing-section-inner">
-        <p class="section-label">Common Questions</p>
-        <h2 class="section-title">Pricing FAQ</h2>
+        <p class="section-label">Questions</p>
+        <h2 class="section-title">Straight answers.</h2>
         <div class="faq-list">
           <details class="faq-item">
-            <summary class="faq-question">Is Soleur really free?</summary>
-            <p class="faq-answer">Yes. The Soleur plugin is open source and free to install. There is no paid tier, no usage limit on the plugin itself, and no vendor lock-in. You pay only for your Claude usage through Anthropic.</p>
+            <summary class="faq-question">Why should I pay $49/mo when AI coding tools cost $20?</summary>
+            <p class="faq-answer">Coding tools handle code. Soleur handles the other 70% of running a company &mdash; marketing, legal, finance, operations, product, sales, and support. A $20 coding tool and Soleur are not in the same category. One writes functions. The other runs departments. The replacement stack for what Soleur covers costs $95,000/mo in people.</p>
           </details>
           <details class="faq-item">
-            <summary class="faq-question">What does Claude cost?</summary>
-            <p class="faq-answer">Claude Code requires either an Anthropic API key (pay-per-token, starting at $3/$15 per million input/output tokens for Sonnet) or a Claude Max subscription ($100&ndash;$200/month for heavy usage with higher rate limits). Most solo founders find the API option more cost-effective for moderate usage.</p>
+            <summary class="faq-question">What are concurrent agent slots?</summary>
+            <p class="faq-answer">Concurrent slots are the number of agents that can execute at the same time. On the Solo plan, two agents work in parallel &mdash; your CTO reviews a pull request while your CMO drafts a blog post. Every plan includes every agent. Slots determine parallelism, not access.</p>
           </details>
           <details class="faq-item">
-            <summary class="faq-question">Why is Soleur free when competitors charge $20+/month?</summary>
-            <p class="faq-answer">Soleur is built by a solo founder using Soleur itself. The project is open source because the company-as-a-service model works best when the community can extend, audit, and improve the platform. Revenue will come from optional managed services, not from the core plugin.</p>
+            <summary class="faq-question">Do I pay for Claude separately?</summary>
+            <p class="faq-answer">Yes. Soleur is the organization layer &mdash; the agents, knowledge base, and cross-domain orchestration. Claude provides the intelligence. Self-hosted users bring their own API key. Hosted plan users pay their Soleur subscription plus their own Claude Pro, Max, or API costs. You choose the Claude plan that fits your usage.</p>
           </details>
           <details class="faq-item">
-            <summary class="faq-question">Will there ever be a paid version?</summary>
-            <p class="faq-answer">The core plugin will remain free and open source. Future paid offerings may include managed hosting, team features, or premium integrations &mdash; but the {{ stats.agents }} agents and {{ stats.skills }} skills you see today will always be free.</p>
+            <summary class="faq-question">Is there a free option?</summary>
+            <p class="faq-answer">Yes. The self-hosted version is free, open-source, and Apache-2.0 licensed. You get the full platform &mdash; every agent, every skill, every department. You provide the infrastructure and the Claude API key. The paid plans add managed hosting, cloud-synced knowledge, priority execution, and team features.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">When do paid plans launch?</summary>
+            <p class="faq-answer">We are building the hosted platform now. Join the waitlist to get early access and founder pricing when we launch. The self-hosted version is available today.</p>
           </details>
         </div>
       </div>
@@ -178,43 +277,77 @@ ogImageAlt: "Soleur Pricing — Every department. One price. $0."
       "mainEntity": [
         {
           "@type": "Question",
-          "name": "Is Soleur really free?",
+          "name": "Why should I pay $49/mo when AI coding tools cost $20?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Yes. The Soleur plugin is open source and free to install. There is no paid tier, no usage limit on the plugin itself, and no vendor lock-in. You pay only for your Claude usage through Anthropic."
+            "text": "Coding tools handle code. Soleur handles the other 70% of running a company -- marketing, legal, finance, operations, product, sales, and support. One writes functions. The other runs departments. The replacement stack for what Soleur covers costs $95,000/mo in people."
           }
         },
         {
           "@type": "Question",
-          "name": "What does Claude cost?",
+          "name": "What are concurrent agent slots?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Claude Code requires either an Anthropic API key (pay-per-token, starting at $3/$15 per million input/output tokens for Sonnet) or a Claude Max subscription ($100-$200/month for heavy usage with higher rate limits). Most solo founders find the API option more cost-effective for moderate usage."
+            "text": "Concurrent slots are the number of agents that can execute at the same time. On the Solo plan, two agents work in parallel -- your CTO reviews a pull request while your CMO drafts a blog post. Every plan includes every agent. Slots determine parallelism, not access."
           }
         },
         {
           "@type": "Question",
-          "name": "Why is Soleur free when competitors charge $20+/month?",
+          "name": "Do I pay for Claude separately?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Soleur is built by a solo founder using Soleur itself. The project is open source because the company-as-a-service model works best when the community can extend, audit, and improve the platform. Revenue will come from optional managed services, not from the core plugin."
+            "text": "Yes. Soleur is the organization layer -- the agents, knowledge base, and cross-domain orchestration. Claude provides the intelligence. Self-hosted users bring their own API key. Hosted plan users pay their Soleur subscription plus their own Claude Pro, Max, or API costs."
           }
         },
         {
           "@type": "Question",
-          "name": "Will there ever be a paid version?",
+          "name": "Is there a free option?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "The core plugin will remain free and open source. Future paid offerings may include managed hosting, team features, or premium integrations — but the agents and skills you see today will always be free."
+            "text": "Yes. The self-hosted version is free, open-source, and Apache-2.0 licensed. You get the full platform -- every agent, every skill, every department. You provide the infrastructure and the Claude API key. The paid plans add managed hosting, cloud-synced knowledge, priority execution, and team features."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "When do paid plans launch?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "We are building the hosted platform now. Join the waitlist to get early access and founder pricing. The self-hosted version is available today."
           }
         }
       ]
     }
     </script>
 
-    <!-- Final CTA -->
-    <section class="landing-cta">
-      <h2>Start building. Pay nothing.</h2>
-      <p>Install in 10 seconds. No credit card. No signup.</p>
-      <a href="pages/getting-started.html" class="btn btn-primary">Get started for free</a>
+    <!-- Proof Point -->
+    <section class="landing-section">
+      <div class="landing-section-inner" style="text-align:center;">
+        <p class="proof-tagline">Designed, built, and shipped by Soleur &mdash; using Soleur. 420+ PRs across all 8 domains.</p>
+      </div>
+    </section>
+
+    <!-- Waitlist CTA -->
+    <section class="landing-cta" id="waitlist">
+      <h2>Your AI organization is ready.</h2>
+      <p>Join the waitlist for early access and founder pricing. Or start building today with the self-hosted version.</p>
+      <form class="newsletter-form" id="newsletter-pricing-waitlist"
+        action="https://buttondown.com/api/emails/embed-subscribe/{{ site.newsletter.username }}"
+        method="post">
+        <label for="newsletter-email-pricing-waitlist" class="sr-only">Email address</label>
+        <input type="email" name="email" id="newsletter-email-pricing-waitlist"
+          placeholder="you@example.com" required autocomplete="email" inputmode="email"
+          aria-describedby="newsletter-privacy-pricing-waitlist" />
+        <input type="hidden" name="embed" value="1" />
+        <input type="hidden" name="tag" value="pricing-waitlist" />
+        <div class="honeypot-trap" aria-hidden="true">
+          <input type="text" name="url" tabindex="-1" autocomplete="off" />
+        </div>
+        <button type="submit" class="btn btn-primary">Join the Waitlist</button>
+        <p id="newsletter-privacy-pricing-waitlist" class="newsletter-privacy">
+          No spam. We email you once when early access opens.
+          <a href="/pages/legal/privacy-policy/">Privacy Policy</a>
+        </p>
+        <div class="newsletter-status" aria-live="polite" role="status"></div>
+      </form>
+      <p class="waitlist-secondary"><a href="pages/getting-started.html">Or start with the free self-hosted version &rarr;</a></p>
     </section>
