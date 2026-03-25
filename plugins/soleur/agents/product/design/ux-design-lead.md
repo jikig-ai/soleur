@@ -59,6 +59,10 @@ When reviewing existing HTML pages (not creating new .pen designs), audit inform
 - **First-time user orientation** -- a new user can understand what to do within 30 seconds
 - **Category granularity** -- prefer fewer top-level categories with sub-headers over many granular categories
 
+## Design-Implementation Handoff
+
+When a wireframe is created as an input for an implementation phase (e.g., Phase 1 wireframe feeding Phase 2 HTML), the .pen file is the source of truth for page structure. The `/work` skill reads .pen files before writing markup, so wireframes must use descriptive frame names that map to HTML sections (e.g., "Hero", "Tier Cards", "Comparison", "FAQ"). Include real content in text nodes (actual prices, feature lists, CTAs) rather than placeholder lorem ipsum — downstream implementation will extract this content directly.
+
 ## Design-Implementation Sync
 
 After HTML/CSS changes to pages that have corresponding .pen design files in `knowledge-base/product/design/`, update the .pen files to reflect the new structure. This keeps the design source of truth consistent with the live implementation. Check for matching .pen files by searching `knowledge-base/product/design/` for filenames related to the changed pages.
