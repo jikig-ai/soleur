@@ -1273,6 +1273,14 @@
     font-size: var(--text-sm);
     color: var(--color-text-secondary);
     line-height: 1.5;
+    padding-left: var(--space-4);
+    position: relative;
+  }
+  .pricing-card-features li::before {
+    content: "\2013";
+    color: var(--color-accent);
+    position: absolute;
+    left: 0;
   }
   .pricing-card-badge {
     display: inline-block;
