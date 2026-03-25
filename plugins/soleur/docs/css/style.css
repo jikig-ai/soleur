@@ -1089,6 +1089,79 @@
   }
   .newsletter-success { color: #4ade80; }
   .newsletter-error { color: #f87171; }
+
+  /* Pricing page: Cost explainer */
+  .pricing-explainer {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-5);
+    max-width: 1200px;
+    margin-inline: auto;
+  }
+  .pricing-explainer-item {
+    padding: var(--space-6);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+  }
+  .pricing-explainer-icon {
+    font-size: var(--text-2xl);
+    margin-bottom: var(--space-5);
+  }
+  .pricing-explainer-item h3 {
+    font-family: var(--font-display);
+    font-size: var(--text-xl);
+    font-weight: 500;
+    margin-bottom: var(--space-4);
+  }
+  .pricing-explainer-item p {
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    line-height: 1.6;
+  }
+
+  /* Pricing page: Comparison table */
+  .pricing-table-wrap {
+    max-width: 1200px;
+    margin-inline: auto;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .pricing-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-sm);
+  }
+  .pricing-table th,
+  .pricing-table td {
+    padding: var(--space-4);
+    text-align: left;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .pricing-table thead th {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-text-tertiary);
+    background: var(--color-bg-secondary);
+  }
+  .pricing-table tbody td {
+    color: var(--color-text-secondary);
+  }
+  .pricing-table-highlight {
+    background: rgba(201, 169, 98, 0.06);
+    color: var(--color-text) !important;
+  }
+  .pricing-table thead .pricing-table-highlight {
+    color: var(--color-accent) !important;
+  }
+
+  @media (max-width: 768px) {
+    .pricing-explainer { grid-template-columns: 1fr; }
+    .pricing-table { font-size: var(--text-xs); }
+    .pricing-table th,
+    .pricing-table td { padding: var(--space-3) var(--space-2); }
+  }
 }
 
 @layer utilities {

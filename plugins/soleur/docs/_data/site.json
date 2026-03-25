@@ -16,6 +16,7 @@
     { "label": "Get Started", "url": "pages/getting-started.html" },
     { "label": "Agents", "url": "pages/agents.html" },
     { "label": "Skills", "url": "pages/skills.html" },
+    { "label": "Pricing", "url": "pages/pricing.html" },
     { "label": "Community", "url": "pages/community.html" },
     { "label": "Blog", "url": "blog/" },
     { "label": "Vision", "url": "pages/vision.html" },
@@ -27,6 +28,7 @@
   },
   "footerLinks": [
     { "label": "Get Started", "url": "pages/getting-started.html" },
+    { "label": "Pricing", "url": "pages/pricing.html" },
     { "label": "Blog", "url": "blog/" },
     { "label": "Community", "url": "pages/community.html" },
     { "label": "Vision", "url": "pages/vision.html" },

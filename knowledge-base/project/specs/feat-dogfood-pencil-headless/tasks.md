@@ -21,11 +21,11 @@ updated: 2026-03-25
 
 ## Phase 2: HTML/Eleventy Implementation
 
-- [ ] 2.1 Create `plugins/soleur/docs/pages/pricing.njk` with frontmatter
-- [ ] 2.2 Implement page sections (hero, tier cards, comparison, cost explainer, FAQ, CTA)
-- [ ] 2.3 Add `.pricing-grid` and `.pricing-card` CSS to `style.css`
-- [ ] 2.4 Add FAQPage JSON-LD schema (4 questions)
-- [ ] 2.5 Add "Pricing" to nav and footer in `site.json`
+- [x] 2.1 Create `plugins/soleur/docs/pages/pricing.njk` with frontmatter
+- [x] 2.2 Implement page sections (hero, tier cards, comparison, cost explainer, FAQ, CTA)
+- [x] 2.3 Add `.pricing-grid` and `.pricing-card` CSS to `style.css`
+- [x] 2.4 Add FAQPage JSON-LD schema (4 questions)
+- [x] 2.5 Add "Pricing" to nav and footer in `site.json`
 
 ## Phase 3: OG Image via Pencil
 
