@@ -17,6 +17,12 @@
 
 set -euo pipefail
 
+# Git hook isolation: git sets GIT_DIR, GIT_INDEX_FILE, GIT_WORK_TREE
+# in hook environments. These cause test-spawned git commands (e.g., in
+# workspace.test.ts) to operate on the parent repo instead of temp dirs,
+# potentially contaminating the feature branch with rogue commits.
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE
+
 # Skip if bun is not available
 if ! command -v bun &>/dev/null; then
   exit 0
