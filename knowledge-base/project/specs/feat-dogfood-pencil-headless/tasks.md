@@ -29,8 +29,8 @@ updated: 2026-03-25
 
 ## Phase 3: OG Image via Pencil
 
-- [ ] 3.1 Design 1200x630 OG image in pencil
-- [ ] 3.2 Export via `export_nodes` to `plugins/soleur/docs/images/pricing-og.png`
+- [x] 3.1 Design 1200x630 OG image in pencil
+- [x] 3.2 Export via `export_nodes` to `plugins/soleur/docs/images/pricing-og.png`
 
 ## Phase 4: Validation and Issue Roundup
 
