@@ -25,13 +25,11 @@ Rewrite the page with a **value-first flow**: establish what Soleur replaces bef
 
 ### Page Sections (in order)
 
-1. **Hero** — "Every department. One price." + replacement value subline
-2. **Hiring comparison table** — Role costs vs. "Included" (Marketing Director $8k/mo, etc.)
-3. **Department roster** — 8 departments rendered from `agents.js` DOMAIN_META with agent counts per department
-4. **Scenario callouts** — 2-3 real-world value proofs ("Need a privacy policy? Your CLO drafts it.")
-5. **Tier cards** — Solo ($49/2 slots), Startup ($149/5 slots), Scale ($499/unlimited), Enterprise (Contact), Self-hosted (Free)
-6. **FAQ** — 5 objection-handling questions
-7. **Final CTA** — Waitlist email capture reusing newsletter form pattern
+1. **Hero** — "Every department. One price." + replacement value subline + breadth stat line
+2. **Hiring comparison table** — Role costs vs. "Included" with scenario proof in each row (e.g., "General Counsel $15k/mo → Included — privacy policies, compliance audits, DPAs")
+3. **Tier cards** — Solo ($49/2 slots), Startup ($149/5 slots), Scale ($499/unlimited), Enterprise (Contact), Self-hosted (Free)
+4. **FAQ** — 5 objection-handling questions
+5. **Final CTA** — Waitlist email capture reusing newsletter form pattern
 
 ## Technical Approach
 
@@ -49,12 +47,7 @@ None — all changes are to existing files.
 
 ### Data Layer
 
-The department roster section will pull from existing data:
-
-- `stats.agents` / `stats.departments` / `stats.skills` — already available via `_data/stats.js`
-- `DOMAIN_META` in `_data/agents.js` — has label, icon, and cardDescription for all 8 departments. However, this data is only available in the agents page template. The pricing page can hardcode department names or we can expose a simpler data export.
-
-**Decision:** Hardcode the department roster in the template. The 8 departments are stable, and adding a new data pipeline for one section adds complexity without value. Use `stats.agents` and `stats.departments` for dynamic counts.
+Use `stats.agents`, `stats.departments`, and `stats.skills` from `_data/stats.js` for dynamic counts in the hero breadth line.
 
 ### Tier Card Architecture
 
@@ -75,74 +68,33 @@ Reuse the existing `newsletter-form.njk` pattern (Buttondown form submission). A
 
 ### Schema Markup
 
-Replace current FAQPage-only schema with:
+Update FAQPage JSON-LD with new question set. Drop SoftwareApplication + Offer — tiers are "Coming Soon" proposals, not purchasable offers. Add structured data when at least one tier is live.
 
-1. **FAQPage** — updated questions matching new FAQ content
-2. **SoftwareApplication + Offer** — array of offers for each tier with price, priceCurrency, availability ("PreOrder" for Coming Soon, "InStock" for self-hosted)
+### Implementation Tasks
 
-### Implementation Phases
+Edit two files: `plugins/soleur/docs/pages/pricing.njk` and `plugins/soleur/docs/css/style.css`.
 
-#### Phase 1: Template Rewrite (~80% of work)
-
-Rewrite `pricing.njk` with all 7 sections. Key tasks:
-
-- [ ] Rewrite hero: "Every department. One price." + new subline
-- [ ] Add hiring comparison table section (6-8 roles with monthly costs)
-- [ ] Add department roster grid (8 departments from DOMAIN_META, each with icon + name + description + agent count)
-- [ ] Add scenario callout section (3 cards: legal, competitive intel, financial reporting)
-- [ ] Redesign tier cards section (5 tiers: Solo, Startup, Scale, Enterprise, Self-hosted)
+- [ ] Rewrite hero: "Every department. One price." + new subline + "{{ stats.agents }} agents across {{ stats.departments }} departments" breadth line
+- [ ] Add hiring comparison table (6-8 roles with monthly cost, "Included" column, and scenario proof per row)
+- [ ] Expand `.pricing-grid` from 2-card to 5-card responsive layout (Solo featured with gold border)
 - [ ] All paid tier CTAs → waitlist buttons with "Coming Soon" badge
 - [ ] Self-hosted tier CTA → "Install Now" linking to getting-started
-- [ ] Rewrite FAQ (5 questions: "What does Soleur cost?", "What are concurrent agent slots?", "What does Claude cost?", "Is there a free option?", "When will paid tiers launch?")
-- [ ] Rewrite final CTA section
-- [ ] Update frontmatter: description, ogImage alt text
-- [ ] Replace all "plugin" with "platform" (FR10)
-- [ ] `plugins/soleur/docs/pages/pricing.njk`
-
-#### Phase 2: CSS Updates
-
-Add/modify styles for new sections. Reuse existing design tokens.
-
-- [ ] Hiring comparison table: `.pricing-hiring-table` — two-column table (Role + Cost | With Soleur), alternating row backgrounds
-- [ ] Department roster: `.department-roster` — responsive grid (4x2 desktop, 2x4 tablet, 1x8 mobile), each card with icon + name + description
-- [ ] Scenario callouts: `.scenario-callouts` — 3-column card grid with icon/title/description
-- [ ] Tier cards: expand `.pricing-grid` from 2-card to 5-card responsive layout. Featured card (Solo) gets gold border.
-- [ ] Coming Soon badge: `.pricing-card-badge` already exists — verify styling works with new layout
-- [ ] Waitlist form: reuse existing `.newsletter-form` styles, no new CSS needed
-- [ ] `plugins/soleur/docs/css/style.css`
-
-#### Phase 3: Schema & Meta
-
+- [ ] Rewrite FAQ (5 questions: cost, concurrent slots, Claude cost, free option, launch timeline)
+- [ ] Rewrite final CTA with waitlist email capture (reuse newsletter form pattern)
 - [ ] Update FAQPage JSON-LD with new 5 questions
-- [ ] Add SoftwareApplication + Offer schema for tier pricing
-- [ ] Update `description` frontmatter to reflect new value prop messaging
-- [ ] Update `ogImageAlt` to remove "$0" framing
-- [ ] `plugins/soleur/docs/pages/pricing.njk`
-
-#### Phase 4: Content Alignment
-
-- [ ] Update `knowledge-base/product/pricing-strategy.md` — mark pricing as "decided" with new tier structure, update tier table, add implementation note
-- [ ] Update `knowledge-base/product/pricing-strategy.md`
-
-#### Phase 5: Build Validation
-
-- [ ] Run `npx @11ty/eleventy` to verify build succeeds
-- [ ] Screenshot at 1440px, 768px, 375px breakpoints via Playwright
-- [ ] Visual review of all sections
-- [ ] Verify FAQ schema renders in structured data testing
-- [ ] Verify no "plugin" instances remain in pricing page output
+- [ ] Update frontmatter: description, ogImageAlt (remove "$0")
+- [ ] Replace all "plugin" with "platform" (FR10)
+- [ ] CSS: `.pricing-hiring-table` styles, expand `.pricing-grid` for 5 cards, verify `.pricing-card-badge`
+- [ ] Build validation: `npx @11ty/eleventy`, screenshot at 3 breakpoints, verify zero "plugin" instances
 
 ## Acceptance Criteria
 
 ### Functional Requirements
 
-- [ ] Page has 7 sections in value-first order (hero → hiring table → departments → scenarios → tiers → FAQ → CTA)
-- [ ] Hiring comparison table shows 6+ roles with realistic monthly costs
-- [ ] Department roster displays all 8 departments with icons, names, and descriptions
-- [ ] 3 scenario callout cards with real-world value examples
+- [ ] Page has 5 sections in value-first order (hero → hiring table → tiers → FAQ → CTA)
+- [ ] Hiring comparison table shows 6+ roles with monthly costs and scenario proof per row
 - [ ] 5 tier cards: Solo ($49), Startup ($149), Scale ($499), Enterprise (Contact), Self-hosted (Free)
-- [ ] All paid tiers show "Coming Soon" badge
-- [ ] Paid tier CTAs are waitlist buttons (not disabled, not linked to checkout)
+- [ ] All paid tiers show "Coming Soon" badge with waitlist CTAs
 - [ ] Self-hosted tier links to getting-started page
 - [ ] FAQ has 5 questions addressing top objections
 - [ ] Zero instances of "plugin" in page content
@@ -151,7 +103,6 @@ Add/modify styles for new sections. Reuse existing design tokens.
 ### Non-Functional Requirements
 
 - [ ] FAQPage JSON-LD schema validates
-- [ ] SoftwareApplication + Offer schema validates
 - [ ] Page responsive at 1440px, 768px, 375px
 - [ ] Eleventy build succeeds with no warnings
 - [ ] OG meta tags reflect new messaging
@@ -161,7 +112,7 @@ Add/modify styles for new sections. Reuse existing design tokens.
 - Given a visitor on the pricing page, when they scroll, then they see value articulation (hiring table) before any price
 - Given a visitor clicking a paid tier CTA, when the form submits, then they receive a waitlist confirmation
 - Given a visitor clicking Self-hosted "Install Now", when they click, then they navigate to getting-started page
-- Given a search engine crawling the page, when it parses JSON-LD, then it finds valid FAQPage and SoftwareApplication schemas
+- Given a search engine crawling the page, when it parses JSON-LD, then it finds valid FAQPage schema
 - Given a mobile visitor at 375px, when they view tier cards, then cards stack vertically and are fully readable
 
 ## Domain Review
