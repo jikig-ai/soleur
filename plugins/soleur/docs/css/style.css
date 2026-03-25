@@ -1180,22 +1180,13 @@
     line-height: 1.6;
   }
 
-  /* Pricing page: Tier cards (3+2 layout) */
-  .pricing-grid-5 {
-    max-width: 1200px;
-    margin-inline: auto;
-  }
-  .pricing-grid-primary {
+  /* Pricing page: Tier cards (3-column) */
+  .pricing-grid-3 {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: var(--space-6);
-  }
-  .pricing-grid-secondary {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: var(--space-6);
-    max-width: 800px;
-    margin: var(--space-6) auto 0;
+    max-width: 1200px;
+    margin-inline: auto;
   }
 
   /* Pricing page: Claude note */
@@ -1346,15 +1337,13 @@
   }
 
   @media (max-width: 1024px) {
-    .pricing-grid-primary { grid-template-columns: repeat(2, 1fr); }
+    .pricing-grid-3 { grid-template-columns: 1fr; max-width: 480px; }
     .department-roster { grid-template-columns: repeat(2, 1fr); }
     .scenario-grid { grid-template-columns: repeat(2, 1fr); }
     .hiring-scenario-col { display: none; }
   }
   @media (max-width: 768px) {
     .pricing-grid { grid-template-columns: 1fr; }
-    .pricing-grid-primary { grid-template-columns: 1fr; }
-    .pricing-grid-secondary { grid-template-columns: 1fr; max-width: 100%; }
     .pricing-card { padding: var(--space-6); }
     .pricing-table { font-size: var(--text-xs); }
     .pricing-table th,
