@@ -135,6 +135,7 @@ provision_goal() {
 echo "Provisioning Plausible goals for ${PLAUSIBLE_SITE_ID}..."
 
 provision_goal "event" "Newsletter Signup"
+provision_goal "event" "Waitlist Signup"
 provision_goal "page"  "/pages/getting-started.html"
 provision_goal "page"  "/blog/*"
 provision_goal "event" "Outbound Link: Click"

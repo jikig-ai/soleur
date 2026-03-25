@@ -1090,6 +1090,11 @@
   .newsletter-success { color: #4ade80; }
   .newsletter-error { color: #f87171; }
 
+  /* Waitlist signup form -- reuses .newsletter-section/.newsletter-form classes */
+  .newsletter-section--waitlist {
+    border-top: 2px solid var(--color-accent);
+  }
+
   /* Pricing page: Hero stat line */
   .hero-stat {
     font-family: var(--font-mono);
@@ -1209,7 +1214,7 @@
     color: var(--color-accent);
   }
 
-  /* Pricing page: Legacy 2-card grid (kept for compatibility) */
+  /* Pricing page: Tier cards */
   .pricing-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
