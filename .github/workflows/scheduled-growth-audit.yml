@@ -35,7 +35,7 @@ permissions:
 jobs:
   growth-audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 75
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -45,7 +45,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh label create scheduled-growth-audit \
-            --description "Weekly growth and AEO audit report" \
+            --description "Weekly growth, SEO, and AEO audit report" \
             --color "0E8A16" 2>/dev/null || true
 
       - name: Run growth audit
@@ -56,7 +56,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
           plugins: 'soleur@soleur'
-          claude_args: '--model claude-opus-4-6 --max-turns 55 --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task'
+          claude_args: '--model claude-opus-4-6 --max-turns 70 --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task'
           prompt: |
             IMPORTANT: This is an automated CI workflow. The AGENTS.md rule
             Do NOT push directly to main.
@@ -98,8 +98,11 @@ jobs:
             technical SEO and AEO issues. Use WebFetch to retrieve pages. Check structured
             data (JSON-LD), meta tags, canonical URLs, OG tags, Twitter cards, sitemap,
             robots.txt AI bot access, llms.txt, E-E-A-T signals, heading hierarchy, and
-            Core Web Vitals indicators. Produce a structured report with Critical Issues,
-            Warnings, Passed Checks, and Recommendations sections. Do NOT make any changes."
+            Core Web Vitals indicators. Produce a structured report that includes:
+            1. An SEO Score section with the weighted scoring table (score/100 with letter grade)
+            2. Critical Issues, Warnings, Passed Checks, and Recommendations sections.
+            Follow the SEO Score Calculation rubric in your agent instructions.
+            Do NOT make any changes."
 
             Save the report to:
             knowledge-base/marketing/audits/soleur-ai/$(date +%Y-%m-%d)-seo-audit.md
@@ -127,10 +130,71 @@ jobs:
             "[Scheduled] Growth Audit - $(date +%Y-%m-%d)"
             with the label "scheduled-growth-audit" summarizing:
             - Top 3 content audit findings
-            - AEO score and grade
+            - AEO score and grade (from aeo-audit report)
+            - SEO score and grade (from seo-audit report's SEO Score section)
             - Top 3 technical SEO findings (or "clean" if no issues)
             - Top 3 content plan priorities
             - Link to the full reports in the repo
+
+            The issue body MUST include both score sections:
+            ## AEO Score
+            **[score]/100** ([grade])
+            ## SEO Score
+            **[score]/100** ([grade])
+
+            ## Step 5.5: Create Tracking Issues
+
+            For each finding in the Key Findings section (P0, P1, P2), create an
+            individual GitHub tracking issue UNLESS one already exists.
+
+            Before creating each issue:
+            1. Search for existing issues: `gh issue list --search "<finding keyword>" --json number,title,state`
+            2. If an open issue already covers this finding, skip creation and note the existing issue number
+
+            For each NEW issue:
+            - Title: "[priority](seo|aeo|content): <concise finding description>"
+            - Labels: appropriate priority label (priority/p0-critical, priority/p1-high, or priority/p2-medium), type/bug or type/chore, domain/marketing
+            - Body: description of the finding, impact, and source reference back to the audit issue
+
+            Collect all issue numbers (new + existing) for the next step.
+
+            Update the summary issue body to include a "Tracking Issues" table at the bottom:
+            | # | Finding | Priority | Issue |
+            |---|---------|----------|-------|
+            | 1 | [description] | P0/P1/P2 | #NNN |
+
+            ## Step 5.6: Product Domain — Milestone Assignment & Roadmap Update
+
+            Launch the cpo agent via the Task tool to assign milestones and update the roadmap:
+
+            Task cpo: "You are the CPO reviewing new issues from the weekly growth audit.
+
+            TRACKING ISSUES: [list the issue numbers from Step 5.5]
+
+            AVAILABLE MILESTONES (use exact titles):
+            - Phase 1: Close the Loop (Mobile-First, PWA)
+            - Phase 2: Secure for Beta
+            - Phase 3: Make it Sticky
+            - Phase 4: Validate + Scale
+            - Phase 5: Desktop Native App (Browser Automation)
+            - Post-MVP / Later
+
+            TASKS:
+            1. Read knowledge-base/product/roadmap.md to understand current phases and priorities
+            2. For each tracking issue, determine the correct milestone based on:
+               - P0 findings that block user acquisition → assign to the earliest incomplete phase
+               - Marketing positioning fixes → Phase 4 (pre-recruitment gate)
+               - Low-impact SEO cleanup → Post-MVP / Later
+            3. Assign milestones: gh issue edit <number> --milestone '<milestone title>'
+            4. Update knowledge-base/product/roadmap.md:
+               - Add new issues to the appropriate phase table (or Marketing Gate table)
+               - Keep the same table format as existing entries
+               - Update the last_updated frontmatter date to today
+            5. Report what you assigned and changed"
+
+            After the CPO agent completes, verify:
+            - Each tracking issue has a milestone: `gh issue view <N> --json milestone`
+            - The roadmap file was updated: `git diff knowledge-base/product/roadmap.md`
 
             ## Step 6: Persist via PR
 
@@ -139,7 +203,7 @@ jobs:
             ```
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add knowledge-base/marketing/audits/soleur-ai/
+            git add knowledge-base/marketing/audits/soleur-ai/ knowledge-base/product/roadmap.md
             git diff --cached --quiet && echo "No changes to commit" && exit 0
             BRANCH="ci/growth-audit-$(date -u +%Y-%m-%d-%H%M%S)"
             git checkout -b "$BRANCH"
