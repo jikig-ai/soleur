@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-03-24
+last_updated: 2026-03-25
 last_reviewed: 2026-03-24
 review_cadence: monthly
 owner: CPO
@@ -185,6 +185,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 3.12 | Pricing page (soleur.ai) | P1 | [#656](https://github.com/jikig-ai/soleur/issues/656) | Not started |
 | 3.13 | Subscription management (cancel, upgrade/downgrade) | P1 | [#1078](https://github.com/jikig-ai/soleur/issues/1078) | Not started |
 | 3.14 | Invoice history + failed payment handling | P2 | [#1079](https://github.com/jikig-ai/soleur/issues/1079) | Not started |
+| 3.15 | Fix meta tags not rendering in production HTML (OG, canonical, Twitter cards) | P0 | [#1121](https://github.com/jikig-ai/soleur/issues/1121) | Not started |
 
 **Why 3.1-3.2 matter:** The knowledge base is the compounding moat. If founders cannot see plans, brainstorms, brand guides, and competitive analyses their agents produced, the value is invisible. The KB viewer closes the review loop.
 
@@ -215,6 +216,9 @@ Before recruiting founders, all public surfaces must reflect the cloud platform 
 | M4 | Draft recruitment messaging templates per channel | 2 hours | Not started |
 | M5 | Update Getting Started page (cloud platform primary, CLI plugin secondary) | 2 hours | Not started |
 | M6 | Standardize agent/skill counts across all surfaces | 2 hours | Not started |
+| M7 | Exclude feed.xml from sitemap.xml | 15 min | Not started — [#1122](https://github.com/jikig-ai/soleur/issues/1122) |
+| M8 | Add case studies to Atom feed entries | 30 min | Not started — [#1123](https://github.com/jikig-ai/soleur/issues/1123) |
+| M9 | Fix author URL to point to About page (blocked by About page creation) | 30 min | Blocked — [#1124](https://github.com/jikig-ai/soleur/issues/1124) |
 
 **Gate:** No recruitment outreach until M1-M4 complete.
 
