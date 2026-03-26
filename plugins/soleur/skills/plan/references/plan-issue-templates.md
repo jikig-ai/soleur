@@ -32,10 +32,16 @@ date: YYYY-MM-DD
 
 ## Test Scenarios
 
-Derive from acceptance criteria. Use Given/When/Then format:
+Derive from acceptance criteria. Use Given/When/Then format for logic tests, and deterministic verification commands for integration tests (consumed by `/soleur:qa`):
 
 - Given [precondition], when [action], then [expected result]
 - Given [edge case], when [action], then [expected handling]
+
+If the feature touches external services, include verification commands:
+
+- **Browser:** [Navigate to URL, fill form, submit, verify UI state]
+- **API verify:** `doppler run -c dev -- curl -s [API endpoint] | jq '[query]'` expects `[value]`
+- **Cleanup:** `doppler run -c dev -- curl -s -X DELETE [API endpoint]`
 
 ## Context
 
@@ -123,6 +129,12 @@ Translate each acceptance criterion into a testable scenario:
 - Given [error condition], when [action], then [graceful handling]
 
 Include regression scenarios for any bugs this work addresses.
+
+If the feature touches external services, include deterministic verification commands (consumed by `/soleur:qa`):
+
+- **Browser:** [Navigate to URL, fill form, submit, verify UI state]
+- **API verify:** `doppler run -c dev -- curl -s [API endpoint] | jq '[query]'` expects `[value]`
+- **Cleanup:** `doppler run -c dev -- curl -s -X DELETE [API endpoint]`
 
 ## Success Metrics
 
@@ -241,6 +253,14 @@ For each bug fix included, write a scenario proving the fix:
 ### Edge Cases
 
 - Given [boundary condition], when [action], then [expected handling]
+
+### Integration Verification (for `/soleur:qa`)
+
+If the feature touches external services, include deterministic verification commands:
+
+- **Browser:** [Navigate to URL, fill form, submit, verify UI state]
+- **API verify:** `doppler run -c dev -- curl -s [API endpoint] | jq '[query]'` expects `[value]`
+- **Cleanup:** `doppler run -c dev -- curl -s -X DELETE [API endpoint]`
 
 ## Success Metrics
 

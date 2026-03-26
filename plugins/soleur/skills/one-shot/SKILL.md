@@ -67,6 +67,7 @@ Do NOT proceed beyond deepen-plan. Do NOT start work."
 After the subagent returns, check for a `## Session Summary` heading in the output.
 
 **If present (success):**
+
 1. Extract the plan file path from `### Plan File`
 2. Detect the feature branch: run `git branch --show-current`
 3. Write the parsed content to `knowledge-base/project/specs/feat-<name>/session-state.md` (create if needed):
@@ -91,6 +92,7 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 4. Continue to step 3 using the extracted plan file path.
 
 **If absent or subagent failed (fallback):**
+
 1. Write to session-state.md: `## Plan Phase\n- Status: fallback (subagent failed)\n`
 2. Use the **Skill tool**: `skill: soleur:plan`, args: "$ARGUMENTS" and then `skill: soleur:deepen-plan` inline (no compaction benefit, but pipeline continues)
 3. Continue to step 3.
@@ -103,6 +105,7 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 
 4. Use the **Skill tool**: `skill: soleur:review`
 5. Use the **Skill tool**: `skill: soleur:resolve-todo-parallel`
+5.5. Use the **Skill tool**: `skill: soleur:qa`, args: "<plan_file_path>". QA verifies features work end-to-end by executing the plan's Test Scenarios (browser flows via Playwright MCP, API verification via Doppler + curl). If QA fails, fix the issues and re-run QA before proceeding. If the plan has no Test Scenarios section, QA skips gracefully.
 6. Use the **Skill tool**: `skill: soleur:compound`
 7. Use the **Skill tool**: `skill: soleur:ship`. Ship handles compound re-check (Phase 2), documentation verification (Phase 3), tests (Phase 4), semver label assignment, push, PR creation, CI, merge, and cleanup.
 8. Use the **Skill tool**: `skill: soleur:test-browser`
