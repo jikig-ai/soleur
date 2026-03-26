@@ -1,0 +1,2840 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "wbLnN",
+      "x": 0,
+      "y": 0,
+      "name": "Page 1 — Homepage (soleur.ai/)",
+      "width": 1440,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "XNvEb",
+          "name": "Header",
+          "width": "fill_container",
+          "height": 56,
+          "fill": "#0A0A0A",
+          "stroke": {
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "padding": [
+            0,
+            56
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "2ewi1",
+              "name": "headerLeft",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "3FIVl",
+                  "name": "logoCircle",
+                  "width": 28,
+                  "height": 28,
+                  "stroke": {
+                    "thickness": 1.5,
+                    "fill": "#C9A962"
+                  }
+                },
+                {
+                  "type": "text",
+                  "id": "lmVZl",
+                  "name": "logoText",
+                  "fill": "#FFFFFF",
+                  "content": "S O L E U R",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "medium",
+                  "letterSpacing": 3
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Frf3w",
+              "name": "headerNav",
+              "gap": 32,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "lBHnE",
+                  "name": "navAgents",
+                  "fill": "#848484",
+                  "content": "Agents",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "Epo9n",
+                  "name": "navSkills",
+                  "fill": "#848484",
+                  "content": "Skills",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "s59ax",
+                  "name": "navPricing",
+                  "fill": "#848484",
+                  "content": "Pricing",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "5wOA9",
+                  "name": "navDocs",
+                  "fill": "#848484",
+                  "content": "Docs",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "4zZuM",
+                  "name": "navCTA",
+                  "fill": "#C9A962",
+                  "padding": [
+                    8,
+                    20
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "d78N2",
+                      "name": "navCTAText",
+                      "fill": "#0A0A0A",
+                      "content": "Join the Waitlist",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "medium"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "O2KnW",
+          "name": "Hero Section",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 32,
+          "padding": [
+            80,
+            120
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "zvsnr",
+              "name": "badge",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#C9A96240"
+              },
+              "padding": [
+                6,
+                16
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "xFPpC",
+                  "name": "badgeText",
+                  "fill": "#C9A962",
+                  "content": "THE COMPANY-AS-A-SERVICE PLATFORM",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "semibold",
+                  "letterSpacing": 3
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "pP5Nm",
+              "name": "headline",
+              "fill": "#FFFFFF",
+              "textGrowth": "fixed-width",
+              "width": 1000,
+              "content": "Build a Billion-Dollar Company. Alone.",
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 64,
+              "fontWeight": "medium"
+            },
+            {
+              "type": "text",
+              "id": "GViDB",
+              "name": "subheadline",
+              "fill": "#848484",
+              "textGrowth": "fixed-width",
+              "width": 800,
+              "content": "The company-as-a-service platform for solo founders. 61 AI agents across 8 departments — engineering, marketing, legal, finance, sales, and more — orchestrated from a single platform.",
+              "lineHeight": 1.6,
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 18,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "TghIf",
+              "name": "Waitlist Form",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "P4cfW",
+                  "name": "emailInput",
+                  "width": 360,
+                  "height": 48,
+                  "fill": "#141414",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "padding": [
+                    0,
+                    20
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "na8U7",
+                      "name": "emailPlaceholder",
+                      "fill": "#6A6A6A",
+                      "content": "Enter your email address",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "9aUM1",
+                  "name": "submitBtn",
+                  "height": 48,
+                  "fill": {
+                    "type": "gradient",
+                    "gradientType": "linear",
+                    "enabled": true,
+                    "rotation": 90,
+                    "size": {
+                      "height": 1
+                    },
+                    "colors": [
+                      {
+                        "color": "#D4B36A",
+                        "position": 0
+                      },
+                      {
+                        "color": "#B8923E",
+                        "position": 1
+                      }
+                    ]
+                  },
+                  "padding": [
+                    0,
+                    28
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "KIhYx",
+                      "name": "submitText",
+                      "fill": "#0A0A0A",
+                      "content": "Join the Waitlist",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "semibold"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "zQDPO",
+              "name": "CTA Group",
+              "layout": "vertical",
+              "gap": 16,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "2M0T6",
+                  "name": "secondaryCTA",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "padding": [
+                    12,
+                    28
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "3QrJP",
+                      "name": "secondaryCTAText",
+                      "fill": "#C9A962",
+                      "content": "See Pricing & Join Waitlist  →",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "medium"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "juAlr",
+                  "name": "tertiaryCTA",
+                  "fill": "#6A6A6A",
+                  "content": "Or try the open-source version →",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "GwfQB",
+          "name": "Stats Strip",
+          "width": "fill_container",
+          "stroke": {
+            "thickness": {
+              "top": 1,
+              "bottom": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "padding": [
+            40,
+            120
+          ],
+          "justifyContent": "space_around",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "JxLRT",
+              "name": "stat1",
+              "layout": "vertical",
+              "gap": 4,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "jsTnW",
+                  "name": "stat1Val",
+                  "fill": "#FFFFFF",
+                  "content": "8",
+                  "fontFamily": "Cormorant Garamond",
+                  "fontSize": 40,
+                  "fontWeight": "medium"
+                },
+                {
+                  "type": "text",
+                  "id": "QSXQu",
+                  "name": "stat1Label",
+                  "fill": "#848484",
+                  "content": "Departments",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "uSEPB",
+              "name": "stat2",
+              "layout": "vertical",
+              "gap": 4,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "aX5Hu",
+                  "name": "stat2Val",
+                  "fill": "#FFFFFF",
+                  "content": "61",
+                  "fontFamily": "Cormorant Garamond",
+                  "fontSize": 40,
+                  "fontWeight": "medium"
+                },
+                {
+                  "type": "text",
+                  "id": "DE0VF",
+                  "name": "stat2Label",
+                  "fill": "#848484",
+                  "content": "AI Agents",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "rbXm6",
+              "name": "stat3",
+              "layout": "vertical",
+              "gap": 4,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "SWl0n",
+                  "name": "stat3Val",
+                  "fill": "#FFFFFF",
+                  "content": "59",
+                  "fontFamily": "Cormorant Garamond",
+                  "fontSize": 40,
+                  "fontWeight": "medium"
+                },
+                {
+                  "type": "text",
+                  "id": "lmBKP",
+                  "name": "stat3Label",
+                  "fill": "#848484",
+                  "content": "Skills",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "imIxY",
+              "name": "stat4",
+              "layout": "vertical",
+              "gap": 4,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "NNVeW",
+                  "name": "stat4Val",
+                  "fill": "#FFFFFF",
+                  "content": "∞",
+                  "fontFamily": "Cormorant Garamond",
+                  "fontSize": 40,
+                  "fontWeight": "medium"
+                },
+                {
+                  "type": "text",
+                  "id": "PYCbA",
+                  "name": "stat4Label",
+                  "fill": "#848484",
+                  "content": "Compounding Knowledge",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "69SO8",
+          "name": "Value Proposition",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 32,
+          "padding": [
+            80,
+            120
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "u4CyV",
+              "name": "problemLabel",
+              "fill": "#C9A962",
+              "content": "THIS IS THE WAY",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "semibold",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "T1oGj",
+              "name": "problemTitle",
+              "fill": "#FFFFFF",
+              "textGrowth": "fixed-width",
+              "width": 900,
+              "content": "The company-as-a-service platform — one founder, one AI organization, every department.",
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 36,
+              "fontWeight": "medium"
+            },
+            {
+              "type": "text",
+              "id": "Iu6W3",
+              "name": "problemDesc",
+              "fill": "#848484",
+              "textGrowth": "fixed-width",
+              "width": 750,
+              "content": "Not a copilot. Not an assistant. A full AI organization that reviews, plans, builds, remembers, and self-improves. Every decision you make teaches the system.",
+              "lineHeight": 1.6,
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 16,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "fTtbo",
+              "name": "Problem Cards",
+              "width": "fill_container",
+              "gap": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "RekCB",
+                  "name": "card1",
+                  "width": "fill_container",
+                  "fill": "#141414",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 32,
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "UIcrE",
+                      "name": "icon1",
+                      "width": 24,
+                      "height": 24,
+                      "iconFontName": "brain",
+                      "iconFontFamily": "lucide",
+                      "fill": "#C9A962"
+                    },
+                    {
+                      "type": "text",
+                      "id": "Y5vlI",
+                      "name": "card1Title",
+                      "fill": "#FFFFFF",
+                      "content": "You Decide",
+                      "fontFamily": "Cormorant Garamond",
+                      "fontSize": 24,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "lCq8f",
+                      "name": "card1Desc",
+                      "fill": "#848484",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Taste, vision, and timing. The things no machine can replace. You set the direction — everything else follows.",
+                      "lineHeight": 1.6,
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "TGwlu",
+                  "name": "card2",
+                  "width": "fill_container",
+                  "fill": "#141414",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 32,
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "apWSZ",
+                      "name": "icon2",
+                      "width": 24,
+                      "height": 24,
+                      "iconFontName": "zap",
+                      "iconFontFamily": "lucide",
+                      "fill": "#C9A962"
+                    },
+                    {
+                      "type": "text",
+                      "id": "rnb0O",
+                      "name": "card2Title",
+                      "fill": "#FFFFFF",
+                      "content": "Agents Execute",
+                      "fontFamily": "Cormorant Garamond",
+                      "fontSize": 24,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "Qxm1u",
+                      "name": "card2Desc",
+                      "fill": "#848484",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Engineering, marketing, legal, finance, sales — every department, running autonomously on your command.",
+                      "lineHeight": 1.6,
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "uiN1x",
+                  "name": "card3",
+                  "width": "fill_container",
+                  "fill": "#141414",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 32,
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "OmBe3",
+                      "name": "icon3",
+                      "width": 24,
+                      "height": 24,
+                      "iconFontName": "refresh-cw",
+                      "iconFontFamily": "lucide",
+                      "fill": "#C9A962"
+                    },
+                    {
+                      "type": "text",
+                      "id": "N9uWj",
+                      "name": "card3Title",
+                      "fill": "#FFFFFF",
+                      "content": "Knowledge Compounds",
+                      "fontFamily": "Cormorant Garamond",
+                      "fontSize": 24,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "vwAQq",
+                      "name": "card3Desc",
+                      "fill": "#848484",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Solutions compound into patterns. Patterns compound into playbooks. Your AI organization gets smarter with every project.",
+                      "lineHeight": 1.6,
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "EBv9G",
+          "name": "Quote Section",
+          "width": "fill_container",
+          "fill": "#0E0E0E",
+          "layout": "vertical",
+          "gap": 16,
+          "padding": [
+            64,
+            120
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "hdh7O",
+              "name": "quoteText",
+              "fill": "#FFFFFF",
+              "textGrowth": "fixed-width",
+              "width": 800,
+              "content": "\"The first billion-dollar company run by one person isn't science fiction. It's an engineering problem. We're solving it.\"",
+              "lineHeight": 1.4,
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 28,
+              "fontWeight": "medium"
+            },
+            {
+              "type": "text",
+              "id": "vkGPs",
+              "name": "quoteCite",
+              "fill": "#C9A962",
+              "content": "— The Soleur Thesis",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "di0Pe",
+          "name": "Mid CTA",
+          "width": "fill_container",
+          "padding": [
+            40,
+            0
+          ],
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "QwOKR",
+              "name": "midCTABtn",
+              "fill": {
+                "type": "gradient",
+                "gradientType": "linear",
+                "enabled": true,
+                "rotation": 90,
+                "size": {
+                  "height": 1
+                },
+                "colors": [
+                  {
+                    "color": "#D4B36A",
+                    "position": 0
+                  },
+                  {
+                    "color": "#B8923E",
+                    "position": 1
+                  }
+                ]
+              },
+              "padding": [
+                14,
+                32
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "PyeoA",
+                  "name": "midCTAText",
+                  "fill": "#0A0A0A",
+                  "content": "Join the Waitlist",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "semibold"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "igmxS",
+          "name": "Department Cards",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 32,
+          "padding": [
+            80,
+            120
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "CvMUU",
+              "name": "deptLabel",
+              "fill": "#C9A962",
+              "content": "YOUR AI ORGANIZATION",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "semibold",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "72H8v",
+              "name": "deptTitle",
+              "fill": "#FFFFFF",
+              "textGrowth": "fixed-width",
+              "width": 900,
+              "content": "Agentic engineering from idea to shipped — every department, one workflow.",
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 36,
+              "fontWeight": "medium"
+            },
+            {
+              "type": "frame",
+              "id": "c9a5y",
+              "name": "Dept Row 1",
+              "width": "fill_container",
+              "gap": 20,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "VIgRW",
+                  "name": "eng",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "9ayDK",
+                      "name": "engIcon",
+                      "width": 20,
+                      "height": 20,
+                      "iconFontName": "code",
+                      "iconFontFamily": "lucide",
+                      "fill": "#5B8DEF"
+                    },
+                    {
+                      "type": "text",
+                      "id": "zCf8K",
+                      "name": "engTitle",
+                      "fill": "#FFFFFF",
+                      "content": "Engineering",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "D8qK9",
+                      "name": "engDesc",
+                      "fill": "#848484",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Code, review, ship. Multi-agent engineering from plan to PR.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "NuNhv",
+                  "name": "mktg",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "2CGOW",
+                      "name": "mktgIcon",
+                      "width": 20,
+                      "height": 20,
+                      "iconFontName": "megaphone",
+                      "iconFontFamily": "lucide",
+                      "fill": "#E67E22"
+                    },
+                    {
+                      "type": "text",
+                      "id": "9GtIS",
+                      "name": "mktgTitle",
+                      "fill": "#FFFFFF",
+                      "content": "Marketing",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "LUzha",
+                      "name": "mktgDesc",
+                      "fill": "#848484",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Brand, content, social, SEO. Full marketing department.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "k7lMg",
+                  "name": "legal",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "4guJ2",
+                      "name": "legalIcon",
+                      "width": 20,
+                      "height": 20,
+                      "iconFontName": "scale",
+                      "iconFontFamily": "lucide",
+                      "fill": "#6C8EBF"
+                    },
+                    {
+                      "type": "text",
+                      "id": "gmpy9",
+                      "name": "legalTitle",
+                      "fill": "#FFFFFF",
+                      "content": "Legal",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "kv3U5",
+                      "name": "legalDesc",
+                      "fill": "#848484",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Terms, privacy, GDPR, compliance. Generate and audit legal docs.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "rmjpt",
+                  "name": "fin",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "5C4Pj",
+                      "name": "finIcon",
+                      "width": 20,
+                      "height": 20,
+                      "iconFontName": "chart-bar",
+                      "iconFontFamily": "lucide",
+                      "fill": "#26A69A"
+                    },
+                    {
+                      "type": "text",
+                      "id": "XMK3P",
+                      "name": "finTitle",
+                      "fill": "#FFFFFF",
+                      "content": "Finance",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "qjLFH",
+                      "name": "finDesc",
+                      "fill": "#848484",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Budget, revenue, financial reports and projections.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "DMAmh",
+              "name": "Dept Row 2",
+              "width": "fill_container",
+              "gap": 20,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "9gDRP",
+                  "name": "ops",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "jmVBo",
+                      "name": "opsIcon",
+                      "width": 20,
+                      "height": 20,
+                      "iconFontName": "settings",
+                      "iconFontFamily": "lucide",
+                      "fill": "#C77DBA"
+                    },
+                    {
+                      "type": "text",
+                      "id": "qnoxV",
+                      "name": "opsTitle",
+                      "fill": "#FFFFFF",
+                      "content": "Operations",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "pgcX9",
+                      "name": "opsDesc",
+                      "fill": "#848484",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Expenses, infrastructure, process optimization.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "uu9AJ",
+                  "name": "prod",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "0CAcd",
+                      "name": "prodIcon",
+                      "width": 20,
+                      "height": 20,
+                      "iconFontName": "layers",
+                      "iconFontFamily": "lucide",
+                      "fill": "#D4A937"
+                    },
+                    {
+                      "type": "text",
+                      "id": "HbYih",
+                      "name": "prodTitle",
+                      "fill": "#FFFFFF",
+                      "content": "Product",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "HdNev",
+                      "name": "prodDesc",
+                      "fill": "#848484",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Specs, UX design, validation, competitive intelligence.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Z4ZkO",
+                  "name": "sales",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "Czgd2",
+                      "name": "salesIcon",
+                      "width": 20,
+                      "height": 20,
+                      "iconFontName": "trending-up",
+                      "iconFontFamily": "lucide",
+                      "fill": "#E06666"
+                    },
+                    {
+                      "type": "text",
+                      "id": "q9fBJ",
+                      "name": "salesTitle",
+                      "fill": "#FFFFFF",
+                      "content": "Sales",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "mWqhF",
+                      "name": "salesDesc",
+                      "fill": "#848484",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Pipeline analysis, outbound strategy, deal architecture.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "mjdvj",
+                  "name": "support",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "T7NFN",
+                      "name": "supportIcon",
+                      "width": 20,
+                      "height": 20,
+                      "iconFontName": "headphones",
+                      "iconFontFamily": "lucide",
+                      "fill": "#9B59B6"
+                    },
+                    {
+                      "type": "text",
+                      "id": "boBag",
+                      "name": "supportTitle",
+                      "fill": "#FFFFFF",
+                      "content": "Support",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "MJU9K",
+                      "name": "supportDesc",
+                      "fill": "#848484",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Ticket triage, community management, knowledge base.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "sMnaY",
+          "name": "FAQ Section",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 32,
+          "padding": [
+            80,
+            120
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "dx3vM",
+              "name": "faqLabel",
+              "fill": "#C9A962",
+              "content": "COMMON QUESTIONS",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "semibold",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "XGJ2S",
+              "name": "faqTitle",
+              "fill": "#FFFFFF",
+              "content": "Frequently Asked Questions",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 36,
+              "fontWeight": "medium"
+            },
+            {
+              "type": "frame",
+              "id": "GVbQc",
+              "name": "FAQ List",
+              "width": 800,
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "ByaGa",
+                  "name": "faq1",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#2A2A2A"
+                  },
+                  "gap": 16,
+                  "padding": [
+                    20,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "5NSeu",
+                      "name": "faq1Icon",
+                      "width": 16,
+                      "height": 16,
+                      "iconFontName": "plus",
+                      "iconFontFamily": "lucide",
+                      "fill": "#C9A962"
+                    },
+                    {
+                      "type": "text",
+                      "id": "McnsE",
+                      "name": "faq1Text",
+                      "fill": "#FFFFFF",
+                      "content": "What is Soleur?",
+                      "fontFamily": "Inter",
+                      "fontSize": 15,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "dvW4h",
+                  "name": "faq2",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#2A2A2A"
+                  },
+                  "gap": 16,
+                  "padding": [
+                    20,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "kDyZa",
+                      "name": "faq2Icon",
+                      "width": 16,
+                      "height": 16,
+                      "iconFontName": "plus",
+                      "iconFontFamily": "lucide",
+                      "fill": "#C9A962"
+                    },
+                    {
+                      "type": "text",
+                      "id": "gmjzh",
+                      "name": "faq2Text",
+                      "fill": "#FFFFFF",
+                      "content": "What is company-as-a-service?",
+                      "fontFamily": "Inter",
+                      "fontSize": 15,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Y54xl",
+                  "name": "faq3",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#2A2A2A"
+                  },
+                  "gap": 16,
+                  "padding": [
+                    20,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "r5h8O",
+                      "name": "faq3Icon",
+                      "width": 16,
+                      "height": 16,
+                      "iconFontName": "plus",
+                      "iconFontFamily": "lucide",
+                      "fill": "#C9A962"
+                    },
+                    {
+                      "type": "text",
+                      "id": "wPGrC",
+                      "name": "faq3Text",
+                      "fill": "#FFFFFF",
+                      "content": "How does Soleur differ from Cursor or GitHub Copilot?",
+                      "fontFamily": "Inter",
+                      "fontSize": 15,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "npGhA",
+                  "name": "faq4",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#2A2A2A"
+                  },
+                  "gap": 16,
+                  "padding": [
+                    20,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "0OPR2",
+                      "name": "faq4Icon",
+                      "width": 16,
+                      "height": 16,
+                      "iconFontName": "plus",
+                      "iconFontFamily": "lucide",
+                      "fill": "#C9A962"
+                    },
+                    {
+                      "type": "text",
+                      "id": "H4iBB",
+                      "name": "faq4Text",
+                      "fill": "#FFFFFF",
+                      "content": "Is Soleur free?",
+                      "fontFamily": "Inter",
+                      "fontSize": 15,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "b46kC",
+                  "name": "faq5",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#2A2A2A"
+                  },
+                  "gap": 16,
+                  "padding": [
+                    20,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "YQivJ",
+                      "name": "faq5Icon",
+                      "width": 16,
+                      "height": 16,
+                      "iconFontName": "plus",
+                      "iconFontFamily": "lucide",
+                      "fill": "#C9A962"
+                    },
+                    {
+                      "type": "text",
+                      "id": "8ouvI",
+                      "name": "faq5Text",
+                      "fill": "#FFFFFF",
+                      "content": "Who is Soleur for?",
+                      "fontFamily": "Inter",
+                      "fontSize": 15,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "hEoiq",
+                  "name": "faq6",
+                  "width": "fill_container",
+                  "gap": 16,
+                  "padding": [
+                    20,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "6EWn1",
+                      "name": "faq6Icon",
+                      "width": 16,
+                      "height": 16,
+                      "iconFontName": "plus",
+                      "iconFontFamily": "lucide",
+                      "fill": "#C9A962"
+                    },
+                    {
+                      "type": "text",
+                      "id": "YZ4W6",
+                      "name": "faq6Text",
+                      "fill": "#FFFFFF",
+                      "content": "How do I get started?",
+                      "fontFamily": "Inter",
+                      "fontSize": 15,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "UegPS",
+          "name": "Final CTA",
+          "width": "fill_container",
+          "fill": "#0E0E0E",
+          "layout": "vertical",
+          "gap": 24,
+          "padding": [
+            80,
+            120
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "qL2sc",
+              "name": "finalCTATitle",
+              "fill": "#FFFFFF",
+              "content": "Ready to build at scale?",
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 40,
+              "fontWeight": "medium"
+            },
+            {
+              "type": "text",
+              "id": "PBBmx",
+              "name": "finalCTADesc",
+              "fill": "#848484",
+              "content": "Your AI organization is ready. Are you?",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 18,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "jHWQb",
+              "name": "Final Waitlist Form",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "9LGvc",
+                  "name": "finalEmailInput",
+                  "width": 360,
+                  "height": 48,
+                  "fill": "#141414",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "padding": [
+                    0,
+                    20
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "pn8v7",
+                      "name": "finalEmailPlaceholder",
+                      "fill": "#6A6A6A",
+                      "content": "Enter your email address",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "ewx1d",
+                  "name": "finalSubmitBtn",
+                  "height": 48,
+                  "fill": {
+                    "type": "gradient",
+                    "gradientType": "linear",
+                    "enabled": true,
+                    "rotation": 90,
+                    "size": {
+                      "height": 1
+                    },
+                    "colors": [
+                      {
+                        "color": "#D4B36A",
+                        "position": 0
+                      },
+                      {
+                        "color": "#B8923E",
+                        "position": 1
+                      }
+                    ]
+                  },
+                  "padding": [
+                    0,
+                    28
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "yveKD",
+                      "name": "finalSubmitText",
+                      "fill": "#0A0A0A",
+                      "content": "Join the Waitlist",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "semibold"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "RjUeP",
+              "name": "finalTertiary",
+              "fill": "#6A6A6A",
+              "content": "Or try the open-source version →",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "8wJH6",
+          "name": "Footer",
+          "width": "fill_container",
+          "stroke": {
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "layout": "vertical",
+          "gap": 16,
+          "padding": [
+            40,
+            56
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "yyeDV",
+              "name": "footerTagline",
+              "fill": "#6A6A6A",
+              "content": "Designed, built, and shipped by Soleur — using Soleur.",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "dgjSw",
+              "name": "footerLinks",
+              "gap": 24,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "5Yex1",
+                  "name": "footerTerms",
+                  "fill": "#848484",
+                  "content": "Terms",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "ERvLe",
+                  "name": "footerPrivacy",
+                  "fill": "#848484",
+                  "content": "Privacy",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "1Ehg5",
+                  "name": "footerGDPR",
+                  "fill": "#848484",
+                  "content": "GDPR",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "dHnar",
+                  "name": "footerGH",
+                  "fill": "#848484",
+                  "content": "GitHub",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "DC8dA",
+                  "name": "footerDiscord",
+                  "fill": "#848484",
+                  "content": "Discord",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "RHRyc",
+              "name": "footerCopyright",
+              "fill": "#4A4A4A",
+              "content": "(c) 2026 Jikigai. All rights reserved.",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "rYKLK",
+      "x": 1540,
+      "y": 0,
+      "name": "Page 2 — Getting Started (soleur.ai/pages/getting-started.html)",
+      "width": 1440,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "5Evik",
+          "name": "Header",
+          "width": "fill_container",
+          "height": 56,
+          "fill": "#0A0A0A",
+          "stroke": {
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "padding": [
+            0,
+            56
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "xmEqi",
+              "name": "header2Left",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "RqAcq",
+                  "name": "logo2Circle",
+                  "width": 28,
+                  "height": 28,
+                  "stroke": {
+                    "thickness": 1.5,
+                    "fill": "#C9A962"
+                  }
+                },
+                {
+                  "type": "text",
+                  "id": "cNwp7",
+                  "name": "logo2Text",
+                  "fill": "#FFFFFF",
+                  "content": "S O L E U R",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "medium",
+                  "letterSpacing": 3
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Oinrj",
+              "name": "header2Nav",
+              "gap": 32,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "UE7m0",
+                  "name": "nav2Agents",
+                  "fill": "#848484",
+                  "content": "Agents",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "ZoVpN",
+                  "name": "nav2Skills",
+                  "fill": "#848484",
+                  "content": "Skills",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "xWhAB",
+                  "name": "nav2Pricing",
+                  "fill": "#848484",
+                  "content": "Pricing",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "hqeIP",
+                  "name": "nav2Docs",
+                  "fill": "#848484",
+                  "content": "Docs",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "nngao",
+                  "name": "nav2CTA",
+                  "fill": "#C9A962",
+                  "padding": [
+                    8,
+                    20
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "EAFGN",
+                      "name": "nav2CTAText",
+                      "fill": "#0A0A0A",
+                      "content": "Join the Waitlist",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "medium"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Gg8sw",
+          "name": "Page Hero",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 12,
+          "padding": [
+            60,
+            120,
+            40,
+            120
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "JYUVi",
+              "name": "hero2Title",
+              "fill": "#FFFFFF",
+              "content": "Getting Started with Soleur",
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 48,
+              "fontWeight": "medium"
+            },
+            {
+              "type": "text",
+              "id": "edzJW",
+              "name": "hero2Sub",
+              "fill": "#848484",
+              "content": "Choose your path — cloud platform or self-hosted open-source.",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 18,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "2Lej6",
+          "name": "Two-Path Choice",
+          "width": "fill_container",
+          "gap": 32,
+          "padding": [
+            40,
+            120
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "Efd9u",
+              "name": "Cloud Platform Path",
+              "width": 720,
+              "fill": "#141414",
+              "stroke": {
+                "thickness": 1.5,
+                "fill": "#C9A962"
+              },
+              "layout": "vertical",
+              "gap": 24,
+              "padding": 48,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "KMLIz",
+                  "name": "cloudBadge",
+                  "fill": "#C9A96240",
+                  "padding": [
+                    6,
+                    14
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "JXYqg",
+                      "name": "cloudBadgeText",
+                      "fill": "#C9A962",
+                      "content": "COMING SOON",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "semibold",
+                      "letterSpacing": 2
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "Tw9qW",
+                  "name": "cloudTitle",
+                  "fill": "#FFFFFF",
+                  "content": "Soleur Cloud Platform",
+                  "fontFamily": "Cormorant Garamond",
+                  "fontSize": 32,
+                  "fontWeight": "medium"
+                },
+                {
+                  "type": "text",
+                  "id": "qSaEy",
+                  "name": "cloudDesc",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Access your AI organization from any device. No CLI required. Dashboard, real-time agents, team collaboration, and managed infrastructure — all in the browser.",
+                  "lineHeight": 1.6,
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "mPHu9",
+                  "name": "cloudFeatures",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 12,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "441xf",
+                      "name": "cf1",
+                      "gap": 12,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "6ao8R",
+                          "name": "cf1Icon",
+                          "width": 16,
+                          "height": 16,
+                          "iconFontName": "check",
+                          "iconFontFamily": "lucide",
+                          "fill": "#C9A962"
+                        },
+                        {
+                          "type": "text",
+                          "id": "4OKwE",
+                          "name": "cf1Text",
+                          "fill": "#FFFFFF",
+                          "content": "Web dashboard — access from any device",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Nsvh4",
+                      "name": "cf2",
+                      "gap": 12,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "5VTe3",
+                          "name": "cf2Icon",
+                          "width": 16,
+                          "height": 16,
+                          "iconFontName": "check",
+                          "iconFontFamily": "lucide",
+                          "fill": "#C9A962"
+                        },
+                        {
+                          "type": "text",
+                          "id": "Qq0m7",
+                          "name": "cf2Text",
+                          "fill": "#FFFFFF",
+                          "content": "Managed infrastructure and agent orchestration",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "n7ux0",
+                      "name": "cf3",
+                      "gap": 12,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "Ov7Ck",
+                          "name": "cf3Icon",
+                          "width": 16,
+                          "height": 16,
+                          "iconFontName": "check",
+                          "iconFontFamily": "lucide",
+                          "fill": "#C9A962"
+                        },
+                        {
+                          "type": "text",
+                          "id": "Tt7V8",
+                          "name": "cf3Text",
+                          "fill": "#FFFFFF",
+                          "content": "Real-time agent activity and knowledge base",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "A05jv",
+                      "name": "cf4",
+                      "gap": 12,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "we9EL",
+                          "name": "cf4Icon",
+                          "width": 16,
+                          "height": 16,
+                          "iconFontName": "check",
+                          "iconFontFamily": "lucide",
+                          "fill": "#C9A962"
+                        },
+                        {
+                          "type": "text",
+                          "id": "p7Vsu",
+                          "name": "cf4Text",
+                          "fill": "#FFFFFF",
+                          "content": "Priority support and early access to new features",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "k4hKL",
+                  "name": "cloudCTA",
+                  "fill": {
+                    "type": "gradient",
+                    "gradientType": "linear",
+                    "enabled": true,
+                    "rotation": 90,
+                    "size": {
+                      "height": 1
+                    },
+                    "colors": [
+                      {
+                        "color": "#D4B36A",
+                        "position": 0
+                      },
+                      {
+                        "color": "#B8923E",
+                        "position": 1
+                      }
+                    ]
+                  },
+                  "padding": [
+                    14,
+                    32
+                  ],
+                  "justifyContent": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "eATdB",
+                      "name": "cloudCTAText",
+                      "fill": "#0A0A0A",
+                      "content": "Join the Waitlist →",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "semibold"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "EmkJF",
+                  "name": "cloudCTANote",
+                  "fill": "#6A6A6A",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Links to pricing page with waitlist form",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "9OL2w",
+              "name": "Self-Hosted Path",
+              "width": "fill_container",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "layout": "vertical",
+              "gap": 24,
+              "padding": 48,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "1PvTX",
+                  "name": "selfBadge",
+                  "fill": "#1A2A1A",
+                  "padding": [
+                    6,
+                    14
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Yr2xR",
+                      "name": "selfBadgeText",
+                      "fill": "#4ADE80",
+                      "content": "AVAILABLE NOW",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "semibold",
+                      "letterSpacing": 2
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "1Uhsv",
+                  "name": "selfTitle",
+                  "fill": "#FFFFFF",
+                  "content": "Self-Hosted (Open Source)",
+                  "fontFamily": "Cormorant Garamond",
+                  "fontSize": 28,
+                  "fontWeight": "medium"
+                },
+                {
+                  "type": "text",
+                  "id": "bkvLs",
+                  "name": "selfDesc",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Install the Claude Code plugin and run your AI organization locally. Full access to all 61 agents and 59 skills. Free and open source.",
+                  "lineHeight": 1.6,
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "2HhDz",
+                  "name": "installBox",
+                  "width": "fill_container",
+                  "fill": "#0A0A0A",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 20,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Y0VB7",
+                      "name": "installLabel",
+                      "fill": "#848484",
+                      "content": "Installation",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "2mlp3",
+                      "name": "installCmd",
+                      "fill": "#C9A962",
+                      "content": "claude plugin install soleur",
+                      "fontFamily": "JetBrains Mono",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "4RnQS",
+                  "name": "runBox",
+                  "width": "fill_container",
+                  "fill": "#0A0A0A",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 20,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "EEoRZ",
+                      "name": "runLabel",
+                      "fill": "#848484",
+                      "content": "Get Started",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "mx1Z5",
+                      "name": "runCmd",
+                      "fill": "#C9A962",
+                      "content": "/soleur:go",
+                      "fontFamily": "JetBrains Mono",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "V7JCW",
+                  "name": "callout",
+                  "width": "fill_container",
+                  "fill": "#141414",
+                  "stroke": {
+                    "thickness": {
+                      "left": 3
+                    },
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 4,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "XrePV",
+                      "name": "calloutBold",
+                      "fill": "#FFFFFF",
+                      "content": "Existing project? Run /soleur:sync to analyze your codebase.",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "pybCn",
+                      "name": "calloutSub",
+                      "fill": "#848484",
+                      "content": "Starting fresh? Run /soleur:go and describe what you need.",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Ki6dz",
+                  "name": "selfCTA",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "padding": [
+                    12,
+                    28
+                  ],
+                  "justifyContent": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "OkeTJ",
+                      "name": "selfCTAText",
+                      "fill": "#FFFFFF",
+                      "content": "View Installation Guide →",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "medium"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "FPxRI",
+          "name": "Workflow Section",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 32,
+          "padding": [
+            60,
+            120
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "9wxDr",
+              "name": "wfLabel",
+              "fill": "#C9A962",
+              "content": "THE WORKFLOW",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "semibold",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "98oxB",
+              "name": "wfTitle",
+              "fill": "#FFFFFF",
+              "content": "Five steps from idea to shipped.",
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 32,
+              "fontWeight": "medium"
+            },
+            {
+              "type": "frame",
+              "id": "K2MDb",
+              "name": "Workflow Steps",
+              "width": "fill_container",
+              "gap": 16,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "OHQW1",
+                  "name": "step1",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "dgGjO",
+                      "name": "step1Num",
+                      "fill": "#C9A962",
+                      "content": "01",
+                      "fontFamily": "Cormorant Garamond",
+                      "fontSize": 24,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "4oEAB",
+                      "name": "step1Title",
+                      "fill": "#FFFFFF",
+                      "content": "Brainstorm",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "r0Bet",
+                      "name": "step1Desc",
+                      "fill": "#848484",
+                      "content": "Explore what to build",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "EJI0O",
+                  "name": "step2",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "3aAxQ",
+                      "name": "step2Num",
+                      "fill": "#C9A962",
+                      "content": "02",
+                      "fontFamily": "Cormorant Garamond",
+                      "fontSize": 24,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "ldK0R",
+                      "name": "step2Title",
+                      "fill": "#FFFFFF",
+                      "content": "Plan",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "LQAxj",
+                      "name": "step2Desc",
+                      "fill": "#848484",
+                      "content": "Structured implementation plan",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "W6O3w",
+                  "name": "step3",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "trfMo",
+                      "name": "step3Num",
+                      "fill": "#C9A962",
+                      "content": "03",
+                      "fontFamily": "Cormorant Garamond",
+                      "fontSize": 24,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "KvBvG",
+                      "name": "step3Title",
+                      "fill": "#FFFFFF",
+                      "content": "Work",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "tAy0b",
+                      "name": "step3Desc",
+                      "fill": "#848484",
+                      "content": "Execute with quality checks",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "oJyBY",
+                  "name": "step4",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "vJiHZ",
+                      "name": "step4Num",
+                      "fill": "#C9A962",
+                      "content": "04",
+                      "fontFamily": "Cormorant Garamond",
+                      "fontSize": 24,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "IAv0g",
+                      "name": "step4Title",
+                      "fill": "#FFFFFF",
+                      "content": "Review",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "8c6MV",
+                      "name": "step4Desc",
+                      "fill": "#848484",
+                      "content": "Multi-agent code review",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "GUud6",
+                  "name": "step5",
+                  "width": "fill_container",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "R0oGP",
+                      "name": "step5Num",
+                      "fill": "#C9A962",
+                      "content": "05",
+                      "fontFamily": "Cormorant Garamond",
+                      "fontSize": 24,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "VeVMl",
+                      "name": "step5Title",
+                      "fill": "#FFFFFF",
+                      "content": "Compound",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "medium"
+                    },
+                    {
+                      "type": "text",
+                      "id": "GbdH2",
+                      "name": "step5Desc",
+                      "fill": "#848484",
+                      "content": "Capture learnings",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "hjWiU",
+          "name": "Learn More",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 20,
+          "padding": [
+            40,
+            120
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "tu00W",
+              "name": "learnTitle",
+              "fill": "#FFFFFF",
+              "content": "Learn More",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 28,
+              "fontWeight": "medium"
+            },
+            {
+              "type": "frame",
+              "id": "3lCTq",
+              "name": "learnLinks",
+              "layout": "vertical",
+              "gap": 12,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "Va0Uw",
+                  "name": "link1",
+                  "gap": 8,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "gvima",
+                      "name": "link1Arrow",
+                      "width": 14,
+                      "height": 14,
+                      "iconFontName": "arrow-right",
+                      "iconFontFamily": "lucide",
+                      "fill": "#C9A962"
+                    },
+                    {
+                      "type": "text",
+                      "id": "bqlp9",
+                      "name": "link1Text",
+                      "fill": "#C9A962",
+                      "content": "Agents — AI agents across 8 departments",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "000zn",
+                  "name": "link2",
+                  "gap": 8,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "LVMXx",
+                      "name": "link2Arrow",
+                      "width": 14,
+                      "height": 14,
+                      "iconFontName": "arrow-right",
+                      "iconFontFamily": "lucide",
+                      "fill": "#C9A962"
+                    },
+                    {
+                      "type": "text",
+                      "id": "Rz626",
+                      "name": "link2Text",
+                      "fill": "#C9A962",
+                      "content": "Skills — Multi-step skills for complex workflows",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "nkOus",
+                  "name": "link3",
+                  "gap": 8,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "zm2O3",
+                      "name": "link3Arrow",
+                      "width": 14,
+                      "height": 14,
+                      "iconFontName": "arrow-right",
+                      "iconFontFamily": "lucide",
+                      "fill": "#C9A962"
+                    },
+                    {
+                      "type": "text",
+                      "id": "mzLeO",
+                      "name": "link3Text",
+                      "fill": "#C9A962",
+                      "content": "Changelog — All notable changes",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "1a4lA",
+          "name": "Footer",
+          "width": "fill_container",
+          "stroke": {
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "layout": "vertical",
+          "gap": 16,
+          "padding": [
+            40,
+            56
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "WAlqA",
+              "name": "footer2Tagline",
+              "fill": "#6A6A6A",
+              "content": "Designed, built, and shipped by Soleur — using Soleur.",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "za4Sp",
+              "name": "footer2Links",
+              "gap": 24,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "TSehZ",
+                  "name": "f2Terms",
+                  "fill": "#848484",
+                  "content": "Terms",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "n7EI8",
+                  "name": "f2Privacy",
+                  "fill": "#848484",
+                  "content": "Privacy",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "k7R7k",
+                  "name": "f2GDPR",
+                  "fill": "#848484",
+                  "content": "GDPR",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "SEwqt",
+                  "name": "f2GH",
+                  "fill": "#848484",
+                  "content": "GitHub",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "C136K",
+                  "name": "f2Discord",
+                  "fill": "#848484",
+                  "content": "Discord",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "brdP4",
+              "name": "footer2Copyright",
+              "fill": "#4A4A4A",
+              "content": "(c) 2026 Jikigai. All rights reserved.",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 ---
 title: Soleur
-description: "Soleur is the company-as-a-service platform — a Claude Code plugin that gives solo founders a full AI organization across every business department."
+description: "The company-as-a-service platform for solo founders. AI agents across every business department — engineering, marketing, legal, finance, sales, and more — orchestrated from a single platform."
 layout: base.njk
 permalink: index.html
 ---
@@ -8,10 +8,23 @@ permalink: index.html
     <!-- Hero -->
     <section class="landing-hero">
       <h1>Build a Billion-Dollar Company. Alone.</h1>
-      <p class="hero-sub">The company-as-a-service platform for solo founders. {{ stats.agents }} AI agents across {{ stats.departments }} departments &mdash; engineering, marketing, legal, finance, sales, and more &mdash; orchestrated from a single Claude Code plugin.</p>
+      <p class="hero-sub">The company-as-a-service platform for solo founders. {{ stats.agents }} AI agents across {{ stats.departments }} departments &mdash; engineering, marketing, legal, finance, sales, and more &mdash; orchestrated from a single platform.</p>
+      <form class="newsletter-form hero-waitlist-form" id="homepage-waitlist-form"
+        action="https://buttondown.com/api/emails/embed-subscribe/soleur"
+        method="post">
+        <label for="newsletter-email-homepage-waitlist" class="sr-only">Email address</label>
+        <input type="email" name="email" id="newsletter-email-homepage-waitlist"
+          placeholder="Enter your email address" required autocomplete="email" inputmode="email"
+          aria-describedby="homepage-waitlist-privacy" />
+        <input type="hidden" name="embed" value="1" />
+        <input type="hidden" name="tag" value="homepage-waitlist" />
+        <input type="hidden" name="url" value="" />
+        <button type="submit" class="btn btn-primary">Join the Waitlist</button>
+        <div class="newsletter-status" id="homepage-waitlist-status" aria-live="polite" role="status"></div>
+      </form>
       <div class="hero-cta">
-        <a href="pages/getting-started.html" class="btn btn-primary">Start building your AI organization</a>
-        <a href="pages/agents.html" class="btn btn-secondary">See the {{ stats.agents }} AI agents</a>
+        <a href="/pages/pricing.html" class="cta-button">See Pricing &amp; Join Waitlist <span aria-hidden="true">&rarr;</span></a>
+        <a href="/pages/getting-started.html" class="cta-link">Or try the open-source version <span aria-hidden="true">&rarr;</span></a>
       </div>
     </section>
 
@@ -71,7 +84,7 @@ permalink: index.html
 
     <!-- Mid-page CTA -->
     <section class="landing-cta-mid">
-      <a href="pages/getting-started.html" class="btn btn-primary">Start building your AI organization</a>
+      <a href="/pages/pricing.html" class="btn btn-primary">See Pricing &amp; Join Waitlist</a>
     </section>
 
     <!-- Features Section -->
@@ -132,7 +145,7 @@ permalink: index.html
         <div class="faq-list">
           <details class="faq-item">
             <summary class="faq-question">What is Soleur?</summary>
-            <p class="faq-answer">Soleur is a company-as-a-service platform delivered as a Claude Code plugin. It deploys {{ stats.agents }} AI agents across {{ stats.departments }} business departments &mdash; engineering, marketing, legal, finance, operations, product, sales, and support &mdash; giving a single founder the operational capacity of a full organization. Every problem solved compounds into patterns that accelerate future work.</p>
+            <p class="faq-answer">Soleur is the company-as-a-service platform. It deploys {{ stats.agents }} AI agents across {{ stats.departments }} business departments &mdash; engineering, marketing, legal, finance, operations, product, sales, and support &mdash; giving a single founder the operational capacity of a full organization. Every problem solved compounds into patterns that accelerate future work.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">What is company-as-a-service?</summary>
@@ -144,15 +157,15 @@ permalink: index.html
           </details>
           <details class="faq-item">
             <summary class="faq-question">Is Soleur free?</summary>
-            <p class="faq-answer">The Soleur plugin is open source and free to install. It runs on Claude Code, which requires an Anthropic API key or a Claude subscription. Your costs depend on your Claude usage.</p>
+            <p class="faq-answer">Soleur offers two paths. The cloud platform (coming soon) provides managed infrastructure, a web dashboard, and priority support &mdash; pricing starts at the Spark tier. The self-hosted version is open source and free. Both run on Anthropic&rsquo;s Claude models, so your AI costs depend on your Claude usage.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">Who is Soleur for?</summary>
-            <p class="faq-answer">Soleur is built for solo founders and small teams who want to operate at the scale of a full organization. Among solo founder AI tools, Soleur is the only platform that spans every department and compounds institutional knowledge across sessions.</p>
+            <p class="faq-answer">Solo founders who refuse to accept that scale requires headcount. Soleur is the only platform that spans every business department and compounds institutional knowledge across projects &mdash; giving one person the operational capacity of a full organization.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">How do I get started?</summary>
-            <p class="faq-answer">Install the plugin with <code>claude plugin install soleur</code>, then run <code>/soleur:go</code> and describe what you want to do. Soleur routes your request to the right workflow &mdash; whether that is building a feature, validating a business idea, generating legal documents, or running a competitive analysis.</p>
+            <p class="faq-answer">Join the waitlist for the cloud platform, or install the open-source version and run <code>/soleur:go</code> to start. Describe what you need &mdash; build a feature, validate a business idea, generate legal documents, run a competitive analysis &mdash; and Soleur routes to the right workflow.</p>
           </details>
         </div>
       </div>
@@ -168,7 +181,7 @@ permalink: index.html
           "name": "What is Soleur?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Soleur is a company-as-a-service platform delivered as a Claude Code plugin. It deploys AI agents across business departments — engineering, marketing, legal, finance, operations, product, sales, and support — giving a single founder the operational capacity of a full organization."
+            "text": "Soleur is the company-as-a-service platform. It deploys AI agents across business departments — engineering, marketing, legal, finance, operations, product, sales, and support — giving a single founder the operational capacity of a full organization. Every problem solved compounds into patterns that accelerate future work."
           }
         },
         {
@@ -192,7 +205,7 @@ permalink: index.html
           "name": "Is Soleur free?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "The Soleur plugin is open source and free to install. It runs on Claude Code, which requires an Anthropic API key or a Claude subscription. Your costs depend on your Claude usage."
+            "text": "Soleur offers two paths. The cloud platform provides managed infrastructure, a web dashboard, and priority support with tiered pricing. The self-hosted version is open source and free. Both run on Anthropic's Claude models."
           }
         },
         {
@@ -200,7 +213,7 @@ permalink: index.html
           "name": "Who is Soleur for?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Soleur is built for solo founders and small teams who want to operate at the scale of a full organization. Among solo founder AI tools, Soleur is the only platform that spans every department and compounds institutional knowledge across sessions."
+            "text": "Solo founders who refuse to accept that scale requires headcount. Soleur is the only platform that spans every business department and compounds institutional knowledge across projects, giving one person the operational capacity of a full organization."
           }
         },
         {
@@ -208,7 +221,7 @@ permalink: index.html
           "name": "How do I get started?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Install the plugin with 'claude plugin install soleur', then run /soleur:go and describe what you want to do. Soleur routes your request to the right workflow."
+            "text": "Join the waitlist for the cloud platform, or install the open-source version and start with /soleur:go. Describe what you need and Soleur routes to the right workflow — whether building a feature, validating a business idea, generating legal documents, or running a competitive analysis."
           }
         }
       ]
@@ -219,5 +232,6 @@ permalink: index.html
     <section class="landing-cta">
       <h2>Ready to build at scale?</h2>
       <p>Your AI organization is ready. Are you?</p>
-      <a href="pages/getting-started.html" class="btn btn-primary">Start building your AI organization</a>
+      <a href="/pages/pricing.html" class="btn btn-primary">See Pricing &amp; Join Waitlist</a>
+      <p class="waitlist-secondary"><a href="/pages/getting-started.html">Or start with the free self-hosted version &rarr;</a></p>
     </section>
