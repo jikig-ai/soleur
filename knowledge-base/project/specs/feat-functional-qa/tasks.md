@@ -1,37 +1,24 @@
 # Tasks: Functional QA Skill
 
-## Phase 1: Skill Skeleton + Environment Detection
+## Phase 1: Create SKILL.md
 
-- [ ] 1.1 Create skill directory `plugins/soleur/skills/qa/`
-- [ ] 1.2 Create `SKILL.md` with YAML frontmatter (name: qa, third-person description) and XML body structure
-- [ ] 1.3 Create `scripts/detect-environment.sh` — auto-detect dev vs prd Doppler config
-- [ ] 1.4 Create `references/qa-scenario-format.md` — guide for writing verifiable test scenarios in plans
-- [ ] 1.5 Verify skill appears in `/soleur:help` output
-- [ ] 1.6 Run `bun test plugins/soleur/test/components.test.ts` — verify description word count under 1,800
+- [ ] 1.1 Create `plugins/soleur/skills/qa/SKILL.md` with YAML frontmatter (`name: qa`, third-person description)
+- [ ] 1.2 Implement XML body structure: `<objective>`, `<quick_start>`, `<workflow>`, `<success_criteria>`
+- [ ] 1.3 Implement plan parsing — read plan file (passed as arg), extract Test Scenarios section
+- [ ] 1.4 Implement environment detection inline — check `DEPLOY_URL`, set Doppler config to `prd` or `dev`
+- [ ] 1.5 Implement scenario execution — Playwright MCP for browser steps, `doppler run` + `curl` for API verification
+- [ ] 1.6 Implement cleanup step execution — run cleanup commands regardless of pass/fail
+- [ ] 1.7 Implement eventual consistency handling — wait + retry up to 3 times before failing
+- [ ] 1.8 Implement inline report generation — pass/fail markdown with screenshots and API responses
+- [ ] 1.9 Implement graceful degradation — missing prerequisites skip with warning, don't block
 
-## Phase 2: Core QA Logic in SKILL.md
+## Phase 2: Update Plan Skill + Pipeline
 
-- [ ] 2.1 Implement plan parsing — read plan file, extract Test Scenarios section
-- [ ] 2.2 Implement scenario classification — browser-only, API-only, browser+API
-- [ ] 2.3 Implement browser flow execution — Playwright MCP navigate, fill, submit, verify UI state
-  - [ ] 2.3.1 Handle absolute paths for worktree compatibility
-  - [ ] 2.3.2 Handle Playwright MCP unavailability (graceful skip with warning)
-- [ ] 2.4 Implement API verification — Doppler credential injection, curl construction, response parsing
-  - [ ] 2.4.1 Handle missing Doppler secrets (graceful skip per-scenario)
-  - [ ] 2.4.2 Handle eventual consistency (retry with exponential backoff: 3s, 6s, 12s)
-- [ ] 2.5 Implement error path testing — Playwright route interception for network failures
-- [ ] 2.6 Implement graceful degradation for missing prerequisites (no Test Scenarios, no Playwright, no Doppler)
+- [ ] 2.1 Update plan skill Test Scenarios format to include explicit verification commands (curl + jq + cleanup templates)
+- [ ] 2.2 Update `plugins/soleur/skills/one-shot/SKILL.md` — insert QA step (5.5) between resolve-todo-parallel and compound
 
-## Phase 3: Report Generation + Pipeline Integration
+## Phase 3: Compliance + Documentation
 
-- [ ] 3.1 Create `scripts/generate-report.sh` — format pass/fail markdown report with evidence
-- [ ] 3.2 Implement report generation in SKILL.md — aggregate results, include screenshots and API responses
-- [ ] 3.3 Update `plugins/soleur/skills/one-shot/SKILL.md` — insert QA step between resolve-todo-parallel (step 5) and compound (step 6)
-- [ ] 3.4 Verify pipeline integration — QA blocks on failure, passes through on success
-
-## Phase 4: Compliance + Documentation
-
-- [ ] 4.1 Verify SKILL.md uses pure XML structure (no markdown headings in body)
-- [ ] 4.2 Verify all reference files linked with proper markdown links (not backtick paths)
-- [ ] 4.3 Update README.md skill count
-- [ ] 4.4 Run `bun test plugins/soleur/test/components.test.ts` — final compliance check
+- [ ] 3.1 Update README.md skill count
+- [ ] 3.2 Run `bun test plugins/soleur/test/components.test.ts` — verify description word count under 1,800
+- [ ] 3.3 Verify SKILL.md uses XML structure (no markdown headings in body)
