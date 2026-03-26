@@ -25,7 +25,7 @@ All findings cascaded into source artifacts (interview guides, brand guide, pric
 
 **Iterative dogfooding is the correct workflow for research instruments.** A single research pass identifies problems but can't validate fixes. Running the same personas through updated instruments confirms whether rewrites actually work — and surfaces second-order weak spots the first pass missed. Three rounds (Original → V1 → V2) took the 30-min guide from 48% to 93% rich. The marginal return from a fourth round is near-zero (remaining flats are structural, not fixable by wording).
 
-**Research findings MUST cascade into source artifacts in the same PR.** The first round produced 5 question rewrites, 6 new questions, and a value prop recommendation — none of which were applied until the founder asked "was any action taken?" This is now an AGENTS.md hard rule: research findings that sit in a brief without updating the documents they target are dead knowledge.
+**The full cascade-validate loop must be automatic, not manual.** This session required 3 manual prompts from the founder: (1) "was any action taken?" → cascade hadn't happened, (2) "can you re-run to validate?" → dogfood loop hadn't run, (3) "did we cascade the learnings?" → brief/learning not updated with V2 results. Each time the answer was "no." The fix is Phase 2.5 in `/soleur:work`: cascade → validate → re-cascade if needed → update brief → present founder summary. All automatic, max 3 iterations. Encoded in AGENTS.md as a hard rule.
 
 **Parallel subagent fan-out works well for independent research gates.** The three gates (interview prep, value prop, pricing) had no dependencies on each other and produced independent output files. Running them in parallel cut wall-clock time roughly 3x.
 

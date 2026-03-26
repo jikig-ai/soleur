@@ -272,6 +272,43 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - Create new tasks if scope expands
    - Keep user informed of major milestones
 
+### Phase 2.5: Research Validation Loop (knowledge-base deliverables only)
+
+**Trigger:** This phase runs when the plan's deliverables are knowledge-base research artifacts (findings, analysis, audits, research briefs) that produce recommendations targeting other existing documents. Skip for code-only plans.
+
+**Detection:** After Phase 2 completes, scan the outputs for recommendation patterns — "should rewrite," "needs updating," "add to," "change X in Y.md," or any finding that names a specific target file. If found, enter the loop.
+
+**The loop:**
+
+```text
+while (recommendations exist that haven't been applied):
+  1. CASCADE: Apply all recommendations to their target artifacts
+     - Rewrite questions in interview guides
+     - Update framings in brand guide
+     - Add alternatives to pricing strategy
+     - Any finding that names a file → edit that file
+  2. VALIDATE: Re-run the same research methodology against updated artifacts
+     - Use the same personas/parameters as the original run
+     - Produce a before/after comparison (original → current)
+  3. CHECK: Did the validation surface NEW weak spots or recommendations?
+     - If yes → apply fixes, loop back to step 2
+     - If no (at synthetic ceiling) → exit loop
+  4. UPDATE BRIEF: Update the research brief with final validated results
+     - Executive summary reflects current state, not original findings
+     - Recommendations marked as "Applied" with results
+     - Add Cascade Status section tracking all changes to all files
+  5. SUMMARIZE: Present founder summary
+     - Key findings table
+     - All files changed table (file, what changed, before/after metrics)
+     - Remaining limitations (structural, not fixable)
+```
+
+**Exit condition:** The loop exits when a validation round produces no new actionable recommendations — only structural limitations that can't be fixed by rewording (e.g., a persona's archetype inherently produces flat responses to a specific question type).
+
+**Max iterations:** 3 rounds. If the third round still produces actionable recommendations, present them to the user rather than looping indefinitely. Synthetic-on-synthetic validation has diminishing returns.
+
+**Why this matters:** Without this loop, research sprints produce findings that sit in briefs without updating the documents they target. The founder has to manually ask "was any action taken?" after each round. This loop makes cascade + validate + re-cascade automatic.
+
 ### Phase 3: Quality Check
 
 1. **Run Core Quality Checks**
@@ -420,5 +457,5 @@ For most features: tests + linting + following patterns is sufficient.
 - **80% done syndrome** - Finish the feature, don't move on early
 - **Over-reviewing simple changes** - Save reviewer agents for complex work
 - **Silent plan omissions** - When dropping a conditional plan item, document why in the commit or plan
-- **Research without cascade** - When a plan produces recommendations targeting specific artifacts (interview guides, brand guide, pricing strategy, etc.), apply those recommendations to the source artifacts in the same session. Research findings that sit in a brief without updating the documents they target are dead knowledge. After completing the research brief, scan it for actionable changes to existing files and apply them before moving to Phase 4.
-- **Missing founder summary** - After completing research, analysis, or audit work, present a concise summary of key findings and all changes made to existing artifacts. The founder needs to review what changed, not just what was discovered. Format: findings table + files changed table.
+- **Research without cascade-validate loop** - For knowledge-base research deliverables, Phase 2.5 enforces: cascade findings into source artifacts → re-run validation → cascade again if new weak spots emerge → update brief with final results → present founder summary. "Findings written" is not "done" — "findings applied, validated, and all documents reflect the final state" is done. See Phase 2.5.
+- **Missing founder summary** - After completing research, analysis, or audit work, present a concise summary: key findings table + all files changed table (file, what changed, before/after metrics if applicable). The founder needs to review what changed, not just what was discovered.
