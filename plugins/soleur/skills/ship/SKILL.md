@@ -194,6 +194,7 @@ Domain leaders are consulted at brainstorm time but not at ship time. The actual
 2. Present the CMO's recommendations to the user.
 3. **Interactive mode:** Ask "Create content now, schedule for later, or skip?" Options: Create now (invoke content-writer/social-distribute), Schedule (create a GitHub issue with content brief), Skip.
 4. **Headless mode:** Auto-create a GitHub issue with the CMO's content brief for later action. Do not block the ship.
+5. **Update content strategy (mandatory if content is scheduled or created).** When a content piece is identified (option 1 or 2 above), update `knowledge-base/marketing/content-strategy.md`: add the piece to the content pipeline table under the appropriate pillar AND insert it into the rolling quarterly calendar at the correct week. A GitHub issue without a content strategy entry is an orphan — it will be forgotten. **Why:** In #1173, a methodology blog post was created as issue #1176 but never added to the content strategy calendar, requiring a manual fix.
 
 **Why:** In #1173, a research sprint produced a novel methodology with compelling data, but no content was planned because the CMO was only consulted when the scope was "should we explore this?" — not when the actual content existed.
 

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-22
-last_reviewed: 2026-03-22
+last_updated: 2026-03-26
+last_reviewed: 2026-03-26
 review_cadence: quarterly
 owner: CMO
 depends_on:
@@ -200,6 +200,7 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 | Piece | Type | Words | Priority | Status |
 |-------|------|-------|----------|--------|
 | Why Most Agentic Engineering Tools Plateau | Pillar explainer | ~3,000 | P1 | **PUBLISHED** (SAP 4.8/5.0). Partially addresses Gaps 1 and 4. |
+| How We Used AI-Generated Personas to Improve Interview Questions by 93% | Methodology | 2,000-3,000 | P1 | Month 1 (Mar 27-Apr 2). Issue #1176. Source: synthetic research sprint. Angle: practitioner methodology, not product demo. Hook: 52%→93% rich response rate over 3 rounds. New content type for Pillar 2 (research methodology). |
 | Vibe Coding vs Agentic Engineering: What Solo Founders Need to Know | Comparison | 2,000-2,500 | P1 | Month 1. Renamed from "Agentic Engineering: Beyond Vibe Coding" to target search query. Audit P2-1, score 18/20. |
 | Knowledge Compounding in AI Development | Concept explainer | 1,500-2,000 | P2 | Month 2-3. Addresses Gap 1. |
 | Compound Engineering: How Every Project Makes the Next One Easier | Concept explainer | 1,500-2,000 | P3 | Month 3+. Audit P3-4. |
@@ -250,10 +251,10 @@ This calendar replaces the completed 4-week calendar (Phase 0-1). It assumes 8-1
 | Week | Task | Hours | Output |
 |------|------|-------|--------|
 | Mar 20-26 | P1 technical fixes: FAQ JSON-LD on agents page + "Why Tools Plateau", FAQ sections on 5 case studies, remove "plugin" from meta descriptions, Vision page H1 rewrite, add `updated` frontmatter to blog posts, add "open source" + "solopreneur" to homepage | 6-8 | All P1 technical fixes deployed |
-| Mar 27-Apr 2 | Write "Vibe Coding vs Agentic Engineering" article (audit P2-1, score 18/20) | 6-8 | Draft + publish |
-| Apr 3-9 | Add external citations to 5+ catalog pages (Gap 12). Add FAQ sections to Skills, Getting Started, Community pages. | 4-6 | AEO score improvement |
-| Apr 10-16 | Write About/Founder page (Gap 11). Add definition paragraphs to Agents and Skills pages. | 3-4 | E-E-A-T + AEO improvements |
-| Apr 17-20 | Distribution: share Vibe Coding article on X, Discord, IndieHackers. Review analytics. | 2-3 | Distribution complete |
+| Mar 27-Apr 2 | Write "How We Used AI-Generated Personas to Improve Interview Questions by 93%" methodology article (issue #1176). Distribute: Substack comment on Ivelin's article, LinkedIn, X thread. | 6-8 | Blog post + social distribution |
+| Apr 3-6 | Write "Vibe Coding vs Agentic Engineering" article (audit P2-1, score 18/20) | 6-8 | Draft + publish |
+| Apr 7-13 | Add external citations to 5+ catalog pages (Gap 12). Add FAQ sections to Skills, Getting Started, Community pages. | 4-6 | AEO score improvement |
+| Apr 14-20 | Write About/Founder page (Gap 11). Distribute Vibe Coding article on X, Discord, IndieHackers. Review analytics. | 4-6 | E-E-A-T + distribution |
 
 ### Month 2 (April 21 - May 20, 2026): Pillar Content + Comparisons
 
