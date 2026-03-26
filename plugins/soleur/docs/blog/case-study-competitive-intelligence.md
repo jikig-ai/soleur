@@ -43,7 +43,7 @@ The report directly updated the business validation document's competitive asses
 
 ## The Cost Comparison
 
-A competitive intelligence consultant charges $150-300/hour. A comprehensive competitive landscape analysis covering 17 competitors with overlap matrices, convergence risk assessments, sourced research, and actionable recommendations typically runs 40-60 hours of analyst time: $6,000-18,000. The cascade outputs (battlecards, pricing matrix, content strategy, SEO queue) would normally be separate engagements -- a set of 4 sales battlecards runs $2,000-4,000 from a sales enablement consultancy. Total equivalent: $8,000-22,000 and 4-8 weeks. The AI-produced analysis was generated in a single session with cascade, including all downstream artifacts.
+While competitive intelligence analysts earn approximately $56/hour as employees according to [Salary.com](https://www.salary.com/research/salary/listing/competitive-intelligence-analyst-salary), external consultants typically command $150-300/hour (as of 2026). A comprehensive competitive landscape analysis covering 17 competitors with overlap matrices, convergence risk assessments, sourced research, and actionable recommendations typically runs 40-60 hours of analyst time: $6,000-18,000. The cascade outputs (battlecards, pricing matrix, content strategy, SEO queue) would normally be separate engagements -- a set of 4 sales battlecards runs $2,000-4,000 from a sales enablement consultancy. Total equivalent: $8,000-22,000 and 4-8 weeks. The AI-produced analysis was generated in a single session with cascade, including all downstream artifacts.
 
 ## The Compound Effect
 
@@ -61,7 +61,7 @@ Yes. Soleur's competitive-intelligence agent researches competitors across multi
 <details>
 <summary>How long does AI competitive analysis take?</summary>
 
-The full competitive intelligence report covering 17 competitors with overlap matrices, battlecards, pricing matrix, and content strategy was generated in a single session. A competitive intelligence consultant charges $6,000–$18,000 for equivalent scope over 40–60 hours.
+The full competitive intelligence report covering 17 competitors with overlap matrices, battlecards, pricing matrix, and content strategy was generated in a single session. While CI analysts earn approximately $56/hour as employees per [Salary.com](https://www.salary.com/research/salary/listing/competitive-intelligence-analyst-salary), external consultants command $150-300/hour (as of 2026), putting equivalent scope at $6,000–$18,000 over 40–60 hours.
 
 </details>
 
@@ -90,7 +90,7 @@ Solo founders and small teams who cannot dedicate a full-time analyst to trackin
       "name": "How long does AI competitive analysis take?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "The full competitive intelligence report covering 17 competitors with overlap matrices, battlecards, pricing matrix, and content strategy was generated in a single session. A competitive intelligence consultant charges $6,000–$18,000 for equivalent scope over 40–60 hours."
+        "text": "The full competitive intelligence report covering 17 competitors with overlap matrices, battlecards, pricing matrix, and content strategy was generated in a single session. While CI analysts earn approximately $56/hour as employees per Salary.com, external consultants command $150-300/hour (as of 2026), putting equivalent scope at $6,000–$18,000 over 40–60 hours."
       }
     },
     {

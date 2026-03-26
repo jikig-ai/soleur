@@ -42,7 +42,7 @@ Each document addresses dual-jurisdiction (French governing law with mandatory-l
 
 ## The Cost Comparison
 
-A technology lawyer in France or the US charges EUR 300-500/hour for SaaS legal document drafting. A full legal compliance suite covering 9 documents -- with cross-document consistency, dual-jurisdiction coverage, and regulatory benchmarking -- typically runs 30-50 billable hours. That puts the cost at EUR 9,000-25,000 and 3-6 weeks of elapsed time. A legal startup package from a boutique firm starts around EUR 5,000 for a basic set without CLAs or regulatory benchmarking. The AI-generated suite was produced across several sessions over 2 weeks, with multiple audit and revision cycles included.
+According to [Robert Half's 2026 Legal Salary Guide](https://www.roberthalf.com/us/en/insights/salary-guide/legal), senior technology lawyers in France or the US command EUR 300-500/hour for SaaS legal document drafting (as of 2026). A full legal compliance suite covering 9 documents -- with cross-document consistency, dual-jurisdiction coverage, and regulatory benchmarking -- typically runs 30-50 billable hours. That puts the cost at EUR 9,000-25,000 and 3-6 weeks of elapsed time. A legal startup package from a boutique firm starts around EUR 5,000 for a basic set without CLAs or regulatory benchmarking. The AI-generated suite was produced across several sessions over 2 weeks, with multiple audit and revision cycles included.
 
 ## The Compound Effect
 
@@ -60,7 +60,7 @@ Yes. Soleur's legal domain agents produce Terms & Conditions, Privacy Policies, 
 <details>
 <summary>How long does AI legal document generation take?</summary>
 
-Nine legal documents totaling 17,761 words were produced across several sessions over two weeks, including multiple audit and revision cycles. A technology lawyer charges EUR 9,000–25,000 for equivalent scope over 30–50 billable hours.
+Nine legal documents totaling 17,761 words were produced across several sessions over two weeks, including multiple audit and revision cycles. According to [Robert Half's 2026 Legal Salary Guide](https://www.roberthalf.com/us/en/insights/salary-guide/legal), technology lawyers charge EUR 300-500/hour (as of 2026), putting equivalent scope at EUR 9,000–25,000 over 30–50 billable hours.
 
 </details>
 
@@ -89,7 +89,7 @@ Solo founders and small teams who need a full legal compliance suite without the
       "name": "How long does AI legal document generation take?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Nine legal documents totaling 17,761 words were produced across several sessions over two weeks, including multiple audit and revision cycles. A technology lawyer charges EUR 9,000–25,000 for equivalent scope over 30–50 billable hours."
+        "text": "Nine legal documents totaling 17,761 words were produced across several sessions over two weeks, including multiple audit and revision cycles. According to Robert Half's 2026 Legal Salary Guide, technology lawyers charge EUR 300-500/hour (as of 2026), putting equivalent scope at EUR 9,000–25,000 over 30–50 billable hours."
       }
     },
     {
