@@ -178,6 +178,42 @@ Ship Checklist for [branch name]:
 - [ ] CI checks pass
 ```
 
+## Phase 5.5: Pre-Ship Domain Review (conditional)
+
+Domain leaders are consulted at brainstorm time but not at ship time. The actual deliverables may have implications the brainstorm couldn't predict. This phase runs two conditional gates in parallel.
+
+### CMO Content-Opportunity Gate
+
+**Trigger:** PR touches files in `knowledge-base/product/research/`, `knowledge-base/marketing/`, or adds new workflow patterns (new AGENTS.md rules, new skill phases). Skip for code-only PRs, bug fixes, and pure infrastructure changes.
+
+**Detection:** Run `git diff --name-only origin/main...HEAD` and check if any path matches the trigger patterns.
+
+**If triggered:**
+
+1. Spawn the CMO agent with a pre-ship content assessment prompt: "Assess content and distribution opportunities from this PR. What was produced, what data points are content-worthy, which channels should be used, and what's the recommended timing (ship with PR or schedule for later)?"
+2. Present the CMO's recommendations to the user.
+3. **Interactive mode:** Ask "Create content now, schedule for later, or skip?" Options: Create now (invoke content-writer/social-distribute), Schedule (create a GitHub issue with content brief), Skip.
+4. **Headless mode:** Auto-create a GitHub issue with the CMO's content brief for later action. Do not block the ship.
+
+**Why:** In #1173, a research sprint produced a novel methodology with compelling data, but no content was planned because the CMO was only consulted when the scope was "should we explore this?" — not when the actual content existed.
+
+### COO Expense-Tracking Gate
+
+**Trigger:** The PR or session involved signing up for new services, provisioning new tools, subscribing to APIs, or using paid external resources during implementation. Also triggers if the diff adds new entries to infrastructure configs, Terraform files, or references new SaaS tools not already in `knowledge-base/operations/expenses.md`.
+
+**Detection:** Scan the session for: account creation actions (Playwright flows, CLI signups), new API key generation, new tool installations, new Terraform resources, or references to services not already tracked in the expense ledger. Also check `git diff origin/main...HEAD` for new domain names, new provider references in `.tf` files, or new environment variables suggesting new service integrations.
+
+**If triggered:**
+
+1. Spawn the COO agent with an expense-tracking prompt: "Review this PR for new tools, services, or subscriptions introduced during implementation. Check each against `knowledge-base/operations/expenses.md`. For any not already tracked, provide the service name, estimated cost, billing cycle, and category for the expense ledger."
+2. Apply the COO's recommended updates to `expenses.md`.
+3. **Interactive mode:** Present additions for confirmation before editing.
+4. **Headless mode:** Auto-apply and commit.
+
+**If not triggered:** Skip silently.
+
+**Why:** New tools and subscriptions adopted during implementation often go unrecorded in the expense ledger because they feel incidental to the engineering work. The COO gate ensures every new cost is tracked at ship time, not discovered months later during a financial review.
+
 ## Phase 6: Push and Create PR
 
 ### Detect Associated Issue
