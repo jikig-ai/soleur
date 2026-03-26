@@ -420,3 +420,5 @@ For most features: tests + linting + following patterns is sufficient.
 - **80% done syndrome** - Finish the feature, don't move on early
 - **Over-reviewing simple changes** - Save reviewer agents for complex work
 - **Silent plan omissions** - When dropping a conditional plan item, document why in the commit or plan
+- **Research without cascade** - When a plan produces recommendations targeting specific artifacts (interview guides, brand guide, pricing strategy, etc.), apply those recommendations to the source artifacts in the same session. Research findings that sit in a brief without updating the documents they target are dead knowledge. After completing the research brief, scan it for actionable changes to existing files and apply them before moving to Phase 4.
+- **Missing founder summary** - After completing research, analysis, or audit work, present a concise summary of key findings and all changes made to existing artifacts. The founder needs to review what changed, not just what was discovered. Format: findings table + files changed table.
