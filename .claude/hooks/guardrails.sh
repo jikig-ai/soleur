@@ -116,7 +116,7 @@ fi
 
 # Guard 5: Block gh issue create without --milestone
 if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create'; then
-  if ! echo "$COMMAND" | grep -qE '--milestone'; then
+  if ! echo "$COMMAND" | grep -qF -- '--milestone'; then
     jq -n '{
       hookSpecificOutput: {
         permissionDecision: "deny",

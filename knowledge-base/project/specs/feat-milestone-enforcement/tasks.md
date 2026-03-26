@@ -62,4 +62,4 @@
 
 - [x] 8.1 Run `gh issue list --state open --json number,milestone --jq '[.[] | select(.milestone == null)] | length'` to confirm zero un-milestoned issues
 - [x] 8.2 Grep all `gh issue create` invocations in active code to confirm all include `--milestone`
-- [ ] 8.3 Verify Guard 5 is active by attempting `gh issue create` without `--milestone` in the worktree shell
+- [x] 8.3 Verify Guard 5 is active by attempting `gh issue create` without `--milestone` in the worktree shell
