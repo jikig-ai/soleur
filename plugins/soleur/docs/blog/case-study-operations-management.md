@@ -35,6 +35,7 @@ The operational data lives in two structured files:
 | Domain registration (one-time) | $140.00 | domain |
 
 **Domain Inventory** -- Domain inventory with DNS records and security configuration:
+
 - 4 A records (GitHub Pages IPs), 1 CNAME (www redirect), 1 TXT (domain verification)
 - Security: Full Strict SSL, HTTPS enforced, TLS 1.2 minimum, HSTS with preload, nosniff headers
 
@@ -52,7 +53,7 @@ The operations domain produced:
 
 ## The Cost Comparison
 
-A fractional COO or operations consultant for an early-stage startup charges $100-250/hour. Setting up expense tracking, evaluating hosting providers, configuring DNS and security, selecting analytics tools, and documenting infrastructure decisions is typically a 15-25 hour engagement: $1,500-6,250. An IT services firm charges $2,000-5,000 for DNS configuration, SSL setup, and security hardening. The ongoing value is in the structured documentation: when the founder returns to operations after weeks of engineering work, the institutional record is there. No context reconstruction required.
+According to [Chore's fractional COO guide](https://www.hirechore.com/startups/fractional-coo-101), a fractional COO or operations consultant for an early-stage startup charges $100-250/hour (as of 2026). Setting up expense tracking, evaluating hosting providers, configuring DNS and security, selecting analytics tools, and documenting infrastructure decisions is typically a 15-25 hour engagement: $1,500-6,250. An IT services firm charges $2,000-5,000 for DNS configuration, SSL setup, and security hardening. The ongoing value is in the structured documentation: when the founder returns to operations after weeks of engineering work, the institutional record is there. No context reconstruction required.
 
 ## The Compound Effect
 
@@ -70,7 +71,7 @@ Yes. Soleur's operations domain includes a COO domain leader and specialist agen
 <details>
 <summary>How long does setting up AI operations management take?</summary>
 
-The full operations function — expense tracking, hosting evaluation, DNS configuration, analytics selection, and security hardening — was built across several sessions. An operations consultant charges $1,500–$6,250 for equivalent scope over 15–25 hours.
+The full operations function — expense tracking, hosting evaluation, DNS configuration, analytics selection, and security hardening — was built across several sessions. According to [Chore's fractional COO guide](https://www.hirechore.com/startups/fractional-coo-101), operations consultants charge $100-250/hour (as of 2026), putting equivalent scope at $1,500–$6,250 over 15–25 hours.
 
 </details>
 
@@ -99,7 +100,7 @@ Solo founders who handle operational logistics alongside engineering. The platfo
       "name": "How long does setting up AI operations management take?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "The full operations function — expense tracking, hosting evaluation, DNS configuration, analytics selection, and security hardening — was built across several sessions. An operations consultant charges $1,500–$6,250 for equivalent scope over 15–25 hours."
+        "text": "The full operations function — expense tracking, hosting evaluation, DNS configuration, analytics selection, and security hardening — was built across several sessions. According to Chore's fractional COO guide, operations consultants charge $100-250/hour (as of 2026), putting equivalent scope at $1,500–$6,250 over 15–25 hours."
       }
     },
     {
