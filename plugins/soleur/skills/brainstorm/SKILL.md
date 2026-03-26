@@ -89,6 +89,8 @@ Assess whether the feature description has implications for specific business do
 
 If the feature description references an external platform, marketplace, or service, **WebFetch the URL first** before launching any research agents. Classify by: (1) self-service or waitlist? (2) discovery surface or procurement layer? (3) does it accept the product category? (4) what are the per-plan quantitative limits? (number of tasks, storage, API calls, concurrent sessions) (5) does the limit cover the migration/feature scope? This 30-second gate prevents spawning agents that analyze a false premise. **Why:** In #1094, a 9-workflow migration plan was built before discovering the Max plan allows only 3 Cloud scheduled tasks — a limit only discoverable by attempting to create the 4th task or checking via the `RemoteTrigger` API.
 
+**Sharp edge:** If WebFetch returns CSS-only or HTML-structure-only content (no article text), the page is JS-rendered (SPA/CSR). Do not retry the same URL. Immediately fall back to WebSearch + third-party analysis articles (tech blogs often provide better-structured summaries). Official documentation pages (help centers, developer docs) are usually static/SSR and WebFetch-friendly.
+
 #### 1.1 Research (Context Gathering)
 
 Run these agents **in parallel** to gather context before dialogue:

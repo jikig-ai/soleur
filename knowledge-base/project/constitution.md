@@ -177,6 +177,7 @@ When a PR adds external services (terraform resources, account signups, API key 
 - Verify documentation against implementation reality before trusting it; treat docs about "what exists" as hypotheses to verify
 
 - `project/` documents what the project does; `project/constitution.md` documents how to work on it
+- Background domain assessments must not block brainstorm dialogue -- weave in results if they arrive during the session; note as "pending" in the brainstorm document if they don't; the primary brainstorm flow (user questions, approach selection, capture) takes priority over waiting for async agents
 - Component documentation in `project/components/` should follow the component template from spec-templates skill
 
 - Use convention over configuration for paths: `feat-<name>` maps to `knowledge-base/project/specs/feat-<name>/` and `.worktrees/feat-<name>/`
