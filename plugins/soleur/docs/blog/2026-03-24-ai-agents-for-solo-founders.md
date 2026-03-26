@@ -10,7 +10,7 @@ tags:
   - company-as-a-service
 ---
 
-Most solo founders discover AI tools the same way: a demo of something that writes code, generates copy, or drafts a legal template. It saves an hour. Then two. Then the plateau arrives.
+Solo-founded startups rose from 23.7% to 36.3% of all new ventures between 2019 and the first half of 2025, according to the [Carta Solo Founders Report](https://carta.com/data/solo-founders-report/). The reason is not courage. It is infrastructure. AI tools now handle work that used to require a team — and most solo founders discover them the same way: a demo of something that writes code, generates copy, or drafts a legal template. It saves an hour. Then two. Then the plateau arrives.
 
 The problem is not the tools. The problem is that running a company requires eight distinct domains — engineering, marketing, legal, finance, operations, product, sales, and support — and a collection of single-function tools never adds up to a working organization.
 
@@ -36,7 +36,7 @@ Four properties define a true agent:
 
 ## The Eight Domains of a Company
 
-Running a company requires expertise across eight distinct domains. No founder — and no AI tool — is competent in all eight from day one. The question is how you close the gaps.
+Running a company requires expertise across eight distinct domains. The [Bureau of Labor Statistics](https://www.bls.gov/ooh/management/top-executives.htm) describes the core duties of top executives as planning strategies, coordinating activities, and communicating with stakeholders — functions that span every department. No founder — and no AI tool — is competent in all eight from day one. The question is how you close the gaps.
 
 **Engineering** builds and ships the product. Code review, architecture decisions, infrastructure provisioning, test coverage, release management.
 
@@ -58,9 +58,9 @@ A solo founder with a collection of coding tools has handled one domain. The oth
 
 ## Why Point Solutions Fail
 
-The promise of solopreneur AI tools is speed. A code generator writes code faster. A copywriting tool drafts faster. A contract template saves legal fees. Each tool delivers on its narrow promise.
+The promise of solopreneur AI tools is speed. A code generator writes code faster. A copywriting tool drafts faster. A contract template saves legal fees. Each tool delivers on its narrow promise — and investors have noticed. Cursor reached [$1 billion in annual recurring revenue](https://www.cnbc.com/2026/02/24/cursor-announces-major-update-as-ai-coding-agent-battle-heats-up.html) proving that founders will pay for AI that accelerates a single domain.
 
-What they cannot deliver is coordination.
+What these tools cannot deliver is coordination.
 
 Legal cannot reference what marketing published. Marketing cannot reflect what engineering decided. Engineering cannot anticipate what compliance requires. Each domain operates in isolation, which means the same decision gets made — and sometimes reversed — across multiple contexts without any of them knowing.
 
@@ -94,13 +94,15 @@ For a solo founder, compound knowledge solves the coordination problem that poin
 
 Over time, the AI organization does not just remember more. It makes better decisions, catches more edge cases, and requires less founder intervention. The founder's job shifts from doing and coordinating to deciding and directing.
 
+Dario Amodei, CEO of Anthropic, [predicted](https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609) a 70-80% probability that a one-person billion-dollar company would emerge by 2026. That prediction is not about better tools. It is about compound knowledge — the only mechanism that turns a solo founder into an organization that improves structurally with every task.
+
 This is why [agentic engineering]({{ site.url }}/blog/vibe-coding-vs-agentic-engineering/) matters more for solo founders than for anyone else. A system that gets smarter with each task is not a convenience — it is the only path to building at company scale without a company.
 
 ## What a Full AI Organization Looks Like
 
-[Company-as-a-Service]({{ site.url }}/blog/what-is-company-as-a-service/) is the model where a single AI organization covers all eight domains with agents that share a compounding knowledge base.
+[Company-as-a-Service]({{ site.url }}/blog/what-is-company-as-a-service/) is the model where a single AI organization covers all eight domains with agents that share a compounding knowledge base. The concept is no longer theoretical. Sam Altman, CEO of OpenAI, described a [betting pool among tech CEOs](https://fortune.com/2024/02/04/sam-altman-one-person-unicorn-silicon-valley-founder-myth/) for "the first year that there is a one-person billion-dollar company." [TechCrunch reported](https://techcrunch.com/2025/02/01/ai-agents-could-birth-the-first-one-person-unicorn-but-at-what-societal-cost/) that AI agents could birth the first one-person unicorn — but only if they extend beyond engineering into every function a company needs. Alibaba Group President J. Michael Evans went further, telling [Fortune](https://fortune.com/2026/03/23/one-person-unicorn-agentic-ai-kuo-zhang/) that agentic AI is making the one-person unicorn a near-term reality.
 
-In practice, this means:
+In practice, a full AI organization means:
 
 - An engineering review that checks code against the product spec, the legal constraints, and the compliance requirements — simultaneously, without the founder acting as the relay
 - A marketing brief that automatically reflects the latest competitive intelligence from the product and engineering teams
