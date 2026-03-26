@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-22
-last_reviewed: 2026-03-22
+last_updated: 2026-03-26
+last_reviewed: 2026-03-26
 review_cadence: quarterly
 owner: CPO
 depends_on:
@@ -203,6 +203,7 @@ When pricing launches, the page must frame the value correctly. Draft messaging:
 | **Freemium with domain gating** | Free engineering, paid non-engineering domains. | Fragments the experience. Violates the "integration IS the product" thesis. | Reject |
 | **One-time license** | Simple. No recurring obligation. | Does not fund ongoing development. Knowledge compounding needs ongoing infrastructure. | Reject |
 | **Donation / sponsorship** | Community goodwill. Open-source aligned. | Does not build a business. Incompatible with "billion-dollar company" thesis. | Reject |
+| **Outcome-based (per result)** | Aligns vendor/customer incentives -- vendor wins when customer wins. No CaaS competitor uses it, potential positioning wedge against Polsia. Matches investor demand for measurable value in the 2026 SaaS correction ($300B value destroyed, 3.6x multiples). Could function as a zero-risk trial mechanism for pre-revenue founders. | Soleur's value is cross-domain compounding knowledge, not discrete tasks -- Intercom's 99¢/resolved-chat model doesn't map. Most domains (finance, product, ops) produce advisory output where value accrues over time, not per execution. "Negative outcomes" (kill criteria that save 3 months of wasted work) have enormous value but no natural pricing unit. Synthetic research (2026-03-26) found: per-outcome pricing creates perverse incentives -- users ration usage and avoid cross-domain exploration, directly undermining the compounding moat. Unpredictability concern may trigger same Replit backlash as usage-based (shifts from "paid for nothing" to "paid more because I succeeded"). Hybrid variant ($29 base + per-outcome) triggers "paying twice" perception. BYOK model creates double-pay perception. 0/5 pricing gates passed -- no real data to validate. | Defer -- conceptually compelling but structurally mismatched with compounding knowledge value. Synthetic personas universally described outcome-based as a trial mechanism they'd abandon once they trusted the tool. Re-evaluate after P4 validation when real usage data reveals which outcomes are discrete and attributable. Consider outcome-based as a first-month trial alternative (replacing 14-day free trial) rather than a permanent tier. Hybrid model (base + outcome bonus) deserves separate evaluation at that time. See `knowledge-base/product/research/synthetic-research-brief.md` for full analysis. |
 
 ---
 
@@ -210,10 +211,10 @@ When pricing launches, the page must frame the value correctly. Draft messaging:
 
 1. **Complete PIVOT validation** (10 founders, problem interviews, guided onboarding)
 2. **Track which domains users engage with** -- confirms or refutes the multi-domain value hypothesis
-3. **Ask willingness-to-pay question** in post-onboarding interviews: "Would you pay $49/month for this? What would it need to deliver?"
+3. **Ask willingness-to-pay question** in post-onboarding interviews: "Would you pay $49/month for this? What would it need to deliver?" Use the synthetic research brief (`knowledge-base/product/research/synthetic-research-brief.md`) to inform question framing -- establish alternative costs before asking WTP, and test the outcome-based trial concept ("pay only for completed outcomes in month 1, then switch to $49/month flat").
 4. **Assess infrastructure requirements** for Pro tier (cloud sync complexity, hosting costs, security)
 5. **Revisit this document** when 4 of 5 pricing gates pass
 
 ---
 
-_Updated: 2026-03-22 (business validation delivery pivot annotation). Sources: competitive-intelligence.md (2026-03-22), business-validation.md (2026-03-22), brand-guide.md (2026-02-21)._
+_Updated: 2026-03-26 (added outcome-based pricing as 6th alternative, linked synthetic research brief for WTP interview prep). Sources: competitive-intelligence.md (2026-03-22), business-validation.md (2026-03-22), brand-guide.md (2026-02-21), synthetic-research-brief.md (2026-03-26)._
