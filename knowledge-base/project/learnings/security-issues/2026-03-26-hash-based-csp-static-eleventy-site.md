@@ -79,6 +79,22 @@ Hash-based CSP on static sites is fragile by design — any whitespace change to
 - **GNU-specific `grep -oP`** — consolidated all HTML parsing into Python for portability
 - **SKILL.md not updated** — added `validate-csp.sh` reference to seo-aeo skill
 
+## Cloudflare Bot Fight Mode Conflict (#1149)
+
+Cloudflare's Bot Fight Mode injects an inline `<script>` at the end of every HTML response with per-request tokens (`r`, `t` parameters). This script bootstraps `/cdn-cgi/challenge-platform/scripts/jsd/main.js` for client-side bot fingerprinting. Because the tokens change per request, the script's SHA-256 hash is unpredictable and will always be blocked by hash-based CSP.
+
+**Decision:** Accept as known limitation. The blocked script has no user-facing impact — Cloudflare's server-side bot protections (IP reputation, rate limiting, challenge pages) remain active. Weakening the CSP to accommodate a cosmetic console error would be a net security loss.
+
+**Why not migrate to HTTP header CSP?** Even with Cloudflare HTTP header CSP + nonces, community reports indicate Cloudflare sometimes fails to inject nonces into Bot Fight Mode scripts. The engineering effort (Terraform Transform Rule + Cloudflare Worker) is disproportionate and unreliable.
+
+**Key constraints:**
+
+- Cloudflare only parses nonces from CSP HTTP response headers, not `<meta>` tags
+- Bot Fight Mode's JavaScript Detections cannot be independently disabled (all-or-nothing toggle)
+- Bot Fight Mode cannot be scoped per-path on free/pro plans (only Super Bot Fight Mode supports WAF Skip actions)
+
+**Generalizable pattern:** CDN-injected scripts (bot detection, analytics, A/B testing) will be blocked by strict hash-based CSP on static sites. This is usually correct behavior — the CSP's purpose is XSS protection, not CDN feature enablement. Accept the console error and document it.
+
 ## See Also
 
 - [Nonce-based CSP for Next.js middleware](../2026-03-20-nonce-based-csp-nextjs-middleware.md) — nonce approach for server-rendered sites (contrast with hash approach for static sites)
