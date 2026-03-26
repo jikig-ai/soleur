@@ -8,7 +8,7 @@
 2. **Handle issue:**
    - Parse feature_description for existing issue reference (`#N` pattern)
    - If found: validate issue state with `gh issue view`. If OPEN, use it. If CLOSED or not found, create a new one.
-   - If not found: create a new issue with `gh issue create --title "feat: <Topic>" --body "..."`
+   - If not found: create a new issue with `gh issue create --title "feat: <Topic>" --milestone "Post-MVP / Later" --body "..."`. After creation, read `knowledge-base/product/roadmap.md` and update the milestone if a more specific phase applies.
    - Update the issue body with artifact links (brand guide path, branch name)
    - Do NOT generate spec.md -- brand workshops produce a brand guide, not a spec
 

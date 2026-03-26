@@ -145,7 +145,8 @@ _Auto-created by the [scheduled-strategy-review workflow](${repo_url}/actions/wo
   if gh issue create \
     --title "$expected_title" \
     --body "$issue_body" \
-    --label "$LABEL"; then
+    --label "$LABEL" \
+    --milestone "Post-MVP / Later"; then
     echo "Created issue: $expected_title"
     created=$((created + 1))
   else

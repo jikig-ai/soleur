@@ -168,7 +168,7 @@ If any surface is missing, output a warning:
 ```text
 [WARNING] Platform <platform-name> is missing from: <list-of-files>.
 These files need updating before the integration is complete.
-Consider filing: gh issue create --title 'feat(docs): add <platform-name> to website and brand guide'
+Consider filing: gh issue create --title 'feat(docs): add <platform-name> to website and brand guide' --milestone 'Post-MVP / Later'
 ```
 
 This check does not block provisioning -- it is advisory only. The ops-provisioner agent has a broader version of this check for non-community tools.

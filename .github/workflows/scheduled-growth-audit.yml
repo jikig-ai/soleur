@@ -62,6 +62,10 @@ jobs:
             Do NOT push directly to main.
             Use the PR-based commit pattern in the MANDATORY FINAL STEP.
 
+            MILESTONE RULE: Every gh issue create command must include --milestone.
+            Use --milestone "Post-MVP / Later" for operational/maintenance issues.
+            For feature issues, read knowledge-base/product/roadmap.md for available milestones and assign the one matching the relevant phase.
+
             Today's date is $(date +%Y-%m-%d). Run a full growth audit of https://soleur.ai.
 
             ## Step 1: Content Audit

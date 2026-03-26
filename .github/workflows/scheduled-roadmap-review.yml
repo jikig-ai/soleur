@@ -56,6 +56,10 @@ jobs:
                - Is the issue in the correct milestone?
             6. Flag any inconsistencies found.
 
+            MILESTONE RULE: Every gh issue create command must include --milestone.
+            Use --milestone "Post-MVP / Later" for operational/maintenance issues.
+            For feature issues, read knowledge-base/product/roadmap.md for available milestones and assign the one matching the relevant phase.
+
             After your analysis, create a GitHub issue summarizing your findings.
             Use the title format: [Scheduled] Monthly Roadmap Review - YYYY-MM-DD
             Add the label: scheduled-roadmap-review
