@@ -234,7 +234,7 @@ Ensure the brainstorms directory exists before writing.
    gh issue create --title "feat: <Feature Title>" --milestone "Post-MVP / Later" --body "..."
    ```
 
-   After creation, if `knowledge-base/product/roadmap.md` exists, read it to determine the correct milestone phase for this feature. If a more specific milestone is appropriate, update: `gh issue edit <number> --milestone '<correct milestone title>'`.
+   After creation, read `knowledge-base/product/roadmap.md` and update the milestone if a more specific phase applies: `gh issue edit <number> --milestone '<phase>'`.
 
    Include in the issue body:
    - Summary of what's being built (from brainstorm)

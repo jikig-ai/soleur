@@ -476,7 +476,7 @@ When user selects "Create Issue", detect their project tracker from CLAUDE.md:
    gh issue create --title "<type>: <title>" --body-file <plan_path> --milestone "Post-MVP / Later"
    ```
 
-   After creation, if `knowledge-base/product/roadmap.md` exists, read it to determine the correct milestone phase for this feature. If a more specific milestone is appropriate, update: `gh issue edit <number> --milestone '<correct milestone title>'`.
+   After creation, read `knowledge-base/product/roadmap.md` and update the milestone if a more specific phase applies: `gh issue edit <number> --milestone '<phase>'`.
 
 3. **If Linear:**
 

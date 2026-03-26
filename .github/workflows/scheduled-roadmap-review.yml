@@ -58,8 +58,7 @@ jobs:
 
             MILESTONE RULE: Every gh issue create command must include --milestone.
             Use --milestone "Post-MVP / Later" for operational/maintenance issues.
-            For feature issues, read knowledge-base/product/roadmap.md and assign the milestone matching the relevant phase.
-            Available milestones: "Phase 1: Close the Loop (Mobile-First, PWA)", "Phase 2: Secure for Beta", "Phase 3: Make it Sticky", "Phase 4: Validate + Scale", "Phase 5: Desktop Native App (Browser Automation)", "Post-MVP / Later".
+            For feature issues, read knowledge-base/product/roadmap.md for available milestones and assign the one matching the relevant phase.
 
             After your analysis, create a GitHub issue summarizing your findings.
             Use the title format: [Scheduled] Monthly Roadmap Review - YYYY-MM-DD
