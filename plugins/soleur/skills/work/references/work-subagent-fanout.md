@@ -13,8 +13,10 @@ This uses more tokens but completes faster. Run in parallel?"
 ## Step B2: Group and spawn subagents
 
 Group independent tasks into clusters (max 5 groups). Each group gets one Task
-general-purpose agent. Spawn all groups in parallel using a single message with
-multiple Task tool calls:
+general-purpose agent. Minimize same-file assignments across groups — if two tasks
+edit the same file (especially CSS with `@layer` blocks), assign them to the same
+group to avoid placement conflicts. Spawn all groups in parallel using a single
+message with multiple Task tool calls:
 
 ```text
 Task general-purpose: "You are executing part of a work plan.
