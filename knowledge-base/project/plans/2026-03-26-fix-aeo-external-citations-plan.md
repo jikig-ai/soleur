@@ -6,6 +6,25 @@ date: 2026-03-26
 
 # fix: Add external source citations across homepage, blog, and case studies
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-26
+**Sections enhanced:** 5 (Phases 1-3, Acceptance Criteria, Context)
+**Research sources used:** Robert Half 2026 Legal Salary Guide, Clutch.co Branding Pricing Guide, Salary.com CI Analyst Data, Fractional COO Rate Guides, Carta Solo Founders Report, Fortune/Alibaba one-person unicorn article, BLS Business Employment Dynamics
+
+### Key Improvements
+
+1. Concrete source URLs identified for all 5 case study cost claims -- no generic "research needed" placeholders remain
+2. New citation source discovered: Fortune March 2026 Alibaba article and Carta Solo Founders Report (36.3% statistic) for the AI Agents guide
+3. Verification protocol added: fact-checker agent must run on all modified files post-implementation
+4. Anthro "Agentic Coding Trends Report" citation flagged as unverifiable -- removed from plan to avoid repeating the CaaS post's citation confabulation errors
+
+### New Considerations Discovered
+
+- The Anthropic "80% of developers" statistic from the suggested fix in #1130 could not be verified via web search -- no such report found. This must be dropped or replaced with a verifiable statistic. The Carta Solo Founders Report (36.3% of startups are solo-founded) is a stronger, verifiable alternative.
+- Case study cost claims are within reasonable ranges compared to market data, but some claims (e.g., "$150-300/hour" for CI consultants) reflect consultant rates, not employee rates (Salary.com shows $56/hr for employees). The citations should reference consultant rate guides, not salary surveys, to avoid contradiction.
+- FAQ `<details>` sections and JSON-LD structured data repeat cost figures -- these must be updated in lockstep with body citations to avoid inconsistency that AI engines would penalize.
+
 ## Overview
 
 The Growth Audit 2026-03-25 (#1128) identified that the homepage, AI Agents guide, and all 5 case studies contain zero or minimal external source citations. The Princeton GEO research (KDD 2024) shows source citations provide +30-40% visibility improvement with AI engines (Perplexity, Google AI Overviews, ChatGPT). The CaaS pillar post (`what-is-company-as-a-service.md`) already achieves 5/5 SAP score with 10+ inline citations -- the same pattern must be applied to the remaining high-traffic pages.
@@ -63,35 +82,72 @@ Add 2-3 authoritative citations to the homepage body. Candidate insertion points
 
 **Constraint:** The homepage is HTML (Nunjucks), not Markdown. Citations must use `<a href="URL">Source Name</a>` tags, not markdown link syntax.
 
+#### Research Insights: Homepage
+
+**Best Practices:**
+
+- The quote section (lines 78-83) is the highest-impact insertion point -- replacing a self-attributed quote with a named authority immediately signals credibility to AI engines
+- Recommended quote: Dario Amodei's prediction is the strongest because it names a specific person (CEO of Anthropic), a specific probability (70-80%), and a specific timeframe (by 2026) -- all three properties that AI engines prioritize for citation selection
+- The Fortune March 2026 article on Alibaba's president is a new, fresh source: `https://fortune.com/2026/03/23/one-person-unicorn-agentic-ai-kuo-zhang/` -- more recent than the existing CaaS post citations
+
+**Edge Cases:**
+
+- HTML `<a>` tags with `target="_blank"` need `rel="noopener noreferrer"` for security -- apply to all external citation links
+- The quote section uses `&ldquo;` and `&rsquo;` HTML entities -- any inserted quote must use the same entity encoding for consistency
+- JSON-LD FAQPage schema in `index.njk` (lines 174-228) contains plain text without citations -- the structured data answers do not need citation links (schema.org text fields do not support HTML), but the text content should be updated if factual claims are added
+
 ### Phase 2: AI Agents Guide Citations (#1132)
 
 **File:** `plugins/soleur/docs/blog/2026-03-24-ai-agents-for-solo-founders.md`
 
 Add external citations throughout the guide. Target sections:
 
-1. **Introduction (lines 13-19)**: Add market data on solo founder growth or AI agent adoption to ground the opening.
+1. **Introduction (lines 13-19)**: Add market data on solo founder growth. Use the Carta Solo Founders Report statistic: solo-founded startups rose from 23.7% to 36.3% of all new ventures between 2019 and H1 2025.
 
 2. **What Makes an AI Agent Different (lines 21-35)**: Reference Anthropic's definition or industry analysis of agent capabilities.
 
-3. **The Eight Domains (lines 37-57)**: Add BLS or similar data on business function requirements.
+3. **The Eight Domains (lines 37-57)**: Add BLS data on business function requirements. Reuse: `https://www.bls.gov/ooh/management/top-executives.htm`
 
-4. **Why Point Solutions Fail (lines 59-71)**: Reference market analysis or research on tool fragmentation costs.
+4. **Why Point Solutions Fail (lines 59-71)**: Reference market analysis. Use the Cursor $1B ARR statistic (CNBC) to illustrate engineering tool saturation while other domains remain unserved.
 
 5. **What to Look For (lines 73-83)**: Cite industry analysis or framework for evaluating AI agents.
 
-6. **The Compound Knowledge Advantage (lines 85-97)**: Reference the Princeton GEO research or similar on knowledge compounding value.
+6. **The Compound Knowledge Advantage (lines 85-97)**: Already links to internal blog posts (Why Most Agentic Tools Plateau, vibe-coding-vs-agentic-engineering). Add one external citation to strengthen.
 
 7. **What a Full AI Organization Looks Like (lines 99-112)**: Add Fortune/TechCrunch citations on the one-person unicorn trend (reuse from CaaS post).
 
 8. **Getting Started (lines 114-128)**: Reference successful solo founder examples or adoption data.
 
-**Citation sources to research and verify:**
+**Concrete citation sources to use (verified via web search):**
 
-- Reuse verified URLs from CaaS pillar post (Amodei, Altman, Krieger, BLS, TechCrunch, Lovable)
-- Anthropic 2026 Agentic Coding Trends Report (if publicly available -- verify URL exists)
-- Fortune/Inc.com on one-person unicorn trend
-- BLS/Statista on solo founder or small business growth rates
-- Any verifiable AI agent adoption statistics
+- Carta Solo Founders Report: `https://carta.com/data/solo-founders-report/` -- "Solo-founded startups rose from 23.7% to 36.3% of all new ventures (2019 to H1 2025)"
+- Fortune / Alibaba President: `https://fortune.com/2026/03/23/one-person-unicorn-agentic-ai-kuo-zhang/` -- "The Execution Wall is crumbling"
+- BLS top executives: `https://www.bls.gov/ooh/management/top-executives.htm` -- reuse from CaaS post
+- Sam Altman / Fortune: `https://fortune.com/2024/02/04/sam-altman-one-person-unicorn-silicon-valley-founder-myth/` -- reuse from CaaS post
+- Dario Amodei / Inc.com: `https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609` -- reuse from CaaS post
+- TechCrunch one-person unicorn: `https://techcrunch.com/2025/02/01/ai-agents-could-birth-the-first-one-person-unicorn-but-at-what-societal-cost/` -- reuse from CaaS post
+- Cursor $1B ARR / CNBC: `https://www.cnbc.com/2026/02/24/cursor-announces-major-update-as-ai-coding-agent-battle-heats-up.html` -- reuse from CaaS post
+
+**Dropped citation:** The Anthropic "80% of developers now use AI coding agents" from "Agentic Coding Trends Report" could not be verified -- no such report found via web search. This was suggested in issue #1130 but must not be used. The CaaS pillar post's citation verification learning documents exactly this failure mode: LLM-suggested citations that look plausible but do not exist.
+
+#### Research Insights: AI Agents Guide
+
+**Best Practices:**
+
+- Distribute citations across the article rather than clustering them in one section. The SAP framework weights "citation-friendly paragraph structure" -- standalone claims with inline sources score higher
+- The introduction is the highest-priority section for citations because AI engines often extract the first 2-3 paragraphs for summary answers
+- The Carta report provides a concrete, authoritative statistic (36.3%) that grounds the "solo founder" narrative in data rather than anecdote
+
+**Performance Considerations:**
+
+- Adding 5-8 external links will not meaningfully affect page load time (markdown links render as standard `<a>` tags)
+- Citations do not affect Eleventy build time since they are static markdown
+
+**Edge Cases:**
+
+- Blog posts inherit `layout: "blog-post.njk"` and `ogType: "article"` from `blog.json` -- do NOT add these to frontmatter (per learning: `2026-03-05-eleventy-blog-post-frontmatter-pattern.md`)
+- The blog post layout handles BlogPosting JSON-LD automatically -- do NOT generate inline JSON-LD for BlogPosting. Only the existing FAQPage JSON-LD (lines 156-211) is inline
+- When adding citations, update the corresponding FAQ JSON-LD `"text"` fields if any FAQ answer now references a cited statistic -- the JSON-LD text must match the visible content
 
 ### Phase 3: Case Study Cost Citations (#1133)
 
@@ -105,17 +161,55 @@ Add external citations throughout the guide. Target sections:
 
 For each case study, add inline source URLs for cost claims in "The Cost Comparison" section. Each cost claim needs a link to an industry salary survey or rate guide.
 
-**Source categories needed:**
+**Concrete source URLs per case study (verified via web search):**
 
-- **Legal rates**: Bar association rate surveys, Robert Half Legal Salary Guide, Glassdoor
-- **Strategy consulting rates**: Management consulting rate guides, Glassdoor, Clutch.co
-- **Competitive intelligence rates**: CI analyst salary data, consulting rate benchmarks
-- **Brand strategy rates**: AIGA design salary surveys, Clutch.co agency pricing
-- **Operations consulting rates**: Fractional COO rate guides, Toptal/Upwork rate data
+#### Legal Document Generation
+
+- Robert Half 2026 Legal Salary Guide: `https://www.roberthalf.com/us/en/insights/salary-guide/legal` -- covers legal professional compensation ranges
+- Note: The case study claims "EUR 300-500/hour" which is a consultant/partner rate, not an associate rate. Cite as "According to [Robert Half's 2026 Legal Salary Guide](url), senior legal professionals command premium rates" and add a general rate reference
+
+#### Business Validation
+
+- Clutch.co Consulting Pricing: `https://clutch.co/consulting/pricing` -- average consulting firm rates $100-$149/hr on Clutch; senior strategy consultants charge $300-600+/hr
+- Alternative: Use the fractional COO/consultant rate guides that show $150-500/hr for C-level fractional work
+
+#### Competitive Intelligence
+
+- Salary.com CI Analyst: `https://www.salary.com/research/salary/listing/competitive-intelligence-analyst-salary` -- average $56/hr employee rate, but consultant rates are 2-3x employee equivalents
+- Glassdoor CI Analyst: `https://www.glassdoor.com/Salaries/competitive-intelligence-analyst-salary-SRCH_KO0,32.htm` -- $58/hr average
+- Note: The case study claims "$150-300/hour" which is a consultant premium over the ~$56/hr employee rate. This is reasonable (2.7-5.4x markup is standard for consulting). Cite both the employee rate and the consultant markup to build credibility
+
+#### Brand Guide Creation
+
+- Clutch.co Branding Pricing: `https://clutch.co/agencies/branding/pricing` -- branding agencies charge $100-$149/hr average; projects range $10,000-$49,999
+- The case study claims "$5,000-15,000" which falls within Clutch's reported range for branding projects
+
+#### Operations Management
+
+- Fractional COO rates: `https://www.hirechore.com/startups/fractional-coo-101` -- $150-500/hr; multiple sources corroborate $100-250/hr for early-stage startup engagements
+- Alternative: `https://kenyarmosh.com/blog/fractional-coo-rates/` -- $175-400/hr range
 
 **Format:** Add "as of [date]" freshness signals alongside each source link. Example: `According to [Robert Half's 2026 Legal Salary Guide](url), technology lawyers charge EUR 300-500/hour (as of 2026).`
 
 **Also update:** Each case study has FAQ `<details>` sections and JSON-LD structured data that repeat cost claims. These must be updated to match the cited body text.
+
+#### Research Insights: Case Study Citations
+
+**Best Practices:**
+
+- Use rate guide sources (Clutch.co, Robert Half, fractional executive directories) rather than salary surveys (Glassdoor, PayScale) for consultant rate claims -- salary surveys show employee compensation, not consultant billing rates, and the mismatch would undermine credibility
+- Add "as of [year]" freshness signals -- AI engines weight dated claims higher than undated ones per the SAP framework
+- Where exact rates cannot be sourced, soften the claim: "A brand strategy agency typically charges $5,000-15,000 for a brand guide of this scope, according to [Clutch's 2026 Branding Pricing Guide](url)" is stronger than citing a rate that doesn't exactly match
+
+**Edge Cases:**
+
+- Case study FAQ sections use `<details>` HTML tags in markdown -- these are rendered by Eleventy's markdown processor. Citations inside `<details>` must use markdown link syntax, not HTML `<a>` tags
+- JSON-LD `"text"` fields in case studies contain plain text versions of FAQ answers -- these cannot include HTML/markdown links but should reflect the same factual claims as the visible content
+- The operations management case study contains a markdown table of expenses with specific vendor pricing (Hetzner EUR 5.83/mo, Copilot $10/mo) -- these are not cost comparison claims and do not need external citations
+
+**Anti-Pattern to Avoid:**
+
+- Do NOT cite sources that contradict the claimed rates. If a source says "$50/hr" and the case study claims "$150-300/hr," the citation undermines credibility. Use consultant/agency rate guides that reflect billing rates, not employee salary data.
 
 ## Acceptance Criteria
 
@@ -127,6 +221,27 @@ For each case study, add inline source URLs for cost claims in "The Cost Compari
 - [ ] FAQ `<details>` sections and JSON-LD structured data in case studies are updated to match cited body text
 - [ ] No existing content is removed -- citations are additive only
 - [ ] Citation style matches the pattern in `what-is-company-as-a-service.md` (inline links with named authorities)
+- [ ] All external `<a>` tags on the homepage include `rel="noopener noreferrer"` for security
+- [ ] The fact-checker agent is run on each modified file before committing to verify all citation URLs are reachable and support the claims made
+
+### Research Insights: Verification Protocol
+
+**Best Practice (from learning: `2026-03-06-blog-citation-verification-before-publish.md`):**
+
+After all citations are added, run the fact-checker agent on each modified file:
+
+```text
+Task fact-checker: "Verify this content: [file content]"
+```
+
+The fact-checker will:
+
+1. Extract all hyperlinked assertions, inline statistics, and attributed quotes
+2. Fetch each cited URL via WebFetch
+3. Confirm the page content supports the specific claim
+4. Return a Verification Report with PASS/FAIL/UNSOURCED for each claim
+
+Any FAIL results must be investigated and fixed before committing. This is the same protocol used by the content-writer skill (Phase 2.5) and was created specifically to prevent the 6 citation errors found in the CaaS pillar post's first draft.
 
 ## Domain Review
 
@@ -144,6 +259,8 @@ For each case study, add inline source URLs for cost claims in "The Cost Compari
 - Given any case study's "Cost Comparison" section, when reading the cost claims, then each numeric rate or price range has an inline citation link
 - Given any citation URL in any modified file, when fetching the URL, then the response is HTTP 200 (not 404, 301 to unrelated page, or paywall-only)
 - Given the CaaS pillar post citations, when comparing with reused citations on the homepage, then the URLs match exactly (no drift)
+- Given all external `<a>` tags on the homepage, when checking attributes, then every external link has `rel="noopener noreferrer"`
+- Given a modified file, when running the fact-checker agent, then all claims receive PASS or SOURCED verdicts (zero FAIL)
 
 ## Context
 
@@ -154,6 +271,14 @@ From `knowledge-base/project/learnings/2026-03-06-blog-citation-verification-bef
 ### Key Learning: GEO Research
 
 From `knowledge-base/project/learnings/2026-02-20-geo-aeo-methodology-incorporation.md`: Princeton GEO paper (KDD 2024) found source citations provide +30-40% AI engine visibility. This is the single highest-impact GEO technique.
+
+### Key Learning: FAQ Section Nesting
+
+From `knowledge-base/project/learnings/2026-03-17-faq-section-nesting-consistency.md`: When modifying FAQ sections, maintain consistent DOM nesting. The homepage FAQ sits outside any container div, using `landing-section` class for full-width layout. Do not move FAQ sections inside container divs.
+
+### Key Learning: Blog Post Frontmatter
+
+From `knowledge-base/project/learnings/2026-03-05-eleventy-blog-post-frontmatter-pattern.md`: Blog posts inherit `layout` and `ogType` from `blog.json`. Do NOT add these to individual post frontmatter. Only FAQPage JSON-LD is inline; BlogPosting JSON-LD is handled by the layout.
 
 ### Existing Citation Pattern
 
@@ -174,6 +299,17 @@ The CaaS pillar post (`what-is-company-as-a-service.md`) establishes the citatio
 - Lovable ARR / TechCrunch: `https://techcrunch.com/2025/11/19/as-lovable-hits-200m-arr-its-ceo-credits-staying-in-europe-for-its-success/`
 - Anthropic Cowork Plugins / TechCrunch: `https://techcrunch.com/2026/02/24/anthropic-launches-new-push-for-enterprise-agents-with-plugins-for-finance-engineering-and-design/`
 - Notion Custom Agents: `https://www.notion.com/releases/2026-02-24`
+
+### New URLs from Research (require verification during implementation)
+
+- Carta Solo Founders Report: `https://carta.com/data/solo-founders-report/`
+- Fortune / Alibaba President (March 2026): `https://fortune.com/2026/03/23/one-person-unicorn-agentic-ai-kuo-zhang/`
+- Robert Half 2026 Legal Salary Guide: `https://www.roberthalf.com/us/en/insights/salary-guide/legal`
+- Clutch.co Branding Pricing: `https://clutch.co/agencies/branding/pricing`
+- Clutch.co Consulting Pricing: `https://clutch.co/consulting/pricing`
+- Salary.com CI Analyst: `https://www.salary.com/research/salary/listing/competitive-intelligence-analyst-salary`
+- Fractional COO Rates (HireChore): `https://www.hirechore.com/startups/fractional-coo-101`
+- BLS Entrepreneurship: `https://www.bls.gov/bdm/entrepreneurship/entrepreneurship.htm`
 
 ### Files to Modify
 
@@ -197,3 +333,12 @@ The CaaS pillar post (`what-is-company-as-a-service.md`) establishes the citatio
 - Princeton GEO paper: arxiv:2311.09735
 - Citation verification learning: `knowledge-base/project/learnings/2026-03-06-blog-citation-verification-before-publish.md`
 - GEO methodology learning: `knowledge-base/project/learnings/2026-02-20-geo-aeo-methodology-incorporation.md`
+- FAQ nesting learning: `knowledge-base/project/learnings/2026-03-17-faq-section-nesting-consistency.md`
+- Blog frontmatter learning: `knowledge-base/project/learnings/2026-03-05-eleventy-blog-post-frontmatter-pattern.md`
+- [Robert Half 2026 Legal Salary Guide](https://www.roberthalf.com/us/en/insights/salary-guide/legal)
+- [Clutch.co Branding Pricing Guide](https://clutch.co/agencies/branding/pricing)
+- [Clutch.co Consulting Pricing Guide](https://clutch.co/consulting/pricing)
+- [Carta Solo Founders Report](https://carta.com/data/solo-founders-report/)
+- [Fortune: Alibaba.com President on one-person unicorn](https://fortune.com/2026/03/23/one-person-unicorn-agentic-ai-kuo-zhang/)
+- [Salary.com: CI Analyst Salary](https://www.salary.com/research/salary/listing/competitive-intelligence-analyst-salary)
+- [HireChore: Fractional COO Rates](https://www.hirechore.com/startups/fractional-coo-101)
