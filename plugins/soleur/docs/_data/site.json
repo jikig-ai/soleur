@@ -13,10 +13,10 @@
     "username": "soleur"
   },
   "nav": [
+    { "label": "Pricing", "url": "pages/pricing.html" },
     { "label": "Get Started", "url": "pages/getting-started.html" },
     { "label": "Agents", "url": "pages/agents.html" },
     { "label": "Skills", "url": "pages/skills.html" },
-    { "label": "Pricing", "url": "pages/pricing.html" },
     { "label": "Community", "url": "pages/community.html" },
     { "label": "Blog", "url": "blog/" },
     { "label": "Vision", "url": "pages/vision.html" },
