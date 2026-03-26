@@ -2,9 +2,29 @@
 title: "fix: Cloudflare challenge script blocked by CSP on docs site"
 type: fix
 date: 2026-03-26
+deepened: 2026-03-26
 ---
 
 # fix: Cloudflare challenge script blocked by CSP on docs site
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-26
+**Sources consulted:** Cloudflare Bot Fight Mode documentation, Cloudflare community forums, MDN CSP specification, Cloudflare Terraform provider docs, project CSP learnings, security-sentinel review
+**Review agents applied:** security-sentinel, code-simplicity-reviewer, infra-security
+
+### Key Improvements from Research
+
+1. **Cloudflare officially confirms `<meta>` tag nonce incompatibility** -- Cloudflare's Bot Fight Mode docs explicitly state that nonce implementation via `<meta>` tags is unsupported. Cloudflare only parses nonces from CSP HTTP response headers, not meta tags. This definitively rules out any nonce-based workaround without migrating to HTTP headers.
+2. **JavaScript Detections cannot be independently disabled** -- Bot Fight Mode's JavaScript Detections feature is "automatically enabled and cannot be disabled" separately. The only toggle is Bot Fight Mode itself (on/off). This means Option 3 (disable Bot Fight Mode) would lose all bot protections, not just the client-side script.
+3. **Known community issue with no Cloudflare-side fix** -- Multiple Cloudflare community threads (2022-2025) report the same CSP conflict. Cloudflare's response consistently recommends nonce-based CSP via HTTP headers. No plans announced to support `<meta>` tag nonces or provide a hash-stable challenge script.
+4. **Cloudflare nonce injection has reported bugs** -- Community users report that even with nonce-based CSP via HTTP headers, Cloudflare sometimes fails to inject nonces into Bot Fight Mode scripts. This further validates choosing Option 1 over the complexity of Option 2.
+5. **Bot Fight Mode cannot be bypassed per-path** -- WAF custom rules with Skip action do not apply to Bot Fight Mode (only to Super Bot Fight Mode on paid plans). This means the challenge script injection affects all pages uniformly.
+
+### New Considerations Discovered
+
+- The `validate-csp.sh` script does not need modification -- it validates hashes in the meta tag against inline scripts in the built HTML. The Cloudflare-injected script only appears in responses served through Cloudflare's proxy, not in the static HTML files that `validate-csp.sh` scans.
+- The learning `2026-02-16-github-pages-cloudflare-wiring-workflow.md` documents the full GitHub Pages + Cloudflare setup for `soleur.ai`, confirming the proxy architecture that enables Bot Fight Mode injection.
 
 ## Overview
 
@@ -45,6 +65,8 @@ The error is harmless -- Cloudflare's bot detection being blocked does not affec
 
 **Risk:** Low. Cloudflare Bot Fight Mode is a free-tier feature that provides basic bot detection. The docs site has no sensitive user data, no authentication, and no forms that process payments. The server-side protections (IP reputation, rate limiting, challenge pages) remain fully functional.
 
+**Research validation:** This is the approach implicitly recommended by Cloudflare for sites using `<meta>` tag CSP. Cloudflare's own docs state that nonce support only works with CSP HTTP response headers, not meta tags. Multiple community threads (2022-2025) with the same issue have no resolution beyond "use HTTP headers" or "disable Bot Fight Mode."
+
 ### Option 2: Migrate CSP to HTTP header via Cloudflare Transform Rule
 
 **Approach:** Remove the `<meta>` CSP tag. Add a `cloudflare_ruleset` Terraform resource with `phase = "http_response_headers_transform"` that injects a `Content-Security-Policy` HTTP header for `soleur.ai` requests. This enables `strict-dynamic` and potentially nonce-based CSP via a Cloudflare Worker, which would allow Cloudflare's injected scripts to execute.
@@ -65,6 +87,8 @@ The error is harmless -- Cloudflare's bot detection being blocked does not affec
 
 **Risk:** Medium. Introduces infrastructure complexity and a new failure mode (Worker errors, Transform Rule misconfiguration) to solve a cosmetic problem.
 
+**Research finding:** Even with HTTP header-based CSP and nonces, community users report Cloudflare sometimes fails to inject nonces into Bot Fight Mode scripts ([community thread](https://community.cloudflare.com/t/bot-fight-mode-csp-with-nonce-not-working/647009)). This means Option 2's complexity may not even resolve the issue reliably.
+
 ### Option 3: Disable Cloudflare Bot Fight Mode via Terraform
 
 **Approach:** Add a `cloudflare_bot_management` Terraform resource to disable Bot Fight Mode for the `soleur.ai` zone.
@@ -79,6 +103,8 @@ The error is harmless -- Cloudflare's bot detection being blocked does not affec
 - Loses Cloudflare's bot detection entirely (both client-side and the Bot Fight Mode server-side protections)
 - May require Enterprise plan features to configure granularly (Bot Fight Mode is all-or-nothing on free/pro plans)
 - Overkill -- disabling a security feature to suppress a harmless console error
+- JavaScript Detections (the client-side fingerprinting) is "automatically enabled and cannot be disabled" independently -- the only toggle is Bot Fight Mode on/off, which removes all bot protections
+- Bot Fight Mode cannot be bypassed per-path via WAF custom rules (only Super Bot Fight Mode on paid plans supports Skip actions)
 
 **Risk:** Medium. Reduces security posture to fix a non-issue.
 
@@ -101,11 +127,12 @@ The error is harmless -- Cloudflare's bot detection being blocked does not affec
 
 **Option 1: Accept as known limitation** is the recommended approach.
 
-The implementation consists of three small changes:
+The implementation consists of two small changes:
 
 1. **Add an HTML comment** in `base.njk` above the CSP meta tag documenting the known Cloudflare console error and why it is acceptable
-2. **Update `validate-csp.sh`** to document the known limitation in its output (informational message, not a failure)
-3. **Close issue #1149** with the rationale
+2. **Close issue #1149** with the rationale
+
+Note: `validate-csp.sh` does not need modification. It validates hashes in the built HTML files (pre-Cloudflare). The Cloudflare-injected script only appears in live responses served through Cloudflare's proxy, not in the static `_site/` output that the CI script scans.
 
 ### Why this is the right call
 
@@ -140,10 +167,20 @@ If Cloudflare's bot detection becomes critical in the future (e.g., DDoS attacks
 
 Cloudflare's Bot Fight Mode operates at two levels:
 
-1. **Server-side (unaffected by CSP):** IP reputation scoring, rate limiting, challenge page interstitials. These protections work at the Cloudflare edge before the HTML response reaches the browser.
-2. **Client-side (blocked by CSP):** An inline script injected into HTML responses that fingerprints the browser environment and reports back to Cloudflare. This is the script being blocked.
+1. **Server-side (unaffected by CSP):** IP reputation scoring, rate limiting, challenge page interstitials. These protections work at the Cloudflare edge before the HTML response reaches the browser. Bot Fight Mode "identifies traffic matching patterns of known bots" and "issues computationally expensive challenges in response to these bots" -- this happens at the edge regardless of client-side script execution.
+2. **Client-side (blocked by CSP):** JavaScript Detections -- an inline script injected into HTML responses that fingerprints the browser environment and reports back to Cloudflare. This feature is "automatically enabled and cannot be disabled" independently of Bot Fight Mode itself. The injected script loads `/cdn-cgi/challenge-platform/scripts/jsd/main.js` with per-request tokens.
 
 Blocking the client-side script degrades Cloudflare's bot detection accuracy but does not disable it entirely. For a static documentation site with no sensitive data, server-side protections are sufficient.
+
+### Cloudflare nonce support limitations
+
+Per [Cloudflare's official docs](https://developers.cloudflare.com/bots/get-started/bot-fight-mode/): Cloudflare parses CSP **HTTP response headers** and adds nonces to injected scripts when configured. However, nonce implementation via `<meta>` tags is explicitly unsupported. This is the fundamental constraint -- the docs site uses `<meta>` tag CSP because GitHub Pages does not support custom HTTP response headers.
+
+Even when using HTTP header-based CSP with nonces, community reports indicate Cloudflare's nonce injection into Bot Fight Mode scripts is unreliable ([community thread](https://community.cloudflare.com/t/bot-fight-mode-csp-with-nonce-not-working/647009)). This further validates Option 1 -- investing in Option 2 (HTTP headers via Transform Rule + Worker) may not resolve the issue.
+
+### Bot Fight Mode cannot be scoped per-path
+
+Bot Fight Mode checks cannot be bypassed using the Skip action in WAF custom rules or Page Rules. Only Super Bot Fight Mode (available on paid plans) runs on the Ruleset Engine and supports per-rule Skip actions. This means the challenge script is injected into all `soleur.ai` responses uniformly -- there is no way to exempt specific pages or paths on the free tier.
 
 ### Future upgrade path
 
@@ -186,8 +223,10 @@ This is documented but not recommended until there is a concrete need.
 ### Internal References
 
 - `plugins/soleur/docs/_includes/base.njk` -- template with CSP meta tag (line 24)
-- `plugins/soleur/skills/seo-aeo/scripts/validate-csp.sh` -- CSP validation CI script
+- `plugins/soleur/skills/seo-aeo/scripts/validate-csp.sh` -- CSP validation CI script (not modified -- only scans static HTML)
 - `knowledge-base/project/learnings/security-issues/2026-03-26-hash-based-csp-static-eleventy-site.md` -- learning from CSP implementation
+- `knowledge-base/project/learnings/2026-03-20-nonce-based-csp-nextjs-middleware.md` -- nonce-based CSP approach for dynamic sites (contrast with static site constraints)
+- `knowledge-base/project/learnings/integration-issues/2026-02-16-github-pages-cloudflare-wiring-workflow.md` -- GitHub Pages + Cloudflare proxy architecture
 - `knowledge-base/project/plans/archive/20260326-090444-2026-03-25-feat-add-csp-header-docs-site-plan.md` -- original CSP implementation plan (includes Cloudflare upgrade path)
 - `.github/workflows/deploy-docs.yml` -- docs deployment pipeline
 - PR #1145 -- added the CSP meta tag
@@ -195,6 +234,10 @@ This is documented but not recommended until there is a concrete need.
 
 ### External References
 
-- [Cloudflare Bot Fight Mode](https://developers.cloudflare.com/bots/get-started/free/) -- free-tier bot detection
+- [Cloudflare Bot Fight Mode docs](https://developers.cloudflare.com/bots/get-started/bot-fight-mode/) -- official docs including CSP compatibility, nonce support limitations, JavaScript Detections behavior
+- [Cloudflare Bot Fight Mode (free tier)](https://developers.cloudflare.com/bots/get-started/free/) -- free-tier feature overview
 - [MDN: Content-Security-Policy meta tag limitations](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy#csp_in_meta_tags) -- strict-dynamic, report-only not supported in meta tags
-- [Cloudflare Community: CSP and challenge scripts](https://community.cloudflare.com/t/csp-and-cloudflare-challenge-platform-scripts/) -- community discussion of the same issue
+- [Cloudflare Community: Bot fighting scripts blocked by static CSP headers](https://community.cloudflare.com/t/bot-fighting-scripts-are-blocked-by-static-csp-headers/847864) -- community discussion of this exact issue
+- [Cloudflare Community: Inline scripts cause CSP problems](https://community.cloudflare.com/t/cloudflares-inline-scripts-cause-csp-problems/396958) -- long-running community thread (2022-2025)
+- [Cloudflare Community: Bot Fight Mode CSP with nonce not working](https://community.cloudflare.com/t/bot-fight-mode-csp-with-nonce-not-working/647009) -- reports of unreliable nonce injection even with HTTP headers
+- [Cloudflare Community: Hash or nonce for Cloudflare-injected inline scripts](https://community.cloudflare.com/t/hash-or-nonce-for-inline-script-inject-by-cloudflare/310860) -- community workaround discussion
