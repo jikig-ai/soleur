@@ -52,6 +52,12 @@ if [[ -f "$SITE_DIR/sitemap.xml" ]]; then
   else
     fail "sitemap.xml missing lastmod dates"
   fi
+  NON_HTML=$(grep -oP '(?<=<loc>)[^<]+' "$SITE_DIR/sitemap.xml" | grep -vE '(/|\.html)$' || true)
+  if [[ -n "$NON_HTML" ]]; then
+    fail "sitemap.xml contains non-HTML entries: $NON_HTML"
+  else
+    pass "sitemap.xml contains only HTML entries"
+  fi
 else
   fail "sitemap.xml missing"
 fi
