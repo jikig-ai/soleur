@@ -180,12 +180,12 @@ The version guard script uses `agent-browser --version 2>/dev/null | grep -oE '[
 - [ ] `which agent-browser` resolves to `~/.local/bin/agent-browser` (version 0.22.3)
 - [ ] `agent-browser open https://example.com` succeeds without version mismatch error
 - [ ] `agent-browser snapshot -i` returns element refs in `@e1` format
-- [ ] `check_deps.sh` includes version guard rejecting agent-browser < 0.21.1
-- [ ] agent-browser SKILL.md install instructions use `npm install --prefix ~/.local -g agent-browser@0.22.3`
-- [ ] agent-browser SKILL.md includes troubleshooting section for PATH shadowing
-- [ ] test-browser SKILL.md install instructions use `npm install --prefix ~/.local -g agent-browser@0.22.3`
-- [ ] README.md Browser Automation section uses `npm install --prefix ~/.local -g agent-browser@0.22.3`
-- [ ] npm-global-install-without-sudo learning updated with PATH shadowing resolution
+- [x] `check_deps.sh` includes version guard rejecting agent-browser < 0.21.1
+- [x] agent-browser SKILL.md install instructions use `npm install --prefix ~/.local -g agent-browser@0.22.3`
+- [x] agent-browser SKILL.md includes troubleshooting section for PATH shadowing
+- [x] test-browser SKILL.md install instructions use `npm install --prefix ~/.local -g agent-browser@0.22.3`
+- [x] README.md Browser Automation section uses `npm install --prefix ~/.local -g agent-browser@0.22.3`
+- [x] npm-global-install-without-sudo learning updated with PATH shadowing resolution
 - [ ] Playwright MCP tools continue working independently
 
 ## Test Scenarios

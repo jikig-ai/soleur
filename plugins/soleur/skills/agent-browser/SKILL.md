@@ -11,17 +11,26 @@ Vercel's headless browser automation CLI designed for AI agents. Uses ref-based 
 
 ```bash
 # Check installation
-command -v agent-browser >/dev/null 2>&1 && echo "Installed" || echo "NOT INSTALLED - run: npm install -g agent-browser@0.21.4 && agent-browser install"
+command -v agent-browser >/dev/null 2>&1 && echo "Installed" || echo "NOT INSTALLED - run: npm install --prefix ~/.local -g agent-browser@0.22.3 && agent-browser install"
 ```
 
 ### Install if needed
 
 ```bash
-npm install -g agent-browser@0.21.4
+npm install --prefix ~/.local -g agent-browser@0.22.3
 agent-browser install  # Downloads Chrome for Testing (~300MB)
 # On Linux if system deps missing:
 # agent-browser install --with-deps
 ```
+
+### Troubleshooting: version mismatch
+
+If you see "Version mismatch between agent-browser (expects 1200) and installed Playwright (1208)":
+
+1. Check which binary is running: `which agent-browser && agent-browser --version`
+2. If it resolves to `/usr/bin/agent-browser` (version 0.5.0), a stale system install is shadowing the correct version
+3. Fix: `sudo npm uninstall -g agent-browser` to remove the system binary
+4. Verify: `which agent-browser` should now resolve to `~/.local/bin/agent-browser` (0.22.3)
 
 ## Core Workflow
 
@@ -191,6 +200,7 @@ agent-browser snapshot -i --json
 ```
 
 Returns:
+
 ```json
 {
   "success": true,
@@ -217,11 +227,13 @@ Returns:
 | Best for | Quick automation | Tool integration |
 
 Use agent-browser when:
+
 - You prefer Bash-based workflows
 - You want simpler CLI commands
 - You need quick one-off automation
 
 Use Playwright MCP when:
+
 - You need deep MCP tool integration
 - You want tool-based responses
 - You're building complex automation
