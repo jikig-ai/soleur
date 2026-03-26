@@ -231,8 +231,10 @@ Ensure the brainstorms directory exists before writing.
 2. **Create GitHub issue** (only if no valid existing issue):
 
    ```bash
-   gh issue create --title "feat: <Feature Title>" --body "..."
+   gh issue create --title "feat: <Feature Title>" --milestone "Post-MVP / Later" --body "..."
    ```
+
+   After creation, if `knowledge-base/product/roadmap.md` exists, read it to determine the correct milestone phase for this feature. If a more specific milestone is appropriate, update: `gh issue edit <number> --milestone '<correct milestone title>'`.
 
    Include in the issue body:
    - Summary of what's being built (from brainstorm)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse guardrail hook for Bash commands.
 # Blocks: commits on main, rm -rf on worktrees, --delete-branch with active worktrees,
-# commits with conflict markers in staged content.
+# commits with conflict markers in staged content, gh issue create without --milestone.
 # NOTE: When adding or modifying guards, update AGENTS.md hook awareness rule to match.
 #
 # Corresponding prose rules:
@@ -9,6 +9,7 @@
 #   Guard 2: AGENTS.md "Never rm -rf on the current directory, a worktree path, or the repo root"
 #   Guard 3: AGENTS.md "Never --delete-branch with gh pr merge"
 #   Guard 4: constitution.md "grep staged content for conflict markers"
+#   Guard 5: AGENTS.md "Every gh issue create must include --milestone"
 
 set -euo pipefail
 
@@ -107,6 +108,19 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|merge
       hookSpecificOutput: {
         permissionDecision: "deny",
         permissionDecisionReason: "BLOCKED: Staged content contains conflict markers (<<<<<<<, =======, or >>>>>>>). Resolve all conflicts before committing."
+      }
+    }'
+    exit 0
+  fi
+fi
+
+# Guard 5: Block gh issue create without --milestone
+if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create'; then
+  if ! echo "$COMMAND" | grep -qE '--milestone'; then
+    jq -n '{
+      hookSpecificOutput: {
+        permissionDecision: "deny",
+        permissionDecisionReason: "BLOCKED: gh issue create must include --milestone. Default to '\''Post-MVP / Later'\'' for operational issues. Read knowledge-base/product/roadmap.md for feature issues."
       }
     }'
     exit 0

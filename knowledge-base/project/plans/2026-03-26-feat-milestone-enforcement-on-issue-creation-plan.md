@@ -85,7 +85,7 @@ Different surfaces create issues with different domain context. The milestone as
 
 ### Category 0: PreToolUse hook guard (defense-in-depth)
 
-- [ ] Add Guard 5 to `.claude/hooks/guardrails.sh` -- block `gh issue create` without `--milestone`
+- [x] Add Guard 5 to `.claude/hooks/guardrails.sh` -- block `gh issue create` without `--milestone`
 
 **Implementation detail:** Match `gh issue create` (or `gh\s+issue\s+create`) in the command string, then check if `--milestone` is present. If missing, deny with message "BLOCKED: gh issue create must include --milestone. Default to 'Post-MVP / Later' for operational issues. Read knowledge-base/product/roadmap.md for feature issues."
 

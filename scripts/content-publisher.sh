@@ -449,7 +449,7 @@ create_dedup_issue() {
     return 0
   fi
 
-  if gh issue create --title "$title" --label "$labels" --body "$body"; then
+  if gh issue create --title "$title" --label "$labels" --milestone "Post-MVP / Later" --body "$body"; then
     echo "[ok] Issue created: $title"
   else
     echo "Error: Failed to create issue: $title" >&2
