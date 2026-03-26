@@ -96,12 +96,12 @@ Existing verification in the codebase is ad hoc -- embedded in individual skills
 
 ### Engineering (CTO)
 
-**Summary:** Pending assessment. Key architectural concerns: Playwright MCP vs agent-browser CLI choice, Doppler config auto-detection mechanism, pipeline integration point, and context window pressure from large test scenario parsing.
+**Summary:** New skill (`/soleur:qa`) using Playwright MCP is the right approach — clean separation from `test-browser` (which uses agent-browser CLI for rendering). Route interception via `browser_run_code` (not `browser_evaluate`) for error paths. Doppler auto-detection well-established. Two browser tool stacks coexist intentionally (different purposes). Skill token budget is a real constraint — description must be minimal.
 
 ### Product (CPO)
 
-**Summary:** Pending assessment. Key product concerns: this is an internal capability that strengthens the autonomous engineering pipeline's reliability claim.
+**Summary:** Internal developer tooling — no business validation needed. The #1139 incident is the validation. Roadmap note: #1146 is in Phase 2 milestone but not listed in roadmap.md Phase 2 table — needs reconciliation. Plan-derived scenarios are the natural fit. Block on functional failures, report on environmental. Option A (new skill) recommended over enhancing test-browser.
 
 ### Marketing (CMO)
 
-**Summary:** Pending assessment. New skill adds to plugin capability count (semver:minor). Potential positioning as "autonomous QA" differentiator.
+**Summary:** New skill is direct evidence for existing "verification gates at every stage" marketing claim. The #1139 origin story is compelling for dogfooding narrative. "Replaces your QA team" claim becomes concrete. Pipeline complexity concern: frame as "the system does this automatically" not "8th step." Skill count inconsistency across brand guide/homepage/content strategy should be reconciled.
