@@ -51,6 +51,9 @@ jobs:
       - name: Validate SEO
         run: bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site
 
+      - name: Validate CSP
+        run: bash plugins/soleur/skills/seo-aeo/scripts/validate-csp.sh _site
+
       - name: Verify build output
         run: |
           test -f _site/index.html || { echo "Missing index.html"; exit 1; }
