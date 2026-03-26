@@ -14,31 +14,46 @@ depends_on:
 
 ## Executive Summary
 
-10 synthetic founder personas were run through Soleur's interview guides, three value proposition framings, and three pricing models. Five findings should change how the next 8 real interviews are conducted:
+10 synthetic founder personas were run through Soleur's interview guides, three value proposition framings, and three pricing models. The guides were then iteratively improved through three rounds of synthetic dogfooding (Original → V1 → V2) until reaching their synthetic ceiling.
 
-**1. Three pain archetypes exist, but the interview guides only surface one well.** Burden pain (too much time on wrong tasks) is captured. Avoidance pain (not doing critical work at all) and anxiety pain (worry without action) are missed. Add the avoidance question ("What business tasks do you know you should be doing but aren't?") and the emotional weight question ("Which tasks keep you up at night?") to both guides.
+> **[2026-03-26 Status: All recommendations below have been applied.** Interview guides updated (V2), brand guide updated with framings, pricing strategy updated with outcome-based alternative. See "Cascade Status" section at the end for full tracking.]
 
-**2. "Stop hiring, start delegating" is the lead framing.** Pain-point framing won for 7/10 personas. CaaS requires market education a bootstrapped company can't afford. Tool-replacement fails for pre-revenue founders (6/10 of the cohort) who don't have tool spend to replace. But the "handles 7 of them" claim needs softening to "helps you tackle 7" for pragmatists.
+### Five key findings
 
-**3. The "memory" differentiator is the buried lead.** Persistent, compounding context across departments generated the strongest unprompted positive reactions. Four personas independently identified it as the feature that separates Soleur from "just use ChatGPT." Yet it's a subordinate clause in all three framings. Test leading with it: "The AI that already knows your business."
+**1. Three pain archetypes exist — guides now serve all three.** Burden pain (too much time on wrong tasks), avoidance pain (not doing critical work at all), and anxiety pain (worry without action). The original guides only served burden. V2 guides now capture all three via the avoidance question, emotional weight question, and cognitive-load reframing. **Applied:** both guides updated.
 
-**4. Outcome-based pricing functions as an on-ramp, not a business model.** Every persona who preferred outcome-based pricing described switching to flat pricing once trust was established. No persona wanted to stay on outcome-based long-term. It could replace the free trial, but not the subscription.
+**2. "Stop hiring, start delegating" is the lead framing.** Pain-point framing won for 7/10 personas. CaaS requires market education a bootstrapped company can't afford. Tool-replacement fails for pre-revenue founders who don't have tool spend to replace. Claim softened to "helps you tackle 7" for pragmatists. **Applied:** brand guide updated with primary framing + segment variants.
+
+**3. The "memory" differentiator is the buried lead.** Persistent, compounding context across departments generated the strongest unprompted positive reactions. Four personas independently identified it as what separates Soleur from "just use ChatGPT." **Applied:** brand guide includes memory-first A/B test variant: "The AI that already knows your business."
+
+**4. Outcome-based pricing functions as an on-ramp, not a business model.** Every persona who preferred outcome-based pricing described switching to flat pricing once trust was established. Per-outcome creates perverse incentives — users ration usage, undermining cross-domain compounding. **Applied:** pricing-strategy.md updated with outcome-based as 6th alternative (verdict: Defer, consider as first-month trial).
 
 **5. The $49/month price is correctly positioned but needs zero-risk trial scaffolding.** No revenue-stage founder called $49 too expensive. Pre-revenue founders called it "too much commitment without proof" — a trial problem, not a price problem.
+
+### Interview guide validation results (3 rounds)
+
+| Guide | Original | V1 | V2 (final) |
+|-------|----------|----|----|
+| 15-min | 52% rich, 6 questions | 81% rich, 10 questions | **84% rich, 9 questions** |
+| 30-min | 48% rich, 12 questions | 76% rich, 15 questions | **93% rich, 15 questions** |
+
+The single most impactful change: Q13→Q14 anchoring sequence (establish costs before asking WTP). Pre-revenue founders stated 4.1x higher WTP when anchored on their own costs.
 
 ---
 
 ## Interview Guide Improvements
 
-### Questions to Rewrite
+### Questions Rewritten (all applied — V2 final versions in guides)
 
-| Original | Problem | Rewrite |
-|----------|---------|---------|
-| 15-min Q5: "If you had AI agents handling [pain] — would you trust the output?" | "AI agents" is jargon. Binary trust question primes for "no." | "If [pain] was handled for you automatically, what's the first thing you'd check before using the output?" |
-| 15-min Q6: "What would 'good enough' look like?" | Domain-unfamiliar founders can't define quality for domains they don't understand. | "If you got a [legal doc / marketing plan / financial report] tomorrow, what would make you confident enough to use it?" |
-| 30-min Q5: "Which tasks felt like a distraction?" | "Distraction" fails when pain IS core work or manifests as avoidance. | "Which of those did you resent doing? And which should you be doing but aren't?" |
-| 30-min Q11: "How much time per week would that save?" | Time is the wrong unit for anxiety, zero-baseline, and effectiveness pain. | "What would change for you if that was handled? What would you do with that space?" |
-| 30-min Q12: "What would you pay for that?" | Pre-revenue founders have no price anchor. Silence makes them guess low. | First establish the alternative cost ("What has this cost you so far — in money, delays, or missed opportunities?"), THEN ask what they'd pay. |
+| Original | Problem | V2 Final Rewrite | V2 Result |
+|----------|---------|-------------------|-----------|
+| 15-min Q5: "Would you trust AI agents handling [pain]?" | Jargon + binary trust primes for "no" | "Imagine [deliverable] appeared in your inbox. What would you check? What would make you nervous?" | 10/10 rich |
+| 15-min Q6: "What would good enough look like?" | Domain-unfamiliar founders can't define quality | "Think about the last time [pain] blocked you. What would have needed to exist?" | 10/10 rich |
+| 30-min Q5: "Which tasks felt like a distraction?" | Fails for avoidance/anxiety archetypes | "Which do you feel least qualified to do? Where's the widest gap vs. an expert?" | 10/10 rich |
+| 30-min Q9: "What would change if handled automatically?" | "Automatically" triggers mechanism objections | "What would change if you didn't have to think about [domain] anymore?" | 10/10 rich |
+| 30-min Q12: "What would the tool need to do?" | Domain-unfamiliar can't spec tools | "Describe the result you need. What would success look like in 30/90 days?" | 10/10 rich |
+| 30-min Q11→Q13: "How much time per week?" | Time wrong unit for anxiety/zero-baseline | "What's this costing you — in money, deals, delays, or risk?" | 10/10 rich |
+| 30-min Q12→Q14: "What would you pay?" | No price anchor for pre-revenue | "You mentioned [their cost from Q13]. How much would a tool need to cover?" | 10/10 rich |
 
 ### Questions to Add
 
@@ -157,4 +172,25 @@ These findings are **hypotheses, not validation evidence.** They inform how to c
 
 ---
 
-_Synthetic research conducted 2026-03-26. Source: 10 personas x 3 research gates (interview prep, value prop, pricing). All findings are hypotheses to be tested against real founder conversations._
+## Cascade Status
+
+All recommendations from this brief have been applied to source artifacts:
+
+| Recommendation | Target Artifact | Status |
+|----------------|----------------|--------|
+| Rewrite 7 weak questions | `validation-outreach-template.md`, `interview-guide.md` | **Applied (V2)** |
+| Add 6 missing questions (avoidance, emotional, failed alternatives, cost-of-inaction, quality-check, urgency) | Both interview guides | **Applied (V2)** |
+| Cut redundant AI-tools question from 15-min | `validation-outreach-template.md` | **Applied (V2)** |
+| Reorder emotional sequence to prevent fatigue | Both interview guides | **Applied (V2)** |
+| Add priority tiers and interviewer notes | `interview-guide.md` | **Applied (V2)** |
+| Pain-point as primary framing, memory-first A/B variant | `brand-guide.md` | **Applied** |
+| Retire tool-replacement as primary framing | `brand-guide.md` | **Applied** |
+| Add trust scaffolding recommendation | `brand-guide.md` | **Applied** |
+| Outcome-based pricing as 6th alternative | `pricing-strategy.md` | **Applied** |
+| Research brief reference for WTP interview prep | `pricing-strategy.md` Next Steps | **Applied** |
+| Cascade enforcement rule | `AGENTS.md` | **Applied** |
+| Lint subagent output rule | `constitution.md` | **Applied** |
+
+---
+
+_Synthetic research conducted 2026-03-26. Three rounds of dogfooding (Original → V1 → V2). 10 personas x 3 research gates + 2 re-runs. All findings are hypotheses to be tested against real founder conversations._
