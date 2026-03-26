@@ -49,19 +49,21 @@ Let them talk. Do not prompt with examples. If they say "nothing" or struggle, f
 
 > 5. Which of those tasks do you feel least qualified to do? Where is the gap between what you're doing and what an expert would do the widest? _[Rewritten 2026-03-26: original "distraction" framing failed when pain IS core work or manifests as avoidance]_
 >
-> 6. What business tasks do you know you should be doing but aren't? What's stopping you? _[Added 2026-03-26: surfaces avoidance pain -- 3/10 personas had pain that manifests as zero time spent, not excess time]_
->
-> 7. Which of these tasks keeps you up at night — not the time-consuming ones, the scary ones? _[Added 2026-03-26: emotional weight is often a stronger buying signal than time cost]_
->
-> 8. Have you tried using AI for any of those non-coding tasks? What happened?
+> 6. What business tasks do you know you should be doing but aren't? What's stopping you? _[Added 2026-03-26: surfaces avoidance pain — skip if Q5 already covered avoidance]_
+
+**Interviewer note:** If Q5 already surfaced avoidance pain ("I'm not qualified so I just don't do it"), skip Q6 to avoid redundancy. If Q5 only surfaced burden pain ("I do it badly"), ask Q6.
+
+> 7. Have you tried using AI for any of those non-coding tasks? What happened?
 
 If yes, probe: "What worked? What didn't? Did you keep using it?" If no, ask: "Why not?"
 
-> 8a. What have you already tried to solve this — AI or otherwise? What worked, what didn't, and why? _[Added 2026-03-26: many founders tried non-AI alternatives (lawyers, freelancers, templates) — understanding why those failed reveals what the new solution must do differently]_
+> 7a. _(Priority: ask if time permits)_ What have you already tried to solve this — AI or otherwise? What worked, what didn't, and why? _[Added 2026-03-26: highest-signal new question — surfaces failed alternatives, competitive intelligence, and product requirements via negation]_
 >
-> 9. What would change for you if those tasks were handled automatically?
+> 8. What would change for you if you didn't have to think about [their pain domain] anymore? _[Rewritten 2026-03-26 v2: original "handled automatically" triggered objections about the mechanism. Outcome framing ("didn't have to think about") focuses on cognitive load removal. Previous version still 40% flat.]_
 
 Listen for intensity signals: time saved, stress reduced, things they'd build instead, emotional relief. This is where willingness-to-pay seeds are planted -- note exact phrases.
+
+> 9. _(Priority: ask if time permits)_ Which of these tasks keeps you up at night — not the time-consuming ones, the scary ones? _[Moved 2026-03-26 v2: was Q7, moved after operational questions to break up emotional sequence and prevent interview fatigue]_
 
 ---
 
@@ -83,9 +85,9 @@ Check off each one they confirm. Then:
 
 Identify their top pain domain from the conversation so far (usually the one with the most emotional energy in questions 4-7, or the strongest response in questions 8-9). Then:
 
-> 12. If a tool existed that handled **[their top pain domain]** for you, what would it need to do?
+> 12. Describe the result you need for **[their top pain domain]**, not the tool. What would success look like in 30 days? _[Rewritten 2026-03-26 v2: original "what would the tool need to do" was 50% flat — domain-unfamiliar founders can't spec tools for domains they don't understand. Outcome framing lets them describe the end state instead.]_
 
-Let them describe the ideal. Note specific capabilities they mention.
+Let them describe the ideal outcome, not features. Note specific results they mention. For marketing personas, extend to 90 days if 30 feels too short.
 
 > 12a. If that was handled for you, how would you know if it was done wrong? _[Added 2026-03-26: tests whether the founder can evaluate quality — critical for AI trust model design]_
 >
@@ -97,7 +99,9 @@ Record the exact answer in whatever unit they use (dollars, hours, deals, risk).
 
 **Establish the anchor first.** If Q13 produced a concrete cost (lawyer fees, hours lost, deals missed), reference it directly. If the founder couldn't quantify, provide the anchor: "You said you're losing enterprise deals / launching late / worried about lawsuits. If we put a dollar figure on that risk, what's the range?" Then ask about budget.
 
-> 15. What would need to happen for you to solve this in the next 30 days? _[Added 2026-03-26: separates chronic pain from acute buying triggers — some founders have pain they'll tolerate indefinitely, others have acute triggers]_
+> 15. What would need to happen for you to solve this in the next 30 days? _[Added 2026-03-26: separates chronic pain from acute buying triggers]_
+
+**Interviewer note:** For marketing-pain personas, 30 days creates false urgency — marketing doesn't resolve that fast. Use "90 days" instead. 6/10 personas said "I'd pay today" on this question — it's the strongest purchase-intent signal in the guide.
 
 ---
 

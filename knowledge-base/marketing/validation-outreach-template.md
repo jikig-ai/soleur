@@ -62,16 +62,15 @@ Happy to share what I've learned so far with anyone who responds.
 1. Walk me through a typical week. What tasks outside of core product work take the most time?
 2. Which of those tasks do you wish you could hand off entirely?
 3. What business tasks do you know you should be doing but aren't? What's stopping you? _[Added 2026-03-26: surfaces avoidance pain that Q1 misses]_
-4. Which of these tasks keeps you up at night — not the time-consuming ones, the scary ones? _[Added 2026-03-26: emotional weight is a stronger buying signal than time cost]_
-5. Have you tried using AI tools for any operational work? What was the experience?
-6. What have you already tried to solve this — AI or otherwise? What worked, what didn't, and why? _[Added 2026-03-26: surfaces failed alternatives including non-AI approaches]_
-7. What's the last thing that made you think "I need to hire someone for this"?
+4. What have you already tried to solve this — AI or otherwise? What worked, what didn't, and why? _[Added 2026-03-26: highest-signal question — surfaces failed alternatives, competitive intelligence, and requirements via negation. Replaces separate AI-tools question which was redundant.]_
+5. What's the last thing that made you think "I need to hire someone for this"?
+6. Which of these tasks keeps you up at night — not the time-consuming ones, the scary ones? _[Moved 2026-03-26 v2: placed after operational questions to space out emotional moments and prevent interview fatigue]_
 
 **Solution Direction (3 min):**
 
-8. Imagine [their pain point deliverable] just appeared in your inbox every week, done correctly. What would you check before using it? What would make you nervous? _[Rewritten 2026-03-26: original "would you trust AI agents" primed for "no"; outcome framing triggers practical evaluation]_
-9. Think about the last time [their pain point] blocked you or cost you something. What would have needed to exist for that not to happen? _[Rewritten 2026-03-26: original "what would good enough look like" failed for domain-unfamiliar founders]_
-10. If this task was handled for you, how would you know if it was done wrong? _[Added 2026-03-26: tests whether founder can evaluate quality — critical for AI trust model]_
+7. Imagine [their pain point deliverable] just appeared in your inbox every week, done correctly. What would you check before using it? What would make you nervous? _[Rewritten 2026-03-26: outcome framing triggers practical evaluation instead of identity-level skepticism]_
+8. Think about the last time [their pain point] blocked you or cost you something. What would have needed to exist for that not to happen? _[Rewritten 2026-03-26: outcome-anchored for domain-unfamiliar founders]_
+9. If this task was handled for you, how would you know if it was done wrong? _[Added 2026-03-26: tests whether founder can evaluate quality — critical for AI trust model]_
 
 **Wrap-up (2 min):**
 
