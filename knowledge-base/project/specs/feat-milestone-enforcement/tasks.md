@@ -46,21 +46,20 @@
 
 ## Phase 7: Fix Existing Issues
 
-- [ ] 7.1 Assign milestones to all 10 un-milestoned open issues (CPO determines correct milestone)
-  - [ ] 7.1.1 #1149 fix: Cloudflare challenge script blocked by CSP on docs site -> Post-MVP / Later
-  - [ ] 7.1.2 #1146 feat: add functional QA agent/skill -> Post-MVP / Later
-  - [ ] 7.1.3 #1142 feat: website conversion flow review -> CPO to determine (Phase 3 or Marketing Gate?)
-  - [ ] 7.1.4 #1117 pencil: I() insert positional placement -> Post-MVP / Later
-  - [ ] 7.1.5 #1116 pencil: export_nodes filenames -> Post-MVP / Later
-  - [ ] 7.1.6 #1108 pencil: set_variables error -> Post-MVP / Later
-  - [ ] 7.1.7 #1107 pencil: padding on text nodes -> Post-MVP / Later
-  - [ ] 7.1.8 #1106 pencil: alignSelf not supported -> Post-MVP / Later
-  - [ ] 7.1.9 #1083 Content Publisher LinkedIn failure -> Post-MVP / Later
-  - [ ] 7.1.10 #1082 Content Publisher LinkedIn failure -> Post-MVP / Later
+- [x] 7.1 Assign milestones to all un-milestoned open issues (CPO reviewed assignments)
+  - N/A 7.1.1 #1149 -- already closed
+  - [x] 7.1.2 #1146 feat: add functional QA agent/skill -> Post-MVP / Later
+  - N/A 7.1.3 #1142 -- already closed
+  - [x] 7.1.4 #1117 pencil: I() insert positional placement -> Post-MVP / Later
+  - [x] 7.1.5 #1116 pencil: export_nodes filenames -> Post-MVP / Later
+  - [x] 7.1.6 #1108 pencil: set_variables error -> Post-MVP / Later
+  - [x] 7.1.7 #1107 pencil: padding on text nodes -> Post-MVP / Later
+  - [x] 7.1.8 #1106 pencil: alignSelf not supported -> Post-MVP / Later
+  - [x] 7.1.9 #1083 Content Publisher LinkedIn failure -> Post-MVP / Later
+  - [x] 7.1.10 #1082 Content Publisher LinkedIn failure -> Post-MVP / Later
 
 ## Phase 8: Verification
 
-- [ ] 8.1 Run `gh issue list --state open --json number,milestone --jq '[.[] | select(.milestone == null)] | length'` to confirm zero un-milestoned issues
-- [ ] 8.2 Grep all `gh issue create` invocations in active code to confirm all include `--milestone`:
-  - `grep -rn 'gh issue create' scripts/ .github/workflows/ plugins/soleur/skills/ --include='*.sh' --include='*.yml' --include='*.md' | grep -v 'milestone'`
+- [x] 8.1 Run `gh issue list --state open --json number,milestone --jq '[.[] | select(.milestone == null)] | length'` to confirm zero un-milestoned issues
+- [x] 8.2 Grep all `gh issue create` invocations in active code to confirm all include `--milestone`
 - [ ] 8.3 Verify Guard 5 is active by attempting `gh issue create` without `--milestone` in the worktree shell

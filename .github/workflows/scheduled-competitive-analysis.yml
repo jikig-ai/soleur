@@ -52,6 +52,8 @@ jobs:
             Do NOT push directly to main.
             Use the PR-based commit pattern in the MANDATORY FINAL STEP.
 
+            MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP / Later".
+
             Run /soleur:competitive-analysis --tiers 0,3 on this repository.
             After your analysis is complete, create a GitHub issue titled
             "[Scheduled] Competitive Analysis - <today's date in YYYY-MM-DD format>"
