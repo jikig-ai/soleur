@@ -146,6 +146,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 2.10 | Error + empty states (agent failure, network loss, rate limit) | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
 | 2.11 | First-time onboarding walkthrough (include PWA install guidance for iOS) | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
 | 2.12 | UX audit of all Phase 1 screens | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
+| 2.13 | Supply chain dependency hardening (lockfile integrity, pinning, scanning) | P1 | [#1174](https://github.com/jikig-ai/soleur/issues/1174) | Not started |
 
 **Exit criteria (beta launch gate):**
 
@@ -160,6 +161,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | Error states visible | Must pass | Agent failure, network loss, empty states render meaningful messages |
 | Onboarding walkthrough | Should pass | First-time user completes the loop without external docs |
 | Integration tests green | Must pass | Auth, WebSocket, session tests pass in CI |
+| Supply chain hardened | Must pass | Exact version pinning, lockfile integrity in CI, dependency review on all PRs |
 
 ---
 
