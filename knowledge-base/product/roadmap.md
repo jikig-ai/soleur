@@ -252,7 +252,7 @@ Before recruiting founders, the platform must handle multiple users signing up a
 | 4.4 | 2-week unassisted usage tracking | P1 | Onboarding complete | Not started |
 | 4.5 | Exit interviews + willingness-to-pay | P1 | 2 weeks elapsed | Not started |
 | 4.6 | Container-per-workspace isolation | P1 | 5+ concurrent users | [#673](https://github.com/jikig-ai/soleur/issues/673) |
-| 4.7 | Rate limiting (per-user concurrency, API rate) | P1 | Before public launch | [#673](https://github.com/jikig-ai/soleur/issues/673) |
+| 4.7 | Plan-based agent concurrency enforcement (slot limits per subscription tier) | P1 | Before public launch | [#1162](https://github.com/jikig-ai/soleur/issues/1162), [#673](https://github.com/jikig-ai/soleur/issues/673) |
 | 4.8 | Resource monitoring (CPU/RAM per workspace) | P1 | Before beta invites | [#673](https://github.com/jikig-ai/soleur/issues/673) |
 | 4.9 | Monitoring + error tracking | P2 | 10+ users | [#673](https://github.com/jikig-ai/soleur/issues/673) |
 | 4.10 | Stripe live mode activation | P1 | 4 of 5 pricing gates pass | Not started |
