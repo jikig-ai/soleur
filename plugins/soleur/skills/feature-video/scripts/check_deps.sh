@@ -224,7 +224,7 @@ if command -v agent-browser >/dev/null 2>&1; then
       exit 1
     fi
   fi
-  echo "  [ok] agent-browser ($AB_VERSION)"
+  echo "  [ok] agent-browser${AB_VERSION:+ ($AB_VERSION)}"
 else
   echo "  [MISSING] agent-browser (required)"
   echo "    Install: npm install --prefix ~/.local -g agent-browser@0.22.3 && agent-browser install"
