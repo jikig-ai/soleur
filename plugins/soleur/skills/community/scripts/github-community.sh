@@ -91,13 +91,13 @@ cmd_activity() {
 
   local issues prs
   issues=$(gh api "repos/${repo}/issues?state=all&since=${since}&per_page=100" 2>&1) || {
-    echo "Error: Failed to fetch issues: ${issues}" >&2
+    echo "Error: Failed to fetch issues ($(echo "$issues" | head -c 200))" >&2
     exit 1
   }
   check_rate_limit "$issues"
 
   prs=$(gh api "repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=100" 2>&1) || {
-    echo "Error: Failed to fetch PRs: ${prs}" >&2
+    echo "Error: Failed to fetch PRs ($(echo "$prs" | head -c 200))" >&2
     exit 1
   }
   check_rate_limit "$prs"
@@ -137,7 +137,7 @@ cmd_contributors() {
   # Get contributors from recent commits
   local commits
   commits=$(gh api "repos/${repo}/commits?since=${since}&per_page=100" 2>&1) || {
-    echo "Error: Failed to fetch commits: ${commits}" >&2
+    echo "Error: Failed to fetch commits ($(echo "$commits" | head -c 200))" >&2
     exit 1
   }
   check_rate_limit "$commits"
@@ -145,7 +145,7 @@ cmd_contributors() {
   # Get contributors from recent issues/PRs
   local issues
   issues=$(gh api "repos/${repo}/issues?state=all&since=${since}&per_page=100" 2>&1) || {
-    echo "Error: Failed to fetch issues: ${issues}" >&2
+    echo "Error: Failed to fetch issues ($(echo "$issues" | head -c 200))" >&2
     exit 1
   }
   check_rate_limit "$issues"
@@ -206,7 +206,7 @@ cmd_discussions() {
       echo '{"discussions": [], "note": "Discussions not enabled for this repository"}'
       return 0
     fi
-    echo "Error: Failed to fetch discussions: ${result}" >&2
+    echo "Error: Failed to fetch discussions ($(echo "$result" | head -c 200))" >&2
     exit 1
   }
   check_rate_limit "$result"
@@ -240,7 +240,7 @@ cmd_repo_stats() {
   # Fetch repo metadata
   local repo_data
   repo_data=$(gh api "repos/${repo}" 2>&1) || {
-    echo "Error: Failed to fetch repo metadata: ${repo_data}" >&2
+    echo "Error: Failed to fetch repo metadata ($(echo "$repo_data" | head -c 200))" >&2
     exit 1
   }
   check_rate_limit "$repo_data"
@@ -251,7 +251,7 @@ cmd_repo_stats() {
   stargazers=$(gh api "repos/${repo}/stargazers?per_page=100" \
     -H "Accept: application/vnd.github.star+json" \
     --paginate 2>&1 | jq -s 'add // []') || {
-    echo "Error: Failed to fetch stargazers: ${stargazers}" >&2
+    echo "Error: Failed to fetch stargazers ($(echo "$stargazers" | head -c 200))" >&2
     exit 1
   }
   check_rate_limit "$stargazers"
