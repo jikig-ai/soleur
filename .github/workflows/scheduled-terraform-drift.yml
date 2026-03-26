@@ -180,6 +180,7 @@ jobs:
             gh issue create \
               --title "$TITLE" \
               --label "infra-drift" \
+              --milestone "Post-MVP / Later" \
               --body-file /tmp/issue-body.md
             echo "Created new drift issue for $STACK_NAME"
           fi

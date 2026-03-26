@@ -59,6 +59,8 @@ jobs:
             Do NOT push directly to main.
             Use the PR-based commit pattern in the MANDATORY FINAL STEP.
 
+            MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP / Later".
+
             Run /soleur:seo-aeo fix on this repository.
 
             After the audit and fix is complete, create a GitHub issue titled

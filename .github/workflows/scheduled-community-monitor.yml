@@ -76,6 +76,8 @@ jobs:
             Do NOT push directly to main.
             Use the PR-based commit pattern in the MANDATORY FINAL STEP.
 
+            MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP / Later".
+
             ## Instructions
 
             1. **Detect platforms** using the community router:

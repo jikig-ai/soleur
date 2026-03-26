@@ -78,6 +78,7 @@ jobs:
               gh issue create --repo "$GH_REPO" \
                 --title "$TITLE" \
                 --label "action-required" \
+                --milestone "Post-MVP / Later" \
                 --body "$BODY"
             fi
             exit 0

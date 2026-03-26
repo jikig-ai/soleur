@@ -129,7 +129,8 @@ jobs:
             if gh issue create \
               --title "$expected_title" \
               --body "$issue_body" \
-              --label "review-reminder"; then
+              --label "review-reminder" \
+              --milestone "Post-MVP / Later"; then
               echo "Created issue: $expected_title"
               created=$((created + 1))
             else

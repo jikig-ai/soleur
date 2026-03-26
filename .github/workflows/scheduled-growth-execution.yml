@@ -59,6 +59,8 @@ jobs:
             Do NOT push directly to main.
             Use the PR-based commit pattern in the MANDATORY FINAL STEP.
 
+            MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP / Later".
+
             Read knowledge-base/marketing/seo-refresh-queue.md and identify
             Priority 1 ("Update immediately") stale pages that need keyword
             optimization.
