@@ -197,6 +197,21 @@ Domain leaders are consulted at brainstorm time but not at ship time. The actual
 
 **Why:** In #1173, a research sprint produced a novel methodology with compelling data, but no content was planned because the CMO was only consulted when the scope was "should we explore this?" — not when the actual content existed.
 
+### CMO Website Framing Review Gate
+
+**Trigger:** PR modifies `knowledge-base/marketing/brand-guide.md` — specifically the Value Proposition Framings, Positioning, Tagline, or Voice sections. Also triggers if the PR modifies value prop findings or competitive positioning documents that inform website copy.
+
+**Detection:** Run `git diff --name-only origin/main...HEAD` and check for `brand-guide.md`. If present, check `git diff origin/main...HEAD -- knowledge-base/marketing/brand-guide.md` for changes to positioning-related sections.
+
+**If triggered:**
+
+1. Spawn the CMO agent (or conversion-optimizer for landing page specifics) with a website framing audit prompt: "The brand guide's value proposition framings have been updated. Audit the website (soleur.ai) for alignment: does the hero headline, subheadline, feature descriptions, and pricing page messaging match the updated framing recommendations? Identify specific copy that needs updating and propose replacements."
+2. Present the audit findings to the user.
+3. **Interactive mode:** Ask "Apply website copy updates now, create issue for later, or skip?" Options: Apply now (edit site templates), Schedule (create GitHub issue with copy changes), Skip.
+4. **Headless mode:** Auto-create a GitHub issue with the copy audit findings for later action.
+
+**Why:** In #1173, the brand guide was updated with a new primary framing ("Stop hiring, start delegating"), a memory-first A/B variant, and trust scaffolding recommendations — but the website still used the old framing. Brand guide changes that don't cascade to the website create a disconnect between strategy and execution.
+
 ### COO Expense-Tracking Gate
 
 **Trigger:** The PR or session involved signing up for new services, provisioning new tools, subscribing to APIs, or using paid external resources during implementation. Also triggers if the diff adds new entries to infrastructure configs, Terraform files, or references new SaaS tools not already in `knowledge-base/operations/expenses.md`.
