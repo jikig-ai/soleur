@@ -198,17 +198,17 @@ If HTTP-header-based CSP is needed in the future (for `frame-ancestors`, `report
 
 ## Acceptance Criteria
 
-- [ ] `<meta http-equiv="Content-Security-Policy">` present in built HTML pages, positioned before any `<script>` tags
-- [ ] No CSP violations in browser console when loading docs site pages (index, pricing, blog posts, agents, skills, community, vision, legal, changelog, getting-started)
-- [ ] Plausible analytics script loads from `https://plausible.io` and sends pageview events
+- [x] `<meta http-equiv="Content-Security-Policy">` present in built HTML pages, positioned before any `<script>` tags
+- [x] No CSP violations in browser console when loading docs site pages (index, pricing, blog posts, agents, skills, community, vision, legal, changelog, getting-started)
+- [x] Plausible analytics script loads from `https://plausible.io` and sends pageview events
 - [ ] Newsletter form submission works -- `fetch()` to `https://buttondown.com` succeeds without CSP block
 - [ ] Waitlist form submission works -- `fetch()` to `https://buttondown.com` succeeds without CSP block
-- [ ] `application/ld+json` structured data blocks render without CSP errors (JSON-LD is exempt from `script-src`)
-- [ ] Inline `style=` attributes render correctly (40+ instances across templates) -- `style-src 'unsafe-inline'` allows them
-- [ ] CI validation script (`validate-csp.sh`) detects hash mismatches when inline scripts are modified
-- [ ] CI validation script detects orphan hashes (hashes in CSP that match no inline script)
-- [ ] All existing pages build successfully with `npx @11ty/eleventy`
-- [ ] CSP meta tag does **not** contain `strict-dynamic`, `report-uri`, `report-to`, `frame-ancestors`, or `sandbox` (unsupported in meta tags)
+- [x] `application/ld+json` structured data blocks render without CSP errors (JSON-LD is exempt from `script-src`)
+- [x] Inline `style=` attributes render correctly (40+ instances across templates) -- `style-src 'unsafe-inline'` allows them
+- [x] CI validation script (`validate-csp.sh`) detects hash mismatches when inline scripts are modified
+- [x] CI validation script detects orphan hashes (hashes in CSP that match no inline script)
+- [x] All existing pages build successfully with `npx @11ty/eleventy`
+- [x] CSP meta tag does **not** contain `strict-dynamic`, `report-uri`, `report-to`, `frame-ancestors`, or `sandbox` (unsupported in meta tags)
 
 ## Domain Review
 
