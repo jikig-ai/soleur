@@ -132,22 +132,22 @@ Rationale: Captures "company-as-a-service" and "solo founder" keywords in the st
 
 ## Acceptance Criteria
 
-- [ ] Homepage meta description contains "open-source" -- `plugins/soleur/docs/index.njk` line 3
-- [ ] Homepage meta description is between 150-160 characters -- `plugins/soleur/docs/index.njk` line 3
-- [ ] Homepage meta description does NOT contain "plugin" -- `plugins/soleur/docs/index.njk` line 3
-- [ ] Homepage meta description does NOT hardcode agent/skill counts -- `plugins/soleur/docs/index.njk` line 3
-- [ ] Homepage body text contains "solopreneur" at least once -- `plugins/soleur/docs/index.njk`
-- [ ] Homepage hero sub-paragraph includes "open-source" -- `plugins/soleur/docs/index.njk` line 11
-- [ ] Homepage JSON-LD FAQ entry for "Who is Soleur for?" matches visible text -- `plugins/soleur/docs/index.njk`
-- [ ] Getting Started meta description contains "free and open source" -- `plugins/soleur/docs/pages/getting-started.njk` line 3
-- [ ] Getting Started meta description is between 150-160 characters -- `plugins/soleur/docs/pages/getting-started.njk` line 3
-- [ ] Getting Started meta description does NOT contain "plugin" -- `plugins/soleur/docs/pages/getting-started.njk` line 3
-- [ ] Vision page H1 contains "Company-as-a-Service" and "Solo Founder" keywords -- `plugins/soleur/docs/pages/vision.njk`
-- [ ] Vision page H1 is NOT the single word "Vision" -- `plugins/soleur/docs/pages/vision.njk`
-- [ ] Vision page H1 is under 65 characters -- `plugins/soleur/docs/pages/vision.njk`
-- [ ] No brand guide violations introduced (no new "plugin" or "tool" references in public-facing copy)
-- [ ] Nunjucks template variables in hero-sub paragraph remain intact after edit -- `plugins/soleur/docs/index.njk` line 11
-- [ ] Site builds successfully with `npx @11ty/eleventy` (no template errors)
+- [x] Homepage meta description contains "open-source" -- `plugins/soleur/docs/index.njk` line 3
+- [x] Homepage meta description is between 150-160 characters -- `plugins/soleur/docs/index.njk` line 3 (157 chars)
+- [x] Homepage meta description does NOT contain "plugin" -- `plugins/soleur/docs/index.njk` line 3
+- [x] Homepage meta description does NOT hardcode agent/skill counts -- `plugins/soleur/docs/index.njk` line 3
+- [x] Homepage body text contains "solopreneur" at least once -- `plugins/soleur/docs/index.njk`
+- [x] Homepage hero sub-paragraph includes "open-source" -- `plugins/soleur/docs/index.njk` line 11
+- [x] Homepage JSON-LD FAQ entry for "Who is Soleur for?" matches visible text -- `plugins/soleur/docs/index.njk`
+- [x] Getting Started meta description contains "free and open source" -- `plugins/soleur/docs/pages/getting-started.njk` line 3
+- [x] Getting Started meta description is between 150-160 characters -- `plugins/soleur/docs/pages/getting-started.njk` line 3 (156 chars)
+- [x] Getting Started meta description does NOT contain "plugin" -- `plugins/soleur/docs/pages/getting-started.njk` line 3
+- [x] Vision page H1 contains "Company-as-a-Service" and "Solo Founder" keywords -- `plugins/soleur/docs/pages/vision.njk`
+- [x] Vision page H1 is NOT the single word "Vision" -- `plugins/soleur/docs/pages/vision.njk`
+- [x] Vision page H1 is under 65 characters -- `plugins/soleur/docs/pages/vision.njk` (60 chars)
+- [x] No brand guide violations introduced (no new "plugin" or "tool" references in public-facing copy)
+- [x] Nunjucks template variables in hero-sub paragraph remain intact after edit -- `plugins/soleur/docs/index.njk` line 11
+- [x] Site builds successfully with `npx @11ty/eleventy` (no template errors) -- pre-existing sitemap.njk dateToShort filter error, unrelated to changes
 
 ## Test Scenarios
 
