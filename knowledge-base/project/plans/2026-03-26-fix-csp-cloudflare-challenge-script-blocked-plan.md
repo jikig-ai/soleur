@@ -198,9 +198,9 @@ This is documented but not recommended until there is a concrete need.
 
 ## Acceptance Criteria
 
-- [ ] HTML comment in `base.njk` documents the known Cloudflare CSP console error with a reference to #1149
-- [ ] No functional regression -- all existing CSP protections remain unchanged
-- [ ] `validate-csp.sh` continues to pass (no changes to CSP hashes or directives)
+- [x] HTML comment in `base.njk` documents the known Cloudflare CSP console error with a reference to #1149
+- [x] No functional regression -- all existing CSP protections remain unchanged
+- [x] `validate-csp.sh` continues to pass (no changes to CSP hashes or directives)
 - [ ] Issue #1149 is closed with rationale
 
 ## Domain Review
