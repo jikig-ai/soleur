@@ -41,7 +41,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 |-----------|-------|
 | Agents | 62 |
 | Commands | 3 |
-| Skills | 59 |
+| Skills | 60 |
 | MCP Servers | 3 |
 
 ## Agents
@@ -247,6 +247,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `plan` | Create structured implementation plans |
 | `plan-review` | Multi-agent plan review in parallel |
 | `product-roadmap` | Define and operationalize product roadmaps through CPO-grade workshop |
+| `qa` | Run functional QA before merge — browser flows and API verification |
 | `review` | Run comprehensive code review with specialized agents |
 
 ### Workflow

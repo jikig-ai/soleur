@@ -1,6 +1,6 @@
 ---
 name: triage
-description: "This skill should be used when triaging and categorizing findings for the CLI todo system. It presents code review findings, security audit results, or performance analysis items one by one for approval, skip, or customization, then creates structured todo files. For GitHub issue classification, use the ticket-triage agent."
+description: "This skill should be used when triaging findings into CLI todo files. Presents items for approval or customization. For GitHub issues, use ticket-triage agent."
 ---
 
 - First set the /model to Haiku
