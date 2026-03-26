@@ -212,10 +212,22 @@ echo
 
 # Hard dependency -- cannot record without this
 if command -v agent-browser >/dev/null 2>&1; then
-  echo "  [ok] agent-browser"
+  # Version guard: must be 0.21.x+ (Chrome for Testing, no Playwright dep)
+  AB_VERSION=$(agent-browser --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+  if [[ -n "$AB_VERSION" ]]; then
+    AB_MAJOR=$(echo "$AB_VERSION" | cut -d. -f1)
+    AB_MINOR=$(echo "$AB_VERSION" | cut -d. -f2)
+    if [[ "$AB_MAJOR" -eq 0 && "$AB_MINOR" -lt 21 ]]; then
+      echo "  [ERROR] agent-browser $AB_VERSION is too old (pre-0.21 uses Playwright, causes version mismatch)"
+      echo "    Required: >= 0.21.1 (uses Chrome for Testing, no shared Playwright cache)"
+      echo "    Fix: sudo npm uninstall -g agent-browser && npm install --prefix ~/.local -g agent-browser@0.22.3 && agent-browser install"
+      exit 1
+    fi
+  fi
+  echo "  [ok] agent-browser${AB_VERSION:+ ($AB_VERSION)}"
 else
   echo "  [MISSING] agent-browser (required)"
-  echo "    Install: npm install -g agent-browser@0.21.4 && agent-browser install"
+  echo "    Install: npm install --prefix ~/.local -g agent-browser@0.22.3 && agent-browser install"
   echo "    On Linux: agent-browser install --with-deps (if system deps missing)"
   echo
   echo "Cannot proceed without agent-browser."

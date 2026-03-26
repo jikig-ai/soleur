@@ -25,7 +25,7 @@ Upgraded to `agent-browser@0.21.4`, which is a Rust native CLI using Chrome for 
 1. Self-contained packages that use Chrome for Testing (like agent-browser 0.21.1+) eliminate shared-cache coupling entirely
 2. Playwright's browser revision lookup is exact-match — there is no forward compatibility between revisions
 3. When two tools depend on the same browser cache, upgrading either tool can break the other
-4. Pin global npm installs to specific versions (`agent-browser@0.21.4`, not `@latest`)
+4. Pin global npm installs to specific versions (`agent-browser@0.22.3`, not `@latest`)
 5. On Linux, `agent-browser install --with-deps` may be needed for system library dependencies
 6. The `--session` flag was renamed to `--session-name` in agent-browser 0.21.x — documentation must track CLI flag renames across major version jumps
 7. When `npm install -g` fails with EACCES (no sudo), use `npm install --prefix ~/.local -g` — but ensure `~/.local/bin` is prepended (not appended) to PATH so it shadows system binaries

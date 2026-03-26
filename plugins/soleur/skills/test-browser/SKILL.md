@@ -22,6 +22,7 @@ If calling `mcp__claude-in-chrome__*` tools, STOP. Use `agent-browser` Bash comm
 <role>QA Engineer specializing in browser-based end-to-end testing</role>
 
 This skill tests affected pages in a real browser, catching issues that unit tests miss:
+
 - JavaScript integration bugs
 - CSS/layout regressions
 - User workflow breakages
@@ -38,13 +39,15 @@ This skill tests affected pages in a real browser, catching issues that unit tes
 ## Setup
 
 **Check installation:**
+
 ```bash
 command -v agent-browser >/dev/null 2>&1 && echo "Installed" || echo "NOT INSTALLED"
 ```
 
 **Install if needed:**
+
 ```bash
-npm install -g agent-browser@0.21.4
+npm install --prefix ~/.local -g agent-browser@0.22.3
 agent-browser install  # Downloads Chrome for Testing (~300MB)
 ```
 
@@ -57,7 +60,7 @@ See the `agent-browser` skill for detailed usage.
 Before starting ANY browser testing, verify agent-browser is installed:
 
 ```bash
-command -v agent-browser >/dev/null 2>&1 && echo "Ready" || (echo "Installing..." && npm install -g agent-browser@0.21.4 && agent-browser install)
+command -v agent-browser >/dev/null 2>&1 && echo "Ready" || (echo "Installing..." && npm install --prefix ~/.local -g agent-browser@0.22.3 && agent-browser install)
 ```
 
 If installation fails, inform the user and stop.
@@ -69,6 +72,7 @@ If installation fails, inform the user and stop.
 Before starting tests, ask the user if they want to watch the browser:
 
 Use AskUserQuestion with:
+
 - Question: "Do you want to watch the browser tests run?"
 - Options:
   1. **Headed (watch)** - Opens visible browser window so tests can be observed
@@ -85,16 +89,19 @@ Store the choice and use `--headed` flag when user selects "Headed".
 <determine_scope>
 
 **If PR number provided:**
+
 ```bash
 gh pr view [number] --json files -q '.files[].path'
 ```
 
 **If 'current' or empty:**
+
 ```bash
 git diff --name-only main...HEAD
 ```
 
 **If branch name provided:**
+
 ```bash
 git diff --name-only main...[branch]
 ```
@@ -135,6 +142,7 @@ agent-browser snapshot -i
 ```
 
 If server is not running, inform user:
+
 ```markdown
 **Server not running**
 
@@ -154,18 +162,21 @@ Then run `/test-browser` again.
 For each affected route, use agent-browser CLI commands (NOT Chrome MCP):
 
 **Step 1: Navigate and capture snapshot**
+
 ```bash
 agent-browser open "http://localhost:3000/[route]"
 agent-browser snapshot -i
 ```
 
 **Step 2: For headed mode (visual debugging)**
+
 ```bash
 agent-browser --headed open "http://localhost:3000/[route]"
 agent-browser --headed snapshot -i
 ```
 
 **Step 3: Verify key elements**
+
 - Use `agent-browser snapshot -i` to get interactive elements with refs
 - Page title/heading present
 - Primary content rendered
@@ -173,12 +184,14 @@ agent-browser --headed snapshot -i
 - Forms have expected fields
 
 **Step 4: Test critical interactions**
+
 ```bash
 agent-browser click @e1  # Use ref from snapshot
 agent-browser snapshot -i
 ```
 
 **Step 5: Take screenshots**
+
 ```bash
 agent-browser screenshot page-name.png
 agent-browser screenshot --full page-name-full.png  # Full page
@@ -201,6 +214,7 @@ Pause for human input when testing touches:
 | External APIs | "Confirm the [service] integration is working" |
 
 Use AskUserQuestion:
+
 ```markdown
 **Human Verification Needed**
 
@@ -226,6 +240,7 @@ When a test fails:
    - Note the exact reproduction steps
 
 2. **Ask user how to proceed:**
+
    ```markdown
    **Test Failed: [route]**
 

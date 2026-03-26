@@ -39,7 +39,7 @@ A 3,627-word business validation document containing:
 
 ## The Cost Comparison
 
-A startup strategy consultant or fractional CPO charges $200-400/hour for business validation work. A structured validation workshop covering problem definition, customer profiling, competitive landscaping, demand assessment, business model evaluation, and scope definition typically runs 20-40 hours: $4,000-16,000. A startup accelerator provides similar validation as part of a cohort program (valued at $10,000-25,000 in advisory). The AI-produced validation was generated through the brainstorm workflow with the `business-validator` agent, iterated through multiple sessions, and updated when new competitive data invalidated prior assessments.
+According to [Clutch.co's consulting pricing data](https://clutch.co/consulting/pricing), startup strategy consultants and fractional CPOs charge $200-400/hour for business validation work (as of 2026). A structured validation workshop covering problem definition, customer profiling, competitive landscaping, demand assessment, business model evaluation, and scope definition typically runs 20-40 hours: $4,000-16,000. A startup accelerator provides similar validation as part of a cohort program (valued at $10,000-25,000 in advisory). The AI-produced validation was generated through the brainstorm workflow with the `business-validator` agent, iterated through multiple sessions, and updated when new competitive data invalidated prior assessments.
 
 ## The Compound Effect
 
@@ -57,7 +57,7 @@ Yes. Soleur's business-validator agent runs a structured 6-gate validation works
 <details>
 <summary>How long does AI business validation take?</summary>
 
-The full 6-gate validation was completed through the brainstorm workflow in a fraction of the time a consultant requires. A startup strategy consultant charges $4,000–$16,000 for equivalent scope over 20–40 hours.
+The full 6-gate validation was completed through the brainstorm workflow in a fraction of the time a consultant requires. According to [Clutch.co's consulting pricing data](https://clutch.co/consulting/pricing), strategy consultants charge $200-400/hour (as of 2026), putting equivalent scope at $4,000–$16,000 over 20–40 hours.
 
 </details>
 
@@ -86,7 +86,7 @@ Before committing significant engineering time to a product. The validation work
       "name": "How long does AI business validation take?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "The full 6-gate validation was completed through the brainstorm workflow in a fraction of the time a consultant requires. A startup strategy consultant charges $4,000–$16,000 for equivalent scope over 20–40 hours."
+        "text": "The full 6-gate validation was completed through the brainstorm workflow in a fraction of the time a consultant requires. According to Clutch.co's consulting pricing data, strategy consultants charge $200-400/hour (as of 2026), putting equivalent scope at $4,000–$16,000 over 20–40 hours."
       }
     },
     {

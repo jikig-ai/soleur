@@ -36,7 +36,7 @@ The guide has been reviewed twice (last reviewed 2026-03-02) and governs all con
 
 ## The Cost Comparison
 
-A brand strategy agency charges $5,000-15,000 for a brand guide of this scope. The low end covers a basic positioning workshop and style guide; the high end includes visual identity exploration with multiple concepts, channel-specific guidelines, and a tone of voice framework. Timeline is typically 4-8 weeks including discovery sessions, concept presentations, and revision rounds. A freelance brand strategist charges $2,000-5,000 for a lighter version. The AI-produced guide was created across two brainstorm sessions and a formalization step, with ongoing review cycles built into the system.
+According to [Clutch.co's branding agency pricing data](https://clutch.co/agencies/branding/pricing), a brand strategy agency charges $5,000-15,000 for a brand guide of this scope (as of 2026). The low end covers a basic positioning workshop and style guide; the high end includes visual identity exploration with multiple concepts, channel-specific guidelines, and a tone of voice framework. Timeline is typically 4-8 weeks including discovery sessions, concept presentations, and revision rounds. A freelance brand strategist charges $2,000-5,000 for a lighter version. The AI-produced guide was created across two brainstorm sessions and a formalization step, with ongoing review cycles built into the system.
 
 ## The Compound Effect
 
@@ -54,7 +54,7 @@ Yes. Soleur's brand-architect agent runs an interactive workshop covering missio
 <details>
 <summary>How long does AI brand guide creation take?</summary>
 
-The brand guide was produced across two brainstorm sessions and a formalization step. A traditional brand agency takes 4–8 weeks for the same scope. The AI-produced guide includes identity, voice, visual direction, and channel-specific guidelines.
+The brand guide was produced across two brainstorm sessions and a formalization step. According to [Clutch.co's branding agency pricing data](https://clutch.co/agencies/branding/pricing), a traditional brand agency charges $5,000-15,000 for the same scope and takes 4–8 weeks (as of 2026). The AI-produced guide includes identity, voice, visual direction, and channel-specific guidelines.
 
 </details>
 
@@ -83,7 +83,7 @@ Solo founders and small teams who need professional brand consistency without hi
       "name": "How long does AI brand guide creation take?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "The brand guide was produced across two brainstorm sessions and a formalization step. A traditional brand agency takes 4–8 weeks for the same scope. The AI-produced guide includes identity, voice, visual direction, and channel-specific guidelines."
+        "text": "The brand guide was produced across two brainstorm sessions and a formalization step. According to Clutch.co's branding agency pricing data, a traditional brand agency charges $5,000-15,000 for the same scope and takes 4–8 weeks (as of 2026). The AI-produced guide includes identity, voice, visual direction, and channel-specific guidelines."
       }
     },
     {
