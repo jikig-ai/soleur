@@ -169,6 +169,6 @@ Report: "Article written to `<path>`. Review and commit when ready."
 - If outline is provided, follow it. If not, generate a reasonable article structure from the topic.
 - Do not scaffold blog infrastructure. If missing, direct the user to the docs-site skill.
 - The blog-post.njk layout generates BlogPosting JSON-LD automatically. Do not duplicate it in the post body.
-- Frontmatter fields should match existing posts in the target directory when possible.
+- Frontmatter fields should match existing posts in the target directory when possible. The `date:` field must be unquoted (e.g., `date: 2026-03-26`, not `date: "2026-03-26"`) -- Eleventy's `dateToRfc3339` filter requires a Date object, and quoted dates are parsed as strings.
 - If the brand guide's `## Channel Notes > ### Blog` section is missing, generate content using only the `## Voice` section (no error).
 - Every factual claim, statistic, and attributed quote must have a verifiable source URL. Phase 2.5 enforces this via the fact-checker agent -- claims without citations are flagged as UNSOURCED and claims with unsupporting sources are flagged as FAIL [enforced: fact-checker agent via Phase 2.5].
