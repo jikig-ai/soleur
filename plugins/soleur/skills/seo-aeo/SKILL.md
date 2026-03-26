@@ -75,7 +75,8 @@ Analyze gaps and apply targeted fixes to source files.
    Task seo-aeo-analyst: "Audit this Eleventy documentation site for SEO and AEO issues.
    For each issue found, apply a fix to the source files. Read each file before editing.
    After all fixes, build the site with `npx @11ty/eleventy` and run
-   `bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site` to verify.
+   `bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site` and
+   `bash plugins/soleur/skills/seo-aeo/scripts/validate-csp.sh _site` to verify.
    Report what was changed and whether validation passed."
    ```
 
@@ -96,16 +97,23 @@ Run the standalone validation script against built output.
    npx @11ty/eleventy
    ```
 
-2. Run the validation script:
+2. Run the validation scripts:
 
    ```bash
    bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site
+   bash plugins/soleur/skills/seo-aeo/scripts/validate-csp.sh _site
    ```
 
 3. Report results:
-   - **Exit 0:** All SEO checks passed
+   - **Exit 0 on both:** All SEO and CSP checks passed
    - **Exit 1:** Show failing checks and recommend running `seo-aeo fix`
 
-Validation script: [validate-seo.sh](./scripts/validate-seo.sh)
+Validation scripts:
 
-**Known limitation:** validate-seo.sh only checks named AI bot entries -- wildcard `User-agent: *` blocks are not detected. A site blocking all bots via wildcard will pass validation.
+- [validate-seo.sh](./scripts/validate-seo.sh) -- SEO/AEO element checks
+- [validate-csp.sh](./scripts/validate-csp.sh) -- Content-Security-Policy hash integrity checks
+
+**Known limitations:**
+
+- validate-seo.sh only checks named AI bot entries -- wildcard `User-agent: *` blocks are not detected. A site blocking all bots via wildcard will pass validation.
+- validate-csp.sh requires Python 3 for reliable multi-line HTML parsing and SHA-256 hash computation.
