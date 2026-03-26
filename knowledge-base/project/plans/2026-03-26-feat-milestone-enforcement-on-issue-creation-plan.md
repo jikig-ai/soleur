@@ -327,14 +327,14 @@ Current un-milestoned issues:
 
 ## Acceptance Criteria
 
-- [ ] All 17 issue creation surfaces include milestone assignment (either `--milestone` flag or prompt instruction)
-- [ ] Guard 5 added to `guardrails.sh` blocking `gh issue create` without `--milestone`
-- [ ] AGENTS.md contains a hard rule mandating milestone assignment on issue creation (annotated with `[hook-enforced: guardrails.sh Guard 5]`)
-- [ ] Constitution.md contains a convention for milestone assignment in workflows/scripts
-- [ ] All currently un-milestoned open issues have been assigned milestones
-- [ ] No regression: existing issue creation functionality works (labels, deduplication, body content)
-- [ ] Guard 5 does not false-positive on `gh issue edit`, `gh issue list`, `gh issue view`, or `gh issue close` commands
-- [ ] Guard 5 does not false-positive on `gh issue create` that appears inside a quoted string (e.g., in a PR body or issue comment)
+- [x] All 17 issue creation surfaces include milestone assignment (either `--milestone` flag or prompt instruction)
+- [x] Guard 5 added to `guardrails.sh` blocking `gh issue create` without `--milestone`
+- [x] AGENTS.md contains a hard rule mandating milestone assignment on issue creation (annotated with `[hook-enforced: guardrails.sh Guard 5]`)
+- [x] Constitution.md contains a convention for milestone assignment in workflows/scripts
+- [x] All currently un-milestoned open issues have been assigned milestones
+- [x] No regression: existing issue creation functionality works (labels, deduplication, body content)
+- [x] Guard 5 does not false-positive on `gh issue edit`, `gh issue list`, `gh issue view`, or `gh issue close` commands
+- [x] Guard 5 does not false-positive on `gh issue create` that appears inside a quoted string (e.g., in a PR body or issue comment)
 
 ## Domain Review
 
