@@ -1,6 +1,6 @@
 ---
 title: Soleur
-description: "The open-source company-as-a-service platform for solo founders. AI agents across engineering, marketing, legal, finance, and every department. Free forever."
+description: "You're doing 8 jobs. Soleur helps you tackle 7 of them -- marketing, legal, finance, sales, and more -- with AI agents that remember everything about your business."
 layout: base.njk
 permalink: index.html
 ---
@@ -8,7 +8,8 @@ permalink: index.html
     <!-- Hero -->
     <section class="landing-hero">
       <h1>Build a Billion-Dollar Company. Alone.</h1>
-      <p class="hero-sub">The open-source company-as-a-service platform for solo founders. {{ stats.agents }} AI agents across {{ stats.departments }} departments &mdash; engineering, marketing, legal, finance, sales, and more &mdash; orchestrated from a single platform.</p>
+      <p class="hero-sub">You&rsquo;re doing 8 jobs. Soleur helps you tackle 7 of them &mdash; marketing campaigns, legal contracts, competitive analysis, financial planning &mdash; delegated to AI agents that remember everything about your business.</p>
+      <p class="hero-trust">Human-in-the-loop. Your expertise, amplified.</p>
       <form class="newsletter-form hero-waitlist-form" id="homepage-waitlist-form"
         action="https://buttondown.com/api/emails/embed-subscribe/soleur"
         method="post">
@@ -52,8 +53,8 @@ permalink: index.html
     <section class="landing-section">
       <div class="landing-section-inner">
         <p class="section-label">This Is the Way</p>
-        <h2 class="section-title">The company-as-a-service platform &mdash; one founder, one AI organization, every department.</h2>
-        <p class="section-desc">Not a copilot. Not an assistant. A full AI organization that reviews, plans, builds, remembers, and self-improves. Sam Altman has called the one-person billion-dollar company <a href="https://fortune.com/2024/02/04/sam-altman-one-person-unicorn-silicon-valley-founder-myth/" rel="noopener noreferrer">&ldquo;unimaginable without AI&rdquo; but something that &ldquo;now will happen.&rdquo;</a> Every decision you make teaches the system. Every feature or project gets better and faster than the last.</p>
+        <h2 class="section-title">The AI that already knows your business.</h2>
+        <p class="section-desc">Every time you use Soleur, it learns more about your company. Your marketing agent knows your brand guide. Your legal agent knows your compliance requirements. Your product agent knows your competitive landscape. One compounding knowledge base across {{ stats.departments }} departments. Not a copilot that forgets. An organization that remembers.</p>
         <div class="problem-cards">
           <div class="problem-card">
             <div class="problem-card-icon" aria-hidden="true">&#x1F9E0;</div>
@@ -68,7 +69,7 @@ permalink: index.html
           <div class="problem-card">
             <div class="problem-card-icon" aria-hidden="true">&#x1F504;</div>
             <h3>Knowledge Compounds</h3>
-            <p>Solutions compound into patterns. Patterns compound into playbooks. Your AI organization gets smarter with every project &mdash; permanently.</p>
+            <p>Your marketing agent references last quarter&rsquo;s campaign data. Your legal agent cites your existing contracts. Every department builds on what came before &mdash; permanently.</p>
           </div>
         </div>
       </div>
@@ -91,7 +92,7 @@ permalink: index.html
     <section class="landing-section">
       <div class="landing-section-inner">
         <p class="section-label">Your AI Organization</p>
-        <h2 class="section-title">Agentic engineering from idea to shipped &mdash; every department, one workflow.</h2>
+        <h2 class="section-title">{{ stats.departments }} departments. One knowledge base. Your expertise, amplified.</h2>
         <div class="feature-grid-departments">
           {%- for domain in agents.domains %}
           <div class="feature-card">
@@ -131,7 +132,7 @@ permalink: index.html
           <div class="feature-card">
             <div class="feature-card-icon" aria-hidden="true">&#x1F4C8;</div>
             <h3>Compound</h3>
-            <p>Every decision captured, every pattern compounded. Your organization gets smarter with every project &mdash; permanently.</p>
+            <p>Every decision captured, every insight retained. Context from one department flows to all the others. Your organization gets smarter &mdash; permanently.</p>
           </div>
         </div>
       </div>
@@ -145,15 +146,19 @@ permalink: index.html
         <div class="faq-list">
           <details class="faq-item">
             <summary class="faq-question">What is Soleur?</summary>
-            <p class="faq-answer">Soleur is the company-as-a-service platform. It deploys {{ stats.agents }} AI agents across {{ stats.departments }} business departments &mdash; engineering, marketing, legal, finance, operations, product, sales, and support &mdash; giving a single founder the operational capacity of a full organization. Every problem solved compounds into patterns that accelerate future work.</p>
+            <p class="faq-answer">Soleur deploys {{ stats.agents }} AI agents across {{ stats.departments }} business departments &mdash; engineering, marketing, legal, finance, operations, product, sales, and support &mdash; giving a single founder the capacity of a full organization. Every agent shares a compounding knowledge base, so your marketing agent knows what your legal agent decided, and your finance agent references your actual revenue data. Your expertise stays in the loop: agents provide starting points, you make the final call.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">What is company-as-a-service?</summary>
-            <p class="faq-answer">Company-as-a-service means running every business function through a unified platform of AI agents instead of hiring individual employees or contractors for each department. You provide the taste, vision, and decisions &mdash; the agents handle execution across engineering, marketing, legal, sales, and every other department.</p>
+            <p class="faq-answer">Company-as-a-service means delegating business functions to AI agents instead of hiring for each department. You provide the decisions and judgment &mdash; agents execute across engineering, marketing, legal, sales, and every other department. The key difference from individual AI tools: a shared knowledge base that compounds across all departments over time.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">How does Soleur differ from Cursor or GitHub Copilot?</summary>
-            <p class="faq-answer">Cursor and Copilot are code editors. Soleur operates across every business department, not only engineering. It includes agents for marketing strategy, legal compliance, financial planning, sales pipeline analysis, and more. It also compounds knowledge over time &mdash; every decision and pattern is captured and reused, making your organization smarter with each project.</p>
+            <p class="faq-answer">Cursor and Copilot help you write code. Soleur helps you run a company. It includes agents for marketing strategy, legal compliance, financial planning, sales pipeline analysis, and more. The core difference: Soleur maintains a persistent knowledge base across every department. Your marketing agent knows your brand voice. Your legal agent knows your compliance posture. Cursor starts fresh every session.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">What if the AI output is wrong?</summary>
+            <p class="faq-answer">Soleur is human-in-the-loop by design. Every agent output is a starting point, not a final answer. You review, edit, and approve before anything ships. Your expertise drives the decisions &mdash; agents handle the execution. Think of it as a draft from a competent team member, not an autonomous system.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">Is Soleur free?</summary>
@@ -161,7 +166,7 @@ permalink: index.html
           </details>
           <details class="faq-item">
             <summary class="faq-question">Who is Soleur for?</summary>
-            <p class="faq-answer">Solo founders and solopreneurs who refuse to accept that scale requires headcount. Soleur is the only platform that spans every business department and compounds institutional knowledge across projects &mdash; giving one person the operational capacity of a full organization.</p>
+            <p class="faq-answer">Solo founders doing 8 jobs who want to delegate 7 of them. Especially founders at the hire-or-don&rsquo;t-hire decision point &mdash; Soleur gives you the capacity of a team before you have the budget for one. Your knowledge compounds across departments and sessions, so the more you use it, the more it knows about your business.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">How do I get started?</summary>
@@ -181,7 +186,7 @@ permalink: index.html
           "name": "What is Soleur?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Soleur is the company-as-a-service platform. It deploys AI agents across business departments — engineering, marketing, legal, finance, operations, product, sales, and support — giving a single founder the operational capacity of a full organization. Every problem solved compounds into patterns that accelerate future work."
+            "text": "Soleur deploys AI agents across business departments — engineering, marketing, legal, finance, operations, product, sales, and support — giving a single founder the capacity of a full organization. Every agent shares a compounding knowledge base, so your marketing agent knows what your legal agent decided. Your expertise stays in the loop: agents provide starting points, you make the final call."
           }
         },
         {
@@ -189,7 +194,7 @@ permalink: index.html
           "name": "What is company-as-a-service?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Company-as-a-service means running every business function through a unified platform of AI agents instead of hiring individual employees or contractors for each department. You provide the taste, vision, and decisions — the agents handle execution across engineering, marketing, legal, sales, and every other department."
+            "text": "Company-as-a-service means delegating business functions to AI agents instead of hiring for each department. You provide the decisions and judgment — agents execute across engineering, marketing, legal, sales, and every other department. The key difference from individual AI tools: a shared knowledge base that compounds across all departments over time."
           }
         },
         {
@@ -197,7 +202,15 @@ permalink: index.html
           "name": "How does Soleur differ from Cursor or GitHub Copilot?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Cursor and Copilot are code editors. Soleur operates across every business department, not only engineering. It includes agents for marketing strategy, legal compliance, financial planning, sales pipeline analysis, and more. It also compounds knowledge over time — every decision and pattern is captured and reused."
+            "text": "Cursor and Copilot help you write code. Soleur helps you run a company. It includes agents for marketing strategy, legal compliance, financial planning, sales pipeline analysis, and more. The core difference: Soleur maintains a persistent knowledge base across every department. Your marketing agent knows your brand voice. Your legal agent knows your compliance posture. Cursor starts fresh every session."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What if the AI output is wrong?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Soleur is human-in-the-loop by design. Every agent output is a starting point, not a final answer. You review, edit, and approve before anything ships. Your expertise drives the decisions — agents handle the execution."
           }
         },
         {
@@ -213,7 +226,7 @@ permalink: index.html
           "name": "Who is Soleur for?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Solo founders and solopreneurs who refuse to accept that scale requires headcount. Soleur is the only platform that spans every business department and compounds institutional knowledge across projects, giving one person the operational capacity of a full organization."
+            "text": "Solo founders doing 8 jobs who want to delegate 7 of them. Especially founders at the hire-or-don't-hire decision point — Soleur gives you the capacity of a team before you have the budget for one. Your knowledge compounds across departments and sessions, so the more you use it, the more it knows about your business."
           }
         },
         {
@@ -230,8 +243,8 @@ permalink: index.html
 
     <!-- Final CTA -->
     <section class="landing-cta">
-      <h2>Ready to build at scale?</h2>
-      <p>Your AI organization is ready. Are you?</p>
+      <h2>Stop hiring. Start delegating.</h2>
+      <p>{{ stats.agents }} agents across {{ stats.departments }} departments. One knowledge base that remembers everything.</p>
       <a href="/pages/pricing.html" class="btn btn-primary">See Pricing &amp; Join Waitlist</a>
       <p class="waitlist-secondary"><a href="/pages/getting-started.html">Or start with the free self-hosted version &rarr;</a></p>
     </section>

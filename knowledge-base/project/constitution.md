@@ -55,6 +55,7 @@ Project principles organized by domain. Add principles as you learn them.
 - Prefer ASCII characters unless the file already contains Unicode
 - Use imperative/infinitive form for instructions (verb-first)
 - When spawning parallel subagents to generate HTML pages, provide an explicit CSS class name reference list (not the full CSS file) -- subagents independently invent class names that don't match the shared stylesheet
+- Run markdownlint on subagent-generated markdown files before staging -- subagents do not inherit the project's lint conventions and commonly produce MD032 violations (missing blank lines around lists)
 - After merges that bump versions, CI updates all version files automatically -- no manual grep needed; if HTML docs contain hardcoded version strings, file an issue to template them
 - When documentation mandates one strategy but code uses another, canonicalize on what the code does -- unless there is a strong reason to change the code; documentation that contradicts implementation creates confusion and wasted effort
 - Prefer numbered phase sections (Phase 1, Phase 2) in SKILL.md for multi-step workflows, with XML semantic tags (`<critical_sequence>`, `<decision_gate>`, `<validation_gate>`) to mark control flow

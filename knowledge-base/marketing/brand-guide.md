@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-22
-last_reviewed: 2026-03-22
+last_updated: 2026-03-26
+last_reviewed: 2026-03-26
 review_cadence: quarterly
 owner: CMO
 depends_on:
@@ -81,6 +81,30 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 - Use emojis in formal marketing copy (acceptable in Discord)
 - Call it a "plugin" or "tool" in public-facing content -- it is a platform. **Exception:** "plugin" is permitted in literal CLI commands (`claude plugin install`), in legal documents where "Plugin" is a defined term, and in technical documentation describing the installation mechanism
 
+### Value Proposition Framings
+
+> **[2026-03-26 Synthetic Research Review]** Tested three framings against 10 synthetic founder personas. Pain-point framing won 7/10. CaaS framing requires market education a bootstrapped company can't afford. Tool-replacement failed for pre-revenue founders (6/10 of the cohort) who don't have tool spend to replace. These findings are hypotheses to validate in real interviews.
+
+**Primary framing (pain-point):** "Stop hiring, start delegating"
+
+- Use: Landing page hero, outbound messaging, first-contact copy
+- Pitch: "You're doing 8 jobs. Soleur helps you tackle 7 of them — marketing campaigns, legal contracts, competitive analysis, financial planning — delegated to AI agents that remember everything about your business."
+- Why: Near-universal problem recognition. "You're doing 8 jobs" describes every solo founder's lived experience. Softened claim ("helps you tackle" not "handles") for pragmatist credibility.
+- Segment: Best for $10K-50K MRR founders at the hire/don't-hire fork
+
+**Memory-first variant (recommended for A/B test):** "The AI that already knows your business"
+
+- Use: A/B test against primary framing on landing page
+- Pitch: "Every time you use Soleur, it learns more about your company. Your marketing agent knows your brand guide. Your legal agent knows your compliance requirements. Your product agent knows your competitive landscape. One compounding knowledge base across 8 departments."
+- Why: "Memory" / persistent context generated the strongest unprompted positive reactions across 4 personas. This is the feature that separates Soleur from "just use ChatGPT." Not one of the three tested framings — emerged from cross-cutting analysis.
+- Segment: Best for pre-revenue enthusiasts who already use ChatGPT and are frustrated by context loss
+
+**CaaS framing (secondary, education-heavy):** "Your AI company" — retain for deep content (blog posts, case studies) where there's space to explain the concept. Not suitable for headlines or first-contact messaging.
+
+**Tool-replacement framing (retire as primary):** "One platform, 8 departments" — demote to secondary proof point on the pricing page for later-stage founders. Not suitable for headlines. The $765-3,190/month comparison only resonates with $15K+ MRR founders with established tool stacks.
+
+**Trust scaffolding (add to all framings):** All three framings lacked trust signals. Add phrases like "human-in-the-loop," "starting point, not final answer," or "your expertise, amplified" to address the #1 objection across 8/10 personas: "What if the output is wrong?"
+
 ### Example Phrases
 
 **Announcements:**
@@ -94,6 +118,8 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 - "You decide. Agents execute. Knowledge compounds."
 - "Not a copilot. Not an assistant. A full AI organization that reviews, plans, builds, remembers, and self-improves."
 - "Designed, built, and shipped by Soleur -- using Soleur."
+- "Stop hiring. Start delegating." _[Added 2026-03-26: lead pain-point framing]_
+- "The AI that already knows your business." _[Added 2026-03-26: memory-first variant for A/B testing]_
 
 **Community replies:**
 
