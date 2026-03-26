@@ -205,7 +205,7 @@ Domain leaders are consulted at brainstorm time but not at ship time. The actual
 
 **If triggered:**
 
-1. Spawn the CMO agent (or conversion-optimizer for landing page specifics) with a website framing audit prompt: "The brand guide's value proposition framings have been updated. Audit the website (soleur.ai) for alignment: does the hero headline, subheadline, feature descriptions, and pricing page messaging match the updated framing recommendations? Identify specific copy that needs updating and propose replacements."
+1. Spawn the CMO agent (or conversion-optimizer for landing page specifics) with a website framing audit prompt. **Read the site source templates directly from the repo** (e.g., `apps/web-platform/`, `docs/`, or the Eleventy source directory) — do NOT use Playwright to fetch the rendered site when the source files are local. Prompt: "The brand guide's value proposition framings have been updated. Audit the website source templates for alignment: does the hero headline, subheadline, feature descriptions, and pricing page messaging match the updated framing recommendations? Identify specific copy that needs updating and propose replacements with file paths and line numbers."
 2. Present the audit findings to the user.
 3. **Interactive mode:** Ask "Apply website copy updates now, create issue for later, or skip?" Options: Apply now (edit site templates), Schedule (create GitHub issue with copy changes), Skip.
 4. **Headless mode:** Auto-create a GitHub issue with the copy audit findings for later action.
