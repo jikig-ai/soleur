@@ -47,13 +47,19 @@ Read each section aloud as written. Do not paraphrase, reorder, or skip question
 
 Let them talk. Do not prompt with examples. If they say "nothing" or struggle, follow up with: "What about emails, docs, planning, anything administrative?" but do not name specific domains.
 
-> 5. Which of those tasks felt like a distraction from your core work?
-
-> 6. Have you tried using AI for any of those non-coding tasks? What happened?
+> 5. Which of those tasks do you feel least qualified to do? Where is the gap between what you're doing and what an expert would do the widest? _[Rewritten 2026-03-26: original "distraction" framing failed when pain IS core work or manifests as avoidance]_
+>
+> 6. What business tasks do you know you should be doing but aren't? What's stopping you? _[Added 2026-03-26: surfaces avoidance pain -- 3/10 personas had pain that manifests as zero time spent, not excess time]_
+>
+> 7. Which of these tasks keeps you up at night — not the time-consuming ones, the scary ones? _[Added 2026-03-26: emotional weight is often a stronger buying signal than time cost]_
+>
+> 8. Have you tried using AI for any of those non-coding tasks? What happened?
 
 If yes, probe: "What worked? What didn't? Did you keep using it?" If no, ask: "Why not?"
 
-> 7. What would change for you if those tasks were handled automatically?
+> 8a. What have you already tried to solve this — AI or otherwise? What worked, what didn't, and why? _[Added 2026-03-26: many founders tried non-AI alternatives (lawyers, freelancers, templates) — understanding why those failed reveals what the new solution must do differently]_
+>
+> 9. What would change for you if those tasks were handled automatically?
 
 Listen for intensity signals: time saved, stress reduced, things they'd build instead, emotional relief. This is where willingness-to-pay seeds are planted -- note exact phrases.
 
@@ -61,15 +67,15 @@ Listen for intensity signals: time saved, stress reduced, things they'd build in
 
 ### Domain Probing (5 minutes)
 
-> 8. I'm going to read a list of business domains. Tell me which ones you've spent time on in the last month.
+> 10. I'm going to read a list of business domains. Tell me which ones you've spent time on in the last month.
 >
-> **[Read aloud, slowly:]** Legal. Marketing. Operations. Finance. Sales. Support.
+> **[Read aloud, slowly:]** Legal. Marketing. Operations. Finance. Sales. Support. HR/People. Product Strategy. _[Expanded 2026-03-26: added HR/People and Product Strategy — personas revealed secondary pain in these domains when prompted]_
 
 Check off each one they confirm. Then:
 
-> 9. Which ones are you ignoring that you probably shouldn't be?
+> 11. Which ones are you ignoring that you probably shouldn't be?
 
-**Interviewer note:** Responses to questions 8 and 9 are coded as "prompted" domains, not "independent." See Section 4.
+**Interviewer note:** Responses to questions 10 and 11 are coded as "prompted" domains, not "independent." See Section 4.
 
 ---
 
@@ -77,17 +83,21 @@ Check off each one they confirm. Then:
 
 Identify their top pain domain from the conversation so far (usually the one with the most emotional energy in questions 4-7, or the strongest response in questions 8-9). Then:
 
-> 10. If a tool existed that handled **[their top pain domain]** with AI, what would it need to do?
+> 12. If a tool existed that handled **[their top pain domain]** for you, what would it need to do?
 
 Let them describe the ideal. Note specific capabilities they mention.
 
-> 11. How much time per week would that save you?
+> 12a. If that was handled for you, how would you know if it was done wrong? _[Added 2026-03-26: tests whether the founder can evaluate quality — critical for AI trust model design]_
+>
+> 13. What's this costing you right now — in money, in deals you're losing, in launch delays, or in risk you're carrying? _[Rewritten 2026-03-26: original "how much time per week" failed for anxiety, zero-baseline, and effectiveness pain — multi-dimensional cost framing lets founders pick the unit that matches their pain]_
 
-Record the exact number. If they give a range, ask: "If you had to pick one number?"
+Record the exact answer in whatever unit they use (dollars, hours, deals, risk). This answer becomes the anchor for the next question.
 
-> 12. What would you pay for that?
+> 14. You mentioned [their stated cost from Q13]. How much of that would a tool need to cover before you'd pay for it? What would the budget look like? _[Rewritten 2026-03-26: original "what would you pay" produced flat responses from pre-revenue founders with no price anchor — anchoring on THEIR stated cost produces reliable WTP signals]_
 
-**Do not anchor.** Do not say "like $20 a month" or "a few hundred dollars." Let them name a number, even if it's uncomfortable silence. If they say "I don't know," follow up with: "Take a guess -- what feels right?" Record the exact amount and whether it was monthly or annual.
+**Establish the anchor first.** If Q13 produced a concrete cost (lawyer fees, hours lost, deals missed), reference it directly. If the founder couldn't quantify, provide the anchor: "You said you're losing enterprise deals / launching late / worried about lawsuits. If we put a dollar figure on that risk, what's the range?" Then ask about budget.
+
+> 15. What would need to happen for you to solve this in the next 30 days? _[Added 2026-03-26: separates chronic pain from acute buying triggers — some founders have pain they'll tolerate indefinitely, others have acute triggers]_
 
 ---
 
