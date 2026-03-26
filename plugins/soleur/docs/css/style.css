@@ -1120,7 +1120,8 @@
   }
   .hiring-total-row td {
     border-top: 2px solid var(--color-accent);
-    font-size: var(--text-lg);
+    padding-top: var(--space-4);
+    padding-bottom: var(--space-4);
   }
   .hiring-footnote {
     font-size: var(--text-xs);
