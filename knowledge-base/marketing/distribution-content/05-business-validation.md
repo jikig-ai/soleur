@@ -3,7 +3,7 @@ title: "Running a Business Validation Workshop With AI Gates"
 type: case-study
 publish_date: 2026-03-26
 channels: discord, x, bluesky, linkedin-company
-status: scheduled
+status: published
 ---
 
 ## Discord
