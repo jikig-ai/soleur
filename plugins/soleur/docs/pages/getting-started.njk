@@ -1,0 +1,249 @@
+---
+title: Getting Started with Soleur
+description: "Get started with Soleur — the company-as-a-service platform. Choose the cloud platform or self-hosted open-source version to deploy AI agents across every business department."
+layout: base.njk
+permalink: pages/getting-started.html
+---
+
+    <!-- Hero -->
+    <section class="page-hero">
+      <div class="container">
+        <p class="section-label">Getting Started</p>
+        <h1>Getting Started with Soleur</h1>
+        <p>Choose your path to a full AI organization.</p>
+      </div>
+    </section>
+
+    <!-- Two-Path Cards -->
+    <section class="landing-section">
+      <div class="landing-section-inner">
+        <div class="path-cards">
+
+          <div class="path-card path-card--primary">
+            <div class="path-card-header">
+              <h2 class="path-card-title">Soleur Cloud Platform</h2>
+              <span class="path-card-badge path-card-badge--coming-soon">COMING SOON</span>
+            </div>
+            <p class="path-card-desc">Access your AI organization from any device. No CLI required. Dashboard, real-time agents, managed infrastructure, and priority support &mdash; all in the browser.</p>
+            <ul class="path-card-features">
+              <li>Web dashboard &mdash; access from any device</li>
+              <li>Managed infrastructure and agent orchestration</li>
+              <li>Real-time agent activity and knowledge base</li>
+              <li>Priority support and early access to new features</li>
+            </ul>
+            <a href="pages/pricing.html" class="btn btn-primary path-card-cta">Join the Waitlist &rarr;</a>
+          </div>
+
+          <div class="path-card path-card--secondary">
+            <div class="path-card-header">
+              <h2 class="path-card-title">Self-Hosted (Open Source)</h2>
+              <span class="path-card-badge path-card-badge--available">AVAILABLE NOW</span>
+            </div>
+            <p class="path-card-desc">Install the Claude Code extension and run your AI organization locally. Full access to all {{ stats.agents }} agents and {{ stats.skills }} skills. Free and open source.</p>
+            <a href="#self-hosted" class="btn btn-secondary path-card-cta">Get Started &rarr;</a>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- Self-Hosted Installation -->
+    <section class="landing-section" id="self-hosted">
+      <div class="landing-section-inner">
+        <p class="section-label">Self-Hosted</p>
+        <h2 class="section-title">Installation</h2>
+
+        <div class="quickstart-code">
+          <pre><code>claude plugin install soleur</code></pre>
+        </div>
+
+        <div class="callout">
+          <strong>Existing project?</strong> Run <code>/soleur:sync</code> to analyze your codebase and populate the knowledge base.<br>
+          <strong>Starting fresh?</strong> Run <code>/soleur:go</code> and describe what you need.
+        </div>
+
+        <h3 class="section-subtitle" style="margin-top: var(--space-8);">The Workflow</h3>
+        <p>Soleur follows a structured 5-step workflow for software development:</p>
+
+        <div class="commands-list">
+          <div class="command-item">
+            <code>/soleur:go</code>
+            <p>The recommended entry point &mdash; describe what you want and Soleur routes to the right workflow</p>
+          </div>
+        </div>
+
+        <p>The 5-step workflow (invoked automatically via <code>/soleur:go</code> or directly via Skill tool):</p>
+
+        <div class="commands-list">
+          <div class="command-item">
+            <code>1. brainstorm</code>
+            <p>Explore what to build</p>
+          </div>
+          <div class="command-item">
+            <code>2. plan</code>
+            <p>Create a structured implementation plan</p>
+          </div>
+          <div class="command-item">
+            <code>3. work</code>
+            <p>Execute the plan with quality checks</p>
+          </div>
+          <div class="command-item">
+            <code>4. review</code>
+            <p>Run multi-agent code review</p>
+          </div>
+          <div class="command-item">
+            <code>5. compound</code>
+            <p>Document learnings for future reference</p>
+          </div>
+        </div>
+
+        <h3 class="section-subtitle" style="margin-top: var(--space-8);">Commands</h3>
+
+        <div class="commands-list">
+          <div class="command-item">
+            <code>/soleur:go</code>
+            <p>Unified entry point &mdash; routes to the right workflow skill</p>
+          </div>
+          <div class="command-item">
+            <code>/soleur:sync</code>
+            <p>Analyze and document your codebase</p>
+          </div>
+          <div class="command-item">
+            <code>/soleur:help</code>
+            <p>List all available components</p>
+          </div>
+        </div>
+
+        <h3 class="section-subtitle" style="margin-top: var(--space-8);">Example Workflows</h3>
+
+        <div class="commands-list">
+          <div class="command-item">
+            <code>Building a Feature</code>
+            <p>/soleur:go build [feature] &rarr; brainstorm &rarr; plan &rarr; work &rarr; review &rarr; compound</p>
+          </div>
+          <div class="command-item">
+            <code>Generating Legal Documents</code>
+            <p>/soleur:go generate legal documents &rarr; Terms, Privacy Policy, GDPR Policy, and more</p>
+          </div>
+          <div class="command-item">
+            <code>Fixing a Bug</code>
+            <p>/soleur:go fix [bug] &rarr; autonomous fix from plan to PR</p>
+          </div>
+          <div class="command-item">
+            <code>Defining Your Brand</code>
+            <p>/soleur:go define our brand identity &rarr; interactive workshop producing a brand guide</p>
+          </div>
+          <div class="command-item">
+            <code>Reviewing a PR</code>
+            <p>/soleur:go review &rarr; multi-agent review on existing PR</p>
+          </div>
+          <div class="command-item">
+            <code>Validating a Business Idea</code>
+            <p>/soleur:go validate our business idea &rarr; 6-gate validation workshop</p>
+          </div>
+          <div class="command-item">
+            <code>Tracking Expenses</code>
+            <p>/soleur:go review our expenses &rarr; routed to ops-advisor agent</p>
+          </div>
+        </div>
+
+        <h3 class="section-subtitle" style="margin-top: var(--space-8);">Learn More</h3>
+
+        <ul class="learn-more-links">
+          <li><a href="pages/agents.html">Agents <span class="learn-more-desc">AI agents across engineering, finance, marketing, legal, operations, product, sales, and support</span></a></li>
+          <li><a href="pages/skills.html">Skills <span class="learn-more-desc">Multi-step skills for complex workflows</span></a></li>
+          <li><a href="pages/changelog.html">Changelog <span class="learn-more-desc">All notable changes to Soleur</span></a></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- FAQ Section -->
+    <section class="landing-section">
+      <div class="landing-section-inner">
+        <p class="section-label">Common Questions</p>
+        <h2 class="section-title">Frequently Asked Questions</h2>
+        <div class="faq-list">
+          <details class="faq-item">
+            <summary class="faq-question">What do I need to run Soleur?</summary>
+            <p class="faq-answer">For the self-hosted version, you need the Claude Code CLI with an Anthropic API key or a Claude subscription. Install with <code>claude plugin install soleur</code> and run <code>/soleur:go</code> to start. No additional dependencies or server setup needed. The cloud platform (coming soon) requires only a browser and a Soleur subscription.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">Does Soleur work on Windows, Linux, and macOS?</summary>
+            <p class="faq-answer">The self-hosted version runs anywhere Claude Code runs &mdash; Linux, macOS, and Windows via WSL. The cloud platform will be accessible from any browser on any operating system.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">How much does Soleur cost?</summary>
+            <p class="faq-answer">The self-hosted version is free and open source. Your costs depend entirely on your Claude usage through Anthropic. The cloud platform will offer paid tiers starting at $49/month for managed infrastructure, priority support, and team features.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">What is the difference between /soleur:go and individual skills?</summary>
+            <p class="faq-answer"><code>/soleur:go</code> is the unified entry point that classifies your intent and routes to the right workflow automatically. Individual skills like brainstorm, plan, work, and review can be invoked directly when you know exactly which stage you need.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">Can I use Soleur with an existing project?</summary>
+            <p class="faq-answer">Yes. Run <code>/soleur:sync</code> to analyze your codebase and populate the knowledge base with your project&rsquo;s conventions, architecture, and patterns. Soleur adapts to your existing codebase rather than requiring a fresh start.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">What is the difference between the cloud platform and self-hosted?</summary>
+            <p class="faq-answer">The self-hosted version gives you the full platform &mdash; every agent, every skill, every department &mdash; running locally through the Claude Code CLI. The cloud platform adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and priority support. Both versions access the same {{ stats.agents }} agents and {{ stats.skills }} skills.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "What do I need to run Soleur?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "For the self-hosted version, you need the Claude Code CLI with an Anthropic API key or a Claude subscription. Install with claude plugin install soleur and run /soleur:go to start. The cloud platform (coming soon) requires only a browser and a Soleur subscription."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does Soleur work on Windows, Linux, and macOS?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "The self-hosted version runs anywhere Claude Code runs -- Linux, macOS, and Windows via WSL. The cloud platform will be accessible from any browser on any operating system."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How much does Soleur cost?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "The self-hosted version is free and open source. Your costs depend entirely on your Claude usage through Anthropic. The cloud platform will offer paid tiers starting at $49/month for managed infrastructure, priority support, and team features."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What is the difference between /soleur:go and individual skills?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "/soleur:go is the unified entry point that classifies your intent and routes to the right workflow automatically. Individual skills like brainstorm, plan, work, and review can be invoked directly when you know exactly which stage you need."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can I use Soleur with an existing project?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. Run /soleur:sync to analyze your codebase and populate the knowledge base with your project's conventions, architecture, and patterns. Soleur adapts to your existing codebase rather than requiring a fresh start."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What is the difference between the cloud platform and self-hosted?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "The self-hosted version gives you the full platform -- every agent, every skill, every department -- running locally through the Claude Code CLI. The cloud platform adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and priority support."
+          }
+        }
+      ]
+    }
+    </script>

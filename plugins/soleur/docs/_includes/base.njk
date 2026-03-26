@@ -40,10 +40,9 @@
       {
         "@type": "SoftwareApplication",
         "name": "{{ site.name }}",
-        "applicationCategory": "DeveloperApplication",
+        "applicationCategory": "BusinessApplication",
         "operatingSystem": "macOS, Linux, Windows",
         "softwareVersion": "{{ plugin.version }}",
-        "softwareRequirements": "Claude Code CLI",
         "downloadUrl": "{{ site.github }}",
         "releaseNotes": "{{ site.url }}/pages/changelog.html",
         "featureList": "AI Agents, Skills, Commands, Knowledge Compounding, Code Review, Planning, Deployment",
@@ -51,11 +50,6 @@
           "@type": "Organization",
           "name": "{{ site.name }}",
           "url": "{{ site.url }}"
-        },
-        "offers": {
-          "@type": "Offer",
-          "price": "0",
-          "priceCurrency": "USD"
         }
       }{% endif %}
     ]
@@ -130,10 +124,14 @@
         body: new URLSearchParams(new FormData(form))
       }).then(function(res) {
         if (res.ok) {
-          status.textContent = 'Check your email to confirm your subscription.';
+          var isWaitlist = form.id.indexOf('waitlist') !== -1;
+          status.textContent = isWaitlist
+            ? 'You are on the list. We will notify you when the cloud platform is ready.'
+            : 'Subscribed. You will hear from us when it matters.';
           status.className = 'newsletter-status newsletter-success';
           form.querySelector('input[type="email"]').value = '';
-          if (window.plausible) plausible('Newsletter Signup', { props: { location: location } });
+          var eventName = isWaitlist ? 'Waitlist Signup' : 'Newsletter Signup';
+          if (window.plausible) plausible(eventName, { props: { location: location } });
         } else {
           status.textContent = 'Something went wrong. Please try again.';
           status.className = 'newsletter-status newsletter-error';
