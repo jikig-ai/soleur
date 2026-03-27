@@ -827,78 +827,49 @@ sync_bare_files() {
     return 0
   fi
 
-  echo -e "${BLUE}Syncing critical on-disk files from git HEAD...${NC}"
+  echo -e "${BLUE}Syncing on-disk files from git HEAD...${NC}"
 
-  # Create a temp directory on the same filesystem for atomic writes
-  local tmpdir
-  tmpdir=$(mktemp -d "${GIT_ROOT}/.sync-tmp.XXXXXX")
-  # shellcheck disable=SC2064  # Intentional: expand tmpdir NOW so the trap works after local scope ends
-  trap "rm -rf '$tmpdir'" EXIT
-
-  # Files that Claude Code reads from the bare repo root
-  local files=(
-    "AGENTS.md"
+  # Extract all plugin-loadable trees from HEAD in one shot.
+  # The old approach used a hardcoded whitelist that missed commands, skills,
+  # agents, and docs -- causing stale files after every merge (#1188 regression).
+  # git archive | tar -x overwrites in-place and adds new files atomically.
+  local trees=(
+    "plugins/"
     "CLAUDE.md"
+    "AGENTS.md"
+    "README.md"
     ".claude-plugin"
     ".claude/settings.json"
-    "plugins/soleur/AGENTS.md"
-    "plugins/soleur/CLAUDE.md"
-    "plugins/soleur/hooks/hooks.json"
-    "plugins/soleur/hooks/stop-hook.sh"
-    "plugins/soleur/hooks/welcome-hook.sh"
-    "plugins/soleur/scripts/resolve-git-root.sh"
-    "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
   )
 
-  local synced=0
-  for file in "${files[@]}"; do
-    # Verify file exists in git HEAD
-    if ! git cat-file -e "HEAD:$file" 2>/dev/null; then
-      continue
-    fi
-
-    # Ensure parent directory exists on disk
-    local dir
-    dir=$(dirname "$GIT_ROOT/$file")
-    mkdir -p "$dir"
-
-    # Atomic write: extract to temp file, then mv into place
-    local safe_name="${file//\//_}"
-    local tmpfile="$tmpdir/${safe_name}"
-    if git show "HEAD:$file" > "$tmpfile" 2>/dev/null; then
-      mv "$tmpfile" "$GIT_ROOT/$file"
-      synced=$((synced + 1))
-    else
-      rm -f "$tmpfile"
-      echo -e "${YELLOW}Warning: Could not sync $file${NC}"
+  # Build archive args, skipping trees that don't exist in HEAD
+  local archive_args=()
+  for tree in "${trees[@]}"; do
+    if git cat-file -e "HEAD:$tree" 2>/dev/null; then
+      archive_args+=("$tree")
     fi
   done
 
-  # Restore execute permissions on scripts
-  chmod +x "$GIT_ROOT/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh" 2>/dev/null || true
-  chmod +x "$GIT_ROOT/plugins/soleur/hooks/"*.sh 2>/dev/null || true
+  if [[ ${#archive_args[@]} -eq 0 ]]; then
+    echo -e "${YELLOW}No syncable trees found in HEAD${NC}"
+    return 0
+  fi
 
-  # Sync hook scripts and restore execute permissions
+  # Extract directly into the bare repo root
+  if ! git archive HEAD -- "${archive_args[@]}" | tar -xC "$GIT_ROOT" 2>/dev/null; then
+    echo -e "${RED}Error: git archive extraction failed${NC}"
+    return 1
+  fi
+
+  # Sync hook scripts from .claude/hooks/ and restore execute permissions
   local hook_files
   hook_files=$(git ls-tree --name-only HEAD .claude/hooks/ 2>/dev/null || true)
   if [[ -n "$hook_files" ]]; then
     mkdir -p "$GIT_ROOT/.claude/hooks"
-    while IFS= read -r hook_file; do
-      # Validate path prefix to prevent unexpected writes
-      [[ "$hook_file" == .claude/hooks/* ]] || continue
-      local tmpfile="$tmpdir/$(basename "$hook_file").$$"
-      if git show "HEAD:$hook_file" > "$tmpfile" 2>/dev/null; then
-        mv "$tmpfile" "$GIT_ROOT/$hook_file"
-        chmod +x "$GIT_ROOT/$hook_file" 2>/dev/null || true
-        synced=$((synced + 1))
-      else
-        rm -f "$tmpfile"
-      fi
-    done <<< "$hook_files"
-  fi
+    git archive HEAD -- .claude/hooks/ | tar -xC "$GIT_ROOT" 2>/dev/null || true
+    chmod +x "$GIT_ROOT/.claude/hooks/"*.sh 2>/dev/null || true
 
-  # Remove stale hook files that no longer exist in git HEAD
-  if [[ -d "$GIT_ROOT/.claude/hooks" ]]; then
+    # Remove stale hook files that no longer exist in git HEAD
     for on_disk_hook in "$GIT_ROOT/.claude/hooks"/*; do
       [[ -f "$on_disk_hook" ]] || continue
       local hook_name
@@ -910,8 +881,11 @@ sync_bare_files() {
     done
   fi
 
+  # Restore execute permissions on scripts
+  find "$GIT_ROOT/plugins/" -name "*.sh" -exec chmod +x {} + 2>/dev/null || true
+  chmod +x "$GIT_ROOT/plugins/soleur/hooks/"*.sh 2>/dev/null || true
 
-  echo -e "${GREEN}Synced $synced file(s) from git HEAD${NC}"
+  echo -e "${GREEN}Synced on-disk files from git HEAD${NC}"
 }
 
 # Main command handler
