@@ -235,16 +235,12 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
         return;
       }
 
-      // Layer 1: transport-level length guard (defense-in-depth)
-      if (typeof msg.selection !== "string" || msg.selection.length > MAX_SELECTION_LENGTH) {
-        sendToClient(userId, {
-          type: "error",
-          message: "Invalid selection. Please choose one of the offered options.",
-        });
-        return;
-      }
-
       try {
+        // Layer 1: transport-level length guard (defense-in-depth)
+        if (typeof msg.selection !== "string" || msg.selection.length > MAX_SELECTION_LENGTH) {
+          throw new Error("Invalid review gate selection");
+        }
+
         await resolveReviewGate(
           userId,
           session.conversationId,

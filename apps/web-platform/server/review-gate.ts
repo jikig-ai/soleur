@@ -26,9 +26,8 @@ export const MAX_SELECTION_LENGTH = 256;
 export function validateSelection(
   options: string[],
   selection: string,
-  maxLength: number = MAX_SELECTION_LENGTH,
 ): void {
-  if (selection.length > maxLength) {
+  if (selection.length > MAX_SELECTION_LENGTH) {
     throw new Error("Invalid review gate selection");
   }
   if (!options.includes(selection)) {

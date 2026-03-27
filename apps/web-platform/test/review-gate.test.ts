@@ -61,12 +61,6 @@ describe("validateSelection", () => {
     expect(() => validateSelection([longOption], longOption)).not.toThrow();
   });
 
-  test("respects custom maxLength", () => {
-    expect(() => validateSelection(["short"], "short", 3)).toThrow(
-      "Invalid review gate selection",
-    );
-  });
-
   test("MAX_SELECTION_LENGTH is 256", () => {
     expect(MAX_SELECTION_LENGTH).toBe(256);
   });
