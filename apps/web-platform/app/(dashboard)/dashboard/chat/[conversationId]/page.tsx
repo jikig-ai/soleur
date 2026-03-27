@@ -27,14 +27,14 @@ export default function ChatPage() {
   }, [messages]);
 
   // Start session when connection is established for a new conversation
+  // leaderId is optional — if omitted, the server auto-routes via domain router
   useEffect(() => {
     if (
       status === "connected" &&
       conversationId === "new" &&
-      leaderId &&
       !sessionStarted
     ) {
-      startSession(leaderId);
+      startSession(leaderId ?? undefined);
       setSessionStarted(true);
     }
   }, [status, conversationId, leaderId, sessionStarted, startSession]);
@@ -52,16 +52,15 @@ export default function ChatPage() {
       {/* Top bar */}
       <header className="flex shrink-0 items-center justify-between border-b border-neutral-800 px-6 py-3">
         <div className="flex items-center gap-3">
-          {leader && (
+          {leader ? (
             <>
               <span className="text-sm font-semibold text-white">
                 {leader.name}
               </span>
               <span className="text-sm text-neutral-500">{leader.title}</span>
             </>
-          )}
-          {!leader && (
-            <span className="text-sm text-neutral-500">Chat</span>
+          ) : (
+            <span className="text-sm font-semibold text-white">Command Center</span>
           )}
         </div>
         <StatusIndicator status={status} />
@@ -90,7 +89,7 @@ export default function ChatPage() {
                   onSelect={sendReviewGateResponse}
                 />
               ) : (
-                <MessageBubble role={msg.role} content={msg.content} />
+                <MessageBubble role={msg.role} content={msg.content} leaderId={msg.leaderId} />
               )}
             </div>
           ))}
@@ -133,14 +132,29 @@ export default function ChatPage() {
 /*  Sub-components                                                     */
 /* ------------------------------------------------------------------ */
 
+const LEADER_COLORS: Record<string, string> = {
+  cmo: "border-l-pink-500",
+  cto: "border-l-blue-500",
+  cfo: "border-l-green-500",
+  cpo: "border-l-purple-500",
+  cro: "border-l-orange-500",
+  coo: "border-l-yellow-500",
+  clo: "border-l-red-500",
+  cco: "border-l-teal-500",
+};
+
 function MessageBubble({
   role,
   content,
+  leaderId,
 }: {
   role: "user" | "assistant";
   content: string;
+  leaderId?: DomainLeaderId;
 }) {
   const isUser = role === "user";
+  const leader = leaderId ? DOMAIN_LEADERS.find((l) => l.id === leaderId) : null;
+  const colorClass = leaderId ? (LEADER_COLORS[leaderId] ?? "border-l-neutral-500") : "";
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -148,9 +162,17 @@ function MessageBubble({
         className={`max-w-[80%] rounded-xl px-4 py-3 text-sm leading-relaxed ${
           isUser
             ? "bg-white text-black"
-            : "bg-neutral-900 text-neutral-200 border border-neutral-800"
+            : `bg-neutral-900 text-neutral-200 border border-neutral-800 ${leader ? `border-l-2 ${colorClass}` : ""}`
         }`}
       >
+        {leader && (
+          <div className="mb-1 flex items-center gap-2">
+            <span className="text-xs font-semibold text-neutral-400">
+              {leader.name}
+            </span>
+            <span className="text-xs text-neutral-600">{leader.title}</span>
+          </div>
+        )}
         <p className="whitespace-pre-wrap">{content}</p>
       </div>
     </div>

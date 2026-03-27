@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import type { WSMessage } from "@/lib/types";
+import type { WSMessage, ConversationContext } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
 type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
@@ -12,6 +12,7 @@ interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   type: "text" | "review_gate";
+  leaderId?: DomainLeaderId;
   /** Present only when type === "review_gate" */
   gateId?: string;
   question?: string;
@@ -20,7 +21,7 @@ interface ChatMessage {
 
 interface UseWebSocketReturn {
   messages: ChatMessage[];
-  startSession: (leaderId: DomainLeaderId) => void;
+  startSession: (leaderId?: DomainLeaderId, context?: ConversationContext) => void;
   sendMessage: (content: string) => void;
   sendReviewGateResponse: (gateId: string, selection: string) => void;
   status: ConnectionStatus;
@@ -37,8 +38,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mountedRef = useRef(true);
 
-  /** Stable ref to the latest partial assistant message index for streaming */
-  const streamIndexRef = useRef<number | null>(null);
+  /** Map of active leader streams: leaderId → message index in the messages array */
+  const activeStreamsRef = useRef<Map<string, number>>(new Map());
 
   const getWsUrlAndToken = useCallback(async () => {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -100,67 +101,66 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           break;
         }
 
-        case "stream": {
+        case "stream_start": {
+          if (msg.type !== "stream_start") break;
+          // Create a new empty message bubble for this leader
           setMessages((prev) => {
-            if (msg.type !== "stream") return prev;
-
-            if (streamIndexRef.current !== null && msg.partial) {
-              // Append to existing partial message
-              const updated = [...prev];
-              const idx = streamIndexRef.current!;
-              if (idx < updated.length) {
-                updated[idx] = {
-                  ...updated[idx],
-                  content: updated[idx].content + msg.content,
-                };
-              }
-              return updated;
-            }
-
-            if (msg.partial) {
-              // Start a new streaming message
-              const newMsg: ChatMessage = {
-                id: `stream-${Date.now()}`,
-                role: "assistant",
-                content: msg.content,
-                type: "text",
-              };
-              streamIndexRef.current = prev.length;
-              return [...prev, newMsg];
-            }
-
-            // Final chunk — append remaining content and close stream
-            if (streamIndexRef.current !== null) {
-              const updated = [...prev];
-              const idx = streamIndexRef.current;
-              if (idx < updated.length) {
-                updated[idx] = {
-                  ...updated[idx],
-                  content: updated[idx].content + msg.content,
-                };
-              }
-              streamIndexRef.current = null;
-              return updated;
-            }
-
-            // Non-partial, non-streaming message — full assistant response
-            streamIndexRef.current = null;
-            return [
-              ...prev,
-              {
-                id: `msg-${Date.now()}`,
-                role: "assistant",
-                content: msg.content,
-                type: "text",
-              },
-            ];
+            const newMsg: ChatMessage = {
+              id: `stream-${msg.leaderId}-${Date.now()}`,
+              role: "assistant",
+              content: "",
+              type: "text",
+              leaderId: msg.leaderId,
+            };
+            activeStreamsRef.current.set(msg.leaderId, prev.length);
+            return [...prev, newMsg];
           });
+          break;
+        }
+
+        case "stream": {
+          if (msg.type !== "stream") break;
+          const streamLeaderId = msg.leaderId;
+
+          setMessages((prev) => {
+            // Look up the message index for this leader's active stream
+            const idx = activeStreamsRef.current.get(streamLeaderId);
+
+            if (idx !== undefined && idx < prev.length) {
+              // Append to existing bubble for this leader
+              const updated = [...prev];
+              updated[idx] = {
+                ...updated[idx],
+                content: updated[idx].content + msg.content,
+              };
+              return updated;
+            }
+
+            // No active stream for this leader (stream_start may have been missed)
+            // Create a new bubble
+            const newMsg: ChatMessage = {
+              id: `stream-${streamLeaderId}-${Date.now()}`,
+              role: "assistant",
+              content: msg.content,
+              type: "text",
+              leaderId: streamLeaderId,
+            };
+            activeStreamsRef.current.set(streamLeaderId, prev.length);
+            return [...prev, newMsg];
+          });
+          break;
+        }
+
+        case "stream_end": {
+          if (msg.type !== "stream_end") break;
+          // Finalize this leader's stream — remove from active streams map
+          activeStreamsRef.current.delete(msg.leaderId);
           break;
         }
 
         case "review_gate": {
           if (msg.type !== "review_gate") break;
-          streamIndexRef.current = null;
+          activeStreamsRef.current.clear();
           setMessages((prev) => [
             ...prev,
             {
@@ -178,7 +178,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
         case "error": {
           if (msg.type !== "error") break;
-          streamIndexRef.current = null;
+          activeStreamsRef.current.clear();
 
           // Key invalidation: redirect to setup instead of showing error
           if (msg.errorCode === "key_invalid") {
@@ -206,16 +206,19 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
         case "session_ended": {
           if (msg.type !== "session_ended") break;
-          streamIndexRef.current = null;
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: `end-${Date.now()}`,
-              role: "assistant",
-              content: `Session ended: ${msg.reason}`,
-              type: "text",
-            },
-          ]);
+          activeStreamsRef.current.clear();
+          // Don't display "turn_complete" as a visible message — it's a lifecycle signal
+          if (msg.reason !== "turn_complete") {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `end-${Date.now()}`,
+                role: "assistant",
+                content: `Session ended: ${msg.reason}`,
+                type: "text",
+              },
+            ]);
+          }
           break;
         }
 
@@ -259,8 +262,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   }, [connect, conversationId]);
 
   const startSession = useCallback(
-    (leaderId: DomainLeaderId) => {
-      send({ type: "start_session", leaderId });
+    (leaderId?: DomainLeaderId, context?: ConversationContext) => {
+      send({ type: "start_session", leaderId, context });
     },
     [send],
   );

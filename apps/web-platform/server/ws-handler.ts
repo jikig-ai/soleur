@@ -95,14 +95,14 @@ const AUTH_TIMEOUT_MS = 5_000;
  */
 async function createConversation(
   userId: string,
-  leaderId: DomainLeaderId,
+  leaderId?: DomainLeaderId,
 ): Promise<string> {
   const id = randomUUID();
 
   const { error } = await supabase.from("conversations").insert({
     id,
     user_id: userId,
-    domain_leader: leaderId,
+    domain_leader: leaderId ?? null,
     status: "active" as Conversation["status"],
     last_active: new Date().toISOString(),
   });
@@ -144,13 +144,13 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
       try {
         abortActiveSession(userId, session);
 
-        console.log(`[ws] start_session for user ${userId}, leader ${msg.leaderId}`);
+        console.log(`[ws] start_session for user ${userId}, leader ${msg.leaderId ?? "auto-route"}`);
         const conversationId = await createConversation(userId, msg.leaderId);
         session.conversationId = conversationId;
         console.log(`[ws] Conversation ${conversationId} created, booting agent`);
 
         // Boot the agent runner (async -- streams will flow via sendToClient)
-        startAgentSession(userId, conversationId, msg.leaderId).catch(
+        startAgentSession(userId, conversationId, msg.leaderId, undefined, undefined, msg.context).catch(
           (err) => {
             console.error(`[ws] startAgentSession error for user ${userId}:`, err);
             sendToClient(userId, {
@@ -303,6 +303,8 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
     // ------------------------------------------------------------------
     case "auth_ok":
     case "stream":
+    case "stream_start":
+    case "stream_end":
     case "review_gate":
     case "session_started":
     case "session_ended":
