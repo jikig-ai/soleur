@@ -197,9 +197,39 @@ Update the reference guide to document the new per-container structure and how t
 | `plugins/soleur/skills/architecture/SKILL.md` | Update `assess` sub-command to support per-container scoping |
 | `plugins/soleur/skills/architecture/references/nfr-reference.md` | Document new per-container structure and referencing conventions |
 
+## New NFRs to Add
+
+In addition to restructuring the existing 30 NFRs, add 17 new NFRs identified from an external NFR reference table comparison. These are either already implemented but untracked, or represent real gaps.
+
+### High-Value Additions (12)
+
+| New ID | Title | Category | Current Status |
+|--------|-------|----------|---------------|
+| NFR-031 | Periodic Backup & Recovery | Scaling & Recovery | Partial (Supabase auto-backup, no app-level strategy) |
+| NFR-032 | Automatic Rollback on KPI Alert | Config & Delivery | Not Implemented |
+| NFR-033 | Unified Logging Format | Observability | Not Implemented |
+| NFR-034 | Stable Dependency Versioning | Config & Delivery | Implemented (bun.lockb, lockfiles) |
+| NFR-035 | Semantic Versioning | Config & Delivery | Implemented (semver labels, ADR-017) |
+| NFR-036 | Immutable Releases | Config & Delivery | Implemented (GHCR Docker image tags) |
+| NFR-037 | FOSS Compatibility Scanning | Testing | Not Implemented |
+| NFR-038 | Least Privilege Container Images | Security | Partial (non-root in some Dockerfiles) |
+| NFR-039 | Container Image Security Scanning | Security | Not Implemented |
+| NFR-040 | Data Retention Policy | Security | Not Implemented |
+| NFR-041 | Link-Level Access Control | Security | Partial (Cloudflare Zero Trust, Supabase RLS) |
+| NFR-042 | LLM-Ready Documentation | Data Quality | Implemented (AGENTS.md, SKILL.md, constitution.md) |
+
+### Medium-Value Additions (5)
+
+| New ID | Title | Category | Current Status |
+|--------|-------|----------|---------------|
+| NFR-043 | Rolling Update Deployment | Config & Delivery | Not Implemented (overlaps NFR-018 canary) |
+| NFR-044 | Dynamic Logging Configuration | Observability | Not Implemented |
+| NFR-045 | API Backwards Compatibility | Resilience | N/A (no public API yet) |
+| NFR-046 | Automated Failure Injection Testing | Testing | N/A (overkill at current scale) |
+| NFR-047 | Certificate Scope Control | Security | Implemented (Cloudflare manages per-domain certs) |
+
 ## Non-Goals
 
-- Adding new NFRs beyond the existing 30 -- this is a structural change, not a content expansion
 - Automating evidence collection (e.g., scanning code for TLS config) -- evidence is manually documented
 - Changing the ADR template -- the existing NFR Impacts section already supports referencing specific containers
 - Creating a machine-readable format (YAML/JSON) for the NFR register -- markdown remains the format
@@ -208,18 +238,18 @@ Update the reference guide to document the new per-container structure and how t
 
 ## Acceptance Criteria
 
-- [ ] Each of the 30 NFRs has its own subsection (`###`) with a container/link applicability table
-- [ ] Container and link names match the C4 container diagram (`container.md`) exactly -- verified by re-reading the diagram, not copied from this plan
-- [ ] Each NFR section includes **Category** and **System-Level Status** metadata above the table
-- [ ] System-level status is derived from per-container rollup using explicit precedence: Not Implemented > Partial > Implemented; N/A excluded
-- [ ] Every row with "Applicable: Yes" has a non-empty "Enforced By" and "Evidence" column (or explicit "TBD" for gaps)
-- [ ] Passive containers (Skills, Agents, Knowledge Base) are included only where genuinely applicable -- not in every NFR section
-- [ ] Internal links (File I/O, Directory scan, Event hook) are excluded from network-oriented NFRs (encryption, circuit breaker, rate limiting)
-- [ ] The summary table at the bottom reflects rollup from per-container data, with counts matching the per-NFR tables
-- [ ] The `assess` sub-command in SKILL.md references the per-container structure in its assessment output format
-- [ ] `nfr-reference.md` documents: (a) the per-container structure, (b) how to reference specific container/link rows in ADR NFR Impacts, (c) the maintenance procedure when adding new containers
-- [ ] All existing NFR IDs are preserved (no renumbering)
-- [ ] Markdown passes markdownlint on all modified files
+- [x] Each of the 48 NFRs (31 existing + 17 new) has its own subsection (`###`) with a container/link applicability table
+- [x] Container and link names match the C4 container diagram (`container.md`) exactly -- verified by re-reading the diagram, not copied from this plan
+- [x] Each NFR section includes **Category** and **System-Level Status** metadata above the table
+- [x] System-level status is derived from per-container rollup using explicit precedence: Not Implemented > Partial > Implemented; N/A excluded
+- [x] Every row with "Applicable: Yes" has a non-empty "Enforced By" and "Evidence" column (or explicit "TBD" for gaps)
+- [x] Passive containers (Skills, Agents, Knowledge Base) are included only where genuinely applicable -- not in every NFR section
+- [x] Internal links (File I/O, Directory scan, Event hook) are excluded from network-oriented NFRs (encryption, circuit breaker, rate limiting)
+- [x] The summary table at the bottom reflects rollup from per-container data, with counts matching the per-NFR tables
+- [x] The `assess` sub-command in SKILL.md references the per-container structure in its assessment output format
+- [x] `nfr-reference.md` documents: (a) the per-container structure, (b) how to reference specific container/link rows in ADR NFR Impacts, (c) the maintenance procedure when adding new containers
+- [x] All existing NFR IDs are preserved (no renumbering)
+- [x] Markdown passes markdownlint on all modified files
 
 ## Test Scenarios
 
