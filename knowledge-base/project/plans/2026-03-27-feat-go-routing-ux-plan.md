@@ -12,13 +12,13 @@ Simplify `/soleur:go` from 4 intents to 3 by making brainstorm the default route
 
 ## Acceptance Criteria
 
-- [ ] `/go add dark mode` routes directly to `soleur:brainstorm` (no confirmation)
-- [ ] `/go fix the login bug` routes directly to `soleur:one-shot`
-- [ ] `/go review PR #100` routes directly to `soleur:review`
-- [ ] No AskUserQuestion confirmation step for classified intents
-- [ ] AskUserQuestion fallback only fires when intent is truly ambiguous
-- [ ] Worktree context detection (Step 1) unchanged
-- [ ] Original user input passed through as `args` to delegated skill
+- [x] `/go add dark mode` routes directly to `soleur:brainstorm` (no confirmation)
+- [x] `/go fix the login bug` routes directly to `soleur:one-shot`
+- [x] `/go review PR #100` routes directly to `soleur:review`
+- [x] No AskUserQuestion confirmation step for classified intents
+- [x] AskUserQuestion fallback only fires when intent is truly ambiguous
+- [x] Worktree context detection (Step 1) unchanged
+- [x] Original user input passed through as `args` to delegated skill
 
 ## Test Scenarios
 
