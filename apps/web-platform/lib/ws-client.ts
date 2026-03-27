@@ -25,18 +25,43 @@ interface UseWebSocketReturn {
   sendMessage: (content: string) => void;
   sendReviewGateResponse: (gateId: string, selection: string) => void;
   status: ConnectionStatus;
+  disconnectReason: string | undefined;
 }
 
 const MAX_BACKOFF = 30_000;
 const INITIAL_BACKOFF = 1_000;
 
+/** Close codes where reconnecting will never succeed. */
+const NON_TRANSIENT_CLOSE_CODES: Record<
+  number,
+  { action: "redirect" | "disconnect"; target?: string; reason: string }
+> = {
+  4001: { action: "redirect", target: "/login", reason: "Session expired" },
+  4002: { action: "disconnect", reason: "Superseded by another tab" },
+  4003: { action: "redirect", target: "/login", reason: "Authentication required" },
+  4004: { action: "redirect", target: "/accept-terms", reason: "Terms acceptance required" },
+  4005: { action: "disconnect", reason: "Server error" },
+};
+
 export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
+  const [disconnectReason, setDisconnectReason] = useState<string | undefined>(undefined);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mountedRef = useRef(true);
+
+  /** Permanently tear down the WebSocket — prevents reconnect loop.
+   *  Mirrors the key_invalid teardown pattern. */
+  const teardown = useCallback(() => {
+    mountedRef.current = false;
+    clearTimeout(reconnectTimerRef.current);
+    if (wsRef.current) {
+      wsRef.current.onclose = null;
+      wsRef.current.close();
+    }
+  }, []);
 
   /** Map of active leader streams: leaderId → message index in the messages array */
   const activeStreamsRef = useRef<Map<string, number>>(new Map());
@@ -182,12 +207,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
           // Key invalidation: redirect to setup instead of showing error
           if (msg.errorCode === "key_invalid") {
-            mountedRef.current = false;
-            clearTimeout(reconnectTimerRef.current);
-            if (wsRef.current) {
-              wsRef.current.onclose = null;
-              wsRef.current.close();
-            }
+            teardown();
             window.location.href = "/setup-key";
             return; // Prevent post-redirect state updates
           }
@@ -228,10 +248,22 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event: CloseEvent) => {
       if (!mountedRef.current) return;
-      setStatus("reconnecting");
 
+      const entry = NON_TRANSIENT_CLOSE_CODES[event.code];
+      if (entry) {
+        teardown();
+        setStatus("disconnected");
+        setDisconnectReason(entry.reason);
+        if (entry.action === "redirect" && entry.target) {
+          window.location.href = entry.target;
+        }
+        return;
+      }
+
+      // Transient failure — reconnect with exponential backoff
+      setStatus("reconnecting");
       const delay = backoffRef.current;
       backoffRef.current = Math.min(backoffRef.current * 2, MAX_BACKOFF);
 
@@ -245,7 +277,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     ws.onerror = () => {
       // onclose will fire after onerror — reconnect logic lives there
     };
-  }, [getWsUrlAndToken]);
+  }, [getWsUrlAndToken, teardown]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -292,5 +324,5 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     [send],
   );
 
-  return { messages, startSession, sendMessage, sendReviewGateResponse, status };
+  return { messages, startSession, sendMessage, sendReviewGateResponse, status, disconnectReason };
 }

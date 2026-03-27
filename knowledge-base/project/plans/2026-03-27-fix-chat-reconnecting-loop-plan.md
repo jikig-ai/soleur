@@ -181,15 +181,15 @@ The `ws` library (server-side) `close` event callback has a different signature:
 
 ## Acceptance Criteria
 
-- [ ] WebSocket close code 4001/4003 redirects user to `/login` instead of reconnecting
-- [ ] WebSocket close code 4004 redirects user to `/accept-terms` instead of reconnecting
-- [ ] WebSocket close code 4002 sets status to `"disconnected"` without reconnecting
-- [ ] WebSocket close code 4005 sets status to `"disconnected"` with error feedback
-- [ ] Normal disconnects (code 1006, 1001, undefined) still trigger exponential backoff reconnect
-- [ ] Reconnect timer is properly cleared when a non-transient close code is received
-- [ ] The `key_invalid` redirect in the message handler (existing) continues to work
-- [ ] The teardown sequence (mountedRef, clearTimeout, onclose=null, close) is consistent between `key_invalid` handler and new close code handler
-- [ ] `disconnectReason` is displayed in the `StatusIndicator` when status is `"disconnected"`
+- [x] WebSocket close code 4001/4003 redirects user to `/login` instead of reconnecting
+- [x] WebSocket close code 4004 redirects user to `/accept-terms` instead of reconnecting
+- [x] WebSocket close code 4002 sets status to `"disconnected"` without reconnecting
+- [x] WebSocket close code 4005 sets status to `"disconnected"` with error feedback
+- [x] Normal disconnects (code 1006, 1001, undefined) still trigger exponential backoff reconnect
+- [x] Reconnect timer is properly cleared when a non-transient close code is received
+- [x] The `key_invalid` redirect in the message handler (existing) continues to work
+- [x] The teardown sequence (mountedRef, clearTimeout, onclose=null, close) is consistent between `key_invalid` handler and new close code handler
+- [x] `disconnectReason` is displayed in the `StatusIndicator` when status is `"disconnected"`
 
 ## Domain Review
 
