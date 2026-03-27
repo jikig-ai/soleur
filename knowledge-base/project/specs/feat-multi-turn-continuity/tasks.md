@@ -39,10 +39,10 @@
 
 ## Phase 4: Lifecycle Management
 
-- [ ] 4.1 Inactivity timeout cleanup (24h)
-- [ ] 4.2 Explicit close mechanism (`close_conversation` WSMessage + handler)
-- [ ] 4.3 Work completion close trigger
-- [ ] 4.4 Orphan session file cleanup
+- [x] 4.1 Inactivity timeout cleanup (24h)
+- [x] 4.2 Explicit close mechanism (`close_conversation` WSMessage + handler)
+- [x] 4.3 Work completion close trigger
+- [x] 4.4 Orphan session file cleanup
 
 ## Phase 5: Testing
 

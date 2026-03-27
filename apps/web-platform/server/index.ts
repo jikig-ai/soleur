@@ -2,7 +2,7 @@ import { createServer } from "http";
 import next from "next";
 import { parse } from "url";
 import { setupWebSocket } from "./ws-handler";
-import { cleanupOrphanedConversations } from "./agent-runner";
+import { cleanupOrphanedConversations, startInactivityTimer } from "./agent-runner";
 import { handleConversationMessages } from "./api-messages";
 
 const port = parseInt(process.env.PORT || "3000", 10);
@@ -39,6 +39,9 @@ app.prepare().then(() => {
   cleanupOrphanedConversations().catch((err) => {
     console.error("[startup] Failed to clean up orphaned conversations:", err);
   });
+
+  // Start periodic inactivity check (24h timeout, hourly checks)
+  startInactivityTimer();
 
   server.listen(port, () => {
     console.log(`> Ready on http://localhost:${port}`);

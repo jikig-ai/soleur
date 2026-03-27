@@ -200,6 +200,38 @@ export async function cleanupOrphanedConversations(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Inactivity timeout (runs as periodic background check)
+// ---------------------------------------------------------------------------
+const INACTIVITY_TIMEOUT_MS = 24 * 60 * 60 * 1_000; // 24 hours
+const INACTIVITY_CHECK_INTERVAL_MS = 60 * 60 * 1_000; // Check every hour
+
+export function startInactivityTimer(): void {
+  const timer = setInterval(async () => {
+    const cutoff = new Date(Date.now() - INACTIVITY_TIMEOUT_MS).toISOString();
+    const { data, error } = await supabase
+      .from("conversations")
+      .update({ status: "completed" })
+      .in("status", ["waiting_for_user"])
+      .lt("last_active", cutoff)
+      .select("id, user_id");
+
+    if (error) {
+      console.error(`[agent] Inactivity cleanup error: ${error.message}`);
+      return;
+    }
+
+    if (data && data.length > 0) {
+      // Abort in-memory sessions for timed-out conversations
+      for (const conv of data) {
+        abortSession(conv.user_id, conv.id);
+      }
+      console.log(`[agent] Cleaned up ${data.length} inactive conversation(s)`);
+    }
+  }, INACTIVITY_CHECK_INTERVAL_MS);
+  timer.unref();
+}
+
+// ---------------------------------------------------------------------------
 // Start agent session
 // ---------------------------------------------------------------------------
 export async function startAgentSession(
