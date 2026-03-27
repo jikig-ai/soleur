@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
@@ -16,6 +17,43 @@ export default function DashboardLayout({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // Auto-close drawer on route change
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [pathname]);
+
+  // Close drawer on ESC key (register once — setDrawerOpen(false) is a no-op when already closed)
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setDrawerOpen(false);
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // Body scroll lock when drawer is open
+  useEffect(() => {
+    if (drawerOpen) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [drawerOpen]);
+
+  // Auto-close drawer when viewport crosses md breakpoint (orientation change)
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(min-width: 768px)");
+    const handler = () => {
+      if (mediaQuery.matches) setDrawerOpen(false);
+    };
+    mediaQuery.addEventListener("change", handler);
+    return () => mediaQuery.removeEventListener("change", handler);
+  }, []);
 
   async function handleSignOut() {
     const supabase = createClient();
@@ -24,14 +62,52 @@ export default function DashboardLayout({
   }
 
   return (
-    <div className="flex h-screen">
-      {/* Sidebar */}
-      <aside className="flex w-56 flex-col border-r border-neutral-800 bg-neutral-900">
-        {/* Brand */}
-        <div className="px-5 py-5">
+    <div className="flex h-dvh flex-col md:flex-row">
+      {/* Mobile top bar — only visible below md breakpoint */}
+      <div className="flex h-14 shrink-0 items-center border-b border-neutral-800 bg-neutral-900 px-4 safe-top md:hidden">
+        <button
+          onClick={() => setDrawerOpen(true)}
+          aria-label="Open navigation"
+          aria-expanded={drawerOpen}
+          className="flex h-10 w-10 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-800 hover:text-white"
+        >
+          <MenuIcon className="h-5 w-5" />
+        </button>
+        <span className="ml-3 text-lg font-semibold tracking-tight text-white">
+          Soleur
+        </span>
+      </div>
+
+      {/* Overlay backdrop — always rendered for fade transition */}
+      <div
+        className={`fixed inset-0 z-40 bg-black/50 transition-opacity duration-200 md:hidden ${
+          drawerOpen ? "opacity-100" : "pointer-events-none opacity-0"
+        }`}
+        aria-hidden="true"
+        onClick={() => setDrawerOpen(false)}
+      />
+
+      {/* Sidebar / mobile drawer — always rendered for CSS transitions */}
+      <aside
+        className={`
+          fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-neutral-800 bg-neutral-900
+          transition-transform duration-200 ease-out
+          ${drawerOpen ? "translate-x-0" : "-translate-x-full"}
+          md:relative md:z-auto md:w-56 md:translate-x-0 md:transition-none
+        `}
+      >
+        {/* Brand + close button */}
+        <div className="flex items-center justify-between px-5 py-5 safe-top">
           <span className="text-lg font-semibold tracking-tight text-white">
             Soleur
           </span>
+          <button
+            onClick={() => setDrawerOpen(false)}
+            aria-label="Close navigation"
+            className="flex h-10 w-10 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-800 hover:text-white md:hidden"
+          >
+            <XIcon className="h-5 w-5" />
+          </button>
         </div>
 
         {/* Navigation */}
@@ -46,7 +122,7 @@ export default function DashboardLayout({
               <Link
                 key={item.href}
                 href={item.href}
-                className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+                className={`flex min-h-[44px] items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
                   active
                     ? "bg-neutral-800 text-white"
                     : "text-neutral-400 hover:bg-neutral-800/50 hover:text-neutral-200"
@@ -60,10 +136,10 @@ export default function DashboardLayout({
         </nav>
 
         {/* Sign out */}
-        <div className="border-t border-neutral-800 p-3">
+        <div className="border-t border-neutral-800 p-3 safe-bottom">
           <button
             onClick={handleSignOut}
-            className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-neutral-400 transition-colors hover:bg-neutral-800/50 hover:text-neutral-200"
+            className="flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-neutral-400 transition-colors hover:bg-neutral-800/50 hover:text-neutral-200"
           >
             <LogOutIcon className="h-4 w-4 shrink-0" />
             Sign out
@@ -71,13 +147,54 @@ export default function DashboardLayout({
         </div>
       </aside>
 
-      {/* Main content */}
-      <main className="flex-1 overflow-y-auto bg-neutral-950">{children}</main>
+      {/* Main content — inert when drawer is open for focus trapping */}
+      <main
+        className="flex-1 overflow-y-auto bg-neutral-950"
+        inert={drawerOpen || undefined}
+      >
+        {children}
+      </main>
     </div>
   );
 }
 
 /* Inline SVG icon components — avoids external dependency */
+
+function MenuIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.5}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"
+      />
+    </svg>
+  );
+}
+
+function XIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.5}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M6 18 18 6M6 6l12 12"
+      />
+    </svg>
+  );
+}
 
 function GridIcon({ className }: { className?: string }) {
   return (

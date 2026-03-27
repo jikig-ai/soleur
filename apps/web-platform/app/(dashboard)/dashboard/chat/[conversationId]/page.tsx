@@ -50,7 +50,7 @@ export default function ChatPage() {
   return (
     <div className="flex h-full flex-col">
       {/* Top bar */}
-      <header className="flex shrink-0 items-center justify-between border-b border-neutral-800 px-6 py-3">
+      <header className="flex shrink-0 items-center justify-between border-b border-neutral-800 px-4 py-3 md:px-6">
         <div className="flex items-center gap-3">
           {leader ? (
             <>
@@ -67,7 +67,7 @@ export default function ChatPage() {
       </header>
 
       {/* Message list */}
-      <div className="flex-1 overflow-y-auto px-6 py-4">
+      <div className="flex-1 overflow-y-auto px-4 py-4 md:px-6">
         {messages.length === 0 && (
           <div className="flex h-full items-center justify-center">
             <p className="text-sm text-neutral-600">
@@ -98,7 +98,7 @@ export default function ChatPage() {
       </div>
 
       {/* Input bar */}
-      <div className="shrink-0 border-t border-neutral-800 bg-neutral-950 px-6 py-4">
+      <div className="shrink-0 border-t border-neutral-800 bg-neutral-950 px-4 py-4 safe-bottom md:px-6">
         <form
           onSubmit={handleSubmit}
           className="mx-auto flex max-w-3xl items-center gap-3"
@@ -118,7 +118,7 @@ export default function ChatPage() {
           <button
             type="submit"
             disabled={!input.trim() || status !== "connected"}
-            className="rounded-lg bg-white px-5 py-3 text-sm font-medium text-black transition-colors hover:bg-neutral-200 disabled:opacity-50 disabled:hover:bg-white"
+            className="min-h-[44px] rounded-lg bg-white px-5 py-3 text-sm font-medium text-black transition-colors hover:bg-neutral-200 disabled:opacity-50 disabled:hover:bg-white"
           >
             Send
           </button>
@@ -159,7 +159,7 @@ function MessageBubble({
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
-        className={`max-w-[80%] rounded-xl px-4 py-3 text-sm leading-relaxed ${
+        className={`max-w-[90%] rounded-xl px-4 py-3 text-sm leading-relaxed md:max-w-[80%] ${
           isUser
             ? "bg-white text-black"
             : `bg-neutral-900 text-neutral-200 border border-neutral-800 ${leader ? `border-l-2 ${colorClass}` : ""}`
