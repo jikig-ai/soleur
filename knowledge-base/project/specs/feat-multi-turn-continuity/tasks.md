@@ -2,25 +2,25 @@
 
 ## Phase 0: SDK Resume Spike
 
-- [ ] 0.1 Remove `persistSession: false` (SDK default is `true`)
-- [ ] 0.2 Complete session, capture `session_id` from first streamed message
-- [ ] 0.3 Locate session files on disk, verify inside persistent volume
-- [ ] 0.4 Kill process, restart, attempt resume
-- [ ] 0.5 Confirm resume works with full tool context in SDK 0.2.80
-- [ ] 0.6 Document spike findings
+- [x] 0.1 Remove `persistSession: false` (SDK default is `true`)
+- [x] 0.2 Complete session, capture `session_id` from first streamed message
+- [x] 0.3 Locate session files on disk, verify inside persistent volume
+- [x] 0.4 Kill process, restart, attempt resume
+- [x] 0.5 Confirm resume works with full tool context in SDK 0.2.80
+- [x] 0.6 Document spike findings
 
 **Decision gate:** If resume fails across restarts, pivot to replay-primary.
 
 ## Phase 1: Core Session Resume
 
-- [ ] 1.1 Extend `AgentSession` type with `sessionId`
-- [ ] 1.2 Remove `persistSession: false` in query options
-- [ ] 1.3 Capture `session_id` from first streamed message (not init)
-- [ ] 1.4 Store `session_id` in `conversations.session_id` via Supabase
-- [ ] 1.5 Refactor `startAgentSession` to accept optional `sessionId` and `userMessage` (branch internally, don't duplicate setup)
-- [ ] 1.6 Refactor `sendUserMessage` to read `session_id` and route (add `user_id` auth check)
-- [ ] 1.7 First turn uses user's actual message, not hardcoded greeting
-- [ ] 1.8 Set status to `waiting_for_user` instead of `completed`
+- [x] 1.1 Extend `AgentSession` type with `sessionId`
+- [x] 1.2 Remove `persistSession: false` in query options
+- [x] 1.3 Capture `session_id` from first streamed message (not init)
+- [x] 1.4 Store `session_id` in `conversations.session_id` via Supabase
+- [x] 1.5 Refactor `startAgentSession` to accept optional `sessionId` and `userMessage` (branch internally, don't duplicate setup)
+- [x] 1.6 Refactor `sendUserMessage` to read `session_id` and route (add `user_id` auth check)
+- [x] 1.7 First turn uses user's actual message, not hardcoded greeting
+- [x] 1.8 Set status to `waiting_for_user` instead of `completed`
 
 ## Phase 2: Message Replay Fallback
 

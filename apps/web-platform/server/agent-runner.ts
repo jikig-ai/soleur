@@ -152,6 +152,8 @@ export async function startAgentSession(
   userId: string,
   conversationId: string,
   leaderId: DomainLeaderId,
+  resumeSessionId?: string,
+  userMessage?: string,
 ): Promise<void> {
   const key = sessionKey(userId, conversationId);
 
@@ -163,6 +165,7 @@ export async function startAgentSession(
   const session: AgentSession = {
     abort: controller,
     reviewGateResolvers: new Map(),
+    sessionId: null,
   };
   activeSessions.set(key, session);
 
@@ -201,8 +204,11 @@ Use the tools available to you to read and write to the knowledge-base directory
 When you need user input for important decisions, use the AskUserQuestion tool.`;
 
     // Run the Agent SDK query
+    const prompt = userMessage
+      ?? `[Session started with ${leader.name}] How can I help you today?`;
+
     const q = query({
-      prompt: `[Session started with ${leader.name}] How can I help you today?`,
+      prompt,
       options: {
         cwd: workspacePath,
         model: "claude-sonnet-4-6",
@@ -212,7 +218,10 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         // step 5). Default is [] since SDK v0.1.0; explicit for defense-in-depth.
         settingSources: [],
         includePartialMessages: true,
-        persistSession: false,
+        // persistSession defaults to true -- session files stored at
+        // ~/.claude/projects/ enable resume within the same container lifecycle.
+        // Cross-restart continuity handled by message replay fallback.
+        ...(resumeSessionId ? { resume: resumeSessionId } : {}),
         maxTurns: 50,
         maxBudgetUsd: 5.0,
         systemPrompt,
@@ -353,6 +362,19 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
     for await (const message of q) {
       if (controller.signal.aborted) break;
 
+      // Capture session_id from the first message (available on every message)
+      if (!session.sessionId && "session_id" in message && message.session_id) {
+        session.sessionId = message.session_id;
+        // Persist to DB for cross-turn resume
+        const { error: updateErr } = await supabase
+          .from("conversations")
+          .update({ session_id: message.session_id })
+          .eq("id", conversationId);
+        if (updateErr) {
+          console.error(`[agent] Failed to store session_id: ${updateErr.message}`);
+        }
+      }
+
       if (message.type === "assistant") {
         const content = message.message?.content;
         if (Array.isArray(content)) {
@@ -373,11 +395,13 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           await saveMessage(conversationId, "assistant", fullText);
         }
 
-        await updateConversationStatus(conversationId, "completed");
+        // Mark as waiting_for_user instead of completed -- conversation
+        // continues until explicit close or inactivity timeout.
+        await updateConversationStatus(conversationId, "waiting_for_user");
 
         sendToClient(userId, {
           type: "session_ended",
-          reason: "completed",
+          reason: "turn_complete",
         });
       } else if (
         // Partial messages (streaming text deltas)
@@ -442,21 +466,28 @@ export async function sendUserMessage(
   // Save user message to DB
   await saveMessage(conversationId, "user", content);
 
-  // For multi-turn, we'd need to start a new query with resume.
-  // For now, start a fresh query with the user's message as the prompt.
-  const { data: conv } = await supabase
+  // Load conversation with ownership check
+  const { data: conv, error: convErr } = await supabase
     .from("conversations")
-    .select("domain_leader")
+    .select("domain_leader, session_id")
     .eq("id", conversationId)
+    .eq("user_id", userId)
     .single();
 
-  if (!conv) throw new Error("Conversation not found");
+  if (convErr || !conv) throw new Error("Conversation not found");
 
-  // Start a new agent turn with the user's message
+  // Check for an in-memory session with a captured session_id
+  const key = sessionKey(userId, conversationId);
+  const activeSession = activeSessions.get(key);
+  const resumeSessionId = activeSession?.sessionId ?? conv.session_id ?? undefined;
+
+  // Resume existing session or start fresh with user's actual message
   startAgentSession(
     userId,
     conversationId,
     conv.domain_leader as DomainLeaderId,
+    resumeSessionId,
+    content,
   ).catch((err) => {
     console.error(
       `[agent] sendUserMessage session error for ${userId}/${conversationId}:`,
