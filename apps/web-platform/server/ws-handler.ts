@@ -60,19 +60,23 @@ export function abortActiveSession(userId: string, session: ClientSession): void
 
   abortSession(userId, oldConvId, "superseded");
 
-  // Fire-and-forget — orphan cleanup catches failures on restart
+  // Fire-and-forget — orphan cleanup catches failures on restart.
+  // Supabase query builders return PromiseLike (not Promise), so use
+  // .then(onFulfilled, onRejected) instead of .then().catch().
   supabase
     .from("conversations")
     .update({ status: "completed", last_active: new Date().toISOString() })
     .eq("id", oldConvId)
-    .then(({ error }) => {
-      if (error) {
-        console.error(`[ws] Failed to mark conversation ${oldConvId} as completed: ${error.message}`);
-      }
-    })
-    .catch((err) => {
-      console.error(`[ws] Failed to update conversation ${oldConvId}: ${err}`);
-    });
+    .then(
+      ({ error }) => {
+        if (error) {
+          console.error(`[ws] Failed to mark conversation ${oldConvId} as completed: ${error.message}`);
+        }
+      },
+      (err) => {
+        console.error(`[ws] Failed to update conversation ${oldConvId}: ${err}`);
+      },
+    );
 
   session.conversationId = undefined;
 }
