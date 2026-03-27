@@ -69,6 +69,41 @@ Extract the feature name from the result by stripping the `feat-`, `feature/`, `
 
 **If no artifacts exist:** Note this in the checklist but do not block. Not all features go through the full brainstorm/plan cycle.
 
+## Phase 1.5: Review Evidence Gate
+
+Check for evidence that `/review` ran on the current branch. This is defense-in-depth --
+`/one-shot` already enforces review ordering, but direct `/ship` invocations bypass it.
+
+**Step 1: Check for review artifacts.**
+
+Search for todo files tagged as code-review findings:
+
+```bash
+grep -rl "code-review" todos/ 2>/dev/null | head -1 || true
+```
+
+**Step 2: Check commit history for review evidence.**
+
+If Step 1 found nothing, check for the review commit pattern:
+
+```bash
+git log origin/main..HEAD --oneline | grep "refactor: add code review findings" || true
+```
+
+**If either step produced output:** Review evidence found. Continue to Phase 2.
+
+**If both steps produced no output:**
+
+**Headless mode:** Abort with: "Error: no review evidence found on this branch. Run `/review` before `/ship`, or use `/one-shot` for the full pipeline."
+
+**Interactive mode:** Present options via AskUserQuestion:
+
+"No evidence that `/review` ran on this branch. How would you like to proceed?"
+
+- **Run /review now** -> invoke `skill: soleur:review`, then continue to Phase 2
+- **Skip review** -> continue to Phase 2 (user accepts the risk; this also covers zero-finding reviews where review ran cleanly)
+- **Abort** -> stop shipping
+
 ## Phase 2: Capture Learnings
 
 Check if /compound was run for this feature. Use the feature name extracted in Phase 1:

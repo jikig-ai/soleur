@@ -163,12 +163,12 @@ Note: `resolve-todo-parallel` does not accept `--headless` (it has no interactiv
 
 ## Acceptance Criteria
 
-- [ ] `/ship` Phase 1.5 detects `todos/` files tagged `code-review` as review evidence
-- [ ] `/ship` Phase 1.5 detects `refactor: add code review findings` commit message as review evidence
-- [ ] `/ship` in headless mode aborts when no review evidence is found
-- [ ] `/ship` in interactive mode presents Run/Skip/Abort options when no review evidence is found
-- [ ] `/work` Phase 4 direct-invocation path includes review and resolve-todo-parallel before compound and ship
-- [ ] One-shot pipeline continues to work unchanged (review evidence is created by step 4)
+- [x] `/ship` Phase 1.5 detects `todos/` files tagged `code-review` as review evidence
+- [x] `/ship` Phase 1.5 detects `refactor: add code review findings` commit message as review evidence
+- [x] `/ship` in headless mode aborts when no review evidence is found
+- [x] `/ship` in interactive mode presents Run/Skip/Abort options when no review evidence is found
+- [x] `/work` Phase 4 direct-invocation path includes review and resolve-todo-parallel before compound and ship
+- [x] One-shot pipeline continues to work unchanged (review evidence is created by step 4)
 
 ## Test Scenarios
 
