@@ -15,6 +15,7 @@ describe("abortableReviewGate", () => {
     session = {
       abort: controller,
       reviewGateResolvers: new Map(),
+      sessionId: null,
     };
   });
 

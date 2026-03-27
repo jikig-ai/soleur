@@ -146,12 +146,100 @@ async function updateConversationStatus(
 }
 
 // ---------------------------------------------------------------------------
+// Conversation history for replay fallback
+// ---------------------------------------------------------------------------
+const MAX_REPLAY_MESSAGES = 20;
+
+async function loadConversationHistory(
+  conversationId: string,
+): Promise<Array<{ role: string; content: string }>> {
+  const { data, error } = await supabase
+    .from("messages")
+    .select("role, content, created_at")
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    console.error(`[agent] Failed to load conversation history: ${error.message}`);
+    return [];
+  }
+
+  return data ?? [];
+}
+
+function buildReplayPrompt(
+  history: Array<{ role: string; content: string }>,
+  newMessage: string,
+): string {
+  // Keep only the last N messages to stay within context budget
+  const recent = history.slice(-MAX_REPLAY_MESSAGES);
+
+  if (recent.length === 0) return newMessage;
+
+  const formatted = recent
+    .map((m) => `[${m.role === "user" ? "User" : "Assistant"}]: ${m.content}`)
+    .join("\n\n");
+
+  return `Previous conversation:\n${formatted}\n\nNew message from user: ${newMessage}`;
+}
+
+// ---------------------------------------------------------------------------
+// Orphaned conversation cleanup (runs on server startup)
+// ---------------------------------------------------------------------------
+export async function cleanupOrphanedConversations(): Promise<void> {
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1_000).toISOString();
+  const { error } = await supabase
+    .from("conversations")
+    .update({ status: "failed" })
+    .in("status", ["active", "waiting_for_user"])
+    .lt("last_active", fiveMinutesAgo);
+
+  if (error) {
+    console.error(`[agent] Failed to clean up orphaned conversations: ${error.message}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Inactivity timeout (runs as periodic background check)
+// ---------------------------------------------------------------------------
+const INACTIVITY_TIMEOUT_MS = 24 * 60 * 60 * 1_000; // 24 hours
+const INACTIVITY_CHECK_INTERVAL_MS = 60 * 60 * 1_000; // Check every hour
+
+export function startInactivityTimer(): void {
+  const timer = setInterval(async () => {
+    const cutoff = new Date(Date.now() - INACTIVITY_TIMEOUT_MS).toISOString();
+    const { data, error } = await supabase
+      .from("conversations")
+      .update({ status: "completed" })
+      .in("status", ["waiting_for_user"])
+      .lt("last_active", cutoff)
+      .select("id, user_id");
+
+    if (error) {
+      console.error(`[agent] Inactivity cleanup error: ${error.message}`);
+      return;
+    }
+
+    if (data && data.length > 0) {
+      // Abort in-memory sessions for timed-out conversations
+      for (const conv of data) {
+        abortSession(conv.user_id, conv.id);
+      }
+      console.log(`[agent] Cleaned up ${data.length} inactive conversation(s)`);
+    }
+  }, INACTIVITY_CHECK_INTERVAL_MS);
+  timer.unref();
+}
+
+// ---------------------------------------------------------------------------
 // Start agent session
 // ---------------------------------------------------------------------------
 export async function startAgentSession(
   userId: string,
   conversationId: string,
   leaderId: DomainLeaderId,
+  resumeSessionId?: string,
+  userMessage?: string,
 ): Promise<void> {
   const key = sessionKey(userId, conversationId);
 
@@ -163,6 +251,7 @@ export async function startAgentSession(
   const session: AgentSession = {
     abort: controller,
     reviewGateResolvers: new Map(),
+    sessionId: null,
   };
   activeSessions.set(key, session);
 
@@ -201,8 +290,11 @@ Use the tools available to you to read and write to the knowledge-base directory
 When you need user input for important decisions, use the AskUserQuestion tool.`;
 
     // Run the Agent SDK query
+    const prompt = userMessage
+      ?? `[Session started with ${leader.name}] How can I help you today?`;
+
     const q = query({
-      prompt: `[Session started with ${leader.name}] How can I help you today?`,
+      prompt,
       options: {
         cwd: workspacePath,
         model: "claude-sonnet-4-6",
@@ -212,7 +304,10 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         // step 5). Default is [] since SDK v0.1.0; explicit for defense-in-depth.
         settingSources: [],
         includePartialMessages: true,
-        persistSession: false,
+        // persistSession defaults to true -- session files stored at
+        // ~/.claude/projects/ enable resume within the same container lifecycle.
+        // Cross-restart continuity handled by message replay fallback.
+        ...(resumeSessionId ? { resume: resumeSessionId } : {}),
         maxTurns: 50,
         maxBudgetUsd: 5.0,
         systemPrompt,
@@ -353,6 +448,19 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
     for await (const message of q) {
       if (controller.signal.aborted) break;
 
+      // Capture session_id from the first message (available on every message)
+      if (!session.sessionId && "session_id" in message && message.session_id) {
+        session.sessionId = message.session_id;
+        // Persist to DB for cross-turn resume
+        const { error: updateErr } = await supabase
+          .from("conversations")
+          .update({ session_id: message.session_id })
+          .eq("id", conversationId);
+        if (updateErr) {
+          console.error(`[agent] Failed to store session_id: ${updateErr.message}`);
+        }
+      }
+
       if (message.type === "assistant") {
         const content = message.message?.content;
         if (Array.isArray(content)) {
@@ -373,11 +481,13 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           await saveMessage(conversationId, "assistant", fullText);
         }
 
-        await updateConversationStatus(conversationId, "completed");
+        // Mark as waiting_for_user instead of completed -- conversation
+        // continues until explicit close or inactivity timeout.
+        await updateConversationStatus(conversationId, "waiting_for_user");
 
         sendToClient(userId, {
           type: "session_ended",
-          reason: "completed",
+          reason: "turn_complete",
         });
       } else if (
         // Partial messages (streaming text deltas)
@@ -442,22 +552,22 @@ export async function sendUserMessage(
   // Save user message to DB
   await saveMessage(conversationId, "user", content);
 
-  // For multi-turn, we'd need to start a new query with resume.
-  // For now, start a fresh query with the user's message as the prompt.
-  const { data: conv } = await supabase
+  // Load conversation with ownership check
+  const { data: conv, error: convErr } = await supabase
     .from("conversations")
-    .select("domain_leader")
+    .select("domain_leader, session_id")
     .eq("id", conversationId)
+    .eq("user_id", userId)
     .single();
 
-  if (!conv) throw new Error("Conversation not found");
+  if (convErr || !conv) throw new Error("Conversation not found");
 
-  // Start a new agent turn with the user's message
-  startAgentSession(
-    userId,
-    conversationId,
-    conv.domain_leader as DomainLeaderId,
-  ).catch((err) => {
+  // Check for an in-memory session with a captured session_id
+  const key = sessionKey(userId, conversationId);
+  const activeSession = activeSessions.get(key);
+  const resumeSessionId = activeSession?.sessionId ?? conv.session_id ?? undefined;
+
+  const handleSessionError = (err: unknown) => {
     console.error(
       `[agent] sendUserMessage session error for ${userId}/${conversationId}:`,
       err,
@@ -474,7 +584,54 @@ export async function sendUserMessage(
         statusErr,
       );
     });
-  });
+  };
+
+  if (resumeSessionId) {
+    // Try SDK resume first; fall back to message replay if it fails
+    startAgentSession(
+      userId,
+      conversationId,
+      conv.domain_leader as DomainLeaderId,
+      resumeSessionId,
+      content,
+    ).catch(async (err) => {
+      console.warn(`[agent] SDK resume failed, falling back to message replay: ${err}`);
+      // Clear stale session_id
+      const { error: clearErr } = await supabase
+        .from("conversations")
+        .update({ session_id: null })
+        .eq("id", conversationId);
+      if (clearErr) {
+        console.error(`[agent] Failed to clear session_id: ${clearErr.message}`);
+      }
+
+      // Load history and build replay prompt
+      const history = await loadConversationHistory(conversationId);
+      const replayPrompt = buildReplayPrompt(history, content);
+
+      startAgentSession(
+        userId,
+        conversationId,
+        conv.domain_leader as DomainLeaderId,
+        undefined,
+        replayPrompt,
+      ).catch(handleSessionError);
+    });
+  } else {
+    // No session to resume — first turn or history-only replay
+    const history = await loadConversationHistory(conversationId);
+    const prompt = history.length > 0
+      ? buildReplayPrompt(history, content)
+      : content;
+
+    startAgentSession(
+      userId,
+      conversationId,
+      conv.domain_leader as DomainLeaderId,
+      undefined,
+      prompt,
+    ).catch(handleSessionError);
+  }
 }
 
 // ---------------------------------------------------------------------------
