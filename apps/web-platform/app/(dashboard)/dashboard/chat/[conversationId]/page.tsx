@@ -27,14 +27,14 @@ export default function ChatPage() {
   }, [messages]);
 
   // Start session when connection is established for a new conversation
+  // leaderId is optional — if omitted, the server auto-routes via domain router
   useEffect(() => {
     if (
       status === "connected" &&
       conversationId === "new" &&
-      leaderId &&
       !sessionStarted
     ) {
-      startSession(leaderId);
+      startSession(leaderId ?? undefined);
       setSessionStarted(true);
     }
   }, [status, conversationId, leaderId, sessionStarted, startSession]);

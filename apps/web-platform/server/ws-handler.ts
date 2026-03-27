@@ -303,6 +303,8 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
     // ------------------------------------------------------------------
     case "auth_ok":
     case "stream":
+    case "stream_start":
+    case "stream_end":
     case "review_gate":
     case "session_started":
     case "session_ended":
