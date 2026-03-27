@@ -28,13 +28,21 @@ const supabase = createClient(
 // ---------------------------------------------------------------------------
 // Session tracking
 // ---------------------------------------------------------------------------
+/** Grace period before aborting session on disconnect (allows reconnection). */
+const DISCONNECT_GRACE_MS = 30_000;
+
 interface ClientSession {
   ws: WebSocket;
   conversationId?: string;
+  /** Timer for deferred abort on disconnect — cleared if user reconnects. */
+  disconnectTimer?: ReturnType<typeof setTimeout>;
 }
 
 /** Active connections keyed by Supabase user ID. */
 const sessions = new Map<string, ClientSession>();
+
+/** Deferred abort timers for disconnected sessions (keyed by userId:conversationId). */
+const pendingDisconnects = new Map<string, ReturnType<typeof setTimeout>>();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -127,6 +135,63 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
         console.log(`[ws] session_started sent to client`);
       } catch (err) {
         console.error(`[ws] start_session error for user ${userId}:`, err);
+        sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
+      }
+      break;
+    }
+
+    // ------------------------------------------------------------------
+    // resume_session: reconnect to an existing conversation
+    // ------------------------------------------------------------------
+    case "resume_session": {
+      try {
+        // Verify conversation ownership
+        const { data: conv, error: convErr } = await supabase
+          .from("conversations")
+          .select("id, status")
+          .eq("id", msg.conversationId)
+          .eq("user_id", userId)
+          .single();
+
+        if (convErr || !conv) {
+          sendToClient(userId, { type: "error", message: "Conversation not found" });
+          return;
+        }
+
+        session.conversationId = msg.conversationId;
+        sendToClient(userId, {
+          type: "session_started",
+          conversationId: msg.conversationId,
+        });
+      } catch (err) {
+        console.error(`[ws] resume_session error for user ${userId}:`, err);
+        sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
+      }
+      break;
+    }
+
+    // ------------------------------------------------------------------
+    // close_conversation: explicitly end the current conversation
+    // ------------------------------------------------------------------
+    case "close_conversation": {
+      if (!session.conversationId) {
+        sendToClient(userId, {
+          type: "error",
+          message: "No active session.",
+        });
+        return;
+      }
+
+      try {
+        abortSession(userId, session.conversationId);
+        await supabase
+          .from("conversations")
+          .update({ status: "completed", last_active: new Date().toISOString() })
+          .eq("id", session.conversationId);
+        sendToClient(userId, { type: "session_ended", reason: "closed" });
+        session.conversationId = undefined;
+      } catch (err) {
+        console.error(`[ws] close_conversation error for user ${userId}:`, err);
         sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
       }
       break;
@@ -329,8 +394,15 @@ export function setupWebSocket(server: HTTPServer) {
           existing.ws.close(4002, "Superseded by new connection");
         }
 
-        // Register session
+        // Register session — cancel any pending disconnect grace period
         sessions.set(userId, { ws });
+        for (const [key, timer] of pendingDisconnects) {
+          if (key.startsWith(`${userId}:`)) {
+            clearTimeout(timer);
+            pendingDisconnects.delete(key);
+            console.log(`[ws] Cancelled pending disconnect for ${key} (user reconnected)`);
+          }
+        }
         console.log(`[ws] User ${userId} connected`);
 
         // Start heartbeat after auth
@@ -362,12 +434,20 @@ export function setupWebSocket(server: HTTPServer) {
         const current = sessions.get(userId);
         if (current?.ws === ws) {
           sessions.delete(userId);
-          // Abort any running agent session so review gate promises reject
+          // Grace period: defer abort to allow reconnection
           if (current.conversationId) {
-            abortSession(userId, current.conversationId);
+            const convId = current.conversationId;
+            const uid = userId;
+            const timer = setTimeout(() => {
+              console.log(`[ws] Grace period expired for ${uid}/${convId}, aborting session`);
+              abortSession(uid, convId);
+            }, DISCONNECT_GRACE_MS);
+            timer.unref();
+            // Store timer so reconnecting user can cancel it
+            pendingDisconnects.set(`${uid}:${convId}`, timer);
           }
         }
-        console.log(`[ws] User ${userId} disconnected`);
+        console.log(`[ws] User ${userId} disconnected (${DISCONNECT_GRACE_MS / 1000}s grace period)`);
       }
     });
 

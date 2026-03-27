@@ -24,36 +24,16 @@ Run `pwd`. If the path contains `.worktrees/`, extract the feature name and ment
 
 If the user wants to continue the current feature, delegate to `soleur:work` via the **Skill tool** with the user input as arguments. Then stop.
 
-## Step 2: Classify Intent
+## Step 2: Classify and Route
 
-Analyze the user input and classify into one of these intents:
+Analyze the user input and classify intent using semantic assessment:
 
-| Intent | Trigger Signals | Delegates To |
-|--------|----------------|--------------|
-| explore | Questions, "brainstorm", "think about", "let's explore", vague scope, no clear deliverable | `soleur:brainstorm` skill |
-| build | Bug fix, feature request, issue reference (#N), clear engineering requirements, "fix", "add", "implement", "build" -- AND the target is code, infrastructure, or technical implementation | `soleur:one-shot` skill |
-| generate | The user wants to produce a non-code business artifact: legal documents, brand guides, policies, reports, strategies, marketing content, financial plans, or similar business deliverables. Distinguished from "build" by artifact type (document vs. code). | `soleur:brainstorm` skill |
-| review | "review PR", "check this code", "review #N", PR number reference | `soleur:review` skill |
+| Intent | Trigger Signals | Routes To |
+|--------|----------------|-----------|
+| fix | The user describes broken behavior, errors, regressions, or something that needs fixing | `soleur:one-shot` |
+| review | "review PR", "check this code", PR number reference | `soleur:review` |
+| default | Everything else — features, exploration, questions, generation, vague scope | `soleur:brainstorm` |
 
-If the input does not clearly match one intent, use the **AskUserQuestion tool** to present all four options and let the user choose. Do not guess on ambiguous input.
+If intent is clear, invoke the skill directly via the **Skill tool** with the original user input as `args`. No confirmation step.
 
-## Step 3: Confirm Route
-
-Use the **AskUserQuestion tool** to propose the classified intent:
-
-**Question:** "I'll route this as **[intent]**. Sound right?"
-
-**Options:**
-1. The proposed intent (add "(Recommended)" to the label)
-2. The other three intents as alternatives
-
-## Step 4: Delegate
-
-After confirmation, invoke the selected skill using the **Skill tool** with the full user input as arguments.
-
-- explore: `skill: soleur:brainstorm`
-- build: `skill: soleur:one-shot`
-- generate: `skill: soleur:brainstorm`
-- review: `skill: soleur:review`
-
-Pass the original user input text as the `args` parameter. Do not strip or modify the input.
+If intent is truly ambiguous, use the **AskUserQuestion tool** with 3 options: Brainstorm (Recommended), Fix (one-shot), Review.

@@ -2,6 +2,8 @@ import { createServer } from "http";
 import next from "next";
 import { parse } from "url";
 import { setupWebSocket } from "./ws-handler";
+import { cleanupOrphanedConversations, startInactivityTimer } from "./agent-runner";
+import { handleConversationMessages } from "./api-messages";
 
 const port = parseInt(process.env.PORT || "3000", 10);
 const dev = process.env.NODE_ENV !== "production";
@@ -19,10 +21,27 @@ app.prepare().then(() => {
       return;
     }
 
+    // REST API: conversation message history
+    const messagesMatch = parsedUrl.pathname?.match(
+      /^\/api\/conversations\/([^/]+)\/messages$/,
+    );
+    if (messagesMatch && req.method === "GET") {
+      handleConversationMessages(req, res, messagesMatch[1]);
+      return;
+    }
+
     handle(req, res, parsedUrl);
   });
 
   setupWebSocket(server);
+
+  // Clean up conversations left in active/waiting_for_user from before restart
+  cleanupOrphanedConversations().catch((err) => {
+    console.error("[startup] Failed to clean up orphaned conversations:", err);
+  });
+
+  // Start periodic inactivity check (24h timeout, hourly checks)
+  startInactivityTimer();
 
   server.listen(port, () => {
     console.log(`> Ready on http://localhost:${port}`);

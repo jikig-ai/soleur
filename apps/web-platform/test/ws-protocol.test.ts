@@ -15,7 +15,14 @@ function parseMessage(raw: string): WSMessage | null {
 }
 
 function isClientMessage(msg: WSMessage): boolean {
-  return ["auth", "chat", "start_session", "review_gate_response"].includes(msg.type);
+  return [
+    "auth",
+    "chat",
+    "start_session",
+    "resume_session",
+    "close_conversation",
+    "review_gate_response",
+  ].includes(msg.type);
 }
 
 function isServerMessage(msg: WSMessage): boolean {
@@ -165,6 +172,76 @@ describe("auth handshake protocol", () => {
     expect(msg).not.toBeNull();
     if (msg!.type === "auth") {
       expect(msg!.token).toBe("");
+    }
+  });
+});
+
+describe("multi-turn session protocol", () => {
+  test("resume_session message is valid client message", () => {
+    const msg = parseMessage(
+      '{"type":"resume_session","conversationId":"conv-123"}',
+    );
+    expect(msg).not.toBeNull();
+    expect(msg!.type).toBe("resume_session");
+    expect(isClientMessage(msg!)).toBe(true);
+    expect(isServerMessage(msg!)).toBe(false);
+  });
+
+  test("resume_session includes conversationId", () => {
+    const msg = parseMessage(
+      '{"type":"resume_session","conversationId":"abc-def-123"}',
+    );
+    expect(msg).not.toBeNull();
+    if (msg!.type === "resume_session") {
+      expect(msg!.conversationId).toBe("abc-def-123");
+    }
+  });
+
+  test("close_conversation message is valid client message", () => {
+    const msg = parseMessage('{"type":"close_conversation"}');
+    expect(msg).not.toBeNull();
+    expect(msg!.type).toBe("close_conversation");
+    expect(isClientMessage(msg!)).toBe(true);
+    expect(isServerMessage(msg!)).toBe(false);
+  });
+
+  test("session_ended with turn_complete reason indicates multi-turn", () => {
+    const msg = parseMessage(
+      '{"type":"session_ended","reason":"turn_complete"}',
+    );
+    expect(msg).not.toBeNull();
+    if (msg!.type === "session_ended") {
+      expect(msg!.reason).toBe("turn_complete");
+    }
+  });
+
+  test("session_ended with closed reason indicates explicit close", () => {
+    const msg = parseMessage(
+      '{"type":"session_ended","reason":"closed"}',
+    );
+    expect(msg).not.toBeNull();
+    if (msg!.type === "session_ended") {
+      expect(msg!.reason).toBe("closed");
+    }
+  });
+
+  test("error with session_expired errorCode is detectable", () => {
+    const msg = parseMessage(
+      '{"type":"error","message":"Session expired","errorCode":"session_expired"}',
+    );
+    expect(msg).not.toBeNull();
+    if (msg!.type === "error") {
+      expect(msg!.errorCode).toBe("session_expired");
+    }
+  });
+
+  test("error with session_resumed errorCode is detectable", () => {
+    const msg = parseMessage(
+      '{"type":"error","message":"Session resumed","errorCode":"session_resumed"}',
+    );
+    expect(msg).not.toBeNull();
+    if (msg!.type === "error") {
+      expect(msg!.errorCode).toBe("session_resumed");
     }
   });
 });

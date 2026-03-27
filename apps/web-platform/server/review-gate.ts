@@ -8,6 +8,7 @@
 export interface AgentSession {
   abort: AbortController;
   reviewGateResolvers: Map<string, (selection: string) => void>;
+  sessionId: string | null;
 }
 
 export const REVIEW_GATE_TIMEOUT_MS = 5 * 60 * 1_000; // 5 minutes
