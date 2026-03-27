@@ -147,6 +147,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 2.11 | First-time onboarding walkthrough (include PWA install guidance for iOS) | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
 | 2.12 | UX audit of all Phase 1 screens | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
 | 2.13 | Supply chain dependency hardening (lockfile integrity, pinning, scanning) | P1 | [#1174](https://github.com/jikig-ai/soleur/issues/1174) | Not started |
+| 2.14 | OAuth sign-in (Google, Apple, GitHub, Microsoft) via Supabase redirect flow | P2 | [#1210](https://github.com/jikig-ai/soleur/issues/1210) | Not started |
 
 **Exit criteria (beta launch gate):**
 
@@ -162,6 +163,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | Onboarding walkthrough | Should pass | First-time user completes the loop without external docs |
 | Integration tests green | Must pass | Auth, WebSocket, session tests pass in CI |
 | Supply chain hardened | Must pass | Exact version pinning, lockfile integrity in CI, dependency review on all PRs |
+| OAuth sign-in functional | Should pass | Google, Apple, GitHub, Microsoft OAuth buttons work on login/signup; legal docs updated |
 
 ---
 
