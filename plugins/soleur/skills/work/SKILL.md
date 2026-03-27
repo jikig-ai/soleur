@@ -369,8 +369,10 @@ If you catch yourself writing phrases like "set up X in the browser", "go to the
 
 **If invoked directly by the user** (no one-shot orchestrator): Continue through the post-implementation pipeline automatically. Do NOT stop and wait — the earlier learning "Workflow Completion is Not Task Completion" applies. Run these steps in order, forwarding `--headless` if `HEADLESS_MODE=true`:
 
-1. `skill: soleur:compound` (or `skill: soleur:compound --headless` if headless) — capture learnings before committing
-2. `skill: soleur:ship` (or `skill: soleur:ship --headless` if headless) — commit, push, create PR, merge
+1. `skill: soleur:review` (or `skill: soleur:review --headless` if headless) — catch issues before shipping
+2. `skill: soleur:resolve-todo-parallel` — resolve any review findings (no `--headless` needed; this skill has no interactive prompts)
+3. `skill: soleur:compound` (or `skill: soleur:compound --headless` if headless) — capture learnings before committing
+4. `skill: soleur:ship` (or `skill: soleur:ship --headless` if headless) — commit, push, create PR, merge
 
 ---
 
