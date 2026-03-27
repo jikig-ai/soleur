@@ -2,9 +2,23 @@
 title: "feat: add review completion gate to /ship skill"
 type: feat
 date: 2026-03-27
+deepened: 2026-03-27
 ---
 
 # feat: add review completion gate to /ship skill
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-27
+**Sections enhanced:** 3 (Technical Approach, Implementation Detail, Work Phase 4 Update)
+**Research sources:** Existing ship Phase 5.5/6.5 patterns, headless mode convention learning, pipeline continuation learnings, review SKILL.md todo structure
+
+### Key Improvements From Deepening
+
+1. Added explicit `--headless` forwarding requirements to work Phase 4 update
+2. Added `|| true` guard on `grep` command to prevent pipefail exit in shell-script contexts
+3. Added implementation note about `Abort` option language in pipeline-compatible phrasing
+4. Documented insertion point precisely (after line 70 `**If no artifacts exist**` block, before `## Phase 2`)
 
 ## Overview
 
@@ -67,9 +81,19 @@ This ensures that even when a user runs `/work` standalone, review happens befor
 
 ### Phase 1.5 Implementation Detail
 
-Insert after the Phase 1 section (line ~68 in ship/SKILL.md), before Phase 2:
+Insert after Phase 1's `**If no artifacts exist**` block (line ~70 in ship/SKILL.md), before `## Phase 2: Capture Learnings`.
 
-```markdown
+#### Research Insights
+
+**Pattern consistency:** Phase 5.5 uses Trigger/Detection/If-triggered structure with headless/interactive branching. Phase 6.5 uses If-condition/action branching. Phase 1.5 should follow the Phase 5.5 pattern since it has the same dual-mode behavior.
+
+**`grep -rl` edge case:** When the `todos/` directory does not exist, `grep -rl` returns exit code 2 (not 1). The `2>/dev/null` suppresses stderr, and the Bash tool does not use `pipefail`, so this is safe. However, add `|| true` as a defensive guard for future-proofing in case the command is extracted to a shell script with `set -euo pipefail`.
+
+**Pipeline language:** The `Abort` option says "stop" which is fine because abort genuinely terminates the flow. But per the pipeline continuation learnings (2026-03-03), the `Run /review now` and `Skip review` paths must NOT use halt language -- they must explicitly say "continue to Phase 2."
+
+**Exact text to insert:**
+
+````markdown
 ## Phase 1.5: Review Evidence Gate
 
 Check for evidence that `/review` ran on the current branch. This is defense-in-depth --
@@ -80,7 +104,7 @@ Check for evidence that `/review` ran on the current branch. This is defense-in-
 Search for todo files tagged as code-review findings:
 
 ```bash
-grep -rl "code-review" todos/ 2>/dev/null | head -1
+grep -rl "code-review" todos/ 2>/dev/null | head -1 || true
 ```
 
 **Step 2: Check commit history for review evidence.**
@@ -88,41 +112,54 @@ grep -rl "code-review" todos/ 2>/dev/null | head -1
 If Step 1 found nothing, check for the review commit pattern:
 
 ```bash
-git log origin/main..HEAD --oneline | grep "refactor: add code review findings"
+git log origin/main..HEAD --oneline | grep "refactor: add code review findings" || true
 ```
 
-**If either step found evidence:** Continue to Phase 2. Log: "Review evidence found via [signal]."
+**If either step produced output:** Review evidence found. Continue to Phase 2.
 
-**If no evidence found:**
+**If both steps produced no output:**
 
-**Headless mode:** Abort: "Error: no review evidence found on this branch. Run `/review` before
-`/ship`, or use `/one-shot` for the full pipeline."
+**Headless mode:** Abort with: "Error: no review evidence found on this branch. Run `/review` before `/ship`, or use `/one-shot` for the full pipeline."
 
 **Interactive mode:** Present options via AskUserQuestion:
 
-- **Run /review now** -> invoke `skill: soleur:review`, then continue to Phase 2
-- **Skip review** -> continue to Phase 2 (user accepts risk)
-- **Abort** -> stop
+"No evidence that `/review` ran on this branch. How would you like to proceed?"
 
-```
+- **Run /review now** -> invoke `skill: soleur:review`, then continue to Phase 2
+- **Skip review** -> continue to Phase 2 (user accepts the risk; this also covers zero-finding reviews where review ran cleanly)
+- **Abort** -> stop shipping
+
+````
 
 ### Work SKILL.md Phase 4 Update
 
-In the "invoked directly by the user" section, change the step sequence from:
+In the "invoked directly by the user" section (line ~370 in work/SKILL.md), change the step sequence.
+
+#### Research Insights
+
+**Headless forwarding (from learning 2026-03-03-headless-mode-skill-bypass-convention):** The `--headless` flag must be forwarded explicitly to each child skill invocation. The existing work Phase 4 already forwards to compound and ship. The new review and resolve-todo-parallel steps must also receive the flag. Use the same conditional pattern: `skill: soleur:review` or `skill: soleur:review --headless` if `HEADLESS_MODE=true`.
+
+**Pipeline continuation (from learning 2026-03-03-skill-handoff-contradicts-pipeline-continuation):** The one-shot path must remain unchanged. The work skill already has separate code paths for one-shot vs direct invocation. Only the direct-invocation path changes.
+
+**Exact change:**
+
+Current text in the "invoked directly by the user" block:
 
 ```text
-1. skill: soleur:compound
-2. skill: soleur:ship
+1. `skill: soleur:compound` (or `skill: soleur:compound --headless` if headless)
+2. `skill: soleur:ship` (or `skill: soleur:ship --headless` if headless)
 ```
 
-To:
+Replace with:
 
 ```text
-1. skill: soleur:review
-2. skill: soleur:resolve-todo-parallel
-3. skill: soleur:compound
-4. skill: soleur:ship
+1. `skill: soleur:review` (or `skill: soleur:review --headless` if headless)
+2. `skill: soleur:resolve-todo-parallel`
+3. `skill: soleur:compound` (or `skill: soleur:compound --headless` if headless)
+4. `skill: soleur:ship` (or `skill: soleur:ship --headless` if headless)
 ```
+
+Note: `resolve-todo-parallel` does not accept `--headless` (it has no interactive prompts -- it processes all approved todos automatically).
 
 ## Acceptance Criteria
 
@@ -157,7 +194,11 @@ To:
 - Issue: #1170
 - Learning: `knowledge-base/project/learnings/2026-02-26-decouple-work-from-ship-review-before-merge.md`
 - Learning: `knowledge-base/project/learnings/2026-03-25-plan-review-simplifies-gate-design.md`
-- Ship SKILL.md: `plugins/soleur/skills/ship/SKILL.md`
-- Work SKILL.md: `plugins/soleur/skills/work/SKILL.md`
-- Review SKILL.md: `plugins/soleur/skills/review/SKILL.md`
-- One-shot SKILL.md: `plugins/soleur/skills/one-shot/SKILL.md`
+- Learning: `knowledge-base/project/learnings/2026-03-03-headless-mode-skill-bypass-convention.md` (headless forwarding pattern)
+- Learning: `knowledge-base/project/learnings/2026-03-03-skill-handoff-contradicts-pipeline-continuation.md` (pipeline language)
+- Learning: `knowledge-base/project/learnings/2026-03-03-and-stop-halt-language-breaks-pipeline.md` (halt language)
+- Ship SKILL.md: `plugins/soleur/skills/ship/SKILL.md` (Phase 1 ends at line ~70, Phase 5.5 for gate pattern reference)
+- Work SKILL.md: `plugins/soleur/skills/work/SKILL.md` (Phase 4 direct-invocation at line ~370)
+- Review SKILL.md: `plugins/soleur/skills/review/SKILL.md` (Step 5 commit message at line ~344)
+- One-shot SKILL.md: `plugins/soleur/skills/one-shot/SKILL.md` (steps 4-7 for reference ordering)
+- Review todo structure: `plugins/soleur/skills/review/references/review-todo-structure.md` (todo file naming and tagging)
