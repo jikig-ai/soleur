@@ -41,7 +41,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 |-----------|-------|
 | Agents | 62 |
 | Commands | 3 |
-| Skills | 60 |
+| Skills | 61 |
 | MCP Servers | 3 |
 
 ## Agents
@@ -240,6 +240,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 
 | Skill | Description |
 |-------|-------------|
+| `architecture` | Create and manage Architecture Decision Records and Mermaid C4 diagrams |
 | `brainstorm` | Explore requirements and approaches before planning |
 | `competitive-analysis` | Run competitive intelligence scans and market research reports |
 | `deepen-plan` | Enhance plans with parallel research agents |

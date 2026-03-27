@@ -26,20 +26,24 @@ Compound engineering knowledge over time. Every solved problem, design decision,
 
 ```
 knowledge-base/
-  project/                # Project meta + feature lifecycle
-    constitution.md       # Project conventions (Always/Never/Prefer)
-    brainstorms/          # Design explorations
-    learnings/            # Documented solutions and patterns
+  engineering/
+    architecture/           # Architecture as Code
+      decisions/            # ADRs (ADR-NNN-title.md)
+      diagrams/             # Mermaid C4 diagrams
+  project/                  # Project meta + feature lifecycle
+    constitution.md         # Project conventions (Always/Never/Prefer)
+    brainstorms/            # Design explorations
+    learnings/              # Documented solutions and patterns
       implementation-patterns/
       architecture/
       technical-debt/
-    plans/                # Implementation plans
+    plans/                  # Implementation plans
     specs/
-      feat-<name>/        # Feature specifications
+      feat-<name>/          # Feature specifications
         spec.md
         tasks.md
-      archive/            # Completed specs
-      external/           # External platform specs
+      archive/              # Completed specs
+      external/             # External platform specs
 ```
 
 **File naming conventions:**
