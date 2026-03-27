@@ -1,6 +1,6 @@
 ---
 title: "chore: pin Agent SDK to exact version (0.2.80)"
-type: fix
+type: chore
 date: 2026-03-27
 ---
 
@@ -11,11 +11,23 @@ The `apps/web-platform/package.json` uses `^0.2.80` (caret range) for `@anthropi
 **Source:** CTO review, #1045
 **Roadmap:** Phase 1, item 1.9
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-27
+**Sections enhanced:** 2 (Context, Implementation)
+**Research sources:** 4 institutional learnings checked, 1 applied
+
+### Key Findings from Learnings
+
+- **Renovate is scoped to exclude npm** (`enabledManagers` does not include `npm`; see learning `2026-03-20-renovate-enabled-managers-scoping.md`). The exact pin will not be overridden by automated dependency PRs. Upgrades require a deliberate manual change.
+- **Consistent with project supply-chain posture:** GitHub Actions use SHA pinning (`2026-02-27-github-actions-sha-pinning-workflow.md`), Docker images use digest pinning (`2026-03-19-docker-base-image-digest-pinning.md`), and npm global installs use version pinning (`2026-03-19-npm-global-install-version-pinning.md`). This change completes the pattern for project-level npm dependencies in the security-critical path.
+- **No new edge cases discovered.** The change is mechanical (single character removal) with a well-understood lockfile regeneration step.
+
 ## Acceptance Criteria
 
-- [ ] `apps/web-platform/package.json` declares `"@anthropic-ai/claude-agent-sdk": "0.2.80"` (no caret)
-- [ ] `apps/web-platform/package-lock.json` updated to reflect the exact version pin
-- [ ] No other dependencies are changed
+- [x] `apps/web-platform/package.json` declares `"@anthropic-ai/claude-agent-sdk": "0.2.80"` (no caret)
+- [x] `apps/web-platform/package-lock.json` updated to reflect the exact version pin
+- [x] No other dependencies are changed
 
 ## Test Scenarios
 
@@ -68,6 +80,17 @@ No cross-domain implications detected -- infrastructure/tooling change.
 - The `canUseTool` callback is the security boundary for workspace isolation (see learning: `2026-03-16-agent-sdk-spike-validation.md`)
 - The SDK was validated at v0.2.76 during the spike and upgraded to v0.2.80; the callback behavior is sensitive to SDK internals
 - The lockfile discrepancy (issue says `bun install`, codebase uses `package-lock.json`) should be resolved by using `npm install` to match the existing lockfile format
+
+### Supply-Chain Pinning Pattern
+
+This pin is the fourth surface in the project's supply-chain hardening posture:
+
+| Surface | Mechanism | Learning |
+|---------|-----------|----------|
+| GitHub Actions | SHA pinning (`@sha # vX.Y.Z`) | `2026-02-27-github-actions-sha-pinning-workflow.md` |
+| Docker images | Digest pinning (`tag@sha256:...`) | `2026-03-19-docker-base-image-digest-pinning.md` |
+| npm global installs | Version pinning (`@X.Y.Z`) | `2026-03-19-npm-global-install-version-pinning.md` |
+| Agent SDK (this change) | Exact version (`"0.2.80"`) | `2026-03-16-agent-sdk-spike-validation.md` |
 
 ## References
 
