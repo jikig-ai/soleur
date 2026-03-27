@@ -10,7 +10,7 @@ Architectural decisions are made during brainstorm/plan phases but evaporate acr
 - Generate and maintain Mermaid architecture diagrams as code in markdown
 - Extend the CTO agent to produce persistent architecture artifacts (not just conversational assessments)
 - Hook into the brainstorm→plan→work pipeline to detect and prompt for architecture decision capture
-- Store all architecture artifacts in `knowledge-base/project/architecture/` as version-controlled markdown (Architecture as Code)
+- Store all architecture artifacts in `knowledge-base/engineering/architecture/` as version-controlled markdown (Architecture as Code)
 - Ship as a product feature usable by any founder, not just internal tooling
 
 ## Non-Goals
@@ -25,7 +25,7 @@ Architectural decisions are made during brainstorm/plan phases but evaporate acr
 
 ### FR1: ADR Creation
 
-The `soleur:architecture create` sub-command creates a new ADR with sequential numbering (ADR-001, ADR-002, etc.) in `knowledge-base/project/architecture/decisions/`. Each ADR follows the Michael Nygard template adapted for lightweight lifecycle: Title, Status (Active/Superseded), Context, Decision, Consequences, and optional Mermaid diagram.
+The `soleur:architecture create` sub-command creates a new ADR with sequential numbering (ADR-001, ADR-002, etc.) in `knowledge-base/engineering/architecture/decisions/`. Each ADR follows the Michael Nygard template adapted for lightweight lifecycle: Title, Status (Active/Superseded), Context, Decision, Consequences, and optional Mermaid diagram.
 
 ### FR2: ADR Lifecycle Management
 
@@ -33,7 +33,7 @@ The `soleur:architecture supersede <N>` sub-command marks an existing ADR as sup
 
 ### FR3: Architecture Diagram Generation
 
-The `soleur:architecture diagram` sub-command generates Mermaid diagrams (C4 Level 1 System Context, Level 2 Container) and stores them in `knowledge-base/project/architecture/diagrams/`. Diagrams are markdown files with embedded Mermaid code blocks.
+The `soleur:architecture diagram` sub-command generates Mermaid diagrams (C4 Level 1 System Context, Level 2 Container) and stores them in `knowledge-base/engineering/architecture/diagrams/`. Diagrams are markdown files with embedded Mermaid code blocks.
 
 ### FR4: Workflow Hook — Brainstorm Integration
 
@@ -49,13 +49,13 @@ The architecture-strategist review agent checks whether PRs that touch architect
 
 ### FR7: ADR Querying
 
-Architecture artifacts are stored as searchable markdown with YAML frontmatter (status, date, tags, related-components). Agents can grep/read the `knowledge-base/project/architecture/` directory to understand prior decisions before proposing new ones.
+Architecture artifacts are stored as searchable markdown with YAML frontmatter (status, date, tags, related-components). Agents can grep/read the `knowledge-base/engineering/architecture/` directory to understand prior decisions before proposing new ones.
 
 ## Technical Requirements
 
 ### TR1: Knowledge Base Convention
 
-Create `knowledge-base/project/architecture/` with subdirectories: `decisions/` (ADRs) and `diagrams/` (Mermaid files). Add the convention to constitution.md.
+Create `knowledge-base/engineering/architecture/` with subdirectories: `decisions/` (ADRs) and `diagrams/` (Mermaid files). Add the convention to constitution.md.
 
 ### TR2: ADR Template
 
