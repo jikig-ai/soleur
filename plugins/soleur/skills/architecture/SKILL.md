@@ -15,6 +15,7 @@ Create, manage, and query Architecture Decision Records (ADRs) and generate Merm
 | `architecture list` | Display all ADRs with status, title, and date |
 | `architecture supersede <N> [title]` | Mark ADR-N as superseded and create its replacement |
 | `architecture diagram [type]` | Generate a Mermaid C4 diagram (context, container, or component) |
+| `architecture assess [feature]` | Assess a feature against the NFR register and recommend relevant requirements |
 
 If no sub-command is provided, display the table above and ask which sub-command to run.
 
@@ -200,6 +201,56 @@ Generate a Mermaid C4 model architecture diagram using the proper C4 diagram syn
    ````
 
 5. **Announce:** "Diagram saved to `knowledge-base/engineering/architecture/diagrams/<type>.md`"
+
+---
+
+## Sub-command: assess
+
+Assess a feature or plan against the NFR register to identify which non-functional requirements are relevant and what their current status is.
+
+**Read [nfr-reference.md](./references/nfr-reference.md) now** for the assessment checklist and common NFR patterns by decision type.
+
+### Steps
+
+1. **Get the feature description.** If provided in `$ARGUMENTS`, use it. Otherwise, check for a plan file on the current branch:
+
+   - If on a `feat-*` branch, look for `knowledge-base/project/plans/*<feature-slug>*-plan.md`
+   - If a plan exists, read it and extract the feature description from the Overview section
+   - Otherwise, use AskUserQuestion: "What feature or change are you assessing?"
+
+2. **Read the NFR register** at `knowledge-base/engineering/architecture/nfr-register.md`.
+
+3. **Classify the feature** against the decision type patterns from [nfr-reference.md](./references/nfr-reference.md):
+
+   - New external service integration
+   - Infrastructure change
+   - New user-facing feature
+   - Data model change
+   - Security change
+   - Deployment change
+
+4. **Assess each NFR category.** For each of the 7 categories (Observability, Resilience, Testing, Config & Delivery, Scaling & Recovery, Security, Data Quality), determine:
+
+   - Which specific NFRs are relevant to this feature
+   - Current status of each relevant NFR
+   - Whether this feature improves, degrades, or has no effect on each NFR
+   - Any new NFRs that should be added to the register
+
+5. **Output the assessment** as a table:
+
+   ```text
+   ## NFR Assessment: [Feature Name]
+
+   | NFR | Requirement | Current Status | Impact | Notes |
+   |-----|-------------|---------------|--------|-------|
+   | NFR-001 | Logging | Partial | Needs attention | New service requires structured logging |
+   | NFR-026 | Encryption In-Transit | Implemented | No change | Already covered by Cloudflare |
+   | NFR-007 | Circuit Breaker | Not Implemented | Risk introduced | New API dependency has no fallback |
+   ```
+
+6. **Recommend actions.** For each NFR with "Needs attention" or "Risk introduced" impact, propose a specific action (e.g., "Add circuit breaker for Stripe API calls", "Configure structured logging for new service").
+
+7. **Offer to create an ADR.** If the assessment reveals architectural decisions (e.g., choosing to accept a risk, implementing a new NFR), ask: "Create an ADR to document these decisions?"
 
 ---
 
