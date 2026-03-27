@@ -82,7 +82,7 @@ function stripAnsi(str) {
 function parseResponse(raw) {
   const text = stripAnsi(raw).trim();
   const isError =
-    /^Error:/m.test(text) || /^\[ERROR\]/m.test(text);
+    /^Error:/m.test(text) || /^\[ERROR\]/m.test(text) || /^Invalid properties:/m.test(text);
   return { text, isError };
 }
 
