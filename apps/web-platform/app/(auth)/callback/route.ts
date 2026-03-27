@@ -34,7 +34,13 @@ export async function GET(request: NextRequest) {
           getAll() {
             return request.cookies.getAll();
           },
-          setAll(cookiesToSet) {
+          setAll(
+            cookiesToSet: {
+              name: string;
+              value: string;
+              options: CookieOptions;
+            }[],
+          ) {
             cookiesToSet.forEach((cookie) => pendingCookies.push(cookie));
           },
         },
