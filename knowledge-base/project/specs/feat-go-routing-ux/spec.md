@@ -19,19 +19,17 @@ The `/soleur:go` command misclassifies new features as "build" intent, routing t
 
 - NG1: Changing brainstorm's Phase 0 escape hatch (it already handles clear-scope features)
 - NG2: Routing bug fixes to `fix-issue` instead of `one-shot` (separate concern)
-- NG3: Adding issue label checking to brainstorm or other skills
+- NG3: Issue label checking via `gh issue view` (YAGNI — brainstorm Phase 0 handles misrouted bugs)
 - NG4: Changing the worktree context detection (Step 1)
 
 ## Functional Requirements
 
 - FR1: `/go` classifies intent into 3 categories: `fix`, `review`, `default`
-- FR2: `fix` intent routes to `soleur:one-shot` — triggered by signal words ("fix", "bug", "broken", "regression", "error")
+- FR2: `fix` intent routes to `soleur:one-shot` — triggered by bug-related language (broken behavior, errors, regressions)
 - FR3: `review` intent routes to `soleur:review` — triggered by "review PR", "check this code", PR number references
 - FR4: `default` intent routes to `soleur:brainstorm` — everything else (features, exploration, questions, generation)
-- FR5: When input contains `#N` reference, check issue labels via `gh issue view <N> --json labels`; if `type/bug` label present, classify as `fix`
-- FR6: When input contains `#N` reference with no labels, read issue description to determine if bug-like
-- FR7: If intent cannot be determined (truly ambiguous), use AskUserQuestion with all 3 options
-- FR8: No confirmation step for classified intents — route directly
+- FR5: If intent cannot be determined (truly ambiguous), use AskUserQuestion with all 3 options
+- FR6: No confirmation step for classified intents — route directly
 
 ## Technical Requirements
 
