@@ -12,7 +12,7 @@ export default function ChatPage() {
   const conversationId = params.conversationId;
   const leaderId = searchParams.get("leader") as DomainLeaderId | null;
 
-  const { messages, startSession, sendMessage, sendReviewGateResponse, status } =
+  const { messages, startSession, sendMessage, sendReviewGateResponse, status, disconnectReason } =
     useWebSocket(conversationId);
 
   const [input, setInput] = useState("");
@@ -63,7 +63,7 @@ export default function ChatPage() {
             <span className="text-sm font-semibold text-white">Command Center</span>
           )}
         </div>
-        <StatusIndicator status={status} />
+        <StatusIndicator status={status} disconnectReason={disconnectReason} />
       </header>
 
       {/* Message list */}
@@ -225,8 +225,10 @@ function ReviewGateCard({
 
 function StatusIndicator({
   status,
+  disconnectReason,
 }: {
   status: "connecting" | "connected" | "reconnecting" | "disconnected";
+  disconnectReason?: string;
 }) {
   const config = {
     connecting: { color: "bg-yellow-500", label: "Connecting" },
@@ -240,7 +242,9 @@ function StatusIndicator({
   return (
     <div className="flex items-center gap-2">
       <span className={`h-2 w-2 rounded-full ${color}`} />
-      <span className="text-xs text-neutral-500">{label}</span>
+      <span className="text-xs text-neutral-500">
+        {status === "disconnected" && disconnectReason ? disconnectReason : label}
+      </span>
     </div>
   );
 }
