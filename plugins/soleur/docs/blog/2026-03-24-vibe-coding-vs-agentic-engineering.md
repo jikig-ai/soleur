@@ -1,7 +1,8 @@
 ---
 title: "Vibe Coding vs Agentic Engineering: What Solo Founders Need to Know"
+seoTitle: "Vibe Coding vs Agentic Engineering for Solo Founders"
 date: 2026-03-24
-description: "Vibe coding got solo founders building fast. Agentic engineering keeps them building better. Here's the difference—and why it matters for every founder using AI to scale."
+description: "Vibe coding gets solo founders building fast. Agentic engineering keeps them building better. The difference and why it matters for founders scaling with AI."
 tags:
   - agentic-engineering
   - vibe-coding

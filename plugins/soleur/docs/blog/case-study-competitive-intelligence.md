@@ -1,7 +1,7 @@
 ---
 title: "Tracking 17 Competitors in One Session -- With Battlecards"
 date: 2026-03-10
-description: "A solo founder cannot track 16+ competitors across two threat tiers, research their latest changes, and generate sales battlecards -- all while shipping product. AI agents produced a full competitive intelligence report with cascade outputs."
+description: "Tracking 17 competitors while shipping is a full-time job. Soleur's AI agents produced a competitive intelligence report with tier analysis and battlecards."
 tags:
   - case-study
   - product

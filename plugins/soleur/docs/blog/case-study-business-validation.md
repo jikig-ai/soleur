@@ -1,7 +1,7 @@
 ---
 title: "Running a Business Validation Workshop With AI Gates"
 date: 2026-03-10
-description: "A technical founder building a product they use daily cannot tell if the market needs it too. A structured 6-gate validation workshop -- run by AI agents -- produced a PIVOT verdict that changed the project's direction."
+description: "A technical founder cannot tell if the market needs their product. A 6-gate AI validation workshop produced a PIVOT verdict that changed the project direction."
 tags:
   - case-study
   - product

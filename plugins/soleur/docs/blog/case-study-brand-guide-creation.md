@@ -1,7 +1,8 @@
 ---
 title: "From Scattered Positioning to a Full Brand Guide in Two Sessions"
+seoTitle: "From Scattered Positioning to a Full Brand Guide"
 date: 2026-03-10
-description: "Soleur had informal positioning scattered across READMEs and commit messages. An interactive brand workshop produced a complete brand guide -- identity, voice, visual direction, and channel guidelines."
+description: "An interactive brand workshop turned scattered READMEs into a brand guide covering identity, voice, visual direction, and channel guidelines."
 tags:
   - case-study
   - marketing

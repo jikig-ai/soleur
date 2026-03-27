@@ -1,7 +1,7 @@
 ---
 title: "Why Most Agentic Engineering Tools Plateau"
 date: 2026-03-14
-description: "Most AI coding tools stop getting better after week two. The missing layer is compound knowledge — a system that learns from every task and feeds those learnings back into its own rules, agents, and workflows."
+description: "Most AI coding tools plateau after week two. Compound knowledge fixes this: a system that learns from every task and routes those learnings back into its rules."
 tags:
   - agentic-engineering
   - compound-engineering
