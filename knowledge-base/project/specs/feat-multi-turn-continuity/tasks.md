@@ -1,0 +1,53 @@
+# Tasks: Multi-Turn Conversation Continuity
+
+## Phase 0: SDK Resume Spike
+
+- [ ] 0.1 Remove `persistSession: false` (SDK default is `true`)
+- [ ] 0.2 Complete session, capture `session_id` from first streamed message
+- [ ] 0.3 Locate session files on disk, verify inside persistent volume
+- [ ] 0.4 Kill process, restart, attempt resume
+- [ ] 0.5 Confirm resume works with full tool context in SDK 0.2.80
+- [ ] 0.6 Document spike findings
+
+**Decision gate:** If resume fails across restarts, pivot to replay-primary.
+
+## Phase 1: Core Session Resume
+
+- [ ] 1.1 Extend `AgentSession` type with `sessionId`
+- [ ] 1.2 Remove `persistSession: false` in query options
+- [ ] 1.3 Capture `session_id` from first streamed message (not init)
+- [ ] 1.4 Store `session_id` in `conversations.session_id` via Supabase
+- [ ] 1.5 Refactor `startAgentSession` to accept optional `sessionId` and `userMessage` (branch internally, don't duplicate setup)
+- [ ] 1.6 Refactor `sendUserMessage` to read `session_id` and route (add `user_id` auth check)
+- [ ] 1.7 First turn uses user's actual message, not hardcoded greeting
+- [ ] 1.8 Set status to `waiting_for_user` instead of `completed`
+
+## Phase 2: Message Replay Fallback
+
+- [ ] 2.1 Add `loadConversationHistory` function
+- [ ] 2.2 Format messages as conversation context (last 20 messages, no tool call replay)
+- [ ] 2.3 Add resume-with-fallback logic
+- [ ] 2.4 Server startup cleanup for orphaned conversations
+- [ ] 2.5 REST endpoint for client-side message history loading
+
+## Phase 3: WebSocket Reconnection
+
+- [ ] 3.1 Grace period before aborting session on disconnect
+- [ ] 3.2 Auto-resume conversation on reconnect
+- [ ] 3.3 TOCTOU guard: re-check `ws.readyState` after awaits
+- [ ] 3.4 Add typed error codes and WSMessage types for session transitions
+
+## Phase 4: Lifecycle Management
+
+- [ ] 4.1 Inactivity timeout cleanup (24h)
+- [ ] 4.2 Explicit close mechanism (`close_conversation` WSMessage + handler)
+- [ ] 4.3 Work completion close trigger
+- [ ] 4.4 Orphan session file cleanup
+
+## Phase 5: Testing
+
+- [ ] 5.1 Multi-turn context retention test
+- [ ] 5.2 WebSocket reconnection test
+- [ ] 5.3 Fallback replay test
+- [ ] 5.4 Session expiry test
+- [ ] 5.5 Concurrent message handling test
