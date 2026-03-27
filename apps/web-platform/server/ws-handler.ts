@@ -7,6 +7,7 @@ import { randomUUID } from "crypto";
 import { KeyInvalidError, type WSMessage, type Conversation } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { TC_VERSION } from "@/lib/legal/tc-version";
+import { MAX_SELECTION_LENGTH } from "./review-gate";
 
 // Agent runner stubs -- will be implemented in server/agent-runner.ts
 import {
@@ -230,6 +231,15 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
         sendToClient(userId, {
           type: "error",
           message: "No active session.",
+        });
+        return;
+      }
+
+      // Layer 1: transport-level length guard (defense-in-depth)
+      if (typeof msg.selection !== "string" || msg.selection.length > MAX_SELECTION_LENGTH) {
+        sendToClient(userId, {
+          type: "error",
+          message: "Invalid selection. Please choose one of the offered options.",
         });
         return;
       }

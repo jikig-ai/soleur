@@ -11,6 +11,8 @@ const KNOWN_SAFE_MESSAGES: Record<string, string> = {
     "Conversation not found. Please start a new session.",
   "Review gate timed out":
     "The review prompt timed out. Please start a new session.",
+  "Invalid review gate selection":
+    "Invalid selection. Please choose one of the offered options.",
   "Session aborted: user disconnected":
     "Your session was disconnected. Please reconnect to continue.",
   "Session expired":

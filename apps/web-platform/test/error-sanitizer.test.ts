@@ -29,6 +29,9 @@ describe("sanitizeErrorForClient", () => {
       "The review prompt timed out. Please start a new session.",
     );
     expect(
+      sanitizeErrorForClient(new Error("Invalid review gate selection")),
+    ).toBe("Invalid selection. Please choose one of the offered options.");
+    expect(
       sanitizeErrorForClient(new Error("Session aborted: user disconnected")),
     ).toBe("Your session was disconnected. Please reconnect to continue.");
   });

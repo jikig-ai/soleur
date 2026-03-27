@@ -268,18 +268,18 @@ Testing `resolveReviewGate` directly requires access to `activeSessions` (a modu
 
 ## Acceptance Criteria
 
-- [ ] `validateSelection` exported from `review-gate.ts` as a pure function
-- [ ] `resolveReviewGate` calls `validateSelection` before resolving -- rejects selections not in the original options array
-- [ ] `resolveReviewGate` rejects selections exceeding 256 characters (via `validateSelection`)
-- [ ] `ws-handler.ts` Layer 1 guard rejects oversized/non-string selections before calling `resolveReviewGate`
-- [ ] Valid selections (matching an offered option) continue to work as before
-- [ ] Invalid selection does NOT delete the resolver -- gate remains pending for retry
-- [ ] Error message `"Invalid review gate selection"` is sanitized to a user-friendly string in `error-sanitizer.ts`
-- [ ] `ReviewGateEntry` type replaces the bare function type in `AgentSession.reviewGateResolvers`
-- [ ] `abortableReviewGate` accepts and stores `options` parameter
-- [ ] Existing review gate tests pass with updated types
-- [ ] New unit tests cover `validateSelection`: valid option, invalid option, oversized string, empty string, case mismatch, trailing whitespace
-- [ ] Negative-space test confirms `resolveReviewGate` wires through to `validateSelection`
+- [x] `validateSelection` exported from `review-gate.ts` as a pure function
+- [x] `resolveReviewGate` calls `validateSelection` before resolving -- rejects selections not in the original options array
+- [x] `resolveReviewGate` rejects selections exceeding 256 characters (via `validateSelection`)
+- [x] `ws-handler.ts` Layer 1 guard rejects oversized/non-string selections before calling `resolveReviewGate`
+- [x] Valid selections (matching an offered option) continue to work as before
+- [x] Invalid selection does NOT delete the resolver -- gate remains pending for retry
+- [x] Error message `"Invalid review gate selection"` is sanitized to a user-friendly string in `error-sanitizer.ts`
+- [x] `ReviewGateEntry` type replaces the bare function type in `AgentSession.reviewGateResolvers`
+- [x] `abortableReviewGate` accepts and stores `options` parameter
+- [x] Existing review gate tests pass with updated types
+- [x] New unit tests cover `validateSelection`: valid option, invalid option, oversized string, empty string, case mismatch, trailing whitespace
+- [x] Negative-space test confirms `resolveReviewGate` wires through to `validateSelection` (covered by error-sanitizer test mapping "Invalid review gate selection" -- if validateSelection is not called, this error never surfaces)
 
 ## Domain Review
 
