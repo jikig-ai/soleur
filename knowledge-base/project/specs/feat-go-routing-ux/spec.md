@@ -1,6 +1,6 @@
 # Spec: Go Routing UX
 
-**Issue:** TBD
+**Issue:** #1188
 **Branch:** feat-go-routing-ux
 **Brainstorm:** [2026-03-27-go-routing-ux-brainstorm.md](../../brainstorms/2026-03-27-go-routing-ux-brainstorm.md)
 
