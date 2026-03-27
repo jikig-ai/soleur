@@ -211,13 +211,37 @@ Ship Checklist for [branch name]:
 - [x/skip] Learnings captured (/compound)
 - [x/skip] README updated (component counts)
 - [x/skip] Tests pass
+- [ ] Code review completed (Phase 5.5 gate)
 - [ ] Push to remote
 - [ ] Create PR with semver label
 - [ ] PR is mergeable (no conflicts)
 - [ ] CI checks pass
 ```
 
-## Phase 5.5: Pre-Ship Domain Review (conditional)
+## Phase 5.5: Pre-Ship Review Gates
+
+### Code Review Completion Gate (mandatory)
+
+Before creating a PR, verify that code review has been run. This gate prevents shipping unreviewed code even when the work skill's handoff instructions are skipped.
+
+**Detection:** Check the git log for review evidence on this branch:
+
+```bash
+git log --oneline origin/main..HEAD --grep="review"
+```
+
+Also check if the conversation contains output from `soleur:review` (look for review agent findings, "Review complete", or review-related skill invocations in the current context).
+
+**If review evidence is found:** Pass silently.
+
+**If no review evidence is found:**
+
+1. **Headless mode:** Auto-invoke `skill: soleur:review --headless`. If review finds critical issues, abort the pipeline.
+2. **Interactive mode:** Display warning: "No code review was run before ship. This is required by the work skill handoff (Phase 4, step 1)." Then invoke `skill: soleur:review`. After review completes, if findings include critical or high severity issues, resolve them before continuing to Phase 6.
+
+**Why:** In #1044 (multi-turn continuity), the work skill's Phase 4 handoff specifies review as step 1 before compound and ship, but the agent skipped directly to compound. The ship skill must enforce review as a last-chance gate since it is the final step before merge.
+
+### Pre-Ship Domain Review (conditional)
 
 Domain leaders are consulted at brainstorm time but not at ship time. The actual deliverables may have implications the brainstorm couldn't predict. This phase runs two conditional gates in parallel.
 
