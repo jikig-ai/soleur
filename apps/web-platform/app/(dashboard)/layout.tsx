@@ -24,16 +24,14 @@ export default function DashboardLayout({
     setDrawerOpen(false);
   }, [pathname]);
 
-  // Close drawer on ESC key
+  // Close drawer on ESC key (register once — setDrawerOpen(false) is a no-op when already closed)
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape" && drawerOpen) {
-        setDrawerOpen(false);
-      }
+      if (e.key === "Escape") setDrawerOpen(false);
     }
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [drawerOpen]);
+  }, []);
 
   // Body scroll lock when drawer is open
   useEffect(() => {
@@ -80,14 +78,14 @@ export default function DashboardLayout({
         </span>
       </div>
 
-      {/* Overlay backdrop */}
-      {drawerOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-black/50 md:hidden"
-          aria-hidden="true"
-          onClick={() => setDrawerOpen(false)}
-        />
-      )}
+      {/* Overlay backdrop — always rendered for fade transition */}
+      <div
+        className={`fixed inset-0 z-40 bg-black/50 transition-opacity duration-200 md:hidden ${
+          drawerOpen ? "opacity-100" : "pointer-events-none opacity-0"
+        }`}
+        aria-hidden="true"
+        onClick={() => setDrawerOpen(false)}
+      />
 
       {/* Sidebar / mobile drawer — always rendered for CSS transitions */}
       <aside
@@ -113,7 +111,7 @@ export default function DashboardLayout({
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 space-y-1 px-3" role="navigation">
+        <nav className="flex-1 space-y-1 px-3">
           {NAV_ITEMS.map((item) => {
             const active =
               item.href === "/dashboard"
