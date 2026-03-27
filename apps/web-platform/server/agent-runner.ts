@@ -237,9 +237,10 @@ export function startInactivityTimer(): void {
 export async function startAgentSession(
   userId: string,
   conversationId: string,
-  leaderId: DomainLeaderId,
+  leaderId?: DomainLeaderId,
   resumeSessionId?: string,
   userMessage?: string,
+  context?: import("@/lib/types").ConversationContext,
 ): Promise<void> {
   const key = sessionKey(userId, conversationId);
 
@@ -259,9 +260,10 @@ export async function startAgentSession(
     // Get user's decrypted API key
     const apiKey = await getUserApiKey(userId);
 
-    // Get leader config
-    const leader = DOMAIN_LEADERS.find((l) => l.id === leaderId);
-    if (!leader) throw new Error(`Unknown leader: ${leaderId}`);
+    // Get leader config (default to CPO as general advisor if no leader specified)
+    const effectiveLeaderId = leaderId ?? "cpo";
+    const leader = DOMAIN_LEADERS.find((l) => l.id === effectiveLeaderId);
+    if (!leader) throw new Error(`Unknown leader: ${effectiveLeaderId}`);
 
     // Get user workspace path
     const { data: user } = await supabase
@@ -283,11 +285,16 @@ export async function startAgentSession(
     patchWorkspacePermissions(workspacePath);
 
     // Build system prompt for the domain leader
-    const systemPrompt = `You are the ${leader.title} (${leader.name}) for this user's business. ${leader.description}
+    let systemPrompt = `You are the ${leader.title} (${leader.name}) for this user's business. ${leader.description}
 
 Use the tools available to you to read and write to the knowledge-base directory. The user's workspace is at ${workspacePath}.
 
 When you need user input for important decisions, use the AskUserQuestion tool.`;
+
+    // Inject artifact context when conversation started from a specific page
+    if (context?.content) {
+      systemPrompt += `\n\nThe user is currently viewing: ${context.path}\n\nArtifact content:\n${context.content}\n\nAnswer in the context of this artifact.`;
+    }
 
     // Run the Agent SDK query
     const prompt = userMessage
@@ -600,7 +607,7 @@ export async function sendUserMessage(
     startAgentSession(
       userId,
       conversationId,
-      conv.domain_leader as DomainLeaderId,
+      (conv.domain_leader as DomainLeaderId) ?? undefined,
       resumeSessionId,
       content,
     ).catch(async (err) => {
@@ -621,7 +628,7 @@ export async function sendUserMessage(
       startAgentSession(
         userId,
         conversationId,
-        conv.domain_leader as DomainLeaderId,
+        (conv.domain_leader as DomainLeaderId) ?? undefined,
         undefined,
         replayPrompt,
       ).catch(handleSessionError);
@@ -636,7 +643,7 @@ export async function sendUserMessage(
     startAgentSession(
       userId,
       conversationId,
-      conv.domain_leader as DomainLeaderId,
+      (conv.domain_leader as DomainLeaderId) ?? undefined,
       undefined,
       prompt,
     ).catch(handleSessionError);
