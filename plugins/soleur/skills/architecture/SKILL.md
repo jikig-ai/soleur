@@ -14,7 +14,7 @@ Create, manage, and query Architecture Decision Records (ADRs) and generate Merm
 | `architecture create [title]` | Create a new ADR with the next sequential number |
 | `architecture list` | Display all ADRs with status, title, and date |
 | `architecture supersede <N> [title]` | Mark ADR-N as superseded and create its replacement |
-| `architecture diagram [type]` | Generate a Mermaid C4 diagram (system-context or container) |
+| `architecture diagram [type]` | Generate a Mermaid C4 diagram (context, container, or component) |
 
 If no sub-command is provided, display the table above and ask which sub-command to run.
 
@@ -143,41 +143,57 @@ Mark an existing ADR as superseded and create its replacement.
 
 ## Sub-command: diagram
 
-Generate a Mermaid C4 architecture diagram.
+Generate a Mermaid C4 model architecture diagram using the proper C4 diagram syntax.
+
+**Read [c4-reference.md](./references/c4-reference.md) now** for the complete C4 Mermaid syntax reference before generating any diagram.
 
 ### Steps
 
 1. **Determine diagram type.** If provided in `$ARGUMENTS`, use it. Otherwise, use AskUserQuestion:
 
-   | Type | Description |
-   |------|-------------|
-   | `system-context` | C4 Level 1 — system boundaries and external actors |
-   | `container` | C4 Level 2 — containers (apps, databases, services) within the system |
+   | Type | C4 Level | Mermaid Keyword | Description |
+   |------|----------|-----------------|-------------|
+   | `context` | Level 1 | `C4Context` | System boundaries, external actors, and system-to-system relationships |
+   | `container` | Level 2 | `C4Container` | Applications, databases, and services within the system boundary |
+   | `component` | Level 3 | `C4Component` | Internal components of a single container |
 
 2. **Gather context.** Read relevant project files to understand the system:
+
    - `knowledge-base/project/README.md` for system overview
    - `knowledge-base/project/components/` for component documentation
    - Existing ADRs in `knowledge-base/engineering/architecture/decisions/` for architectural decisions
+   - Existing diagrams in `knowledge-base/engineering/architecture/diagrams/` for consistency
 
-3. **Generate the Mermaid diagram.** Use `graph TB` with subgraphs for system boundaries. Follow existing Mermaid conventions in the codebase (see `knowledge-base/project/components/` for examples).
+3. **Generate the Mermaid diagram** using proper C4 syntax from [c4-reference.md](./references/c4-reference.md). Key rules:
+
+   - Use the correct diagram keyword (`C4Context`, `C4Container`, or `C4Component`)
+   - Use C4 shapes: `Person`, `System`, `System_Ext`, `Container`, `ContainerDb`, `Component`, etc.
+   - Use `Rel(from, to, label, ?protocol)` for relationships — NOT `-->`
+   - Use `Enterprise_Boundary`, `System_Boundary`, or `Container_Boundary` for grouping
+   - Use `_Ext` suffix for external systems/actors
 
 4. **Write the diagram file.** Save to `knowledge-base/engineering/architecture/diagrams/<type>.md`:
 
    ````markdown
-   # <Type> Diagram
+   # <Title> (C4 Level N)
 
    Generated: YYYY-MM-DD
 
    ```mermaid
-   graph TB
-       subgraph "System Boundary"
-           ...
-       end
+   C4Context
+   title System Context diagram for [System Name]
+
+   Person(user, "User Role", "Description")
+   System(sys, "System Name", "Description")
+   System_Ext(ext, "External System", "Description")
+
+   Rel(user, sys, "Uses", "HTTPS")
+   Rel(sys, ext, "Sends data to", "API")
    ```
 
    ## Notes
 
-   [Any relevant context about the diagram]
+   [Context about the diagram, references to relevant ADRs]
    ````
 
 5. **Announce:** "Diagram saved to `knowledge-base/engineering/architecture/diagrams/<type>.md`"

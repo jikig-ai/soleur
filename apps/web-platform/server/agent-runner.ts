@@ -57,12 +57,12 @@ function sessionKey(userId: string, conversationId: string) {
   return `${userId}:${conversationId}`;
 }
 
-/** Abort a running agent session (called from ws-handler on disconnect). */
-export function abortSession(userId: string, conversationId: string): void {
+/** Abort a running agent session (called from ws-handler on disconnect or supersession). */
+export function abortSession(userId: string, conversationId: string, reason?: "disconnected" | "superseded"): void {
   const key = sessionKey(userId, conversationId);
   const session = activeSessions.get(key);
   if (session) {
-    session.abort.abort(new Error("Session aborted: user disconnected"));
+    session.abort.abort(new Error(`Session aborted: ${reason ?? "disconnected"}`));
   }
 }
 
@@ -512,16 +512,21 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
     }
   } catch (err) {
     if (controller.signal.aborted) {
-      // Disconnect or abort -- mark conversation as failed so it does not
-      // stay stuck in "waiting_for_user" or "active" status forever.
-      await updateConversationStatus(conversationId, "failed").catch(
-        (statusErr) => {
-          console.error(
-            `[agent] Failed to mark aborted conversation ${conversationId} as failed:`,
-            statusErr,
-          );
-        },
-      );
+      // If superseded, the caller (abortActiveSession) already set status to
+      // "completed" — skip the "failed" write to avoid overwriting it.
+      const isSuperseded = err instanceof Error && err.message.includes("superseded");
+      if (!isSuperseded) {
+        // Disconnect or abort -- mark conversation as failed so it does not
+        // stay stuck in "waiting_for_user" or "active" status forever.
+        await updateConversationStatus(conversationId, "failed").catch(
+          (statusErr) => {
+            console.error(
+              `[agent] Failed to mark aborted conversation ${conversationId} as failed:`,
+              statusErr,
+            );
+          },
+        );
+      }
     } else {
       console.error(`[agent] Session error for ${userId}/${conversationId}:`, err);
       const message = sanitizeErrorForClient(err);

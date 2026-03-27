@@ -32,7 +32,7 @@ const supabase = createClient(
 /** Grace period before aborting session on disconnect (allows reconnection). */
 const DISCONNECT_GRACE_MS = 30_000;
 
-interface ClientSession {
+export interface ClientSession {
   ws: WebSocket;
   conversationId?: string;
   /** Timer for deferred abort on disconnect — cleared if user reconnects. */
@@ -48,6 +48,34 @@ const pendingDisconnects = new Map<string, ReturnType<typeof setTimeout>>();
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** Abort the active agent session for this user (if any), mark the conversation
+ *  completed (fire-and-forget), and clear session.conversationId. No-ops if no
+ *  conversation is active. */
+export function abortActiveSession(userId: string, session: ClientSession): void {
+  if (!session.conversationId) return;
+
+  const oldConvId = session.conversationId;
+  console.log(`[ws] Aborting active session ${oldConvId} for user ${userId} (superseded)`);
+
+  abortSession(userId, oldConvId, "superseded");
+
+  // Fire-and-forget — orphan cleanup catches failures on restart
+  supabase
+    .from("conversations")
+    .update({ status: "completed", last_active: new Date().toISOString() })
+    .eq("id", oldConvId)
+    .then(({ error }) => {
+      if (error) {
+        console.error(`[ws] Failed to mark conversation ${oldConvId} as completed: ${error.message}`);
+      }
+    })
+    .catch((err) => {
+      console.error(`[ws] Failed to update conversation ${oldConvId}: ${err}`);
+    });
+
+  session.conversationId = undefined;
+}
 
 /**
  * Serialize and send a WSMessage to the client identified by `userId`.
@@ -114,6 +142,8 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
     // ------------------------------------------------------------------
     case "start_session": {
       try {
+        abortActiveSession(userId, session);
+
         console.log(`[ws] start_session for user ${userId}, leader ${msg.leaderId}`);
         const conversationId = await createConversation(userId, msg.leaderId);
         session.conversationId = conversationId;
@@ -146,6 +176,8 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
     // ------------------------------------------------------------------
     case "resume_session": {
       try {
+        abortActiveSession(userId, session);
+
         // Verify conversation ownership
         const { data: conv, error: convErr } = await supabase
           .from("conversations")
@@ -184,13 +216,14 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
       }
 
       try {
-        abortSession(userId, session.conversationId);
+        const convId = session.conversationId;
+        abortSession(userId, convId, "superseded");
         await supabase
           .from("conversations")
           .update({ status: "completed", last_active: new Date().toISOString() })
-          .eq("id", session.conversationId);
-        sendToClient(userId, { type: "session_ended", reason: "closed" });
+          .eq("id", convId);
         session.conversationId = undefined;
+        sendToClient(userId, { type: "session_ended", reason: "closed" });
       } catch (err) {
         console.error(`[ws] close_conversation error for user ${userId}:`, err);
         sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
