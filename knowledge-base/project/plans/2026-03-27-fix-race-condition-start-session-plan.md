@@ -175,15 +175,15 @@ The client (`ws-client.ts`) does not need changes. It receives `session_started`
 
 ## Acceptance Criteria
 
-- [ ] When a user sends `start_session` while an agent session is already active, the previous session is aborted before the new one starts (`apps/web-platform/server/ws-handler.ts`)
-- [ ] When a user sends `resume_session` while an agent session is already active, the previous session is aborted before the new one is associated
-- [ ] The previous conversation's status is updated to `"completed"` (not `"failed"`) in the database
-- [ ] No stream messages from the old session are delivered to the client after the new session starts (except the one-message leak window inherent to cooperative abort)
-- [ ] The `session_started` response for the new session is sent after the abort completes
-- [ ] A `start_session` with no prior active session (first session, or after `close_conversation`) works unchanged
-- [ ] The `close_conversation` handler is not affected (already handles cleanup correctly, optionally refactored to use shared helper)
-- [ ] A shared `abortActiveSession()` helper eliminates duplication across the three handlers
-- [ ] Add unit tests for the concurrent `start_session` and `resume_session` race condition scenarios to `apps/web-platform/test/ws-protocol.test.ts`
+- [x] When a user sends `start_session` while an agent session is already active, the previous session is aborted before the new one starts (`apps/web-platform/server/ws-handler.ts`)
+- [x] When a user sends `resume_session` while an agent session is already active, the previous session is aborted before the new one is associated
+- [x] The previous conversation's status is updated to `"completed"` (not `"failed"`) in the database
+- [x] No stream messages from the old session are delivered to the client after the new session starts (except the one-message leak window inherent to cooperative abort)
+- [x] The `session_started` response for the new session is sent after the abort completes
+- [x] A `start_session` with no prior active session (first session, or after `close_conversation`) works unchanged
+- [x] The `close_conversation` handler is not affected (already handles cleanup correctly, optionally refactored to use shared helper)
+- [x] A shared `abortActiveSession()` helper eliminates duplication across the three handlers
+- [x] Add unit tests for the concurrent `start_session` and `resume_session` race condition scenarios to `apps/web-platform/test/ws-abort.test.ts`
 
 ## Domain Review
 
