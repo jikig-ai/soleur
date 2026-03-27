@@ -231,7 +231,7 @@ Assess a feature or plan against the NFR register to identify which non-function
    - Security change
    - Deployment change
 
-5. **Assess each NFR category.** For each of the 7 categories (Observability, Resilience, Testing, Config & Delivery, Scaling & Recovery, Security, Data Quality), determine:
+5. **Assess each NFR category.** For each of the 7 categories (Observability, Resilience, Testing, Configuration & Delivery, Scaling & Recovery, Security, Data Quality), determine:
 
    - Which specific NFRs are relevant to the affected containers/links
    - Current per-container/link status from the NFR register tables
@@ -260,7 +260,7 @@ Assess a feature or plan against the NFR register to identify which non-function
 
 7. **Recommend actions.** For each NFR with "Needs attention" or "Risk introduced" impact, propose a specific action referencing the affected container/link (e.g., "Add circuit breaker on Agent Runtime -> Stripe link", "Configure structured logging for New Service container").
 
-7. **Offer to create an ADR.** If the assessment reveals architectural decisions (e.g., choosing to accept a risk, implementing a new NFR), ask: "Create an ADR to document these decisions?"
+8. **Offer to create an ADR.** If the assessment reveals architectural decisions (e.g., choosing to accept a risk, implementing a new NFR), ask: "Create an ADR to document these decisions?"
 
 ---
 

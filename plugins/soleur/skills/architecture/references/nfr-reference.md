@@ -16,7 +16,7 @@ Non-Functional Requirements (NFRs) define how the system should behave rather th
 
 ## NFR Register Structure
 
-The canonical NFR register lives at `knowledge-base/engineering/architecture/nfr-register.md`. It contains 48 NFRs organized per-container and per-link with applicability matrices.
+The canonical NFR register lives at `knowledge-base/engineering/architecture/nfr-register.md`. It contains all NFRs organized per-container and per-link with applicability matrices.
 
 ### Per-Container/Link Format
 
@@ -27,10 +27,10 @@ Each NFR has its own section with a table mapping to C4 containers and links:
 
 **Category:** X | **Scope:** Y | **System-Level Status:** Z
 
-| Container/Link | Applicable | Status | Enforced By | Evidence |
-|----------------|------------|--------|-------------|----------|
-| Dashboard | Yes | Implemented | Cloudflare | WAF managed rulesets |
-| Agent Runtime -> Anthropic | Yes | Not Implemented | — | No circuit breaker |
+| Container/Link | Status | Enforced By | Evidence |
+|----------------|--------|-------------|----------|
+| Dashboard | Implemented | Cloudflare | WAF managed rulesets |
+| Agent Runtime -> Anthropic | Not Implemented | — | No circuit breaker |
 ```
 
 ### NFR Scope Classification
