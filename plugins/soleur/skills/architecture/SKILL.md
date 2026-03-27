@@ -82,6 +82,7 @@ Create a new ADR with the next sequential number.
    - **Decision:** Which option was chosen and why?
    - **Consequences:** What becomes easier or harder?
    - **Cost Impacts:** How much does this change increase or reduce costs? (reference `knowledge-base/operations/expenses.md` for baseline; use "None" if no impact)
+   - **NFR Impacts:** Which non-functional requirements are affected? (reference NFR IDs from `knowledge-base/engineering/architecture/nfr-register.md`; use "None" if no impact)
    - **Diagram:** (optional) Should a Mermaid C4 diagram be included?
 
 7. **Write the ADR body** with the gathered context. If a diagram was requested, generate using proper C4 syntax from [c4-reference.md](./references/c4-reference.md).
