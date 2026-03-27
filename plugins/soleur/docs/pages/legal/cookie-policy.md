@@ -1,6 +1,6 @@
 ---
 title: "Cookie Policy"
-description: "Cookie usage on the Soleur documentation site."
+description: "Cookie usage on the Soleur documentation site. The Soleur plugin itself does not use cookies. Analytics are privacy-friendly via Plausible."
 layout: base.njk
 permalink: pages/legal/cookie-policy.html
 ---

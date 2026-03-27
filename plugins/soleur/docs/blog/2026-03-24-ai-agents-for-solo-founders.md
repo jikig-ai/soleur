@@ -1,7 +1,7 @@
 ---
 title: "AI Agents for Solo Founders: The Definitive Guide"
 date: 2026-03-24
-description: "The complete guide to AI agents for solo founders in 2026. What makes a true AI agent, the 8 domains every company needs, and why compound knowledge is the only path to solo-founder scale."
+description: "The complete guide to AI agents for solo founders in 2026: what makes a true agent, the 8 domains every company needs, and how compound knowledge enables scale."
 tags:
   - ai-agents
   - solo-founder

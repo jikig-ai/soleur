@@ -1,7 +1,8 @@
 ---
 title: "Soleur vs. Anthropic Cowork: Which AI Agent Platform Is Right for Solo Founders?"
+seoTitle: "Soleur vs. Anthropic Cowork: AI Agent Platform Comparison"
 date: 2026-03-16
-description: "Soleur and Anthropic Cowork both deploy multi-domain AI agents. A direct comparison of knowledge architecture, workflow depth, cross-domain coherence, and pricing."
+description: "Soleur and Anthropic Cowork both deploy multi-domain AI agents. A comparison of knowledge architecture, workflow depth, cross-domain coherence, and pricing."
 tags:
   - comparison
   - anthropic-cowork

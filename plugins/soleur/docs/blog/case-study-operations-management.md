@@ -1,7 +1,7 @@
 ---
 title: "Building an Operations Department for a One-Person Company"
 date: 2026-03-10
-description: "Running a company -- even solo -- requires expense tracking, domain management, hosting decisions, and infrastructure security. AI agents built a full operations function with structured documentation that survives context switches."
+description: "AI agents built a full operations function -- expense tracking, domain management, infrastructure security -- with documentation that survives context switches."
 tags:
   - case-study
   - operations

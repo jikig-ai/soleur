@@ -1,7 +1,7 @@
 ---
 title: "How We Generated 9 Legal Documents in Days, Not Months"
 date: 2026-03-10
-description: "A solo founder needed a full legal compliance suite -- Terms & Conditions, Privacy Policy, GDPR Policy, CLAs, and more. AI agents produced 9 documents totaling 17,761 words with dual-jurisdiction coverage."
+description: "AI agents produced 9 legal documents -- Terms, Privacy Policy, GDPR, CLAs -- totaling 17,761 words with dual-jurisdiction coverage in days, not months."
 tags:
   - case-study
   - legal
