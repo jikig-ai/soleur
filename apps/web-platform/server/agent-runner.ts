@@ -146,6 +146,60 @@ async function updateConversationStatus(
 }
 
 // ---------------------------------------------------------------------------
+// Conversation history for replay fallback
+// ---------------------------------------------------------------------------
+const MAX_REPLAY_MESSAGES = 20;
+
+async function loadConversationHistory(
+  conversationId: string,
+): Promise<Array<{ role: string; content: string }>> {
+  const { data, error } = await supabase
+    .from("messages")
+    .select("role, content, created_at")
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    console.error(`[agent] Failed to load conversation history: ${error.message}`);
+    return [];
+  }
+
+  return data ?? [];
+}
+
+function buildReplayPrompt(
+  history: Array<{ role: string; content: string }>,
+  newMessage: string,
+): string {
+  // Keep only the last N messages to stay within context budget
+  const recent = history.slice(-MAX_REPLAY_MESSAGES);
+
+  if (recent.length === 0) return newMessage;
+
+  const formatted = recent
+    .map((m) => `[${m.role === "user" ? "User" : "Assistant"}]: ${m.content}`)
+    .join("\n\n");
+
+  return `Previous conversation:\n${formatted}\n\nNew message from user: ${newMessage}`;
+}
+
+// ---------------------------------------------------------------------------
+// Orphaned conversation cleanup (runs on server startup)
+// ---------------------------------------------------------------------------
+export async function cleanupOrphanedConversations(): Promise<void> {
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1_000).toISOString();
+  const { error } = await supabase
+    .from("conversations")
+    .update({ status: "failed" })
+    .in("status", ["active", "waiting_for_user"])
+    .lt("last_active", fiveMinutesAgo);
+
+  if (error) {
+    console.error(`[agent] Failed to clean up orphaned conversations: ${error.message}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Start agent session
 // ---------------------------------------------------------------------------
 export async function startAgentSession(
@@ -481,14 +535,7 @@ export async function sendUserMessage(
   const activeSession = activeSessions.get(key);
   const resumeSessionId = activeSession?.sessionId ?? conv.session_id ?? undefined;
 
-  // Resume existing session or start fresh with user's actual message
-  startAgentSession(
-    userId,
-    conversationId,
-    conv.domain_leader as DomainLeaderId,
-    resumeSessionId,
-    content,
-  ).catch((err) => {
+  const handleSessionError = (err: unknown) => {
     console.error(
       `[agent] sendUserMessage session error for ${userId}/${conversationId}:`,
       err,
@@ -505,7 +552,54 @@ export async function sendUserMessage(
         statusErr,
       );
     });
-  });
+  };
+
+  if (resumeSessionId) {
+    // Try SDK resume first; fall back to message replay if it fails
+    startAgentSession(
+      userId,
+      conversationId,
+      conv.domain_leader as DomainLeaderId,
+      resumeSessionId,
+      content,
+    ).catch(async (err) => {
+      console.warn(`[agent] SDK resume failed, falling back to message replay: ${err}`);
+      // Clear stale session_id
+      const { error: clearErr } = await supabase
+        .from("conversations")
+        .update({ session_id: null })
+        .eq("id", conversationId);
+      if (clearErr) {
+        console.error(`[agent] Failed to clear session_id: ${clearErr.message}`);
+      }
+
+      // Load history and build replay prompt
+      const history = await loadConversationHistory(conversationId);
+      const replayPrompt = buildReplayPrompt(history, content);
+
+      startAgentSession(
+        userId,
+        conversationId,
+        conv.domain_leader as DomainLeaderId,
+        undefined,
+        replayPrompt,
+      ).catch(handleSessionError);
+    });
+  } else {
+    // No session to resume — first turn or history-only replay
+    const history = await loadConversationHistory(conversationId);
+    const prompt = history.length > 0
+      ? buildReplayPrompt(history, content)
+      : content;
+
+    startAgentSession(
+      userId,
+      conversationId,
+      conv.domain_leader as DomainLeaderId,
+      undefined,
+      prompt,
+    ).catch(handleSessionError);
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -24,11 +24,11 @@
 
 ## Phase 2: Message Replay Fallback
 
-- [ ] 2.1 Add `loadConversationHistory` function
-- [ ] 2.2 Format messages as conversation context (last 20 messages, no tool call replay)
-- [ ] 2.3 Add resume-with-fallback logic
-- [ ] 2.4 Server startup cleanup for orphaned conversations
-- [ ] 2.5 REST endpoint for client-side message history loading
+- [x] 2.1 Add `loadConversationHistory` function
+- [x] 2.2 Format messages as conversation context (last 20 messages, no tool call replay)
+- [x] 2.3 Add resume-with-fallback logic
+- [x] 2.4 Server startup cleanup for orphaned conversations
+- [x] 2.5 REST endpoint for client-side message history loading
 
 ## Phase 3: WebSocket Reconnection
 
