@@ -13,6 +13,10 @@ const KNOWN_SAFE_MESSAGES: Record<string, string> = {
     "The review prompt timed out. Please start a new session.",
   "Session aborted: user disconnected":
     "Your session was disconnected. Please reconnect to continue.",
+  "Session expired":
+    "Your session has expired. Context will be restored from history.",
+  "SDK resume failed":
+    "Session resume failed. Falling back to conversation history.",
 };
 
 export function sanitizeErrorForClient(err: unknown): string {

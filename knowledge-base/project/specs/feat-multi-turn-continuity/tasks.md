@@ -32,10 +32,10 @@
 
 ## Phase 3: WebSocket Reconnection
 
-- [ ] 3.1 Grace period before aborting session on disconnect
-- [ ] 3.2 Auto-resume conversation on reconnect
-- [ ] 3.3 TOCTOU guard: re-check `ws.readyState` after awaits
-- [ ] 3.4 Add typed error codes and WSMessage types for session transitions
+- [x] 3.1 Grace period before aborting session on disconnect
+- [x] 3.2 Auto-resume conversation on reconnect
+- [x] 3.3 TOCTOU guard: re-check `ws.readyState` after awaits
+- [x] 3.4 Add typed error codes and WSMessage types for session transitions
 
 ## Phase 4: Lifecycle Management
 

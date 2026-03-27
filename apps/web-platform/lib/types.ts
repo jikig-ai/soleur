@@ -1,7 +1,7 @@
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
 // Typed error codes for structured error handling over WebSocket
-export type WSErrorCode = "key_invalid";
+export type WSErrorCode = "key_invalid" | "session_expired" | "session_resumed";
 
 export class KeyInvalidError extends Error {
   constructor() {
@@ -16,6 +16,8 @@ export type WSMessage =
   | { type: "auth_ok" }
   | { type: "chat"; content: string }
   | { type: "start_session"; leaderId: DomainLeaderId }
+  | { type: "resume_session"; conversationId: string }
+  | { type: "close_conversation" }
   | { type: "review_gate_response"; gateId: string; selection: string }
   | { type: "stream"; content: string; partial: boolean }
   | { type: "review_gate"; gateId: string; question: string; options: string[] }
