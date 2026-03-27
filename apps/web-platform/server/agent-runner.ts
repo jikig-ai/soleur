@@ -385,9 +385,10 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             const gateId = randomUUID();
             const question =
               (toolInput.question as string) || "Agent needs your input";
-            const gateOptions = Array.isArray(toolInput.options)
-              ? (toolInput.options as string[])
-              : ["Approve", "Reject"];
+            const rawOptions = Array.isArray(toolInput.options)
+              ? (toolInput.options as unknown[]).filter((o): o is string => typeof o === "string")
+              : [];
+            const gateOptions = rawOptions.length > 0 ? rawOptions : ["Approve", "Reject"];
 
             sendToClient(userId, {
               type: "review_gate",

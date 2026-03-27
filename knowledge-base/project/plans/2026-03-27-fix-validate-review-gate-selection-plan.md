@@ -17,7 +17,7 @@ deepened: 2026-03-27
 
 1. Full attack surface enumeration added (per project security convention) -- identified WebSocket message parsing as an additional hardening point
 2. Negative-space test pattern applied from tool-path-checker precedent -- completeness guard ensures future gate types cannot bypass validation
-3. `gateId` format validation added as defense-in-depth (UUID format check prevents map key injection)
+3. `gateId` format validation deferred -- Map.get() on non-existent keys returns undefined (safe), and gateId is server-generated UUID; brute-force guessing is infeasible
 4. `ws-handler.ts` length guard added as Layer 1 (before `resolveReviewGate` is even called) following the project's defense-in-depth layering convention
 
 ### Relevant Institutional Learnings Applied
