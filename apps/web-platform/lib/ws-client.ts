@@ -32,39 +32,37 @@ const MAX_BACKOFF = 30_000;
 const INITIAL_BACKOFF = 1_000;
 
 /** Close codes where reconnecting will never succeed. */
-const NON_TRANSIENT_CLOSE_CODES: Record<
-  number,
-  { action: "redirect" | "disconnect"; target?: string; reason: string }
-> = {
-  4001: { action: "redirect", target: "/login", reason: "Session expired" },
-  4002: { action: "disconnect", reason: "Superseded by another tab" },
-  4003: { action: "redirect", target: "/login", reason: "Authentication required" },
-  4004: { action: "redirect", target: "/accept-terms", reason: "Terms acceptance required" },
-  4005: { action: "disconnect", reason: "Server error" },
+const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason: string }> = {
+  4001: { target: "/login", reason: "Session expired" },
+  4002: { reason: "Superseded by another tab" },
+  4003: { target: "/login", reason: "Authentication required" },
+  4004: { target: "/accept-terms", reason: "Terms acceptance required" },
+  4005: { reason: "Server error" },
 };
 
 export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
-  const [disconnectReason, setDisconnectReason] = useState<string | undefined>(undefined);
+  const [disconnectReason, setDisconnectReason] = useState<string>();
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mountedRef = useRef(true);
+
+  /** Map of active leader streams: leaderId → message index in the messages array */
+  const activeStreamsRef = useRef<Map<string, number>>(new Map());
 
   /** Permanently tear down the WebSocket — prevents reconnect loop.
    *  Mirrors the key_invalid teardown pattern. */
   const teardown = useCallback(() => {
     mountedRef.current = false;
     clearTimeout(reconnectTimerRef.current);
+    activeStreamsRef.current.clear();
     if (wsRef.current) {
       wsRef.current.onclose = null;
       wsRef.current.close();
     }
   }, []);
-
-  /** Map of active leader streams: leaderId → message index in the messages array */
-  const activeStreamsRef = useRef<Map<string, number>>(new Map());
 
   const getWsUrlAndToken = useCallback(async () => {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -256,7 +254,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         teardown();
         setStatus("disconnected");
         setDisconnectReason(entry.reason);
-        if (entry.action === "redirect" && entry.target) {
+        if (entry.target) {
           window.location.href = entry.target;
         }
         return;
