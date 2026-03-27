@@ -11,28 +11,27 @@ The `/ship` skill's review gate only fires when `/ship` is invoked. Agents can b
 ## Goals
 
 - G1: Prevent `gh pr merge` without review evidence via a PreToolUse hook
-- G2: Provide an auditable escape hatch for legitimate hotfixes
-- G3: Consolidate redundant review checks in the ship skill
-- G4: Document a hotfix protocol in AGENTS.md
+- G2: Consolidate redundant review checks in the ship skill (Phase 1.5 is the single gate)
+- G3: Update AGENTS.md hook awareness
 
 ## Non-Goals
 
 - GitHub branch protection rules (enforcement outside Claude Code) — separate future issue
 - Pre-push hooks (the merge command is the correct interception point)
 - Changes to the review skill itself
+- Hotfix escape hatch (YAGNI — dropped after plan review)
 
 ## Functional Requirements
 
-- **FR1:** New guardrails.sh Guard 6 intercepts `gh pr merge` commands
-- **FR2:** Guard 6 extracts the PR number, checks for review evidence on the branch (todo files tagged `code-review` OR commit message matching review output pattern)
-- **FR3:** Guard 6 checks the PR for a `hotfix` label — if present, merge is allowed without review evidence
-- **FR4:** Deny message includes instructions: "Add 'hotfix' label to bypass: `gh pr edit <N> --add-label hotfix`"
-- **FR5:** Ship skill Phase 5.5 review check is removed; Phase 1.5 is the single review gate
-- **FR6:** AGENTS.md updated with hotfix protocol and Guard 6 documentation
+- **FR1:** Review evidence check added to `pre-merge-rebase.sh` as early-exit before fetch/merge/push
+- **FR2:** Check detects review evidence via todo files tagged `code-review` OR commit message matching review output pattern
+- **FR3:** Deny message is clear: "Run /review before merging"
+- **FR4:** Ship skill Phase 5.5 Code Review Completion Gate subsection is removed; Phase 1.5 is the single review gate
+- **FR5:** AGENTS.md hook awareness line updated to include review evidence gate
 
 ## Technical Requirements
 
-- **TR1:** Review evidence detection logic is centralized (shared between hook and ship skill to prevent drift)
-- **TR2:** Hook uses `gh pr view <N> --json labels` to check for hotfix label (requires network, acceptable since `gh pr merge` is infrequent)
-- **TR3:** PR number extraction handles both `gh pr merge <N>` and `gh pr merge --squash --auto` (current branch) forms
-- **TR4:** Guard 6 follows existing hook patterns in guardrails.sh (deny response format, error handling)
+- **TR1:** Review evidence detection uses `-C "$WORK_DIR"` consistently for both grep and git log
+- **TR2:** Guard is purely local — zero network calls, no PR number extraction needed
+- **TR3:** Guard follows existing pre-merge-rebase.sh patterns (deny response format, `.cwd` resolution)
+- **TR4:** Phase 5.5 removal preserves other subsections (CMO, COO conditional gates)

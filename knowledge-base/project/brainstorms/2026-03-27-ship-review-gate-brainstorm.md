@@ -6,9 +6,9 @@
 
 ## What We're Building
 
-A hard-deny PreToolUse hook (Guard 6) on `gh pr merge` that blocks merging when no review evidence exists on the branch. Bypass via a `hotfix` GitHub label on the PR — auditable, two-step, and consistent with existing label patterns (semver labels).
+A hard-deny review evidence check in `pre-merge-rebase.sh` that blocks `gh pr merge` when no review evidence exists on the branch. Purely local detection (zero network calls). No escape hatch — run `/review` first, even for hotfixes.
 
-Additionally: consolidate the ship skill's redundant review checks (Phase 1.5 and Phase 5.5) into a single gate at Phase 1.5, and add a brief hotfix protocol to AGENTS.md.
+Additionally: consolidate the ship skill's redundant review checks (Phase 1.5 and Phase 5.5) into a single gate at Phase 1.5.
 
 ## Why This Approach
 
@@ -20,11 +20,11 @@ The fix must be at the hook level — the only enforcement layer that fires rega
 
 1. **Hard deny, not warning.** The project's existing hooks (Guards 1-5) all use deny. A warning-only review gate would be inconsistent and easily ignored under urgency — the exact failure mode we're fixing.
 
-2. **Escape hatch: GitHub 'hotfix' label.** Requires `gh pr edit <N> --add-label hotfix` before merge. Auditable in PR history, two-step (deliberate), consistent with existing label patterns. The deny message tells the agent exactly how to bypass.
+2. ~~**Escape hatch: GitHub 'hotfix' label.**~~ [Updated 2026-03-27] Dropped after plan review — YAGNI. Two of three reviewers recommended removing it. Without the escape hatch, the guard is purely local (zero network calls, no PR number extraction). If a genuine bypass need arises, add it then.
 
-3. **Single review gate at Phase 1.5.** Remove the Phase 5.5 review check in the ship skill. Phase 1.5 is the correct position (fail early). In headless mode: abort, not auto-invoke. Phase 5.5 had inconsistent behavior (auto-invoked review in headless, used looser grep).
+3. **Single review gate at Phase 1.5.** Remove the Phase 5.5 review check in the ship skill. Phase 1.5 is the correct position (fail early). In headless mode: abort, not auto-invoke. Phase 5.5's auto-invoke is *wrong behavior* (hidden side effect), not just redundant.
 
-4. **Brief hotfix protocol in AGENTS.md.** Three steps: (1) add 'hotfix' label, (2) merge, (3) follow-up review within 24h. The hook's deny message references this protocol.
+4. **Guard lives in pre-merge-rebase.sh, not guardrails.sh.** [Updated 2026-03-27] Co-locates the guard with the side-effecting logic (fetch/merge/push) it should gate. Eliminates hook execution order dependency.
 
 ## Open Questions
 
