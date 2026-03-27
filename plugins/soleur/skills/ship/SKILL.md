@@ -90,6 +90,8 @@ If Step 1 found nothing, check for the review commit pattern:
 git log origin/main..HEAD --oneline | grep "refactor: add code review findings" || true
 ```
 
+**Note:** This commit message is coupled to review SKILL.md Step 5. If that message changes, update this grep to match.
+
 **If either step produced output:** Review evidence found. Continue to Phase 2.
 
 **If both steps produced no output:**
@@ -103,6 +105,8 @@ git log origin/main..HEAD --oneline | grep "refactor: add code review findings" 
 - **Run /review now** -> invoke `skill: soleur:review`, then continue to Phase 2
 - **Skip review** -> continue to Phase 2 (user accepts the risk; this also covers zero-finding reviews where review ran cleanly)
 - **Abort** -> stop shipping
+
+**Why:** Identified during #1129/#1131/#1134 implementation session when the `/one-shot` pipeline ran correctly but the gap was noted as a systemic risk for direct `/ship` invocations. See #1170.
 
 ## Phase 2: Capture Learnings
 
