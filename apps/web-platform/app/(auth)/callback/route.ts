@@ -1,10 +1,11 @@
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
+import { createServiceClient } from "@/lib/supabase/server";
 import { resolveOrigin } from "@/lib/auth/resolve-origin";
 import { provisionWorkspace } from "@/server/workspace";
 import { TC_VERSION } from "@/lib/legal/tc-version";
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
   const origin = resolveOrigin(
@@ -14,7 +15,32 @@ export async function GET(request: Request) {
   );
 
   if (code) {
-    const supabase = await createClient();
+    // Accumulate cookie operations so they can be applied to whatever
+    // redirect response we return. cookies() from next/headers does NOT
+    // carry over to NextResponse.redirect() — cookies must be set on the
+    // response object directly.
+    const pendingCookies: { name: string; value: string; options: CookieOptions }[] = [];
+
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookieOptions: {
+          sameSite: "lax" as const,
+          secure: process.env.NODE_ENV === "production",
+          path: "/",
+        },
+        cookies: {
+          getAll() {
+            return request.cookies.getAll();
+          },
+          setAll(cookiesToSet) {
+            cookiesToSet.forEach((cookie) => pendingCookies.push(cookie));
+          },
+        },
+      },
+    );
+
     const { error } = await supabase.auth.exchangeCodeForSession(code);
 
     if (error) {
@@ -29,23 +55,22 @@ export async function GET(request: Request) {
       if (user) {
         const tcAcceptedVersion = await ensureWorkspaceProvisioned(user.id, user.email ?? "");
 
+        let redirectPath: string;
         if (tcAcceptedVersion !== TC_VERSION) {
-          return NextResponse.redirect(`${origin}/accept-terms`);
+          redirectPath = "/accept-terms";
+        } else {
+          const { data: keys } = await supabase
+            .from("api_keys")
+            .select("id")
+            .eq("user_id", user.id)
+            .eq("provider", "anthropic")
+            .eq("is_valid", true)
+            .limit(1);
+
+          redirectPath = !keys || keys.length === 0 ? "/setup-key" : "/dashboard";
         }
 
-        // Check if user has an API key set up
-        const { data: keys } = await supabase
-          .from("api_keys")
-          .select("id")
-          .eq("user_id", user.id)
-          .eq("provider", "anthropic")
-          .eq("is_valid", true)
-          .limit(1);
-
-        if (!keys || keys.length === 0) {
-          return NextResponse.redirect(`${origin}/setup-key`);
-        }
-        return NextResponse.redirect(`${origin}/dashboard`);
+        return redirectWithCookies(`${origin}${redirectPath}`, pendingCookies);
       }
     }
   }
@@ -53,6 +78,23 @@ export async function GET(request: Request) {
   // Auth failed — redirect to login with error
   console.error("[callback] Auth failed — no code or exchange error. code:", code ? "present" : "missing", "origin:", origin);
   return NextResponse.redirect(`${origin}/login?error=auth_failed`);
+}
+
+/** Create a redirect response with accumulated session cookies applied. */
+function redirectWithCookies(
+  url: string,
+  cookies: { name: string; value: string; options: CookieOptions }[],
+): NextResponse {
+  const response = NextResponse.redirect(url);
+  cookies.forEach(({ name, value, options }) => {
+    response.cookies.set(name, value, {
+      ...options,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+    });
+  });
+  return response;
 }
 
 async function ensureWorkspaceProvisioned(
