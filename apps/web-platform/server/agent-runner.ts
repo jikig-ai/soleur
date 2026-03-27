@@ -13,7 +13,7 @@ import { isPathInWorkspace } from "./sandbox";
 import { UNVERIFIED_PARAM_TOOLS, extractToolPath, isFileTool, isSafeTool } from "./tool-path-checker";
 import { buildAgentEnv } from "./agent-env";
 import { createSandboxHook } from "./sandbox-hook";
-import { abortableReviewGate, type AgentSession } from "./review-gate";
+import { abortableReviewGate, validateSelection, type AgentSession } from "./review-gate";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -385,9 +385,10 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             const gateId = randomUUID();
             const question =
               (toolInput.question as string) || "Agent needs your input";
-            const gateOptions = Array.isArray(toolInput.options)
-              ? (toolInput.options as string[])
-              : ["Approve", "Reject"];
+            const rawOptions = Array.isArray(toolInput.options)
+              ? (toolInput.options as unknown[]).filter((o): o is string => typeof o === "string")
+              : [];
+            const gateOptions = rawOptions.length > 0 ? rawOptions : ["Approve", "Reject"];
 
             sendToClient(userId, {
               type: "review_gate",
@@ -402,6 +403,8 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               session,
               gateId,
               controller.signal,
+              undefined, // timeoutMs (use default)
+              gateOptions,
             );
 
             await updateConversationStatus(conversationId, "active");
@@ -656,11 +659,13 @@ export async function resolveReviewGate(
     throw new Error("No active session");
   }
 
-  const resolver = session.reviewGateResolvers.get(gateId);
-  if (!resolver) {
+  const entry = session.reviewGateResolvers.get(gateId);
+  if (!entry) {
     throw new Error("Review gate not found or already resolved");
   }
 
-  resolver(selection);
+  validateSelection(entry.options, selection);
+
+  entry.resolve(selection);
   session.reviewGateResolvers.delete(gateId);
 }
