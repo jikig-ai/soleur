@@ -314,34 +314,34 @@ useEffect(() => {
 
 ### Functional Requirements
 
-- [ ] At viewport widths below 768px, sidebar is hidden and a hamburger button appears in a top bar
-- [ ] Tapping the hamburger button opens a full-height drawer overlay with navigation items and sign-out
-- [ ] Tapping the backdrop or a nav link closes the drawer
-- [ ] Pressing ESC closes the drawer
-- [ ] At viewport widths 768px and above, sidebar renders as the current fixed layout (no regression)
-- [ ] Domain leader grid displays as single column on mobile, two columns on desktop
-- [ ] All domain leader cards are tappable and link correctly on touch devices
-- [ ] Chat input bar and send button have minimum 44px touch targets on mobile
-- [ ] Message bubbles do not overflow or cause horizontal scroll at 375px
+- [x] At viewport widths below 768px, sidebar is hidden and a hamburger button appears in a top bar
+- [x] Tapping the hamburger button opens a full-height drawer overlay with navigation items and sign-out
+- [x] Tapping the backdrop or a nav link closes the drawer
+- [x] Pressing ESC closes the drawer
+- [x] At viewport widths 768px and above, sidebar renders as the current fixed layout (no regression)
+- [x] Domain leader grid displays as single column on mobile, two columns on desktop
+- [x] All domain leader cards are tappable and link correctly on touch devices
+- [x] Chat input bar and send button have minimum 44px touch targets on mobile
+- [x] Message bubbles do not overflow or cause horizontal scroll at 375px
 - [ ] No horizontal scroll on any screen at any viewport width (375px through 1920px+)
 - [ ] Dashboard is fully usable on 375px viewport (iPhone SE)
-- [ ] Body content does not scroll when drawer overlay is open
+- [x] Body content does not scroll when drawer overlay is open
 
 ### Non-Functional Requirements
 
 - [ ] Lighthouse mobile score > 80 on the dashboard page
-- [ ] No new JS dependencies added
-- [ ] Drawer open/close transition completes in < 300ms (target: 200ms)
-- [ ] All interactive elements meet WCAG 2.5.5 touch target size (44x44px minimum)
-- [ ] Root container uses `100dvh` (not `100vh`) for correct iOS Safari behavior
+- [x] No new JS dependencies added
+- [x] Drawer open/close transition completes in < 300ms (target: 200ms)
+- [x] All interactive elements meet WCAG 2.5.5 touch target size (44x44px minimum)
+- [x] Root container uses `100dvh` (not `100vh`) for correct iOS Safari behavior
 
 ### Quality Gates
 
 - [ ] Visual verification at 375px, 768px, 1024px, and 1440px viewports
 - [ ] Test on iOS Safari (via Playwright WebKit), Android Chrome (via Playwright Chromium), desktop Chrome/Edge
-- [ ] No TypeScript errors (`npx tsc --noEmit`)
+- [x] No TypeScript errors (`npx tsc --noEmit`)
 - [ ] markdownlint passes on all changed markdown files
-- [ ] Breakpoint audit: verify `card_count % column_count == 0` at every responsive breakpoint for the domain leader grid
+- [x] Breakpoint audit: verify `card_count % column_count == 0` at every responsive breakpoint for the domain leader grid
 
 ## Domain Review
 
