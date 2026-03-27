@@ -220,7 +220,9 @@ Assess a feature or plan against the NFR register to identify which non-function
 
 2. **Read the NFR register** at `knowledge-base/engineering/architecture/nfr-register.md`.
 
-3. **Classify the feature** against the decision type patterns from [nfr-reference.md](./references/nfr-reference.md):
+3. **Identify affected containers and links.** Read the Container & Link Inventory in the NFR register. Map the feature to specific C4 containers and links it touches (e.g., a new external service adds a network link; a new UI feature affects Dashboard and API Routes).
+
+4. **Classify the feature** against the decision type patterns from [nfr-reference.md](./references/nfr-reference.md):
 
    - New external service integration
    - Infrastructure change
@@ -229,26 +231,34 @@ Assess a feature or plan against the NFR register to identify which non-function
    - Security change
    - Deployment change
 
-4. **Assess each NFR category.** For each of the 7 categories (Observability, Resilience, Testing, Config & Delivery, Scaling & Recovery, Security, Data Quality), determine:
+5. **Assess each NFR category.** For each of the 7 categories (Observability, Resilience, Testing, Config & Delivery, Scaling & Recovery, Security, Data Quality), determine:
 
-   - Which specific NFRs are relevant to this feature
-   - Current status of each relevant NFR
-   - Whether this feature improves, degrades, or has no effect on each NFR
+   - Which specific NFRs are relevant to the affected containers/links
+   - Current per-container/link status from the NFR register tables
+   - Whether this feature improves, degrades, or has no effect on each NFR for the affected containers/links
+   - Any evidence gaps (rows with "Applicable: Yes" but no evidence documented)
    - Any new NFRs that should be added to the register
 
-5. **Output the assessment** as a table:
+6. **Output the assessment** as a per-container table:
 
    ```text
    ## NFR Assessment: [Feature Name]
 
-   | NFR | Requirement | Current Status | Impact | Notes |
-   |-----|-------------|---------------|--------|-------|
-   | NFR-001 | Logging | Partial | Needs attention | New service requires structured logging |
-   | NFR-026 | Encryption In-Transit | Implemented | No change | Already covered by Cloudflare |
-   | NFR-007 | Circuit Breaker | Not Implemented | Risk introduced | New API dependency has no fallback |
+   ### Affected Containers/Links
+
+   - Dashboard, API Routes, Agent Runtime -> New External Service (new link)
+
+   ### Assessment
+
+   | NFR | Requirement | Container/Link | Status | Impact | Evidence Gap |
+   |-----|-------------|----------------|--------|--------|-------------|
+   | NFR-001 | Logging | New Service | — | Needs attention | No logging configured |
+   | NFR-026 | Encryption In-Transit | Agent Runtime -> New Service | — | Needs attention | HTTPS required |
+   | NFR-007 | Circuit Breaker | Agent Runtime -> New Service | — | Risk introduced | No fallback for new dependency |
+   | NFR-026 | Encryption In-Transit | Founder -> Dashboard | Implemented | No change | Cloudflare |
    ```
 
-6. **Recommend actions.** For each NFR with "Needs attention" or "Risk introduced" impact, propose a specific action (e.g., "Add circuit breaker for Stripe API calls", "Configure structured logging for new service").
+7. **Recommend actions.** For each NFR with "Needs attention" or "Risk introduced" impact, propose a specific action referencing the affected container/link (e.g., "Add circuit breaker on Agent Runtime -> Stripe link", "Configure structured logging for New Service container").
 
 7. **Offer to create an ADR.** If the assessment reveals architectural decisions (e.g., choosing to accept a risk, implementing a new NFR), ask: "Create an ADR to document these decisions?"
 
