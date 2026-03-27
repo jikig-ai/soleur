@@ -49,6 +49,7 @@ For each category in the checklist, analyze the relevant source files:
 - Verify OG tags: og:title, og:description, og:url, og:type, og:site_name, og:locale, og:image
 - Verify Twitter/X cards: twitter:card, twitter:title, twitter:description, twitter:image
 - Check that title and description are page-specific (not hardcoded)
+- When fetching live pages for verification, always use `curl -sL` (follow redirects) -- Cloudflare Bot Fight Mode returns 301 redirects that strip all page content
 
 **AI Discoverability:**
 
@@ -160,3 +161,4 @@ When asked to fix issues rather than just report:
 - Do not modify `robots.txt` if it already has permissive rules (`Allow: /`)
 - Do not add features beyond what the site currently needs (no breadcrumbs on flat sites, no Organization schema for single-product sites)
 - When auditing, check the built output in `_site/` if available, not just source templates
+- When fetching live URLs with curl, always use `-L` to follow redirects -- Cloudflare Bot Fight Mode and similar CDN protections return 301/302 redirects that strip all page content from the initial response

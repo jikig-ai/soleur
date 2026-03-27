@@ -89,8 +89,8 @@ The Important Guidelines bullet (Change 1) is the generic catch-all covering all
 
 ## Acceptance Criteria
 
-- [ ] `seo-aeo-analyst.md` "Important Guidelines" section includes a bullet about using `curl -L` to follow redirects
-- [ ] `seo-aeo-analyst.md` Meta Tags audit step includes an inline note about `curl -sL`
+- [x] `seo-aeo-analyst.md` "Important Guidelines" section includes a bullet about using `curl -L` to follow redirects
+- [x] `seo-aeo-analyst.md` Meta Tags audit step includes an inline note about `curl -sL`
 - [ ] Next scheduled SEO audit does not produce false positives for meta tags or feed entries (verified by running the audit after merge)
 
 ## Test Scenarios
