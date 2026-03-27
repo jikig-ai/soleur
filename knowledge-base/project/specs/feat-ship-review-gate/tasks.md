@@ -4,10 +4,10 @@
 
 - [ ] 1.1 Read `plugins/soleur/skills/ship/SKILL.md` fully
 - [ ] 1.2 Add Phase 1.5: Review Evidence Gate section after Phase 1 (Validate Artifact Trail)
-  - [ ] 1.2.1 Step 1: Check for `todos/` directory with review-tagged files
+  - [ ] 1.2.1 Step 1: Check for `todos/` files tagged `code-review` via `grep -rl "code-review" todos/`
   - [ ] 1.2.2 Step 2: Check commit history for `refactor: add code review findings` pattern
-  - [ ] 1.2.3 Step 3: Check session-state.md for review completion marker
-  - [ ] 1.2.4 Gate behavior: headless mode aborts, interactive mode presents Run/Skip/Abort
+  - [ ] 1.2.3 Gate behavior: headless mode aborts, interactive mode presents Run/Skip/Abort
+  - [ ] 1.2.4 Document zero-finding review edge case in Skip option text
 - [ ] 1.3 Verify Phase 1.5 references do not use `$()` command substitution (ship CRITICAL rule)
 - [ ] 1.4 Verify Phase 1.5 uses separate Bash calls for multi-step detection (ship pattern)
 

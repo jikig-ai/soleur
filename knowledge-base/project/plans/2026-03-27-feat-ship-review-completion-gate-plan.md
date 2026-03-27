@@ -16,7 +16,9 @@ The `/one-shot` pipeline enforces the correct order: work -> review -> resolve-t
 
 1. **Direct `/ship` invocation** -- a user running `/work` then `/ship` (skipping `/review`) ships unreviewed code
 2. **Direct `/work` invocation** -- when invoked directly (not via one-shot), work's Phase 4 chains directly to compound -> ship, skipping review entirely
-3. **Manual merge** -- draft PRs exist on GitHub before review completes; a manual merge is possible
+3. **Manual merge** -- draft PRs exist on GitHub before review completes; a manual merge is possible (out-of-scope: branch protection rules are the correct mitigation; that is a separate configuration task)
+
+**Threat model:** The work Phase 4 change prevents gaps 1 and 2 (the primary fix). The ship Phase 1.5 gate is defense-in-depth for direct `/ship` invocations that bypass `/work`.
 
 Source: #1170, identified during #1129/#1131/#1134 implementation session.
 
@@ -26,13 +28,14 @@ Add a new **Phase 1.5: Review Evidence Gate** to `/ship` SKILL.md, inserted betw
 
 ### Review Evidence Detection
 
-Check for evidence that `/review` ran on the current branch, using three signals (stop at first match):
+Check for evidence that `/review` ran on the current branch, using two signals (stop at first match):
 
 | Signal | Detection Method | Confidence |
 |--------|-----------------|------------|
-| `todos/` directory with review-tagged files | `ls todos/*-*-p*-*.md 2>/dev/null` | High -- review creates structured todo files |
-| Commit message pattern | `git log origin/main..HEAD --oneline` matching `refactor: add code review findings` | High -- review instructs this exact commit message |
-| Session-state marker | `knowledge-base/project/specs/feat-*/session-state.md` containing `review: complete` | Medium -- only set by one-shot pipeline |
+| `todos/` directory with review-tagged files | `grep -rl "code-review" todos/ 2>/dev/null` | High -- review creates todo files tagged `code-review` |
+| Commit message pattern | `git log origin/main..HEAD --oneline` matching `refactor: add code review findings` | High -- review instructs this exact commit message (coupled to review SKILL.md Step 5; if that message changes, update this grep) |
+
+**Zero-finding reviews:** If `/review` runs and finds no issues, no todo files are created and no review commit exists. The gate falls through to "no evidence found." In interactive mode, "Skip review" handles this case -- the user confirms review ran cleanly. In headless mode, this is an acceptable false negative: zero-finding reviews are rare in practice, and the one-shot pipeline (the primary headless caller) creates its own evidence via the review step.
 
 ### Gate Behavior
 
@@ -74,10 +77,10 @@ Check for evidence that `/review` ran on the current branch. This is defense-in-
 
 **Step 1: Check for review artifacts.**
 
-Search for todo files from a code review:
+Search for todo files tagged as code-review findings:
 
 ```bash
-ls todos/*-*-p*-*.md 2>/dev/null | head -1
+grep -rl "code-review" todos/ 2>/dev/null | head -1
 ```
 
 **Step 2: Check commit history for review evidence.**
@@ -88,15 +91,7 @@ If Step 1 found nothing, check for the review commit pattern:
 git log origin/main..HEAD --oneline | grep "refactor: add code review findings"
 ```
 
-**Step 3: Check session-state marker.**
-
-If Steps 1-2 found nothing, check for one-shot session state:
-
-```bash
-cat knowledge-base/project/specs/feat-*/session-state.md 2>/dev/null | grep "review.*complete"
-```
-
-**If any step found evidence:** Continue to Phase 2. Log: "Review evidence found via [signal]."
+**If either step found evidence:** Continue to Phase 2. Log: "Review evidence found via [signal]."
 
 **If no evidence found:**
 
@@ -131,9 +126,8 @@ To:
 
 ## Acceptance Criteria
 
-- [ ] `/ship` Phase 1.5 detects `todos/` directory with review-tagged files as review evidence
+- [ ] `/ship` Phase 1.5 detects `todos/` files tagged `code-review` as review evidence
 - [ ] `/ship` Phase 1.5 detects `refactor: add code review findings` commit message as review evidence
-- [ ] `/ship` Phase 1.5 detects session-state.md review marker as review evidence
 - [ ] `/ship` in headless mode aborts when no review evidence is found
 - [ ] `/ship` in interactive mode presents Run/Skip/Abort options when no review evidence is found
 - [ ] `/work` Phase 4 direct-invocation path includes review and resolve-todo-parallel before compound and ship
@@ -141,10 +135,12 @@ To:
 
 ## Test Scenarios
 
-- Given a branch with `todos/` files from a review, when `/ship` runs, then Phase 1.5 passes silently
+- Given a branch with `todos/` files tagged `code-review`, when `/ship` runs, then Phase 1.5 passes silently
 - Given a branch with a `refactor: add code review findings` commit, when `/ship` runs, then Phase 1.5 passes silently
+- Given a branch with non-review todo files (no `code-review` tag), when `/ship` runs, then Phase 1.5 does NOT treat them as review evidence
 - Given a branch with no review artifacts and headless mode, when `/ship` runs, then it aborts with a clear error message
 - Given a branch with no review artifacts and interactive mode, when `/ship` runs, then it presents Run/Skip/Abort options
+- Given `/review` ran with zero findings (no todos created, no commit), when `/ship` runs in interactive mode, then user can select "Skip review" to proceed
 - Given `/work` invoked directly (not via one-shot), when Phase 4 runs, then it chains: review -> resolve-todo-parallel -> compound -> ship
 
 ## Domain Review
