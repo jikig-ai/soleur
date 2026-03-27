@@ -48,27 +48,18 @@ const pendingDisconnects = new Map<string, ReturnType<typeof setTimeout>>();
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Abort the active agent session for this user, if any, and mark the
- * conversation as completed. Call synchronously before overwriting
- * session.conversationId with a new value.
- *
- * The abortSession() call is synchronous (fires AbortController.abort()),
- * guaranteeing the agent's for-await loop will break on the next iteration.
- * The DB status update is fire-and-forget — if it fails, the conversation
- * is left in "active" status but the agent is already dead; the startup
- * orphan cleanup (cleanupOrphanedConversations) will catch it.
- */
+/** Abort the active agent session for this user (if any), mark the conversation
+ *  completed (fire-and-forget), and clear session.conversationId. No-ops if no
+ *  conversation is active. */
 export function abortActiveSession(userId: string, session: ClientSession): void {
   if (!session.conversationId) return;
 
   const oldConvId = session.conversationId;
   console.log(`[ws] Aborting active session ${oldConvId} for user ${userId} (superseded)`);
 
-  // 1. Abort the agent runner (synchronous — fires AbortController.abort())
-  abortSession(userId, oldConvId);
+  abortSession(userId, oldConvId, "superseded");
 
-  // 2. Mark old conversation as completed (fire-and-forget)
+  // Fire-and-forget — orphan cleanup catches failures on restart
   supabase
     .from("conversations")
     .update({ status: "completed", last_active: new Date().toISOString() })
@@ -77,9 +68,11 @@ export function abortActiveSession(userId: string, session: ClientSession): void
       if (error) {
         console.error(`[ws] Failed to mark conversation ${oldConvId} as completed: ${error.message}`);
       }
+    })
+    .catch((err) => {
+      console.error(`[ws] Failed to update conversation ${oldConvId}: ${err}`);
     });
 
-  // 3. Clear the conversation ID before caller sets the new one
   session.conversationId = undefined;
 }
 
@@ -222,7 +215,13 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
       }
 
       try {
-        abortActiveSession(userId, session);
+        const convId = session.conversationId;
+        abortSession(userId, convId, "superseded");
+        await supabase
+          .from("conversations")
+          .update({ status: "completed", last_active: new Date().toISOString() })
+          .eq("id", convId);
+        session.conversationId = undefined;
         sendToClient(userId, { type: "session_ended", reason: "closed" });
       } catch (err) {
         console.error(`[ws] close_conversation error for user ${userId}:`, err);
