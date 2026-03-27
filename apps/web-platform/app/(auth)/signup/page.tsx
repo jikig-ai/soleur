@@ -53,7 +53,7 @@ export default function SignupPage() {
         <div className="space-y-2 text-center">
           <h1 className="text-2xl font-semibold">Create your account</h1>
           <p className="text-sm text-neutral-400">
-            Get started with Soleur — AI domain leaders for your business
+            Get started with Soleur — your AI organization
           </p>
         </div>
 

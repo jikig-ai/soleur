@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-26
-last_reviewed: 2026-03-26
+last_updated: 2026-03-27
+last_reviewed: 2026-03-27
 review_cadence: quarterly
 owner: CMO
 depends_on:
@@ -169,6 +169,20 @@ Twelve content gaps block Soleur's organic discovery and category authority. Ran
 - Add 1-2 authoritative external citations per catalog page (Agents, Skills, Vision, Getting Started, Community)
 - Add definition paragraphs with citations to Agents page ("Agentic engineering is...") and Skills page ("In Soleur, a skill is...")
 
+### Gap 13: Command Center Launch Narrative (Critical) [NEW 2026-03-27]
+
+**What is missing:** The web platform shipped a fundamental UX paradigm shift: from "choose a department leader" (8-card grid) to "command center" (auto-routed multi-leader chat). Alongside this, 20 Architecture Decision Records and C4 diagrams were captured. No content announces this shift, explains the product design thinking, or documents the technical architecture. The homepage, meta tags, and all marketing copy still reference the old "choose a domain leader" interaction model.
+
+**Why it matters:** The "command center" framing is Soleur's strongest positioning upgrade to date. "Experts come to you" is more visceral than "visit separate offices." No competitor auto-routes to the right expert based on conversation context. The paradigm shift itself is content-worthy.
+
+**Content needed:**
+
+- Blog post: "From Department Offices to Command Center" (narrative, build-in-public) -- explains why the UX changed, what the founder gains, how auto-routing works. Hero content for the launch announcement.
+- Blog post: "One Chat, 8 Departments: How We Built Domain Routing with Claude Haiku" (technical deep-dive) -- assessment questions as classification, multi-leader streaming architecture, Map-based stream multiplexing. Targets developer audience.
+- Blog post: "Why We Wrote 20 Architecture Decision Records for an AI Platform" (thought leadership) -- positions Soleur as engineering-serious. The "Cost Impacts" section in the ADR template is a differentiator.
+- Distribution: X thread + LinkedIn + Discord announcement linking to the narrative blog post.
+- Website copy updates: dashboard, meta tags, brand guide (critical tier completed in PR).
+
 ---
 
 ## Content Pillars
@@ -204,6 +218,8 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 | Vibe Coding vs Agentic Engineering: What Solo Founders Need to Know | Comparison | 2,000-2,500 | P1 | Month 1. Renamed from "Agentic Engineering: Beyond Vibe Coding" to target search query. Audit P2-1, score 18/20. |
 | Knowledge Compounding in AI Development | Concept explainer | 1,500-2,000 | P2 | Month 2-3. Addresses Gap 1. |
 | Compound Engineering: How Every Project Makes the Next One Easier | Concept explainer | 1,500-2,000 | P3 | Month 3+. Audit P3-4. |
+| One Chat, 8 Departments: How We Built Domain Routing with Claude Haiku | Technical deep-dive | 2,000-2,500 | P1 | Month 1. Gap 13. Multi-leader streaming, assessment question classification, Map-based multiplexing. |
+| Why We Wrote 20 Architecture Decision Records for an AI Platform | Thought leadership | 1,500-2,000 | P2 | Month 2. Gap 13. ADR template with Cost Impacts, C4 diagrams, architecture-as-code skill. |
 
 ### Pillar 3: Competitive Positioning
 
@@ -238,6 +254,7 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 | Case Study: Brand Guide Creation | Case study | ~1,500 | P1 | **PUBLISHED** (2026-03-10). Lacks FAQ section (P1 fix). |
 | Case Study: Competitive Intelligence | Case study | ~1,500 | P1 | **PUBLISHED** (2026-03-10). Lacks FAQ section (P1 fix). |
 | About/Founder Page | Authority page | 500-800 | P1 | Month 1. Gap 11. Low effort, high E-E-A-T impact. |
+| From Department Offices to Command Center | Build-in-public narrative | 1,500-2,000 | P1 | Month 1. Gap 13. Hero content for command center launch. Explains UX paradigm shift, auto-routing, multi-leader threading. Link target for social distribution. |
 | How to Build a SaaS as a Solo Founder | Tutorial | 2,500-3,000 | P3 | Month 3+. |
 
 ---
@@ -252,19 +269,20 @@ This calendar replaces the completed 4-week calendar (Phase 0-1). It assumes 8-1
 |------|------|-------|--------|
 | Mar 20-26 | P1 technical fixes: FAQ JSON-LD on agents page + "Why Tools Plateau", FAQ sections on 5 case studies, remove "plugin" from meta descriptions, Vision page H1 rewrite, add `updated` frontmatter to blog posts, add "open source" + "solopreneur" to homepage | 6-8 | All P1 technical fixes deployed |
 | Mar 27-Apr 2 | Write "How We Used AI-Generated Personas to Improve Interview Questions by 93%" methodology article (issue #1176). Distribute: Substack comment on Ivelin's article, LinkedIn, X thread. | 6-8 | Blog post + social distribution |
-| Apr 3-6 | Write "Vibe Coding vs Agentic Engineering" article (audit P2-1, score 18/20) | 6-8 | Draft + publish |
-| Apr 7-13 | Add external citations to 5+ catalog pages (Gap 12). Add FAQ sections to Skills, Getting Started, Community pages. | 4-6 | AEO score improvement |
-| Apr 14-20 | Write About/Founder page (Gap 11). Distribute Vibe Coding article on X, Discord, IndieHackers. Review analytics. | 4-6 | E-E-A-T + distribution |
+| Apr 3-6 | Write "From Department Offices to Command Center" narrative (Gap 13). Distribute: X thread, LinkedIn, Discord announcement. | 6-8 | Launch blog post + social distribution |
+| Apr 7-9 | Write "One Chat, 8 Departments: Domain Routing with Claude Haiku" technical deep-dive (Gap 13) | 6-8 | Technical blog post |
+| Apr 10-13 | Write "Vibe Coding vs Agentic Engineering" article (audit P2-1, score 18/20) | 6-8 | Draft + publish |
+| Apr 14-20 | Add external citations to 5+ catalog pages (Gap 12). Add FAQ sections to Skills, Getting Started, Community pages. | 4-6 | AEO score improvement |
+| Apr 21-27 | Write About/Founder page (Gap 11). Distribute Vibe Coding article on X, Discord, IndieHackers. Review analytics. | 4-6 | E-E-A-T + distribution |
 
-### Month 2 (April 21 - May 20, 2026): Pillar Content + Comparisons
+### Month 2 (April 28 - May 25, 2026): Pillar Content + Comparisons
 
 | Week | Task | Hours | Output |
 |------|------|-------|--------|
-| Apr 21-27 | Write "AI Agents for Solo Founders: The Definitive Guide" (audit P2-2, score 18/20) | 8-10 | Pillar article draft |
-| Apr 28-May 4 | Publish AI Agents guide. Begin "Soleur vs Polsia" comparison (audit P2-3). | 6-8 | 1 pillar + 1 comparison draft |
-| May 5-11 | Publish Soleur vs Polsia. Add internal cross-links between case studies. | 4-6 | Comparison live, cross-links added |
-| May 12-18 | Write "One-Person Billion-Dollar Company" (high social distribution potential) | 6-8 | Draft |
-| May 19-20 | Distribution + analytics review | 2 | Status check |
+| Apr 28-May 4 | Write "AI Agents for Solo Founders: The Definitive Guide" (audit P2-2, score 18/20) | 8-10 | Pillar article draft |
+| May 5-11 | Publish AI Agents guide. Begin "Soleur vs Polsia" comparison (audit P2-3). | 6-8 | 1 pillar + 1 comparison draft |
+| May 12-18 | Publish Soleur vs Polsia. Write "Why We Wrote 20 ADRs" (Gap 13, P2). | 6-8 | Comparison live + ADR thought leadership |
+| May 19-25 | Write "One-Person Billion-Dollar Company" (high social distribution potential). Distribution + analytics review. | 6-8 | Draft + status check |
 
 ### Month 3 (May 21 - June 20, 2026): Long-Tail + Off-Site
 
