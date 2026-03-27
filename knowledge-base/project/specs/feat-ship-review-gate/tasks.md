@@ -1,25 +1,44 @@
-# Tasks: feat-ship-review-gate
+# Tasks: Ship Review Gate Enforcement
 
-## Phase 1: Ship SKILL.md -- Add Review Evidence Gate
+**Issue:** #1227
+**Branch:** feat-ship-review-gate
 
-- [ ] 1.1 Read `plugins/soleur/skills/ship/SKILL.md` fully
-- [ ] 1.2 Add Phase 1.5: Review Evidence Gate section after Phase 1 (Validate Artifact Trail)
-  - [ ] 1.2.1 Step 1: Check for `todos/` files tagged `code-review` via `grep -rl "code-review" todos/`
-  - [ ] 1.2.2 Step 2: Check commit history for `refactor: add code review findings` pattern
-  - [ ] 1.2.3 Gate behavior: headless mode aborts, interactive mode presents Run/Skip/Abort
-  - [ ] 1.2.4 Document zero-finding review edge case in Skip option text
-- [ ] 1.3 Verify Phase 1.5 references do not use `$()` command substitution (ship CRITICAL rule)
-- [ ] 1.4 Verify Phase 1.5 uses separate Bash calls for multi-step detection (ship pattern)
+## Phase 1: Ship SKILL.md -- Add Review Evidence Gate (DONE)
 
-## Phase 2: Work SKILL.md -- Update Direct-Invocation Chain
+- [x] 1.1 Add Phase 1.5: Review Evidence Gate section after Phase 1
+- [x] 1.2 Gate behavior: headless mode aborts, interactive mode presents Run/Skip/Abort
 
-- [ ] 2.1 Read `plugins/soleur/skills/work/SKILL.md` Phase 4 section
-- [ ] 2.2 Update direct-invocation chain from (compound -> ship) to (review -> resolve-todo-parallel -> compound -> ship)
-- [ ] 2.3 Verify one-shot invocation path remains unchanged (hand off to orchestrator)
-- [ ] 2.4 Forward `--headless` flag to review and resolve-todo-parallel when headless
+## Phase 2: Work SKILL.md -- Update Direct-Invocation Chain (DONE)
 
-## Phase 3: Validation
+- [x] 2.1 Update direct-invocation chain to: review -> resolve-todo-parallel -> compound -> ship
+- [x] 2.2 Forward `--headless` flag to review step
 
-- [ ] 3.1 Run `bun test` to verify no regressions
-- [ ] 3.2 Verify SKILL.md markdown passes lint (no MD032 violations)
-- [ ] 3.3 Review both modified files for consistency with existing Phase N.5 patterns
+## Phase 3: Guard 6 Implementation
+
+- [ ] 3.1 Add Guard 6 to `.claude/hooks/guardrails.sh` after Guard 5
+  - [ ] 3.1.1 Match `gh pr merge` with chain operator pattern
+  - [ ] 3.1.2 Resolve working directory from `.cwd` hook input
+  - [ ] 3.1.3 Check review evidence: `grep -rl "code-review" todos/` and `git log` for review commit
+  - [ ] 3.1.4 Extract PR number from command or resolve via `gh pr view --json number`
+  - [ ] 3.1.5 Check `hotfix` label via `gh pr view <N> --json labels`
+  - [ ] 3.1.6 Deny with bypass instructions if no evidence and no hotfix label
+  - [ ] 3.1.7 Fail open on network errors and unparseable PR numbers
+- [ ] 3.2 Update guardrails.sh header comment to include Guard 6
+
+## Phase 4: Ship Phase 5.5 Consolidation
+
+- [ ] 4.1 Remove "Code Review Completion Gate (mandatory)" subsection from Phase 5.5 (lines 221-242)
+- [ ] 4.2 Remove `Code review completed (Phase 5.5 gate)` from Phase 5 checklist (line 214)
+- [ ] 4.3 Verify remaining Phase 5.5 gates (CMO, COO) are intact
+
+## Phase 5: AGENTS.md Updates
+
+- [ ] 5.1 Add hotfix protocol to Hard Rules section with `[hook-enforced: guardrails.sh Guard 6]` annotation
+- [ ] 5.2 Update PreToolUse hooks awareness line to include Guard 6
+- [ ] 5.3 Update spec.md to reflect final implementation
+
+## Phase 6: Validation
+
+- [ ] 6.1 Run `bun test` to verify no regressions
+- [ ] 6.2 Verify markdown passes lint
+- [ ] 6.3 Test Guard 6 manually with a `gh pr merge` command on this PR
