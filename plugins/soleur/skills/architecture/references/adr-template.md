@@ -50,6 +50,15 @@ and any savings from replacing existing services. Use "None" if no
 cost impact. Reference knowledge-base/operations/expenses.md for
 current cost baseline.]
 
+## NFR Impacts
+
+[Which non-functional requirements does this decision affect?
+Reference NFR IDs from knowledge-base/engineering/architecture/nfr-register.md.
+Use "None" if no NFR impact.
+
+Example: "Improves NFR-026 (Encryption In-Transit) from Partial to Implemented.
+No impact on NFR-008 (Low Latency) — additional TLS termination handled by Cloudflare."]
+
 ## Diagram
 
 [Optional Mermaid diagram illustrating the decision.
