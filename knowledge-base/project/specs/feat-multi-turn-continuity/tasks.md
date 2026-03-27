@@ -46,8 +46,8 @@
 
 ## Phase 5: Testing
 
-- [ ] 5.1 Multi-turn context retention test
-- [ ] 5.2 WebSocket reconnection test
-- [ ] 5.3 Fallback replay test
-- [ ] 5.4 Session expiry test
-- [ ] 5.5 Concurrent message handling test
+- [x] 5.1 Multi-turn context retention test
+- [x] 5.2 WebSocket reconnection test
+- [x] 5.3 Fallback replay test
+- [x] 5.4 Session expiry test
+- [x] 5.5 Concurrent message handling test
