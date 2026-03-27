@@ -105,6 +105,7 @@ date: YYYY-MM-DD
 - Architecture impacts
 - Performance implications
 - Security considerations
+- NFR impacts (read `knowledge-base/engineering/architecture/nfr-register.md` and assess which non-functional requirements this feature affects — run `/soleur:architecture assess` for a structured assessment)
 
 ### Attack Surface Enumeration (for security fixes)
 
@@ -229,6 +230,7 @@ date: YYYY-MM-DD
 - [ ] Performance targets
 - [ ] Security requirements
 - [ ] Accessibility standards
+- [ ] NFR register assessment (run `/soleur:architecture assess` against `knowledge-base/engineering/architecture/nfr-register.md`)
 
 ### Quality Gates
 
