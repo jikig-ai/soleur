@@ -30,7 +30,7 @@ Moved CSP generation from `next.config.ts` static headers into `middleware.ts` w
 
 ## Key Insights
 
-- **Next.js 15 extracts nonces from the CSP header automatically** -- setting `Content-Security-Policy` with `'nonce-<value>'` on request headers is sufficient. No manual nonce passing to framework scripts needed.
+- **Next.js 15 extracts nonces from the CSP header automatically, but ONLY during dynamic rendering** -- setting `Content-Security-Policy` with `'nonce-<value>'` on request headers is sufficient, but the root layout must call `await headers()` (or use another dynamic function) to force dynamic rendering. Static layouts skip nonce extraction entirely, causing `'strict-dynamic'` to block all scripts. See `2026-03-27-csp-strict-dynamic-requires-dynamic-rendering.md`.
 - **`style-src` must keep `'unsafe-inline'`** -- Next.js injects inline styles that would break with nonce-only style-src. CSS injection is not an XSS vector.
 - **`/health` should skip CSP** -- health endpoints return no HTML, so nonce generation is wasted computation for load balancer probes.
 - **`http:` in CSP1 fallback is a security regression, not a fallback** -- CSP1 browsers don't support `upgrade-insecure-requests`, so `http:` would allow scripts from any HTTP origin. Use `https:` only.
