@@ -78,11 +78,13 @@ Create a new ADR with the next sequential number.
 
 6. **Gather context.** Ask the user (or use `$ARGUMENTS` context if running in pipeline):
    - **Context:** What motivates this decision?
-   - **Decision:** What change are we making?
+   - **Considered Options:** What alternatives were evaluated? (list with pros/cons and links to tentative C4 model changes)
+   - **Decision:** Which option was chosen and why?
    - **Consequences:** What becomes easier or harder?
-   - **Diagram:** (optional) Should a Mermaid diagram be included?
+   - **Cost Impacts:** How much does this change increase or reduce costs? (reference `knowledge-base/operations/expenses.md` for baseline; use "None" if no impact)
+   - **Diagram:** (optional) Should a Mermaid C4 diagram be included?
 
-7. **Write the ADR body** with the gathered context. If a diagram was requested, generate an appropriate Mermaid block.
+7. **Write the ADR body** with the gathered context. If a diagram was requested, generate using proper C4 syntax from [c4-reference.md](./references/c4-reference.md).
 
 8. **Announce:** "Created ADR-<NNN>: <title> at `knowledge-base/engineering/architecture/decisions/ADR-<NNN>-<kebab-title>.md`"
 
