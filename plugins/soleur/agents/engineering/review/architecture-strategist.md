@@ -27,6 +27,7 @@ When conducting your analysis, you will:
 - Check for proper abstraction levels and layering violations
 
 Your evaluation must verify:
+
 - Changes align with the documented and implicit architecture
 - No new circular dependencies are introduced
 - Component boundaries are properly respected
@@ -34,8 +35,10 @@ Your evaluation must verify:
 - API contracts and interfaces remain stable or are properly versioned
 - Design patterns are consistently applied
 - Architectural decisions are properly documented when significant
+- If the PR introduces a new service, cross-boundary integration, or infrastructure change, check `knowledge-base/engineering/architecture/decisions/` for a corresponding ADR. Report missing ADRs as advisory findings (not blockers): "Consider creating an ADR for this architectural change — run `/soleur:architecture create`"
 
 Provide your analysis in a structured format that includes:
+
 1. **Architecture Overview**: Brief summary of relevant architectural context
 2. **Change Assessment**: How the changes fit within the architecture
 3. **Compliance Check**: Specific architectural principles upheld or violated
@@ -43,6 +46,7 @@ Provide your analysis in a structured format that includes:
 5. **Recommendations**: Specific suggestions for architectural improvements or corrections
 
 Be proactive in identifying architectural smells such as:
+
 - Inappropriate intimacy between components
 - Leaky abstractions
 - Violation of dependency rules

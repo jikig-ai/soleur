@@ -22,6 +22,10 @@ Identify technical risks, architecture impacts, and affected components.
 
 After completing the assessment, check whether any agents or skills are missing from the current domain that would be needed to execute the proposed work. If gaps exist, list each with what is missing, which domain it belongs to, and why it is needed. If no gaps exist, omit this section entirely.
 
+#### Architecture Decision Detection
+
+When the assessment identifies an architectural decision (new service, infrastructure change, data model change, cross-boundary integration, technology choice), recommend the user run `/soleur:architecture create` with a suggested title. Example: "This involves choosing PostgreSQL over MongoDB for the event store — consider running `/soleur:architecture create 'Use PostgreSQL for event store'` to capture the rationale."
+
 ### 2. Recommend
 
 Suggest technical approach based on assessment findings.
