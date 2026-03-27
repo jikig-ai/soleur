@@ -1,53 +1,68 @@
-# Container Diagram
+# Soleur Platform — Container Diagram (C4 Level 2)
 
 Generated: 2026-03-27
 
-````mermaid
-graph TB
-    subgraph "Web Application (Next.js PWA)"
-        dashboard["Dashboard<br/>(React)"]
-        auth["Auth Module<br/>(Supabase Auth)"]
-        api["API Routes<br/>(Next.js)"]
-    end
+```mermaid
+C4Container
+title Container diagram for Soleur Platform
 
-    subgraph "Cloud CLI Engine"
-        claude["Claude Code<br/>(Agent Runtime)"]
-        skillloader["Skill Loader<br/>(Plugin Discovery)"]
-        hookengine["Hook Engine<br/>(PreToolUse Guards)"]
-    end
+Person(founder, "Founder", "Solo founder using Soleur")
 
-    subgraph "Soleur Plugin (plugins/soleur/)"
-        commands["Commands<br/>(go, sync, help)"]
-        skills["Skills<br/>(61 workflow skills)"]
-        agents["Agents<br/>(65 domain agents)"]
-        kb["Knowledge Base<br/>(Conventions, Learnings)"]
-    end
+System_Ext(anthropic, "Anthropic API", "Claude LLM")
+System_Ext(github, "GitHub", "Source control and CI/CD")
+System_Ext(cloudflare, "Cloudflare", "DNS, CDN, Tunnel, R2")
+System_Ext(doppler, "Doppler", "Secrets management")
 
-    subgraph "Infrastructure"
-        supabase_db["Supabase PostgreSQL<br/>(Users, Keys, Sessions)"]
-        r2["Cloudflare R2<br/>(Terraform State)"]
-        tunnel["Cloudflare Tunnel<br/>(Zero-Trust Access)"]
-        hetzner["Hetzner Cloud<br/>(Compute)"]
-    end
+Enterprise_Boundary(b0, "Soleur Platform") {
 
-    dashboard --> api
-    api --> claude
-    claude --> skillloader
-    skillloader --> skills
-    skillloader --> agents
-    skillloader --> commands
-    hookengine --> claude
-    skills --> kb
-    agents --> kb
-    api --> supabase_db
-    claude --> supabase_db
-    tunnel --> api
-    hetzner --> claude
-````
+    Container_Boundary(web, "Web Application") {
+        Container(dashboard, "Dashboard", "React, Next.js", "Conversation UI, knowledge base viewer, session management")
+        Container(api, "API Routes", "Next.js API", "REST endpoints for auth, sessions, and agent control")
+        Container(auth, "Auth Module", "Supabase Auth", "JWT authentication, OAuth providers, session tokens")
+    }
+
+    Container_Boundary(cli, "Cloud CLI Engine") {
+        Container(claude, "Agent Runtime", "Claude Code", "Executes agent workflows with full orchestration tools")
+        Container(skillloader, "Skill Loader", "Plugin Discovery", "Discovers and loads skills, agents, commands from plugin directory")
+        Container(hooks, "Hook Engine", "PreToolUse Guards", "Enforces syntactic rules — blocks commits to main, rm -rf, etc.")
+    }
+
+    Container_Boundary(plugin, "Soleur Plugin") {
+        Container(skills, "Skills", "Markdown SKILL.md", "61 workflow skills — brainstorm, plan, work, review, compound, etc.")
+        Container(agents, "Agents", "Markdown Agent Defs", "65 domain agents across 8 departments")
+        Container(kb, "Knowledge Base", "Markdown + YAML", "Conventions, learnings, ADRs, specs, plans, brainstorms")
+    }
+
+    Container_Boundary(infra, "Infrastructure") {
+        ContainerDb(supabase, "Supabase PostgreSQL", "PostgreSQL", "Users, BYOK-encrypted API keys, conversation sessions")
+        Container(tunnel, "Cloudflare Tunnel", "cloudflared", "Zero-trust inbound access — no exposed ports")
+        Container(hetzner, "Compute", "Hetzner Cloud", "Docker containers running web app and CLI engine")
+    }
+}
+
+Rel(founder, dashboard, "Browses and converses", "HTTPS")
+Rel(dashboard, api, "Calls", "HTTPS")
+Rel(api, claude, "Spawns agent sessions", "WebSocket")
+Rel(claude, skillloader, "Loads plugin", "File I/O")
+Rel(skillloader, skills, "Discovers", "Directory scan")
+Rel(skillloader, agents, "Discovers", "Recursive scan")
+Rel(hooks, claude, "Guards tool calls", "Event hook")
+Rel(skills, kb, "Reads/writes", "File I/O")
+Rel(agents, kb, "Reads", "File I/O")
+Rel(api, supabase, "Auth and data", "HTTPS")
+Rel(claude, supabase, "Sessions and keys", "HTTPS")
+Rel(claude, anthropic, "LLM calls", "HTTPS")
+Rel(claude, github, "Git operations", "HTTPS/SSH")
+Rel(tunnel, api, "Routes traffic", "HTTPS")
+Rel(hetzner, claude, "Hosts", "Docker")
+Rel(doppler, claude, "Injects secrets", "CLI")
+Rel(auth, supabase, "Validates tokens", "HTTPS")
+```
 
 ## Notes
 
-- Plugin has flat skill structure (skills don't nest) and recursive agent discovery
-- Three enforcement tiers: hooks (syntactic), skills (semantic), prose (advisory) — see ADR-011
-- Knowledge base compounds decisions (ADRs), learnings, and conventions
-- Worktree isolation enforced via hooks (ADR-009)
+- Plugin has flat skill structure (skills don't nest) and recursive agent discovery (ADR-016)
+- Three enforcement tiers: hooks (syntactic), skills (semantic), prose (advisory) — ADR-011
+- Knowledge base compounds ADRs, learnings, and conventions across sessions
+- Worktree isolation enforced via PreToolUse hooks (ADR-009)
+- Version derived from git tags at merge time, not committed files (ADR-017)
