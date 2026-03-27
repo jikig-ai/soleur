@@ -549,10 +549,8 @@ export async function sendUserMessage(
   conversationId: string,
   content: string,
 ): Promise<void> {
-  // Save user message to DB
-  await saveMessage(conversationId, "user", content);
-
-  // Load conversation with ownership check
+  // Verify conversation ownership BEFORE saving the message to prevent
+  // cross-user writes (the message insert has no user_id check itself).
   const { data: conv, error: convErr } = await supabase
     .from("conversations")
     .select("domain_leader, session_id")
@@ -561,6 +559,9 @@ export async function sendUserMessage(
     .single();
 
   if (convErr || !conv) throw new Error("Conversation not found");
+
+  // Save user message to DB (after ownership verified)
+  await saveMessage(conversationId, "user", content);
 
   // Check for an in-memory session with a captured session_id
   const key = sessionKey(userId, conversationId);
