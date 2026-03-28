@@ -7,11 +7,10 @@ Source: `knowledge-base/project/plans/2026-03-28-fix-qa-auto-start-dev-server-pl
 - [ ] 1.1 Read `plugins/soleur/skills/qa/SKILL.md`
 - [ ] 1.2 Add new Step 1.5: Ensure Dev Server is Running
   - [ ] 1.2.1 Add server reachability check (curl localhost:3000)
-  - [ ] 1.2.2 Add dev command detection from package.json
-  - [ ] 1.2.3 Add port detection logic (default 3000, fallback 3001)
-  - [ ] 1.2.4 Add Doppler-aware server startup (doppler run or bare command)
-  - [ ] 1.2.5 Add 30-second startup polling with timeout
-  - [ ] 1.2.6 Add failure reporting with last 20 lines of server output
+  - [ ] 1.2.2 Add dev command detection from apps/web-platform/package.json
+  - [ ] 1.2.3 Add Doppler-aware server startup with output redirected to temp log file
+  - [ ] 1.2.4 Add 30-second startup polling with timeout
+  - [ ] 1.2.5 Add failure reporting with last 20 lines from temp log file
 
 ## Phase 2: Add Cleanup Step
 

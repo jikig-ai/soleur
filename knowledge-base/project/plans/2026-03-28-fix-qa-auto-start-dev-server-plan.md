@@ -8,6 +8,25 @@ date: 2026-03-28
 
 Closes #1230
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-28
+**Sections enhanced:** Implementation Plan (simplified from 4 phases to 1 atomic edit)
+**Review agents used:** code-simplicity-reviewer, learnings-researcher
+
+### Key Improvements
+
+1. Collapsed 4 phases into 1 atomic edit — this is a single-file, single-commit change
+2. Instructions written as intent for the AI agent, not prescriptive bash — Claude can derive `curl`, `jq`, `kill` implementations
+3. Dropped temp log file complexity — unnecessary cleanup burden for a QA context
+
+### Research Insights
+
+- **Pipeline continuation:** The one-shot pipeline learned (2026-03-03) that conclusive-sounding output stalls pipelines. The QA skill must output clear continuation signals, not terminal phrases like "QA complete."
+- **Insights learning (2026-03-28):** QA/review being skipped when dev server wasn't running was one of the top 6 friction points across 100 sessions. This fix directly addresses it.
+- **Port config:** Verified `apps/web-platform/server/index.ts:15` uses `PORT` env var defaulting to 3000.
+- **Dev command:** Verified `apps/web-platform/package.json` uses `tsx server/index.ts` as the dev command.
+
 ## Problem
 
 The `/soleur:qa` skill currently lists "Local development server running" as a prerequisite and fails browser scenarios with "Server not reachable" when the dev server is not running. This violates the AGENTS.md hard rule: "Exhaust all automated options before suggesting manual steps." In practice, QA gets skipped entirely during one-shot pipelines because no one is around to start the server.
@@ -33,93 +52,35 @@ The `/soleur:qa` skill currently lists "Local development server running" as a p
 
 ## Implementation Plan
 
-### Phase 1: Add Dev Server Lifecycle to SKILL.md
+Single atomic edit to `plugins/soleur/skills/qa/SKILL.md`. Four changes in one pass:
 
-Modify `plugins/soleur/skills/qa/SKILL.md` to add a new step between the current Step 1 (Read Plan) and Step 2 (Detect Environment).
+### Edit 1: Add Step 1.5 "Ensure Dev Server is Running"
 
-**New Step 1.5: Ensure Dev Server is Running**
+Insert between Step 1 (Read Plan) and Step 2 (Detect Environment). Intent-based instructions for the agent:
 
-Insert after Step 1 and before the current Step 2 (renumber if needed). The logic:
+1. Check if the dev server is already reachable at `http://localhost:3000` (curl with 3s timeout). If reachable, skip to Step 2.
+2. If not reachable, find the dev command from `apps/web-platform/package.json` `scripts.dev` field. If no dev script exists, warn and skip browser scenarios (API verify steps still run).
+3. Start the server in the background via `doppler run -p soleur -c dev -- <dev-command> &` (fall back to bare command if Doppler is unavailable). Record the PID.
+4. Poll until the server responds or 30 seconds elapse. If timeout, kill the process, report the failure reason, and skip browser scenarios.
 
-1. **Check if server is already running:**
+### Edit 2: Add Step 5.5 "Cleanup Dev Server"
 
-   ```bash
-   curl -sf --max-time 3 http://localhost:3000/ >/dev/null 2>&1 && echo "RUNNING" || echo "NOT_RUNNING"
-   ```
+After the pass/fail gate (Step 5), before the skill returns. One instruction: if a dev server was started in Step 1.5, kill the process by PID. This runs regardless of pass/fail.
 
-   If `RUNNING`, skip to Step 2 (no action needed). Set `QA_STARTED_SERVER=false`.
+### Edit 3: Update Graceful Degradation table
 
-2. **If NOT_RUNNING, detect the dev command:**
-   - Walk up from the worktree root to find the closest `package.json` with a `scripts.dev` field
-   - Primary: check `apps/web-platform/package.json` (the main app in this repo)
-   - Fallback: check root `package.json`
-   - Extract the dev command: `jq -r '.scripts.dev // empty' <path>/package.json`
-   - If no dev command found, report: "No dev script found in package.json -- cannot auto-start server" and skip browser scenarios (do not block the pipeline)
-
-3. **Detect port:**
-   - Default: 3000
-   - Parse from dev command if it contains `--port <N>` or `-p <N>`
-   - Try 3000, then 3001 if 3000 is occupied
-
-4. **Start the server:**
-   - Check if Doppler is configured: `doppler secrets --only-names -p soleur -c dev 2>/dev/null | head -1`
-   - If Doppler is available: `doppler run -p soleur -c dev -- <dev-command> --port <port> &`
-   - If Doppler is not available: `<dev-command> --port <port> &`
-   - Capture the background PID: `QA_SERVER_PID=$!`
-   - Set `QA_STARTED_SERVER=true`
-
-5. **Wait for server to respond (30s timeout):**
-
-   ```bash
-   for i in $(seq 1 30); do
-     curl -sf --max-time 2 http://localhost:<port>/ >/dev/null 2>&1 && break
-     sleep 1
-   done
-   ```
-
-   If the server does not respond within 30 seconds:
-   - Kill the background process
-   - Capture and report the last 20 lines of server output as the failure reason
-   - Report: "Dev server failed to start within 30s. Last output: ..."
-   - Skip browser scenarios (do not block the pipeline entirely -- API verify steps may still run)
-
-### Phase 2: Add Cleanup Step
-
-Add a new Step 5.5 (after the pass/fail gate, before the skill returns):
-
-**Step 5.5: Cleanup Dev Server**
-
-- If `QA_STARTED_SERVER=true` and `QA_SERVER_PID` is set:
-  - Kill the server process: `kill $QA_SERVER_PID 2>/dev/null`
-  - Wait briefly for cleanup: `wait $QA_SERVER_PID 2>/dev/null`
-  - Report: "Stopped auto-started dev server (PID <pid>)"
-- If `QA_STARTED_SERVER=false`: no action needed
-
-**Important:** The cleanup must run regardless of whether scenarios passed or failed. Place it after the pass/fail gate output but before returning control.
-
-### Phase 3: Update Graceful Degradation Table
-
-Update the `## Graceful Degradation` table to reflect the new behavior:
+Replace the "Dev server not running" row. Add two new rows:
 
 | Missing Prerequisite | Behavior |
 |---------------------|----------|
 | Dev server not running | Auto-start via package.json dev script; if startup fails, report reason and skip browser scenarios |
 | No dev script in package.json | Warn and skip browser scenarios (API verification still runs) |
-| Dev server startup timeout | Report last 20 lines of server output and skip browser scenarios |
+| Dev server startup timeout (30s) | Report failure reason and skip browser scenarios |
 
-### Phase 4: Update Prerequisites Section
+### Edit 4: Update Prerequisites section
 
-Change the Prerequisites section from:
-
-```markdown
-- Local development server running (e.g., `npm run dev`, `bin/dev`)
-```
-
-To:
-
-```markdown
-- Local development server running OR a `dev` script in the project's `package.json` (auto-started if not running)
-```
+Change "Local development server running" to note auto-start capability:
+"Local development server running OR a `dev` script in `package.json` (auto-started if not running)"
 
 ## Files Changed
 
@@ -129,13 +90,13 @@ To:
 
 ## Acceptance Criteria
 
-- [ ] QA skill attempts to start dev server before skipping browser scenarios
-- [ ] Server process is cleaned up after QA completes (both pass and fail paths)
-- [ ] If server startup fails (missing env vars, port conflict), QA reports the failure reason instead of silently skipping
-- [ ] If package.json has no dev script, QA warns and skips browser scenarios without blocking the pipeline
-- [ ] API verification steps still run even when browser scenarios are skipped due to server issues
-- [ ] If dev server is already running, no auto-start is attempted (no-op path)
-- [ ] Graceful Degradation table is updated to reflect auto-start behavior
+- [x] QA skill attempts to start dev server before skipping browser scenarios
+- [x] Server process is cleaned up after QA completes (both pass and fail paths)
+- [x] If server startup fails (missing env vars, port conflict), QA reports the failure reason instead of silently skipping
+- [x] If package.json has no dev script, QA warns and skips browser scenarios without blocking the pipeline
+- [x] API verification steps still run even when browser scenarios are skipped due to server issues
+- [x] If dev server is already running, no auto-start is attempted (no-op path)
+- [x] Graceful Degradation table is updated to reflect auto-start behavior
 
 ## Test Scenarios
 
