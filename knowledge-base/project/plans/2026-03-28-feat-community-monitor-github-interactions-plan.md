@@ -36,12 +36,12 @@ Add `$ROUTER github fetch-interactions 7` to Capability 1 (Digest Generation) St
 
 ## Acceptance Criteria
 
-- [ ] `github-community.sh fetch-interactions 1` outputs valid JSON with external comments from the last 24 hours
-- [ ] Bot and org-member comments are excluded (filtered by `author_association`)
-- [ ] Daily digest includes `**Community Interactions:**` table when external comments exist
-- [ ] No interactions sub-section when there are no external comments (clean omission)
-- [ ] Pagination handled correctly (`--paginate` + `jq -s 'add // []'`)
-- [ ] Existing commands (`activity`, `contributors`, `discussions`, `repo-stats`) remain unchanged
+- [x] `github-community.sh fetch-interactions 1` outputs valid JSON with external comments from the last 24 hours
+- [x] Bot and org-member comments are excluded (filtered by `author_association`)
+- [x] Daily digest includes `**Community Interactions:**` table when external comments exist
+- [x] No interactions sub-section when there are no external comments (clean omission)
+- [x] Pagination handled correctly (`--paginate` + `jq -s 'add // []'`)
+- [x] Existing commands (`activity`, `contributors`, `discussions`, `repo-stats`) remain unchanged
 
 ## Test Scenarios
 
