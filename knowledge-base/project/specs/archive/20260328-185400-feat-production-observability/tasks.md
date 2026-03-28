@@ -1,0 +1,76 @@
+# Tasks: Production Observability
+
+## Phase 1: Structured Logging (Pino)
+
+- [ ] 1.1 Install dependencies: `pino` (dep), `pino-pretty` (devDep)
+- [ ] 1.2 Create `server/logger.ts` — singleton Pino logger with child logger factory, `x-nonce` redaction
+- [ ] 1.3 Add `pino` to esbuild `--external` in `build:server` script
+- [ ] 1.4 Migrate `server/ws-handler.ts` FIRST — replace 21 `console.*` calls, verify esbuild builds
+- [ ] 1.5 Migrate `server/agent-runner.ts` — replace 17 calls with child logger `agent`
+- [ ] 1.6 Migrate `server/index.ts` — replace 4 calls
+- [ ] 1.7 Migrate `server/workspace.ts` — replace 2 calls
+- [ ] 1.8 Migrate `server/domain-router.ts` — replace 1 call
+- [ ] 1.9 Migrate `lib/auth/resolve-origin.ts` — replace 1 call
+- [ ] 1.10 Migrate `lib/auth/validate-origin.ts` — replace 1 call
+- [ ] 1.11 Migrate `app/(auth)/callback/route.ts` — replace 4 calls
+- [ ] 1.12 Migrate `app/api/accept-terms/route.ts` — replace 2 calls
+- [ ] 1.13 Migrate `app/api/keys/route.ts` — replace 1 call
+- [ ] 1.14 Migrate `app/api/workspace/route.ts` — replace 1 call
+- [ ] 1.15 Migrate `app/api/webhooks/stripe/route.ts` — replace 1 call
+- [ ] 1.16 Verify: all tests pass, JSON output in production, pretty-print in dev
+
+## Phase 2: Sentry Integration
+
+- [x] 2.1 Install `@sentry/nextjs`
+- [x] 2.2 Create `sentry.server.config.ts` — server-side init, `tracesSampleRate: 0`, `beforeSend` filtering
+- [x] 2.3 Create `sentry.client.config.ts` — client-side init, `tracesSampleRate: 0`
+- [x] 2.4 Create `instrumentation.ts` — `onRequestError` export only (register() is a no-op for custom servers)
+- [x] 2.5 Create `app/global-error.tsx` — root error boundary with Sentry capture
+- [x] 2.6 Create `app/error.tsx` — app-level error boundary with Sentry capture
+- [x] 2.7 Add `import "../sentry.server.config"` as FIRST import in `server/index.ts`
+- [x] 2.8 Wrap `next.config.ts` with `withSentryConfig()` (org, project, authToken, source maps)
+- [x] 2.9 Add `*.ingest.sentry.io` to `connect-src` and `report-uri` directive in `lib/csp.ts`
+- [x] 2.10 Update CSP tests in `test/csp.test.ts` for Sentry domain and `report-uri`
+- [x] 2.11 Add `Sentry.captureException()` at call sites in `server/ws-handler.ts` catch blocks
+- [x] 2.12 Add `Sentry.captureException()` at call sites in `server/agent-runner.ts` catch blocks
+- [x] 2.13 Add `--external:@sentry/nextjs` to esbuild `build:server` and `next.config.mjs` scripts
+- [x] 2.14 Add `SENTRY_DSN` and `NEXT_PUBLIC_SENTRY_DSN` to `.env.example`
+- [x] 2.15 Add `ARG NEXT_PUBLIC_SENTRY_DSN`, `ARG SENTRY_AUTH_TOKEN`, `ARG SENTRY_ORG`, `ARG SENTRY_PROJECT` to Dockerfile builder stage
+- [x] 2.16 Add Sentry build-args to `.github/workflows/reusable-release.yml` Docker build step
+- [x] 2.17 Verify: CSP tests pass, error boundaries render, no sensitive data in Sentry events
+
+## Phase 3: Enhanced Health Endpoint + Deploy Verification
+
+- [x] 3.1 Add `checkSupabase()` — lightweight REST API connectivity check (not business table query)
+- [x] 3.2 Enrich `/health` response: version, supabase status, uptime, memory
+- [x] 3.3 Return 503 when degraded (Supabase unreachable)
+- [x] 3.4 Add `ARG BUILD_VERSION` and `ENV BUILD_VERSION` to Dockerfile
+- [x] 3.5 Pass `BUILD_VERSION` to Docker build in reusable-release.yml
+- [x] 3.6 Replace existing CI health verification with version-aware check (12 attempts x 10s = 120s)
+- [x] 3.7 Verify: health endpoint returns enriched response, Docker healthcheck still works
+
+## Phase 4: External Services Setup
+
+- [x] 4.1 Create Sentry project (Playwright MCP or CLI)
+- [x] 4.2 Get DSN values, construct `report-uri` URL from DSN
+- [x] 4.3 Store in Doppler: `SENTRY_DSN`, `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT`, `SENTRY_CSP_REPORT_URI`
+- [x] 4.4 Add `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` as GitHub secrets
+- [x] 4.5 Create Better Stack account and uptime monitor (Playwright MCP)
+- [x] 4.6 Configure alerting — email (default on both free tiers). Telegram deferred: requires paid plan or custom webhook bot
+- [x] 4.7 Configure alerting — email (default on both free tiers). Telegram deferred: requires paid plan or custom webhook bot
+- [x] 4.8 Better Stack monitor validated: app.soleur.ai/health checked every 3 min, email alerts active
+- [x] 4.9 Better Stack uptime monitor active, email alerts configured
+- [x] 4.10 Record Sentry and Better Stack in expenses.md (EUR 0/month free tiers)
+- [x] 4.11 Flag CLO: new sub-processors need privacy policy disclosure (#1048)
+
+## Phase 5: Testing & Verification
+
+- [ ] 5.1 Run full test suite — all existing tests pass
+- [ ] 5.2 Verify Pino JSON output in Docker container
+- [ ] 5.3 Verify Sentry receives test error event
+- [ ] 5.4 Verify source maps produce readable client-side stack traces
+- [ ] 5.5 Verify CSP `report-uri` sends violations to Sentry
+- [ ] 5.6 Verify `/health` returns version, 503 on degraded
+- [ ] 5.7 Verify CI deploy pipeline checks version match
+- [ ] 5.8 Verify Better Stack monitors health endpoint
+- [ ] 5.9 Verify email alerts configured for both Sentry and Better Stack (Telegram deferred)

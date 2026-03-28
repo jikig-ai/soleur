@@ -12,8 +12,9 @@ export function buildCspHeader(options: {
   isDev: boolean;
   supabaseUrl: string;
   appHost: string;
+  sentryReportUri?: string;
 }): string {
-  const { nonce, isDev, supabaseUrl, appHost } = options;
+  const { nonce, isDev, supabaseUrl, appHost, sentryReportUri } = options;
   const supabaseHost = parseSupabaseHost(supabaseUrl);
 
   // In production, require an explicit Supabase URL to avoid a permissive
@@ -52,7 +53,7 @@ export function buildCspHeader(options: {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' blob: data:",
     "font-src 'self'",
-    `connect-src 'self' ${appWsOrigin} ${supabaseConnect}`,
+    `connect-src 'self' ${appWsOrigin} ${supabaseConnect} https://*.ingest.sentry.io`,
     "object-src 'none'",
     "frame-src 'none'",
     "worker-src 'self'",
@@ -60,6 +61,7 @@ export function buildCspHeader(options: {
     "form-action 'self'",
     "frame-ancestors 'none'",
     "upgrade-insecure-requests",
+    ...(sentryReportUri ? [`report-uri ${sentryReportUri}`] : []),
   ];
 
   return directives.join("; ");

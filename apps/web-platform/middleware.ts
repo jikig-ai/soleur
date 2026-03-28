@@ -29,6 +29,7 @@ export async function middleware(request: NextRequest) {
     isDev: process.env.NODE_ENV === "development",
     supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
     appHost: request.nextUrl.host,
+    sentryReportUri: process.env.SENTRY_CSP_REPORT_URI,
   });
 
   // Set nonce and CSP on request headers for Next.js SSR nonce extraction.

@@ -70,18 +70,24 @@ jobs:
           fi
           echo "Deploy initiated (HTTP 202), polling health endpoint..."
 
-      - name: Verify deploy health
+      - name: Verify deploy health and version
         env:
           VERSION: ${{ needs.release.outputs.version }}
         run: |
-          for i in $(seq 1 30); do
+          for i in $(seq 1 12); do
             HEALTH=$(curl -sf "https://app.soleur.ai/health" 2>/dev/null || echo "")
             if echo "$HEALTH" | grep -q "ok"; then
-              echo "Deploy verified: $HEALTH"
-              exit 0
+              DEPLOYED_VERSION=$(echo "$HEALTH" | jq -r '.version // empty')
+              if [ "$DEPLOYED_VERSION" = "$VERSION" ]; then
+                echo "Deploy verified: version $VERSION running"
+                echo "$HEALTH" | jq .
+                exit 0
+              fi
+              echo "Version mismatch: expected $VERSION, got $DEPLOYED_VERSION (attempt $i/12)"
+            else
+              echo "Attempt $i/12: waiting for healthy response..."
             fi
-            echo "Attempt $i/30: waiting for healthy response..."
             sleep 10
           done
-          echo "::error::Deploy verification timed out after 300s"
+          echo "::error::Deploy verification failed after 120s"
           exit 1

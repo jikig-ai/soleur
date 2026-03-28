@@ -1,4 +1,7 @@
 import { DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
+import { createChildLogger } from "./logger";
+
+const log = createChildLogger("domain");
 
 // Assessment questions ported from brainstorm-domain-config.md
 const DOMAIN_ASSESSMENT: Record<DomainLeaderId, string> = {
@@ -137,7 +140,7 @@ Respond with ONLY a JSON array like ["cmo","clo"]. No explanation.`,
 
     return validated.slice(0, MAX_LEADERS_PER_MESSAGE);
   } catch (err) {
-    console.error("[router] Classification failed, falling back to CPO:", err);
+    log.error({ err }, "Classification failed, falling back to CPO");
     return ["cpo"]; // Fallback on any error
   }
 }

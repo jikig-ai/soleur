@@ -114,6 +114,26 @@ describe("buildCspHeader", () => {
     expect(connectSrc).not.toMatch(/\bwss:\s/);
   });
 
+  test("connect-src includes Sentry ingest domain", () => {
+    const connectSrc = parseCspDirective(prodCsp, "connect-src");
+    expect(connectSrc).toContain("https://*.ingest.sentry.io");
+  });
+
+  test("includes report-uri when sentryReportUri is provided", () => {
+    const csp = buildCspHeader({
+      nonce: TEST_NONCE,
+      isDev: false,
+      supabaseUrl: "https://abc.supabase.co",
+      appHost: "app.soleur.ai",
+      sentryReportUri: "https://o123.ingest.sentry.io/api/456/security/?sentry_key=abc",
+    });
+    expect(csp).toContain("report-uri https://o123.ingest.sentry.io/api/456/security/?sentry_key=abc");
+  });
+
+  test("omits report-uri when sentryReportUri is not provided", () => {
+    expect(prodCsp).not.toContain("report-uri");
+  });
+
   test("contains all required directives", () => {
     const requiredDirectives = [
       "default-src",

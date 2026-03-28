@@ -28,6 +28,14 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      - name: Install web-platform dependencies
+        run: bun install
+        working-directory: apps/web-platform
+
+      - name: Install telegram-bridge dependencies
+        run: bun install
+        working-directory: apps/telegram-bridge
+
       - name: Run tests
         run: bash scripts/test-all.sh
 
