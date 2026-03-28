@@ -21,23 +21,23 @@
 
 ## Phase 2: Sentry Integration
 
-- [ ] 2.1 Install `@sentry/nextjs`
-- [ ] 2.2 Create `sentry.server.config.ts` — server-side init, `tracesSampleRate: 0`, `beforeSend` filtering
-- [ ] 2.3 Create `sentry.client.config.ts` — client-side init, `tracesSampleRate: 0`
-- [ ] 2.4 Create `instrumentation.ts` — `onRequestError` export only (register() is a no-op for custom servers)
-- [ ] 2.5 Create `app/global-error.tsx` — root error boundary with Sentry capture
-- [ ] 2.6 Create `app/error.tsx` — app-level error boundary with Sentry capture
-- [ ] 2.7 Add `import "../sentry.server.config"` as FIRST import in `server/index.ts`
-- [ ] 2.8 Wrap `next.config.ts` with `withSentryConfig()` (org, project, authToken, source maps)
-- [ ] 2.9 Add `*.ingest.sentry.io` to `connect-src` and `report-uri` directive in `lib/csp.ts`
-- [ ] 2.10 Update CSP tests in `test/csp.test.ts` for Sentry domain and `report-uri`
-- [ ] 2.11 Add `Sentry.captureException()` at call sites in `server/ws-handler.ts` catch blocks
-- [ ] 2.12 Add `Sentry.captureException()` at call sites in `server/agent-runner.ts` catch blocks
-- [ ] 2.13 Add `--external:@sentry/nextjs` to esbuild `build:server` and `next.config.mjs` scripts
-- [ ] 2.14 Add `SENTRY_DSN` and `NEXT_PUBLIC_SENTRY_DSN` to `.env.example`
-- [ ] 2.15 Add `ARG NEXT_PUBLIC_SENTRY_DSN`, `ARG SENTRY_AUTH_TOKEN`, `ARG SENTRY_ORG`, `ARG SENTRY_PROJECT` to Dockerfile builder stage
-- [ ] 2.16 Add Sentry build-args to `.github/workflows/reusable-release.yml` Docker build step
-- [ ] 2.17 Verify: CSP tests pass, error boundaries render, no sensitive data in Sentry events
+- [x] 2.1 Install `@sentry/nextjs`
+- [x] 2.2 Create `sentry.server.config.ts` — server-side init, `tracesSampleRate: 0`, `beforeSend` filtering
+- [x] 2.3 Create `sentry.client.config.ts` — client-side init, `tracesSampleRate: 0`
+- [x] 2.4 Create `instrumentation.ts` — `onRequestError` export only (register() is a no-op for custom servers)
+- [x] 2.5 Create `app/global-error.tsx` — root error boundary with Sentry capture
+- [x] 2.6 Create `app/error.tsx` — app-level error boundary with Sentry capture
+- [x] 2.7 Add `import "../sentry.server.config"` as FIRST import in `server/index.ts`
+- [x] 2.8 Wrap `next.config.ts` with `withSentryConfig()` (org, project, authToken, source maps)
+- [x] 2.9 Add `*.ingest.sentry.io` to `connect-src` and `report-uri` directive in `lib/csp.ts`
+- [x] 2.10 Update CSP tests in `test/csp.test.ts` for Sentry domain and `report-uri`
+- [x] 2.11 Add `Sentry.captureException()` at call sites in `server/ws-handler.ts` catch blocks
+- [x] 2.12 Add `Sentry.captureException()` at call sites in `server/agent-runner.ts` catch blocks
+- [x] 2.13 Add `--external:@sentry/nextjs` to esbuild `build:server` and `next.config.mjs` scripts
+- [x] 2.14 Add `SENTRY_DSN` and `NEXT_PUBLIC_SENTRY_DSN` to `.env.example`
+- [x] 2.15 Add `ARG NEXT_PUBLIC_SENTRY_DSN`, `ARG SENTRY_AUTH_TOKEN`, `ARG SENTRY_ORG`, `ARG SENTRY_PROJECT` to Dockerfile builder stage
+- [x] 2.16 Add Sentry build-args to `.github/workflows/reusable-release.yml` Docker build step
+- [x] 2.17 Verify: CSP tests pass, error boundaries render, no sensitive data in Sentry events
 
 ## Phase 3: Enhanced Health Endpoint + Deploy Verification
 

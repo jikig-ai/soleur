@@ -15,6 +15,9 @@ out/
 # debug
 npm-debug.log*
 
+# sentry
+.sentryclirc
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

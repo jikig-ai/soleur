@@ -1,3 +1,7 @@
+// MUST be first import — before next, ws, or any app code.
+// instrumentation.ts register() is NOT called by Next.js with custom servers.
+import "../sentry.server.config";
+
 import { createServer } from "http";
 import next from "next";
 import { parse } from "url";

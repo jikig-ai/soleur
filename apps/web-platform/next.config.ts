@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { withSentryConfig } from "@sentry/nextjs";
 import { buildSecurityHeaders } from "./lib/security-headers";
 
 const securityHeaders = buildSecurityHeaders();
@@ -25,4 +26,15 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+export default withSentryConfig(nextConfig, {
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  // Upload source maps for all client chunks
+  widenClientFileUpload: true,
+  // Delete source maps after upload — don't ship to users
+  sourcemaps: { deleteSourcemapsAfterUpload: true },
+  // Suppress noisy logs outside CI
+  silent: !process.env.CI,
+  disableLogger: true,
+});

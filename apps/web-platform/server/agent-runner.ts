@@ -9,6 +9,7 @@ import { routeMessage } from "./domain-router";
 import { KeyInvalidError } from "@/lib/types";
 import { decryptKey, decryptKeyLegacy, encryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
+import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 import { isPathInWorkspace } from "./sandbox";
 import { UNVERIFIED_PARAM_TOOLS, extractToolPath, isFileTool, isSafeTool } from "./tool-path-checker";
@@ -549,6 +550,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         );
       }
     } else {
+      Sentry.captureException(err);
       log.error({ err, userId, conversationId }, "Session error");
       const message = sanitizeErrorForClient(err);
       sendToClient(userId, {
@@ -642,6 +644,7 @@ export async function sendUserMessage(
   const resumeSessionId = activeSession?.sessionId ?? conv.session_id ?? undefined;
 
   const handleSessionError = (err: unknown) => {
+    Sentry.captureException(err);
     log.error(
       { err, userId, conversationId },
       "sendUserMessage session error",

@@ -16,6 +16,7 @@ import {
   resolveReviewGate,
   abortSession,
 } from "./agent-runner";
+import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 import { createChildLogger } from "./logger";
 
@@ -159,6 +160,7 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
         // Boot the agent runner (async -- streams will flow via sendToClient)
         startAgentSession(userId, conversationId, msg.leaderId, undefined, undefined, msg.context).catch(
           (err) => {
+            Sentry.captureException(err);
             log.error({ userId, err }, "startAgentSession error");
             sendToClient(userId, {
               type: "error",
@@ -172,6 +174,7 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
         sendToClient(userId, { type: "session_started", conversationId });
         log.debug("session_started sent to client");
       } catch (err) {
+        Sentry.captureException(err);
         log.error({ userId, err }, "start_session error");
         sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
       }
@@ -204,6 +207,7 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
           conversationId: msg.conversationId,
         });
       } catch (err) {
+        Sentry.captureException(err);
         log.error({ userId, err }, "resume_session error");
         sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
       }
@@ -232,6 +236,7 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
         session.conversationId = undefined;
         sendToClient(userId, { type: "session_ended", reason: "closed" });
       } catch (err) {
+        Sentry.captureException(err);
         log.error({ userId, err }, "close_conversation error");
         sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
       }
@@ -257,6 +262,7 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
           msg.content,
         );
       } catch (err) {
+        Sentry.captureException(err);
         log.error({ userId, err }, "chat error");
         sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
       }
@@ -288,6 +294,7 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
           msg.selection,
         );
       } catch (err) {
+        Sentry.captureException(err);
         log.error({ userId, err }, "review_gate_response error");
         sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
       }
@@ -466,6 +473,7 @@ export function setupWebSocket(server: HTTPServer) {
 
       // Authenticated — route to handleMessage
       handleMessage(userId!, data.toString()).catch((err) => {
+        Sentry.captureException(err);
         log.error({ userId, err }, "Unhandled message error");
         sendToClient(userId!, {
           type: "error",
@@ -500,6 +508,7 @@ export function setupWebSocket(server: HTTPServer) {
     });
 
     ws.on("error", (err) => {
+      Sentry.captureException(err);
       log.error({ userId, err }, "Socket error");
     });
   });
