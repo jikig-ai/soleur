@@ -6,36 +6,37 @@
 
 ## What We're Building
 
-A GitHub Actions workflow (`deploy-watchdog.yml`) that automatically detects failed web-platform deploys, investigates the root cause by pulling both workflow logs and server-side container logs, and creates a structured GitHub issue with diagnosis. GitHub's built-in email notifications handle alerting — no custom Discord or email integration needed.
+Two complementary improvements to deploy reliability:
 
-The watchdog triggers via `workflow_run` on `web-platform-release.yml`. When the release workflow's deploy job fails, the watchdog:
+**Part A — Rollback in ci-deploy.sh (prevention):** Enhance the server-side deploy script with health-gated container swapping. Before killing the old container, start the new one under a temporary name, health-check it, then swap. On failure, remove the new container and keep the old one running. This replicates Kamal's core zero-downtime deploy value in ~30 lines of bash without changing the deploy architecture.
 
-1. Extracts workflow step logs via `gh api` to identify which step failed and why
-2. Queries Better Stack Logs API for container logs from the deploy time window
-3. Pattern-matches against known failure types (version mismatch, health 503, timeout, container crash)
-4. Creates a GitHub issue with structured diagnosis including both log sources
+**Part B — Deploy watchdog workflow (visibility):** New `deploy-watchdog.yml` GitHub Actions workflow that detects failed deploys, investigates root cause using workflow logs + Better Stack container logs, and creates a GitHub issue with structured diagnosis. When Part A rolls back, the watchdog ensures the rollback event is visible and investigated.
 
 ## Why This Approach
 
-- **Real pain point:** 4 of the last 10 deploy runs failed. The #1235 deploy failure went unnoticed until the founder manually checked.
-- **New workflow, not extending post-merge-monitor:** The existing `post-merge-monitor.yml` is scoped to bot-fix commits on the CI workflow with an infinite-loop guard tied to that design. Different trigger, different scope, different concerns.
-- **Better Stack for server-side logs:** GitHub Actions only sees the health poll timeout, not the actual container failure reason (OOM, crash, startup error). Better Stack is already integrated (#1235) and provides the missing observability layer.
-- **GitHub email for alerting:** GitHub already emails repo watchers on issue creation. Adding custom alerting is unnecessary complexity. The watchdog's job is to create the issue with good diagnosis — notification is GitHub's job.
-- **Single workflow:** All logic in one file. No premature abstractions (only web-platform deploys today). Testable via `workflow_dispatch`.
+- **Real pain point:** 8 of the last 20 deploy runs failed (40%). The #1235 deploy failure went unnoticed until the founder manually checked.
+- **Kamal evaluated and rejected:** CTO and COO independently recommended against Kamal migration. Key reasons: (1) Kamal deploys via SSH, reversing the deliberate SSH→Cloudflare Tunnel webhook migration across 4 issues (#749, #963, #967, #968); (2) no native Doppler adapter; (3) kamal-proxy conflicts with Cloudflare SSL termination; (4) 1-2 week migration vs. 3-5 days for targeted fixes. See Domain Assessments below.
+- **Rollback solves the acute problem:** The current deploy has a hard-stop gap — old container is killed before new one is verified. This is the root cause of downtime during failed deploys. Health-gated swapping eliminates this gap.
+- **Watchdog provides visibility:** Even with rollback, you want to know when deploys fail and why. The watchdog creates a GitHub issue with diagnosis, and GitHub's built-in email notifications alert the founder.
+- **New workflow, not extending post-merge-monitor:** `post-merge-monitor.yml` is scoped to bot-fix commits on the CI workflow. Different trigger, scope, and concerns.
+- **Better Stack for server-side logs:** GitHub Actions only sees the health poll timeout. Better Stack (already integrated per #1235) provides container-level failure details.
 
 ## Key Decisions
 
-1. **Scope: Phase 1 + 2 only.** Detect + investigate + create issue. No auto-fix — deferred to a separate issue due to high risk (deploy secrets, infinite-loop potential, retry authority conflicts with server-side `ci-deploy.sh`).
-2. **No custom alerting.** Rely on GitHub's built-in email notifications for issue creation. No Discord webhook, no transactional email service.
-3. **Better Stack API for container logs.** Requires `BETTER_STACK_API_TOKEN` in GitHub secrets. Graceful degradation: if Better Stack query fails, issue is still created with workflow logs only.
-4. **Pattern matching for known failures.** Version mismatch (expected X, got Y/empty), health 503, deploy verification timeout, container crash. Pattern match informs the issue title and labels but does not trigger automated remediation.
-5. **`workflow_dispatch` for testing.** Include manual trigger inputs to simulate failure scenarios without needing an actual failed deploy.
+1. **Two-part approach: prevention + visibility.** Part A (ci-deploy.sh rollback) prevents downtime. Part B (watchdog) provides investigation and alerting. Neither alone is sufficient.
+2. **Kamal rejected.** SSH re-introduction is a dealbreaker. The custom pipeline is already hardened over 7+ sessions. Adding rollback to ci-deploy.sh replicates Kamal's core value without the migration cost.
+3. **No custom alerting.** Rely on GitHub's built-in email notifications for issue creation. No Discord webhook, no transactional email service.
+4. **Better Stack API for container logs.** Requires `BETTER_STACK_API_TOKEN` in GitHub secrets. Graceful degradation: if query fails, issue is created with workflow logs only.
+5. **Pattern matching for known failures.** Version mismatch (expected X, got Y/empty), health 503, deploy verification timeout, container crash. Pattern match informs the issue title and labels.
+6. **`workflow_dispatch` for testing.** Watchdog includes manual trigger inputs to simulate failure scenarios.
 
 ## Open Questions
 
-1. **Better Stack API token availability.** Does a token already exist in Doppler/GitHub secrets, or does it need to be created? (Actionable during implementation.)
-2. **Log retention window.** How far back does Better Stack retain logs? Affects the query time window for the container logs.
-3. **Issue deduplication.** If a deploy fails, gets investigated, then the same commit is re-deployed and fails again, should the watchdog update the existing issue or create a new one?
+1. **Better Stack API token availability.** Does a token already exist in Doppler/GitHub secrets, or does it need to be created?
+2. **Log retention window.** How far back does Better Stack retain logs?
+3. **Issue deduplication.** Should the watchdog update an existing issue or create a new one on repeated failures?
+4. **Rollback container naming.** What temporary name should the new container use during health verification? (e.g., `soleur-web-platform-canary`)
+5. **Rollback notification.** Should ci-deploy.sh write a structured event to syslog when rollback occurs, so Better Stack can surface it?
 
 ## Domain Assessments
 
@@ -43,4 +44,10 @@ The watchdog triggers via `workflow_run` on `web-platform-release.yml`. When the
 
 ### Engineering (CTO)
 
-**Summary:** The existing `post-merge-monitor.yml` is not reusable — it monitors CI (not deploys) and is scoped to bot-fix commits. A new workflow is needed. The CTO strongly recommended phasing: detect+alert is small, investigation is medium (requires log access strategy), auto-fix is large with its own risk profile. Key risk: GitHub Actions only sees health poll timeouts, not actual container failures. Better Stack bridges this gap. No capability gaps identified — existing tooling (`gh` CLI, `workflow_run` triggers, Better Stack) covers all Phase 1+2 requirements.
+**Summary (initial):** `post-merge-monitor.yml` is not reusable — it monitors CI (not deploys) and is scoped to bot-fix commits. A new workflow is needed. Recommended phasing: detect+alert (small), investigation (medium), auto-fix (large/risky).
+
+**Summary (Kamal evaluation):** Kamal's SSH requirement is a dealbreaker given 4 issues documenting the deliberate migration away from SSH. Recommended Option C (rollback in ci-deploy.sh) + Option B Phase 1 (watchdog) over Kamal migration. The rollback logic replicates Kamal's core value (health-gated traffic cutover) in ~30 lines of bash. Estimated 3-5 days vs. 1-2 weeks for Kamal with higher risk. No capability gaps.
+
+### Operations (COO)
+
+**Summary:** The 40% failure rate (8/20 runs) clusters on 2026-03-27 (6 failures in one day), suggesting a specific incident rather than chronic fragility. The custom pipeline has been hardened over 7+ sessions with significant investment. Kamal has zero cost impact ($0) but re-introduces SSH, reversing a deliberate architectural decision. Migration effort: 8-12 hours. Recommended: diagnose failure cluster before committing to any solution. Flagged stale Plausible entry in expenses.md. No capability gaps.
