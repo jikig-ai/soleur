@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import type { WSMessage, ConversationContext } from "@/lib/types";
+import { WS_CLOSE_CODES, type WSMessage, type ConversationContext } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
 type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
@@ -33,11 +33,11 @@ const INITIAL_BACKOFF = 1_000;
 
 /** Close codes where reconnecting will never succeed. */
 const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason: string }> = {
-  4001: { target: "/login", reason: "Session expired" },
-  4002: { reason: "Superseded by another tab" },
-  4003: { target: "/login", reason: "Authentication required" },
-  4004: { target: "/accept-terms", reason: "Terms acceptance required" },
-  4005: { reason: "Server error" },
+  [WS_CLOSE_CODES.AUTH_TIMEOUT]: { target: "/login", reason: "Session expired" },
+  [WS_CLOSE_CODES.SUPERSEDED]: { reason: "Superseded by another tab" },
+  [WS_CLOSE_CODES.AUTH_REQUIRED]: { target: "/login", reason: "Authentication required" },
+  [WS_CLOSE_CODES.TC_NOT_ACCEPTED]: { target: "/accept-terms", reason: "Terms acceptance required" },
+  [WS_CLOSE_CODES.INTERNAL_ERROR]: { reason: "Server error" },
 };
 
 export function useWebSocket(conversationId: string): UseWebSocketReturn {

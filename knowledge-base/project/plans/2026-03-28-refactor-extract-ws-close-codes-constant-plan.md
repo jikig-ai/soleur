@@ -103,6 +103,22 @@ describe("WebSocket close code allocation", () => {
 - Given `WS_CLOSE_CODES` is defined in `types.ts`, when `accept-terms.test.ts` runs, then all codes are unique and in the 4000-4999 range
 - Given a numeric close code is removed from grep output across all three files, when searching for `\b40(0[1-5])\b` in `.ts` files under `apps/web-platform/`, then only `types.ts` contains the numeric literals (all other files reference the constant)
 
+## Enhancement Notes
+
+**Deepened on:** 2026-03-28
+
+### Relevant Institutional Learning
+
+The learning at `2026-03-18-typed-error-codes-websocket-key-invalidation.md` established the pattern of placing typed WS protocol artifacts in `types.ts` specifically because it is a side-effect-free module (no `createClient()` calls at module load time). This reinforces the placement decision -- importing `WS_CLOSE_CODES` from `types.ts` will not trigger Supabase client initialization, which matters for test imports.
+
+### Edge Case: `ws-client.ts` is a `"use client"` Module
+
+`ws-client.ts` runs in the browser where the `ws` npm package is not available -- it uses the native browser `WebSocket` API. The `WS_CLOSE_CODES` constant must remain a plain object with no runtime dependencies (no imports from `ws`, no Node.js APIs). Since it is defined as a plain `as const` object in `types.ts` with no imports of its own, this is already safe. Worth verifying during implementation that no accidental Node.js-only import is added to `types.ts` as part of this change.
+
+### Type Compatibility
+
+The `ws` library's `close()` method signature accepts `code?: number`. TypeScript `as const` narrows values to literal types (e.g., `4001` not `number`), but literal number types are assignable to `number`, so `ws.close(WS_CLOSE_CODES.AUTH_TIMEOUT, ...)` will typecheck without widening.
+
 ## Domain Review
 
 **Domains relevant:** none
