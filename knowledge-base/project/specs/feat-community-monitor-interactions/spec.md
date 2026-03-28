@@ -24,9 +24,9 @@ The daily community monitor tracks GitHub activity (issue/PR counts, contributor
 ## Functional Requirements
 
 - **FR1:** `github-community.sh fetch-interactions` command fetches issue and PR comments from the last 24 hours
-- **FR2:** Filter to external users only using `author_association` field (keep `NONE`, `CONTRIBUTOR`, `FIRST_TIMER`, `FIRST_TIME_CONTRIBUTOR`)
-- **FR3:** Output JSON with commenter login, issue/PR number, title, comment snippet (first ~120 chars), and URL
-- **FR4:** Community-manager agent renders interactions as a summary table in the digest under a `## GitHub Interactions` section
+- **FR2:** Filter to external users only using `author_association` field (keep `NONE`, `CONTRIBUTOR`, `FIRST_TIMER`, `FIRST_TIME_CONTRIBUTOR`) and exclude bots via `.user.type != "Bot"` plus `[bot]$` login fallback
+- **FR3:** Output JSON with commenter login, issue/PR number, comment snippet (first ~120 chars, newlines stripped), and URL
+- **FR4:** Community-manager agent renders interactions as a `**Community Interactions:**` sub-section within `## GitHub Activity` in the digest
 - **FR5:** Scheduled workflow passes interaction data to the agent for digest generation
 
 ## Technical Requirements
@@ -38,8 +38,8 @@ The daily community monitor tracks GitHub activity (issue/PR counts, contributor
 
 ## Acceptance Criteria
 
-- [ ] Daily digest includes a `## GitHub Interactions` section when external comments exist
-- [ ] Section shows a table: commenter | issue/PR | comment snippet
+- [ ] Daily digest includes a `**Community Interactions:**` sub-section under `## GitHub Activity` when external comments exist
+- [ ] Sub-section shows a table: commenter | issue/PR | comment snippet
 - [ ] Bot and org-member comments are excluded
 - [ ] No interactions section when there are no external comments (clean omission)
 - [ ] `github-community.sh fetch-interactions` works standalone for testing
