@@ -58,16 +58,15 @@ BLOCKED: No review evidence found on this branch. Run /review before merging.
 
 **Note on coupling:** The commit message grep (`"refactor: add code review findings"`) is coupled to review SKILL.md Step 5. This is the same coupling that exists in ship Phase 1.5, documented with a comment in both locations. The coupling is minimal (one string literal) and intentionally documented rather than abstracted.
 
-### Remove Phase 5.5 Code Review Completion Gate
+### Align Phase 5.5 Code Review Completion Gate with Phase 1.5
 
-Delete the "Code Review Completion Gate (mandatory)" subsection from Phase 5.5 in ship SKILL.md. Keep the other Phase 5.5 subsections (CMO Content-Opportunity, CMO Website Framing Review, COO Expense-Tracking) intact. Also remove the `- [ ] Code review completed (Phase 5.5 gate)` checklist item from Phase 5.
+[Updated 2026-03-28] Originally planned for removal, but kept as defense-in-depth per user decision. Rewritten to match Phase 1.5 behavior:
 
-**Why remove (strengthened per DHH review):** Phase 5.5's code review gate auto-invokes review in headless mode. This is *wrong behavior*, not just redundancy — it silently adds a full code review to the ship pipeline as a hidden side effect that changes runtime characteristics. Phase 1.5 correctly aborts instead, forcing the caller to make an explicit decision. Additionally:
+- **Headless mode:** abort (was: auto-invoke review — wrong behavior, hidden side effect)
+- **Detection:** same exact commit message grep as Phase 1.5 (was: loose `--grep="review"`)
+- **Rationale preserved:** if context compaction erases Phase 1.5's check, Phase 5.5 is the second net (Guard 6 in the hook is the third)
 
-- Detection: loose `--grep="review"` (Phase 1.5 uses exact commit message match)
-- Position: too late (after compound, tests, documentation — wasted work if review finds blockers)
-
-Locate the subsection by its heading text ("Code Review Completion Gate (mandatory)"), not line numbers.
+Keep the other Phase 5.5 subsections (CMO Content-Opportunity, CMO Website Framing Review, COO Expense-Tracking) intact.
 
 ### Update AGENTS.md
 
@@ -87,13 +86,13 @@ Locate the subsection by its heading text ("Code Review Completion Gate (mandato
 |------|--------|--------|
 | `plugins/soleur/skills/ship/SKILL.md` | Add Phase 1.5 review gate | Done |
 | `plugins/soleur/skills/work/SKILL.md` | Update Phase 4 direct-invocation chain | Done |
-| `.claude/hooks/pre-merge-rebase.sh` | Add review evidence early-exit check before fetch/merge/push | **TODO** |
-| `plugins/soleur/skills/ship/SKILL.md` | Remove Phase 5.5 Code Review Completion Gate subsection | **TODO** |
-| `AGENTS.md` | Update hook awareness line | **TODO** |
+| `.claude/hooks/pre-merge-rebase.sh` | Add review evidence early-exit check before fetch/merge/push | Done |
+| `plugins/soleur/skills/ship/SKILL.md` | Align Phase 5.5 with Phase 1.5 behavior (abort in headless, same detection) | Done |
+| `AGENTS.md` | Update hook awareness line | Done |
 
 ### Review Evidence Gate Implementation Detail
 
-Insert after the existing early exits in `pre-merge-rebase.sh` (skip if on main, skip if detached HEAD), before the uncommitted changes check. The hook already resolves `$WORK_DIR` from `.cwd` and `$CURRENT_BRANCH`.
+Insert after the git-repo check in `pre-merge-rebase.sh`, before the detached HEAD and main/master exits. The review evidence gate fires first because `gh pr merge` operates on a PR number, not the local checkout state — the gate should fire regardless of HEAD state.
 
 ```bash
 # Review evidence gate: block gh pr merge without review evidence.

@@ -218,6 +218,28 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     expect(result.stderr).toContain("up-to-date");
   });
 
+  test("todos-only review evidence satisfies review evidence gate", async () => {
+    spawnChecked(["git", "checkout", "-b", "test-review-todos"], { cwd: repoDir });
+    spawnChecked(
+      ["bash", "-c", "echo 'feature' > feature.txt && git add feature.txt && git commit -m 'feature'"],
+      { cwd: repoDir }
+    );
+    // Add review evidence via todos file only (no matching commit message)
+    spawnChecked(
+      ["bash", "-c", "mkdir -p todos && echo 'tags: code-review' > todos/review-finding.md && git add todos/ && git commit -m 'chore: add review todos'"],
+      { cwd: repoDir }
+    );
+    spawnChecked(["git", "push", "origin", "test-review-todos"], { cwd: repoDir });
+
+    const result = await runHook(
+      makeInput("gh pr merge 123 --squash --auto", repoDir)
+    );
+
+    expect(result.exitCode).toBe(0);
+    // Should pass the review gate and reach the up-to-date check
+    expect(result.stderr).toContain("up-to-date");
+  });
+
   test("branch already up-to-date with main proceeds without sync", async () => {
     spawnChecked(["git", "checkout", "-b", "test-uptodate"], { cwd: repoDir });
     spawnChecked(
@@ -341,7 +363,12 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     expect(new TextDecoder().decode(status.stdout).trim()).toBe("");
   });
 
-  test("detached HEAD allows merge with warning", async () => {
+  test("detached HEAD allows merge with warning (review gate fires first)", async () => {
+    // Create a feature branch with review evidence, then detach HEAD.
+    // The review gate fires before the detached HEAD exit because
+    // gh pr merge operates on a PR number, not the local checkout state.
+    spawnChecked(["git", "checkout", "-b", "test-detached-review"], { cwd: repoDir });
+    addReviewEvidence(repoDir);
     const headSha = spawnChecked(["git", "rev-parse", "HEAD"], { cwd: repoDir });
     const sha = new TextDecoder().decode(headSha.stdout).trim();
     Bun.spawnSync(["git", "checkout", sha], { cwd: repoDir, env: GIT_ENV });
@@ -353,6 +380,20 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toContain("Detached HEAD");
     expect(result.stdout).toBe("");
+  });
+
+  test("detached HEAD without review evidence is denied", async () => {
+    const headSha = spawnChecked(["git", "rev-parse", "HEAD"], { cwd: repoDir });
+    const sha = new TextDecoder().decode(headSha.stdout).trim();
+    Bun.spawnSync(["git", "checkout", sha], { cwd: repoDir, env: GIT_ENV });
+
+    const result = await runHook(
+      makeInput("gh pr merge 123 --squash --auto", repoDir)
+    );
+
+    expect(result.exitCode).toBe(0);
+    const output = JSON.parse(result.stdout);
+    expect(output.hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
   test("main branch skips sync silently", async () => {
