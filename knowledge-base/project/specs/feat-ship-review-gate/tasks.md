@@ -13,24 +13,24 @@
 - [x] 2.1 Update direct-invocation chain to: review -> resolve-todo-parallel -> compound -> ship
 - [x] 2.2 Forward `--headless` flag to review step
 
-## Phase 3: Review Evidence Gate in pre-merge-rebase.sh
+## Phase 3: Review Evidence Gate in pre-merge-rebase.sh (DONE)
 
-- [ ] 3.1 Add early-exit review evidence check to `.claude/hooks/pre-merge-rebase.sh`
-  - [ ] 3.1.1 Insert after existing early exits (skip main, skip detached HEAD), before uncommitted changes check
-  - [ ] 3.1.2 Check `grep -rl "code-review" "$WORK_DIR/todos/"` for review todo files
-  - [ ] 3.1.3 Check `git -C "$WORK_DIR" log origin/main..HEAD --oneline | grep "refactor: add code review findings"` for review commit
-  - [ ] 3.1.4 Deny with clear message if no evidence found
-- [ ] 3.2 Update `pre-merge-rebase.sh` header comment to document review evidence gate
+- [x] 3.1 Add early-exit review evidence check to `.claude/hooks/pre-merge-rebase.sh`
+  - [x] 3.1.1 Insert after existing early exits (skip main, skip detached HEAD), before uncommitted changes check
+  - [x] 3.1.2 Check `grep -rl "code-review" "$WORK_DIR/todos/"` for review todo files
+  - [x] 3.1.3 Check `git -C "$WORK_DIR" log origin/main..HEAD --oneline | grep "refactor: add code review findings"` for review commit
+  - [x] 3.1.4 Deny with clear message if no evidence found
+- [x] 3.2 Update `pre-merge-rebase.sh` header comment to document review evidence gate
 
-## Phase 4: Ship Phase 5.5 Consolidation
+## Phase 4: Ship Phase 5.5 Alignment (DONE)
 
-- [ ] 4.1 Remove "Code Review Completion Gate (mandatory)" subsection from Phase 5.5 (locate by heading text)
-- [ ] 4.2 Remove `Code review completed (Phase 5.5 gate)` from Phase 5 checklist
-- [ ] 4.3 Verify remaining Phase 5.5 gates (CMO, COO) are intact
+- [x] 4.1 Rewrite Phase 5.5 Code Review Completion Gate to match Phase 1.5 behavior (abort in headless, same detection logic)
+- [x] 4.2 Restore Phase 5 checklist item
+- [x] 4.3 Verify remaining Phase 5.5 gates (CMO, COO) are intact
 
-## Phase 5: AGENTS.md Updates
+## Phase 5: AGENTS.md Updates (DONE)
 
-- [ ] 5.1 Update PreToolUse hooks awareness line to include review evidence gate
+- [x] 5.1 Update PreToolUse hooks awareness line to include review evidence gate
 
 ## Phase 6: Validation
 
