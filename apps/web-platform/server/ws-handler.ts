@@ -4,7 +4,7 @@ import { parse } from "url";
 import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
 
-import { KeyInvalidError, type WSMessage, type Conversation } from "@/lib/types";
+import { KeyInvalidError, WS_CLOSE_CODES, type WSMessage, type Conversation } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { MAX_SELECTION_LENGTH } from "./review-gate";
@@ -371,7 +371,7 @@ export function setupWebSocket(server: HTTPServer) {
     // ---- Auth timeout: close if no auth message within 5 seconds ----
     const authTimer = setTimeout(() => {
       if (!authenticated) {
-        ws.close(4001, "Auth timeout");
+        ws.close(WS_CLOSE_CODES.AUTH_TIMEOUT, "Auth timeout");
       }
     }, AUTH_TIMEOUT_MS);
 
@@ -387,13 +387,13 @@ export function setupWebSocket(server: HTTPServer) {
           msg = JSON.parse(data.toString());
         } catch {
           clearTimeout(authTimer);
-          ws.close(4003, "Auth required");
+          ws.close(WS_CLOSE_CODES.AUTH_REQUIRED, "Auth required");
           return;
         }
 
         if (msg.type !== "auth" || !msg.token) {
           clearTimeout(authTimer);
-          ws.close(4003, "Auth required");
+          ws.close(WS_CLOSE_CODES.AUTH_REQUIRED, "Auth required");
           return;
         }
 
@@ -405,7 +405,7 @@ export function setupWebSocket(server: HTTPServer) {
 
         if (error || !user) {
           clearTimeout(authTimer);
-          ws.close(4001, "Unauthorized");
+          ws.close(WS_CLOSE_CODES.AUTH_TIMEOUT, "Unauthorized");
           return;
         }
 
@@ -434,19 +434,19 @@ export function setupWebSocket(server: HTTPServer) {
 
         if (tcError) {
           log.error({ userId: user.id, err: tcError.message }, "tc_accepted_version query failed");
-          ws.close(4005, "Internal error");
+          ws.close(WS_CLOSE_CODES.INTERNAL_ERROR, "Internal error");
           return;
         }
 
         if (userRow?.tc_accepted_version !== TC_VERSION) {
-          ws.close(4004, "T&C not accepted");
+          ws.close(WS_CLOSE_CODES.TC_NOT_ACCEPTED, "T&C not accepted");
           return;
         }
 
         // If user already has an open socket, close the old one
         const existing = sessions.get(userId);
         if (existing && existing.ws.readyState === WebSocket.OPEN) {
-          existing.ws.close(4002, "Superseded by new connection");
+          existing.ws.close(WS_CLOSE_CODES.SUPERSEDED, "Superseded by new connection");
         }
 
         // Register session — cancel any pending disconnect grace period
