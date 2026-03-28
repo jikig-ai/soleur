@@ -3,10 +3,11 @@
 #
 # Usage: github-community.sh <command> [args]
 # Commands:
-#   activity [days]      - Recent issues, PRs, and comments
-#   contributors [days]  - Active contributors in period
-#   discussions [days]   - Recent discussions (if enabled)
-#   repo-stats [days]    - Stars, forks, watchers, new stargazers
+#   activity [days]             - Recent issues, PRs, and comments
+#   contributors [days]        - Active contributors in period
+#   discussions [days]         - Recent discussions (if enabled)
+#   repo-stats [days]          - Stars, forks, watchers, new stargazers
+#   fetch-interactions [days]  - External user comments on issues/PRs
 #
 # Prerequisites: gh CLI authenticated
 # Output: JSON to stdout
@@ -277,6 +278,53 @@ cmd_repo_stats() {
     }'
 }
 
+cmd_fetch_interactions() {
+  local days="${1:-1}"
+  local repo
+  repo=$(detect_repo)
+  local since
+  since=$(date_n_days_ago "$days")
+
+  # Fetch all issue/PR comments since cutoff (paginated).
+  # Use temp file -- paginated results can exceed shell argument limits.
+  local tmpfile
+  tmpfile=$(mktemp)
+
+  if ! gh api "repos/${repo}/issues/comments?since=${since}&per_page=100" \
+    --paginate 2>/dev/null | jq -s 'add // []' > "$tmpfile"; then
+    echo "Error: Failed to fetch issue comments" >&2
+    rm -f "$tmpfile"
+    exit 1
+  fi
+
+  # Filter to external users only, exclude bots
+  jq --arg since "$since" --arg repo "$repo" \
+    '{
+      repo: $repo,
+      since: $since,
+      interactions: [
+        .[]
+        | select(
+            (.author_association == "NONE" or
+             .author_association == "CONTRIBUTOR" or
+             .author_association == "FIRST_TIMER" or
+             .author_association == "FIRST_TIME_CONTRIBUTOR") and
+            (.user.type != "Bot") and
+            (.user.login | test("\\[bot\\]$") | not)
+          )
+        | {
+            user: .user.login,
+            issue_number: (.issue_url | split("/") | last | tonumber),
+            body_snippet: (.body | gsub("\n"; " ") | .[:120]),
+            url: .html_url,
+            created_at: .created_at
+          }
+      ]
+    }' "$tmpfile"
+
+  rm -f "$tmpfile"
+}
+
 # --- Main ---
 
 main() {
@@ -287,20 +335,22 @@ main() {
     echo "Usage: github-community.sh <command> [args]" >&2
     echo "" >&2
     echo "Commands:" >&2
-    echo "  activity [days]      - Recent issues, PRs, and comments" >&2
-    echo "  contributors [days]  - Active contributors in period" >&2
-    echo "  discussions [days]   - Recent discussions (if enabled)" >&2
-    echo "  repo-stats [days]   - Stars, forks, watchers, new stargazers" >&2
+    echo "  activity [days]             - Recent issues, PRs, and comments" >&2
+    echo "  contributors [days]        - Active contributors in period" >&2
+    echo "  discussions [days]         - Recent discussions (if enabled)" >&2
+    echo "  repo-stats [days]          - Stars, forks, watchers, new stargazers" >&2
+    echo "  fetch-interactions [days]  - External user comments on issues/PRs" >&2
     exit 1
   fi
 
   validate_gh
 
   case "$command" in
-    activity)     cmd_activity "$@" ;;
-    contributors) cmd_contributors "$@" ;;
-    discussions)  cmd_discussions "$@" ;;
-    repo-stats)   cmd_repo_stats "$@" ;;
+    activity)            cmd_activity "$@" ;;
+    contributors)        cmd_contributors "$@" ;;
+    discussions)         cmd_discussions "$@" ;;
+    repo-stats)          cmd_repo_stats "$@" ;;
+    fetch-interactions)  cmd_fetch_interactions "$@" ;;
     *)
       echo "Error: Unknown command '${command}'" >&2
       echo "Run 'github-community.sh' without arguments for usage." >&2
