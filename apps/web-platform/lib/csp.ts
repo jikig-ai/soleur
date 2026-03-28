@@ -11,8 +11,9 @@ export function buildCspHeader(options: {
   nonce: string;
   isDev: boolean;
   supabaseUrl: string;
+  appHost: string;
 }): string {
-  const { nonce, isDev, supabaseUrl } = options;
+  const { nonce, isDev, supabaseUrl, appHost } = options;
   const supabaseHost = parseSupabaseHost(supabaseUrl);
 
   // In production, require an explicit Supabase URL to avoid a permissive
@@ -26,6 +27,10 @@ export function buildCspHeader(options: {
   const supabaseConnect = supabaseHost
     ? `https://${supabaseHost} wss://${supabaseHost}`
     : "https://*.supabase.co wss://*.supabase.co";
+
+  // CSP 'self' does not resolve to wss:// in all browsers (MDN compat note).
+  // Use ws:// in dev (HTTP) and wss:// in prod (HTTPS).
+  const appWsOrigin = isDev ? `ws://${appHost}` : `wss://${appHost}`;
 
   // Three-tier backward-compatible script-src (MDN + Next.js with-strict-csp):
   // CSP3: 'strict-dynamic' ignores 'unsafe-inline', 'self', https: — only nonce matters
@@ -47,7 +52,7 @@ export function buildCspHeader(options: {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' blob: data:",
     "font-src 'self'",
-    `connect-src 'self' ${supabaseConnect}`,
+    `connect-src 'self' ${appWsOrigin} ${supabaseConnect}`,
     "object-src 'none'",
     "frame-src 'none'",
     "worker-src 'self'",

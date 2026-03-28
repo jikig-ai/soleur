@@ -13,12 +13,14 @@ describe("buildCspHeader", () => {
     nonce: TEST_NONCE,
     isDev: false,
     supabaseUrl: "https://abc.supabase.co",
+    appHost: "app.soleur.ai",
   });
 
   const devCsp = buildCspHeader({
     nonce: TEST_NONCE,
     isDev: true,
     supabaseUrl: "https://abc.supabase.co",
+    appHost: "localhost:3000",
   });
 
   test("script-src contains nonce", () => {
@@ -67,6 +69,7 @@ describe("buildCspHeader", () => {
       nonce: TEST_NONCE,
       isDev: true,
       supabaseUrl: "",
+      appHost: "localhost:3000",
     });
     const connectSrc = parseCspDirective(csp, "connect-src");
     expect(connectSrc).toContain("https://*.supabase.co");
@@ -75,13 +78,13 @@ describe("buildCspHeader", () => {
 
   test("throws when Supabase URL is missing in production", () => {
     expect(() =>
-      buildCspHeader({ nonce: TEST_NONCE, isDev: false, supabaseUrl: "" }),
+      buildCspHeader({ nonce: TEST_NONCE, isDev: false, supabaseUrl: "", appHost: "app.soleur.ai" }),
     ).toThrow("NEXT_PUBLIC_SUPABASE_URL must be set in production builds");
   });
 
   test("throws when Supabase URL is malformed in production", () => {
     expect(() =>
-      buildCspHeader({ nonce: TEST_NONCE, isDev: false, supabaseUrl: "not-a-url" }),
+      buildCspHeader({ nonce: TEST_NONCE, isDev: false, supabaseUrl: "not-a-url", appHost: "app.soleur.ai" }),
     ).toThrow("NEXT_PUBLIC_SUPABASE_URL must be set in production builds");
   });
 
@@ -90,8 +93,25 @@ describe("buildCspHeader", () => {
       nonce: TEST_NONCE,
       isDev: true,
       supabaseUrl: "not-a-url",
+      appHost: "localhost:3000",
     });
     expect(csp).toContain("*.supabase.co");
+  });
+
+  test("connect-src includes explicit wss:// for app WebSocket origin", () => {
+    const connectSrc = parseCspDirective(prodCsp, "connect-src");
+    expect(connectSrc).toContain("wss://app.soleur.ai");
+  });
+
+  test("connect-src includes ws:// for dev WebSocket origin", () => {
+    const connectSrc = parseCspDirective(devCsp, "connect-src");
+    expect(connectSrc).toContain("ws://localhost:3000");
+  });
+
+  test("connect-src does not use bare wss: scheme", () => {
+    const connectSrc = parseCspDirective(prodCsp, "connect-src");
+    // Bare 'wss:' (without host) allows connections to ANY wss:// host
+    expect(connectSrc).not.toMatch(/\bwss:\s/);
   });
 
   test("contains all required directives", () => {
