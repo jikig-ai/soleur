@@ -17,14 +17,37 @@ const dev = process.env.NODE_ENV !== "production";
 const app = next({ dev });
 const handle = app.getRequestHandler();
 
+async function checkSupabase(): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/`,
+      {
+        headers: { apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY! },
+        signal: AbortSignal.timeout(2000),
+      },
+    );
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 app.prepare().then(() => {
-  const server = createServer((req, res) => {
+  const server = createServer(async (req, res) => {
     const parsedUrl = parse(req.url!, true);
 
     // Health check for deployment
     if (parsedUrl.pathname === "/health") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok" }));
+      const supabaseOk = await checkSupabase();
+      const healthy = supabaseOk;
+      res.writeHead(healthy ? 200 : 503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        status: healthy ? "ok" : "degraded",
+        version: process.env.BUILD_VERSION || "dev",
+        supabase: supabaseOk ? "connected" : "error",
+        uptime: Math.floor(process.uptime()),
+        memory: Math.floor(process.memoryUsage().rss / 1024 / 1024),
+      }));
       return;
     }
 

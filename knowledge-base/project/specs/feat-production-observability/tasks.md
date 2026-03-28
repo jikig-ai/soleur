@@ -41,13 +41,13 @@
 
 ## Phase 3: Enhanced Health Endpoint + Deploy Verification
 
-- [ ] 3.1 Add `checkSupabase()` — lightweight REST API connectivity check (not business table query)
-- [ ] 3.2 Enrich `/health` response: version, supabase status, uptime, memory
-- [ ] 3.3 Return 503 when degraded (Supabase unreachable)
-- [ ] 3.4 Add `ARG BUILD_VERSION` and `ENV BUILD_VERSION` to Dockerfile
-- [ ] 3.5 Pass `BUILD_VERSION` to Docker build in reusable-release.yml
-- [ ] 3.6 Replace existing CI health verification with version-aware check (12 attempts x 10s = 120s)
-- [ ] 3.7 Verify: health endpoint returns enriched response, Docker healthcheck still works
+- [x] 3.1 Add `checkSupabase()` — lightweight REST API connectivity check (not business table query)
+- [x] 3.2 Enrich `/health` response: version, supabase status, uptime, memory
+- [x] 3.3 Return 503 when degraded (Supabase unreachable)
+- [x] 3.4 Add `ARG BUILD_VERSION` and `ENV BUILD_VERSION` to Dockerfile
+- [x] 3.5 Pass `BUILD_VERSION` to Docker build in reusable-release.yml
+- [x] 3.6 Replace existing CI health verification with version-aware check (12 attempts x 10s = 120s)
+- [x] 3.7 Verify: health endpoint returns enriched response, Docker healthcheck still works
 
 ## Phase 4: External Services Setup
 

@@ -38,6 +38,10 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 
+# Version injected at build time for /health endpoint verification
+ARG BUILD_VERSION=dev
+ENV BUILD_VERSION=$BUILD_VERSION
+
 # Production dependencies only
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
