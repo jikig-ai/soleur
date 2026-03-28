@@ -146,12 +146,12 @@ Add the following block at the end of the existing `install_deps()` function, af
 
 ## Acceptance Criteria
 
-- [ ] `install_deps()` installs dependencies in `apps/*/` subdirectories that have both `package.json` and a lockfile
-- [ ] Package manager is detected per directory: `bun.lockb` -> bun, `package-lock.json` -> npm
-- [ ] Directories without a lockfile are skipped with a warning
-- [ ] Directories with existing `node_modules/` are skipped
-- [ ] Failures warn but never block worktree creation
-- [ ] Both `create_worktree()` and `create_for_feature()` benefit (they already call `install_deps`)
+- [x] `install_deps()` installs dependencies in `apps/*/` subdirectories that have both `package.json` and a lockfile
+- [x] Package manager is detected per directory: `bun.lockb` -> bun, `package-lock.json` -> npm
+- [x] Directories without a lockfile are skipped with a warning
+- [x] Directories with existing `node_modules/` are skipped
+- [x] Failures warn but never block worktree creation
+- [x] Both `create_worktree()` and `create_for_feature()` benefit (they already call `install_deps`)
 
 ## Test Scenarios
 
