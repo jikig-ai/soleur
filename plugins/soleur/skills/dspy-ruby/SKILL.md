@@ -1,6 +1,6 @@
 ---
 name: dspy-ruby
-description: "This skill should be used when working with DSPy.rb, a Ruby framework for type-safe, composable LLM applications. It applies when implementing LLM signatures and modules, configuring providers (OpenAI, Anthropic, Gemini, Ollama), building agent systems with tools, optimizing prompts, or testing LLM-powered Ruby code."
+description: "This skill should be used when working with DSPy.rb, a Ruby framework for type-safe, composable LLM applications."
 ---
 
 # DSPy.rb Expert
@@ -10,6 +10,7 @@ description: "This skill should be used when working with DSPy.rb, a Ruby framew
 DSPy.rb is a Ruby framework that enables developers to **program LLMs, not prompt them**. Instead of manually crafting prompts, define application requirements through type-safe, composable modules that can be tested, optimized, and version-controlled like regular code.
 
 This skill provides comprehensive guidance on:
+
 - Creating type-safe signatures for LLM operations
 - Building composable modules and workflows
 - Configuring multiple LLM providers
@@ -26,6 +27,7 @@ Create input/output contracts for LLM operations with runtime type checking.
 **When to use**: Defining any LLM task, from simple classification to complex analysis.
 
 **Quick reference**:
+
 ```ruby
 class EmailClassificationSignature < DSPy::Signature
   description "Classify customer support emails"
@@ -43,12 +45,14 @@ end
 ```
 
 **Templates**: See [signature-template.rb](./assets/signature-template.rb) for comprehensive examples including:
+
 - Basic signatures with multiple field types
 - Vision signatures for multimodal tasks
 - Sentiment analysis signatures
 - Code generation signatures
 
 **Best practices**:
+
 - Always provide clear, specific descriptions
 - Use enums for constrained outputs
 - Include field descriptions with `desc:` parameter
@@ -63,6 +67,7 @@ Build reusable, chainable modules that encapsulate LLM operations.
 **When to use**: Implementing any LLM-powered feature, especially complex multi-step workflows.
 
 **Quick reference**:
+
 ```ruby
 class EmailProcessor < DSPy::Module
   def initialize
@@ -80,6 +85,7 @@ end
 ```
 
 **Templates**: See [module-template.rb](./assets/module-template.rb) for comprehensive examples including:
+
 - Basic modules with single predictors
 - Multi-step pipelines that chain modules
 - Modules with conditional logic
@@ -88,6 +94,7 @@ end
 - Caching implementations
 
 **Module composition**: Chain modules together to create complex workflows:
+
 ```ruby
 class Pipeline < DSPy::Module
   def initialize
@@ -112,12 +119,14 @@ end
 Choose the right predictor for your task:
 
 **Predict**: Basic LLM inference with type-safe inputs/outputs
+
 ```ruby
 predictor = DSPy::Predict.new(TaskSignature)
 result = predictor.forward(input: "data")
 ```
 
 **ChainOfThought**: Adds automatic reasoning for improved accuracy
+
 ```ruby
 predictor = DSPy::ChainOfThought.new(TaskSignature)
 result = predictor.forward(input: "data")
@@ -125,6 +134,7 @@ result = predictor.forward(input: "data")
 ```
 
 **ReAct**: Tool-using agents with iterative reasoning
+
 ```ruby
 predictor = DSPy::ReAct.new(
   TaskSignature,
@@ -134,12 +144,14 @@ predictor = DSPy::ReAct.new(
 ```
 
 **CodeAct**: Dynamic code generation (requires `dspy-code_act` gem)
+
 ```ruby
 predictor = DSPy::CodeAct.new(TaskSignature)
 result = predictor.forward(task: "Calculate factorial of 5")
 ```
 
 **When to use each**:
+
 - **Predict**: Simple tasks, classification, extraction
 - **ChainOfThought**: Complex reasoning, analysis, multi-step thinking
 - **ReAct**: Tasks requiring external tools (search, calculation, API calls)
@@ -152,6 +164,7 @@ result = predictor.forward(task: "Calculate factorial of 5")
 Support for OpenAI, Anthropic Claude, Google Gemini, Ollama, and OpenRouter.
 
 **Quick configuration examples**:
+
 ```ruby
 # OpenAI
 DSPy.configure do |c|
@@ -178,6 +191,7 @@ end
 ```
 
 **Templates**: See [config-template.rb](./assets/config-template.rb) for comprehensive examples including:
+
 - Environment-based configuration
 - Multi-model setups for different tasks
 - Configuration with observability (OpenTelemetry, Langfuse)
@@ -195,6 +209,7 @@ end
 | Tool Calling | ✅ | ✅ | ✅ | Varies |
 
 **Cost optimization strategy**:
+
 - Development: Ollama (free) or gpt-4o-mini (cheap)
 - Testing: gpt-4o-mini with temperature=0.0
 - Production simple tasks: gpt-4o-mini, claude-haiku-4-5, gemini-1.5-flash
@@ -207,6 +222,7 @@ end
 Process images alongside text using the unified `DSPy::Image` interface.
 
 **Quick reference**:
+
 ```ruby
 class VisionSignature < DSPy::Signature
   description "Analyze image and answer questions"
@@ -229,6 +245,7 @@ result = predictor.forward(
 ```
 
 **Image loading methods**:
+
 ```ruby
 # From file
 DSPy::Image.from_file("path/to/image.jpg")
@@ -241,6 +258,7 @@ DSPy::Image.from_base64(base64_data, mime_type: "image/jpeg")
 ```
 
 **Provider support**:
+
 - OpenAI: Full support including URLs
 - Anthropic, Gemini: Base64 or file loading only
 - Ollama: Limited multimodal depending on model
@@ -252,6 +270,7 @@ DSPy::Image.from_base64(base64_data, mime_type: "image/jpeg")
 Write standard RSpec tests for LLM logic.
 
 **Quick reference**:
+
 ```ruby
 RSpec.describe EmailClassifier do
   before do
@@ -275,6 +294,7 @@ end
 ```
 
 **Testing patterns**:
+
 - Mock LLM responses for unit tests
 - Use VCR for deterministic API testing
 - Test type safety and validation
@@ -288,6 +308,7 @@ end
 Automatically improve prompts and modules using optimization techniques.
 
 **MIPROv2 optimization**:
+
 ```ruby
 require 'dspy/mipro'
 
@@ -318,6 +339,7 @@ optimized_module = optimizer.compile(
 ```
 
 **A/B testing different approaches**:
+
 ```ruby
 # Test ChainOfThought vs ReAct
 approach_a_score = evaluate_approach(ChainOfThoughtModule, test_set)
@@ -331,6 +353,7 @@ approach_b_score = evaluate_approach(ReActModule, test_set)
 Track performance, token usage, and behavior in production.
 
 **OpenTelemetry integration**:
+
 ```ruby
 require 'opentelemetry/sdk'
 
@@ -343,6 +366,7 @@ end
 ```
 
 **Langfuse tracing**:
+
 ```ruby
 DSPy.configure do |c|
   c.lm = DSPy::LM.new('openai/gpt-4o-mini',
@@ -356,6 +380,7 @@ end
 ```
 
 **Custom monitoring**:
+
 - Token tracking
 - Performance monitoring
 - Error rate tracking
@@ -368,11 +393,13 @@ end
 ### For New Projects
 
 1. **Install DSPy.rb and provider gems**:
+
 ```bash
 gem install dspy dspy-openai  # or dspy-anthropic, dspy-gemini
 ```
 
 2. **Configure LLM provider** (see [config-template.rb](./assets/config-template.rb)):
+
 ```ruby
 require 'dspy'
 
@@ -383,6 +410,7 @@ end
 ```
 
 3. **Create a signature** (see [signature-template.rb](./assets/signature-template.rb)):
+
 ```ruby
 class MySignature < DSPy::Signature
   description "Clear description of task"
@@ -398,6 +426,7 @@ end
 ```
 
 4. **Create a module** (see [module-template.rb](./assets/module-template.rb)):
+
 ```ruby
 class MyModule < DSPy::Module
   def initialize
@@ -412,6 +441,7 @@ end
 ```
 
 5. **Use the module**:
+
 ```ruby
 module_instance = MyModule.new
 result = module_instance.forward(input_field: "test")
@@ -419,6 +449,7 @@ puts result[:output_field]
 ```
 
 6. **Add tests** (see [optimization.md](./references/optimization.md)):
+
 ```ruby
 RSpec.describe MyModule do
   it 'produces expected output' do
@@ -431,12 +462,14 @@ end
 ### For Rails Applications
 
 1. **Add to Gemfile**:
+
 ```ruby
 gem 'dspy'
 gem 'dspy-openai'  # or other provider
 ```
 
 2. **Create initializer** at `config/initializers/dspy.rb` (see [config-template.rb](./assets/config-template.rb) for full example):
+
 ```ruby
 require 'dspy'
 
@@ -447,6 +480,7 @@ end
 ```
 
 3. **Create modules in** `app/llm/` directory:
+
 ```ruby
 # app/llm/email_classifier.rb
 class EmailClassifier < DSPy::Module
@@ -455,6 +489,7 @@ end
 ```
 
 4. **Use in controllers/services**:
+
 ```ruby
 class EmailsController < ApplicationController
   def classify
@@ -583,6 +618,7 @@ This skill includes comprehensive reference materials and templates:
 ## When to Use This Skill
 
 Trigger this skill when:
+
 - Implementing LLM-powered features in Ruby applications
 - Creating type-safe interfaces for AI operations
 - Building agent systems with tool usage
