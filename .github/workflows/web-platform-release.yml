@@ -60,7 +60,7 @@ jobs:
     if: >-
       always() &&
       needs.release.outputs.version != '' &&
-      needs.migrate.result != 'failure' &&
+      (needs.migrate.result == 'success' || needs.migrate.result == 'skipped') &&
       (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
     runs-on: ubuntu-latest
     concurrency:
