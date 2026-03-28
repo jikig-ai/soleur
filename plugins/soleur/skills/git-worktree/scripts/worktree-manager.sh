@@ -165,24 +165,24 @@ install_deps() {
     local app_name
     app_name=$(basename "$app_dir")
 
-    local install_cmd=""
-    if [[ -f "$app_dir/bun.lockb" ]]; then
+    local -a install_cmd=()
+    if [[ -f "$app_dir/bun.lockb" ]] || [[ -f "$app_dir/bun.lock" ]]; then
       if command -v bun &>/dev/null; then
-        install_cmd="bun install --frozen-lockfile --cwd $app_dir"
+        install_cmd=(bun install --frozen-lockfile --cwd "$app_dir")
       else
-        echo -e "  ${YELLOW}Warning: $app_name has bun.lockb but bun not found -- skip${NC}" >&2
+        echo -e "  ${YELLOW}Warning: $app_name has bun lockfile but bun not found -- skip${NC}" >&2
         continue
       fi
     elif [[ -f "$app_dir/package-lock.json" ]]; then
       if command -v npm &>/dev/null; then
-        install_cmd="npm ci --prefix $app_dir"
+        install_cmd=(npm ci --prefix "$app_dir")
       else
         echo -e "  ${YELLOW}Warning: $app_name has package-lock.json but npm not found -- skip${NC}" >&2
         continue
       fi
     elif [[ -f "$app_dir/yarn.lock" ]]; then
       if command -v yarn &>/dev/null; then
-        install_cmd="yarn install --frozen-lockfile --cwd $app_dir"
+        install_cmd=(yarn install --frozen-lockfile --cwd "$app_dir")
       else
         echo -e "  ${YELLOW}Warning: $app_name has yarn.lock but yarn not found -- skip${NC}" >&2
         continue
@@ -194,7 +194,7 @@ install_deps() {
 
     echo -e "${BLUE}Installing dependencies for $app_name...${NC}"
     local app_install_output
-    if app_install_output=$($install_cmd 2>&1); then
+    if app_install_output=$("${install_cmd[@]}" 2>&1); then
       echo -e "  ${GREEN}$app_name dependencies installed${NC}"
     else
       echo -e "  ${YELLOW}Warning: $app_name install failed -- run manually${NC}" >&2
