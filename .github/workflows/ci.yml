@@ -32,6 +32,10 @@ jobs:
         run: bun install
         working-directory: apps/web-platform
 
+      - name: Type-check web-platform
+        run: npx tsc --noEmit
+        working-directory: apps/web-platform
+
       - name: Install telegram-bridge dependencies
         run: bun install
         working-directory: apps/telegram-bridge
