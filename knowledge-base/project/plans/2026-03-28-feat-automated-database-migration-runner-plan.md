@@ -219,15 +219,15 @@ The first run of the migration runner will find no `_schema_migrations` table. I
 
 ## Acceptance Criteria
 
-- [ ] `_schema_migrations` table is created automatically on first run
-- [ ] Unapplied migrations are applied in filename-sorted order before deploy
-- [ ] Already-applied migrations are skipped (idempotent)
-- [ ] Migration failure blocks the deploy job (exit code propagation)
-- [ ] `DATABASE_URL` is injected from Doppler, never hardcoded
-- [ ] Existing production schema (001-010) is bootstrapped without re-execution
-- [ ] Script follows project shell conventions (`set -euo pipefail`, `#!/usr/bin/env bash`)
-- [ ] `deploy` job depends on `migrate` job succeeding
-- [ ] Duplicate `007_` prefix files both execute in correct order
+- [x] `_schema_migrations` table is created automatically on first run
+- [x] Unapplied migrations are applied in filename-sorted order before deploy
+- [x] Already-applied migrations are skipped (idempotent)
+- [x] Migration failure blocks the deploy job (exit code propagation)
+- [x] `DATABASE_URL` is injected from Doppler, never hardcoded
+- [x] Existing production schema (001-010) is bootstrapped without re-execution
+- [x] Script follows project shell conventions (`set -euo pipefail`, `#!/usr/bin/env bash`)
+- [x] `deploy` job depends on `migrate` job succeeding
+- [x] Duplicate `007_` prefix files both execute in correct order
 
 ## Test Scenarios
 

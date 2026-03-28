@@ -38,9 +38,30 @@ jobs:
       force_run: ${{ github.event_name == 'workflow_dispatch' }}
     secrets: inherit
 
-  deploy:
+  migrate:
     needs: release
     if: needs.release.outputs.version != '' && (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
+    runs-on: ubuntu-latest
+    concurrency:
+      group: migrate-web-platform
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+      - name: Run migrations
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          doppler run -c prd -- bash apps/web-platform/scripts/run-migrations.sh
+
+  deploy:
+    needs: [release, migrate]
+    if: >-
+      always() &&
+      needs.release.outputs.version != '' &&
+      needs.migrate.result != 'failure' &&
+      (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
     runs-on: ubuntu-latest
     concurrency:
       group: deploy-web-platform
