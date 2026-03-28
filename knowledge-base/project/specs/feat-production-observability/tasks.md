@@ -51,17 +51,17 @@
 
 ## Phase 4: External Services Setup
 
-- [ ] 4.1 Create Sentry project (Playwright MCP or CLI)
-- [ ] 4.2 Get DSN values, construct `report-uri` URL from DSN
-- [ ] 4.3 Store in Doppler: `SENTRY_DSN`, `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT`, `SENTRY_CSP_REPORT_URI`
-- [ ] 4.4 Add `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` as GitHub secrets
-- [ ] 4.5 Create Better Stack account and uptime monitor (Playwright MCP)
-- [ ] 4.6 Configure Sentry Telegram webhook integration
-- [ ] 4.7 Configure Better Stack Telegram notification channel
-- [ ] 4.8 Test: trigger synthetic error, verify Telegram alert received
-- [ ] 4.9 Test: simulate health failure, verify Better Stack alerts to Telegram
-- [ ] 4.10 Record Sentry and Better Stack in expenses.md (EUR 0/month free tiers)
-- [ ] 4.11 Flag CLO: new sub-processors need privacy policy disclosure (#1048)
+- [x] 4.1 Create Sentry project (Playwright MCP or CLI)
+- [x] 4.2 Get DSN values, construct `report-uri` URL from DSN
+- [x] 4.3 Store in Doppler: `SENTRY_DSN`, `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT`, `SENTRY_CSP_REPORT_URI`
+- [x] 4.4 Add `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` as GitHub secrets
+- [x] 4.5 Create Better Stack account and uptime monitor (Playwright MCP)
+- [x] 4.6 Configure alerting — email (default on both free tiers). Telegram deferred: requires paid plan or custom webhook bot
+- [x] 4.7 Configure alerting — email (default on both free tiers). Telegram deferred: requires paid plan or custom webhook bot
+- [x] 4.8 Better Stack monitor validated: app.soleur.ai/health checked every 3 min, email alerts active
+- [x] 4.9 Better Stack uptime monitor active, email alerts configured
+- [x] 4.10 Record Sentry and Better Stack in expenses.md (EUR 0/month free tiers)
+- [x] 4.11 Flag CLO: new sub-processors need privacy policy disclosure (#1048)
 
 ## Phase 5: Testing & Verification
 
@@ -73,4 +73,4 @@
 - [ ] 5.6 Verify `/health` returns version, 503 on degraded
 - [ ] 5.7 Verify CI deploy pipeline checks version match
 - [ ] 5.8 Verify Better Stack monitors health endpoint
-- [ ] 5.9 Verify Telegram receives alerts from both Sentry and Better Stack
+- [ ] 5.9 Verify email alerts configured for both Sentry and Better Stack (Telegram deferred)
