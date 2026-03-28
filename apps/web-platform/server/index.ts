@@ -4,6 +4,9 @@ import { parse } from "url";
 import { setupWebSocket } from "./ws-handler";
 import { cleanupOrphanedConversations, startInactivityTimer } from "./agent-runner";
 import { handleConversationMessages } from "./api-messages";
+import { createChildLogger } from "./logger";
+
+const log = createChildLogger("startup");
 
 const port = parseInt(process.env.PORT || "3000", 10);
 const dev = process.env.NODE_ENV !== "production";
@@ -37,15 +40,13 @@ app.prepare().then(() => {
 
   // Clean up conversations left in active/waiting_for_user from before restart
   cleanupOrphanedConversations().catch((err) => {
-    console.error("[startup] Failed to clean up orphaned conversations:", err);
+    log.error({ err }, "Failed to clean up orphaned conversations");
   });
 
   // Start periodic inactivity check (24h timeout, hourly checks)
   startInactivityTimer();
 
   server.listen(port, () => {
-    console.log(`> Ready on http://localhost:${port}`);
-    console.log(`> WebSocket server attached`);
-    console.log(`> Environment: ${dev ? "development" : "production"}`);
+    log.info({ port, env: dev ? "development" : "production" }, "Server ready");
   });
 });

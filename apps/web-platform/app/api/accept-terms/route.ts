@@ -3,6 +3,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
+import logger from "@/server/logger";
 
 async function getRedirectDestination(
   supabase: SupabaseClient,
@@ -56,7 +57,7 @@ export async function POST(request: Request) {
     .select("id");
 
   if (error) {
-    console.error("[accept-terms] Failed to record acceptance:", error);
+    logger.error({ err: error }, "Failed to record acceptance");
     return NextResponse.json(
       { error: "Failed to record acceptance" },
       { status: 500 },
@@ -64,7 +65,7 @@ export async function POST(request: Request) {
   }
 
   if (!data || data.length === 0) {
-    console.error("[accept-terms] User row not found for:", user.id);
+    logger.error({ userId: user.id }, "User row not found");
     return NextResponse.json(
       { error: "User profile not found. Please try again shortly." },
       { status: 404 },

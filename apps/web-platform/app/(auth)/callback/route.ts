@@ -4,6 +4,7 @@ import { resolveOrigin } from "@/lib/auth/resolve-origin";
 import { provisionWorkspace } from "@/server/workspace";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { NextResponse, type NextRequest } from "next/server";
+import logger from "@/server/logger";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -50,7 +51,7 @@ export async function GET(request: NextRequest) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
 
     if (error) {
-      console.error("[callback] exchangeCodeForSession failed:", error.message, error.status);
+      logger.error({ err: error, status: error.status }, "exchangeCodeForSession failed");
     }
 
     if (!error) {
@@ -82,7 +83,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Auth failed — redirect to login with error
-  console.error("[callback] Auth failed — no code or exchange error. code:", code ? "present" : "missing", "origin:", origin);
+  logger.error({ codePresent: !!code, origin }, "Auth failed — no code or exchange error");
   return NextResponse.redirect(`${origin}/login?error=auth_failed`);
 }
 
@@ -137,7 +138,7 @@ async function ensureWorkspaceProvisioned(
         { onConflict: "id", ignoreDuplicates: true },
       );
     if (insertError) {
-      console.error(`[callback] Fallback user upsert failed for ${userId}:`, insertError);
+      logger.error({ err: insertError, userId }, "Fallback user upsert failed");
     }
     return null;
   }
@@ -150,7 +151,7 @@ async function ensureWorkspaceProvisioned(
         .update({ workspace_path: workspacePath, workspace_status: "ready" })
         .eq("id", userId);
     } catch (err) {
-      console.error(`[callback] Workspace provisioning failed for ${userId}:`, err);
+      logger.error({ err, userId }, "Workspace provisioning failed");
     }
   }
 

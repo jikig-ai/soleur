@@ -15,6 +15,9 @@ import { UNVERIFIED_PARAM_TOOLS, extractToolPath, isFileTool, isSafeTool } from 
 import { buildAgentEnv } from "./agent-env";
 import { createSandboxHook } from "./sandbox-hook";
 import { abortableReviewGate, validateSelection, type AgentSession } from "./review-gate";
+import { createChildLogger } from "./logger";
+
+const log = createChildLogger("agent");
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -163,7 +166,7 @@ async function loadConversationHistory(
     .order("created_at", { ascending: true });
 
   if (error) {
-    console.error(`[agent] Failed to load conversation history: ${error.message}`);
+    log.error({ err: error }, "Failed to load conversation history");
     return [];
   }
 
@@ -198,7 +201,7 @@ export async function cleanupOrphanedConversations(): Promise<void> {
     .lt("last_active", fiveMinutesAgo);
 
   if (error) {
-    console.error(`[agent] Failed to clean up orphaned conversations: ${error.message}`);
+    log.error({ err: error }, "Failed to clean up orphaned conversations");
   }
 }
 
@@ -219,7 +222,7 @@ export function startInactivityTimer(): void {
       .select("id, user_id");
 
     if (error) {
-      console.error(`[agent] Inactivity cleanup error: ${error.message}`);
+      log.error({ err: error }, "Inactivity cleanup error");
       return;
     }
 
@@ -228,7 +231,7 @@ export function startInactivityTimer(): void {
       for (const conv of data) {
         abortSession(conv.user_id, conv.id);
       }
-      console.log(`[agent] Cleaned up ${data.length} inactive conversation(s)`);
+      log.info({ count: data.length }, "Cleaned up inactive conversations");
     }
   }, INACTIVITY_CHECK_INTERVAL_MS);
   timer.unref();
@@ -351,9 +354,9 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             hooks: [async (input) => {
               const subInput = input as Record<string, unknown>;
               const sanitize = (v: unknown) => String(v ?? '').replace(/[\r\n]/g, ' ').slice(0, 200);
-              console.log(
-                `[sec] Subagent started: agent_id=${sanitize(subInput.agent_id)}, ` +
-                `type=${sanitize(subInput.agent_type)}`,
+              log.info(
+                { sec: true, agentId: sanitize(subInput.agent_id), agentType: sanitize(subInput.agent_type) },
+                "Subagent started",
               );
               return {};
             }],
@@ -381,10 +384,9 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               };
             }
             if (!filePath && (UNVERIFIED_PARAM_TOOLS as readonly string[]).includes(toolName) && Object.keys(toolInput).length > 0) {
-              console.warn(
-                `[sec] ${toolName} invoked without recognized path parameter. ` +
-                `Keys: ${Object.keys(toolInput).join(", ")}. ` +
-                `SDK version may have changed parameter names. See #891.`,
+              log.warn(
+                { sec: true, toolName, inputKeys: Object.keys(toolInput) },
+                "Tool invoked without recognized path parameter; SDK may have changed parameter names (see #891)",
               );
             }
             return { behavior: "allow" as const };
@@ -433,7 +435,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           // auto-allow for auditability. See #910.
           if (toolName === "Agent") {
             if (subagentCtx) {
-              console.log(`[sec] Agent tool invoked${subagentCtx}`);
+              log.info({ sec: true, agentId: options.agentID }, "Agent tool invoked by subagent");
             }
             return { behavior: "allow" as const };
           }
@@ -474,7 +476,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           .update({ session_id: message.session_id })
           .eq("id", conversationId);
         if (updateErr) {
-          console.error(`[agent] Failed to store session_id: ${updateErr.message}`);
+          log.error({ err: updateErr, conversationId }, "Failed to store session_id");
         }
       }
 
@@ -539,15 +541,15 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         // stay stuck in "waiting_for_user" or "active" status forever.
         await updateConversationStatus(conversationId, "failed").catch(
           (statusErr) => {
-            console.error(
-              `[agent] Failed to mark aborted conversation ${conversationId} as failed:`,
-              statusErr,
+            log.error(
+              { err: statusErr, conversationId },
+              "Failed to mark aborted conversation as failed",
             );
           },
         );
       }
     } else {
-      console.error(`[agent] Session error for ${userId}/${conversationId}:`, err);
+      log.error({ err, userId, conversationId }, "Session error");
       const message = sanitizeErrorForClient(err);
       sendToClient(userId, {
         type: "error",
@@ -556,9 +558,9 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
       });
       await updateConversationStatus(conversationId, "failed").catch(
         (statusErr) => {
-          console.error(
-            `[agent] Failed to mark conversation ${conversationId} as failed:`,
-            statusErr,
+          log.error(
+            { err: statusErr, conversationId },
+            "Failed to mark conversation as failed",
           );
         },
       );
@@ -603,9 +605,9 @@ async function dispatchToLeaders(
   // Log failures but don't fail the whole dispatch
   for (let i = 0; i < results.length; i++) {
     if (results[i].status === "rejected") {
-      console.error(
-        `[agent] Leader ${leaders[i]} dispatch failed:`,
-        (results[i] as PromiseRejectedResult).reason,
+      log.error(
+        { err: (results[i] as PromiseRejectedResult).reason, leaderId: leaders[i] },
+        "Leader dispatch failed",
       );
     }
   }
@@ -640,9 +642,9 @@ export async function sendUserMessage(
   const resumeSessionId = activeSession?.sessionId ?? conv.session_id ?? undefined;
 
   const handleSessionError = (err: unknown) => {
-    console.error(
-      `[agent] sendUserMessage session error for ${userId}/${conversationId}:`,
-      err,
+    log.error(
+      { err, userId, conversationId },
+      "sendUserMessage session error",
     );
     const message = sanitizeErrorForClient(err);
     sendToClient(userId, {
@@ -651,9 +653,9 @@ export async function sendUserMessage(
       errorCode: err instanceof KeyInvalidError ? "key_invalid" : undefined,
     });
     updateConversationStatus(conversationId, "failed").catch((statusErr) => {
-      console.error(
-        `[agent] Failed to mark conversation ${conversationId} as failed:`,
-        statusErr,
+      log.error(
+        { err: statusErr, conversationId },
+        "Failed to mark conversation as failed",
       );
     });
   };
@@ -664,7 +666,7 @@ export async function sendUserMessage(
     try {
       const apiKey = await getUserApiKey(userId);
       const route = await routeMessage(content, apiKey, conversationContext);
-      console.log(`[agent] Routed to leaders: ${route.leaders.join(", ")} (${route.source})`);
+      log.info({ leaders: route.leaders, source: route.source }, "Routed message to leaders");
       dispatchToLeaders(userId, conversationId, route.leaders, content, conversationContext)
         .catch(handleSessionError);
     } catch (err) {
@@ -683,14 +685,14 @@ export async function sendUserMessage(
       resumeSessionId,
       content,
     ).catch(async (err) => {
-      console.warn(`[agent] SDK resume failed, falling back to message replay: ${err}`);
+      log.warn({ err }, "SDK resume failed, falling back to message replay");
       // Clear stale session_id
       const { error: clearErr } = await supabase
         .from("conversations")
         .update({ session_id: null })
         .eq("id", conversationId);
       if (clearErr) {
-        console.error(`[agent] Failed to clear session_id: ${clearErr.message}`);
+        log.error({ err: clearErr, conversationId }, "Failed to clear session_id");
       }
 
       // Load history and build replay prompt

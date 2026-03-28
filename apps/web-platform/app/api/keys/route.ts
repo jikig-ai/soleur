@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { encryptKey, validateAnthropicKey } from "@/server/byok";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
+import logger from "@/server/logger";
 
 export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
@@ -55,7 +56,7 @@ export async function POST(request: Request) {
     );
 
   if (dbError) {
-    console.error("Failed to store API key:", dbError);
+    logger.error({ err: dbError }, "Failed to store API key");
     return NextResponse.json(
       { error: "Failed to store key" },
       { status: 500 },

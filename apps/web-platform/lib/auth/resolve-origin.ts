@@ -1,4 +1,5 @@
 import { getAllowedOrigins } from "./validate-origin";
+import logger from "@/server/logger";
 
 export function resolveOrigin(
   forwardedHost: string | null,
@@ -10,7 +11,7 @@ export function resolveOrigin(
   const resolvedHost = forwardedHost ?? host ?? "app.soleur.ai";
   const computed = `${proto}://${resolvedHost}`.toLowerCase();
   if (!allowed.has(computed)) {
-    console.warn(`[callback] Rejected origin: ${computed.slice(0, 100).replace(/[\x00-\x1f]/g, "")}`);
+    logger.warn({ rejectedOrigin: computed.slice(0, 100).replace(/[\x00-\x1f]/g, "") }, "Rejected origin");
     return "https://app.soleur.ai";
   }
   return computed;

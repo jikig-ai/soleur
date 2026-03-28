@@ -1,6 +1,9 @@
 import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { execFileSync } from "child_process";
+import { createChildLogger } from "./logger";
+
+const log = createChildLogger("workspace");
 
 function getWorkspacesRoot(): string {
   return process.env.WORKSPACES_ROOT || "/workspaces";
@@ -65,10 +68,7 @@ export async function provisionWorkspace(userId: string): Promise<string> {
     try {
       symlinkSync(getPluginPath(), symlinkTarget);
     } catch (err) {
-      console.warn(
-        `[workspace] Failed to symlink plugin for ${userId}:`,
-        err,
-      );
+      log.warn({ err, userId }, "Failed to symlink plugin");
     }
   }
 
@@ -81,7 +81,7 @@ export async function provisionWorkspace(userId: string): Promise<string> {
       stdio: "pipe",
     });
   } catch (err) {
-    console.warn(`[workspace] Git init failed for ${userId}:`, err);
+    log.warn({ err, userId }, "Git init failed");
   }
 
   return workspacePath;
