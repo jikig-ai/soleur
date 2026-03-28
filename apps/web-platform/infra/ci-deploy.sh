@@ -92,37 +92,87 @@ fi
 
 logger -t "$LOG_TAG" "ACCEPTED: deploy $COMPONENT $IMAGE:$TAG"
 
+# Serialize concurrent deploys (webhook may invoke ci-deploy.sh simultaneously).
+# CI_DEPLOY_LOCK is overridable for testing; production uses /var/lock/ci-deploy.lock.
+LOCK_FILE="${CI_DEPLOY_LOCK:-/var/lock/ci-deploy.lock}"
+exec 200>"$LOCK_FILE"
+flock -n 200 || { logger -t "$LOG_TAG" "REJECTED: another deploy in progress"; echo "Error: another deploy in progress" >&2; exit 1; }
+
 # Component-specific deploy logic
 case "$COMPONENT" in
   web-platform)
     echo "Pruning old Docker images (>48h)..."
     docker system prune -f --filter "until=48h"
     docker pull "$IMAGE:$TAG"
-    { docker stop soleur-web-platform || true; }
-    { docker rm soleur-web-platform || true; }
+
+    # Clean stale canary from previous failed deploy
+    { docker stop soleur-web-platform-canary 2>/dev/null || true; }
+    { docker rm soleur-web-platform-canary 2>/dev/null || true; }
+
+    # Prepare environment (shared between canary and production)
     sudo chown 1001:1001 /mnt/data/workspaces
     ENV_FILE=$(resolve_env_file)
+
+    # Start canary on port 3001 (old container still serving on 80/3000)
     docker run -d \
-      --name soleur-web-platform \
-      --restart unless-stopped \
+      --name soleur-web-platform-canary \
+      --restart no \
       --env-file "$ENV_FILE" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
-      -p 0.0.0.0:80:3000 \
-      -p 0.0.0.0:3000:3000 \
+      -p 0.0.0.0:3001:3000 \
       "$IMAGE:$TAG"
-    cleanup_env_file "$ENV_FILE"
-    echo "Waiting for health check..."
+
+    # Health-check canary
+    echo "Waiting for canary health check..."
+    CANARY_HEALTHY=false
     for i in $(seq 1 10); do
-      if curl -sf http://localhost:3000/health; then
-        echo " OK"
-        exit 0
+      if curl -sf http://localhost:3001/health; then
+        CANARY_HEALTHY=true
+        echo " Canary OK"
+        break
       fi
       sleep 3
     done
-    echo "Health check failed"
-    docker logs soleur-web-platform --tail 30 2>&1 | logger -t ci-deploy
-    exit 1
+
+    if [[ "$CANARY_HEALTHY" == "true" ]]; then
+      # SUCCESS: swap canary to production
+      echo "Canary passed, swapping to production..."
+      { docker stop soleur-web-platform 2>/dev/null || true; }
+      { docker rm soleur-web-platform 2>/dev/null || true; }
+
+      if docker run -d \
+        --name soleur-web-platform \
+        --restart unless-stopped \
+        --env-file "$ENV_FILE" \
+        -v /mnt/data/workspaces:/workspaces \
+        -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
+        -p 0.0.0.0:80:3000 \
+        -p 0.0.0.0:3000:3000 \
+        "$IMAGE:$TAG"; then
+        { docker stop soleur-web-platform-canary 2>/dev/null || true; }
+        { docker rm soleur-web-platform-canary 2>/dev/null || true; }
+        cleanup_env_file "$ENV_FILE"
+        echo "Deploy succeeded"
+        exit 0
+      else
+        # Production start failed after canary success (infra issue, not app)
+        logger -t "$LOG_TAG" "DEPLOY_ERROR: production container failed to start after canary passed"
+        { docker stop soleur-web-platform-canary 2>/dev/null || true; }
+        { docker rm soleur-web-platform-canary 2>/dev/null || true; }
+        cleanup_env_file "$ENV_FILE"
+        exit 1
+      fi
+    else
+      # ROLLBACK: canary failed, keep old container running
+      echo "Canary health check failed, rolling back..."
+      { docker logs soleur-web-platform-canary --tail 30 2>&1 || true; } | logger -t "$LOG_TAG"
+      { docker stop soleur-web-platform-canary 2>/dev/null || true; }
+      { docker rm soleur-web-platform-canary 2>/dev/null || true; }
+      cleanup_env_file "$ENV_FILE"
+      logger -t "$LOG_TAG" "DEPLOY_ROLLBACK: canary failed for $IMAGE:$TAG, keeping previous version"
+      exit 1
+    fi
     ;;
   telegram-bridge)
     echo "Pruning old Docker images (>48h)..."
