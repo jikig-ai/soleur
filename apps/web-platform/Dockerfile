@@ -46,7 +46,8 @@ ENV BUILD_VERSION=$BUILD_VERSION
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-# Next.js build output (add COPY --from=builder /app/public ./public when public/ exists)
+# Next.js build output + public assets (icons, service worker)
+COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next ./.next
 
 # Compiled custom server
