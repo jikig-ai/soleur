@@ -183,16 +183,16 @@ Per the learning `2026-03-27-csp-strict-dynamic-requires-dynamic-rendering.md`: 
 
 ## Acceptance Criteria
 
-- [ ] CSP `connect-src` includes an explicit `wss://` directive that covers the app's own WebSocket endpoint
-- [ ] In development mode, CSP includes `ws://localhost:3000` for local WebSocket connections
+- [x] CSP `connect-src` includes an explicit `wss://` directive that covers the app's own WebSocket endpoint
+- [x] In development mode, CSP includes `ws://localhost:3000` for local WebSocket connections
 - [ ] The WebSocket connection to `/ws` is not blocked by CSP in any major browser (Chrome, Firefox, Safari)
-- [ ] CSP test suite includes a test verifying WebSocket same-origin coverage
-- [ ] CSP test suite includes a negative test verifying bare `wss:` scheme is NOT used
+- [x] CSP test suite includes a test verifying WebSocket same-origin coverage
+- [x] CSP test suite includes a negative test verifying bare `wss:` scheme is NOT used
 - [ ] The `StatusIndicator` shows "Connected" (green dot) after the fix is deployed
 - [ ] No CSP violation errors appear in the browser console for WebSocket connections
-- [ ] Existing CSP protections (script-src nonce, frame-src none, etc.) are not weakened
-- [ ] Supabase `wss://` connection in `connect-src` is preserved
-- [ ] All existing CSP tests pass with updated `buildCspHeader` signature
+- [x] Existing CSP protections (script-src nonce, frame-src none, etc.) are not weakened
+- [x] Supabase `wss://` connection in `connect-src` is preserved
+- [x] All existing CSP tests pass with updated `buildCspHeader` signature
 
 ## Domain Review
 
