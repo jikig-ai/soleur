@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-03-18
+last_updated: 2026-03-28
 ---
 
 # Expenses
@@ -15,7 +15,7 @@ last_updated: 2026-03-18
 | Supabase | Supabase | saas | 0.00 | free-tier | - | Auth + PostgreSQL for web platform. Upgrade triggers: 500 MB DB, 50K MAU, 1 GB file storage, 2 GB bandwidth. Pro tier: $25/mo |
 | Stripe | Stripe | payments | 0.00 | test-mode | - | Payment processing for web platform. Live costs: 2.9% + $0.30/charge (US), 1.5% + EUR 0.25/charge (EU cards). No monthly minimum |
 | soleur.ai | Cloudflare | domain | 70.00 | active | 2028-02-16 | 2-year registration required for .ai TLD. Also proxies app.soleur.ai (A record to Hetzner CX33, free tier) |
-| Plausible Analytics | Plausible | saas | 0.00 | free-trial | 2026-03-24 | Free trial until ~2026-03-24, then $9/mo Growth plan |
+| Plausible Analytics | Plausible | saas | 9.00 | active | 2027-03-28 | Growth plan, 10K pageviews, EUR 9/mo. Annual renewal |
 | X API | X Corp | api | 0.00 | active | - | Free tier, pay-per-use; @soleur_ai account |
 | X API Basic (DEFERRED) | X Corp | api | 100.00 | deferred | - | DEFERRED: $100/mo Basic tier for fetch-mentions/timeline. Trigger: first paying customer or $500 MRR. See #497 |
 
