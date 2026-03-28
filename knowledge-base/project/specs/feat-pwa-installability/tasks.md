@@ -5,40 +5,40 @@ Plan: `knowledge-base/project/plans/2026-03-28-feat-pwa-manifest-service-worker-
 
 ## Phase 1: Setup (public directory + icons)
 
-- [ ] 1.1 Create `apps/web-platform/public/` directory
-- [ ] 1.2 Generate PWA icons: `public/icons/icon-192x192.png` (192x192), `public/icons/icon-512x512.png` (512x512), `public/icons/apple-touch-icon.png` (180x180), `public/favicon.ico` (32x32)
+- [x] 1.1 Create `apps/web-platform/public/` directory
+- [x] 1.2 Generate PWA icons: `public/icons/icon-192x192.png` (192x192), `public/icons/icon-512x512.png` (512x512), `public/icons/apple-touch-icon.png` (180x180), `public/favicon.ico` (32x32)
   - Use Soleur brand colors (neutral-950 background `#0a0a0a`, white "S" lettermark)
   - Placeholder quality is acceptable for P1; design-quality icons before beta (P4)
 
 ## Phase 2: Core Implementation
 
-- [ ] 2.1 Create `apps/web-platform/app/manifest.ts`
+- [x] 2.1 Create `apps/web-platform/app/manifest.ts`
   - Export typed `MetadataRoute.Manifest` function
   - Fields: `name`, `short_name`, `description`, `start_url: "/"`, `display: "standalone"`, `background_color: "#0a0a0a"`, `theme_color: "#0a0a0a"`, `icons` array (512x512 with `purpose: "any maskable"` for Android adaptive icons)
-- [ ] 2.2 Create `apps/web-platform/public/sw.js` (see plan for complete code)
+- [x] 2.2 Create `apps/web-platform/public/sw.js` (see plan for complete code)
   - Install event: pre-cache shell assets (icons, favicon), call `self.skipWaiting()`
   - Fetch event: cache-first for `/_next/static/**` (content-hashed); stale-while-revalidate for `/icons/**` and `/favicon.ico` (non-hashed); network-only for HTML, API, WebSocket
   - Activate event: delete old caches via `caches.keys()` filter, call `self.clients.claim()`
   - Skip non-GET requests (guard against WebSocket intercept)
   - Skip `/api/`, `/ws`, `/health` explicitly
   - HTML must always come from network (CSP nonce is per-request)
-- [ ] 2.3 Create `apps/web-platform/app/sw-register.tsx` (see plan for complete code)
+- [x] 2.3 Create `apps/web-platform/app/sw-register.tsx` (see plan for complete code)
   - Client component that returns `null`, registers SW in `useEffect`
   - Register `/sw.js` with `scope: "/"` and `updateViaCache: "none"`
   - Only register if `"serviceWorker" in navigator`
   - Use `console.warn` not `console.error` for registration failures (non-fatal)
   - No push notification logic (deferred to P3)
-- [ ] 2.4 Update `apps/web-platform/app/layout.tsx`
+- [x] 2.4 Update `apps/web-platform/app/layout.tsx`
   - Import and render `<SwRegister />` component inside `<body>`
   - Add `apple-touch-icon` link to metadata `icons` field
   - Export `viewport` with `themeColor: "#0a0a0a"`
-- [ ] 2.5 Update `apps/web-platform/middleware.ts`
+- [x] 2.5 Update `apps/web-platform/middleware.ts`
   - Add `sw.js` to the middleware matcher exclusion pattern
   - Pattern: `"/((?!_next/static|_next/image|favicon.ico|sw\\.js|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"`
 
 ## Phase 3: Docker + Deployment
 
-- [ ] 3.1 Update `apps/web-platform/Dockerfile`
+- [x] 3.1 Update `apps/web-platform/Dockerfile`
   - Uncomment/add `COPY --from=builder /app/public ./public` in the runner stage (line 49 area)
 
 ## Phase 4: Verification

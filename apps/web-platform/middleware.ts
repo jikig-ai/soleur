@@ -4,7 +4,7 @@ import { TC_VERSION } from "@/lib/legal/tc-version";
 import { buildCspHeader } from "@/lib/csp";
 
 // No auth required — middleware returns early
-const PUBLIC_PATHS = ["/login", "/signup", "/callback", "/api/webhooks", "/ws"];
+const PUBLIC_PATHS = ["/login", "/signup", "/callback", "/api/webhooks", "/ws", "/manifest.webmanifest"];
 
 // Auth required, but T&C check skipped (user must reach these to accept terms)
 const TC_EXEMPT_PATHS = ["/accept-terms", "/api/accept-terms"];
@@ -128,6 +128,6 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|sw\\.js|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };
