@@ -9,11 +9,11 @@ export default async function DashboardPage() {
   } = await supabase.auth.getUser();
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-10">
+    <div className="mx-auto max-w-5xl px-4 py-6 md:px-6 md:py-10">
       {/* Command Center header */}
-      <div className="mb-8 flex items-center justify-between">
+      <div className="mb-6 flex items-center justify-between md:mb-8">
         <div>
-          <h1 className="text-2xl font-semibold text-white">
+          <h1 className="text-xl font-semibold text-white md:text-2xl">
             Command Center
           </h1>
           <p className="mt-1 text-sm text-neutral-500">
@@ -21,15 +21,17 @@ export default async function DashboardPage() {
           </p>
         </div>
         {user?.email && (
-          <span className="text-sm text-neutral-500">{user.email}</span>
+          <span className="hidden text-sm text-neutral-500 md:inline">
+            {user.email}
+          </span>
         )}
       </div>
 
       {/* Primary: Start a conversation (auto-routed) */}
-      <div className="mb-10">
+      <div className="mb-8 md:mb-10">
         <Link
           href="/dashboard/chat/new"
-          className="flex w-full items-center justify-center rounded-xl border border-neutral-700 bg-neutral-900 px-6 py-5 text-sm text-neutral-400 transition-colors hover:border-neutral-500 hover:text-white"
+          className="flex w-full items-center justify-center rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-5 text-sm text-neutral-400 transition-colors hover:border-neutral-500 hover:text-white md:px-6"
         >
           Start a conversation &mdash; the right experts will show up
         </Link>
