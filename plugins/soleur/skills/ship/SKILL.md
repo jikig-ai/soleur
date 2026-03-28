@@ -222,24 +222,27 @@ Ship Checklist for [branch name]:
 
 ### Code Review Completion Gate (mandatory)
 
-Before creating a PR, verify that code review has been run. This gate prevents shipping unreviewed code even when the work skill's handoff instructions are skipped.
+Defense-in-depth check that review ran before shipping. Phase 1.5 catches this earlier, but if context compaction erased Phase 1.5's check or the skill was invoked mid-flow, this gate is the second net.
 
-**Detection:** Check the git log for review evidence on this branch:
+**Detection:** Check for review evidence using the same signals as Phase 1.5:
 
 ```bash
-git log --oneline origin/main..HEAD --grep="review"
+grep -rl "code-review" todos/ 2>/dev/null | head -1 || true
 ```
 
-Also check if the conversation contains output from `soleur:review` (look for review agent findings, "Review complete", or review-related skill invocations in the current context).
+```bash
+git log origin/main..HEAD --oneline | grep "refactor: add code review findings" || true
+```
+
+**Note:** The commit message grep is coupled to review SKILL.md Step 5. If that message changes, update both Phase 1.5 and this grep.
 
 **If review evidence is found:** Pass silently.
 
 **If no review evidence is found:**
 
-1. **Headless mode:** Auto-invoke `skill: soleur:review --headless`. If review finds critical issues, abort the pipeline.
-2. **Interactive mode:** Display warning: "No code review was run before ship. This is required by the work skill handoff (Phase 4, step 1)." Then invoke `skill: soleur:review`. After review completes, if findings include critical or high severity issues, resolve them before continuing to Phase 6.
+**Headless mode:** Abort with: "Error: no review evidence found on this branch. Run `/review` before `/ship`, or use `/one-shot` for the full pipeline."
 
-**Why:** In #1044 (multi-turn continuity), the work skill's Phase 4 handoff specifies review as step 1 before compound and ship, but the agent skipped directly to compound. The ship skill must enforce review as a last-chance gate since it is the final step before merge.
+**Interactive mode:** Display warning: "No code review was run before ship." Then invoke `skill: soleur:review`. After review completes, if findings include critical or high severity issues, resolve them before continuing to Phase 6.
 
 ### Pre-Ship Domain Review (conditional)
 

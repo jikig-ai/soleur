@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
-# PreToolUse hook: auto-sync against origin/main before gh pr merge.
-# Merges origin/main into the feature branch to ensure it is current before merge.
+# PreToolUse hook: review evidence gate + auto-sync against origin/main before gh pr merge.
+#
+# Guard 6 (review evidence): blocks gh pr merge when no review evidence exists on the branch.
+# Review evidence is detected via: (1) todos/ files tagged "code-review", or
+# (2) a commit matching "refactor: add code review findings" (coupled to review SKILL.md Step 5).
+# No escape hatch — run /review before merging.
+#
+# Auto-sync: merges origin/main into the feature branch to ensure it is current before merge.
 # Note: filename says "rebase" for historical reasons; strategy is merge (not rebase).
 #
 # Corresponding prose rules:
 #   AGENTS.md "Before merging any PR, merge origin/main into the feature branch"
+#   AGENTS.md "gh pr merge without review evidence" (PreToolUse hooks block list)
 #   constitution.md "Before creating a PR or merging, merge latest origin/main into the feature branch"
 #
 # Error handling: fail-open on infrastructure errors (network, non-git context),
-# fail-closed on logical errors (conflicts, dirty tree, push failure).
+# fail-closed on logical errors (conflicts, dirty tree, push failure, missing review evidence).
 
 set -eo pipefail
 # -u (nounset) omitted: hook failure paths must return JSON, not crash silently.
@@ -34,15 +41,43 @@ if ! git -C "$WORK_DIR" rev-parse --git-dir >/dev/null 2>&1; then
   exit 0
 fi
 
-# Check for detached HEAD -- merge works but push will fail without upstream
+# Resolve current branch for main/master skip and detached HEAD handling
 CURRENT_BRANCH=$(git -C "$WORK_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null)
-if [[ "$CURRENT_BRANCH" == "HEAD" ]]; then
-  echo "Warning: Detached HEAD state. Skipping auto-sync." >&2
+
+# Skip if already on main/master -- no local review evidence to check,
+# and nothing to sync (the agent is merging a PR *into* main, not from it)
+if [[ "$CURRENT_BRANCH" == "main" ]] || [[ "$CURRENT_BRANCH" == "master" ]]; then
   exit 0
 fi
 
-# Skip if already on main/master -- nothing to sync
-if [[ "$CURRENT_BRANCH" == "main" ]] || [[ "$CURRENT_BRANCH" == "master" ]]; then
+# Guard 6: Review evidence gate.
+# Block gh pr merge when no review evidence exists on the branch.
+# Purely local check -- no network calls, no PR number needed.
+# Fires before detached HEAD exit because gh pr merge operates on a PR number,
+# not the local checkout state -- review evidence is still visible in detached HEAD.
+
+# Check 1: todo files tagged "code-review"
+REVIEW_TODOS=$(grep -rl "code-review" "$WORK_DIR/todos/" 2>/dev/null | head -1 || true)
+
+# Check 2: review commit (coupled to review SKILL.md Step 5 commit message;
+# uses locally-cached origin/main — may be stale if not recently fetched)
+REVIEW_COMMIT=$(git -C "$WORK_DIR" log origin/main..HEAD --oneline 2>/dev/null \
+  | grep "refactor: add code review findings" || true)
+
+if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]]; then
+  jq -n '{
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: "BLOCKED: No review evidence found on this branch. Run /review before merging."
+    }
+  }'
+  exit 0
+fi
+
+# Check for detached HEAD -- auto-sync needs a branch to push
+if [[ "$CURRENT_BRANCH" == "HEAD" ]]; then
+  echo "Warning: Detached HEAD state. Skipping auto-sync." >&2
   exit 0
 fi
 

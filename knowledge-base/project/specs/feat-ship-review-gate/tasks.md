@@ -1,25 +1,39 @@
-# Tasks: feat-ship-review-gate
+# Tasks: Ship Review Gate Enforcement
 
-## Phase 1: Ship SKILL.md -- Add Review Evidence Gate
+**Issue:** #1227
+**Branch:** feat-ship-review-gate
 
-- [ ] 1.1 Read `plugins/soleur/skills/ship/SKILL.md` fully
-- [ ] 1.2 Add Phase 1.5: Review Evidence Gate section after Phase 1 (Validate Artifact Trail)
-  - [ ] 1.2.1 Step 1: Check for `todos/` files tagged `code-review` via `grep -rl "code-review" todos/`
-  - [ ] 1.2.2 Step 2: Check commit history for `refactor: add code review findings` pattern
-  - [ ] 1.2.3 Gate behavior: headless mode aborts, interactive mode presents Run/Skip/Abort
-  - [ ] 1.2.4 Document zero-finding review edge case in Skip option text
-- [ ] 1.3 Verify Phase 1.5 references do not use `$()` command substitution (ship CRITICAL rule)
-- [ ] 1.4 Verify Phase 1.5 uses separate Bash calls for multi-step detection (ship pattern)
+## Phase 1: Ship SKILL.md -- Add Review Evidence Gate (DONE)
 
-## Phase 2: Work SKILL.md -- Update Direct-Invocation Chain
+- [x] 1.1 Add Phase 1.5: Review Evidence Gate section after Phase 1
+- [x] 1.2 Gate behavior: headless mode aborts, interactive mode presents Run/Skip/Abort
 
-- [ ] 2.1 Read `plugins/soleur/skills/work/SKILL.md` Phase 4 section
-- [ ] 2.2 Update direct-invocation chain from (compound -> ship) to (review -> resolve-todo-parallel -> compound -> ship)
-- [ ] 2.3 Verify one-shot invocation path remains unchanged (hand off to orchestrator)
-- [ ] 2.4 Forward `--headless` flag to review and resolve-todo-parallel when headless
+## Phase 2: Work SKILL.md -- Update Direct-Invocation Chain (DONE)
 
-## Phase 3: Validation
+- [x] 2.1 Update direct-invocation chain to: review -> resolve-todo-parallel -> compound -> ship
+- [x] 2.2 Forward `--headless` flag to review step
 
-- [ ] 3.1 Run `bun test` to verify no regressions
-- [ ] 3.2 Verify SKILL.md markdown passes lint (no MD032 violations)
-- [ ] 3.3 Review both modified files for consistency with existing Phase N.5 patterns
+## Phase 3: Review Evidence Gate in pre-merge-rebase.sh (DONE)
+
+- [x] 3.1 Add early-exit review evidence check to `.claude/hooks/pre-merge-rebase.sh`
+  - [x] 3.1.1 Insert after existing early exits (skip main, skip detached HEAD), before uncommitted changes check
+  - [x] 3.1.2 Check `grep -rl "code-review" "$WORK_DIR/todos/"` for review todo files
+  - [x] 3.1.3 Check `git -C "$WORK_DIR" log origin/main..HEAD --oneline | grep "refactor: add code review findings"` for review commit
+  - [x] 3.1.4 Deny with clear message if no evidence found
+- [x] 3.2 Update `pre-merge-rebase.sh` header comment to document review evidence gate
+
+## Phase 4: Ship Phase 5.5 Alignment (DONE)
+
+- [x] 4.1 Rewrite Phase 5.5 Code Review Completion Gate to match Phase 1.5 behavior (abort in headless, same detection logic)
+- [x] 4.2 Restore Phase 5 checklist item
+- [x] 4.3 Verify remaining Phase 5.5 gates (CMO, COO) are intact
+
+## Phase 5: AGENTS.md Updates (DONE)
+
+- [x] 5.1 Update PreToolUse hooks awareness line to include review evidence gate
+
+## Phase 6: Validation
+
+- [ ] 6.1 Run `bun test` to verify no regressions
+- [ ] 6.2 Verify markdown passes lint
+- [ ] 6.3 Test review evidence gate with a `gh pr merge` command on this PR

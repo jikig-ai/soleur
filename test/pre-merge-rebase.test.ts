@@ -44,6 +44,17 @@ function spawnChecked(args: string[], opts: { cwd: string }) {
   return result;
 }
 
+/**
+ * Create review evidence so Guard 6 (review evidence gate) passes.
+ * Must be called after creating a feature branch and before running the hook.
+ */
+function addReviewEvidence(cwd: string) {
+  spawnChecked(
+    ["bash", "-c", "mkdir -p todos && echo 'tags: code-review' > todos/review-finding.md && git add todos/ && git commit -m 'refactor: add code review findings'"],
+    { cwd }
+  );
+}
+
 async function runHook(
   input: string
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -166,12 +177,76 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     }
   });
 
+  test("no review evidence blocks merge with deny", async () => {
+    spawnChecked(["git", "checkout", "-b", "test-no-review"], { cwd: repoDir });
+    spawnChecked(
+      ["bash", "-c", "echo 'feature' > feature.txt && git add feature.txt && git commit -m 'feature'"],
+      { cwd: repoDir }
+    );
+
+    const result = await runHook(
+      makeInput("gh pr merge 123 --squash --auto", repoDir)
+    );
+
+    expect(result.exitCode).toBe(0);
+    const output = JSON.parse(result.stdout);
+    expect(output.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(output.hookSpecificOutput.permissionDecisionReason).toContain(
+      "No review evidence"
+    );
+  });
+
+  test("review commit message satisfies review evidence gate", async () => {
+    spawnChecked(["git", "checkout", "-b", "test-review-commit"], { cwd: repoDir });
+    spawnChecked(
+      ["bash", "-c", "echo 'feature' > feature.txt && git add feature.txt && git commit -m 'feature'"],
+      { cwd: repoDir }
+    );
+    // Add review evidence via commit message (no todos/ directory)
+    spawnChecked(
+      ["bash", "-c", "echo 'reviewed' > reviewed.txt && git add reviewed.txt && git commit -m 'refactor: add code review findings'"],
+      { cwd: repoDir }
+    );
+    spawnChecked(["git", "push", "origin", "test-review-commit"], { cwd: repoDir });
+
+    const result = await runHook(
+      makeInput("gh pr merge 123 --squash --auto", repoDir)
+    );
+
+    expect(result.exitCode).toBe(0);
+    // Should pass the review gate and reach the up-to-date check
+    expect(result.stderr).toContain("up-to-date");
+  });
+
+  test("todos-only review evidence satisfies review evidence gate", async () => {
+    spawnChecked(["git", "checkout", "-b", "test-review-todos"], { cwd: repoDir });
+    spawnChecked(
+      ["bash", "-c", "echo 'feature' > feature.txt && git add feature.txt && git commit -m 'feature'"],
+      { cwd: repoDir }
+    );
+    // Add review evidence via todos file only (no matching commit message)
+    spawnChecked(
+      ["bash", "-c", "mkdir -p todos && echo 'tags: code-review' > todos/review-finding.md && git add todos/ && git commit -m 'chore: add review todos'"],
+      { cwd: repoDir }
+    );
+    spawnChecked(["git", "push", "origin", "test-review-todos"], { cwd: repoDir });
+
+    const result = await runHook(
+      makeInput("gh pr merge 123 --squash --auto", repoDir)
+    );
+
+    expect(result.exitCode).toBe(0);
+    // Should pass the review gate and reach the up-to-date check
+    expect(result.stderr).toContain("up-to-date");
+  });
+
   test("branch already up-to-date with main proceeds without sync", async () => {
     spawnChecked(["git", "checkout", "-b", "test-uptodate"], { cwd: repoDir });
     spawnChecked(
       ["bash", "-c", "echo 'feature' > feature.txt && git add feature.txt && git commit -m 'feature'"],
       { cwd: repoDir }
     );
+    addReviewEvidence(repoDir);
     spawnChecked(["git", "push", "origin", "test-uptodate"], { cwd: repoDir });
 
     const result = await runHook(
@@ -189,6 +264,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
       ["bash", "-c", "echo 'feature' > feature.txt && git add feature.txt && git commit -m 'feature'"],
       { cwd: repoDir }
     );
+    addReviewEvidence(repoDir);
     spawnChecked(["git", "push", "origin", "test-behind"], { cwd: repoDir });
 
     spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
@@ -212,6 +288,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
 
   test("uncommitted changes blocks merge with deny", async () => {
     spawnChecked(["git", "checkout", "-b", "test-dirty"], { cwd: repoDir });
+    addReviewEvidence(repoDir);
     Bun.spawnSync(["bash", "-c", "echo 'dirty' >> file.txt"], { cwd: repoDir, env: GIT_ENV });
 
     const result = await runHook(
@@ -228,6 +305,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
 
   test("staged uncommitted changes blocks merge with deny", async () => {
     spawnChecked(["git", "checkout", "-b", "test-staged"], { cwd: repoDir });
+    addReviewEvidence(repoDir);
     Bun.spawnSync(
       ["bash", "-c", "echo 'staged' >> file.txt && git add file.txt"],
       { cwd: repoDir, env: GIT_ENV }
@@ -251,6 +329,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
       ["bash", "-c", "echo 'feature-content' > file.txt && git add file.txt && git commit -m 'feature change'"],
       { cwd: repoDir }
     );
+    addReviewEvidence(repoDir);
     spawnChecked(["git", "push", "origin", "test-conflict"], { cwd: repoDir });
 
     spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
@@ -284,7 +363,12 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     expect(new TextDecoder().decode(status.stdout).trim()).toBe("");
   });
 
-  test("detached HEAD allows merge with warning", async () => {
+  test("detached HEAD allows merge with warning (review gate fires first)", async () => {
+    // Create a feature branch with review evidence, then detach HEAD.
+    // The review gate fires before the detached HEAD exit because
+    // gh pr merge operates on a PR number, not the local checkout state.
+    spawnChecked(["git", "checkout", "-b", "test-detached-review"], { cwd: repoDir });
+    addReviewEvidence(repoDir);
     const headSha = spawnChecked(["git", "rev-parse", "HEAD"], { cwd: repoDir });
     const sha = new TextDecoder().decode(headSha.stdout).trim();
     Bun.spawnSync(["git", "checkout", sha], { cwd: repoDir, env: GIT_ENV });
@@ -296,6 +380,20 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toContain("Detached HEAD");
     expect(result.stdout).toBe("");
+  });
+
+  test("detached HEAD without review evidence is denied", async () => {
+    const headSha = spawnChecked(["git", "rev-parse", "HEAD"], { cwd: repoDir });
+    const sha = new TextDecoder().decode(headSha.stdout).trim();
+    Bun.spawnSync(["git", "checkout", sha], { cwd: repoDir, env: GIT_ENV });
+
+    const result = await runHook(
+      makeInput("gh pr merge 123 --squash --auto", repoDir)
+    );
+
+    expect(result.exitCode).toBe(0);
+    const output = JSON.parse(result.stdout);
+    expect(output.hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
   test("main branch skips sync silently", async () => {
@@ -313,6 +411,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
       ["bash", "-c", "echo 'feature' > pushfail.txt && git add pushfail.txt && git commit -m 'feature'"],
       { cwd: repoDir }
     );
+    addReviewEvidence(repoDir);
     spawnChecked(["git", "push", "origin", "test-pushfail"], { cwd: repoDir });
 
     spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
@@ -352,6 +451,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
       ["bash", "-c", "echo 'feature' > feature2.txt && git add feature2.txt && git commit -m 'feature'"],
       { cwd: repoDir }
     );
+    addReviewEvidence(repoDir);
     spawnChecked(["git", "push", "origin", "test-idempotent"], { cwd: repoDir });
 
     spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
