@@ -2,7 +2,26 @@
 title: "fix: worktree creation should install subdirectory dependencies"
 type: fix
 date: 2026-03-28
+deepened: 2026-03-28
 ---
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-28
+**Sections enhanced:** 3 (Proposed Fix, Edge cases, Test Scenarios)
+**Research sources:** constitution.md shell conventions, existing `copy_env_files` pattern, `npm ci` semantics, `set -euo pipefail` audit vectors
+
+### Key Improvements
+
+1. Added reference implementation with concrete code for the enhanced `install_deps()` function
+2. Identified null-glob safety requirement under `set -euo pipefail` (constitution line 27, vector 2) and the existing `[[ -f ]]` guard pattern from `copy_env_files()`
+3. Added `yarn.lock` detection for completeness and future-proofing
+4. Clarified `npm ci` semantics: it deletes `node_modules/` before install, so the existing `node_modules/` skip check prevents unnecessary reinstalls
+
+### New Considerations Discovered
+
+- The existing `install_deps()` is bun-only -- the root package uses `package-lock.json` (npm), so the root install currently uses bun even though the lockfile is npm. This is a pre-existing inconsistency but out of scope for this fix.
+- `npm ci` requires `package-lock.json` to be in sync with `package.json`; out-of-sync lockfiles will fail, which is the correct behavior for deterministic installs in worktrees.
 
 # fix: worktree creation should install subdirectory dependencies
 
@@ -43,6 +62,70 @@ After the existing root-level install logic, add a loop that:
 4. Runs the install command with `--cwd` or from the subdirectory.
 5. Warns but never blocks worktree creation on failure (existing graceful degradation pattern).
 
+### Reference Implementation
+
+Add the following block at the end of the existing `install_deps()` function, after the root-level install logic (after line 161):
+
+```bash
+  # --- Subdirectory dependency install ---
+  # Scan apps/*/ for package.json files and install per-directory.
+  # Follows the same null-glob-safe pattern as copy_env_files().
+  local app_dir
+  for app_dir in "$worktree_path"/apps/*/; do
+    [[ -d "$app_dir" ]] || continue
+    [[ -f "$app_dir/package.json" ]] || continue
+    [[ -d "$app_dir/node_modules" ]] && continue
+
+    local app_name
+    app_name=$(basename "$app_dir")
+
+    local install_cmd=""
+    if [[ -f "$app_dir/bun.lockb" ]]; then
+      if command -v bun &>/dev/null; then
+        install_cmd="bun install --frozen-lockfile --cwd $app_dir"
+      else
+        echo -e "  ${YELLOW}Warning: $app_name has bun.lockb but bun not found -- skip${NC}"
+        continue
+      fi
+    elif [[ -f "$app_dir/package-lock.json" ]]; then
+      if command -v npm &>/dev/null; then
+        install_cmd="npm ci --prefix $app_dir"
+      else
+        echo -e "  ${YELLOW}Warning: $app_name has package-lock.json but npm not found -- skip${NC}"
+        continue
+      fi
+    elif [[ -f "$app_dir/yarn.lock" ]]; then
+      if command -v yarn &>/dev/null; then
+        install_cmd="yarn install --frozen-lockfile --cwd $app_dir"
+      else
+        echo -e "  ${YELLOW}Warning: $app_name has yarn.lock but yarn not found -- skip${NC}"
+        continue
+      fi
+    else
+      echo -e "  ${YELLOW}Warning: $app_name has package.json but no lockfile -- skip${NC}"
+      continue
+    fi
+
+    echo -e "${BLUE}Installing dependencies for $app_name...${NC}"
+    local app_install_output
+    if app_install_output=$($install_cmd 2>&1); then
+      echo -e "  ${GREEN}$app_name dependencies installed${NC}"
+    else
+      echo -e "  ${YELLOW}Warning: $app_name install failed -- run manually${NC}" >&2
+      echo "  $app_install_output" >&2
+    fi
+  done
+```
+
+**Implementation notes:**
+
+- The `for app_dir in "$worktree_path"/apps/*/` pattern with trailing `/` ensures only directories match. The `[[ -d "$app_dir" ]]` guard handles the null-glob case where no matches exist (bash expands the literal glob string, which is not a directory).
+- All variables are declared with `local` per constitution.
+- Warning messages go to stderr via `>&2` per constitution.
+- `npm ci --prefix` sets the working directory for npm, equivalent to bun's `--cwd`.
+- `yarn.lock` detection is included for completeness even though no current app uses yarn.
+- The `command -v` check is done per-directory, not once globally, because different subdirectories may use different package managers and only one needs to be available.
+
 ### Lockfile inventory (current state)
 
 | Directory | `package.json` | Lockfile | Package Manager |
@@ -55,9 +138,11 @@ After the existing root-level install logic, add a loop that:
 
 - **No `bun` and no `npm`:** Warn and return. Never block worktree creation.
 - **Network failure during install:** Warn and continue. The existing pattern already handles this.
-- **`apps/` directory does not exist:** Skip subdirectory scan silently. Some worktrees (e.g., for plugin-only changes) may not have apps.
+- **`apps/` directory does not exist:** Skip subdirectory scan silently. The `for app_dir in "$worktree_path"/apps/*/` glob expands to the literal string when no matches exist; the `[[ -d "$app_dir" ]]` guard catches this (same pattern as `copy_env_files`).
 - **New apps added in the future:** The generic `apps/*/package.json` scan picks them up automatically.
 - **Root install already failed:** If the root install failed (e.g., bun not found), still attempt subdirectory installs with npm if available, since subdirectories may use a different package manager.
+- **`npm ci` vs `npm install`:** `npm ci` deletes existing `node_modules/` and installs from `package-lock.json` exactly. The `[[ -d "$app_dir/node_modules" ]] && continue` check prevents unnecessary reinstalls on re-runs. `npm ci` will fail if `package-lock.json` is out of sync with `package.json`, which is correct behavior (nondeterministic installs are worse than a warning).
+- **`set -euo pipefail` safety (constitution line 27):** The `for ... in glob` pattern does not trigger `pipefail` or `-e` when no matches exist because there is no pipeline or command exit code -- the shell just expands the glob literally. The `[[ -d ]]` guard handles the literal expansion. No `|| true` needed here, unlike `grep` in pipelines.
 
 ## Acceptance Criteria
 
@@ -76,6 +161,8 @@ After the existing root-level install logic, add a loop that:
 - Given neither `bun` nor `npm` is available, when `create_worktree` runs, then a warning is printed but worktree creation completes successfully.
 - Given `npm ci` fails (e.g., network error), when `create_worktree` runs, then a warning is printed but worktree creation completes successfully.
 - Given the `apps/` directory does not exist in the worktree, when `create_worktree` runs, then the subdirectory scan is skipped silently.
+- Given a future app with `yarn.lock`, when `create_worktree` runs and `yarn` is available, then `yarn install --frozen-lockfile` is used.
+- Given `install_deps` is called a second time on the same worktree (re-run), when `apps/web-platform/node_modules/` already exists, then the install is skipped (no unnecessary `npm ci` that would delete and recreate `node_modules/`).
 
 ## Domain Review
 
