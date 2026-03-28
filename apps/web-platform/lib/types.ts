@@ -3,6 +3,16 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
 // Typed error codes for structured error handling over WebSocket
 export type WSErrorCode = "key_invalid" | "session_expired" | "session_resumed";
 
+// Shared WebSocket close codes — single source of truth for server, client, and tests.
+// See: https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent/code (4000-4999 = application-reserved)
+export const WS_CLOSE_CODES = {
+  AUTH_TIMEOUT: 4001,
+  SUPERSEDED: 4002,
+  AUTH_REQUIRED: 4003,
+  TC_NOT_ACCEPTED: 4004,
+  INTERNAL_ERROR: 4005,
+} as const;
+
 export class KeyInvalidError extends Error {
   constructor() {
     super("No valid API key found. Please set up your key first.");
