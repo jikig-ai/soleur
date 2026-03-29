@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 priority: p3
 tags: [performance, rate-limiting]
 file: apps/web-platform/server/rate-limiter.ts

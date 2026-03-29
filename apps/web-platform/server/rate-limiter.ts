@@ -54,16 +54,26 @@ export class SlidingWindowCounter {
     const now = Date.now();
     const cutoff = now - this.config.windowMs;
 
-    const timestamps = this.windows.get(key);
-    const valid = timestamps ? timestamps.filter((t) => t > cutoff) : [];
+    let timestamps = this.windows.get(key);
+    if (timestamps) {
+      // In-place compaction: avoids allocating a new array on every call.
+      let write = 0;
+      for (let i = 0; i < timestamps.length; i++) {
+        if (timestamps[i] > cutoff) {
+          timestamps[write++] = timestamps[i];
+        }
+      }
+      timestamps.length = write;
+    } else {
+      timestamps = [];
+      this.windows.set(key, timestamps);
+    }
 
-    if (valid.length >= this.config.maxRequests) {
-      this.windows.set(key, valid);
+    if (timestamps.length >= this.config.maxRequests) {
       return false;
     }
 
-    valid.push(now);
-    this.windows.set(key, valid);
+    timestamps.push(now);
     return true;
   }
 
@@ -72,11 +82,16 @@ export class SlidingWindowCounter {
     const now = Date.now();
     const cutoff = now - this.config.windowMs;
     for (const [key, timestamps] of this.windows) {
-      const valid = timestamps.filter((t) => t > cutoff);
-      if (valid.length === 0) {
+      // In-place compaction: same pattern as isAllowed().
+      let write = 0;
+      for (let i = 0; i < timestamps.length; i++) {
+        if (timestamps[i] > cutoff) {
+          timestamps[write++] = timestamps[i];
+        }
+      }
+      timestamps.length = write;
+      if (write === 0) {
         this.windows.delete(key);
-      } else {
-        this.windows.set(key, valid);
       }
     }
   }
