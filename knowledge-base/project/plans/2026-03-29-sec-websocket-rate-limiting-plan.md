@@ -273,26 +273,26 @@ Three documented learnings from `knowledge-base/project/learnings/` are directly
 
 ### Functional Requirements
 
-- [ ] Rapid WebSocket connection attempts from the same IP (>20/min) are rejected with close code 4008
-- [ ] More than 5 simultaneous unauthenticated WebSocket connections from the same IP are rejected
-- [ ] More than 30 `start_session` messages per hour from the same authenticated user are rejected with an error message
-- [ ] Rate limit thresholds are configurable via environment variables
-- [ ] Client displays a user-friendly message when rate-limited (not an auto-reconnect loop)
-- [ ] HTTP 429 responses include a `Retry-After` header (RFC 6585 compliance)
-- [ ] Rate limit rejections are logged with structured fields (`sec: true`, IP/userId, layer name)
+- [x] Rapid WebSocket connection attempts from the same IP (>20/min) are rejected with close code 4008
+- [x] More than 5 simultaneous unauthenticated WebSocket connections from the same IP are rejected
+- [x] More than 30 `start_session` messages per hour from the same authenticated user are rejected with an error message
+- [x] Rate limit thresholds are configurable via environment variables
+- [x] Client displays a user-friendly message when rate-limited (not an auto-reconnect loop)
+- [x] HTTP 429 responses include a `Retry-After` header (RFC 6585 compliance)
+- [x] Rate limit rejections are logged with structured fields (`sec: true`, IP/userId, layer name)
 
 ### Non-Functional Requirements
 
-- [ ] Rate limiter adds <1ms latency per connection check
-- [ ] Memory usage grows proportionally to active IPs, not total historical connections (cleanup works)
-- [ ] Server shutdown is not blocked by rate limiter timers (`.unref()` on all intervals)
+- [x] Rate limiter adds <1ms latency per connection check
+- [x] Memory usage grows proportionally to active IPs, not total historical connections (cleanup works)
+- [x] Server shutdown is not blocked by rate limiter timers (`.unref()` on all intervals)
 
 ### Quality Gates
 
-- [ ] Unit tests for SlidingWindowCounter (window expiry, cleanup, edge cases)
-- [ ] Unit tests for IP extraction (cf-connecting-ip, x-forwarded-for, remoteAddress)
-- [ ] Integration tests verifying rate limit rejection at the ws-handler level
-- [ ] All existing ws-protocol and ws-abort tests continue to pass
+- [x] Unit tests for SlidingWindowCounter (window expiry, cleanup, edge cases)
+- [x] Unit tests for IP extraction (cf-connecting-ip, x-forwarded-for, remoteAddress)
+- [x] Integration tests verifying rate limit rejection at the ws-handler level
+- [x] All existing ws-protocol and ws-abort tests continue to pass
 
 ## Test Scenarios
 
