@@ -524,16 +524,12 @@ server.tool(
           }
         }
       }
-    } catch {
-      // batch_get failed — fall back to node IDs as filenames
+    } catch (err) {
+      process.stderr.write(`[pencil-adapter] batch_get for node names failed: ${err.message}\n`);
     }
 
     // Step 2: Run the original export_nodes command
-    const exportParams = { nodeIds, outputDir };
-    if (format) exportParams.format = format;
-    if (scale !== undefined) exportParams.scale = scale;
-    if (quality !== undefined) exportParams.quality = quality;
-    const cmd = formatReplCommand("export_nodes", exportParams);
+    const cmd = formatReplCommand("export_nodes", { nodeIds, outputDir, format, scale, quality });
     const raw = await commandQueue.enqueue(cmd);
     const { text, isError } = parseResponse(raw);
     if (isError) {
@@ -544,13 +540,9 @@ server.tool(
     const renamedFiles = [];
     for (const nodeId of nodeIds) {
       const nodeName = nameMap.get(nodeId);
-      if (!nodeName) {
-        renamedFiles.push(`${nodeId}.${ext} (no name, kept as-is)`);
-        continue;
-      }
-      const sanitized = sanitizeFilename(nodeName);
-      if (!sanitized || sanitized === nodeId) {
-        renamedFiles.push(`${nodeId}.${ext} (kept as-is)`);
+      const sanitized = nodeName ? sanitizeFilename(nodeName) : "";
+      if (!sanitized) {
+        renamedFiles.push(`${nodeId}.${ext}`);
         continue;
       }
       const oldPath = join(outputDir, `${nodeId}.${ext}`);
@@ -558,8 +550,9 @@ server.tool(
       try {
         renameSync(oldPath, newPath);
         renamedFiles.push(`${sanitized}.${ext}`);
-      } catch {
-        renamedFiles.push(`${nodeId}.${ext} (rename failed, kept as-is)`);
+      } catch (err) {
+        process.stderr.write(`[pencil-adapter] rename ${oldPath} -> ${newPath} failed: ${err.message}\n`);
+        renamedFiles.push(`${nodeId}.${ext}`);
       }
     }
 

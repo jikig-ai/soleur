@@ -38,13 +38,23 @@ describe("sanitizeFilename", () => {
     expect(sanitizeFilename("  spaced  ")).toBe("spaced");
   });
 
-  test("truncates to 200 characters", () => {
+  test("truncates to 200 characters with correct content", () => {
     const longName = "a".repeat(250);
-    expect(sanitizeFilename(longName).length).toBe(200);
+    expect(sanitizeFilename(longName)).toBe("a".repeat(200));
+  });
+
+  test("returns empty string for null or undefined input", () => {
+    expect(sanitizeFilename(null)).toBe("");
+    expect(sanitizeFilename(undefined)).toBe("");
   });
 
   test("returns empty string for empty input", () => {
     expect(sanitizeFilename("")).toBe("");
+  });
+
+  test("returns empty string for dot-dot traversal names", () => {
+    expect(sanitizeFilename("..")).toBe("");
+    expect(sanitizeFilename(".")).toBe("");
   });
 
   test("returns empty string when all characters are unsafe", () => {

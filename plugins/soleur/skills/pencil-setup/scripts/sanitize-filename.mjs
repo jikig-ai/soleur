@@ -19,5 +19,7 @@ export function sanitizeFilename(name) {
   if (result.length > 200) {
     result = result.slice(0, 200);
   }
+  // Guard against dot-dot traversal (a node named ".." would pass through otherwise)
+  if (result === "." || result === "..") return "";
   return result;
 }
