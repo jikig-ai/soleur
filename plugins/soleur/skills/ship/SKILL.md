@@ -296,6 +296,23 @@ Domain leaders are consulted at brainstorm time but not at ship time. The actual
 
 **Why:** New tools and subscriptions adopted during implementation often go unrecorded in the expense ledger because they feel incidental to the engineering work. The COO gate ensures every new cost is tracked at ship time, not discovered months later during a financial review.
 
+### Retroactive Gate Application (conditional)
+
+**Trigger:** The PR fixes a gate's detection logic (trigger conditions, assessment questions, or routing rules) AND the fix was motivated by a specific case that the gate missed.
+
+**Detection:** Check if the PR modifies any of: Phase 5.5 gate trigger/detection sections in this file, assessment questions in `brainstorm-domain-config.md`, or domain routing rules in AGENTS.md. If yes, check the linked issue or brainstorm document for the original missed case (e.g., a PR number, feature name, or issue that exposed the gap).
+
+**If triggered:**
+
+1. Identify the original missed case from the issue/brainstorm (e.g., "PR #1256 PWA was not assessed for content").
+2. Run the fixed gate retroactively against the missed case: spawn the relevant domain leader with the original PR/feature context and the same assessment prompt the gate would have used.
+3. Produce the artifacts that would have been created if the gate had worked (content briefs, expense entries, website audits, etc.).
+4. Commit the artifacts before proceeding to Phase 6.
+
+**If not triggered:** Skip silently.
+
+**Why:** In #1265, the CMO content gate was fixed to catch product features but the PWA feature itself was never assessed — the fix shipped without remediating the original gap. "Gate fixed" is not done — "gate fixed AND missed case remediated" is done.
+
 ## Phase 6: Push and Create PR
 
 ### Detect Associated Issue
