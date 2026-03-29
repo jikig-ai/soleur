@@ -8,6 +8,19 @@ date: 2026-03-29
 
 Closes #1291
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-29
+**Sections enhanced:** 3 (Implementation Steps, Key Details, Test Scenarios)
+**Research sources:** Project learnings (Supabase silent errors, WebSocket close code routing, unapplied migration), codebase analysis (activeStreamsRef index tracking, reconnect lifecycle)
+
+### Key Improvements
+
+1. Added AbortController cleanup pattern for fetch cancellation on unmount/re-render
+2. Identified critical activeStreamsRef index invalidation bug -- history must load before streaming or indices break
+3. Added deduplication strategy for messages that exist in both history and WebSocket stream
+4. Fixed dependency array design -- fetch once per conversationId, not per reconnection
+
 ## Overview
 
 The chat page (`apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx`) does not load conversation history when mounted. The `useWebSocket` hook initializes with an empty `messages` state. On page refresh or navigation back to an existing conversation, all messages are lost.
@@ -26,52 +39,106 @@ Add a `useEffect` in the chat page that fetches historical messages from the RES
 
 The current select is `id, role, content, created_at` -- it omits `leader_id`, which the client needs to render color-coded leader bubbles.
 
-- [ ] Add `leader_id` to the `.select()` call: `id, role, content, leader_id, created_at`
+- [x] Add `leader_id` to the `.select()` call: `id, role, content, leader_id, created_at`
 
-#### 2. Add history loading to the chat page (`apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx`)
+#### 2. No chat page changes needed
 
-- [ ] Add a `useEffect` that runs when `conversationId` changes (and is not `"new"`)
-- [ ] Fetch `GET /api/conversations/${conversationId}/messages` with the Supabase access token as `Authorization: Bearer` header
-- [ ] Map the response `messages` array to `ChatMessage[]` format (mapping `leader_id` to `leaderId`)
-- [ ] Set the messages state with `setMessages` (not prepend, since on mount the array is empty)
-- [ ] Track a `historyLoaded` boolean ref to avoid duplicate fetches on re-renders
+History loading is encapsulated inside the `useWebSocket` hook (Step 3). The chat page already consumes `messages` from the hook -- historical messages will appear automatically.
 
-#### 3. Expose `setMessages` or an `initMessages` method from `useWebSocket` (`apps/web-platform/lib/ws-client.ts`)
+#### 3. Add history fetch inside `useWebSocket` hook (`apps/web-platform/lib/ws-client.ts`)
 
-The `useWebSocket` hook currently does not expose a way to set messages from outside. Two approaches:
+The hook already owns `messages` state and knows the `conversationId`. Fetching history inside the hook keeps state management encapsulated -- no new public API needed.
 
-**Option A (preferred): Add a `loadHistory` callback to `useWebSocket`.**
+- [x] Add a `useEffect` with dependency array `[conversationId]` only (NOT `status`) to prevent re-fetching on reconnect
+- [x] Guard: skip when `conversationId === "new"`
+- [x] Fetch `GET /api/conversations/${conversationId}/messages` with Bearer token from Supabase session
+- [x] Map response: `leader_id` to `leaderId`, add `type: "text"`, generate stable `id` from DB `id` field
+- [x] Use functional updater to prepend history: `setMessages(prev => [...historyMsgs, ...prev])` -- this preserves any WebSocket messages that arrived during the fetch
+- [x] Add AbortController in the useEffect cleanup to cancel in-flight fetches on unmount or conversationId change
+- [x] Error handling: `console.error` and continue (do not block the chat UI)
 
-- [ ] Add a `loadHistory(msgs: ChatMessage[]) => void` callback that calls `setMessages(msgs)` and is stable via `useCallback`
-- [ ] Export it from the hook's return value
-- [ ] The chat page calls `loadHistory(mappedMessages)` after fetch completes
+### Research Insights
 
-**Option B: Fetch inside the hook itself.**
+**Critical: activeStreamsRef index invalidation.**
 
-- [ ] Move the fetch logic into the `useWebSocket` hook, triggered by `conversationId` and `status === "connected"`
-- [ ] Keeps message state management encapsulated
+The `activeStreamsRef` stores message array indices (positions) to track which array slot belongs to each leader's active stream. When history messages are prepended via `setMessages(prev => [...historyMsgs, ...prev])`, all existing indices shift by `historyMsgs.length`, causing `activeStreamsRef` entries to point at wrong messages.
 
-Option A is preferred because it keeps the hook focused on WebSocket concerns, and the REST fetch is a one-time page-load concern.
+Mitigation: The history fetch runs on mount before any streaming begins (the `useEffect` for `conversationId` fires before the user sends a message). In the normal flow, `activeStreamsRef` is empty when history loads, so no indices are invalidated. However, if a reconnection triggers a `stream_start` before the history response arrives, the indices would be wrong.
 
-#### 4. Show loading state while fetching history
+Safest approach: check that `activeStreamsRef.current.size === 0` before prepending. If streams are active, skip the prepend (the user is already seeing live messages; history would cause a jarring reorder).
 
-- [ ] While history is loading, show a "Loading messages..." indicator instead of the empty state prompt
-- [ ] After history loads (even if empty), show the normal empty state or the messages
+**Fetch cleanup with AbortController.**
+
+Standard React pattern -- the useEffect cleanup function should abort in-flight requests:
+
+```typescript
+useEffect(() => {
+  if (conversationId === "new") return;
+  const controller = new AbortController();
+
+  (async () => {
+    try {
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+
+      const res = await fetch(
+        `/api/conversations/${conversationId}/messages`,
+        {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+          signal: controller.signal,
+        },
+      );
+      if (!res.ok) return;
+
+      const { messages: history } = await res.json();
+      const mapped = history.map((m: { id: string; role: string; content: string; leader_id: string | null }) => ({
+        id: m.id,
+        role: m.role as "user" | "assistant",
+        content: m.content,
+        type: "text" as const,
+        leaderId: m.leader_id ?? undefined,
+      }));
+
+      if (activeStreamsRef.current.size === 0) {
+        setMessages(prev => [...mapped, ...prev]);
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      console.error("Failed to load history:", err);
+    }
+  })();
+
+  return () => controller.abort();
+}, [conversationId]);
+```
+
+**Dependency array: `[conversationId]` not `[conversationId, status]`.**
+
+Including `status` would re-trigger the fetch on every reconnection (connecting -> connected -> reconnecting -> connected). History only needs to load once per conversation. The `conversationId` value does not change during reconnection, so the effect runs exactly once per conversation navigation.
+
+**Supabase getSession() error handling.**
+
+Per project learning (`2026-03-20-supabase-silent-error-return-values.md`): the Supabase client returns `{ data, error }` without throwing. The `getSession()` call may return a null session if the token is expired. Check `session?.access_token` before proceeding -- if null, skip the fetch silently (the WebSocket auth flow will handle the redirect via close codes).
+
+**Deduplication is not needed in the normal flow.**
+
+Historical messages have DB-generated UUIDs as IDs. WebSocket stream messages use client-generated IDs (`stream-${leaderId}-${Date.now()}`). These ID namespaces never collide. The only scenario where a message could appear twice is if the server sends a `stream_start`/`stream` for a message that is already in the DB history -- but this would only happen if the agent is mid-response during a page refresh, which the `resume_session` flow handles separately.
 
 ### Key Details
 
-- **Auth token retrieval:** Use `createClient()` from `@/lib/supabase/client` (already imported pattern in `ws-client.ts`) to get the session access token: `const { data: { session } } = await supabase.auth.getSession()`
+- **Auth token retrieval:** Use `createClient()` from `@/lib/supabase/client` (already imported in `ws-client.ts`) to get the session access token: `const { data: { session } } = await supabase.auth.getSession()`. Check `session?.access_token` before fetching -- null means expired session (per Supabase silent error learning).
 - **Guard for new conversations:** The fetch must NOT run when `conversationId === "new"` -- new conversations have no history
-- **Race condition:** If the user sends a message via WebSocket before history loads, the history response must not overwrite WebSocket messages. Use a ref to track whether history has been set, and only set once.
-- **Error handling:** If the fetch fails (network error, 401, 404), log to console and continue with empty messages -- do not block the chat UI
+- **Race condition:** Use a functional `setMessages` updater (`prev => [...historyMsgs, ...prev]`) so any WebSocket messages that arrived during the fetch are preserved. Additionally, check `activeStreamsRef.current.size === 0` before prepending to avoid invalidating active stream indices.
+- **Error handling:** If the fetch fails (network error, 401, 404), log to console and continue with empty messages -- do not block the chat UI. Catch and ignore `AbortError` from the cleanup controller.
+- **Stable message IDs:** Use the database `id` field (UUID) directly as the `ChatMessage.id`. Do not generate synthetic IDs -- the DB IDs are unique and stable across page refreshes.
 
 ### Files Changed
 
 | File | Change |
 |------|--------|
 | `apps/web-platform/server/api-messages.ts` | Add `leader_id` to select |
-| `apps/web-platform/lib/ws-client.ts` | Export `loadHistory` callback |
-| `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx` | Add history fetch `useEffect` + loading state |
+| `apps/web-platform/lib/ws-client.ts` | Add history fetch `useEffect` inside hook |
 
 ## Acceptance Criteria
 
@@ -96,6 +163,9 @@ No cross-domain implications detected -- client-side data loading bugfix.
 - Given `conversationId` is `"new"`, when the page mounts, then no fetch to `/api/conversations/new/messages` is made
 - Given the API returns a 401 (expired token), when the page mounts, then the chat UI is still usable with WebSocket (no crash)
 - Given the user sends a message before history loads, when history arrives, then the user's WebSocket message is not overwritten
+- Given the user navigates away mid-fetch (conversationId changes), when the component re-renders, then the in-flight fetch is aborted (no stale data from wrong conversation)
+- Given a reconnection occurs after history has loaded, then the history fetch does NOT re-execute (dependency array is `[conversationId]` not `[status]`)
+- Given a conversation with 100+ messages, when history loads, then messages appear in ascending chronological order matching the API's `order("created_at", { ascending: true })`
 
 ## Context
 
