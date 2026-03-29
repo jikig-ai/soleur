@@ -6,15 +6,20 @@ set -euo pipefail
 # tracking state in a _schema_migrations table.
 #
 # Usage: doppler run -c prd -- bash run-migrations.sh
-# Requires: DATABASE_URL environment variable (PostgreSQL connection string)
+# Requires: DATABASE_URL or DATABASE_URL_POOLER environment variable.
+#   Prefers DATABASE_URL_POOLER (IPv4 pooler) for CI where IPv6 is unavailable.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MIGRATIONS_DIR="$SCRIPT_DIR/../supabase/migrations"
 
 command -v psql >/dev/null 2>&1 || { echo "::error::psql not found on PATH"; exit 1; }
 
-if [[ -z "${DATABASE_URL:-}" ]]; then
-  echo "::error::DATABASE_URL is not set. Ensure Doppler injects it."
+# Prefer DATABASE_URL_POOLER (IPv4 pooler) for CI environments where IPv6 is unavailable.
+# Falls back to DATABASE_URL (direct connection) for environments with IPv6 support.
+DATABASE_URL="${DATABASE_URL_POOLER:-${DATABASE_URL:-}}"
+
+if [[ -z "$DATABASE_URL" ]]; then
+  echo "::error::Neither DATABASE_URL_POOLER nor DATABASE_URL is set. Ensure Doppler injects them."
   exit 1
 fi
 
@@ -64,9 +69,8 @@ skipped=0
 for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   filename="$(basename "$migration_file")"
 
-  already_applied=$(psql "$DATABASE_URL" --no-psqlrc --set ON_ERROR_STOP=1 -tAq \
-    -v fname="$filename" \
-    -c "SELECT count(*) FROM public._schema_migrations WHERE filename = :'fname';")
+  # Filenames are from a controlled glob (*.sql) — safe for direct interpolation.
+  already_applied=$(run_sql "SELECT count(*) FROM public._schema_migrations WHERE filename = '$filename';")
   if [[ "$already_applied" -gt 0 ]]; then
     skipped=$((skipped + 1))
     continue
@@ -76,9 +80,8 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   # Apply migration and record it in a single atomic transaction
   {
     cat "$migration_file"
-    printf "\nINSERT INTO public._schema_migrations (filename) VALUES (:'fname');\n"
-  } | psql "$DATABASE_URL" --no-psqlrc --single-transaction --set ON_ERROR_STOP=1 \
-      -v fname="$filename"
+    printf "\nINSERT INTO public._schema_migrations (filename) VALUES ('%s');\n" "$filename"
+  } | psql "$DATABASE_URL" --no-psqlrc --single-transaction --set ON_ERROR_STOP=1
 
   if [[ $? -ne 0 ]]; then
     echo "::error::Migration failed: $filename"
