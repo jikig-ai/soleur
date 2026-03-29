@@ -38,6 +38,7 @@ const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason: strin
   [WS_CLOSE_CODES.AUTH_REQUIRED]: { target: "/login", reason: "Authentication required" },
   [WS_CLOSE_CODES.TC_NOT_ACCEPTED]: { target: "/accept-terms", reason: "Terms acceptance required" },
   [WS_CLOSE_CODES.INTERNAL_ERROR]: { reason: "Server error" },
+  [WS_CLOSE_CODES.RATE_LIMITED]: { reason: "Too many requests. Please try again later." },
 };
 
 export function useWebSocket(conversationId: string): UseWebSocketReturn {
