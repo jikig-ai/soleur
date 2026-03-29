@@ -80,6 +80,14 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 9. If a plan file was provided (check 5 passed) and a `## Domain Review` section exists with a `### Product/UX Gate` subsection: check whether domain leader assessments recommended specialists (copywriter, ux-design-lead, conversion-optimizer) that are NEITHER listed in `**Agents invoked:**` NOR in `**Skipped specialists:**`. If the `**Decision:**` field says `reviewed (partial)`, WARN: "Domain review was partial — some specialist agents failed. Review the Domain Review section before proceeding." If any recommended specialist is missing from both fields: **Interactive mode:** FAIL with message listing the missing specialists and options: (a) "Run \<specialist\> now" — invoke the specialist agent directly, update the plan file's `**Agents invoked:**` field, then continue; (b) "Skip with justification" — prompt for reason, add to the plan file's `**Skipped specialists:**` field, then continue. **Pipeline mode (headless/one-shot):** auto-invoke each missing specialist agent. If the agent succeeds, add to `**Agents invoked:**`. If it fails, add to `**Skipped specialists:**` with note `(auto-skipped — agent unavailable in pipeline)` and WARN. Do not FAIL in pipeline mode. If all recommended specialists are accounted for (in `**Agents invoked:**` or `**Skipped specialists:**`): pass silently.
 
+   **UX artifact commit checkpoint (after each specialist in check 9):** After each specialist agent completes successfully (interactive "Run specialist now" or pipeline auto-invoke), commit the output:
+
+   1. Run `git status --short` to discover new/modified files from the specialist
+   2. Stage specialist output files: `git add <discovered files>`
+   3. Commit: `git commit -m "wip: <specialist-name> artifacts for <feature-name>"`
+
+   Each specialist gets its own commit so partial progress is preserved if a later specialist fails. Do not commit on specialist failure.
+
 **On FAIL:** Display the failure message with remediation steps and stop. Do not proceed to Phase 1.
 
 **On WARN only:** Display all warnings together and proceed to Phase 1.
@@ -183,6 +191,14 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    **Design Artifact Gate (before first UI task):** If `DESIGN_ARTIFACTS` was set in Phase 0.5, spawn the `ux-design-lead` agent with the artifact paths and ask it to produce an **implementation brief** (see ux-design-lead "Wireframe-to-Implementation Handoff" workflow). The brief is a structured description of every section, its content, and its layout — this becomes the binding input for all UI tasks. Do not write any markup until the brief is received.
 
+   **UX artifact commit checkpoint (after Design Artifact Gate):** After the implementation brief is received, commit before proceeding to UI tasks:
+
+   1. Run `git status --short` to discover the implementation brief and any generated design files
+   2. Stage output files: `git add <discovered files>`
+   3. Commit: `git commit -m "wip: UX implementation brief for <feature-name>"`
+
+   This checkpoint ensures the implementation brief survives session crashes.
+
    For each task in priority order:
 
    ```text
@@ -213,9 +229,16 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    | Logical unit complete (model, service, component) | Small part of a larger unit |
    | Tests pass + meaningful progress | Tests failing |
    | About to switch contexts (backend → frontend) | Purely scaffolding with no behavior |
-   | About to attempt risky/uncertain changes | Would need a "WIP" commit message |
+   | About to attempt risky/uncertain changes | Would need a "WIP" commit message (exception: UX artifacts use `wip:` prefix) |
+   | UX specialist produces artifacts (wireframes, copy, brief) | Specialist is still generating (mid-output) |
+   | Domain leader review cycle completes (feedback applied) | Review feedback not yet incorporated |
+   | Brand guide alignment pass completes | Alignment still in progress |
 
    **Heuristic:** "Can I write a commit message that describes a complete, valuable change? If yes, commit. If the message would be 'WIP' or 'partial X', wait."
+
+   **UX artifact heuristic:** "Did a specialist just produce or revise artifacts? If yes, commit with `wip: UX <description> for feat-X`. UX artifacts are high-effort and low-recoverability -- err on the side of committing too often rather than too rarely."
+
+   The `wip:` prefix is intentional -- UX artifacts are valuable at every revision stage, and WIP commits are squashed on merge with no impact on final git history. Do not run compound before UX WIP commits -- compound runs once in Phase 4.
 
    **Commit workflow:**
 
