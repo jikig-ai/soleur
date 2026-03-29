@@ -37,6 +37,8 @@ INSTRUCTIONS:
 - Run tests relevant to your changes
 - Do NOT commit -- the lead will commit after reviewing all work
 - Do NOT modify files outside your assigned scope
+- Do NOT run package manager install commands (bun install, npm install) that create lockfiles
+- If any task involves UI copy from an approved copy document, include the FULL VERBATIM text in the task description -- never summarize or paraphrase CMO-approved copy
 - Report back: what you completed, files modified, any issues encountered"
 ```
 

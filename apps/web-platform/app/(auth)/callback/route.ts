@@ -74,7 +74,22 @@ export async function GET(request: NextRequest) {
             .eq("is_valid", true)
             .limit(1);
 
-          redirectPath = !keys || keys.length === 0 ? "/setup-key" : "/dashboard";
+          if (!keys || keys.length === 0) {
+            redirectPath = "/setup-key";
+          } else {
+            // Check if a repository is connected
+            const serviceClient = createServiceClient();
+            const { data: repoUser } = await serviceClient
+              .from("users")
+              .select("repo_status")
+              .eq("id", user.id)
+              .single();
+
+            redirectPath =
+              !repoUser || repoUser.repo_status === "not_connected"
+                ? "/connect-repo"
+                : "/dashboard";
+          }
         }
 
         return redirectWithCookies(`${origin}${redirectPath}`, pendingCookies);

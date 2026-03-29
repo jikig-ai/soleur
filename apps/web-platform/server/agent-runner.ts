@@ -17,6 +17,7 @@ import { buildAgentEnv } from "./agent-env";
 import { createSandboxHook } from "./sandbox-hook";
 import { abortableReviewGate, validateSelection, type AgentSession } from "./review-gate";
 import { createChildLogger } from "./logger";
+import { syncPull, syncPush } from "./session-sync";
 
 const log = createChildLogger("agent");
 
@@ -272,10 +273,10 @@ export async function startAgentSession(
     const leader = DOMAIN_LEADERS.find((l) => l.id === effectiveLeaderId);
     if (!leader) throw new Error(`Unknown leader: ${effectiveLeaderId}`);
 
-    // Get user workspace path
+    // Get user workspace path and repo status
     const { data: user } = await supabase
       .from("users")
-      .select("workspace_path")
+      .select("workspace_path, repo_status")
       .eq("id", userId)
       .single();
 
@@ -290,6 +291,11 @@ export async function startAgentSession(
     // bypass canUseTool (see #725). Safe to run on every session start —
     // no-op for already-migrated workspaces.
     patchWorkspacePermissions(workspacePath);
+
+    // Sync: pull latest from remote before session (connected repos only)
+    if (user.repo_status === "ready") {
+      await syncPull(userId, workspacePath);
+    }
 
     // Build system prompt for the domain leader
     let systemPrompt = `You are the ${leader.title} (${leader.name}) for this user's business. ${leader.description}
@@ -500,6 +506,11 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         // Save the full assistant response with leader attribution
         if (fullText) {
           await saveMessage(conversationId, "assistant", fullText, undefined, streamLeaderId);
+        }
+
+        // Sync: push changes to remote after session (connected repos only)
+        if (user.repo_status === "ready") {
+          await syncPush(userId, workspacePath);
         }
 
         // Notify client that this leader finished streaming
