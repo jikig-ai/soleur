@@ -6,6 +6,26 @@ date: 2026-03-29
 
 # legal: update AUP, Cookie Policy, and privacy docs for Web Platform
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-29
+**Sections enhanced:** 5 (Technical Considerations, Acceptance Criteria, Test Scenarios, Dependencies, References)
+**Research sources:** 6 institutional learnings, Supabase SSR source code, middleware analysis
+
+### Key Improvements
+
+1. Added pre-implementation grep inventory strategy (from learning: product-addition-prevention-strategies)
+2. Added post-edit compliance auditor cycle (from learning: cross-document-audit-review-cycle)
+3. Corrected Supabase cookie duration from "Session / persistent (configurable)" to "Persistent (400 days, SameSite=Lax)"
+4. Added blanket-statement grep verification as a validation step
+5. Added cross-reference integrity checks for conversation data across secondary sections (rights, retention, breach scenarios)
+
+### New Considerations Discovered
+
+- Privacy Policy Section 8 (Rights) already mentions Web Platform but may need conversation-specific data subject right language (right to export conversation history)
+- GDPR Policy Section 11 (Breach Notification) scenarios should include conversation data compromise
+- The `tool_calls` JSONB column in messages table may contain structured data that qualifies as a sub-category -- document as "tool call metadata" rather than expanding the PII definition
+
 ## Overview
 
 Three legal documents need updating before beta invites (Phase 2 items 2.7-2.9). The CLO review identified:
@@ -38,6 +58,26 @@ Per the cookie-free analytics learning, legal docs exist in two locations that m
 Body content must match across both locations. Update `docs/legal/` first, then sync to `plugins/soleur/docs/pages/legal/`.
 
 ## Technical Considerations
+
+### Pre-Implementation: Exhaustive Grep Inventory
+
+Per learning `2026-03-20-legal-doc-product-addition-prevention-strategies.md`, run these greps BEFORE making any edits to build a complete change inventory:
+
+```bash
+# AUP: Find every "Plugin" reference that may need Web Platform qualifier
+grep -n "the Plugin\|Local Execution\|locally\|your machine" docs/legal/acceptable-use-policy.md
+
+# Cookie Policy: Verify no blanket "no cookies" statements survive
+grep -n "does not use cookies\|does not set\|no cookies" docs/legal/cookie-policy.md
+
+# Privacy docs: Find all sections referencing Web Platform data
+grep -n "conversation\|message\|chat" docs/legal/privacy-policy.md docs/legal/data-protection-disclosure.md docs/legal/gdpr-policy.md
+
+# Blanket statement scan across ALL legal docs
+grep -rn "does not collect\|does not store\|does not transmit\|does not process" docs/legal/
+```
+
+Classify each match into: **false statement** (P1 fix), **incomplete scope** (P2 fix), or **correctly scoped** (no action, with justification).
 
 ### Document 1: Acceptable Use Policy (`acceptable-use-policy.md`)
 
@@ -74,8 +114,8 @@ Update Section 6.1 to acknowledge that the Web Platform enables server-side moni
 
 | Cookie | Provider | Purpose | Type | Duration |
 |--------|----------|---------|------|----------|
-| `sb-*-auth-token` | Supabase (via app.soleur.ai) | Authentication session (JWT) | Strictly necessary (first-party) | Session / persistent (configurable) |
-| `sb-*-auth-token-code-verifier` | Supabase (via app.soleur.ai) | PKCE code verifier for OAuth flow | Strictly necessary (first-party) | Session |
+| `sb-*-auth-token` | Supabase (via app.soleur.ai) | Authentication session (JWT) | Strictly necessary (first-party) | Persistent (400 days; SameSite=Lax, HttpOnly=false per Supabase SSR defaults in `@supabase/ssr/src/utils/constants.ts`) |
+| `sb-*-auth-token-code-verifier` | Supabase (via app.soleur.ai) | PKCE code verifier for OAuth flow | Strictly necessary (first-party) | Session (consumed and cleared after OAuth exchange) |
 | `__stripe_mid` / `__stripe_sid` | Stripe (via Stripe Checkout redirect) | Fraud prevention during checkout | Strictly necessary (third-party) | Session / 1 year |
 
 **Note on CSRF protection:** The Web Platform validates the `Origin` header on state-changing requests as CSRF protection (`lib/auth/validate-origin.ts`). This is not a cookie but is documented here for transparency. No CSRF token cookie is set -- the protection relies on Origin header checking.
@@ -101,9 +141,19 @@ Update the Purpose and Retention bullets accordingly:
 - **Purpose:** Providing the Web Platform service, including conversational AI interactions with domain-specific agents.
 - **Retention:** Conversation data is retained while the user's account is active and deleted upon account deletion request (cascade delete via foreign key).
 
+**Section 7 (Data Retention):** Add conversation data retention to the Web Platform bullet (currently covers account data and payment records but not conversations).
+
 **Section 12 (Cookies):** Add a paragraph about app.soleur.ai cookies cross-referencing the Cookie Policy.
 
 **Frontmatter:** Update `Last Updated` date and changelog note.
+
+#### Research Insight: Secondary Section Propagation
+
+Per learning `2026-03-18-split-legal-basis-cross-section-consistency.md`, adding a new data category propagates beyond the primary disclosure section. Grep for "Web Platform" and "conversation" across all sections to find secondary references. Known secondary sections:
+
+- Section 7 (Retention) -- needs conversation-specific retention clause
+- Section 8 (Rights) -- already mentions Web Platform; verify conversation data is covered by existing language
+- Section 11 (Security) -- already covers Web Platform; no change needed
 
 ### Document 4: Data Protection Disclosure (`data-protection-disclosure.md`)
 
@@ -135,7 +185,15 @@ Update the Purpose and Retention bullets accordingly:
 
 Update the register count from "nine processing activities" to "ten processing activities".
 
+**Section 9 (DPIA):** Add re-evaluation note: conversation data does not change the DPIA conclusion (no special categories, no systematic monitoring, no automated decision-making).
+
+**Section 11.2 (Breach Notification -- Practical Context):** Add conversation data compromise as a breach scenario: "(e) unauthorized access to conversation history stored in the Supabase database (user messages, assistant responses)."
+
 **Frontmatter:** Update `Last Updated` date and changelog note.
+
+#### Research Insight: Article 30 Register Consistency
+
+Per learning `2026-02-21-gdpr-article-30-compliance-audit-pattern.md`, the public GDPR Policy references a processing activity count. If a private Article 30 register exists, it must also be updated. Verify no private register exists out-of-band.
 
 ## Acceptance Criteria
 
@@ -153,6 +211,11 @@ Update the register count from "nine processing activities" to "ten processing a
 - [ ] All docs updated in both locations (`docs/legal/` and `plugins/soleur/docs/pages/legal/`)
 - [ ] `Last Updated` dates and changelog notes updated in all modified documents
 - [ ] `npx markdownlint-cli2 --fix` passes on all changed files
+- [ ] GDPR Policy Section 9 (DPIA) includes re-evaluation note for conversation data
+- [ ] GDPR Policy Section 11.2 (Breach Notification) includes conversation data compromise scenario
+- [ ] Privacy Policy Section 7 (Retention) includes conversation data retention clause
+- [ ] Post-edit blanket statement grep returns zero unaddressed "does not collect/store/transmit" matches
+- [ ] legal-compliance-auditor run returns zero P1/P2 findings (post-edit verification)
 
 ## Test Scenarios
 
@@ -165,6 +228,32 @@ Update the register count from "nine processing activities" to "ten processing a
 - Given the GDPR Policy Section 10, when a reader counts processing activities, then the count is 10 and includes conversation management
 - Given any modified file, when `npx markdownlint-cli2` is run, then zero errors are reported
 - Given both file locations (`docs/legal/` and `plugins/soleur/docs/pages/legal/`), when body content is compared for each modified document, then the content matches (frontmatter may differ)
+- Given the AUP, when `grep -c "the Plugin" docs/legal/acceptable-use-policy.md | grep -v "Web Platform"` is run, then every remaining "the Plugin" reference is either correctly scoped to Plugin-only context or paired with "Web Platform"
+- Given all legal docs, when `grep -rn "does not collect\|does not store\|does not transmit" docs/legal/` is run, then zero blanket statements contradict the new conversation data processing
+
+### Post-Edit Verification Commands
+
+Per learning `2026-03-20-legal-doc-product-addition-prevention-strategies.md`, run these after all edits are complete:
+
+```bash
+# 1. Section ordering -- verify monotonic order in all modified docs
+for f in acceptable-use-policy cookie-policy privacy-policy data-protection-disclosure gdpr-policy; do
+  echo "--- $f ---"
+  grep -E '^#{2,3} [0-9]+' "docs/legal/${f}.md"
+done
+
+# 2. Product completeness -- find remaining Plugin-only references in AUP
+grep -n "the Plugin" docs/legal/acceptable-use-policy.md | grep -v "Web Platform" | grep -v "Plugin only"
+
+# 3. Blanket statement scan across ALL legal docs
+grep -rn "does not collect\|does not store\|does not transmit\|does not process" docs/legal/
+
+# 4. Conversation data completeness -- verify all three privacy docs mention conversation
+for f in privacy-policy data-protection-disclosure gdpr-policy; do
+  echo "--- $f ---"
+  grep -c "conversation" "docs/legal/${f}.md"
+done
+```
 
 ## Dependencies and Risks
 
@@ -173,6 +262,7 @@ Update the register count from "nine processing activities" to "ten processing a
 - **Dual-file sync risk.** Five documents exist in two locations. Missing one location creates contradictions. Mitigated by updating `docs/legal/` first, then syncing.
 - **Article 30 register count.** The GDPR Policy references "nine processing activities" -- this must be incremented to ten. If any other PR has modified the count concurrently, a merge conflict is expected but trivially resolvable.
 - **DPIA re-evaluation.** Adding conversation data as a new PII category may trigger DPIA re-evaluation. However, conversation data does not involve special categories (Art. 9), systematic monitoring, or automated decision-making -- the existing DPIA assessment (GDPR Policy Section 9) conclusion remains valid. A sentence noting the re-evaluation should be added.
+- **Compliance auditor cycle.** Per learning `2026-03-18-legal-cross-document-audit-review-cycle.md`, always run the legal-compliance-auditor agent AFTER all edits are complete, not during. Budget for one fix-reverify cycle. The auditor checks cross-document consistency, missing disclosures, and stale conditionals that are invisible in a section-by-section plan.
 
 ## Domain Review
 
@@ -189,11 +279,22 @@ Update the register count from "nine processing activities" to "ten processing a
 
 - Issue: #1048 (legal: update AUP, Cookie Policy, and privacy docs for Web Platform)
 - Milestone: Phase 2: Secure for Beta
-- Learning: `knowledge-base/project/learnings/2026-02-21-cookie-free-analytics-legal-update-pattern.md`
-- Schema: `apps/web-platform/supabase/migrations/001_initial_schema.sql` (conversations and messages tables)
+- Schema: `apps/web-platform/supabase/migrations/001_initial_schema.sql` (conversations and messages tables, lines 46-90)
 - Cookies: `apps/web-platform/middleware.ts` (Supabase auth cookie config, SameSite=Lax)
+- Cookie defaults: `apps/web-platform/node_modules/@supabase/ssr/src/utils/constants.ts` (maxAge=400 days, httpOnly=false)
 - CSRF: `apps/web-platform/lib/auth/validate-origin.ts` (Origin header validation)
 - Auth callback: `apps/web-platform/app/(auth)/callback/route.ts` (cookie handling)
+
+### Institutional Learnings Applied
+
+| Learning | Key Insight Applied |
+|----------|-------------------|
+| `2026-02-21-cookie-free-analytics-legal-update-pattern.md` | Dual-file location sync pattern; lockstep update requirement |
+| `2026-03-10-first-pii-collection-legal-update-pattern.md` | Grep verification for blanket "does not" statements after targeted edits |
+| `2026-02-20-dogfood-legal-agents-cross-document-consistency.md` | Budget for audit-fix-reaudit cycle; cross-document consistency is invisible in section plans |
+| `2026-03-20-legal-doc-product-addition-prevention-strategies.md` | Exhaustive grep inventory before implementation; section-by-section checklist; anchor-based insertion |
+| `2026-03-18-legal-cross-document-audit-review-cycle.md` | Run compliance auditor AFTER all edits; budget for one fix-reverify cycle |
+| `2026-03-18-split-legal-basis-cross-section-consistency.md` | New data category propagates to retention, rights, and processor sections -- not just primary disclosure |
 
 ### Files to Modify (10 files -- 5 documents x 2 locations)
 
