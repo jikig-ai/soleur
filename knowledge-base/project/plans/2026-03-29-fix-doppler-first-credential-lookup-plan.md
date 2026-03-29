@@ -6,6 +6,19 @@ date: 2026-03-29
 
 # fix: auto-check Doppler for API keys before prompting users
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-29
+**Sections enhanced:** 1 (Proposed Change)
+**Research method:** Doppler CLI behavior verification, learnings scan
+
+### Key Findings
+
+1. `doppler secrets get <MISSING_KEY> --plain` exits with code 1 and writes error to stderr -- `2>/dev/null` in the proposed rule correctly handles this
+2. `doppler secrets --only-names` outputs a clean table with header row -- usable for key discovery
+3. No relevant learnings in `knowledge-base/project/learnings/` apply to this change
+4. The `dev` config has 14 application secrets; `prd` has 23 -- checking `dev` first is the right default for local agent sessions
+
 ## Problem
 
 When a tool or service requires an API key (e.g., Pencil CLI `PENCIL_CLI_KEY`), the agent should automatically check Doppler before asking the user to manually log in or provide credentials. During the feat-repo-connection session, the agent attempted `pencil login` (interactive) and suggested the user run it manually, when the key was already stored in Doppler (`soleur/dev` config). This wasted a round-trip and violated the "exhaust all automated options" rule.
