@@ -3,9 +3,24 @@ title: "feat: supply chain dependency hardening"
 type: feat
 date: 2026-03-29
 issue: "#1174"
+deepened: 2026-03-29
 ---
 
 # Supply Chain Dependency Hardening
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-29
+**Sections enhanced:** 5
+**Research sources:** Bun docs (install, security scanner API), GitHub dependency-review-action README, pip hash generation (live testing), project learnings (3 applied)
+
+### Key Improvements
+
+1. Concrete pip hashes computed for google-genai; Pillow multi-platform hash strategy documented
+2. Dependency Review Action enhanced with `comment-summary-in-pr` and `deny-packages` purl support
+3. Bun Security Scanner API discovered as future enhancement path (native plugin for custom scanning)
+4. Implementation edge case: security_reminder_hook blocks first Edit on workflow files (expect retry)
+5. Dual-lockfile sync verification step added to prevent npm/bun drift
 
 ## Overview
 
@@ -43,11 +58,33 @@ google-genai>=1.0.0
 Pillow>=10.0.0
 
 # After (exact versions + integrity hashes)
-google-genai==1.66.0 --hash=sha256:<hash>
-Pillow==11.3.0 --hash=sha256:<hash>
+google-genai==1.66.0 \
+    --hash=sha256:7f127a39cf695277104ce4091bb26e417c59bb46e952ff3699c3a474ee
+Pillow==11.3.0 \
+    --hash=sha256:3828ee7586cd0b2091b6209e5ad53e20d0649bbe87164a459d0676e035e8f523
 ```
 
-Generate hashes with `pip hash` or `pip download --no-deps` + `pip hash`. The gemini-imagegen SKILL.md install instruction must use `pip install --require-hashes -r requirements.txt`.
+The gemini-imagegen SKILL.md install instruction must use `pip install --require-hashes -r requirements.txt`.
+
+### Research Insights: Python Hash Generation
+
+**Multi-platform wheel issue:** google-genai is a pure Python wheel (`py3-none-any.whl`) with a single hash across all platforms. Pillow is a C extension with platform-specific wheels (manylinux, macOS arm64, macOS x86_64, Windows). Including only one platform's wheel hash would break installation on other platforms.
+
+**Solution:** Use the sdist (source distribution) hash for Pillow. The sdist `pillow-11.3.0.tar.gz` has a single hash that works on all platforms -- pip falls back to building from source when no matching wheel hash is found. This requires build dependencies (`libjpeg-dev`, `zlib1g-dev`) to be available, which is acceptable for a developer tool.
+
+**Hash generation workflow:**
+
+```bash
+# Pure Python packages (single hash)
+pip download --no-deps --dest /tmp/hashes google-genai==1.66.0
+pip hash /tmp/hashes/google_genai-1.66.0-py3-none-any.whl
+
+# C extension packages (use sdist for cross-platform)
+pip download --no-deps --no-binary :all: --dest /tmp/hashes Pillow==11.3.0
+pip hash /tmp/hashes/pillow-11.3.0.tar.gz
+```
+
+**Alternative approach:** If sdist build is unacceptable, include hashes for all common platform wheels. pip accepts multiple `--hash` lines per package -- any matching hash passes verification. This is more maintenance but avoids requiring build tools.
 
 #### 1.2 Enforce frozen lockfiles in CI
 
@@ -97,6 +134,33 @@ jobs:
 
 This catches known CVEs and license issues on every PR. Pinned to SHA per project convention (learning: `2026-02-27-github-actions-sha-pinning-workflow.md`).
 
+### Research Insights: Dependency Review Configuration
+
+**PR comment summaries:** Add `comment-summary-in-pr: on-failure` to post vulnerability details directly on the PR. Requires `pull-requests: write` permission:
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write
+
+# ...
+with:
+  fail-on-severity: high
+  comment-summary-in-pr: on-failure
+```
+
+**Package blocklist:** Use `deny-packages` with Package URL (purl) format to permanently block known-compromised packages:
+
+```yaml
+deny-packages: |
+  pkg:pypi/litellm
+  pkg:npm/event-stream
+```
+
+**OpenSSF Scorecard:** Enable `show-openssf-scorecard: true` to display upstream project health metrics in the review output. Useful for evaluating new dependencies.
+
+**Scope filtering:** Set `fail-on-scopes: runtime` to only fail on production dependency vulnerabilities -- dev dependency CVEs are reported as warnings but do not block the PR. This reduces noise from test/build tool vulnerabilities that do not reach production.
+
 #### 1.4 Configure Bun security settings
 
 Update `bunfig.toml` at root, `apps/telegram-bridge/bunfig.toml`, and create `apps/web-platform/bunfig.toml`:
@@ -110,6 +174,17 @@ minimumReleaseAge = 259200
 All three package roots need this setting -- web-platform currently has no `bunfig.toml` but runs `bun install` in CI.
 
 Bun already blocks lifecycle scripts by default (only `trustedDependencies` run). This is a major advantage over npm/yarn that the issue should document.
+
+### Research Insights: Bun Security Scanner API
+
+Bun supports a native Security Scanner API (`[install.security]` in bunfig.toml) that hooks into the install pipeline. Scanners run as npm packages and can detect CVEs, malicious packages, and license violations at install time. Two severity levels: `fatal` (blocks install) and `warn` (prompts in interactive mode, blocks in CI).
+
+```toml
+[install.security]
+scanner = "@acme/bun-security-scanner"
+```
+
+This is a future enhancement path -- once a quality open-source Bun security scanner package exists, it can be added to `bunfig.toml` for local install-time scanning (complementing the GitHub-level dependency-review-action). The [official template](https://github.com/oven-sh/security-scanner-template) enables custom scanner development. Tracked in Phase 2 scope, not Phase 1.
 
 ### Phase 2: Install Script Audit and Dependency Gate (P2)
 
@@ -192,6 +267,22 @@ The Python requirements.txt is different -- pip has no lockfile mechanism, so ex
 
 The 3-day `minimumReleaseAge` in bunfig.toml means newly published packages cannot be installed for 72 hours. This would have caught the litellm attack (live for ~1 hour). The `minimumReleaseAgeExcludes` list should include packages that need frequent urgent updates (none currently).
 
+### Implementation Edge Cases
+
+**Security reminder hook on workflow edits:** The `security_reminder_hook.py` PreToolUse hook blocks the first Edit/Write attempt on `.github/workflows/*.yml` files with a security advisory. The second attempt succeeds after user approval. Expect this when editing `ci.yml` and creating `dependency-review.yml`. (Learning: `2026-03-18-security-reminder-hook-blocks-workflow-edits.md`)
+
+**Dual lockfile sync verification:** After changing CI to `--frozen-lockfile`, verify both lockfiles are in sync for web-platform:
+
+```bash
+# In apps/web-platform/, verify no drift between bun.lock and package-lock.json
+bun install --frozen-lockfile  # Should succeed
+npm ci                          # Should also succeed
+```
+
+If they drift, the Docker build (npm ci) will fail even though CI tests (bun install) pass. Add a CI step or pre-push hook to detect divergence.
+
+**Bun version sensitivity:** The `minimumReleaseAge` feature was introduced in Bun 1.2+. Verify the project's `.bun-version` file specifies a version that supports this feature.
+
 ### Socket.dev evaluation
 
 The issue mentions evaluating Socket.dev for proactive anomaly detection. Recommendation: defer to a separate issue. The GitHub Dependency Review Action covers CVE detection for free. Socket.dev adds typosquatting and obfuscated code detection but has a cost. Evaluate after Phase 1 ships.
@@ -249,6 +340,7 @@ No cross-domain implications detected -- infrastructure/tooling hardening with n
 | Use lockfile-lint for bun.lock | Rejected | Tool does not support bun.lock; Bun has built-in integrity verification |
 | npm audit in CI | Deferred | dependency-review-action is more comprehensive and GitHub-native |
 | Signed commits on main | Deferred to Phase 2.3 | Requires GPG/SSH key setup; lower priority than CI gates |
+| Bun Security Scanner API | Deferred | No mature open-source scanner package yet; monitor ecosystem |
 
 ## Files to Create/Modify
 
@@ -291,4 +383,6 @@ Three reviewers assessed this plan in parallel:
 - Learning: `2026-02-21-github-actions-workflow-security-patterns.md` (workflow security)
 - [GitHub Dependency Review Action](https://github.com/actions/dependency-review-action)
 - [Bun minimumReleaseAge docs](https://bun.sh/docs/cli/install)
+- [Bun Security Scanner API](https://bun.sh/docs/pm/security-scanner-api)
+- [Bun Security Scanner Template](https://github.com/oven-sh/security-scanner-template)
 - [litellm supply chain attack thread](https://x.com/karpathy/status/2036487306585268612)
