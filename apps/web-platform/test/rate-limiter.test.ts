@@ -196,29 +196,22 @@ function mockRequest(headers: Record<string, string | undefined>, remoteAddress?
 }
 
 describe("extractClientIp", () => {
-  test("prefers cf-connecting-ip", () => {
+  test("prefers cf-connecting-ip over remoteAddress", () => {
     const req = mockRequest({
       "cf-connecting-ip": "1.2.3.4",
-      "x-forwarded-for": "5.6.7.8",
-    });
+    }, "10.0.0.1");
     expect(extractClientIp(req)).toBe("1.2.3.4");
   });
 
-  test("falls back to x-forwarded-for first entry", () => {
+  test("ignores x-forwarded-for (not trusted — spoofable without Cloudflare)", () => {
     const req = mockRequest({
-      "x-forwarded-for": "1.2.3.4, 5.6.7.8, 9.10.11.12",
-    });
-    expect(extractClientIp(req)).toBe("1.2.3.4");
+      "x-forwarded-for": "1.2.3.4, 5.6.7.8",
+    }, "10.0.0.1");
+    // Should use remoteAddress, not XFF
+    expect(extractClientIp(req)).toBe("10.0.0.1");
   });
 
-  test("falls back to single x-forwarded-for entry", () => {
-    const req = mockRequest({
-      "x-forwarded-for": "1.2.3.4",
-    });
-    expect(extractClientIp(req)).toBe("1.2.3.4");
-  });
-
-  test("falls back to remoteAddress", () => {
+  test("falls back to remoteAddress when cf-connecting-ip absent", () => {
     const req = mockRequest({}, "10.0.0.1");
     expect(extractClientIp(req)).toBe("10.0.0.1");
   });
@@ -231,18 +224,18 @@ describe("extractClientIp", () => {
     expect(extractClientIp(req)).toBe("unknown");
   });
 
-  test("handles empty cf-connecting-ip by falling through", () => {
+  test("handles empty cf-connecting-ip by falling through to remoteAddress", () => {
     const req = mockRequest({
       "cf-connecting-ip": "",
-      "x-forwarded-for": "1.2.3.4",
-    });
-    expect(extractClientIp(req)).toBe("1.2.3.4");
-  });
-
-  test("handles empty x-forwarded-for by falling through", () => {
-    const req = mockRequest({
-      "x-forwarded-for": "",
     }, "10.0.0.1");
     expect(extractClientIp(req)).toBe("10.0.0.1");
+  });
+
+  test("cf-connecting-ip takes priority even when x-forwarded-for is present", () => {
+    const req = mockRequest({
+      "cf-connecting-ip": "1.2.3.4",
+      "x-forwarded-for": "5.6.7.8",
+    });
+    expect(extractClientIp(req)).toBe("1.2.3.4");
   });
 });

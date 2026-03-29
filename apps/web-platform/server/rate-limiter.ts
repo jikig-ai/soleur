@@ -130,18 +130,26 @@ export class PendingConnectionTracker {
 // ---------------------------------------------------------------------------
 
 export function extractClientIp(req: IncomingMessage): string {
+  // Trust cf-connecting-ip (set by Cloudflare, not spoofable when traffic
+  // flows through the proxy). This is the only reliable header in production.
   const cfIp = req.headers["cf-connecting-ip"];
   if (typeof cfIp === "string" && cfIp) {
     return cfIp;
   }
 
-  const xff = req.headers["x-forwarded-for"];
-  if (typeof xff === "string" && xff) {
-    const first = xff.split(",")[0]?.trim();
-    if (first) return first;
+  // Do NOT trust x-forwarded-for — absence of cf-connecting-ip means traffic
+  // bypassed Cloudflare. An attacker with the origin IP could spoof XFF to
+  // rotate IPs and bypass all per-IP rate limiting. Fall through to
+  // remoteAddress which cannot be spoofed at the TCP level.
+  const remoteAddress = req.socket.remoteAddress;
+  if (!remoteAddress) {
+    log.warn(
+      { sec: true },
+      "No client IP available — possible direct-to-origin connection",
+    );
+    return "unknown";
   }
-
-  return req.socket.remoteAddress ?? "unknown";
+  return remoteAddress;
 }
 
 // ---------------------------------------------------------------------------
@@ -178,3 +186,18 @@ export const sessionThrottle = new SlidingWindowCounter({
 export const pendingConnections = new PendingConnectionTracker(
   RATE_LIMIT_CONFIG.maxPendingPerIp,
 );
+
+// Periodic cleanup to prevent unbounded memory growth from stale entries.
+// Lazy eviction in isAllowed() only cleans keys that are actively checked —
+// IPs that connect once and never return accumulate until pruned.
+const pruneConnectionInterval = setInterval(
+  () => connectionThrottle.prune(),
+  60_000,
+);
+pruneConnectionInterval.unref();
+
+const pruneSessionInterval = setInterval(
+  () => sessionThrottle.prune(),
+  300_000,
+);
+pruneSessionInterval.unref();

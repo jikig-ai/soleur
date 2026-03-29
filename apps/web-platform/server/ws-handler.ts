@@ -25,7 +25,6 @@ import {
   pendingConnections,
   extractClientIp,
   logRateLimitRejection,
-  RATE_LIMIT_CONFIG,
 } from "./rate-limiter";
 
 const log = createChildLogger("ws");
@@ -383,11 +382,9 @@ export function setupWebSocket(server: HTTPServer) {
     const clientIp = extractClientIp(req);
     if (!connectionThrottle.isAllowed(clientIp)) {
       logRateLimitRejection("connection-throttle", clientIp);
-      const retryAfterSec = Math.ceil(
-        RATE_LIMIT_CONFIG.connectionWindowMs / 1_000,
-      );
+      // Fixed Retry-After to avoid leaking exact window config (CWE-209)
       socket.write(
-        `HTTP/1.1 429 Too Many Requests\r\nRetry-After: ${retryAfterSec}\r\nConnection: close\r\n\r\n`,
+        "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 120\r\nConnection: close\r\n\r\n",
       );
       socket.destroy();
       return;
