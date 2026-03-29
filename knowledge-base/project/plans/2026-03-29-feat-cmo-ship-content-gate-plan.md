@@ -50,12 +50,12 @@ To:
 
 ## Acceptance Criteria
 
-- [ ] Phase 5.5 CMO gate fires on `semver:minor`/`major` labels and `feat:` titles
-- [ ] CMO produces content brief + updates `content-strategy.md` immediately (existing behavior, unchanged)
-- [ ] "Skip for code-only PRs, bug fixes, and pure infrastructure changes" removed
-- [ ] CMO assessment question in domain config includes "new user-facing product capabilities"
-- [ ] AGENTS.md Phase 5.5 description reflects new trigger conditions
-- [ ] Intro text says "three" not "two" conditional gates
+- [x] Phase 5.5 CMO gate fires on `semver:minor`/`major` labels and `feat:` titles
+- [x] CMO produces content brief + updates `content-strategy.md` immediately (existing behavior, unchanged)
+- [x] "Skip for code-only PRs, bug fixes, and pure infrastructure changes" removed
+- [x] CMO assessment question in domain config includes "new user-facing product capabilities"
+- [x] AGENTS.md Phase 5.5 description reflects new trigger conditions
+- [x] Intro text says "three" not "two" conditional gates
 
 ## Test Scenarios
 
