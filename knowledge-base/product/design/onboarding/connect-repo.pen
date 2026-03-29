@@ -1,0 +1,2437 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "xKdzv",
+      "x": 0,
+      "y": -200,
+      "name": "Component/GoldButton",
+      "reusable": true,
+      "fill": {
+        "type": "gradient",
+        "gradientType": "linear",
+        "enabled": true,
+        "rotation": 90,
+        "size": {
+          "height": 1
+        },
+        "colors": [
+          {
+            "color": "#D4B36A",
+            "position": 0
+          },
+          {
+            "color": "#B8923E",
+            "position": 1
+          }
+        ]
+      },
+      "padding": [
+        14,
+        32
+      ],
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "text",
+          "id": "wEmAh",
+          "name": "label",
+          "fill": "#0A0A0A",
+          "content": "Button",
+          "fontFamily": "Inter",
+          "fontSize": 15,
+          "fontWeight": "600",
+          "letterSpacing": 0.3
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "mfwRL",
+      "x": 300,
+      "y": -200,
+      "name": "Component/OutlineButton",
+      "reusable": true,
+      "fill": "#0A0A0A",
+      "stroke": {
+        "align": "inside",
+        "thickness": 1,
+        "fill": "#2A2A2A"
+      },
+      "padding": [
+        14,
+        32
+      ],
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "text",
+          "id": "b8E0r",
+          "name": "label",
+          "fill": "#FFFFFF",
+          "content": "Button",
+          "fontFamily": "Inter",
+          "fontSize": 15,
+          "fontWeight": "500",
+          "letterSpacing": 0.3
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "xGJN6",
+      "x": 0,
+      "y": 0,
+      "name": "1 - Choose Setup",
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg",
+      "layout": "vertical",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "0Nzag",
+          "name": "content",
+          "width": 720,
+          "layout": "vertical",
+          "gap": 24,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "bS2s2",
+              "name": "lbl1",
+              "fill": "$gold",
+              "content": "GETTING STARTED",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 2
+            },
+            {
+              "type": "text",
+              "id": "PKt3d",
+              "name": "h1",
+              "fill": "$white",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Give Your AI Team the Full Picture",
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 40,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "SIbsv",
+              "name": "sub1",
+              "fill": "$body-text",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Your AI team works best when it understands your actual business -- your decisions, your patterns, what you have built so far. Connect a project so your team starts with real context, not a blank slate.",
+              "lineHeight": 1.6,
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "pamoJ",
+              "name": "trust1",
+              "fill": "$muted-text",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "You stay in control -- your AI team proposes changes, you decide what ships.",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "UKXRY",
+              "name": "cards-row",
+              "width": "fill_container",
+              "gap": 20,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "5W7tw",
+                  "name": "left-card",
+                  "width": "fill_container",
+                  "fill": "$card-bg",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "#D4B36A33"
+                  },
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 28,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "JCcCU",
+                      "name": "icon",
+                      "width": 40,
+                      "height": 40,
+                      "fill": "#1A1A1A",
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "$card-border"
+                      },
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "PSbV6",
+                          "name": "lcIconTxt",
+                          "fill": "$gold",
+                          "content": "+",
+                          "fontFamily": "Inter",
+                          "fontSize": 20,
+                          "fontWeight": "300"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "oYZXR",
+                      "name": "lcHead",
+                      "fill": "$white",
+                      "content": "Start Fresh",
+                      "fontFamily": "Cormorant Garamond",
+                      "fontSize": 22,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "nueFu",
+                      "name": "lcDesc",
+                      "fill": "$body-text",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Starting from scratch? We create a project workspace on GitHub (owned by Microsoft) under your own account -- you keep full ownership of your code and data. Your AI team gets a home base from day one.",
+                      "lineHeight": 1.6,
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "id": "hyO8X",
+                      "type": "ref",
+                      "ref": "xKdzv",
+                      "name": "lcBtn",
+                      "x": 28,
+                      "y": 248,
+                      "width": "fit_content",
+                      "height": "fit_content",
+                      "descendants": {
+                        "wEmAh": {
+                          "content": "Create Project",
+                          "x": 32,
+                          "y": 14
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "LNlRN",
+                  "name": "right-card",
+                  "width": "fill_container",
+                  "fill": "$card-bg",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$card-border"
+                  },
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 28,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "ge1sN",
+                      "name": "icon",
+                      "width": 40,
+                      "height": 40,
+                      "fill": "#1A1A1A",
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "$card-border"
+                      },
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "EJG8l",
+                          "name": "rcIconTxt",
+                          "width": 18,
+                          "height": 18,
+                          "iconFontName": "link",
+                          "iconFontFamily": "lucide",
+                          "fill": "$body-text"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "2o7T2",
+                      "name": "rcHead",
+                      "fill": "$white",
+                      "content": "Connect Existing Project",
+                      "fontFamily": "Cormorant Garamond",
+                      "fontSize": 22,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "pKKyD",
+                      "name": "rcDesc",
+                      "fill": "$body-text",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Already have project files stored online? Link your existing work so your AI team starts with full context -- your architecture, your patterns, your decisions.",
+                      "lineHeight": 1.6,
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "id": "NoJ3S",
+                      "type": "ref",
+                      "ref": "mfwRL",
+                      "name": "rcBtn",
+                      "x": 28,
+                      "y": 227,
+                      "width": "fit_content",
+                      "height": "fit_content",
+                      "descendants": {
+                        "b8E0r": {
+                          "content": "Connect Project",
+                          "x": 32,
+                          "y": 14
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "ljrCw",
+              "name": "skipLink",
+              "fill": "$muted-text",
+              "content": "Skip this step -- you can connect a project later from Settings.",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "M5AEf",
+      "x": 1540,
+      "y": 0,
+      "name": "2 - GitHub Redirect",
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg",
+      "layout": "vertical",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "eVukh",
+          "name": "content",
+          "width": 620,
+          "layout": "vertical",
+          "gap": 28,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "O7HoE",
+              "name": "lbl2",
+              "fill": "$gold",
+              "content": "SECURE CONNECTION",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 2
+            },
+            {
+              "type": "text",
+              "id": "xERG0",
+              "name": "h2",
+              "fill": "$white",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Connecting to GitHub",
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 40,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "cnRqo",
+              "name": "desc2",
+              "fill": "$body-text",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "GitHub is a trusted platform, owned by Microsoft, where millions of developers and companies store their project files securely. We use it as the foundation for your project workspace.",
+              "lineHeight": 1.6,
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "7TRwM",
+              "name": "steps-card",
+              "width": "fill_container",
+              "fill": "$card-bg",
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "$card-border"
+              },
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "DJZ8l",
+                  "name": "stepsHead",
+                  "fill": "$white",
+                  "content": "What happens next",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "49oxt",
+                  "name": "step1",
+                  "fill": "$body-text",
+                  "content": "1. Sign in to GitHub",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "Auh7X",
+                  "name": "step2",
+                  "fill": "$body-text",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "2. Grant project access -- We only request permission to read and manage your project files -- nothing else.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "dotDr",
+                  "name": "step3",
+                  "fill": "$body-text",
+                  "content": "3. Return here automatically",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "u7QPQ",
+              "name": "ownership-block",
+              "width": "fill_container",
+              "fill": "$card-bg",
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "$card-border"
+              },
+              "gap": 16,
+              "padding": 20,
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "fyLWJ",
+                  "name": "shieldIcon",
+                  "width": 20,
+                  "height": 20,
+                  "iconFontName": "shield",
+                  "iconFontFamily": "lucide",
+                  "fill": "$gold"
+                },
+                {
+                  "type": "frame",
+                  "id": "H085w",
+                  "name": "owner-text",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 6,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "H6EIE",
+                      "name": "ownerHead",
+                      "fill": "$white",
+                      "content": "Why your own GitHub account?",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "WyeFR",
+                      "name": "ownerDesc",
+                      "fill": "$body-text",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Your project is created under your GitHub account, not ours. You own your code and data completely. This keeps your files separate from every other Soleur user -- no shared storage, no co-mingled data.",
+                      "lineHeight": 1.6,
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "CbbQr",
+              "name": "buttons",
+              "width": "fill_container",
+              "gap": 12,
+              "justifyContent": "center",
+              "children": [
+                {
+                  "id": "eQ92i",
+                  "type": "ref",
+                  "ref": "xKdzv",
+                  "name": "goldBtn2",
+                  "x": 137,
+                  "y": 0,
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "descendants": {
+                    "wEmAh": {
+                      "content": "Continue to GitHub",
+                      "x": 32,
+                      "y": 14
+                    }
+                  }
+                },
+                {
+                  "id": "6OF06",
+                  "type": "ref",
+                  "ref": "mfwRL",
+                  "name": "backBtn2",
+                  "x": 357,
+                  "y": 0,
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "descendants": {
+                    "b8E0r": {
+                      "content": "Go Back",
+                      "x": 32,
+                      "y": 14
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "b2Gs3",
+      "x": 3080,
+      "y": 0,
+      "name": "3 - Create Project",
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg",
+      "layout": "vertical",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "dfJXU",
+          "name": "content",
+          "width": 520,
+          "layout": "vertical",
+          "gap": 28,
+          "children": [
+            {
+              "type": "text",
+              "id": "N1YXj",
+              "name": "lbl3",
+              "fill": "$gold",
+              "content": "NEW PROJECT",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 2
+            },
+            {
+              "type": "text",
+              "id": "ptFsy",
+              "name": "h3",
+              "fill": "$white",
+              "content": "Name Your Project",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 40,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "Ruk2X",
+              "name": "desc3",
+              "fill": "$body-text",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Give your project a name. This will be used to create your workspace on GitHub.",
+              "lineHeight": 1.6,
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "Yw1ik",
+              "name": "input-group",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 8,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "u3gGj",
+                  "name": "inputLabel",
+                  "fill": "$white",
+                  "content": "Project Name",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "frame",
+                  "id": "nTnq9",
+                  "name": "input-field",
+                  "width": "fill_container",
+                  "fill": "#0A0A0A",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$card-border"
+                  },
+                  "padding": [
+                    12,
+                    16
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "e9RM1",
+                      "name": "inputPlaceholder",
+                      "fill": "#4A4A4A",
+                      "content": "my-startup",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "yniIw",
+                  "name": "helperText",
+                  "fill": "$muted-text",
+                  "content": "This becomes your project address on GitHub (e.g. github.com/you/my-startup)",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "OW5B1",
+              "name": "visibility",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "WJepG",
+                  "name": "visLabel",
+                  "fill": "$white",
+                  "content": "Visibility",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "frame",
+                  "id": "IrBw0",
+                  "name": "vis-options",
+                  "width": "fill_container",
+                  "gap": 12,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "ouxj6",
+                      "name": "private-opt",
+                      "width": "fill_container",
+                      "fill": "$card-bg",
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#D4B36A44"
+                      },
+                      "gap": 10,
+                      "padding": [
+                        12,
+                        16
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "zK0Ur",
+                          "name": "privRadio",
+                          "fill": "#0A0A0A",
+                          "width": 16,
+                          "height": 16,
+                          "stroke": {
+                            "align": "inside",
+                            "thickness": 1,
+                            "fill": "$gold"
+                          }
+                        },
+                        {
+                          "type": "ellipse",
+                          "id": "1mqSd",
+                          "name": "privDot",
+                          "fill": "$gold",
+                          "width": 8,
+                          "height": 8
+                        },
+                        {
+                          "type": "frame",
+                          "id": "RGoVa",
+                          "name": "privTxt",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 2,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "LiP04",
+                              "name": "privName",
+                              "fill": "$white",
+                              "content": "Private (recommended)",
+                              "fontFamily": "Inter",
+                              "fontSize": 13,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Fgped",
+                      "name": "public-opt",
+                      "width": "fill_container",
+                      "fill": "$card-bg",
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "$card-border"
+                      },
+                      "gap": 10,
+                      "padding": [
+                        12,
+                        16
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "GZv1M",
+                          "name": "pubRadio",
+                          "fill": "#0A0A0A",
+                          "width": 16,
+                          "height": 16,
+                          "stroke": {
+                            "align": "inside",
+                            "thickness": 1,
+                            "fill": "$card-border"
+                          }
+                        },
+                        {
+                          "type": "text",
+                          "id": "z9Wih",
+                          "name": "pubTxt",
+                          "fill": "$body-text",
+                          "content": "Public",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "yODYn",
+              "name": "buttons",
+              "width": "fill_container",
+              "gap": 12,
+              "children": [
+                {
+                  "id": "EFmE7",
+                  "type": "ref",
+                  "ref": "xKdzv",
+                  "name": "goldBtn3",
+                  "y": 0,
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "descendants": {
+                    "wEmAh": {
+                      "content": "Create Project",
+                      "x": 32,
+                      "y": 14
+                    }
+                  }
+                },
+                {
+                  "id": "DHXB8",
+                  "type": "ref",
+                  "ref": "mfwRL",
+                  "name": "backBtn3",
+                  "x": 184,
+                  "y": 0,
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "descendants": {
+                    "b8E0r": {
+                      "content": "Back",
+                      "x": 32,
+                      "y": 14
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "olobQ",
+      "x": 4620,
+      "y": 0,
+      "name": "4 - Select Project",
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg",
+      "layout": "vertical",
+      "padding": [
+        48,
+        100
+      ],
+      "justifyContent": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "srJ7D",
+          "name": "top-bar",
+          "width": "fill_container",
+          "gap": 12,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "icon_font",
+              "id": "Ctt10",
+              "name": "backArrow",
+              "width": 20,
+              "height": 20,
+              "iconFontName": "arrow-left",
+              "iconFontFamily": "lucide",
+              "fill": "$body-text"
+            },
+            {
+              "type": "text",
+              "id": "Cx1GR",
+              "name": "backLbl",
+              "fill": "$body-text",
+              "content": "Back",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "dDjYL",
+          "name": "content",
+          "width": 680,
+          "layout": "vertical",
+          "gap": 24,
+          "children": [
+            {
+              "type": "text",
+              "id": "MB4vG",
+              "name": "lbl4",
+              "fill": "$gold",
+              "content": "CONNECT PROJECT",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 2
+            },
+            {
+              "type": "text",
+              "id": "juUEw",
+              "name": "h4",
+              "fill": "$white",
+              "content": "Select a Project",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 40,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "uZhre",
+              "name": "sub4",
+              "fill": "$body-text",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Choose from your existing projects on GitHub. Each project below is a repository (a project folder) from your GitHub account.",
+              "lineHeight": 1.6,
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "R013X",
+              "name": "filter-row",
+              "width": "fill_container",
+              "gap": 12,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "vD362",
+                  "name": "account-dropdown",
+                  "fill": "$card-bg",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$card-border"
+                  },
+                  "gap": 8,
+                  "padding": [
+                    10,
+                    16
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "msbZQ",
+                      "name": "acctTxt",
+                      "fill": "$white",
+                      "content": "My Projects",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "icon_font",
+                      "id": "nEEhW",
+                      "name": "acctChev",
+                      "width": 14,
+                      "height": 14,
+                      "iconFontName": "chevron-down",
+                      "iconFontFamily": "lucide",
+                      "fill": "$body-text"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Ig3zl",
+                  "name": "search-bar",
+                  "width": "fill_container",
+                  "fill": "#0A0A0A",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$card-border"
+                  },
+                  "gap": 8,
+                  "padding": [
+                    10,
+                    16
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "lS80T",
+                      "name": "searchIcon",
+                      "width": 14,
+                      "height": 14,
+                      "iconFontName": "search",
+                      "iconFontFamily": "lucide",
+                      "fill": "#4A4A4A"
+                    },
+                    {
+                      "type": "text",
+                      "id": "dFdhI",
+                      "name": "searchPlc",
+                      "fill": "#4A4A4A",
+                      "content": "Search projects...",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "9tev9",
+              "name": "repo-list",
+              "width": "fill_container",
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "7557r",
+                  "name": "repo-row-1",
+                  "width": "fill_container",
+                  "fill": "$card-bg",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": {
+                      "top": 1,
+                      "right": 1,
+                      "left": 1
+                    },
+                    "fill": "$card-border"
+                  },
+                  "gap": 12,
+                  "padding": [
+                    16,
+                    20
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "8biCX",
+                      "name": "r1info",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "6wv7C",
+                          "name": "r1top",
+                          "gap": 10,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "in6tR",
+                              "name": "r1name",
+                              "fill": "$white",
+                              "content": "my-saas-app",
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "wMkdI",
+                              "name": "r1badge",
+                              "fill": "#1A1A1A",
+                              "stroke": {
+                                "align": "inside",
+                                "thickness": 1,
+                                "fill": "$card-border"
+                              },
+                              "padding": [
+                                2,
+                                8
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "jgyFN",
+                                  "name": "r1badgeTxt",
+                                  "fill": "$muted-text",
+                                  "content": "private",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 10,
+                                  "fontWeight": "500",
+                                  "letterSpacing": 0.5
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "kPWdZ",
+                          "name": "r1desc",
+                          "fill": "$body-text",
+                          "content": "SaaS boilerplate with auth, billing, and dashboard",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "IukQ4",
+                      "name": "r1date",
+                      "fill": "$muted-text",
+                      "content": "Updated 2 days ago",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "yoDq2",
+                  "name": "repo-row-2",
+                  "width": "fill_container",
+                  "fill": "$card-bg",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": {
+                      "top": 1,
+                      "right": 1,
+                      "left": 1
+                    },
+                    "fill": "$card-border"
+                  },
+                  "gap": 12,
+                  "padding": [
+                    16,
+                    20
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "1pJL3",
+                      "name": "r2info",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "yZEIp",
+                          "name": "r2top",
+                          "gap": 10,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "CUfsm",
+                              "name": "r2name",
+                              "fill": "$white",
+                              "content": "marketing-site",
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "syoM9",
+                              "name": "r2badge",
+                              "fill": "#1A1A1A",
+                              "stroke": {
+                                "align": "inside",
+                                "thickness": 1,
+                                "fill": "$card-border"
+                              },
+                              "padding": [
+                                2,
+                                8
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "a5dNI",
+                                  "name": "r2badgeTxt",
+                                  "fill": "$muted-text",
+                                  "content": "public",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 10,
+                                  "fontWeight": "500",
+                                  "letterSpacing": 0.5
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "EdVAQ",
+                          "name": "r2desc",
+                          "fill": "$body-text",
+                          "content": "Company marketing website and blog",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "sw61e",
+                      "name": "r2date",
+                      "fill": "$muted-text",
+                      "content": "Updated 1 week ago",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "pQaff",
+                  "name": "repo-row-3",
+                  "width": "fill_container",
+                  "fill": "$card-bg",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$card-border"
+                  },
+                  "gap": 12,
+                  "padding": [
+                    16,
+                    20
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "k8aQC",
+                      "name": "r3info",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "4v3mQ",
+                          "name": "r3top",
+                          "gap": 10,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "J4LZz",
+                              "name": "r3name",
+                              "fill": "$white",
+                              "content": "api-gateway",
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "8V5ff",
+                              "name": "r3badge",
+                              "fill": "#1A1A1A",
+                              "stroke": {
+                                "align": "inside",
+                                "thickness": 1,
+                                "fill": "$card-border"
+                              },
+                              "padding": [
+                                2,
+                                8
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "C4Q0I",
+                                  "name": "r3badgeTxt",
+                                  "fill": "$muted-text",
+                                  "content": "private",
+                                  "fontFamily": "Inter",
+                                  "fontSize": 10,
+                                  "fontWeight": "500",
+                                  "letterSpacing": 0.5
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "wM5FD",
+                          "name": "r3desc",
+                          "fill": "$body-text",
+                          "content": "API gateway and microservices orchestration",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "Q9AXO",
+                      "name": "r3date",
+                      "fill": "$muted-text",
+                      "content": "Updated 3 weeks ago",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "rnLgb",
+              "name": "pagination",
+              "width": "fill_container",
+              "justifyContent": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "iuAJ1",
+                  "name": "pageTxt",
+                  "fill": "$muted-text",
+                  "content": "Page 1 of 3",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "id": "P9pfB",
+              "type": "ref",
+              "ref": "xKdzv",
+              "name": "goldBtn4",
+              "y": 510,
+              "width": "fit_content",
+              "height": "fit_content",
+              "descendants": {
+                "wEmAh": {
+                  "content": "Connect This Repository",
+                  "x": 32,
+                  "y": 14
+                }
+              }
+            },
+            {
+              "type": "frame",
+              "id": "ziORw",
+              "name": "expand-link",
+              "gap": 6,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "ppLqh",
+                  "name": "expandIcon",
+                  "width": 12,
+                  "height": 12,
+                  "iconFontName": "chevron-right",
+                  "iconFontFamily": "lucide",
+                  "fill": "$muted-text"
+                },
+                {
+                  "type": "text",
+                  "id": "6od5p",
+                  "name": "expandTxt",
+                  "fill": "$muted-text",
+                  "content": "What can the GitHub App access?",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "z3qB1",
+      "x": 6160,
+      "y": 0,
+      "name": "5 - No Projects",
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg",
+      "layout": "vertical",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "6YLEL",
+          "name": "content",
+          "width": 520,
+          "layout": "vertical",
+          "gap": 28,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "ZMsgY",
+              "name": "lbl5",
+              "fill": "$gold",
+              "content": "CONNECT PROJECT",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 2
+            },
+            {
+              "type": "text",
+              "id": "T7LYP",
+              "name": "h5",
+              "fill": "$white",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Select a Project",
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 40,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "i3nhf",
+              "name": "empty-state",
+              "width": "fill_container",
+              "fill": "$card-bg",
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "$card-border"
+              },
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 40,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "Q2Iga",
+                  "name": "folderIcon",
+                  "width": 40,
+                  "height": 40,
+                  "iconFontName": "folder-open",
+                  "iconFontFamily": "lucide",
+                  "fill": "$muted-text"
+                },
+                {
+                  "type": "text",
+                  "id": "SOX6l",
+                  "name": "emptyHead",
+                  "fill": "$white",
+                  "content": "No projects found",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "ZbcuY",
+                  "name": "emptyDesc",
+                  "fill": "$body-text",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "We cannot see any projects in this account. This usually means Soleur does not yet have permission to access them. You can fix this by updating your access settings on GitHub.",
+                  "lineHeight": 1.6,
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "pfGHi",
+              "name": "buttons",
+              "gap": 12,
+              "children": [
+                {
+                  "id": "YdgYx",
+                  "type": "ref",
+                  "ref": "xKdzv",
+                  "name": "goldBtn5",
+                  "y": 0,
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "descendants": {
+                    "wEmAh": {
+                      "content": "Update Access on GitHub",
+                      "x": 32,
+                      "y": 14
+                    }
+                  }
+                },
+                {
+                  "id": "z5pz3",
+                  "type": "ref",
+                  "ref": "mfwRL",
+                  "name": "backBtn5",
+                  "x": 269,
+                  "y": 0,
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "descendants": {
+                    "b8E0r": {
+                      "content": "Go Back",
+                      "x": 32,
+                      "y": 14
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "36Vqt",
+      "x": 0,
+      "y": 1000,
+      "name": "6 - Setting Up",
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg",
+      "layout": "vertical",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "OjEKS",
+          "name": "content",
+          "width": 560,
+          "layout": "vertical",
+          "gap": 28,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "6dXdB",
+              "name": "lbl6",
+              "fill": "$gold",
+              "content": "SETTING UP",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 2
+            },
+            {
+              "type": "text",
+              "id": "tENp9",
+              "name": "h6",
+              "fill": "$white",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Setting up your AI team...",
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 40,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "7KIhC",
+              "name": "sub6",
+              "fill": "$body-text",
+              "content": "This usually takes less than a minute.",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "fz07q",
+              "name": "progress-bar-bg",
+              "width": "fill_container",
+              "height": 4,
+              "fill": "#1A1A1A",
+              "layout": "none",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "4jrY4",
+                  "x": 0,
+                  "y": 0,
+                  "name": "progress-fill",
+                  "width": 350,
+                  "height": 4,
+                  "fill": {
+                    "type": "gradient",
+                    "gradientType": "linear",
+                    "enabled": true,
+                    "rotation": 90,
+                    "size": {
+                      "height": 1
+                    },
+                    "colors": [
+                      {
+                        "color": "#D4B36A",
+                        "position": 0
+                      },
+                      {
+                        "color": "#B8923E",
+                        "position": 1
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "uCgR2",
+              "name": "checklist",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": [
+                0,
+                20
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "qTra1",
+                  "name": "check1",
+                  "gap": 12,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "5Py2R",
+                      "name": "c1icon",
+                      "width": 18,
+                      "height": 18,
+                      "iconFontName": "circle-check",
+                      "iconFontFamily": "lucide",
+                      "fill": "#4CAF50"
+                    },
+                    {
+                      "type": "text",
+                      "id": "rGnCm",
+                      "name": "c1txt",
+                      "fill": "$white",
+                      "content": "Copying your project files",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "qVPx6",
+                  "name": "check2",
+                  "gap": 12,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "CuRXH",
+                      "name": "c2icon",
+                      "width": 18,
+                      "height": 18,
+                      "iconFontName": "circle-check",
+                      "iconFontFamily": "lucide",
+                      "fill": "#4CAF50"
+                    },
+                    {
+                      "type": "text",
+                      "id": "z01DF",
+                      "name": "c2txt",
+                      "fill": "$white",
+                      "content": "Building your knowledge base",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "DdIgm",
+                  "name": "check3",
+                  "gap": 12,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "cysJx",
+                      "name": "c3icon",
+                      "width": 18,
+                      "height": 18,
+                      "iconFontName": "loader",
+                      "iconFontFamily": "lucide",
+                      "fill": "$gold"
+                    },
+                    {
+                      "type": "text",
+                      "id": "7efdC",
+                      "name": "c3txt",
+                      "fill": "$gold",
+                      "content": "Learning your project structure",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "x0olk",
+                  "name": "check4",
+                  "gap": 12,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "AIVEN",
+                      "name": "c4icon",
+                      "width": 18,
+                      "height": 18,
+                      "iconFontName": "circle",
+                      "iconFontFamily": "lucide",
+                      "fill": "#333333"
+                    },
+                    {
+                      "type": "text",
+                      "id": "ShcpW",
+                      "name": "c4txt",
+                      "fill": "$muted-text",
+                      "content": "Preparing your AI team to work on your project",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "KL4k7",
+              "name": "what-next",
+              "width": "fill_container",
+              "fill": "$card-bg",
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "$card-border"
+              },
+              "layout": "vertical",
+              "gap": 8,
+              "padding": 20,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "CarWu",
+                  "name": "wnHead",
+                  "fill": "$white",
+                  "content": "What happens next",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "xkmN8",
+                  "name": "wnDesc",
+                  "fill": "$body-text",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Your AI team -- marketing, engineering, legal, finance, and more -- will have full context on your project from the first conversation.",
+                  "lineHeight": 1.6,
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "Zq9hN",
+              "name": "trustSig",
+              "fill": "$muted-text",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Your code stays in your GitHub account. Your AI team reads it -- you decide what changes get made.",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "gxJGO",
+      "x": 1540,
+      "y": 1000,
+      "name": "7 - Project Ready",
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg",
+      "layout": "vertical",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "iuDBS",
+          "name": "content",
+          "width": 480,
+          "layout": "vertical",
+          "gap": 28,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "WBFOi",
+              "name": "icon-box",
+              "width": 56,
+              "height": 56,
+              "fill": {
+                "type": "gradient",
+                "gradientType": "linear",
+                "enabled": true,
+                "rotation": 90,
+                "size": {
+                  "height": 1
+                },
+                "colors": [
+                  {
+                    "color": "#D4B36A",
+                    "position": 0
+                  },
+                  {
+                    "color": "#B8923E",
+                    "position": 1
+                  }
+                ]
+              },
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "c57hv",
+                  "name": "checkIcon7",
+                  "width": 28,
+                  "height": 28,
+                  "iconFontName": "check",
+                  "iconFontFamily": "lucide",
+                  "fill": "#0A0A0A"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "z87Hh",
+              "name": "h7",
+              "fill": "$white",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Your AI Team Is Ready.",
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 40,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "sLszN",
+              "name": "body7",
+              "fill": "$body-text",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Your AI team. Your project. Full context from the first conversation.",
+              "lineHeight": 1.6,
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "ndXxK",
+              "name": "stats-card",
+              "width": "fill_container",
+              "fill": "$card-bg",
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "$card-border"
+              },
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "hlixo",
+                  "name": "statRow1",
+                  "width": "fill_container",
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "w0kGw",
+                      "name": "sr1label",
+                      "fill": "$muted-text",
+                      "content": "Project",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "u0smW",
+                      "name": "sr1value",
+                      "fill": "$white",
+                      "content": "my-saas-app",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "CJOJP",
+                  "name": "statDiv",
+                  "width": "fill_container",
+                  "height": 1,
+                  "fill": "#1E1E1E"
+                },
+                {
+                  "type": "frame",
+                  "id": "4082H",
+                  "name": "statRow2",
+                  "width": "fill_container",
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "AQYO3",
+                      "name": "sr2label",
+                      "fill": "$muted-text",
+                      "content": "Agents",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "2eVnq",
+                      "name": "sr2value",
+                      "fill": "#4CAF50",
+                      "content": "61 ready",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "fZdC1",
+              "name": "trust7",
+              "fill": "$muted-text",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "You are always the decision-maker. Your AI team proposes -- you approve.",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "id": "FBslK",
+              "type": "ref",
+              "ref": "xKdzv",
+              "name": "goldBtn7",
+              "x": 144.5,
+              "y": 397,
+              "width": "fit_content",
+              "height": "fit_content",
+              "descendants": {
+                "wEmAh": {
+                  "content": "Open Dashboard",
+                  "x": 32,
+                  "y": 14
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "sJl68",
+      "x": 3080,
+      "y": 1000,
+      "name": "8 - Setup Failed",
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg",
+      "layout": "vertical",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "7R7Vs",
+          "name": "content",
+          "width": 520,
+          "layout": "vertical",
+          "gap": 28,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "fbqwz",
+              "name": "icon-box",
+              "width": 56,
+              "height": 56,
+              "fill": "#2A1515",
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#E54D4D33"
+              },
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "Plb6t",
+                  "name": "xIcon8",
+                  "width": 28,
+                  "height": 28,
+                  "iconFontName": "x",
+                  "iconFontFamily": "lucide",
+                  "fill": "$error-red"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "OxW3M",
+              "name": "h8",
+              "fill": "$white",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Project Setup Failed",
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 40,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "M6oRM",
+              "name": "body8",
+              "fill": "$body-text",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "We were unable to finish setting up your project. This is usually a temporary issue with the connection between our servers and GitHub.",
+              "lineHeight": 1.6,
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "Uy67D",
+              "name": "steps-card",
+              "width": "fill_container",
+              "fill": "$card-bg",
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "$card-border"
+              },
+              "layout": "vertical",
+              "gap": 14,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "pwJWe",
+                  "name": "stepsHead8",
+                  "fill": "$white",
+                  "content": "What you can do:",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "lX5rT",
+                  "name": "step8a",
+                  "fill": "$body-text",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "1. Wait a moment and try again -- most issues resolve quickly.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "ISL3A",
+                  "name": "step8b",
+                  "fill": "$body-text",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "2. Check whether GitHub is experiencing any service disruptions.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "V4uG8",
+                  "name": "step8c",
+                  "fill": "$body-text",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "3. If the issue persists, reach out to our support team.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "laX6z",
+              "name": "buttons",
+              "gap": 12,
+              "children": [
+                {
+                  "id": "019bt",
+                  "type": "ref",
+                  "ref": "xKdzv",
+                  "name": "goldBtn8",
+                  "y": 0,
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "descendants": {
+                    "wEmAh": {
+                      "content": "Try Again",
+                      "x": 32,
+                      "y": 14
+                    }
+                  }
+                },
+                {
+                  "id": "5cHa2",
+                  "type": "ref",
+                  "ref": "mfwRL",
+                  "name": "outBtn8",
+                  "x": 149,
+                  "y": 0,
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "descendants": {
+                    "b8E0r": {
+                      "content": "GitHub Status Page",
+                      "x": 32,
+                      "y": 14
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "OQ7BE",
+      "x": 4620,
+      "y": 1000,
+      "name": "9 - Setup Interrupted",
+      "width": 1440,
+      "height": 900,
+      "fill": "$bg",
+      "layout": "vertical",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "IDbC4",
+          "name": "content",
+          "width": 520,
+          "layout": "vertical",
+          "gap": 28,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "Y4dYn",
+              "name": "icon-box",
+              "width": 56,
+              "height": 56,
+              "fill": "#2A2515",
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#D4B36A33"
+              },
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "h9KXF",
+                  "name": "warnIcon9",
+                  "width": 28,
+                  "height": 28,
+                  "iconFontName": "triangle-alert",
+                  "iconFontFamily": "lucide",
+                  "fill": "$gold"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "6IM3t",
+              "name": "h9",
+              "fill": "$white",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Setup Was Interrupted",
+              "textAlign": "center",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 40,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "eP3RY",
+              "name": "body9",
+              "fill": "$body-text",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "It looks like the connection process was not completed on GitHub. This can happen if the browser was closed or the approval step was skipped.",
+              "lineHeight": 1.6,
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "18MZO",
+              "name": "info-card",
+              "width": "fill_container",
+              "fill": "$card-bg",
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "$card-border"
+              },
+              "layout": "vertical",
+              "gap": 8,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "SqRs8",
+                  "name": "infoTxt9",
+                  "fill": "$body-text",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "To finish connecting, you need to approve Soleur access on GitHub. This takes about 30 seconds.",
+                  "lineHeight": 1.6,
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "E4a66",
+              "name": "buttons",
+              "gap": 12,
+              "children": [
+                {
+                  "id": "x6fIU",
+                  "type": "ref",
+                  "ref": "xKdzv",
+                  "name": "goldBtn9",
+                  "y": 0,
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "descendants": {
+                    "wEmAh": {
+                      "content": "Resume on GitHub",
+                      "x": 32,
+                      "y": 14
+                    }
+                  }
+                },
+                {
+                  "id": "V9hXJ",
+                  "type": "ref",
+                  "ref": "mfwRL",
+                  "name": "outBtn9",
+                  "x": 216,
+                  "y": 0,
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "descendants": {
+                    "b8E0r": {
+                      "content": "Start Over",
+                      "x": 32,
+                      "y": 14
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "bg": {
+      "type": "color",
+      "value": "#0A0A0A"
+    },
+    "body-text": {
+      "type": "color",
+      "value": "#848484"
+    },
+    "card-bg": {
+      "type": "color",
+      "value": "#141414"
+    },
+    "card-border": {
+      "type": "color",
+      "value": "#2A2A2A"
+    },
+    "error-red": {
+      "type": "color",
+      "value": "#E54D4D"
+    },
+    "gold": {
+      "type": "color",
+      "value": "#D4B36A"
+    },
+    "gold-dark": {
+      "type": "color",
+      "value": "#B8923E"
+    },
+    "muted-text": {
+      "type": "color",
+      "value": "#6A6A6A"
+    },
+    "warning-gold": {
+      "type": "color",
+      "value": "#D4B36A"
+    },
+    "white": {
+      "type": "color",
+      "value": "#FFFFFF"
+    }
+  }
+}
