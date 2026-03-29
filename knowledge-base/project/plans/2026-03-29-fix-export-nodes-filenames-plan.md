@@ -49,20 +49,20 @@ The key change is in `plugins/soleur/skills/pencil-setup/scripts/pencil-mcp-adap
    b. Parses the `batch_get` JSON response to build a `nodeId -> name` map
    c. Sends the original `export_nodes(...)` command to the REPL
    d. Renames files using `fs.renameSync` from `<nodeId>.<ext>` to `<sanitizedName>.<ext>`
-   e. Updates the response text to reflect renamed filenames
+   e. Appends a summary line to the response listing final filenames (simpler than find-and-replace in REPL output)
    f. Falls back gracefully if `batch_get` fails or returns no name (uses node ID)
 
 ### Handling Duplicate Names
 
-If multiple nodes share the same name (after sanitization), append `-<index>` to avoid overwrites (e.g., `Frame.png`, `Frame-2.png`).
+Deferred to a follow-up if it causes real overwrites. For v1, if two nodes share a sanitized name, the second export overwrites the first. This matches the behavior of any `mv` to the same path and avoids ~10 lines of deduplication logic for an edge case that rarely occurs in practice (export_nodes is typically called with 1-3 nodes).
 
 ## Acceptance Criteria
 
 - [ ] Exported files use the node's `name` property as the filename (`plugins/soleur/skills/pencil-setup/scripts/pencil-mcp-adapter.mjs`)
 - [ ] Filenames are sanitized for filesystem safety (no path separators, no reserved characters)
 - [ ] Falls back to node ID if node has no name or `batch_get` fails
-- [ ] Duplicate names are disambiguated with a numeric suffix
-- [ ] Response text reflects the final (renamed) file paths
+- [ ] Duplicate names: deferred (v1 allows overwrite; documented limitation)
+- [ ] Response appends a summary line listing final filenames
 - [ ] Existing `export_nodes` MCP tool schema is unchanged (no breaking API change)
 
 ## Test Scenarios
@@ -72,7 +72,7 @@ If multiple nodes share the same name (after sanitization), append `-<index>` to
 - Given a node with `name: "test:::file"`, when `export_nodes` is called, then the exported file is named `test-file.png` (consecutive unsafe chars collapsed)
 - Given a node with no name (unnamed), when `export_nodes` is called, then the exported file uses the node ID as filename (fallback)
 - Given `batch_get` fails or times out, when `export_nodes` is called, then the exported files use node IDs as filenames (graceful degradation)
-- Given two nodes both named "Frame", when `export_nodes` is called with both IDs, then files are named `Frame.png` and `Frame-2.png`
+- Given two nodes both named "Frame", when `export_nodes` is called with both IDs, then the second overwrites the first (documented v1 limitation)
 - Given a node with a very long name (200+ chars), when `export_nodes` is called, then the filename is truncated to 200 characters
 
 ## Domain Review

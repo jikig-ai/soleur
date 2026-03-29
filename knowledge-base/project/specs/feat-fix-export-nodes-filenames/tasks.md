@@ -19,8 +19,7 @@
   - [ ] 2.3.3 Parse batch_get JSON response into `nodeId -> name` map
   - [ ] 2.3.4 Send original `export_nodes(...)` command to REPL
   - [ ] 2.3.5 Rename exported files from `<nodeId>.<ext>` to `<sanitizedName>.<ext>` using `fs.renameSync`
-  - [ ] 2.3.6 Handle duplicate sanitized names with `-<index>` suffix
-  - [ ] 2.3.7 Update response text to reflect renamed filenames
+  - [ ] 2.3.6 Append summary line to response listing final filenames
   - [ ] 2.3.8 Wrap `batch_get` and rename in try/catch -- fall back to node IDs on any failure
 
 ## Phase 3: Testing
