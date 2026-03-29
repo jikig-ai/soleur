@@ -91,7 +91,7 @@ try {
 }
 ```
 
-The credential helper exists on disk for the duration of the git operation — typically under one second. After the `finally` block, the token is gone.
+The credential helper exists on disk for the duration of the git operation — seconds for pulls and pushes, up to two minutes for initial clones. After the `finally` block, the token is gone.
 
 ## Security Hardening
 
@@ -215,7 +215,7 @@ log.warn({ err, userId },
   "Sync push failed — next session will retry");
 ```
 
-The next `syncPull` auto-commits local changes before pulling, so uncommitted work from a failed push is preserved.
+The next `syncPull` auto-commits any local changes before pulling, so work that accumulated between sessions — whether or not the previous push succeeded — is preserved.
 
 ### Why merge instead of rebase
 
@@ -285,7 +285,7 @@ Shallow clones (`--depth 1`) lack full git history. Agents cannot run `git log` 
       "name": "What happens if the credential helper is not cleaned up?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "The token in the helper expires after one hour regardless. The randomized filename means it cannot be targeted without directory listing access. The finally block ensures cleanup in all normal and exceptional exit paths — the only scenario where cleanup fails is a a hard process kill (SIGKILL)."
+        "text": "The token in the helper expires after one hour regardless. The randomized filename means it cannot be targeted without directory listing access. The finally block ensures cleanup in all normal and exceptional exit paths — the only scenario where cleanup fails is a hard process kill (SIGKILL)."
       }
     },
     {

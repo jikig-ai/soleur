@@ -28,7 +28,7 @@ The entire flow is designed for founders who may not be technical. Plain languag
 
 ## How It Works
 
-When you connect a repository, Soleur installs a [GitHub App]({{ site.url }}blog/what-is-company-as-a-service/) on your account. The app requests permission to read and manage your project files — nothing else. Your code stays in your GitHub account, under your control.
+When you connect a repository, Soleur installs a [GitHub App](https://docs.github.com/en/apps) on your account. The app requests permission to read and manage your project files — nothing else. Your code stays in your GitHub account, under your control.
 
 Behind the scenes:
 
@@ -40,13 +40,13 @@ Authentication uses short-lived GitHub App installation tokens that expire after
 
 ## The Compounding Effect
 
-Repository connection is not a convenience feature. It is the infrastructure that makes [compound knowledge]({{ site.url }}blog/why-agentic-engineering-tools-plateau/) work in practice.
+Repository connection is not a convenience feature. It is the infrastructure that makes [compound knowledge]({{ site.url }}blog/why-most-agentic-tools-plateau/) work in practice.
 
 Every Soleur session produces artifacts: brainstorm documents capture design decisions. Plans encode implementation strategy. Learnings record what worked and what did not. Legal agents generate compliance documents. Marketing agents produce content briefs. All of these accumulate in your knowledge base.
 
 Without repository connection, these artifacts exist only in a temporary workspace. They vanish when the session ends. With repository connection, they persist in your GitHub repository. The next session reads them. The session after that builds on them. Your AI team's institutional memory compounds across every conversation, every domain, every decision.
 
-This is the difference between an AI assistant that forgets and an AI team that learns.
+This is the difference between an AI that forgets and an AI team that learns.
 
 ## What This Means for Your Workflow
 
