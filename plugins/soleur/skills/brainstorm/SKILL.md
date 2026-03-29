@@ -269,7 +269,17 @@ Ensure the brainstorms directory exists before writing.
 
    If the push fails (no network), print a warning but continue. The artifacts are committed locally.
 
-7. **Switch to worktree:**
+7. **Create tracking issues for deferred items:**
+
+   Scan the brainstorm document's Key Decisions table and Non-Goals for items explicitly deferred to a later phase (e.g., "deferred to Phase 3", "revisit when X grows"). For each deferred item, create a GitHub issue:
+
+   ```bash
+   gh issue create --title "feat: <deferred item>" --milestone "Post-MVP / Later" --body "Deferred from #<parent-issue> during brainstorm on <date>.\n\n## What was deferred\n<description>\n\n## Why deferred\n<rationale from brainstorm>\n\n## Re-evaluation criteria\n<when to revisit>"
+   ```
+
+   After creation, read `knowledge-base/product/roadmap.md` and update the milestone if a more specific phase applies. If no items were deferred, skip silently.
+
+8. **Switch to worktree:**
 
    ```bash
    cd .worktrees/feat-<name>
@@ -277,7 +287,7 @@ Ensure the brainstorms directory exists before writing.
 
    **IMPORTANT:** All subsequent work for this feature should happen in the worktree, not the main repository. Announce the switch clearly to the user.
 
-8. **Announce:**
+9. **Announce:**
    - If using existing issue: "Spec saved. **Using existing issue: #N.** Now working in worktree: `.worktrees/feat-<name>`. Use `skill: soleur:plan` to create tasks."
    - If created new issue: "Spec saved. GitHub issue #N created. **Now working in worktree:** `.worktrees/feat-<name>`. Use `skill: soleur:plan` to create tasks."
 
