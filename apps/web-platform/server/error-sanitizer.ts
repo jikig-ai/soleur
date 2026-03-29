@@ -19,6 +19,8 @@ const KNOWN_SAFE_MESSAGES: Record<string, string> = {
     "Your session has expired. Context will be restored from history.",
   "SDK resume failed":
     "Session resume failed. Falling back to conversation history.",
+  "Rate limited: too many sessions":
+    "Too many sessions. Please wait before starting a new session.",
 };
 
 export function sanitizeErrorForClient(err: unknown): string {

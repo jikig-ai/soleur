@@ -343,7 +343,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           },
           filesystem: {
             allowWrite: [workspacePath],
-            denyRead: ["/workspaces"],
+            denyRead: ["/workspaces", "/proc"],
           },
         },
         plugins: [{ type: "local" as const, path: pluginPath }],

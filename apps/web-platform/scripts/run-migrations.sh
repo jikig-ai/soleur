@@ -8,6 +8,7 @@ set -euo pipefail
 # Usage: doppler run -c prd -- bash run-migrations.sh
 # Requires: DATABASE_URL or DATABASE_URL_POOLER environment variable.
 #   Prefers DATABASE_URL_POOLER (IPv4 pooler) for CI where IPv6 is unavailable.
+# Rollback: See apps/web-platform/docs/migration-rollback.md
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MIGRATIONS_DIR="$SCRIPT_DIR/../supabase/migrations"
