@@ -63,9 +63,14 @@ Twelve content gaps block Soleur's organic discovery and category authority. Ran
 - ~~Individual comparison pages (Cowork, Cursor, Notion)~~ All published
 - Position paper: "Agent Platform vs. AI Organization" (audit P2 priority)
 
-### Gap 4: Engineering-in-Context Value Proposition (High) [UPDATED 2026-03-20]
+### Gap 4: Engineering-in-Context Value Proposition (High) [UPDATED 2026-03-29]
 
 **What is missing:** "Why Most Agentic Engineering Tools Plateau" (SAP 4.8/5.0) partially covers this gap by explaining compound knowledge and the brainstorm-plan-implement-review-compound lifecycle. The remaining gap is a dedicated article targeting the trending search query "vibe coding vs agentic engineering" (audit P2-1, score 18/20) -- the highest-priority new content identified by the 2026-03-17 growth audit.
+
+**What is covered:** The repo connection feature (PR #1257) makes the engineering-in-context value proposition concrete. Two content pieces published:
+
+- Product update: "Your AI Team Now Works From Your Actual Codebase" -- announces repo connection, explains compound knowledge in practice
+- Technical deep-dive: "Credential Helper Isolation: Secure Git Auth in Sandboxed Environments" -- targets developer/security audience
 
 **Why it matters:** "Agentic engineering" is now mainstream (IBM, The New Stack, Addy Osmani all publishing). "Vibe coding vs agentic engineering" is a trending comparison query. No authoritative comparison exists that positions Soleur.
 
