@@ -154,6 +154,11 @@ When a PR adds external services (terraform resources, account signups, API key 
 - Workflows that perform git operations against specific commits (revert, cherry-pick) must use `fetch-depth: 0` and validate that HEAD matches the expected SHA before acting -- `fetch-depth: 2` creates a race condition when additional commits land between trigger and execution
 - Always use absolute paths or verify CWD is repo root before `git worktree add` -- relative `.worktrees/` paths resolve from CWD, creating nested worktrees when run from inside an existing worktree
 - `worktree-manager.sh cleanup-merged` works from both worktrees and the bare repo root -- the `IS_BARE` guard routes bare repos to `git fetch origin main:main` (updates local ref) + `sync_bare_files` (refreshes stale on-disk files)
+- Bun is the primary JavaScript package manager; lifecycle scripts (preinstall/postinstall) are blocked by default -- only packages listed in `trustedDependencies` can run install hooks, which is the secure default (no packages are trusted)
+- All CI install commands must use `bun install --frozen-lockfile` (or `npm ci` for Docker builds) -- this fails if the lockfile diverges from package.json, catching accidental or malicious lockfile tampering
+- Python requirements files must pin exact versions (`==`) -- pip has no lockfile mechanism, so exact version pinning is the primary supply chain defense; `--require-hashes` for full transitive dependency verification requires `pip-compile` from `pip-tools`
+- Never add a dependency for something an LLM can generate inline -- every new dependency is an attack surface expansion; the dependency-review-action flags new dependencies on every PR
+- `bunfig.toml` sets `minimumReleaseAge = 259200` (3 days) at all package roots -- newly published packages cannot be installed for 72 hours, which would have caught the litellm attack (live for ~1 hour)
 
 ### Never
 
