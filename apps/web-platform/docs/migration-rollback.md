@@ -13,9 +13,6 @@ down-migrations or rollback commands.
 - PostgreSQL supports transactional DDL. The migration runner uses
   `--single-transaction`, so a failed migration rolls back automatically and
   leaves no partial state.
-- The only scenario requiring manual intervention is a **successfully applied**
-  migration that turns out to be wrong. This is rare and best handled with a
-  corrective migration rather than a reversal.
 
 ## Manual Rollback Procedure
 
@@ -25,23 +22,17 @@ When a successfully applied migration must be reversed:
 
 ```bash
 # List applied migrations
-doppler run -c prd -- psql "$DATABASE_URL" -c \
-  "SELECT filename, applied_at FROM _schema_migrations ORDER BY applied_at DESC;"
+doppler run -c prd -- bash -c 'psql "$DATABASE_URL" -c \
+  "SELECT filename, applied_at FROM public._schema_migrations ORDER BY applied_at DESC;"'
 ```
 
 ### 2. Write and test the reversal SQL
 
-Write a reversal script that undoes the migration's changes. Common patterns:
+Write a reversal script that undoes the migration's changes (adapt for
+columns, constraints, etc.):
 
 ```sql
--- Reverse a CREATE TABLE
 DROP TABLE IF EXISTS public.my_table;
-
--- Reverse an ALTER TABLE ADD COLUMN
-ALTER TABLE public.my_table DROP COLUMN IF EXISTS my_column;
-
--- Reverse an ALTER TABLE ADD CONSTRAINT
-ALTER TABLE public.my_table DROP CONSTRAINT IF EXISTS my_constraint;
 ```
 
 Test the reversal SQL against a development database first.
@@ -49,8 +40,8 @@ Test the reversal SQL against a development database first.
 ### 3. Apply the reversal
 
 ```bash
-doppler run -c prd -- psql "$DATABASE_URL" --single-transaction \
-  --set ON_ERROR_STOP=1 -f reversal.sql
+doppler run -c prd -- bash -c 'psql "$DATABASE_URL" --single-transaction \
+  --set ON_ERROR_STOP=1 -f reversal.sql'
 ```
 
 ### 4. Remove the migration record
@@ -59,8 +50,8 @@ After the reversal succeeds, remove the entry from the tracking table so
 the migration runner does not consider it applied:
 
 ```bash
-doppler run -c prd -- psql "$DATABASE_URL" -c \
-  "DELETE FROM _schema_migrations WHERE filename = '<migration_filename>.sql';"
+doppler run -c prd -- bash -c 'psql "$DATABASE_URL" -c \
+  "DELETE FROM public._schema_migrations WHERE filename = '"'"'<migration_filename>.sql'"'"';"'
 ```
 
 ### 5. Commit a corrective migration
@@ -86,9 +77,5 @@ blocks deployment.
 
 ## Prevention Patterns
 
-Write migrations that are safe to reverse by following these practices:
-
 - Use `IF EXISTS` / `IF NOT EXISTS` guards on all DDL statements.
-- Avoid `DROP TABLE` or `DROP COLUMN` without first backing up data.
 - Prefer additive changes (add column, add table) over destructive ones.
-- Test migrations against a copy of the production schema before merging.
