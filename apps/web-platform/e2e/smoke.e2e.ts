@@ -66,11 +66,11 @@ test.describe("CSP nonce propagation", () => {
       );
     });
 
-    // Even error pages get framework scripts with nonces
-    if (scriptNonces.length > 0) {
-      for (const sNonce of scriptNonces) {
-        expect(sNonce).toBe(nonce);
-      }
+    // Framework scripts must carry nonces — if this is 0, nonce propagation is broken
+    // (the exact #1213 failure mode)
+    expect(scriptNonces.length).toBeGreaterThan(0);
+    for (const sNonce of scriptNonces) {
+      expect(sNonce).toBe(nonce);
     }
   });
 
@@ -93,11 +93,18 @@ test.describe("CSP nonce propagation", () => {
 // ---------- Public Page Smoke Tests ----------
 
 test.describe("public pages", () => {
-  test("/login responds with CSP headers", async ({ request }) => {
+  test("CSP header contains all hardening directives", async ({ request }) => {
     const response = await request.get("/login");
-    const csp = response.headers()["content-security-policy"];
-    expect(csp).toBeTruthy();
-    expect(csp).toContain("nonce-");
+    const csp = response.headers()["content-security-policy"]!;
+    for (const directive of [
+      "frame-ancestors 'none'",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "upgrade-insecure-requests",
+    ]) {
+      expect(csp).toContain(directive);
+    }
   });
 
   test("/signup responds with CSP headers", async ({ request }) => {
