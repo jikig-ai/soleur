@@ -51,3 +51,4 @@ tmp/
 !plugins/soleur/docs/images/*.png
 !plugins/soleur/docs/screenshots/*.png
 !apps/web-platform/public/icons/*.png
+!knowledge-base/product/design/**/screenshots/*.png

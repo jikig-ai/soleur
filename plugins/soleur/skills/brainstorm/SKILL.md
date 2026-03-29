@@ -309,7 +309,7 @@ Use **AskUserQuestion tool** to present next steps:
 **Options:**
 
 1. **Proceed to planning** - Use `skill: soleur:plan` (will auto-detect this brainstorm)
-2. **Create visual designs** - Run ux-design-lead agent for .pen file design (requires Pencil extension)
+2. **Create visual designs** - Run ux-design-lead agent for .pen file design (requires Pencil extension). The agent auto-opens the screenshots folder for founder review after completion.
 3. **Refine design further** - Continue exploring
 4. **Done for now** - Return later
 
