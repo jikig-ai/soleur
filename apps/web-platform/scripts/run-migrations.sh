@@ -6,15 +6,20 @@ set -euo pipefail
 # tracking state in a _schema_migrations table.
 #
 # Usage: doppler run -c prd -- bash run-migrations.sh
-# Requires: DATABASE_URL environment variable (PostgreSQL connection string)
+# Requires: DATABASE_URL or DATABASE_URL_POOLER environment variable.
+#   Prefers DATABASE_URL_POOLER (IPv4 pooler) for CI where IPv6 is unavailable.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MIGRATIONS_DIR="$SCRIPT_DIR/../supabase/migrations"
 
 command -v psql >/dev/null 2>&1 || { echo "::error::psql not found on PATH"; exit 1; }
 
-if [[ -z "${DATABASE_URL:-}" ]]; then
-  echo "::error::DATABASE_URL is not set. Ensure Doppler injects it."
+# Prefer DATABASE_URL_POOLER (IPv4 pooler) for CI environments where IPv6 is unavailable.
+# Falls back to DATABASE_URL (direct connection) for environments with IPv6 support.
+DATABASE_URL="${DATABASE_URL_POOLER:-${DATABASE_URL:-}}"
+
+if [[ -z "$DATABASE_URL" ]]; then
+  echo "::error::Neither DATABASE_URL_POOLER nor DATABASE_URL is set. Ensure Doppler injects them."
   exit 1
 fi
 
