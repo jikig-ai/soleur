@@ -114,9 +114,10 @@ describe("buildCspHeader", () => {
     expect(connectSrc).not.toMatch(/\bwss:\s/);
   });
 
-  test("connect-src includes Sentry ingest domain", () => {
+  test("connect-src includes Sentry ingest domains (global and EU region)", () => {
     const connectSrc = parseCspDirective(prodCsp, "connect-src");
     expect(connectSrc).toContain("https://*.ingest.sentry.io");
+    expect(connectSrc).toContain("https://*.ingest.de.sentry.io");
   });
 
   test("includes report-uri when sentryReportUri is provided", () => {
