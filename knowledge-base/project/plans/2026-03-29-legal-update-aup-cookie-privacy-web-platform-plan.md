@@ -76,8 +76,9 @@ Update Section 6.1 to acknowledge that the Web Platform enables server-side moni
 |--------|----------|---------|------|----------|
 | `sb-*-auth-token` | Supabase (via app.soleur.ai) | Authentication session (JWT) | Strictly necessary (first-party) | Session / persistent (configurable) |
 | `sb-*-auth-token-code-verifier` | Supabase (via app.soleur.ai) | PKCE code verifier for OAuth flow | Strictly necessary (first-party) | Session |
-| Origin validation | app.soleur.ai | CSRF protection via Origin header check (not a cookie, but documented for transparency) | N/A | N/A |
 | `__stripe_mid` / `__stripe_sid` | Stripe (via Stripe Checkout redirect) | Fraud prevention during checkout | Strictly necessary (third-party) | Session / 1 year |
+
+**Note on CSRF protection:** The Web Platform validates the `Origin` header on state-changing requests as CSRF protection (`lib/auth/validate-origin.ts`). This is not a cookie but is documented here for transparency. No CSRF token cookie is set -- the protection relies on Origin header checking.
 
 **Section 4.1 (Strictly Necessary Cookies):** Add the app.soleur.ai cookies to the table.
 
@@ -168,6 +169,7 @@ Update the register count from "nine processing activities" to "ten processing a
 ## Dependencies and Risks
 
 - **No code changes required.** All changes are to Markdown legal documents.
+- **T&C already updated.** The Terms and Conditions was updated in the March 20 batch to include Web Platform scope (Section 4.3, definitions for "Web Platform", "Account Data", "Subscription"). No T&C changes needed in this PR.
 - **Dual-file sync risk.** Five documents exist in two locations. Missing one location creates contradictions. Mitigated by updating `docs/legal/` first, then syncing.
 - **Article 30 register count.** The GDPR Policy references "nine processing activities" -- this must be incremented to ten. If any other PR has modified the count concurrently, a merge conflict is expected but trivially resolvable.
 - **DPIA re-evaluation.** Adding conversation data as a new PII category may trigger DPIA re-evaluation. However, conversation data does not involve special categories (Art. 9), systematic monitoring, or automated decision-making -- the existing DPIA assessment (GDPR Policy Section 9) conclusion remains valid. A sentence noting the re-evaluation should be added.
