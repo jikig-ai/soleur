@@ -53,7 +53,7 @@ export function buildCspHeader(options: {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' blob: data:",
     "font-src 'self'",
-    `connect-src 'self' ${appWsOrigin} ${supabaseConnect} https://*.ingest.sentry.io`,
+    `connect-src 'self' ${appWsOrigin} ${supabaseConnect} https://*.ingest.sentry.io https://*.ingest.de.sentry.io`,
     "object-src 'none'",
     "frame-src 'none'",
     "worker-src 'self'",
