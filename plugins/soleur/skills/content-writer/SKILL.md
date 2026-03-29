@@ -11,9 +11,10 @@ Generate full publication-ready article drafts with brand-consistent voice, Elev
 
 If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true` and strip `--headless` from `$ARGUMENTS`. The remainder is the topic/arguments.
 
-**Argument format:** `<topic> [--outline <outline>] [--keywords <keywords>] [--headless]`
+**Argument format:** `<topic> [--outline <outline>] [--keywords <keywords>] [--audience <audience>] [--headless]`
 
 **Headless defaults for interactive gates:**
+
 - Phase 3 (User Approval): auto-selects **Accept** when all citations are PASS or SOURCED. When any citation is FAIL, auto-selects **Fix** — removes or replaces the failed claims, re-runs fact-checker, and accepts only when all claims pass (max 2 fix cycles, then accepts with UNSOURCED markers for any remaining failures).
 - If citation verification was skipped (fact-checker unavailable), auto-selects **Accept** with a warning in the issue.
 
@@ -52,6 +53,7 @@ Parse the arguments provided after the skill name:
 - `--outline "..."` (optional): article structure as inline text (Markdown list format)
 - `--keywords "kw1, kw2, kw3"` (optional): target keywords, comma-separated
 - `--path <output-path>` (optional): where to write the file
+- `--audience "technical|general"` (optional): audience register from brand guide. `technical` uses engineering vocabulary and developer proof points. `general` uses plain language and business-outcome proof points. Defaults to channel-appropriate (blog → technical, landing page → general).
 
 **Default output path** (if `--path` not provided): auto-generate from topic slug as `plugins/soleur/docs/blog/YYYY-MM-DD-<slug>.md`.
 
@@ -62,6 +64,7 @@ Read the brand guide sections that inform content generation:
 1. Read `## Voice` -- apply brand voice, tone, do's and don'ts
 2. Read `## Channel Notes > ### Blog` -- apply blog-specific guidelines (if the section exists)
 3. Read `## Identity` -- use mission and positioning for content alignment
+4. If `--audience` is set, read `### Audience Voice Profiles` from brand guide and apply the matching register's vocabulary, explanation depth, and proof point selection rules. If `--audience` is not set, infer from `--path` or topic context (blog posts default to `technical`, landing pages and onboarding content default to `general`).
 
 Generate a full article draft that:
 
@@ -136,6 +139,7 @@ Re-verification runs after each Edit cycle in Phase 3 -- when the user selects "
 If Phase 2.5 produced a Verification Report, display the summary first (total claims, verified, failed, unsourced), then present the draft with any inline FAIL/UNSOURCED markers visible. If all claims passed, note "All citations verified." If verification was skipped, note "Citation verification was skipped -- manual review recommended."
 
 **If `HEADLESS_MODE=true`:**
+
 - If all citations are PASS/SOURCED, or verification was skipped: auto-select **Accept**. Proceed to Phase 4.
 - If any citation has a FAIL marker: auto-select **Fix**. For each FAIL claim:
   1. Remove the unsupported statistic, quote, or claim entirely, OR

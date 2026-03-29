@@ -21,6 +21,13 @@ The name Soleur is a portmanteau of Solo and Solar -- entrepreneur energy and li
 
 Solo founders who think in billions. Technical builders who refuse to accept that scale requires headcount. People who see the billion-dollar solo company not as science fiction, but as an engineering problem waiting to be solved.
 
+### Who Is Soleur For?
+
+| Segment | Description | Default channels |
+|---------|-------------|-----------------|
+| Technical builders | Founders who code, use Claude Code, think in systems. The beachhead audience. | HN, GitHub, Discord, technical blog posts |
+| Non-technical founders | Founders who use AI tools (ChatGPT, Notion) but don't code. Want business leverage, not technical leverage. | Website, LinkedIn, X/Twitter, onboarding content |
+
 ### Positioning
 
 Soleur is not a copilot. Not an assistant. It is a full AI organization -- 61 agents, 59 skills, and compounding knowledge -- that operates as every department from strategy to shipping. The brand energy mirrors Tesla and SpaceX: audacious, mission-driven, future-focused. We lead with the ambitious platform vision, never the plugin description.
@@ -28,6 +35,8 @@ Soleur is not a copilot. Not an assistant. It is a full AI organization -- 61 ag
 **Tagline:** The Company-as-a-Service Platform
 
 **Thesis:** "The first billion-dollar company run by one person isn't science fiction. It's an engineering problem. We're solving it."
+
+**General thesis (non-technical channels):** "Running a company alone shouldn't mean doing everything alone. Soleur gives you a full team of AI specialists -- marketing, legal, operations, finance -- that learn your business and work together."
 
 > **[2026-03-22 Business Validation Review]** The positioning statement, tagline, and thesis remain valid -- user research confirmed the CaaS vision resonates strongly with founders. However, "terminal-first workflow" is no longer a positioning asset. The positioning must be delivery-agnostic: accessible from any device, not tied to a specific development environment. The phrase "operates as every department from strategy to shipping" holds. What changes is the access surface, not the mission. When the web platform ships, positioning language should emphasize "accessible anywhere" alongside the existing "full AI organization" framing. No changes to mission or thesis required.
 
@@ -56,6 +65,7 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 | Technical docs | Clear, precise, no fluff | "The compound skill chains two agents sequentially." |
 | Community / Discord | Direct, collaborative, still bold | "Shipped. Try it and tell us what breaks." |
 | Error messages | Honest, actionable | "Agent failed. Here's the log. Here's the fix." |
+| Non-technical founders | Clear, outcome-focused, no jargon | "Your AI marketing team writes copy, plans campaigns, and tracks competitors -- without you hiring anyone." |
 
 ### Do's and Don'ts
 
@@ -68,6 +78,7 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 - Write like the future is already here
 - Use "we" when speaking as Soleur, "you" when addressing the founder
 - Keep sentences short and punchy in marketing copy
+- When writing for non-technical founders: define technical terms on first use, lead with business outcomes, use "your AI team" instead of "61 agents," and explain concepts in business terms (e.g., "knowledge base" = "your company's institutional memory")
 
 **Don't:**
 
@@ -80,6 +91,30 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 - Over-explain -- trust the reader's intelligence
 - Use emojis in formal marketing copy (acceptable in Discord)
 - Call it a "plugin" or "tool" in public-facing content -- it is a platform. **Exception:** "plugin" is permitted in literal CLI commands (`claude plugin install`), in legal documents where "Plugin" is a defined term, and in technical documentation describing the installation mechanism
+
+### Audience Voice Profiles
+
+Two registers share the same brand identity (bold, mission-driven, precise). They differ in vocabulary, explanation depth, and proof points.
+
+**Technical register** (default for HN, GitHub, Discord, technical blog posts):
+
+- Use engineering metaphors and developer-native terms freely
+- Proof points: "420+ merged PRs," "61 agents, 59 skills," "brainstorm-plan-implement-review-compound lifecycle"
+- Assume the reader understands agents, CLI, workflows, and software development concepts
+- "Trust the reader's intelligence" applies -- don't over-explain
+
+**General register** (default for website, LinkedIn, X/Twitter, onboarding content):
+
+- Plain language -- no jargon without immediate definition in the same sentence
+- Proof points: "saves 15+ hours/week on marketing, legal, and ops," "handles 7 of the 8 jobs you're doing alone," "remembers everything about your business"
+- Use business analogies: "your AI team" not "61 agents," "your company's memory" not "compounding knowledge base," "AI specialists" not "domain leader agents"
+- Key term glossary for inline definitions:
+  - **Agents** = "AI specialists that handle specific business functions"
+  - **Skills** = "workflows the AI team follows to get things done"
+  - **Knowledge base** = "your company's institutional memory -- everything your AI team learns stays and compounds"
+  - **Compounding** = "gets smarter the more you use it"
+  - **Cross-domain coherence** = "your marketing agent knows what your legal agent decided"
+- "Explain, don't dumb down" -- maintain confidence and precision, just use accessible vocabulary
 
 ### Value Proposition Framings
 

@@ -112,8 +112,8 @@ These are the structural advantages that competitors cannot replicate by shippin
 - Solo founders or very small teams (1-3 people)
 - Building SaaS products, developer tools, creative businesses, or consulting-turned-product companies
 - Pre-revenue through early revenue stage
-- Already using Claude Code as their primary development interface **[2026-03-22: INVALIDATED -- majority of interviewed founders do not use Claude Code. Remove this criterion. Replace with: "Uses AI tools for some business tasks but lacks cross-domain integration."]**
-- Technical background (can read code, use terminal) **[2026-03-22: SOFTEN -- technical background is the beachhead but not a hard requirement for the web platform. Founders interviewed included non-terminal users.]**
+- Uses AI tools for some business tasks (ChatGPT, Notion AI, etc.) but lacks cross-domain integration
+- Technical background is helpful but not required -- the web platform serves both technical and non-technical founders
 
 **Psychographics:**
 
@@ -128,18 +128,20 @@ These are the structural advantages that competitors cannot replicate by shippin
 
 For the PIVOT validation, narrow to:
 
-- **Claude Code power users** who have already pushed beyond coding into broader workflows
+- **AI-tool-active solo founders** who use AI for some business tasks but lack an integrated, cross-domain solution
 - **IndieHackers / solopreneur community members** actively building products
-- **GitHub signal**: developers with repos that show business operations (marketing content, legal docs, product specs) alongside code
+- **Founders frustrated by context loss** -- using ChatGPT for marketing, a separate tool for legal, another for ops, with no shared memory between them
 
 ### Channels to Reach Them
 
 | Channel | Density | Effort | Priority |
 |---------|---------|--------|----------|
-| Claude Code Discord | High | Low | P1 -- direct builder-to-builder conversations |
-| GitHub (issue engagement, plugin discovery) | Medium | Low | P1 -- native discovery surface |
+| Website (app.soleur.ai) | High | Medium | P1 -- primary discovery surface for all founders |
+| LinkedIn (personal + company) | Medium | Medium | P1 -- reaches non-technical founders directly |
+| X/Twitter solopreneur network | Medium | Medium | P1 -- amplification and thought leadership |
 | IndieHackers | Medium | Medium | P2 -- active solopreneur community |
-| X/Twitter solopreneur network | Medium | Medium | P2 -- amplification and thought leadership |
+| Claude Code Discord | High | Low | P2 -- technical builders (beachhead) |
+| GitHub (issue engagement, plugin discovery) | Medium | Low | P2 -- technical discovery surface |
 | Hacker News | High (when triggered) | Low (organic) | P3 -- submit articles, not product launches |
 | Reddit (r/ClaudeAI, r/SaaS, r/solopreneur) | Medium | Low | P3 -- respond to relevant threads |
 
