@@ -246,13 +246,13 @@ git log origin/main..HEAD --oneline | grep "refactor: add code review findings" 
 
 ### Pre-Ship Domain Review (conditional)
 
-Domain leaders are consulted at brainstorm time but not at ship time. The actual deliverables may have implications the brainstorm couldn't predict. This phase runs two conditional gates in parallel.
+Domain leaders are consulted at brainstorm time but not at ship time. The actual deliverables may have implications the brainstorm couldn't predict. This phase runs three conditional gates in parallel.
 
 ### CMO Content-Opportunity Gate
 
-**Trigger:** PR touches files in `knowledge-base/product/research/`, `knowledge-base/marketing/`, or adds new workflow patterns (new AGENTS.md rules, new skill phases). Skip for code-only PRs, bug fixes, and pure infrastructure changes.
+**Trigger:** PR matches ANY of: (a) touches files in `knowledge-base/product/research/`, `knowledge-base/marketing/`, or adds new workflow patterns (new AGENTS.md rules, new skill phases); (b) has a `semver:minor` or `semver:major` label; (c) title matches `^feat(\(.*\))?:` pattern.
 
-**Detection:** Run `git diff --name-only origin/main...HEAD` and check if any path matches the trigger patterns.
+**Detection:** Run `git diff --name-only origin/main...HEAD` and check file paths against trigger (a). Run `gh pr view --json labels,title` and check against triggers (b) and (c). If any trigger matches, proceed to "If triggered."
 
 **If triggered:**
 
