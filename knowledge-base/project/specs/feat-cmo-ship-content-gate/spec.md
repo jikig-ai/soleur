@@ -1,6 +1,6 @@
 # CMO Ship Content Gate Improvement
 
-**Issue:** TBD
+**Issue:** #1265
 **Branch:** cmo-ship-content-gate
 **Brainstorm:** [2026-03-29-cmo-ship-content-gate-brainstorm.md](../../brainstorms/2026-03-29-cmo-ship-content-gate-brainstorm.md)
 

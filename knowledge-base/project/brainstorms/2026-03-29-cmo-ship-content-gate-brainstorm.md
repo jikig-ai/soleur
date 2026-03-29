@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-29
 **Status:** Approved
-**Issue:** TBD
+**Issue:** #1265
 
 ## What We're Building
 
