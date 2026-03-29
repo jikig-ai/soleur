@@ -98,10 +98,10 @@ Three content pieces, each using existing skills:
 
 ### Phase 1: Product Update Blog Post
 
-- [ ] Run `soleur:content-writer` with the product update topic, outline, and keywords
-- [ ] Verify brand voice compliance (general + technical registers)
-- [ ] Verify Eleventy frontmatter and JSON-LD structured data
-- [ ] Verify all claims are factually grounded in the PR #1257 implementation
+- [x] Run `soleur:content-writer` with the product update topic, outline, and keywords
+- [x] Verify brand voice compliance (general + technical registers)
+- [x] Verify Eleventy frontmatter and JSON-LD structured data
+- [x] Verify all claims are factually grounded in the PR #1257 implementation
 
 Files:
 
@@ -109,10 +109,10 @@ Files:
 
 ### Phase 2: Technical Blog Post
 
-- [ ] Run `soleur:content-writer` with the credential helper topic, outline, and keywords
-- [ ] Verify code examples match actual implementation in `workspace.ts`, `github-app.ts`, `session-sync.ts`
-- [ ] Verify technical register voice
-- [ ] Verify security claims are accurate (randomized paths, UUID validation, token expiry)
+- [x] Run `soleur:content-writer` with the credential helper topic, outline, and keywords
+- [x] Verify code examples match actual implementation in `workspace.ts`, `github-app.ts`, `session-sync.ts`
+- [x] Verify technical register voice
+- [x] Verify security claims are accurate (randomized paths, UUID validation, token expiry)
 
 Files:
 
@@ -120,12 +120,12 @@ Files:
 
 ### Phase 3: Social Distribution and Content Strategy Updates
 
-- [ ] Run `soleur:social-distribute` on the product update blog post
-- [ ] Verify platform-specific formatting (character limits, thread structure)
-- [ ] Verify brand voice consistency across primary channel variants (Discord, X, LinkedIn)
-- [ ] Verify links point to the correct blog post URL
-- [ ] Update `knowledge-base/marketing/content-strategy.md` Gap 4 to reference the new content
-- [ ] Update `knowledge-base/marketing/campaign-calendar.md` with the new content entries
+- [x] Run `soleur:social-distribute` on the product update blog post
+- [x] Verify platform-specific formatting (character limits, thread structure)
+- [x] Verify brand voice consistency across primary channel variants (Discord, X, LinkedIn)
+- [x] Verify links point to the correct blog post URL
+- [x] Update `knowledge-base/marketing/content-strategy.md` Gap 4 to reference the new content
+- [x] Update `knowledge-base/marketing/campaign-calendar.md` with the new content entries
 
 Files:
 
@@ -135,13 +135,13 @@ Files:
 
 ## Acceptance Criteria
 
-- [ ] Product update blog post exists at the specified path with valid Eleventy frontmatter
-- [ ] Technical blog post exists at the specified path with valid Eleventy frontmatter
-- [ ] Social distribution content file exists with variants for all specified channels
-- [ ] All content uses the correct brand voice register (general for product update narrative, technical for deep-dive)
-- [ ] All factual claims are traceable to PR #1257 implementation code
-- [ ] Content strategy document updated to reflect the new content
-- [ ] Campaign calendar updated with publish dates
+- [x] Product update blog post exists at the specified path with valid Eleventy frontmatter
+- [x] Technical blog post exists at the specified path with valid Eleventy frontmatter
+- [x] Social distribution content file exists with variants for all specified channels
+- [x] All content uses the correct brand voice register (general for product update narrative, technical for deep-dive)
+- [x] All factual claims are traceable to PR #1257 implementation code
+- [x] Content strategy document updated to reflect the new content
+- [x] Campaign calendar updated with publish dates
 
 ## Test Scenarios
 
