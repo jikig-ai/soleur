@@ -552,7 +552,13 @@ server.tool(
     const raw = await commandQueue.enqueue(cmd);
     const { text, isError } = parseResponse(raw);
     if (isError) {
-      return { content: [{ type: "text", text }], isError: true };
+      let enriched = text;
+      if (/does not have a valid definition/i.test(text)) {
+        enriched += '\nExpected: { "type": "color" | "string" | "number", "value": <value> }';
+      } else if (/invalid type property/i.test(text)) {
+        enriched += "\nValid types: color, string, number";
+      }
+      return { content: [{ type: "text", text: enriched }], isError: true };
     }
     await commandQueue.enqueue("save()");
     return { content: [{ type: "text", text }] };
