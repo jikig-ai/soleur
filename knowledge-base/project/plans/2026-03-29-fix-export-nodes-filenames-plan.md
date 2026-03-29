@@ -58,12 +58,12 @@ Deferred to a follow-up if it causes real overwrites. For v1, if two nodes share
 
 ## Acceptance Criteria
 
-- [ ] Exported files use the node's `name` property as the filename (`plugins/soleur/skills/pencil-setup/scripts/pencil-mcp-adapter.mjs`)
-- [ ] Filenames are sanitized for filesystem safety (no path separators, no reserved characters)
-- [ ] Falls back to node ID if node has no name or `batch_get` fails
-- [ ] Duplicate names: deferred (v1 allows overwrite; documented limitation)
-- [ ] Response appends a summary line listing final filenames
-- [ ] Existing `export_nodes` MCP tool schema is unchanged (no breaking API change)
+- [x] Exported files use the node's `name` property as the filename (`plugins/soleur/skills/pencil-setup/scripts/pencil-mcp-adapter.mjs`)
+- [x] Filenames are sanitized for filesystem safety (no path separators, no reserved characters)
+- [x] Falls back to node ID if node has no name or `batch_get` fails
+- [x] Duplicate names: deferred (v1 allows overwrite; documented limitation)
+- [x] Response appends a summary line listing final filenames
+- [x] Existing `export_nodes` MCP tool schema is unchanged (no breaking API change)
 
 ## Test Scenarios
 

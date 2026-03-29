@@ -7,9 +7,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { spawn as nodeSpawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
+import { sanitizeFilename } from "./sanitize-filename.mjs";
 
 // --- Node version gate ---
 
@@ -495,13 +496,77 @@ registerReadOnlyTool("snapshot_layout", {
   problemsOnly: z.boolean().optional(),
 });
 
-registerReadOnlyTool("export_nodes", {
-  nodeIds: z.array(z.string()),
-  outputDir: z.string(),
-  format: z.enum(["png", "jpeg", "webp", "pdf"]).optional(),
-  scale: z.number().optional(),
-  quality: z.number().optional(),
-});
+// export_nodes — custom handler to rename exported files using node names
+server.tool(
+  "export_nodes",
+  {
+    nodeIds: z.array(z.string()),
+    outputDir: z.string(),
+    format: z.enum(["png", "jpeg", "webp", "pdf"]).optional(),
+    scale: z.number().optional(),
+    quality: z.number().optional(),
+  },
+  async ({ nodeIds, outputDir, format, scale, quality }) => {
+    await ensureProcess();
+    const ext = format || "png";
+
+    // Step 1: Try to get node names via batch_get
+    let nameMap = new Map();
+    try {
+      const batchCmd = formatReplCommand("batch_get", { nodeIds });
+      const batchRaw = await commandQueue.enqueue(batchCmd);
+      const { text: batchText } = parseResponse(batchRaw);
+      const parsed = JSON.parse(batchText);
+      if (parsed.nodes && Array.isArray(parsed.nodes)) {
+        for (const node of parsed.nodes) {
+          if (node.id && node.name) {
+            nameMap.set(node.id, node.name);
+          }
+        }
+      }
+    } catch {
+      // batch_get failed — fall back to node IDs as filenames
+    }
+
+    // Step 2: Run the original export_nodes command
+    const exportParams = { nodeIds, outputDir };
+    if (format) exportParams.format = format;
+    if (scale !== undefined) exportParams.scale = scale;
+    if (quality !== undefined) exportParams.quality = quality;
+    const cmd = formatReplCommand("export_nodes", exportParams);
+    const raw = await commandQueue.enqueue(cmd);
+    const { text, isError } = parseResponse(raw);
+    if (isError) {
+      return { content: [{ type: "text", text }], isError: true };
+    }
+
+    // Step 3: Rename exported files from nodeId to sanitized name
+    const renamedFiles = [];
+    for (const nodeId of nodeIds) {
+      const nodeName = nameMap.get(nodeId);
+      if (!nodeName) {
+        renamedFiles.push(`${nodeId}.${ext} (no name, kept as-is)`);
+        continue;
+      }
+      const sanitized = sanitizeFilename(nodeName);
+      if (!sanitized || sanitized === nodeId) {
+        renamedFiles.push(`${nodeId}.${ext} (kept as-is)`);
+        continue;
+      }
+      const oldPath = join(outputDir, `${nodeId}.${ext}`);
+      const newPath = join(outputDir, `${sanitized}.${ext}`);
+      try {
+        renameSync(oldPath, newPath);
+        renamedFiles.push(`${sanitized}.${ext}`);
+      } catch {
+        renamedFiles.push(`${nodeId}.${ext} (rename failed, kept as-is)`);
+      }
+    }
+
+    const summary = `\nExported files: ${renamedFiles.join(", ")}`;
+    return { content: [{ type: "text", text: text + summary }] };
+  }
+);
 
 // --- Mutating tools (auto-save after) ---
 
