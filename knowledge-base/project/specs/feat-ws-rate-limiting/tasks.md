@@ -8,7 +8,7 @@ Issue: #1046
 - [ ] 1.1 Create `apps/web-platform/server/rate-limiter.ts` with `SlidingWindowCounter` class
   - [ ] 1.1.1 Implement sliding window counter with `Map<string, number[]>` tracking timestamps
   - [ ] 1.1.2 Implement `isAllowed(key: string): boolean` method that checks and records
-  - [ ] 1.1.3 Implement periodic cleanup of expired entries (`setInterval().unref()`)
+  - [ ] 1.1.3 Implement lazy eviction of expired entries (prune on each `isAllowed()` call)
   - [ ] 1.1.4 Implement `getClientIp(req: IncomingMessage): string` helper (cf-connecting-ip > x-forwarded-for > remoteAddress)
 - [ ] 1.2 Add `RATE_LIMITED: 4008` to `WS_CLOSE_CODES` in `apps/web-platform/lib/types.ts`
 - [ ] 1.3 Add `rate_limited` to `WSErrorCode` type in `apps/web-platform/lib/types.ts`
@@ -28,8 +28,8 @@ Issue: #1046
   - [ ] 2.3.1 Add `SlidingWindowCounter` for session creation keyed by userId
   - [ ] 2.3.2 Check before `createConversation()` call
   - [ ] 2.3.3 Send error message `{ type: "error", message: "Rate limited..." }` if over limit (30/hour default, `WS_RATE_LIMIT_SESSIONS_PER_HOUR` env var)
-- [ ] 2.4 Thread `req` through to connection handler to access IP after upgrade
-  - Pass IP as second arg to `wss.emit("connection", ws, req)` -- already done, but need to use it
+- [ ] 2.4 Update `wss.on("connection")` handler signature to accept `req: IncomingMessage` as second parameter
+  - The emit side already passes `req` (`wss.emit("connection", ws, req)`) but the handler only accepts `(ws: WebSocket)` -- add the second param to access IP headers
 
 ## Phase 3: Testing
 
@@ -37,12 +37,12 @@ Issue: #1046
   - [ ] 3.1.1 Test SlidingWindowCounter allows requests within limit
   - [ ] 3.1.2 Test SlidingWindowCounter rejects requests over limit
   - [ ] 3.1.3 Test window expiry allows new requests after window passes
-  - [ ] 3.1.4 Test cleanup removes expired entries
+  - [ ] 3.1.4 Test lazy eviction removes expired entries on next call
   - [ ] 3.1.5 Test getClientIp extracts cf-connecting-ip header
   - [ ] 3.1.6 Test getClientIp falls back to x-forwarded-for
   - [ ] 3.1.7 Test getClientIp falls back to remoteAddress
-- [ ] 3.2 Create `apps/web-platform/test/ws-rate-limit.test.ts`
+- [ ] 3.2 Add rate limit assertions to `apps/web-platform/test/ws-protocol.test.ts`
   - [ ] 3.2.1 Test rate limit close code 4008 is in WS_CLOSE_CODES
-  - [ ] 3.2.2 Test rate_limited is in NON_TRANSIENT_CLOSE_CODES (no reconnect)
+  - [ ] 3.2.2 Test RATE_LIMITED is treated as non-transient (no reconnect)
 - [ ] 3.3 Verify existing tests pass
   - [ ] 3.3.1 Run `bun test` in apps/web-platform and confirm all existing tests pass

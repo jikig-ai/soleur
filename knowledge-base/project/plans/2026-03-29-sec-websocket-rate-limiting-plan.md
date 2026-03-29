@@ -56,7 +56,11 @@ The server sits behind Cloudflare proxy (confirmed by `infra/firewall.tf` and th
 2. `x-forwarded-for` -- first entry (client IP)
 3. `req.socket.remoteAddress` -- fallback (will be Cloudflare edge IP)
 
-The `req` object is available in the `server.on("upgrade")` callback and must be threaded through to the `wss.on("connection")` handler.
+The `req` object is available in the `server.on("upgrade")` callback. The emit side already passes `req` (`wss.emit("connection", ws, req)`), but the `wss.on("connection")` handler signature currently only accepts `(ws: WebSocket)` -- it must be updated to accept a second `req: IncomingMessage` parameter to access IP headers.
+
+### Rejection mechanism distinction
+
+Layer 1 (connection throttle) rejects **before** the WebSocket upgrade completes -- it responds at the HTTP level with a 429 status and destroys the raw socket. Layer 2 (pending connection limit) rejects **after** the upgrade -- it uses WS close code 4008. This distinction is intentional: pre-upgrade rejection cannot use WebSocket close codes because no WebSocket connection exists yet.
 
 ### New close code for rate limiting
 
@@ -81,7 +85,7 @@ class SlidingWindowCounter {
 }
 ```
 
-Cleanup: Run a periodic sweep (every 60s) to evict expired entries from the maps. Use `setInterval().unref()` to avoid blocking server shutdown.
+Cleanup: Use lazy eviction (prune expired entries on each `isAllowed()` call) instead of a periodic `setInterval` timer. This eliminates a background timer and is sufficient for the expected scale (tens of concurrent users). If profiling shows lazy eviction adds measurable latency, switch to a periodic sweep with `setInterval().unref()`.
 
 ### Proposed limits (configurable via environment variables)
 
@@ -100,7 +104,7 @@ Cleanup: Run a periodic sweep (every 60s) to evict expired entries from the maps
 | `apps/web-platform/lib/types.ts` | Modify | Add `RATE_LIMITED: 4008` close code, add `rate_limited` to `WSErrorCode` |
 | `apps/web-platform/lib/ws-client.ts` | Modify | Add `RATE_LIMITED` to `NON_TRANSIENT_CLOSE_CODES` with user message |
 | `apps/web-platform/test/rate-limiter.test.ts` | Create | Unit tests for `SlidingWindowCounter`, IP extraction |
-| `apps/web-platform/test/ws-rate-limit.test.ts` | Create | Integration-style tests for rate limit behavior in ws-handler |
+| `apps/web-platform/test/ws-protocol.test.ts` | Modify | Add rate limit close code and NON_TRANSIENT_CLOSE_CODES assertions |
 
 ### Attack surface enumeration
 
