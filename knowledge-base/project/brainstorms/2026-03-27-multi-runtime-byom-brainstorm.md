@@ -48,9 +48,11 @@ Quality will degrade on non-Claude models (agents are prompt-engineered for Opus
 
 ## Open Questions
 
-1. What does the user respond when asked about their specific needs? (Already contacted, awaiting reply)
+1. ~~What does the user respond when asked about their specific needs?~~ **Answered 2026-03-29** — see Follow-Up Feedback below.
 2. How badly does Soleur degrade on Llama 3.1 70B through the proxy? (Worth testing before documenting)
 3. Should the cloud platform eventually support BYOM at the cloud layer? (Deferred to post-P4)
+4. How should channel connectors (Telegram, Discord, WhatsApp) interact with the tag-and-route model? (See follow-up signal #2)
+5. What does agent-native discovery look like in practice? MCP registry? ACP listing? Package manager? (See follow-up signal #3)
 
 ## Domain Assessments
 
@@ -68,9 +70,46 @@ Quality will degrade on non-Claude models (agents are prompt-engineered for Opus
 
 **Summary:** Vendor lock-in is "the canonical objection of the next 100 users." Addressable market ceiling with Claude-only positioning. Immediate actions: (1) respond to user with portability angle ("your knowledge base is portable markdown"), (2) enforce "don't say plugin" brand rule, (3) write portability-focused blog post. These cost zero engineering time and partially neutralize the objection.
 
+## Follow-Up Feedback [Updated 2026-03-29]
+
+Ivelin Ivanov responded via WhatsApp (2026-03-29) with three distinct signals beyond the original vendor lock-in concern:
+
+### Signal 1: BYOM confirmed (maps to #1215)
+
+Original concern stands — doesn't want Claude dependency. When asked "Would you be fine using a hosted service such as soleur.ai with web, mobile, desktop apps without knowing which underlying provider is being used or having the ability to choose the underlying AI model (LLaMa, Grok, Kimi, ...) or you would want to also be able to select the CLI tool (Mistral Vibe, Claude, OpenCode, KiloCode, ...)?" his response focused on chat UX, not CLI choice — suggesting the hosted platform with model choice addresses his core concern. No change to #1215 scope needed.
+
+### Signal 2: Channel connectors — fluid chat UX
+
+> "My personal preference shifted to fluid chat UX. Telegram, discord, WhatsApp. Voice, text, images, video occasionally. I ask my agents to do the clicking and typing."
+
+This validates the post-MVP channel connectors direction. Users already have their preferred messaging channels. Soleur should meet them there rather than forcing a new app. Jean confirmed: "great, that's what I had in mind for post MVP with channel connectors."
+
+**Implication:** The cloud platform (app.soleur.ai) is the agent workspace, but the user-facing interface can be Telegram/Discord/WhatsApp with Soleur agents responding in-channel.
+
+**Tracked:** New issue created for channel connectors.
+
+### Signal 3: Agent-native discovery & procurement
+
+> "Since most users already have some sort of favorite channel, I wonder if the new apps should focus on making themselves available as skills or MCP or CLI or ACP. Something that agents can easily find and incorporate in their workspace."
+>
+> "Ideally I want to ask my main openclaw agent — go look at this soleur nonsense. Can we use that shit? If the answer is yes, which is highly unlikely, then here is $10 more USDC in your wallet. Go get some."
+
+This is the most forward-looking signal. Ivelin's mental model:
+
+1. His agent discovers Soleur (via MCP registry, ACP, or package manager)
+2. His agent evaluates Soleur's capabilities programmatically
+3. His agent autonomously purchases access using crypto (USDC)
+4. His agent incorporates Soleur into its workspace
+
+**Implication:** Soleur needs to be **discoverable by agents** (MCP server listing, structured capability manifest) and **purchasable by agents** (API-based subscription, crypto payment acceptance). This aligns with the broader trend Ivelin notes: "Apple restricted voice coded apps. That's probably the early days of a trend. Direct to consumer apps get swapped out with agent friendly apps."
+
+**Tracked:** New issue created for agent-native discovery & procurement.
+
 ## Evidence Base
 
-- User feedback: "Trying to test but Claude install is a show stopper for me. I don't want to be tied to a commercial provider."
+- User feedback (2026-03-27): "Trying to test but Claude install is a show stopper for me. I don't want to be tied to a commercial provider."
+- User follow-up (2026-03-29): "My personal preference shifted to fluid chat UX. Telegram, discord, WhatsApp. Voice, text, images, video occasionally."
+- User follow-up (2026-03-29): "Ideally I want to ask my main openclaw agent — go look at this soleur nonsense. Can we use that shit?"
 - Business validation (2026-03-22): "Plugin delivery rejected," "Claude Code not in their stack," "Standalone product expected."
 - Codex portability inventory (2026-03-10): 47.5% green, 43.4% red. Agents 67.7% portable, skills 57.9% non-portable.
 - Platform risk learning (2026-02-25): Cross-platform presence identified as strategic moat.
