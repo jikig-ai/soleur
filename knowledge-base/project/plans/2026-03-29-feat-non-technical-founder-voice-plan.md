@@ -84,15 +84,15 @@ Apply the two existing annotations that were never enacted:
 
 ## Acceptance Criteria
 
-- [ ] Brand guide has `### Audience Voice Profiles` with technical and general registers
-- [ ] Tone Spectrum table has "Non-technical founders" row
-- [ ] Parallel general thesis added under positioning
-- [ ] "Who Is Soleur For?" section with two segments
-- [ ] Do's list includes non-technical founder guidance
-- [ ] Content-writer skill accepts `--audience` parameter
-- [ ] Content-writer Phase 2 reads audience-specific voice rules
-- [ ] Marketing strategy ICP rewritten (annotations applied, not just commented)
-- [ ] Beachhead segment and channel table updated
+- [x] Brand guide has `### Audience Voice Profiles` with technical and general registers
+- [x] Tone Spectrum table has "Non-technical founders" row
+- [x] Parallel general thesis added under positioning
+- [x] "Who Is Soleur For?" section with two segments
+- [x] Do's list includes non-technical founder guidance
+- [x] Content-writer skill accepts `--audience` parameter
+- [x] Content-writer Phase 2 reads audience-specific voice rules
+- [x] Marketing strategy ICP rewritten (annotations applied, not just commented)
+- [x] Beachhead segment and channel table updated
 
 ## Test Scenarios
 
