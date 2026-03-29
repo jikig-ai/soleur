@@ -7,7 +7,7 @@ import { describe, test, expect, vi, beforeEach, beforeAll } from "vitest";
 import type { ClientSession } from "../server/ws-handler";
 
 let abortActiveSession: (userId: string, session: ClientSession) => void;
-let agentRunnerModule: { abortSession: (userId: string, conversationId: string, reason?: string) => void };
+let agentRunnerModule: { abortSession: (userId: string, conversationId: string, reason?: "disconnected" | "superseded") => void };
 
 beforeAll(async () => {
   try {

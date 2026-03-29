@@ -56,12 +56,16 @@ describe("auth callback origin validation", () => {
   });
 
   test("accepts localhost for development", () => {
-    const origEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = "development";
-    expect(resolveOrigin(null, "http", "localhost:3000")).toBe(
-      "http://localhost:3000",
-    );
-    process.env.NODE_ENV = origEnv;
+    const env = process.env as Record<string, string | undefined>;
+    const origEnv = env.NODE_ENV;
+    env.NODE_ENV = "development";
+    try {
+      expect(resolveOrigin(null, "http", "localhost:3000")).toBe(
+        "http://localhost:3000",
+      );
+    } finally {
+      env.NODE_ENV = origEnv;
+    }
   });
 
   test("falls back to production when no headers present", () => {

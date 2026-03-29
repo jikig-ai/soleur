@@ -8,7 +8,8 @@
     "build:server": "esbuild server/index.ts --bundle --platform=node --target=node22 --outfile=dist/server/index.js --external:next --external:react --external:react-dom --external:@supabase/supabase-js --external:@supabase/ssr --external:ws --external:stripe --external:@anthropic-ai/claude-agent-sdk --external:pino --external:@sentry/nextjs",
     "start": "NODE_ENV=production node dist/server/index.js",
     "lint": "next lint",
-    "test": "vitest"
+    "test": "vitest",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.2.80",

@@ -45,17 +45,18 @@ const EXPECTED_OVERRIDES: Record<string, string> = {
 
 describe("buildAgentEnv", () => {
   const savedEnv: Record<string, string | undefined> = {};
+  const env = process.env as Record<string, string | undefined>;
 
   beforeEach(() => {
     // Save and set all allowlisted vars so tests are deterministic
     for (const key of EXPECTED_ALLOWLIST) {
-      savedEnv[key] = process.env[key];
-      process.env[key] = `test-${key.toLowerCase()}`;
+      savedEnv[key] = env[key];
+      env[key] = `test-${key.toLowerCase()}`;
     }
     // Inject server secrets into process.env
     for (const key of SERVER_SECRETS) {
-      savedEnv[key] = process.env[key];
-      process.env[key] = `secret-${key.toLowerCase()}`;
+      savedEnv[key] = env[key];
+      env[key] = `secret-${key.toLowerCase()}`;
     }
   });
 
@@ -63,9 +64,9 @@ describe("buildAgentEnv", () => {
     // Restore original env
     for (const key of [...EXPECTED_ALLOWLIST, ...SERVER_SECRETS]) {
       if (savedEnv[key] === undefined) {
-        delete process.env[key];
+        delete env[key];
       } else {
-        process.env[key] = savedEnv[key];
+        env[key] = savedEnv[key];
       }
     }
   });
@@ -97,8 +98,9 @@ describe("buildAgentEnv", () => {
   });
 
   test("omits allowlisted vars not present in process.env", () => {
-    delete process.env.LANG;
-    delete process.env.LC_ALL;
+    const mutableEnv = process.env as Record<string, string | undefined>;
+    delete mutableEnv.LANG;
+    delete mutableEnv.LC_ALL;
     const env = buildAgentEnv("sk-ant-test");
     expect(env).not.toHaveProperty("LANG");
     expect(env).not.toHaveProperty("LC_ALL");

@@ -20,21 +20,27 @@ pre-commit:
       glob: "*.md"
       run: npx --yes markdownlint-cli {staged_files}
       stage_fixed: true
-    bun-test:
+    web-platform-typecheck:
       priority: 5
+      glob:
+        - "apps/web-platform/*.{ts,tsx}"
+        - "apps/web-platform/**/*.{ts,tsx}"
+      run: cd apps/web-platform && npx tsc --noEmit
+    bun-test:
+      priority: 6
       glob: "*.{ts,tsx,js,jsx}"
       run: bash scripts/test-all.sh
     plugin-component-test:
-      priority: 6
+      priority: 7
       glob: "plugins/soleur/**/*.md"
       run: bun test plugins/soleur/test/
     terraform-fmt:
-      priority: 7
+      priority: 8
       glob: "apps/*/infra/*.tf"
       run: terraform fmt {staged_files}
       stage_fixed: true
     kb-structure-guard:
-      priority: 8
+      priority: 9
       glob:
         - "knowledge-base/{brainstorms,learnings,plans,specs}/*"
         - "knowledge-base/{brainstorms,learnings,plans,specs}/**/*"

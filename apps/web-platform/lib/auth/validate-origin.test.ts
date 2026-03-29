@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { validateOrigin, rejectCsrf } from "./validate-origin";
 
 function makeRequest(headers: Record<string, string> = {}): Request {
@@ -9,14 +9,15 @@ function makeRequest(headers: Record<string, string> = {}): Request {
 }
 
 describe("validateOrigin", () => {
-  const origNodeEnv = process.env.NODE_ENV;
+  const env = process.env as Record<string, string | undefined>;
+  const origNodeEnv = env.NODE_ENV;
 
   beforeEach(() => {
-    process.env.NODE_ENV = "production";
+    env.NODE_ENV = "production";
   });
 
   afterEach(() => {
-    process.env.NODE_ENV = origNodeEnv;
+    env.NODE_ENV = origNodeEnv;
   });
 
   it("accepts a valid production origin", () => {
@@ -74,14 +75,14 @@ describe("validateOrigin", () => {
   });
 
   it("accepts localhost in development mode", () => {
-    process.env.NODE_ENV = "development";
+    env.NODE_ENV = "development";
     const req = makeRequest({ origin: "http://localhost:3000" });
     const result = validateOrigin(req);
     expect(result.valid).toBe(true);
   });
 
   it("rejects localhost in production mode", () => {
-    process.env.NODE_ENV = "production";
+    env.NODE_ENV = "production";
     const req = makeRequest({ origin: "http://localhost:3000" });
     const result = validateOrigin(req);
     expect(result.valid).toBe(false);

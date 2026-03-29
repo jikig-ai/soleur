@@ -255,6 +255,7 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 | Case Study: Competitive Intelligence | Case study | ~1,500 | P1 | **PUBLISHED** (2026-03-10). Lacks FAQ section (P1 fix). |
 | About/Founder Page | Authority page | 500-800 | P1 | Month 1. Gap 11. Low effort, high E-E-A-T impact. |
 | From Department Offices to Command Center | Build-in-public narrative | 1,500-2,000 | P1 | Month 1. Gap 13. Hero content for command center launch. Explains UX paradigm shift, auto-routing, multi-leader threading. Link target for social distribution. |
+| PWA Installability Milestone Announcement | Distribution (social) | N/A | P1 | **DRAFT** (2026-03-29). Social announcement for PWA shipping (PR #1256). Reinforces "accessible anywhere" positioning. Draft at `distribution-content/2026-03-29-pwa-installability-milestone.md`. |
 | How to Build a SaaS as a Solo Founder | Tutorial | 2,500-3,000 | P3 | Month 3+. |
 
 ---
