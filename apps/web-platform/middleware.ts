@@ -2,12 +2,7 @@ import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { buildCspHeader } from "@/lib/csp";
-
-// No auth required — middleware returns early
-const PUBLIC_PATHS = ["/login", "/signup", "/callback", "/api/webhooks", "/ws", "/manifest.webmanifest"];
-
-// Auth required, but T&C check skipped (user must reach these to accept terms)
-const TC_EXEMPT_PATHS = ["/accept-terms", "/api/accept-terms"];
+import { PUBLIC_PATHS, TC_EXEMPT_PATHS } from "@/lib/routes";
 
 function withCspHeaders(response: NextResponse, cspValue: string): NextResponse {
   response.headers.set("Content-Security-Policy", cspValue);
