@@ -51,6 +51,13 @@ describe("createSandboxHook - file tools", () => {
     expectDenied(result, "workspace");
   });
 
+  test("denies Read of /proc/1/environ at hook layer (defense-in-depth)", async () => {
+    const result = await invokeHook("Read", {
+      file_path: "/proc/1/environ",
+    });
+    expectDenied(result, "workspace");
+  });
+
   test("denies Read with ../ traversal escaping workspace", async () => {
     const result = await invokeHook("Read", {
       file_path: "/workspaces/user1/../user2/secret.md",
