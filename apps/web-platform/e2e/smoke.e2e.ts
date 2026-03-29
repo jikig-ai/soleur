@@ -114,6 +114,20 @@ test.describe("public pages", () => {
     expect(csp).toContain("nonce-");
   });
 
+  test("CSP connect-src uses x-forwarded-host when present (regression for #1075)", async ({
+    request,
+  }) => {
+    // Simulate proxy forwarding (like Cloudflare): set x-forwarded-host header.
+    // The middleware must use this instead of request.nextUrl.host (localhost:PORT).
+    const response = await request.get("/login", {
+      headers: { "x-forwarded-host": "app.soleur.ai" },
+    });
+    const csp = response.headers()["content-security-policy"]!;
+    // In dev mode buildCspHeader uses ws:// (not wss://) but the host should
+    // come from x-forwarded-host, not the internal server bind address.
+    expect(csp).toContain("ws://app.soleur.ai");
+  });
+
   test("/health returns JSON without CSP header", async ({ request }) => {
     const response = await request.get("/health");
     expect(response.status()).toBe(200);

@@ -19,11 +19,17 @@ export async function middleware(request: NextRequest) {
 
   // Generate per-request nonce for CSP
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
+  // Use forwarded host from proxy (Cloudflare), falling back to Host header,
+  // then nextUrl.host. request.nextUrl.host returns the custom server's bind
+  // address (localhost:3000), not the client-facing hostname.
+  const appHost = request.headers.get("x-forwarded-host")
+    ?? request.headers.get("host")
+    ?? request.nextUrl.host;
   const cspValue = buildCspHeader({
     nonce,
     isDev: process.env.NODE_ENV === "development",
     supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
-    appHost: request.nextUrl.host,
+    appHost,
     sentryReportUri: process.env.SENTRY_CSP_REPORT_URI,
   });
 
