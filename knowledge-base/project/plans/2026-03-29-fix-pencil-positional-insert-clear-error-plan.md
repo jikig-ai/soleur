@@ -4,13 +4,25 @@ type: fix
 date: 2026-03-29
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-29
+**Sections enhanced:** 3 (Proposed Solution, Technical Considerations, Test Scenarios)
+**Research focus:** Adapter architecture validation, error flow verification, test coverage gap
+
+### Key Improvements
+
+1. Confirmed `parseResponse()` detects "Invalid properties:" as `isError: true` (line 85), guaranteeing the error flows through `enrichErrorMessage()`
+2. Identified no existing unit tests for `enrichErrorMessage()` -- added test file recommendation
+3. Verified `M(nodeId, parent, index)` requires knowing the target index -- enhanced error message to mention `batch_get` for index discovery
+
 # fix: pencil I() positional insert returns clear error with M() workaround
 
 ## Overview
 
 The `I()` insert operation in Pencil's `batch_design` does not support positional placement (`{after: "nodeId"}` or `{before: "nodeId"}`). When a caller passes a third positional argument, Pencil returns a misleading error: "Invalid properties: /id missing required property" -- which looks like a schema validation failure rather than an unsupported feature.
 
-The fix adds pre-validation in the MCP adapter (`pencil-mcp-adapter.mjs`) to intercept positional insert patterns before they reach the Pencil REPL, and returns an actionable error message explaining the limitation and the `M(nodeId, parent, index)` workaround.
+The fix adds error enrichment in the MCP adapter (`pencil-mcp-adapter.mjs`) to detect the misleading upstream error and append an actionable message explaining the limitation and the `M(nodeId, parent, index)` workaround.
 
 Closes #1117
 
@@ -52,6 +64,31 @@ This follows the existing `enrichErrorMessage()` pattern used for `alignSelf` (#
 
 **Why not pre-validate with regex?** An earlier draft included a regex to detect positional arguments before sending to Pencil. Plan review rejected this: (1) the regex `[^}]*` fails on nested braces (e.g., `{type:"frame", stroke:{...}}`), (2) the enrichment fallback alone achieves all acceptance criteria, (3) adding regex parsing of a free-form DSL creates maintenance burden with no clear benefit over post-hoc error enrichment.
 
+### Research Insights
+
+**Error flow verification (confirmed):**
+
+The adapter architecture guarantees this fix works:
+
+1. `batch_design` is registered via `registerMutatingTool()` (line 508)
+2. `registerMutatingTool` calls `parseResponse(raw)` on the REPL output (line 389)
+3. `parseResponse` detects `^Invalid properties:` as `isError: true` (line 85)
+4. On `isError`, the handler calls `enrichErrorMessage(text)` (line 391)
+5. The enriched text is returned to the MCP caller with `isError: true`
+
+No intermediate step swallows or transforms the error text before it reaches `enrichErrorMessage()`.
+
+**M() index discovery:** The error message should note that `M()` requires an integer index. Callers can determine the target index by calling `batch_get` or `snapshot_layout` on the parent to inspect its current children order. A complete workaround example:
+
+```javascript
+// Step 1: Insert node (appended at end)
+node=I(parent, {type:"frame", width:60, height:2, fill:"#C9A962"})
+// Step 2: Move to position after sibling (index 1 = second child)
+M(node, parent, 1)
+```
+
+**Test coverage gap:** No unit tests exist for `enrichErrorMessage()`. The function is pure (string in, string out) and easy to test. Consider adding a test file `plugins/soleur/test/pencil-error-enrichment.test.ts` to cover all three patterns (alignSelf, padding, positional insert). This is optional for this fix but would prevent regressions as more patterns are added.
+
 ## Technical Considerations
 
 - **No upstream changes**: This is purely adapter-side. Pencil's REPL behavior is unchanged.
@@ -61,11 +98,11 @@ This follows the existing `enrichErrorMessage()` pattern used for `alignSelf` (#
 
 ## Acceptance Criteria
 
-- [ ] `I(parent, {props}, {after: "siblingId"})` returns a clear error mentioning `M()` workaround instead of "Invalid properties: /id missing required property"
-- [ ] `I(parent, {props}, {before: "siblingId"})` returns the same clear error
-- [ ] `I(parent, {props})` (normal two-arg form) continues to work unchanged
-- [ ] Error message includes `#1117` reference and `M()` example
-- [ ] Existing error enrichment for `alignSelf` and `padding` continues to work
+- [x] `I(parent, {props}, {after: "siblingId"})` returns a clear error mentioning `M()` workaround instead of "Invalid properties: /id missing required property"
+- [x] `I(parent, {props}, {before: "siblingId"})` returns the same clear error
+- [x] `I(parent, {props})` (normal two-arg form) continues to work unchanged
+- [x] Error message includes `#1117` reference and `M()` example
+- [x] Existing error enrichment for `alignSelf` and `padding` continues to work
 
 ## Test Scenarios
 
@@ -78,7 +115,9 @@ This follows the existing `enrichErrorMessage()` pattern used for `alignSelf` (#
 
 | File | Change |
 |------|--------|
-| `plugins/soleur/skills/pencil-setup/scripts/pencil-mcp-adapter.mjs` | Add `/id missing required property` pattern to `enrichErrorMessage()` with `M()` workaround hint |
+| `plugins/soleur/skills/pencil-setup/scripts/pencil-error-enrichment.mjs` | Extracted `enrichErrorMessage()` with all 3 patterns (alignSelf, padding, positional insert) |
+| `plugins/soleur/skills/pencil-setup/scripts/pencil-mcp-adapter.mjs` | Import `enrichErrorMessage` from extracted module, remove inline definition |
+| `plugins/soleur/test/pencil-error-enrichment.test.ts` | Unit tests for all `enrichErrorMessage()` patterns |
 
 ## Domain Review
 
