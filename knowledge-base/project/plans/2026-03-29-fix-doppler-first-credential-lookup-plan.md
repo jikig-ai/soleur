@@ -67,12 +67,12 @@ Insert as a new bullet in the Hard Rules section, directly before the existing "
 
 ## Acceptance Criteria
 
-- [ ] AGENTS.md updated with Doppler-first credential lookup rule in Hard Rules section
-- [ ] Rule covers all credential scenarios (CLI tools, MCP servers, API tokens)
-- [ ] Existing priority chain preserved (Doppler check inserted as step 0 before MCP tools)
-- [ ] Rule includes the `2>/dev/null` suffix to handle cases where Doppler CLI is not installed
-- [ ] Rule includes guidance for uncertain key names (list secrets, check multiple configs)
-- [ ] Rule includes a `**Why:**` annotation with the triggering incident
+- [x] AGENTS.md updated with Doppler-first credential lookup rule in Hard Rules section
+- [x] Rule covers all credential scenarios (CLI tools, MCP servers, API tokens)
+- [x] Existing priority chain preserved (Doppler check inserted as step 0 before MCP tools)
+- [x] Rule includes the `2>/dev/null` suffix to handle cases where Doppler CLI is not installed
+- [x] Rule includes guidance for uncertain key names (list secrets, check multiple configs)
+- [x] Rule includes a `**Why:**` annotation with the triggering incident
 
 ## Test Scenarios
 
