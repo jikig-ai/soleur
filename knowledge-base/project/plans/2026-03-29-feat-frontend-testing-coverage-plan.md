@@ -78,11 +78,11 @@ Install Playwright, fix the `PUBLIC_PATHS` drift bug, write all E2E tests.
 
 **Tasks:**
 
-- [ ] Fix pre-existing bug: export `PUBLIC_PATHS` from `apps/web-platform/lib/routes.ts`
+- [x] Fix pre-existing bug: export `PUBLIC_PATHS` from `apps/web-platform/lib/routes.ts`
   and import in both `middleware.ts` and `middleware.test.ts`. The test currently
   duplicates the array and is missing `/manifest.webmanifest`.
-- [ ] Add `@playwright/test` to `apps/web-platform/package.json` devDependencies
-- [ ] Create `apps/web-platform/playwright.config.ts` with:
+- [x] Add `@playwright/test` to `apps/web-platform/package.json` devDependencies
+- [x] Create `apps/web-platform/playwright.config.ts` with:
   - `testDir: "./e2e"`
   - `webServer` command: `bun run build && bun run build:server && NODE_ENV=production node dist/server/index.js`
     on a random port (production mode -- dev mode includes `unsafe-eval` in CSP which
@@ -96,7 +96,7 @@ Install Playwright, fix the `PUBLIC_PATHS` drift bug, write all E2E tests.
   - Environment: `NEXT_PUBLIC_SUPABASE_URL=https://test.supabase.co` and
     `NEXT_PUBLIC_SUPABASE_ANON_KEY=test-anon-key` (URL-shaped values required --
     `csp.ts` parses the URL host for CSP directives and crashes on invalid URLs)
-- [ ] Create `apps/web-platform/e2e/smoke.spec.ts`:
+- [x] Create `apps/web-platform/e2e/smoke.spec.ts`:
   - **CSP nonce tests:**
     - Navigate to `/login` (public page, no auth needed)
     - Listen for `SecurityPolicyViolation` events (not just console -- CSP violations
@@ -113,8 +113,8 @@ Install Playwright, fix the `PUBLIC_PATHS` drift bug, write all E2E tests.
   - **Auth redirect tests:**
     - `/dashboard` unauthenticated -- redirects to `/login`
     - `/setup-key` unauthenticated -- redirects to `/login`
-- [ ] Add `"test:e2e": "npx playwright test"` script to package.json
-- [ ] Run locally and verify green
+- [x] Add `"test:e2e"`: "npx playwright test"` script to package.json
+- [x] Run locally and verify green
 
 **Success criteria:** All E2E tests pass locally. CSP nonce propagation verified.
 Public pages load. Protected routes redirect.
@@ -125,7 +125,7 @@ Add E2E job to GitHub Actions, parallel with existing test job.
 
 **Tasks:**
 
-- [ ] Add `e2e` job to `.github/workflows/ci.yml`:
+- [x] Add `e2e` job to `.github/workflows/ci.yml`:
   - Runs in parallel with existing `test` job (no dependency)
   - Path filter: triggers on `apps/web-platform/**` changes
   - Steps:
@@ -142,14 +142,14 @@ Add E2E job to GitHub Actions, parallel with existing test job.
   - Pin all actions to commit SHAs
   - Upload `test-results/` as GitHub Actions artifact on failure
     (screenshots, traces -- essential for debugging CI-only failures)
-- [ ] Verify CI job passes on PR
+- [x] Verify CI job passes on PR
 
 **Success criteria:** E2E job runs in CI, passes, and blocks merge on failure.
 Failure artifacts downloadable.
 
 #### Phase 3: Verification
 
-- [ ] Confirm E2E job passes on this PR
+- [x] Confirm E2E job passes on this PR
 - [ ] Confirm E2E job is skipped on a PR that only modifies `plugins/` (path filter)
 - [ ] Confirm existing `test` job is unaffected
 
@@ -165,12 +165,12 @@ Failure artifacts downloadable.
 
 ## Acceptance Criteria
 
-- [ ] Playwright E2E tests verify CSP nonce propagation on a real page load
-- [ ] E2E tests verify unauthenticated redirect to `/login`
-- [ ] CI `e2e` job blocks merge on failure
-- [ ] All existing 251 unit tests continue to pass
-- [ ] Playwright browser binaries cached in CI
-- [ ] `PUBLIC_PATHS` exported from shared constants (drift bug fixed)
+- [x] Playwright E2E tests verify CSP nonce propagation on a real page load
+- [x] E2E tests verify unauthenticated redirect to `/login`
+- [x] CI `e2e` job blocks merge on failure
+- [x] All existing 251 unit tests continue to pass
+- [x] Playwright browser binaries cached in CI
+- [x] `PUBLIC_PATHS` exported from shared constants (drift bug fixed)
 
 ## Dependencies and Risks
 
