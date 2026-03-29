@@ -7,9 +7,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { spawn as nodeSpawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
+import { enrichErrorMessage } from "./pencil-error-enrichment.mjs";
+import { sanitizeFilename } from "./sanitize-filename.mjs";
 
 // --- Node version gate ---
 
@@ -365,20 +367,6 @@ function registerReadOnlyTool(name, schema, handler) {
   });
 }
 
-// --- Error enrichment for known pencil API gotchas ---
-
-function enrichErrorMessage(text) {
-  if (text.includes("alignSelf") && text.includes("unexpected property")) {
-    return text + "\n\n[adapter hint] alignSelf is not supported on frames. " +
-      "Use parent container alignment or layout properties instead. See #1106.";
-  }
-  if (text.includes("padding") && text.includes("unexpected property")) {
-    return text + "\n\n[adapter hint] Text nodes do not support padding. " +
-      "Wrap the text in a frame and apply padding to the frame. See #1107.";
-  }
-  return text;
-}
-
 // --- Mutating tool handler factory ---
 
 function registerMutatingTool(name, schema, postHandler) {
@@ -495,13 +483,70 @@ registerReadOnlyTool("snapshot_layout", {
   problemsOnly: z.boolean().optional(),
 });
 
-registerReadOnlyTool("export_nodes", {
-  nodeIds: z.array(z.string()),
-  outputDir: z.string(),
-  format: z.enum(["png", "jpeg", "webp", "pdf"]).optional(),
-  scale: z.number().optional(),
-  quality: z.number().optional(),
-});
+// export_nodes — custom handler to rename exported files using node names
+server.tool(
+  "export_nodes",
+  {
+    nodeIds: z.array(z.string()),
+    outputDir: z.string(),
+    format: z.enum(["png", "jpeg", "webp", "pdf"]).optional(),
+    scale: z.number().optional(),
+    quality: z.number().optional(),
+  },
+  async ({ nodeIds, outputDir, format, scale, quality }) => {
+    await ensureProcess();
+    const ext = format || "png";
+
+    // Step 1: Try to get node names via batch_get
+    let nameMap = new Map();
+    try {
+      const batchCmd = formatReplCommand("batch_get", { nodeIds });
+      const batchRaw = await commandQueue.enqueue(batchCmd);
+      const { text: batchText } = parseResponse(batchRaw);
+      const parsed = JSON.parse(batchText);
+      if (parsed.nodes && Array.isArray(parsed.nodes)) {
+        for (const node of parsed.nodes) {
+          if (node.id && node.name) {
+            nameMap.set(node.id, node.name);
+          }
+        }
+      }
+    } catch (err) {
+      process.stderr.write(`[pencil-adapter] batch_get for node names failed: ${err.message}\n`);
+    }
+
+    // Step 2: Run the original export_nodes command
+    const cmd = formatReplCommand("export_nodes", { nodeIds, outputDir, format, scale, quality });
+    const raw = await commandQueue.enqueue(cmd);
+    const { text, isError } = parseResponse(raw);
+    if (isError) {
+      return { content: [{ type: "text", text }], isError: true };
+    }
+
+    // Step 3: Rename exported files from nodeId to sanitized name
+    const renamedFiles = [];
+    for (const nodeId of nodeIds) {
+      const nodeName = nameMap.get(nodeId);
+      const sanitized = nodeName ? sanitizeFilename(nodeName) : "";
+      if (!sanitized) {
+        renamedFiles.push(`${nodeId}.${ext}`);
+        continue;
+      }
+      const oldPath = join(outputDir, `${nodeId}.${ext}`);
+      const newPath = join(outputDir, `${sanitized}.${ext}`);
+      try {
+        renameSync(oldPath, newPath);
+        renamedFiles.push(`${sanitized}.${ext}`);
+      } catch (err) {
+        process.stderr.write(`[pencil-adapter] rename ${oldPath} -> ${newPath} failed: ${err.message}\n`);
+        renamedFiles.push(`${nodeId}.${ext}`);
+      }
+    }
+
+    const summary = `\nExported files: ${renamedFiles.join(", ")}`;
+    return { content: [{ type: "text", text: text + summary }] };
+  }
+);
 
 // --- Mutating tools (auto-save after) ---
 
@@ -552,7 +597,13 @@ server.tool(
     const raw = await commandQueue.enqueue(cmd);
     const { text, isError } = parseResponse(raw);
     if (isError) {
-      return { content: [{ type: "text", text }], isError: true };
+      let enriched = text;
+      if (/does not have a valid definition/i.test(text)) {
+        enriched += '\nExpected: { "type": "color" | "string" | "number", "value": <value> }';
+      } else if (/invalid type property/i.test(text)) {
+        enriched += "\nValid types: color, string, number";
+      }
+      return { content: [{ type: "text", text: enriched }], isError: true };
     }
     await commandQueue.enqueue("save()");
     return { content: [{ type: "text", text }] };
