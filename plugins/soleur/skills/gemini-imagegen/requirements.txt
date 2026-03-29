@@ -1,2 +1,4 @@
-google-genai>=1.0.0
-Pillow>=10.0.0
+google-genai==1.66.0 \
+    --hash=sha256:7f127a39cf695277104ce4091bb26e417c59bb46e952ff3699c3a982d9c474ee
+Pillow==11.3.0 \
+    --hash=sha256:3828ee7586cd0b2091b6209e5ad53e20d0649bbe87164a459d0676e035e8f523
