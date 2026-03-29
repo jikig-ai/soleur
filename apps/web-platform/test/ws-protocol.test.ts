@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import type { WSMessage } from "../lib/types";
-import { KeyInvalidError } from "../lib/types";
+import { KeyInvalidError, WS_CLOSE_CODES } from "../lib/types";
 
 // Test the WebSocket message protocol types and routing logic.
 // The actual WebSocket server requires HTTP infrastructure, so we test
@@ -243,5 +243,32 @@ describe("multi-turn session protocol", () => {
     if (msg!.type === "error") {
       expect(msg!.errorCode).toBe("session_resumed");
     }
+  });
+});
+
+describe("rate limiting close codes", () => {
+  test("RATE_LIMITED close code is 4008", () => {
+    expect(WS_CLOSE_CODES.RATE_LIMITED).toBe(4008);
+  });
+
+  test("RATE_LIMITED is in the application-reserved range (4000-4999)", () => {
+    expect(WS_CLOSE_CODES.RATE_LIMITED).toBeGreaterThanOrEqual(4000);
+    expect(WS_CLOSE_CODES.RATE_LIMITED).toBeLessThanOrEqual(4999);
+  });
+
+  test("error with rate_limited errorCode is detectable", () => {
+    const msg = parseMessage(
+      '{"type":"error","message":"Too many sessions.","errorCode":"rate_limited"}',
+    );
+    expect(msg).not.toBeNull();
+    if (msg!.type === "error") {
+      expect(msg!.errorCode).toBe("rate_limited");
+    }
+  });
+
+  test("all close codes are unique values", () => {
+    const values = Object.values(WS_CLOSE_CODES);
+    const unique = new Set(values);
+    expect(unique.size).toBe(values.length);
   });
 });
