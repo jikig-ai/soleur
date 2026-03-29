@@ -69,9 +69,8 @@ skipped=0
 for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   filename="$(basename "$migration_file")"
 
-  already_applied=$(psql "$DATABASE_URL" --no-psqlrc --set ON_ERROR_STOP=1 -tAq \
-    -v fname="$filename" \
-    -c "SELECT count(*) FROM public._schema_migrations WHERE filename = :'fname';")
+  # Filenames are from a controlled glob (*.sql) — safe for direct interpolation.
+  already_applied=$(run_sql "SELECT count(*) FROM public._schema_migrations WHERE filename = '$filename';")
   if [[ "$already_applied" -gt 0 ]]; then
     skipped=$((skipped + 1))
     continue
@@ -81,9 +80,8 @@ for migration_file in "$MIGRATIONS_DIR"/*.sql; do
   # Apply migration and record it in a single atomic transaction
   {
     cat "$migration_file"
-    printf "\nINSERT INTO public._schema_migrations (filename) VALUES (:'fname');\n"
-  } | psql "$DATABASE_URL" --no-psqlrc --single-transaction --set ON_ERROR_STOP=1 \
-      -v fname="$filename"
+    printf "\nINSERT INTO public._schema_migrations (filename) VALUES ('%s');\n" "$filename"
+  } | psql "$DATABASE_URL" --no-psqlrc --single-transaction --set ON_ERROR_STOP=1
 
   if [[ $? -ne 0 ]]; then
     echo "::error::Migration failed: $filename"
