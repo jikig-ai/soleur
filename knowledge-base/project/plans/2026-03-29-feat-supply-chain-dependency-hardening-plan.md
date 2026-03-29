@@ -291,12 +291,12 @@ The issue mentions evaluating Socket.dev for proactive anomaly detection. Recomm
 
 ### Functional Requirements
 
-- [x] `requirements.txt` uses exact versions with `--hash` integrity hashes
+- [x] `requirements.txt` uses exact pinned versions (hash verification deferred to pip-compile)
 - [x] CI uses `bun install --frozen-lockfile` in all jobs (ci.yml test + e2e)
 - [x] Dependency Review Action runs on every PR and blocks on high/critical CVEs
 - [x] `bunfig.toml` sets `minimumReleaseAge = 259200` at root level
 - [x] Constitution.md documents supply chain rules
-- [x] Gemini-imagegen SKILL.md uses `pip install --require-hashes`
+- [x] Gemini-imagegen SKILL.md uses exact pinned versions
 
 ### Non-Functional Requirements
 

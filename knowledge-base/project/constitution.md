@@ -156,7 +156,7 @@ When a PR adds external services (terraform resources, account signups, API key 
 - `worktree-manager.sh cleanup-merged` works from both worktrees and the bare repo root -- the `IS_BARE` guard routes bare repos to `git fetch origin main:main` (updates local ref) + `sync_bare_files` (refreshes stale on-disk files)
 - Bun is the primary JavaScript package manager; lifecycle scripts (preinstall/postinstall) are blocked by default -- only packages listed in `trustedDependencies` can run install hooks, which is the secure default (no packages are trusted)
 - All CI install commands must use `bun install --frozen-lockfile` (or `npm ci` for Docker builds) -- this fails if the lockfile diverges from package.json, catching accidental or malicious lockfile tampering
-- Python requirements files must pin exact versions with `--hash` integrity verification (`pip install --require-hashes -r requirements.txt`) -- pip has no lockfile mechanism, so exact versions + hashes are the only supply chain defense
+- Python requirements files must pin exact versions (`==`) -- pip has no lockfile mechanism, so exact version pinning is the primary supply chain defense; `--require-hashes` for full transitive dependency verification requires `pip-compile` from `pip-tools`
 - Never add a dependency for something an LLM can generate inline -- every new dependency is an attack surface expansion; the dependency-review-action flags new dependencies on every PR
 - `bunfig.toml` sets `minimumReleaseAge = 259200` (3 days) at all package roots -- newly published packages cannot be installed for 72 hours, which would have caught the litellm attack (live for ~1 hour)
 

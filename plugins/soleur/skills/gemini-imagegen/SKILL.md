@@ -12,7 +12,7 @@ Generate and edit images using Google's Gemini API. The environment variable `GE
 Before generating images, verify both environment and quota:
 
 1. **Environment:** Confirm `GEMINI_API_KEY` is set (the scripts check this)
-2. **Python dependencies:** Install in a venv (`python3 -m venv .venv && source .venv/bin/activate && pip install --require-hashes -r requirements.txt`) -- bare `pip install` is blocked by PEP 668 on modern Linux; `--require-hashes` verifies package integrity against pinned SHA-256 hashes
+2. **Python dependencies:** Install in a venv (`python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`) -- bare `pip install` is blocked by PEP 668 on modern Linux; versions are pinned to exact releases for supply chain security
 3. **Image generation quota:** Free-tier API keys authenticate successfully but may have zero quota for image generation. Run a minimal test request before building the full pipeline:
 
 ```bash
