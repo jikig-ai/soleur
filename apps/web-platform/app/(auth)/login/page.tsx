@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import Link from "next/link";
 
 export default function LoginPage() {
@@ -83,6 +84,14 @@ export default function LoginPage() {
             {loading ? "Sending..." : "Send magic link"}
           </button>
         </form>
+
+        <div className="relative flex items-center gap-4">
+          <div className="flex-1 border-t border-neutral-700" />
+          <span className="text-xs text-neutral-500">or</span>
+          <div className="flex-1 border-t border-neutral-700" />
+        </div>
+
+        <OAuthButtons />
 
         <p className="text-center text-sm text-neutral-500">
           Don&apos;t have an account?{" "}
