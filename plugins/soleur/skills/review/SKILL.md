@@ -141,7 +141,7 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 **When to run SAST agent:**
 
 - `which semgrep` returns 0 (semgrep binary found in PATH)
-- PR modifies source code files (*.py, *.js, *.ts, *.rb, *.go, *.java, *.rs, *.swift, *.kt, etc.)
+- PR modifies source code files (*.py,*.js, *.ts,*.rb, *.go,*.java, *.rs,*.swift, *.kt, etc.)
 - Not needed for documentation-only or config-only changes
 
 **What this agent checks:**
@@ -149,6 +149,19 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 - `semgrep-sast`: Known vulnerability signatures (CWE patterns), hardcoded secrets, insecure function calls, taint analysis. Complements security-sentinel's LLM-based architectural review with deterministic rule-based scanning.
 
 </conditional_agents>
+
+### 2. Rate Limit Fallback
+
+<decision_gate>
+
+After all parallel and conditional agents complete, check their outputs:
+
+- **If ALL agents returned empty output or rate-limit errors** (e.g., "out of extra usage", "rate limit exceeded", zero findings across every agent): perform an inline review in the main context covering all four core dimensions — security, architecture, performance, and simplicity. This is expected fallback behavior during high-usage periods, not an error condition.
+- **If ANY agent returned substantive output**: proceed normally with available results. No fallback needed — partial coverage from real agents is better than duplicating their work inline.
+
+This is a binary gate: all-failed triggers the fallback; any-succeeded means continue.
+
+</decision_gate>
 
 ### 4. Ultra-Thinking Deep Dive Phases
 
