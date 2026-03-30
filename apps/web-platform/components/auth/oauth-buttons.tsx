@@ -58,7 +58,7 @@ const PROVIDERS: ProviderConfig[] = [
   },
 ];
 
-export function OAuthButtons() {
+export function OAuthButtons({ disabled = false }: { disabled?: boolean }) {
   const [loading, setLoading] = useState<Provider | null>(null);
   const [error, setError] = useState("");
 
@@ -89,7 +89,7 @@ export function OAuthButtons() {
           key={provider.id}
           type="button"
           onClick={() => handleOAuth(provider)}
-          disabled={loading !== null}
+          disabled={loading !== null || disabled}
           className="flex w-full items-center justify-center gap-3 rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-3 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-50"
         >
           {provider.icon}

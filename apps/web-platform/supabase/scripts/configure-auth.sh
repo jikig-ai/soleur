@@ -81,13 +81,14 @@ configure_provider() {
 
   local payload
   payload=$(jq -n \
+    --arg prov "$provider_name" \
     --arg id "$client_id" \
     --arg secret "$client_secret" \
     --argjson extra "${extra_json:-{}}" \
     '{
-      ("external_" + "'"$provider_name"'" + "_enabled"): true,
-      ("external_" + "'"$provider_name"'" + "_client_id"): $id,
-      ("external_" + "'"$provider_name"'" + "_secret"): $secret
+      ("external_" + $prov + "_enabled"): true,
+      ("external_" + $prov + "_client_id"): $id,
+      ("external_" + $prov + "_secret"): $secret
     } + $extra'
   )
 

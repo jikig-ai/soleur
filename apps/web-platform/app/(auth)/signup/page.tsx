@@ -115,7 +115,7 @@ export default function SignupPage() {
           <div className="flex-1 border-t border-neutral-700" />
         </div>
 
-        <OAuthButtons />
+        <OAuthButtons disabled={!tcAccepted} />
 
         <p className="text-center text-sm text-neutral-500">
           Already have an account?{" "}

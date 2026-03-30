@@ -86,4 +86,12 @@ describe("OAuthButtons", () => {
     expect(screen.getByRole("button", { name: /github/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /microsoft/i })).toBeDisabled();
   });
+
+  it("disables all buttons when disabled prop is true", () => {
+    render(<OAuthButtons disabled />);
+    expect(screen.getByRole("button", { name: /google/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /apple/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /github/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /microsoft/i })).toBeDisabled();
+  });
 });
