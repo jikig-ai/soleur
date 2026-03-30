@@ -26,6 +26,8 @@ interface UseWebSocketReturn {
   sendReviewGateResponse: (gateId: string, selection: string) => void;
   status: ConnectionStatus;
   disconnectReason: string | undefined;
+  routeSource: "auto" | "mention" | null;
+  activeLeaderIds: DomainLeaderId[];
 }
 
 const MAX_BACKOFF = 30_000;
@@ -45,6 +47,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [disconnectReason, setDisconnectReason] = useState<string>();
+  const [routeSource, setRouteSource] = useState<"auto" | "mention" | null>(null);
+  const [activeLeaderIds, setActiveLeaderIds] = useState<DomainLeaderId[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -127,6 +131,10 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
         case "stream_start": {
           if (msg.type !== "stream_start") break;
+          // Store routing source from first stream_start
+          if (msg.source) {
+            setRouteSource(msg.source);
+          }
           // Create a new empty message bubble for this leader
           setMessages((prev) => {
             const newMsg: ChatMessage = {
@@ -137,6 +145,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
               leaderId: msg.leaderId,
             };
             activeStreamsRef.current.set(msg.leaderId, prev.length);
+            setActiveLeaderIds(Array.from(activeStreamsRef.current.keys()) as DomainLeaderId[]);
             return [...prev, newMsg];
           });
           break;
@@ -179,6 +188,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           if (msg.type !== "stream_end") break;
           // Finalize this leader's stream — remove from active streams map
           activeStreamsRef.current.delete(msg.leaderId);
+          setActiveLeaderIds(Array.from(activeStreamsRef.current.keys()) as DomainLeaderId[]);
           break;
         }
 
@@ -323,5 +333,5 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     [send],
   );
 
-  return { messages, startSession, sendMessage, sendReviewGateResponse, status, disconnectReason };
+  return { messages, startSession, sendMessage, sendReviewGateResponse, status, disconnectReason, routeSource, activeLeaderIds };
 }

@@ -38,7 +38,7 @@ export type WSMessage =
   | { type: "close_conversation" }
   | { type: "review_gate_response"; gateId: string; selection: string }
   | { type: "stream"; content: string; partial: boolean; leaderId: DomainLeaderId }
-  | { type: "stream_start"; leaderId: DomainLeaderId }
+  | { type: "stream_start"; leaderId: DomainLeaderId; source?: "auto" | "mention" }
   | { type: "stream_end"; leaderId: DomainLeaderId }
   | { type: "review_gate"; gateId: string; question: string; options: string[] }
   | { type: "session_started"; conversationId: string }

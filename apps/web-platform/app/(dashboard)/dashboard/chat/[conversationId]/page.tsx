@@ -5,6 +5,7 @@ import { useParams, useSearchParams } from "next/navigation";
 import { useWebSocket } from "@/lib/ws-client";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
+import { LEADER_COLORS } from "@/components/chat/leader-colors";
 
 export default function ChatPage() {
   const params = useParams<{ conversationId: string }>();
@@ -131,17 +132,6 @@ export default function ChatPage() {
 /* ------------------------------------------------------------------ */
 /*  Sub-components                                                     */
 /* ------------------------------------------------------------------ */
-
-const LEADER_COLORS: Record<string, string> = {
-  cmo: "border-l-pink-500",
-  cto: "border-l-blue-500",
-  cfo: "border-l-green-500",
-  cpo: "border-l-purple-500",
-  cro: "border-l-orange-500",
-  coo: "border-l-yellow-500",
-  clo: "border-l-red-500",
-  cco: "border-l-teal-500",
-};
 
 function MessageBubble({
   role,
