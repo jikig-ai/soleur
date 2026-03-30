@@ -98,7 +98,7 @@ If you subscribe to the Soleur newsletter via the signup form on the Docs Site, 
 
 The Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) is a cloud-hosted service operated by Jikigai. Unlike the Plugin (Section 4.1), the Web Platform processes personal data on Jikigai-operated infrastructure. The following data is collected when you use the Web Platform:
 
-- **Account data:** Email address (registration), hashed password (managed by Supabase), authentication tokens, and session cookies.
+- **Account data:** Email address (registration), authentication tokens, and session cookies. If you sign in via an OAuth provider (Google, Apple, GitHub, or Microsoft), we also receive your provider user ID, display name, and profile picture URL from the provider. Accounts with matching verified email addresses are automatically linked.
 - **Workspace data:** User workspaces and encrypted API keys (BYOK -- bring your own key). API keys are encrypted using AES-256-GCM before storage.
 - **Subscription data:** Subscription status and billing metadata (managed by Stripe). Card data is handled exclusively by Stripe via Stripe Checkout and never reaches Jikigai servers (PCI SAQ-A).
 - **Conversation data:** Conversation metadata (domain leader, status, timestamps) and message content (user messages, assistant responses, tool call metadata) stored in the Supabase database. Conversations are associated with the user's account via user_id.

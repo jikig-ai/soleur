@@ -78,7 +78,7 @@ The Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) is a cloud-hos
 
 When you create a Web Platform account:
 
-- You provide an email address and create authentication credentials managed by Supabase.
+- You provide an email address and authenticate via magic link or an OAuth provider (Google, Apple, GitHub, or Microsoft). Authentication credentials are managed by Supabase. If you use OAuth, your provider user ID, display name, and profile picture URL are stored. Accounts with matching verified email addresses are automatically linked.
 - You may store encrypted API keys (BYOK -- bring your own key) in your workspace.
 - If you subscribe to a paid plan, payment is processed by Stripe via Stripe Checkout. Card data is handled exclusively by Stripe and never reaches Jikigai servers.
 
@@ -100,7 +100,7 @@ If you delete your Web Platform account while a Subscription is active, the dele
 
 ### 5.3 EU Right of Withdrawal
 
-If you are a consumer in the EU/EEA, you have a 14-day right of withdrawal under Directive 2011/83/EU. However, by subscribing and requesting immediate access to the Web Platform's paid features, you expressly consent to the performance of the digital service beginning immediately and acknowledge that you thereby waive your right of withdrawal in accordance with Article 16(m) of Directive 2011/83/EU. If you do not consent to immediate access, your access to paid features will begin after the 14-day withdrawal period has expired, during which you may withdraw and receive a full refund. To exercise your right of withdrawal, contact legal@jikigai.com or use the model withdrawal form available upon request.
+If you are a consumer in the EU/EEA, you have a 14-day right of withdrawal under Directive 2011/83/EU. However, by subscribing and requesting immediate access to the Web Platform's paid features, you expressly consent to the performance of the digital service beginning immediately and acknowledge that you thereby waive your right of withdrawal in accordance with Article 16(m) of Directive 2011/83/EU. If you do not consent to immediate access, your access to paid features will begin after the 14-day withdrawal period has expired, during which you may withdraw and receive a full refund. To exercise your right of withdrawal, contact <legal@jikigai.com> or use the model withdrawal form available upon request.
 
 ### 5.4 Refunds
 
@@ -186,7 +186,7 @@ If you are located in the EU/EEA, you have rights under the GDPR including the r
 
 For the Plugin, these rights are inherently satisfied by your local control over Plugin-generated data.
 
-For the Web Platform, you may exercise these rights against Jikigai by contacting legal@jikigai.com. See the [GDPR Policy](/pages/legal/gdpr-policy.html) Section 5 for full details on how to exercise each right.
+For the Web Platform, you may exercise these rights against Jikigai by contacting <legal@jikigai.com>. See the [GDPR Policy](/pages/legal/gdpr-policy.html) Section 5 for full details on how to exercise each right.
 
 For any GDPR-related inquiries concerning the documentation site or third-party integrations, please contact us through the channels listed in Section 17.
 
@@ -294,7 +294,7 @@ Any disputes arising under or in connection with these Terms shall be subject to
 
 ### 15.3 EU/EEA Consumers
 
-If you are a consumer in the EU/EEA, nothing in these Terms affects your rights under mandatory EU or member state consumer protection laws, including your right to bring proceedings in the courts of your country of habitual residence. The European Commission provides an Online Dispute Resolution (ODR) platform at https://ec.europa.eu/consumers/odr. We are not obligated to participate in ODR procedures but will consider doing so on a case-by-case basis.
+If you are a consumer in the EU/EEA, nothing in these Terms affects your rights under mandatory EU or member state consumer protection laws, including your right to bring proceedings in the courts of your country of habitual residence. The European Commission provides an Online Dispute Resolution (ODR) platform at <https://ec.europa.eu/consumers/odr>. We are not obligated to participate in ODR procedures but will consider doing so on a case-by-case basis.
 
 ## 16. General Provisions
 
@@ -328,17 +328,18 @@ Soleur is a source-available project maintained by Jikigai, a company incorporat
 
 For questions or concerns regarding these Terms, please contact us through:
 
-- **Email:** legal@jikigai.com
+- **Email:** <legal@jikigai.com>
 - **GitHub Repository:** [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur)
 - **Website:** [soleur.ai](https://soleur.ai)
 - **Issues:** [github.com/jikig-ai/soleur/issues](https://github.com/jikig-ai/soleur/issues)
-- **GDPR / Data Protection Inquiries:** legal@jikigai.com (include "GDPR" in the subject line)
+- **GDPR / Data Protection Inquiries:** <legal@jikigai.com> (include "GDPR" in the subject line)
 
-To exercise your data subject rights under GDPR, send a written request to legal@jikigai.com. We will acknowledge your request within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3). This period may be extended by two further months where necessary, taking into account the complexity or volume of requests, in which case we will inform you of the extension and reasons within the initial one-month period.
+To exercise your data subject rights under GDPR, send a written request to <legal@jikigai.com>. We will acknowledge your request within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3). This period may be extended by two further months where necessary, taking into account the complexity or volume of requests, in which case we will inform you of the extension and reasons within the initial one-month period.
 
 ---
 
 > **Related documents:** This Terms & Conditions document references privacy practices, data handling, cookies, acceptable use policies, and contributor agreements. Please review the companion documents:
+>
 > - [Privacy Policy](/pages/legal/privacy-policy.html) -- details data practices referenced in Section 8
 > - [Acceptable Use Policy](/pages/legal/acceptable-use-policy.html) -- expands on the acceptable use provisions in Section 9
 > - [Cookie Policy](/pages/legal/cookie-policy.html) -- covers cookies used by the documentation site

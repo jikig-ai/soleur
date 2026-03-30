@@ -128,12 +128,19 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    Use a meaningful name based on the work (e.g., `feat-user-authentication`, `fix-email-validation`).
 
-3. **Create Todo List**
-   - Use TodoWrite to break plan into actionable tasks
-   - Include dependencies between tasks
-   - Prioritize based on what needs to be done first
-   - Include testing and quality check tasks
+3. **Create Todo List (TDD-First Structure)**
+
+   Structure tasks as RED/GREEN/REFACTOR units, not as "implement everything, then test":
+
+   - For each feature requirement with Acceptance Criteria or testable behavior:
+     - Create a **RED task**: "Write failing test for [feature]" — the test file with at least one failing test
+     - Create a **GREEN task**: "Implement [feature] to pass tests" — blocked by its RED task
+     - Group these as a TDD unit with `blockedBy` dependency (GREEN blocked by RED)
+   - Infrastructure-only tasks (config files, CI, scaffolding, legal docs) are exempt from RED/GREEN pairing — create them as standalone tasks
+   - Place a final "Run full test suite and lint" task at the end, blocked by all other tasks
    - Keep tasks specific and completable
+
+   **Anti-pattern to avoid:** Creating a task list like `[implement A, implement B, implement C, ..., write tests, lint]`. This structure guarantees TDD violation because the agent executes tasks in order. The correct structure is `[RED: test A, GREEN: implement A, RED: test B, GREEN: implement B, ..., lint]`.
 
 ### Phase 2: Execute
 
