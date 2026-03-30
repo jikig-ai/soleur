@@ -92,6 +92,12 @@ api_request() {
       echo "This workflow will provision goals automatically once the plan includes Sites API access."
       exit 0
       ;;
+    402)
+      echo "Plausible API returned 402 -- this API endpoint requires a higher plan."
+      echo "Skipping goal provisioning. Goals can be configured manually in the dashboard."
+      echo "This workflow will provision goals automatically once the plan includes API access."
+      exit 0
+      ;;
     429)
       echo "Error: Plausible API rate limited (HTTP 429). Try again later." >&2
       exit 1
