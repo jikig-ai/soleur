@@ -27,7 +27,7 @@ Plan: `knowledge-base/project/plans/2026-03-30-feat-phase2-security-gdpr-onboard
 ### 1.2 Remediation
 
 - [ ] 1.2.1 Fix any critical/high findings from 1.1 (tasks added dynamically based on audit results)
-- [ ] 1.2.2 Add WebSocket message size limit (defense-in-depth against oversized payloads)
+- [ ] 1.2.2 Add WebSocket message size limit: set `maxPayload: 1_048_576` (1 MiB) on `WebSocketServer` constructor in ws-handler.ts (default is 100 MiB -- excessive for chat)
 
 ## Phase 2: CSP + CORS Hardening (TG-2)
 
@@ -42,8 +42,10 @@ Plan: `knowledge-base/project/plans/2026-03-30-feat-phase2-security-gdpr-onboard
 - [ ] 2.2.1 Add explicit CORS headers to API routes via next.config.ts `headers()` -- restrict `Access-Control-Allow-Origin` to `https://app.soleur.ai`
 - [ ] 2.2.2 Add `Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS` for API routes
 - [ ] 2.2.3 Add `Access-Control-Allow-Headers: Content-Type, Authorization`
-- [ ] 2.2.4 Handle OPTIONS preflight requests in API routes
-- [ ] 2.2.5 Add test: CORS headers on API responses, reject disallowed origins
+- [ ] 2.2.4 Add `Vary: Origin` header (required for correct CDN/proxy caching with specific ACAO)
+- [ ] 2.2.5 Add `Access-Control-Max-Age: 86400` for preflight caching
+- [ ] 2.2.6 Handle OPTIONS preflight requests in API routes
+- [ ] 2.2.7 Add test: CORS headers on API responses, reject disallowed origins
 
 ## Phase 3: Session Timeout + WebSocket Expiry (TG-3)
 
@@ -61,7 +63,8 @@ Plan: `knowledge-base/project/plans/2026-03-30-feat-phase2-security-gdpr-onboard
 
 - [ ] 3.2.1 Handle `session_expiring` message in ws-client.ts -- display toast/banner
 - [ ] 3.2.2 Handle idle/absolute timeout close codes -- display appropriate message
-- [ ] 3.2.3 Auto-reconnect on timeout (prompt re-auth if session expired)
+- [ ] 3.2.3 Add 4008 and 4009 to `NON_TRANSIENT_CLOSE_CODES` map in ws-client.ts with appropriate UI messages
+- [ ] 3.2.4 Do NOT auto-reconnect on timeout codes (they are non-transient) -- show re-login prompt instead
 
 ### 3.3 Tests
 
@@ -94,7 +97,7 @@ Plan: `knowledge-base/project/plans/2026-03-30-feat-phase2-security-gdpr-onboard
 - [ ] 4.3.2 Require email confirmation in request body (must match authenticated user email)
 - [ ] 4.3.3 Add rate limit: 3 deletion attempts per hour per user
 - [ ] 4.3.4 Implement deletion cascade (order: auth first, workspace last):
-  - 4.3.4.1 Delete auth.users entry via `supabase.auth.admin.deleteUser(userId)` -- triggers FK cascade
+  - 4.3.4.1 Delete auth.users entry via `supabase.auth.admin.deleteUser(userId)` with `shouldSoftDelete: false` (hard delete) -- soft delete does NOT trigger FK cascade
   - 4.3.4.2 DB cascade handles conversations, messages, api_keys via FK constraints
   - 4.3.4.3 Delete workspace directory (best-effort, log errors, cron cleanup as backup)
 - [ ] 4.3.5 Return 200 with `Set-Cookie` clearing all session cookies

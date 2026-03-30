@@ -4,9 +4,45 @@ type: feat
 date: 2026-03-30
 issue: "#674"
 milestone: "Phase 2: Secure for Beta"
+deepened: 2026-03-30
 ---
 
 # Phase 2: Security Audit, GDPR, Onboarding (Beta Gate)
+
+## Enhancement Summary
+
+**Deepened on:** 2026-03-30
+**Sections enhanced:** 7 (all task groups)
+**Research sources:** OWASP cheat sheets, MDN CORS spec, ws library docs,
+Supabase admin API docs, 8 project learnings, plan review feedback
+
+### Key Improvements
+
+1. **Account deletion cascade order corrected** -- auth.users first
+   (triggers FK cascade), workspace last (best-effort). Soft delete
+   (`shouldSoftDelete: true`) does NOT trigger FK cascade; must use hard
+   delete.
+2. **WebSocket maxPayload must be reduced** -- ws library defaults to
+   100 MiB, far too generous for chat messages. Set to 1 MiB.
+3. **CORS must include `Vary: Origin`** -- required for correct CDN/proxy
+   caching when Access-Control-Allow-Origin is not `*`.
+4. **Session timeout must check readyState after async** -- existing
+   TOCTOU learning applies to timeout handlers the same way it applies
+   to auth handlers.
+5. **Six project learnings directly applicable** -- CSP nonce rendering,
+   WS close code routing, TOCTOU race, connect-src scheme mismatch,
+   error sanitization, path traversal patterns.
+
+### New Considerations Discovered
+
+- Supabase `shouldSoftDelete: true` preserves the auth.users row (hashed
+  ID) but does NOT trigger ON DELETE CASCADE on public.users -- must use
+  `shouldSoftDelete: false` for GDPR full deletion
+- CORS `Access-Control-Allow-Origin: *` cannot be used with credentials
+  (cookies) -- must use specific origin with `Vary: Origin`
+- ws library `maxPayload` default is 100 MiB -- set to 1 MiB for chat
+- RFC 6455 close codes 4000-4999 are application-defined; existing close
+  code routing in ws-client.ts must be extended for new timeout codes
 
 ## Overview
 
@@ -310,6 +346,45 @@ only per constitution rule -- never persist aggregated findings to files).
 Any critical/high findings become immediate remediation tasks inserted
 before TG-2.
 
+#### Research Insights (TG-1)
+
+**From project learnings:**
+
+- **Path traversal (CWE-22):** Never use string prefix matching
+  (`startsWith`) on raw paths. Always canonicalize with
+  `fs.realpathSync()` first, append trailing `/` to prevent prefix
+  collisions. Already fixed in `sandbox.ts` (learning: 2026-03-20).
+- **Error sanitization (CWE-209):** Allowlist-with-fallback is the
+  correct posture. Unknown errors automatically get the safe generic
+  message. Already implemented in `error-sanitizer.ts` (learning:
+  2026-03-20).
+- **TOCTOU race in WS auth:** Any async operation between a timer-based
+  deadline and a state mutation creates a TOCTOU window. Always check
+  `ws.readyState` after every `await` before mutating shared state.
+  Already fixed in auth handler (learning: 2026-03-20). Apply the same
+  pattern to the new idle/absolute timeout handlers.
+- **Symlink escape (CWE-59):** `resolveRealPath()` in `sandbox.ts`
+  handles dangling symlinks, circular symlinks, and non-ENOENT errors.
+  Verify test coverage includes these edge cases.
+
+**WebSocket message size limit:**
+
+- The `ws` library defaults `maxPayload` to 100 MiB (104,857,600 bytes).
+  This is excessive for a chat application where messages are typically
+  under 10 KB.
+- Set `maxPayload: 1_048_576` (1 MiB) on the `WebSocketServer`
+  constructor. The ws library automatically closes the connection with
+  code 1009 (Message Too Big) when a message exceeds the limit.
+- Implementation: add `maxPayload` to the `new WebSocketServer({ noServer: true })`
+  call in `ws-handler.ts`.
+
+```typescript
+const wss = new WebSocketServer({
+  noServer: true,
+  maxPayload: 1_048_576, // 1 MiB -- defense-in-depth against oversized payloads
+});
+```
+
 ### TG-2: CSP + CORS Hardening
 
 **Files to modify:**
@@ -327,6 +402,71 @@ before TG-2.
 4. Verify `connect-src` in CSP allows only the required WebSocket and
    Supabase origins
 5. Add tests for CORS headers on API responses
+
+#### Research Insights (TG-2)
+
+**From project learnings:**
+
+- **CSP connect-src and WebSocket schemes:** `'self'` does NOT cover
+  `wss://` in all browsers (learning: 2026-03-28). The current
+  `buildCspHeader()` already includes explicit `wss://` origins -- verify
+  this is preserved when modifying CSP directives.
+- **CSP strict-dynamic requires dynamic rendering:** The root layout
+  must call `await headers()` or equivalent to force dynamic rendering.
+  Already fixed (learning: 2026-03-27). Verify this is not regressed.
+- **Forwarded host validation:** The `resolveOrigin()` function already
+  validates `x-forwarded-host` to prevent CSP injection via spoofed
+  headers (learning: 2026-03-29). Use the same validated origin for
+  CORS `Access-Control-Allow-Origin`.
+
+**CORS implementation details (from MDN CORS spec):**
+
+- **Never use `Access-Control-Allow-Origin: *` with credentials.**
+  Since Supabase auth uses cookies (`sameSite: lax`, `secure: true`),
+  CORS must use specific origin, not wildcard.
+- **Always include `Vary: Origin`** when ACAO is not `*`. This prevents
+  CDN/proxy caching from serving a response with the wrong origin header.
+- **Preflight caching:** Set `Access-Control-Max-Age: 86400` (24 hours)
+  to reduce preflight overhead. Browsers cap this (Chrome: 2 hours,
+  Firefox: 24 hours).
+- **Handle OPTIONS explicitly** in API routes. Next.js does not
+  auto-respond to preflight requests.
+
+**Implementation pattern for Next.js CORS via headers():**
+
+```typescript
+// next.config.ts headers() addition for API routes
+{
+  source: "/api/:path*",
+  headers: [
+    {
+      key: "Access-Control-Allow-Origin",
+      value: "https://app.soleur.ai",
+    },
+    { key: "Access-Control-Allow-Methods", value: "GET, POST, DELETE, OPTIONS" },
+    { key: "Access-Control-Allow-Headers", value: "Content-Type, Authorization" },
+    { key: "Access-Control-Max-Age", value: "86400" },
+    { key: "Vary", value: "Origin" },
+  ],
+},
+```
+
+**Note:** This is complementary to the existing Origin validation in
+`validate-origin.ts`. CORS is browser-enforced (prevents cross-origin
+JS from reading responses); Origin validation is server-enforced (rejects
+requests from non-allowed origins regardless of browser behavior).
+
+**Report-To header format:**
+
+```typescript
+// In middleware.ts, after CSP header
+response.headers.set("Report-To", JSON.stringify({
+  group: "csp-endpoint",
+  max_age: 10_886_400,
+  endpoints: [{ url: sentryReportUri }],
+  include_subdomains: true,
+}));
+```
 
 ### TG-3: Session Timeout + WebSocket Expiry
 
@@ -352,6 +492,80 @@ before TG-2.
    timeout close codes
 8. Tests: idle timeout fires, absolute timeout fires, message resets
    idle timer, warning sent before expiry
+
+#### Research Insights (TG-3)
+
+**From OWASP Session Management Cheat Sheet:**
+
+- **Idle timeout:** 15-30 min for low-risk apps, 2-5 min for high-value.
+  30 min is appropriate -- users step away mid-conversation with agents.
+- **Absolute timeout:** 4-8 hours. 8 hours covers a full workday.
+- **Renewal timeout (optional):** Regenerate session IDs mid-session at
+  intervals. Not applicable here since WebSocket connections don't use
+  session IDs (Supabase JWT handles HTTP sessions).
+
+**From project learnings:**
+
+- **Close code routing (learning: 2026-03-27):** The client's `onclose`
+  handler already routes on close codes via `NON_TRANSIENT_CLOSE_CODES`
+  map. New timeout codes (4008, 4009) must be added to this map with
+  appropriate behavior:
+  - 4008 (idle timeout): show "Session expired due to inactivity"
+    message, offer reconnect
+  - 4009 (absolute timeout): show "Session expired" message, redirect
+    to re-auth
+- **TOCTOU race (learning: 2026-03-20):** The idle timer callback
+  must check `ws.readyState === WebSocket.OPEN` before calling
+  `ws.close()`. If the socket closed between timer scheduling and
+  firing, `ws.close()` on a non-OPEN socket throws.
+
+**Implementation pattern for idle timer with TOCTOU guard:**
+
+```typescript
+// After auth success, start timers
+let idleTimer: ReturnType<typeof setTimeout> | undefined;
+let absoluteTimer: ReturnType<typeof setTimeout> | undefined;
+let warningTimer: ReturnType<typeof setTimeout> | undefined;
+
+function resetIdleTimer() {
+  if (idleTimer) clearTimeout(idleTimer);
+  if (warningTimer) clearTimeout(warningTimer);
+
+  warningTimer = setTimeout(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "session_expiring", secondsLeft: 60 }));
+    }
+  }, IDLE_TIMEOUT_MS - IDLE_WARNING_MS);
+  warningTimer.unref();
+
+  idleTimer = setTimeout(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.close(WS_CLOSE_CODES.IDLE_TIMEOUT, "Idle timeout");
+    }
+  }, IDLE_TIMEOUT_MS);
+  idleTimer.unref();
+}
+
+absoluteTimer = setTimeout(() => {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.close(WS_CLOSE_CODES.ABSOLUTE_TIMEOUT, "Absolute timeout");
+  }
+}, ABSOLUTE_TIMEOUT_MS);
+absoluteTimer.unref();
+
+resetIdleTimer();
+```
+
+**Edge cases:**
+
+- Timer `.unref()` prevents timers from keeping the Node process alive
+  during graceful shutdown.
+- On disconnect, clear all three timers to prevent memory leaks.
+- The existing `pingInterval` (30s heartbeat) does NOT count as user
+  activity -- only client-originated messages reset the idle timer.
+- If an agent session is actively streaming when idle timeout fires,
+  the agent session continues independently (it has its own lifecycle
+  via `AbortController`). The client reconnects and can resume.
 
 ### TG-4: User Settings Page
 
@@ -397,6 +611,104 @@ before TG-2.
    - Return 200 with redirect to `/login`
    - Log deletion event (user ID only, no PII)
 
+#### Research Insights (TG-4)
+
+**Supabase admin.deleteUser behavior:**
+
+- `supabase.auth.admin.deleteUser(id)` with default `shouldSoftDelete:
+  false` performs a hard delete of the `auth.users` row.
+- **Critical:** The `public.users` table has `id uuid primary key
+  references auth.users(id) on delete cascade`. Hard-deleting the
+  `auth.users` row triggers FK cascade: `public.users` -> `api_keys`,
+  `conversations` -> `messages`. This is the correct behavior for GDPR.
+- **Warning:** `shouldSoftDelete: true` does NOT delete the `auth.users`
+  row -- it marks it as deleted with a hashed ID. This does NOT trigger
+  the FK cascade, leaving orphaned data in public tables. **Always use
+  `shouldSoftDelete: false` for GDPR deletion.**
+- The function requires `service_role` key -- never call from browser.
+
+**FK cascade chain (verified from migrations):**
+
+```text
+auth.users (hard delete)
+  └─> public.users (ON DELETE CASCADE)
+       ├─> public.api_keys (ON DELETE CASCADE via user_id FK)
+       ├─> public.conversations (ON DELETE CASCADE via user_id FK)
+       │    └─> public.messages (ON DELETE CASCADE via conversation_id FK)
+       └─> [workspace filesystem -- NOT handled by FK, requires manual rm]
+```
+
+**Account deletion implementation pattern:**
+
+```typescript
+// POST /api/account/delete
+export async function POST(request: Request) {
+  // 1. Auth + validate email confirmation
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const body = await request.json();
+  if (body.confirmEmail !== user.email) {
+    return NextResponse.json({ error: "Email does not match" }, { status: 400 });
+  }
+
+  // 2. Get workspace path before deletion (needed for filesystem cleanup)
+  const service = createServiceClient();
+  const { data: userRow } = await service
+    .from("users")
+    .select("workspace_path")
+    .eq("id", user.id)
+    .single();
+
+  // 3. Hard delete auth.users (triggers FK cascade on all public tables)
+  const { error } = await service.auth.admin.deleteUser(user.id);
+  if (error) {
+    return NextResponse.json({ error: "Deletion failed" }, { status: 500 });
+  }
+
+  // 4. Filesystem cleanup (best-effort)
+  if (userRow?.workspace_path) {
+    try {
+      execFileSync("rm", ["-rf", userRow.workspace_path], { stdio: "pipe" });
+    } catch (err) {
+      log.error({ userId: user.id, err }, "Workspace cleanup failed");
+      // Don't fail the request -- cron cleanup handles orphaned dirs
+    }
+  }
+
+  // 5. Clear cookies and return
+  const response = NextResponse.json({ deleted: true });
+  response.cookies.delete("sb-access-token");
+  response.cookies.delete("sb-refresh-token");
+  // Clear all Supabase cookies (pattern: sb-*-auth-token)
+  request.cookies.getAll()
+    .filter(c => c.name.startsWith("sb-"))
+    .forEach(c => response.cookies.delete(c.name));
+
+  return response;
+}
+```
+
+**GDPR compliance notes:**
+
+- GDPR Article 17 requires deletion "without undue delay" (~30 days).
+  Immediate deletion on confirmation exceeds this requirement.
+- Log the deletion event with user ID only (no email, no PII) for
+  audit trail. GDPR allows retention of processing records.
+- If workspace cleanup fails, the orphaned directory contains no PII
+  (it's the user's project files, not personal data). A cleanup cron
+  can sweep `/workspaces/` for directories whose UUID doesn't match
+  any `auth.users` ID.
+
+**API key deletion (soft delete rationale):**
+
+- Soft-delete (`is_valid = false`) rather than hard delete preserves
+  the encrypted_key row for audit trail. The encrypted data is
+  unreadable without the BYOK master key + user's HKDF-derived key.
+- When the user hard-deletes their account, the FK cascade removes
+  the api_keys row entirely.
+
 ### TG-5: Error + Empty States
 
 **Files to modify:**
@@ -416,6 +728,49 @@ before TG-2.
 3. Add reconnection logic to ws-client.ts with exponential backoff
 4. Update each page with contextual empty states
 5. Add rate limit error display with countdown timer
+
+#### Research Insights (TG-5)
+
+**WebSocket reconnection with exponential backoff:**
+
+```typescript
+// In ws-client.ts
+const MAX_RECONNECT_DELAY_MS = 30_000;
+const BASE_DELAY_MS = 1_000;
+let reconnectAttempt = 0;
+
+function scheduleReconnect() {
+  const delay = Math.min(
+    BASE_DELAY_MS * Math.pow(2, reconnectAttempt),
+    MAX_RECONNECT_DELAY_MS,
+  );
+  // Add jitter to prevent thundering herd
+  const jitter = delay * 0.2 * Math.random();
+  reconnectAttempt += 1;
+  setTimeout(connect, delay + jitter);
+}
+
+function onOpen() {
+  reconnectAttempt = 0; // Reset on successful connection
+}
+```
+
+**From project learnings:**
+
+- **Close code routing (learning: 2026-03-27):** Non-transient close
+  codes (4001 auth failure, 4004 T&C, 4005 server error) must NOT
+  trigger reconnection. Only transient codes (1006 abnormal closure,
+  1001 going away) should reconnect. The existing `NON_TRANSIENT_CLOSE_CODES`
+  map in `ws-client.ts` handles this. New codes 4008/4009 should be
+  added as non-transient with appropriate UI messages.
+
+**Empty state design principles:**
+
+- Empty states are onboarding opportunities, not dead ends. Each empty
+  state should include: (1) what this page is for, (2) why it's empty,
+  (3) a single primary action to populate it.
+- Use consistent visual treatment: centered layout, muted icon, short
+  title, one-line description, prominent CTA button.
 
 ### TG-6: UX Audit
 
@@ -469,6 +824,62 @@ in this PR, non-critical deferred to future phases.
    (upgrade to DB flag in Phase 3 when user settings table is richer)
 4. Skip button and step counter visible at all times
 5. Does not block interaction -- user can click through the overlay
+
+#### Research Insights (TG-7)
+
+**Spotlight overlay implementation (no external library):**
+
+The overlay uses a CSS `box-shadow` trick to create the spotlight effect
+without complex SVG clipping:
+
+```typescript
+// Walkthrough spotlight overlay
+const Spotlight = ({ targetRect }: { targetRect: DOMRect }) => (
+  <div
+    style={{
+      position: "fixed",
+      top: targetRect.top - 8,
+      left: targetRect.left - 8,
+      width: targetRect.width + 16,
+      height: targetRect.height + 16,
+      borderRadius: 12,
+      boxShadow: "0 0 0 9999px rgba(0, 0, 0, 0.7)",
+      zIndex: 9999,
+      pointerEvents: "none",
+    }}
+  />
+);
+```
+
+**Key implementation details:**
+
+- Use `getBoundingClientRect()` to position the spotlight. Recalculate
+  on window resize with `ResizeObserver`.
+- Set `pointer-events: none` on the overlay so users can interact with
+  the highlighted element.
+- Use `data-onboarding="step-1"` attributes on target elements rather
+  than querying by class/ID -- decouples onboarding from component
+  implementation.
+- Animate transitions between steps with CSS `transition: all 300ms
+  ease-in-out` on the spotlight `div`.
+
+**iOS PWA install detection:**
+
+```typescript
+// Detect iOS and whether app is already installed as PWA
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+const isStandalone = window.matchMedia("(display-mode: standalone)").matches
+  || (navigator as any).standalone === true;
+const showPWAStep = isIOS && !isStandalone;
+```
+
+**Completion persistence:**
+
+- `localStorage` is appropriate for beta (single device).
+- Key: `soleur_onboarding_complete` with value `"1"` (not boolean --
+  localStorage stores strings).
+- Check on mount with `useEffect`, not during render, to avoid SSR
+  hydration mismatch.
 
 ## Dependencies & Risks
 
