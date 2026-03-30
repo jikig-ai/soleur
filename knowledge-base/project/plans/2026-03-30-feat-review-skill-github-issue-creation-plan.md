@@ -3,13 +3,32 @@ title: "feat: review skill creates GitHub issues instead of local todos"
 type: feat
 date: 2026-03-30
 issue: "#1288"
+deepened: 2026-03-30
 ---
 
 # Review Skill: Create GitHub Issues Instead of Local Todos
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-30
+**Sections enhanced:** 4 (Technical Approach, Implementation Phases, Issue Body Template, Test Scenarios)
+**Research sources:** 4 institutional learnings, existing `gh issue create` patterns from 6 skills
+
+### Key Improvements
+
+1. Use `--body-file` pattern instead of inline `--body` to avoid `$()` command substitution permission prompts (from learning: `2026-02-22-command-substitution-in-plugin-markdown`)
+2. Add duplicate detection before issue creation to prevent duplicates when review runs twice on the same PR
+3. Add graceful error handling per `gh issue create` call (log and continue, from `compound-capture` pattern)
+4. Add concrete command for active milestone detection
+
+### New Considerations Discovered
+
+- Finding descriptions from review agents may contain arbitrary markdown, newlines, and special characters -- `--body-file` handles this safely
+- The `$()` permission prompt learning has recurred 4 times in the project; this plan would have introduced a 5th occurrence without the deepening pass
+
 ## Overview
 
-Update the `/soleur:review` skill's Step 2 (Create Todo Files) and its supporting reference (`review-todo-structure.md`) to create GitHub issues with appropriate labels and milestones instead of (or in addition to) local `todos/*.md` files. Review findings should be tracked in the issue tracker for roadmap visibility, prioritization, and milestone planning.
+Update the `/soleur:review` skill's Step 2 (Create Todo Files) and its supporting reference (`review-todo-structure.md`) to create GitHub issues with appropriate labels and milestones instead of local `todos/*.md` files. Review findings should be tracked in the issue tracker for roadmap visibility, prioritization, and milestone planning.
 
 ## Problem Statement
 
@@ -52,9 +71,36 @@ Default to `domain/engineering` for all findings. The agent may override to `dom
 
 ### Files to Modify
 
-1. **`plugins/soleur/skills/review/SKILL.md`** -- Update Step 5 (Findings Synthesis and Todo Creation) to create GitHub issues instead of (or alongside) local todos
-2. **`plugins/soleur/skills/review/references/review-todo-structure.md`** -- Rewrite to describe GitHub issue creation as the primary approach, with local todos as secondary
+1. **`plugins/soleur/skills/review/SKILL.md`** -- Update Step 5 (Findings Synthesis and Todo Creation) to create GitHub issues instead of local todos
+2. **`plugins/soleur/skills/review/references/review-todo-structure.md`** -- Rewrite to describe GitHub issue creation flow
 3. **`plugins/soleur/skills/triage/SKILL.md`** -- Update description to reflect that review findings now live in GitHub issues; the triage skill's scope narrows to legacy local todos only
+
+### Research Insights
+
+**Use `--body-file` pattern (mandatory).** Per learning `2026-02-22-command-substitution-in-plugin-markdown`, bash code blocks in plugin markdown that use `$()` trigger Claude Code permission prompts. The established safe pattern (from `compound-capture`) is:
+
+1. Write the issue body to a temporary file (e.g., `/tmp/review-finding-001.md`)
+2. Run `gh issue create --body-file /tmp/review-finding-001.md ...`
+
+This also naturally handles newlines, special characters, and arbitrary markdown in finding descriptions.
+
+**Graceful error handling per issue.** Per `compound-capture` pattern: if `gh issue create` fails (network error, auth failure, rate limit), log the error and continue to the next finding. Do not block the entire review synthesis on one failed issue creation. The summary report should note failed creations.
+
+**Duplicate detection.** Before creating an issue, check if one already exists for this finding from the same PR:
+
+```text
+gh issue list --label code-review --search "review: <description>" --json number,title --jq '.[0].number // empty'
+```
+
+If a match exists, skip creation and reference the existing issue in the summary.
+
+**Active milestone detection.** The plan says "P1 findings get the current active milestone" -- use this concrete command to find it:
+
+```text
+gh api repos/:owner/:repo/milestones --jq '[.[] | select(.state=="open") | select(.title | startswith("Phase"))] | sort_by(.due_on) | .[0].title // "Post-MVP / Later"'
+```
+
+This selects the earliest open Phase milestone, falling back to `Post-MVP / Later`.
 
 ### Implementation Phases
 
@@ -63,7 +109,7 @@ Default to `domain/engineering` for all findings. The agent may override to `dom
 Rewrite the reference document to describe the new GitHub issue creation flow:
 
 - **Label prerequisite** -- Verify `code-review` label exists; create with `gh label create code-review --description "Finding from code review" --color 0E8A16` if missing
-- **Issue body template** -- Simplified markdown body with: Problem Statement, Location (file:line), Proposed Solution, and a one-liner for effort estimate. Severity and category are captured in labels, not duplicated in the body. PR back-link included.
+- **Issue body template** -- Simplified markdown body with: Problem Statement, Location (file:line), Proposed Solution, and a one-liner for effort estimate. Severity and category are captured in labels, not duplicated in the body. PR back-link included. Body is written to a temp file and passed via `--body-file` (not inline `--body`) to avoid `$()` permission prompts and handle arbitrary markdown safely.
 - **Label selection logic** -- Map P1/P2/P3 to `priority/*` labels; default `domain/engineering`; always add `code-review` label
 - **Milestone selection** -- P1 findings get current active milestone; P2/P3 get `Post-MVP / Later`
 - **Batch creation strategy** -- Use parallel `gh issue create` calls grouped by severity. If a review produces 15+ findings, batch sequentially to avoid GitHub API rate limits.
@@ -91,6 +137,10 @@ Update `plugins/soleur/skills/triage/SKILL.md` description to clarify scope:
 
 ### Issue Body Template
 
+The body is written to a temporary file (e.g., `/tmp/review-finding-001.md`) and passed via `--body-file`. This avoids `$()` command substitution permission prompts and handles arbitrary markdown safely.
+
+**Template content:**
+
 ```markdown
 **Source:** PR #{pr_number} review | **Effort:** {Small|Medium|Large}
 
@@ -112,6 +162,16 @@ Update `plugins/soleur/skills/triage/SKILL.md` description to clarify scope:
 
 Severity and category are captured in issue labels (`priority/*`, `domain/*`, `code-review`), not duplicated in the body.
 
+**Creation command pattern:**
+
+```text
+# 1. Write body to temp file (using Write tool, not echo/cat)
+# 2. Create issue with --body-file
+gh issue create --title "review: {description}" --body-file /tmp/review-finding-001.md --label code-review --label priority/p2-medium --label domain/engineering --milestone "Post-MVP / Later"
+```
+
+**Error handling:** If `gh issue create` exits non-zero, log the error and continue to the next finding. Report failed creations in the summary.
+
 ## Acceptance Criteria
 
 - [ ] `/soleur:review` creates GitHub issues for each finding via `gh issue create`
@@ -132,6 +192,9 @@ Severity and category are captured in issue labels (`priority/*`, `domain/*`, `c
 - Given a finding with file location `app/services/auth.rb:42`, when the issue is created, then the body contains the file:line reference
 - Given the `--milestone` AGENTS.md guard, when `gh issue create` is called, then `--milestone` flag is always present
 - Given a review with no findings, when synthesis completes, then no GitHub issues are created and the summary says "No findings"
+- Given `gh issue create` fails for one finding (network error), when synthesis continues, then remaining findings are still created and the summary notes the failure
+- Given a review runs twice on the same PR, when duplicate detection checks existing issues, then no duplicate issues are created
+- Given a finding description contains newlines and special markdown characters, when the body is written via `--body-file`, then the issue body renders correctly
 
 ## Alternative Approaches Considered
 
@@ -166,11 +229,19 @@ Severity and category are captured in issue labels (`priority/*`, `domain/*`, `c
 
 ## References
 
+### Source Files
+
 - Issue: #1288
 - Review skill: `plugins/soleur/skills/review/SKILL.md`
 - Todo structure reference: `plugins/soleur/skills/review/references/review-todo-structure.md`
 - File-todos skill: `plugins/soleur/skills/file-todos/SKILL.md`
 - Triage skill: `plugins/soleur/skills/triage/SKILL.md`
 - Ticket-triage agent: `plugins/soleur/agents/support/ticket-triage.md`
-- GitHub issue auto-close learning: `knowledge-base/project/learnings/2026-02-22-github-issue-auto-close-syntax.md`
-- Triage domain labels learning: `knowledge-base/project/learnings/2026-03-02-triage-domain-labels-must-match-org-structure.md`
+- Compound-capture skill (body-file pattern): `plugins/soleur/skills/compound-capture/SKILL.md:332-336`
+
+### Institutional Learnings Applied
+
+- `$()` command substitution avoidance: `knowledge-base/project/learnings/2026-02-22-command-substitution-in-plugin-markdown.md`
+- GitHub issue auto-close syntax: `knowledge-base/project/learnings/2026-02-22-github-issue-auto-close-syntax.md`
+- Domain label alignment: `knowledge-base/project/learnings/2026-03-02-triage-domain-labels-must-match-org-structure.md`
+- `gh` CLI pitfalls (error handling, rate limits): `knowledge-base/project/learnings/2026-03-05-autonomous-bugfix-pipeline-gh-cli-pitfalls.md`
