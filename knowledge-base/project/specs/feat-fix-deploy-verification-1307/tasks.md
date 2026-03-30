@@ -4,21 +4,21 @@
 
 ### 1.1 Verify vite compatibility matrix
 
-- [ ] Check `@vitejs/plugin-react@6.0.1` peer dependency on vite
-- [ ] Check `vitest@3.x` peer dependency range for vite
-- [ ] Determine if `vite@6` satisfies both (likely yes based on lockfile data)
+- [x] Check `@vitejs/plugin-react@6.0.1` peer dependency on vite — requires `vite@^8.0.0` (plan was wrong about ^6)
+- [x] Check `vitest@3.x` peer dependency range for vite — uses `vite@^5 || ^6`
+- [x] Fix: pin `@vitejs/plugin-react` to `^4.7.0` (supports `vite@^4 || ^5 || ^6 || ^7`)
 
 ### 1.2 Regenerate lockfiles
 
-- [ ] Run `npm install` in `apps/web-platform/` to regenerate `package-lock.json`
-- [ ] Run `bun install` in `apps/web-platform/` to regenerate `bun.lock`
-- [ ] Verify `npm ci` succeeds with the updated lockfile
-- [ ] Verify `bun install --frozen-lockfile` succeeds
+- [x] Run `npm install` in `apps/web-platform/` to regenerate `package-lock.json`
+- [x] Run `bun install` in `apps/web-platform/` to regenerate `bun.lock`
+- [x] Verify `npm ci` succeeds with the updated lockfile
+- [x] Verify `bun install --frozen-lockfile` succeeds
 
 ### 1.3 Verify tests pass with updated dependencies
 
-- [ ] Run `bun test` in `apps/web-platform/` to verify vitest works with vite@6
-- [ ] Run `npm run typecheck` to verify TypeScript compilation
+- [x] Run `bun test` in `apps/web-platform/` — 333 tests pass, 1 skipped
+- [x] Run `npm run typecheck` — passes with no errors
 
 ### 1.4 After merge, verify release workflow (automated via ship Phase 7)
 

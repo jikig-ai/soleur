@@ -75,10 +75,8 @@ Per review feedback, split into an urgent fix and a hardening follow-up:
 
 Regenerate `package-lock.json` to resolve the `@vitejs/plugin-react@6.0.1` peer dependency on `vite@^6`. This requires either:
 
-- **Option A**: Upgrade `vite` to v6 in the lockfile (let npm resolve the peer dep naturally by running `npm install` in `apps/web-platform/`)
-- **Option B**: If `vitest@^3.1.0` does not support `vite@^6`, pin `@vitejs/plugin-react` to a version compatible with `vite@5` (e.g., `@vitejs/plugin-react@^4.3.0`)
-
-**Investigation needed**: Check `@vitejs/plugin-react@6.0.1`'s peer dependency range and `vitest@3.x`'s vite compatibility before choosing.
+- ~~**Option A**: Upgrade `vite` to v6~~ — Not viable. `@vitejs/plugin-react@6.0.1` requires `vite@^8.0.0`, not `^6.0.0` as initially assumed. Upgrading to vite@8 would be a major change.
+- **Option B (chosen)**: Pin `@vitejs/plugin-react` to `^4.7.0` which supports `vite@^4 || ^5 || ^6 || ^7`. This is compatible with the project's existing `vite@5.4.21` resolved via `vitest@^3.1.0`.
 
 **Files:**
 
@@ -169,7 +167,7 @@ The `always()` in the deploy condition was intentional -- it allows deploy to ru
 
 ## Acceptance Criteria
 
-- [ ] `npm ci` succeeds in `apps/web-platform/` with the updated `package-lock.json`
+- [x] `npm ci` succeeds in `apps/web-platform/` with the updated `package-lock.json`
 - [ ] Docker build for web-platform completes successfully in CI
 - [ ] Deploy job does NOT fire when Docker build fails (test by checking workflow condition logic)
 - [ ] Deploy job DOES fire when Docker build succeeds (preserves normal flow)
