@@ -8,7 +8,7 @@ permalink: pages/legal/acceptable-use-policy.html
 <section class="page-hero">
   <div class="container">
     <h1>Acceptable Use Policy</h1>
-    <p>Effective February 20, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated March 29, 2026</p>
   </div>
 </section>
 
@@ -20,13 +20,13 @@ permalink: pages/legal/acceptable-use-policy.html
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** February 20, 2026
+**Last Updated:** March 29, 2026
 
 ---
 
 ## 1. Introduction
 
-This Acceptable Use Policy ("AUP" or "Policy") governs your use of the Soleur platform ("Soleur," "the Platform," "the Plugin"), a Claude Code plugin providing agents for software development workflows, including code generation, review, planning, deployment, and browser automation. Soleur is developed and maintained by Jikigai ("we," "us," "our") and is available at [soleur.ai](https://soleur.ai) and through the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur).
+This Acceptable Use Policy ("AUP" or "Policy") governs your use of the Soleur platform ("Soleur," "the Platform"), including the Claude Code plugin ("the Plugin") and the hosted web application at app.soleur.ai ("the Web Platform"), providing agents for software development workflows, including code generation, review, planning, deployment, and browser automation. Soleur is developed and maintained by Jikigai ("we," "us," "our") and is available at [soleur.ai](https://soleur.ai), [app.soleur.ai](https://app.soleur.ai), and through the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur).
 
 By installing, configuring, or using Soleur, you ("User," "you," "your") agree to comply with this Policy. If you do not agree, you must discontinue use of the Platform immediately.
 
@@ -42,10 +42,13 @@ This Policy applies to all use of the Soleur platform, including but not limited
 - Execution of shell commands, code generation, and file manipulation through agents;
 - Browser automation via the agent-browser subsystem;
 - API interactions initiated by or through Soleur agents;
-- Use of the compounding knowledge base; and
+- Use of the compounding knowledge base;
+- Cloud-hosted conversation sessions via the Web Platform;
+- Account creation and workspace management on app.soleur.ai;
+- Subscription and payment processing through the Web Platform; and
 - Any output, artifact, or action produced by or through the Platform.
 
-Soleur operates locally on your machine. You retain full control over agent actions and bear responsibility for all activities performed through the Platform under your account or on your systems.
+The Plugin operates locally on your machine; the Web Platform operates on cloud infrastructure managed by Jikigai. You retain full control over Plugin agent actions and bear responsibility for all activities performed through the Platform -- whether locally via the Plugin or remotely via the Web Platform -- under your account or on your systems.
 
 ---
 
@@ -123,15 +126,23 @@ You must not:
 
 ## 5. User Responsibilities
 
-### 5.1 Local Execution Model
+### 5.1 Platform-Specific Responsibilities
 
-Soleur operates locally on your machine. You are solely responsible for:
+**Plugin (Local Execution).** The Plugin operates locally on your machine. You are solely responsible for:
 
 - Reviewing and approving agent actions before execution, particularly destructive operations (file deletion, force-push, deployment);
 - Securing API keys, credentials, and secrets used by or accessible to Soleur agents;
 - Ensuring that generated code, configurations, and artifacts are reviewed before deployment to production systems;
 - Maintaining appropriate backups of your data and code; and
 - Configuring appropriate access controls on your local environment.
+
+**Web Platform (Cloud Execution).** The Web Platform operates on cloud infrastructure managed by Jikigai. You are solely responsible for:
+
+- Securing your account credentials for app.soleur.ai;
+- Not sharing or transferring account access to unauthorized third parties;
+- Compliance with usage limits and fair-use thresholds of the Web Platform;
+- Reporting unauthorized access to your Web Platform account promptly to Jikigai; and
+- Reviewing outputs generated through the Web Platform before relying on them in production.
 
 ### 5.2 Output Review
 
@@ -157,7 +168,7 @@ When using Soleur in a manner that involves personal data:
 
 ### 6.1 Monitoring
 
-While Soleur operates locally and we do not monitor your usage in real time, we reserve the right to investigate reported violations of this Policy.
+The Plugin operates locally and we do not monitor Plugin usage in real time. The Web Platform operates on cloud infrastructure managed by Jikigai, which enables server-side monitoring of service usage, access patterns, and compliance with this Policy. We reserve the right to investigate reported violations of this Policy across both the Plugin and the Web Platform.
 
 ### 6.2 Consequences of Violation
 
@@ -165,6 +176,9 @@ Violation of this Policy may result in:
 
 - Warnings or requests to cease the violating activity;
 - Temporary or permanent suspension of access to Soleur updates, support, or community resources;
+- Temporary or permanent suspension of Web Platform account access;
+- Termination of Web Platform account and deletion of associated data;
+- Restriction of specific Web Platform features or capabilities;
 - Removal from community channels (GitHub Discussions, issue trackers); and
 - Referral to law enforcement authorities where we believe a violation involves criminal conduct.
 
@@ -232,7 +246,7 @@ Soleur is a source-available project maintained by Jikigai, a company incorporat
 
 For questions about this Policy, please contact us through:
 
-- **Email:** legal@jikigai.com
+- **Email:** <legal@jikigai.com>
 - **GitHub:** [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur)
 - **Website:** [soleur.ai](https://soleur.ai)
 

@@ -17,7 +17,7 @@ preconditions:
 
 ## Headless Mode Detection
 
-If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headless` from `$ARGUMENTS` before processing remaining args. Headless mode affects Steps 2, 3, 5, and auto-consolidation Step E.
+If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headless` from `$ARGUMENTS` before processing remaining args. Headless mode affects Steps 2, 3, 5, 8, and auto-consolidation Step E.
 
 ## Overview
 
@@ -79,6 +79,7 @@ Extract from conversation history:
 Scan conversation history AND session-state.md (if present) for errors unrelated to the main problem investigation documented above. Only capture errors that are NOT part of the investigation attempts. Skip trivial errors immediately corrected (typos in commands, expected test failures during TDD).
 
 Extract for each error found:
+
 - Describe what went wrong (1 sentence)
 - Note what was done to recover
 - Suggest how to prevent it in future sessions (1 sentence)
@@ -107,6 +108,7 @@ I need a few details to document this properly:
 
 [Continue after user provides details]
 ```
+
 </step>
 
 <step number="3" required="false" depends_on="2">
@@ -210,6 +212,7 @@ Determine the category from the validated YAML `problem_type` field and generate
 Replace `<category>` with the mapped category and `<filename>` with the generated filename.
 
 **Result:**
+
 - Single file in category directory
 - Enum validation ensures consistent categorization
 
@@ -252,11 +255,13 @@ EOF
 **Critical Pattern Detection (Optional Proactive Suggestion):**
 
 If this issue has automatic indicators suggesting it might be critical:
+
 - Severity: `critical` in YAML
 - Affects multiple modules OR foundational stage (Stage 2 or 3)
 - Non-obvious solution
 
 Then in the decision menu, add a note:
+
 ```
 💡 This might be worth adding to Required Reading (Option 2)
 ```
@@ -274,14 +279,17 @@ When user selects Option 3 (Add to Required Reading), use the template from [cri
 After capturing and cross-referencing the learning, route the insight to the skill, agent, or command definition that needs it. This ensures definitions improve over time with sharp-edge gotchas that prevent repeated mistakes.
 
 **Skip this step if:**
+
 - `plugins/soleur/` directory does not exist
 - No skills, agents, or commands were invoked in this session
 
+<!-- markdownlint-disable-next-line MD001 -- h4 under h3 is correct; linter resets at <step> tags -->
 #### 8.1 Detect Active Components
 
 Identify which skills, agents, or commands were invoked in this session by examining the conversation history.
 
 Map detected component names to file paths:
+
 - Skill `foo` -> `plugins/soleur/skills/foo/SKILL.md`
 - Agent `soleur:engineering:review:baz` -> `plugins/soleur/agents/engineering/review/baz.md`
 - Command `soleur:bar` -> `plugins/soleur/commands/bar.md`
@@ -294,6 +302,8 @@ If one component detected: propose it as the routing target.
 
 If multiple detected: use **AskUserQuestion** to present a numbered list ordered by relevance to the learning content. Include an option to skip.
 
+**Headless mode:** If `HEADLESS_MODE=true` and multiple components detected, select the component most relevant to the learning content using LLM judgment. If one component detected, use it. Do not prompt.
+
 If the target file does not exist at the expected path, warn and skip.
 
 #### 8.3 Propose Edit
@@ -301,6 +311,7 @@ If the target file does not exist at the expected path, warn and skip.
 Route **two categories** of insights to each target:
 
 **A. Solution insight** (the main learning):
+
 1. Read the target definition file
 2. Find the most relevant existing section for a new bullet -- do not create new sections
 3. If no section with bullets exists in the target file, warn and skip this target
@@ -308,6 +319,7 @@ Route **two categories** of insights to each target:
 5. Display the proposed edit showing the section name, existing bullets, and the new bullet
 
 **B. Error prevention** (from session errors):
+
 1. Check the learning file's `## Session Errors` section. For each error with a `**Prevention:**` line, determine if the error could have been prevented by a skill instruction in the target definition.
 2. If yes, draft a one-line bullet for the target's Sharp Edges or equivalent section (e.g., "Verify relative paths by tracing each `../` step before prescribing them in plans.").
 3. If the target has no section suitable for preventive bullets, skip.
@@ -317,7 +329,17 @@ This dual-routing ensures session errors feed back into the definitions that cau
 
 #### 8.4 Confirm
 
-Use **AskUserQuestion** with options:
+**Headless mode:** If `HEADLESS_MODE=true`, do not apply the edit directly. Instead, create a GitHub issue to track the proposed edit. Write the issue body to a temporary file, then create the issue:
+
+1. Write the body to `/tmp/compound-rtd-body.md` containing: the proposed edit text (as a fenced code block), the target file path, and the source learning file path
+2. Run: `gh issue create --title "compound: route-to-definition proposal for <target-basename>" --body-file /tmp/compound-rtd-body.md --milestone "Post-MVP / Later"`
+3. If `gh issue create` fails (network error, auth failure), log the error and continue to the decision menu -- do not block the pipeline on issue creation failure
+4. If successful, log the created issue URL
+5. Update the learning file's `synced_to` frontmatter with the bare `<definition-name>` (same format as interactive mode) to prevent `/soleur:sync` from re-proposing this pair
+6. Proceed to the decision menu
+
+**Interactive mode:** Use **AskUserQuestion** with options:
+
 - **Accept** -- Apply the edit to the definition file
 - **Skip** -- Do not modify the definition; the learning is still captured in knowledge-base/project/learnings/
 - **Edit** -- Modify the bullet text, then re-display for confirmation
@@ -348,6 +370,7 @@ Run `git branch --show-current` to get the current branch. If it does not start 
 ### Auto-Consolidation Step A: Artifact Discovery
 
 Extract the slug from the current branch name by stripping the branch type prefix. Handle all prefix variants:
+
 - `feat/` -- strip prefix (e.g., `feat/domain-leaders` becomes `domain-leaders`)
 - `feat-` -- strip prefix (e.g., `feat-domain-leaders` becomes `domain-leaders`)
 - `fix/` -- strip prefix (e.g., `fix/typo` becomes `typo`)
@@ -439,7 +462,9 @@ Archive ALL discovered artifacts regardless of how many proposals were accepted 
 
 Run the archival script from the repository root:
 
-    bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh
+```bash
+bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh
+```
 
 The script discovers artifacts matching the current branch's feature slug, creates archive directories, and moves each artifact with a timestamped prefix using `git mv`. It handles untracked files automatically. If the script exits non-zero, display the error and stop -- do not proceed to Step F.
 
@@ -514,11 +539,13 @@ What's next?
 **Option 2: Add to Required Reading** ⭐ PRIMARY PATH FOR CRITICAL PATTERNS
 
 User selects this when:
+
 - System made this mistake multiple times across different modules
 - Solution is non-obvious but must be followed every time
 - Foundational requirement (Rails, Rails API, threading, etc.)
 
 Action:
+
 1. Extract pattern from the documentation
 2. Format as ❌ WRONG vs ✅ CORRECT with code examples
 3. Add to `knowledge-base/project/learnings/patterns/critical-patterns.md`
@@ -537,12 +564,14 @@ Action:
 User selects this when the documented solution relates to an existing learning skill:
 
 Action:
+
 1. Prompt: "Which skill? (hotwire-native, etc.)"
 2. Determine which reference file to update (resources.md, patterns.md, or examples.md)
 3. Add link and brief description to appropriate section
 4. Confirm: "✓ Added to [skill-name] skill in [file]"
 
 Example: For Hotwire Native Tailwind variants solution:
+
 - Add to `hotwire-native/references/resources.md` under "Project-Specific Resources"
 - Add to `hotwire-native/references/examples.md` with link to solution doc
 
@@ -551,6 +580,7 @@ Example: For Hotwire Native Tailwind variants solution:
 User selects this when the solution represents the start of a new learning domain:
 
 Action:
+
 1. Prompt: "What should the new skill be called? (e.g., stripe-billing, email-processing)"
 2. Run `python3 plugins/soleur/skills/skill-creator/scripts/init_skill.py [skill-name]`
 3. Create initial reference files with this solution as first example
@@ -574,11 +604,13 @@ Action:
 ## Integration Points
 
 **Invoked by:**
+
 - /compound command (primary interface)
 - Manual invocation in conversation after solution confirmed
 - Can be triggered by detecting confirmation phrases like "that worked", "it's fixed", etc.
 
 **Invokes:**
+
 - None (terminal skill - does not delegate to other skills)
 
 **Handoff expectations:**
@@ -634,6 +666,7 @@ Documentation is successful when ALL of the following are true:
 ## Execution Guidelines
 
 **MUST do:**
+
 - Validate YAML frontmatter (BLOCK if invalid per Step 5 validation gate)
 - Extract exact error messages from conversation
 - Include code examples in solution section
@@ -641,6 +674,7 @@ Documentation is successful when ALL of the following are true:
 - Ask user and WAIT if critical context missing
 
 **MUST NOT do:**
+
 - Skip YAML validation (validation gate is blocking)
 - Use vague descriptions (not searchable)
 - Omit code examples or cross-references
@@ -687,6 +721,7 @@ Documentation is successful when ALL of the following are true:
 3. **Check existing:** No similar issue found
 4. **Generate filename:** `n-plus-one-brief-generation-BriefSystem-20251110.md`
 5. **Validate YAML:**
+
    ```yaml
    module: Brief System
    date: 2025-11-10
@@ -699,6 +734,7 @@ Documentation is successful when ALL of the following are true:
    severity: high
    tags: [n-plus-one, eager-loading, performance]
    ```
+
    ✅ Valid
 6. **Create documentation:**
    - `knowledge-base/project/learnings/performance-issues/n-plus-one-brief-generation-BriefSystem-20251110.md`

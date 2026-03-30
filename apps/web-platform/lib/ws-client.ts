@@ -282,6 +282,47 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     };
   }, [getWsUrlAndToken, teardown]);
 
+  // Fetch conversation history on mount (once per conversationId)
+  useEffect(() => {
+    if (conversationId === "new") return;
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        const supabase = createClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token) return;
+
+        const res = await fetch(
+          `/api/conversations/${conversationId}/messages`,
+          {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+            signal: controller.signal,
+          },
+        );
+        if (!res.ok) return;
+
+        const { messages: history } = await res.json();
+        const mapped: ChatMessage[] = history.map((m: { id: string; role: string; content: string; leader_id: string | null }) => ({
+          id: m.id,
+          role: m.role as "user" | "assistant",
+          content: m.content,
+          type: "text" as const,
+          leaderId: m.leader_id ?? undefined,
+        }));
+
+        if (activeStreamsRef.current.size === 0) {
+          setMessages(prev => [...mapped, ...prev]);
+        }
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.error("Failed to load history:", err);
+      }
+    })();
+
+    return () => controller.abort();
+  }, [conversationId]);
+
   useEffect(() => {
     mountedRef.current = true;
     connect();
