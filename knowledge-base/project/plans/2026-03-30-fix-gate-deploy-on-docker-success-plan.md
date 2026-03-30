@@ -6,6 +6,19 @@ date: 2026-03-30
 
 # fix(ci): gate deploy job on Docker build success
 
+## Enhancement Summary
+
+**Deepened on:** 2026-03-30
+**Sections enhanced:** 4 (Proposed Solution, Technical Considerations, Test Scenarios, Acceptance Criteria)
+**Research sources:** GitHub Actions docs, project learnings (5 relevant), workflow file analysis
+
+### Key Improvements
+
+1. Added edge case analysis for retry path with `check_changed` gate interaction
+2. Identified that `docker/build-push-action` (composite action) supports `outcome` the same as `run:` steps
+3. Added concrete step-by-step execution traces for all three paths (first-run, retry, failure)
+4. Strengthened test scenarios with specific output value assertions
+
 ## Overview
 
 The deploy job in `web-platform-release.yml` uses `always()` combined with `needs.release.outputs.version != ''` to decide whether to deploy. Because `version` is computed before the Docker build step, the condition is true even when Docker build fails. This causes spurious deploy webhooks to fire against non-existent images, triggering unnecessary canary rollback cycles on the production server.
@@ -125,6 +138,8 @@ This ensures Docker build runs on retry when the release already exists but the 
 
 **Idempotency concern:** If the image already exists in GHCR, re-pushing with the same tag is idempotent (GHCR accepts duplicate pushes of the same digest). No additional skip logic is needed for Docker push -- unlike GitHub Release creation, Docker push does not fail on duplicates.
 
+**`check_changed` gate interaction:** All steps in the release job are gated on `steps.check_changed.outputs.changed == 'true'`. When `changed` is `'false'` (no component files changed), the `version` step never runs, so `version.outputs.next` is empty. The proposed condition `steps.version.outputs.next != ''` correctly evaluates to false in this case, keeping Docker build skipped. No behavioral change for the no-change path.
+
 ### 3. Gate deploy on `docker_pushed` in `web-platform-release.yml`
 
 **File:** `.github/workflows/web-platform-release.yml`
@@ -202,6 +217,52 @@ The telegram-bridge deploy does not have a `migrate` job, so the condition is si
 
 The `docker_pushed` output defaults to `'false'` when `docker_image` is empty (the Docker steps are all skipped). Caller workflows that do not use Docker do not reference `docker_pushed` in their deploy conditions, so they are unaffected.
 
+### Research Insights: GitHub Actions step outcome for `uses:` actions
+
+The "Build and push Docker image" step uses `docker/build-push-action` (a `uses:` step, not a `run:` step). Per GitHub Actions documentation, both `uses:` and `run:` steps populate `steps.<id>.outcome` and `steps.<id>.conclusion`. The `outcome` property reflects the step's actual result before `continue-on-error` processing. Since `docker/build-push-action` does not set `continue-on-error`, `outcome` and `conclusion` are identical. The proposed `steps.docker_build.outcome == 'success'` condition works correctly for composite actions.
+
+### Execution trace: three paths
+
+**Path 1 -- Normal first run (Docker build succeeds):**
+
+1. `check_changed` -> `changed=true`
+2. `version` -> `next=0.10.1`, `tag=web-v0.10.1`
+3. `idempotency` -> `exists=false`
+4. `create_release` -> `released=true`
+5. Docker login -> runs (`version.outputs.next != ''` is true)
+6. Docker build -> runs, succeeds
+7. `docker_pushed` -> `pushed=true`
+8. Job outputs: `version=0.10.1`, `released=true`, `docker_pushed=true`
+9. Deploy job: `always()` evaluates condition -> `docker_pushed == 'true'` is true -> deploys
+
+**Path 2 -- Retry (release exists, Docker build succeeds):**
+
+1. `check_changed` -> `changed=true`
+2. `version` -> `next=0.10.1`, `tag=web-v0.10.1`
+3. `idempotency` -> `exists=true`
+4. `create_release` -> SKIPPED (condition `exists == 'false'` is false)
+5. Docker login -> runs (`version.outputs.next != ''` is true, regardless of `released`)
+6. Docker build -> runs, succeeds
+7. `docker_pushed` -> `pushed=true`
+8. Job outputs: `version=0.10.1`, `released=false`, `docker_pushed=true`
+9. Job conclusion: may be `failure` due to skipped release step
+10. Deploy job: `always()` forces condition evaluation -> `docker_pushed == 'true'` is true -> deploys
+
+**Path 3 -- Docker build fails:**
+
+1. `check_changed` -> `changed=true`
+2. `version` -> `next=0.10.1`
+3. `create_release` -> `released=true`
+4. Docker login -> runs
+5. Docker build -> runs, FAILS (ERESOLVE, OOM, etc.)
+6. `docker_pushed` -> SKIPPED (`steps.docker_build.outcome == 'success'` is false)
+7. Job outputs: `version=0.10.1`, `released=true`, `docker_pushed=false` (fallback)
+8. Deploy job: `always()` evaluates condition -> `docker_pushed == 'true'` is false -> SKIPPED
+
+### Discord notification on retry
+
+The "Post to Discord" step is gated on `steps.create_release.outputs.released == 'true'`. On retry, `released` is `'false'` (release creation was skipped), so Discord notification is also skipped. This is correct behavior -- a retry should not send a duplicate release announcement. No changes needed to the Discord step.
+
 ## Acceptance Criteria
 
 - [ ] `reusable-release.yml` exposes a `docker_pushed` output set to `'true'` only on Docker build+push success
@@ -220,11 +281,27 @@ No cross-domain implications detected -- CI/CD workflow fix with no user-facing,
 
 ## Test Scenarios
 
+### Core scenarios
+
 - Given a release run where Docker build fails, when the deploy job evaluates its condition, then `docker_pushed` is `'false'` and deploy is skipped
 - Given a release run where Docker build succeeds, when the deploy job evaluates its condition, then `docker_pushed` is `'true'` and deploy fires normally
 - Given a retry of an existing release (idempotency skip), when the Docker build step evaluates its condition, then it runs (because `version != ''`) instead of being skipped
 - Given a retry where Docker build succeeds, when the deploy job evaluates its condition, then `docker_pushed` is `'true'` and deploy fires
-- Given a component with no Docker image configured, when the release runs, then `docker_pushed` is `'false'` and no deploy-related steps are affected
+- Given a component with no Docker image configured (`docker_image` is empty), when the release runs, then `docker_pushed` is `'false'` and no deploy-related steps are affected
+
+### Edge cases
+
+- Given a release run where `check_changed.outputs.changed` is `'false'`, when Docker build evaluates `version.outputs.next != ''`, then it is false (version step was skipped) and Docker build is skipped
+- Given a retry where Docker login fails (GHCR auth error), when Docker build evaluates its condition, then Docker build is skipped (its `if:` condition passes but the `docker/login-action` step fails first, so `docker_build.outcome` is never set, `docker_pushed` remains `'false'`)
+- Given a release run on telegram-bridge where Docker build succeeds, when the deploy job evaluates `always() && docker_pushed == 'true'`, then deploy fires even if the release job's overall conclusion is `failure`
+
+### Verification approach
+
+Since these are CI workflow changes that cannot be unit-tested locally, verification relies on:
+
+1. **Static analysis:** Trace the condition logic through all three execution paths (see Execution Traces above)
+2. **Manual trigger after merge:** Run `gh workflow run web-platform-release.yml -f bump_type=patch` and verify the deploy job fires and succeeds
+3. **Regression check:** Confirm the next organic push to main triggers the release workflow and deploys correctly via `/health` endpoint
 
 ## Files Changed
 
