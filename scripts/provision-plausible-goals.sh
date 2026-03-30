@@ -87,16 +87,12 @@ api_request() {
       cat "$response_file"
       ;;
     401)
-      echo "Plausible API returned 401 -- Sites API requires an Enterprise plan."
-      echo "Skipping goal provisioning. Goals can be configured manually in the dashboard."
-      echo "This workflow will provision goals automatically once the plan includes Sites API access."
-      exit 0
+      echo "Plausible API returned 401 -- Sites API may require a higher plan." >&2
+      exit 1
       ;;
     402)
-      echo "Plausible API returned 402 -- this API endpoint requires a higher plan."
-      echo "Skipping goal provisioning. Goals can be configured manually in the dashboard."
-      echo "This workflow will provision goals automatically once the plan includes API access."
-      exit 0
+      echo "Plausible API returned 402 -- this API endpoint requires a higher plan." >&2
+      exit 1
       ;;
     429)
       echo "Error: Plausible API rate limited (HTTP 429). Try again later." >&2
@@ -135,6 +131,20 @@ provision_goal() {
 
   echo "[ok] Goal ready: ${display_name}"
 }
+
+# --- Preflight: Check API Plan Access ---
+# api_request is called inside $() (subshell) where exit only exits the subshell,
+# so plan-limitation checks must happen here before any $() calls.
+
+_preflight_code=$(curl -s -o /dev/null -w "%{http_code}" \
+  -H "Authorization: Bearer ${PLAUSIBLE_API_KEY}" \
+  "${PLAUSIBLE_BASE_URL}/api/v1/sites/goals?site_id=${PLAUSIBLE_SITE_ID}" 2>/dev/null)
+if [[ "$_preflight_code" == "401" || "$_preflight_code" == "402" ]]; then
+  echo "Plausible API returned ${_preflight_code} -- Sites/Goals API requires a higher plan."
+  echo "Skipping goal provisioning. Goals can be configured manually in the dashboard."
+  echo "This workflow will provision goals automatically once the plan includes API access."
+  exit 0
+fi
 
 # --- Provision Goals ---
 
