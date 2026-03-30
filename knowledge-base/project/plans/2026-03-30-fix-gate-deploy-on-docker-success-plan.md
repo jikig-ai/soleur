@@ -265,13 +265,13 @@ The "Post to Discord" step is gated on `steps.create_release.outputs.released ==
 
 ## Acceptance Criteria
 
-- [ ] `reusable-release.yml` exposes a `docker_pushed` output set to `'true'` only on Docker build+push success
-- [ ] Docker login and build steps fire when version is available (not just when release was newly created), enabling retry
-- [ ] `web-platform-release.yml` deploy job gates on `docker_pushed == 'true'` instead of `version != ''`
-- [ ] `telegram-bridge-release.yml` deploy job gates on `docker_pushed == 'true'` with `always()`
-- [ ] Deploy does NOT fire when Docker build fails (verified by condition logic)
-- [ ] Deploy DOES fire on normal first-run when Docker build succeeds
-- [ ] Deploy DOES fire on retry when release exists but Docker build succeeds
+- [x] `reusable-release.yml` exposes a `docker_pushed` output set to `'true'` only on Docker build+push success
+- [x] Docker login and build steps fire when version is available (not just when release was newly created), enabling retry
+- [x] `web-platform-release.yml` deploy job gates on `docker_pushed == 'true'` instead of `version != ''`
+- [x] `telegram-bridge-release.yml` deploy job gates on `docker_pushed == 'true'` with `always()`
+- [x] Deploy does NOT fire when Docker build fails (verified by condition logic)
+- [x] Deploy DOES fire on normal first-run when Docker build succeeds
+- [x] Deploy DOES fire on retry when release exists but Docker build succeeds
 
 ## Domain Review
 
