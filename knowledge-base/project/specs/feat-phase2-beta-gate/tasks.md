@@ -93,10 +93,10 @@ Plan: `knowledge-base/project/plans/2026-03-30-feat-phase2-security-gdpr-onboard
 - [ ] 4.3.1 Create `app/api/account/delete/route.ts` with POST handler
 - [ ] 4.3.2 Require email confirmation in request body (must match authenticated user email)
 - [ ] 4.3.3 Add rate limit: 3 deletion attempts per hour per user
-- [ ] 4.3.4 Implement deletion cascade:
-  - 4.3.4.1 Delete workspace directory (`rm -rf /workspaces/{userId}`)
-  - 4.3.4.2 Delete auth.users entry via `supabase.auth.admin.deleteUser(userId)`
-  - 4.3.4.3 DB cascade handles conversations, messages, api_keys via FK constraints
+- [ ] 4.3.4 Implement deletion cascade (order: auth first, workspace last):
+  - 4.3.4.1 Delete auth.users entry via `supabase.auth.admin.deleteUser(userId)` -- triggers FK cascade
+  - 4.3.4.2 DB cascade handles conversations, messages, api_keys via FK constraints
+  - 4.3.4.3 Delete workspace directory (best-effort, log errors, cron cleanup as backup)
 - [ ] 4.3.5 Return 200 with `Set-Cookie` clearing all session cookies
 - [ ] 4.3.6 Log deletion event (user ID only, no PII)
 - [ ] 4.3.7 Confirmation UI: modal with email re-entry, "I understand this is irreversible" checkbox

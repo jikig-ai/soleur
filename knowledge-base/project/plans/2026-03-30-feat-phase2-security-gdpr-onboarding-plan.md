@@ -152,6 +152,7 @@ All code paths that handle auth, sessions, and data access:
 - [ ] BYOK key handling reviewed: no plaintext key in logs, no key in error messages
 - [ ] Path traversal mitigations verified: symlink escape, `..` sequences, null bytes
 - [ ] `/proc` deny verified in sandbox with test coverage
+- [ ] WebSocket message size limit enforced (defense-in-depth against oversized payloads)
 - [ ] No high or critical findings remain open
 
 ### CSP + CORS (TG-2)
@@ -177,11 +178,10 @@ All code paths that handle auth, sessions, and data access:
 - [ ] API key rotation: user can submit a new key, old key is replaced
 - [ ] API key deletion: user can remove their key entirely
 - [ ] Account deletion: user confirms with email re-entry, then:
-  - Conversations and messages cascade-deleted via FK constraints
-  - API keys cascade-deleted via FK constraints
-  - Workspace directory removed from filesystem
-  - Supabase auth.users entry deleted (via admin API)
+  - Supabase auth.users entry deleted (via admin API) -- triggers FK cascade
+  - Conversations, messages, API keys cascade-deleted via FK constraints
   - HTTP session cookies cleared
+  - Workspace directory removed (best-effort, cron cleanup as backup)
 - [ ] Account deletion is irreversible and clearly communicated in UI
 - [ ] Rate limit on account deletion API (prevent abuse)
 - [ ] Test coverage for the full deletion cascade
@@ -385,12 +385,15 @@ before TG-2.
 4. **Account deletion** (`POST /api/account/delete`):
    - Require email confirmation (user types their email to confirm)
    - Rate limit: 3 attempts per hour per user
-   - Server-side cascade:
-     a. Delete workspace directory (`rm -rf /workspaces/{userId}`)
-     b. Delete auth.users entry via Supabase Admin API
-        (`supabase.auth.admin.deleteUser(userId)`)
-     c. DB cascade handles conversations, messages, api_keys via FK
-     d. Clear all cookies in response
+   - Server-side cascade (order matters -- delete auth first, workspace
+     last so user cannot be stranded if filesystem cleanup fails):
+     a. Delete auth.users entry via Supabase Admin API
+        (`supabase.auth.admin.deleteUser(userId)`) -- triggers FK
+        cascade on users table, which cascades to conversations,
+        messages, api_keys
+     b. Clear all cookies in response
+     c. Delete workspace directory (best-effort, log errors) -- a cron
+        job cleans orphaned workspaces if this step fails
    - Return 200 with redirect to `/login`
    - Log deletion event (user ID only, no PII)
 
