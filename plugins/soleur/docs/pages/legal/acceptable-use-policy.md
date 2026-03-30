@@ -8,7 +8,7 @@ permalink: pages/legal/acceptable-use-policy.html
 <section class="page-hero">
   <div class="container">
     <h1>Acceptable Use Policy</h1>
-    <p>Effective February 20, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated March 29, 2026</p>
   </div>
 </section>
 

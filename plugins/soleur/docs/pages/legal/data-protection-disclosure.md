@@ -8,7 +8,7 @@ permalink: pages/legal/data-protection-disclosure.html
 <section class="page-hero">
   <div class="container">
     <h1>Data Protection Disclosure</h1>
-    <p>Effective February 20, 2026 | Last Updated March 20, 2026 (added Web Platform notification channel to Section 13.2, added Web Platform email notification to Section 8.2(b), added Web Platform to Section 7.2 breach notification scope, renamed Section 3.1 heading, removed Buttondown from Section 4.3, updated Cloudflare legal basis to dual basis, added Section 10.3 Web Platform account deletion, added Section 5.3 Web Platform data subject rights, harmonized Cloudflare dual legal basis in Section 2.1b(d), added Article 12(3) two-month extension provision to response timeline)</p>
+    <p>Effective February 20, 2026 | Last Updated March 29, 2026</p>
   </div>
 </section>
 
