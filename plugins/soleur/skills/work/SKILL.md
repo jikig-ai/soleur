@@ -206,6 +206,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
      - Mark task as in_progress in TodoWrite
      - Read any referenced files from the plan
      - If task creates UI/pages: verify implementation brief exists (HARD GATE)
+     - TDD GATE: (see below)
      - Look for similar patterns in codebase
      - RED: Write failing test(s) for this task's acceptance criteria
      - GREEN: Write minimum code to make the test(s) pass
@@ -216,7 +217,21 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
      - Evaluate for incremental commit (see below)
    ```
 
-   **Test-First Enforcement**: If the plan includes a "Test Scenarios" section, write tests for each scenario BEFORE writing implementation code. If no test scenarios exist in the plan, derive them from acceptance criteria. For infrastructure-only tasks (config, CI, scaffolding), unit tests may be skipped, but config-specific validation is required -- see Infrastructure Validation below.
+   **TDD Gate (HARD GATE):** Before writing ANY implementation code for a task, determine if the task has testable behavior:
+
+   1. **Check:** Does the plan have a "Test Scenarios" or "Acceptance Criteria" section that covers this task? If yes, this task requires test-first.
+   2. **Exempt:** Infrastructure-only tasks (config files, CI workflows, scaffolding directories, dependency installs) are exempt. If the task only creates/modifies config, it skips to Infrastructure Validation below.
+   3. **Enforce:** For non-exempt tasks, write the failing test file FIRST. The test must:
+      - Import the component/function/module that will be created (the import will fail — that is correct)
+      - Assert the specific behavior from the acceptance criteria
+      - Be runnable via the project's test command (even if it fails due to missing implementation)
+   4. **Verify RED:** Run the test. It must fail (missing module, assertion failure, etc.). If it passes, the test is not testing new behavior — rewrite it.
+   5. **Only then:** Write the minimum implementation to make the test pass (GREEN).
+   6. **Refactor:** Improve code while keeping tests green.
+
+   Skipping this gate — writing implementation before tests — is a workflow violation equivalent to committing directly to main. The rationalization "this is simple enough to not need test-first" is exactly the reasoning TDD is designed to prevent.
+
+   **Test environment setup:** If the project's test runner cannot run the type of test needed (e.g., React component tests require jsdom but vitest is configured for node), set up the test environment BEFORE starting the task. This is part of RED — the test infrastructure must exist for the test to fail properly.
 
    **IMPORTANT**: Always update the original plan document by checking off completed items. Use the Edit tool to change `- [ ]` to `- [x]` for each task you finish. This keeps the plan as a living document showing progress and ensures no checkboxes are left unchecked.
 

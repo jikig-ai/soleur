@@ -26,6 +26,8 @@ interface UseWebSocketReturn {
   sendReviewGateResponse: (gateId: string, selection: string) => void;
   status: ConnectionStatus;
   disconnectReason: string | undefined;
+  routeSource: "auto" | "mention" | null;
+  activeLeaderIds: DomainLeaderId[];
 }
 
 const MAX_BACKOFF = 30_000;
@@ -45,6 +47,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [disconnectReason, setDisconnectReason] = useState<string>();
+  const [routeSource, setRouteSource] = useState<"auto" | "mention" | null>(null);
+  const [activeLeaderIds, setActiveLeaderIds] = useState<DomainLeaderId[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -126,7 +130,10 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "stream_start": {
-          if (msg.type !== "stream_start") break;
+          // Store routing source from first stream_start
+          if (msg.source) {
+            setRouteSource(msg.source);
+          }
           // Create a new empty message bubble for this leader
           setMessages((prev) => {
             const newMsg: ChatMessage = {
@@ -137,13 +144,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
               leaderId: msg.leaderId,
             };
             activeStreamsRef.current.set(msg.leaderId, prev.length);
+            setActiveLeaderIds(Array.from(activeStreamsRef.current.keys()) as DomainLeaderId[]);
             return [...prev, newMsg];
           });
           break;
         }
 
         case "stream": {
-          if (msg.type !== "stream") break;
           const streamLeaderId = msg.leaderId;
 
           setMessages((prev) => {
@@ -176,14 +183,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "stream_end": {
-          if (msg.type !== "stream_end") break;
           // Finalize this leader's stream — remove from active streams map
           activeStreamsRef.current.delete(msg.leaderId);
+          setActiveLeaderIds(Array.from(activeStreamsRef.current.keys()) as DomainLeaderId[]);
           break;
         }
 
         case "review_gate": {
-          if (msg.type !== "review_gate") break;
           activeStreamsRef.current.clear();
           setMessages((prev) => [
             ...prev,
@@ -201,7 +207,6 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "error": {
-          if (msg.type !== "error") break;
           activeStreamsRef.current.clear();
 
           // Key invalidation: redirect to setup instead of showing error
@@ -224,7 +229,6 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "session_ended": {
-          if (msg.type !== "session_ended") break;
           activeStreamsRef.current.clear();
           // Don't display "turn_complete" as a visible message — it's a lifecycle signal
           if (msg.reason !== "turn_complete") {
@@ -364,5 +368,5 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     [send],
   );
 
-  return { messages, startSession, sendMessage, sendReviewGateResponse, status, disconnectReason };
+  return { messages, startSession, sendMessage, sendReviewGateResponse, status, disconnectReason, routeSource, activeLeaderIds };
 }

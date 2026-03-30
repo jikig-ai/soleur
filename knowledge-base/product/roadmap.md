@@ -181,7 +181,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 3.6 | Usage/cost indicator (BYOK spending) | P2 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
 | 3.7 | Review gate notifications (PWA push + email fallback for iOS) | P2 | [#1049](https://github.com/jikig-ai/soleur/issues/1049) | Not started |
 | 3.8 | Guided instructions fallback (deep links + review gates for services without API/MCP) | P2 | [#1077](https://github.com/jikig-ai/soleur/issues/1077) | Not started |
-| 3.9 | Tag-and-route UX enhancements (@-mentions syntax, multi-leader threads, context-aware suggestions) | P2 | [#1059](https://github.com/jikig-ai/soleur/issues/1059) | Depends on P1 foundation |
+| 3.9 | Chat UX redesign — remove department grid, @-mention autocomplete, auto-routing, sidebar | P2 | [#1289](https://github.com/jikig-ai/soleur/issues/1289) | Wireframes approved, spec complete |
 | 3.10 | CI/CD integration (agents trigger deploys, run tests, open PRs on founder's repo) | P1 | [#1062](https://github.com/jikig-ai/soleur/issues/1062) | Not started |
 | 3.11 | Product analytics instrumentation for P4 validation metrics (domain engagement, session frequency, KB growth) | P1 | [#1063](https://github.com/jikig-ai/soleur/issues/1063) | Not started |
 | 3.12 | Pricing page (soleur.ai) | P1 | [#656](https://github.com/jikig-ai/soleur/issues/656) | Not started |
