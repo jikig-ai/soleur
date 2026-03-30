@@ -135,13 +135,13 @@ SKILL.md files must not contain `${VAR}` or `$()` -- use angle-bracket prose pla
 
 ## Acceptance Criteria
 
-- [ ] Compound's Route Learning to Definition creates a GitHub issue when `HEADLESS_MODE=true` and the proposed edit is actionable
-- [ ] Issue includes: proposed edit text, target file path, source learning file path
-- [ ] Issue is milestoned to "Post-MVP / Later"
-- [ ] Headless mode does NOT apply the edit directly to definition files
-- [ ] Interactive mode behavior is unchanged (Accept/Skip/Edit via AskUserQuestion)
-- [ ] Step 8.2 has explicit headless mode target selection logic
-- [ ] Issue creation failure does not block the pipeline (graceful degradation)
+- [x] Compound's Route Learning to Definition creates a GitHub issue when `HEADLESS_MODE=true` and the proposed edit is actionable
+- [x] Issue includes: proposed edit text, target file path, source learning file path
+- [x] Issue is milestoned to "Post-MVP / Later"
+- [x] Headless mode does NOT apply the edit directly to definition files
+- [x] Interactive mode behavior is unchanged (Accept/Skip/Edit via AskUserQuestion)
+- [x] Step 8.2 has explicit headless mode target selection logic
+- [x] Issue creation failure does not block the pipeline (graceful degradation)
 
 ## Test Scenarios
 
