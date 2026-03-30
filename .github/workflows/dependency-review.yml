@@ -14,6 +14,7 @@ jobs:
       - name: Dependency Review
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
         with:
+          retry-on-snapshot-warnings: true
           fail-on-severity: high
           fail-on-scopes: runtime
           license-check: true
