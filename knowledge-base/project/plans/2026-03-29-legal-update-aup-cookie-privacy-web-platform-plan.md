@@ -197,25 +197,25 @@ Per learning `2026-02-21-gdpr-article-30-compliance-audit-pattern.md`, the publi
 
 ## Acceptance Criteria
 
-- [ ] AUP Section 1 defines Soleur to include both Plugin and Web Platform
-- [ ] AUP Section 2 lists Web Platform activities in scope
-- [ ] AUP Section 5 covers Web Platform user responsibilities (not just local execution)
-- [ ] AUP Section 6 includes account suspension/termination as enforcement mechanisms
-- [ ] Cookie Policy documents app.soleur.ai session cookies (Supabase auth)
-- [ ] Cookie Policy documents Stripe checkout cookies
-- [ ] Cookie Policy notes CSRF protection mechanism
-- [ ] Cookie Policy legal basis covers app.soleur.ai strictly necessary cookies
-- [ ] Privacy Policy Section 4.7 lists conversation history as a data category
-- [ ] Data Protection Disclosure Section 2.3 includes conversation data processing
-- [ ] GDPR Policy Article 30 register includes conversation management as processing activity #10
-- [ ] All docs updated in both locations (`docs/legal/` and `plugins/soleur/docs/pages/legal/`)
-- [ ] `Last Updated` dates and changelog notes updated in all modified documents
-- [ ] `npx markdownlint-cli2 --fix` passes on all changed files
-- [ ] GDPR Policy Section 9 (DPIA) includes re-evaluation note for conversation data
-- [ ] GDPR Policy Section 11.2 (Breach Notification) includes conversation data compromise scenario
-- [ ] Privacy Policy Section 7 (Retention) includes conversation data retention clause
-- [ ] Post-edit blanket statement grep returns zero unaddressed "does not collect/store/transmit" matches
-- [ ] legal-compliance-auditor run returns zero P1/P2 findings (post-edit verification)
+- [x] AUP Section 1 defines Soleur to include both Plugin and Web Platform
+- [x] AUP Section 2 lists Web Platform activities in scope
+- [x] AUP Section 5 covers Web Platform user responsibilities (not just local execution)
+- [x] AUP Section 6 includes account suspension/termination as enforcement mechanisms
+- [x] Cookie Policy documents app.soleur.ai session cookies (Supabase auth)
+- [x] Cookie Policy documents Stripe checkout cookies
+- [x] Cookie Policy notes CSRF protection mechanism
+- [x] Cookie Policy legal basis covers app.soleur.ai strictly necessary cookies
+- [x] Privacy Policy Section 4.7 lists conversation history as a data category
+- [x] Data Protection Disclosure Section 2.3 includes conversation data processing
+- [x] GDPR Policy Article 30 register includes conversation management as processing activity #10
+- [x] All docs updated in both locations (`docs/legal/` and `plugins/soleur/docs/pages/legal/`)
+- [x] `Last Updated` dates and changelog notes updated in all modified documents
+- [x] `npx markdownlint-cli2 --fix` passes on all changed files
+- [x] GDPR Policy Section 9 (DPIA) includes re-evaluation note for conversation data
+- [x] GDPR Policy Section 11.2 (Breach Notification) includes conversation data compromise scenario
+- [x] Privacy Policy Section 7 (Retention) includes conversation data retention clause
+- [x] Post-edit blanket statement grep returns zero unaddressed "does not collect/store/transmit" matches
+- [x] legal-compliance-auditor run returns zero P1/P2 findings (post-edit verification)
 
 ## Test Scenarios
 
