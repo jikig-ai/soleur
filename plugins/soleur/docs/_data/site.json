@@ -32,6 +32,7 @@
     { "label": "Blog", "url": "blog/" },
     { "label": "Community", "url": "pages/community.html" },
     { "label": "Vision", "url": "pages/vision.html" },
+    { "label": "About", "url": "about/" },
     { "label": "Legal", "url": "pages/legal.html" }
   ]
 }
