@@ -558,7 +558,37 @@ Poll every 10 seconds until state is `MERGED`.
 
    If the workflow did not fire (e.g., no semver label was set), run `/release-announce` manually as a fallback.
 
-2. **Post-merge validation of new or modified workflows.** If the PR added or modified GitHub Actions workflow files (`.github/workflows/*.yml`), validate them by triggering each affected workflow via `workflow_dispatch` and polling for completion. This is mandatory — never leave validation as a manual step for the user.
+2. **Verify all release/deploy workflows triggered by the merge.** The push to main triggers release workflows based on path filters (e.g., `web-platform-release.yml` when `apps/web-platform/**` changed). These can fail for reasons unrelated to PR CI (Docker build failures, lockfile drift, deploy health mismatches). A failing release workflow means the old version keeps running in production — this is a silent outage.
+
+   **Step 1:** Get the merge commit SHA. Use the PR number from Phase 6:
+
+   ```bash
+   gh pr view <number> --json mergeCommit --jq .mergeCommit.oid
+   ```
+
+   **Step 2:** Wait 15 seconds for workflows to trigger, then list all runs on the merge commit:
+
+   ```bash
+   gh run list --branch main --commit <merge-sha> --json databaseId,workflowName,status,conclusion
+   ```
+
+   **Step 3:** For each run that is not yet `completed`, poll every 30 seconds:
+
+   ```bash
+   gh run view <id> --json status,conclusion --jq '"\(.status) \(.conclusion)"'
+   ```
+
+   Poll until all runs complete. Expected max wait: ~5 minutes for Docker builds + deploy verification.
+
+   **Step 4:** Check conclusions:
+   - All `success`: Report "Release verification: N/N workflows passed" and continue.
+   - Any `failure`: Report which workflow failed, fetch logs with `gh run view <id> --log-failed | tail -n 50`, and investigate. Do NOT silently proceed. If the failure is in the release/deploy pipeline, it must be fixed before ending the session — production is running stale code.
+
+   **If no workflows were triggered** (the PR only touched files outside all path filters): Skip this step.
+
+   **Why this matters:** In #1293, PR #1275 added `@playwright/test` to `package.json` but didn't update `package-lock.json`. PR CI passed (it uses `bun test`, not `npm ci`), but the Docker build uses `npm ci` which requires lockfile sync. Five consecutive release runs failed silently — production stayed on v0.8.6 for hours while new PRs kept merging.
+
+3. **Post-merge validation of new or modified workflows.** If the PR added or modified GitHub Actions workflow files (`.github/workflows/*.yml`), validate them by triggering each affected workflow via `workflow_dispatch` and polling for completion. This is mandatory — never leave validation as a manual step for the user.
 
    **Step 1:** Detect new or modified workflow files in this PR. Use the merge base hash from Phase 3:
 
@@ -592,7 +622,7 @@ Poll every 10 seconds until state is `MERGED`.
 
    **Why this matters:** The founder is a solo operator. Every "please run this manually" is a context switch. `gh workflow run` exists — use it. Modified workflows are equally risky — a prompt change, a new step, or a timeout bump can all cause failures that are invisible without a live run. **Why `AM` not just `A`:** In #1126, a modified workflow (new Steps 5.5/5.6 in growth audit) was merged without validation because the ship skill only checked for new files.
 
-3. Clean up worktree and local branch:
+4. Clean up worktree and local branch:
 
    Navigate to the repository root directory, then run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged`.
 

@@ -2,6 +2,7 @@ import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { buildCspHeader } from "@/lib/csp";
+import { resolveOrigin } from "@/lib/auth/resolve-origin";
 import { PUBLIC_PATHS, TC_EXEMPT_PATHS } from "@/lib/routes";
 
 function withCspHeaders(response: NextResponse, cspValue: string): NextResponse {
@@ -19,11 +20,20 @@ export async function middleware(request: NextRequest) {
 
   // Generate per-request nonce for CSP
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
+  // Resolve client-facing host via the same validated fallback chain used by
+  // the auth callback (resolveOrigin). This prevents CSP injection via spoofed
+  // x-forwarded-host headers and eliminates duplication with resolve-origin.ts.
+  const origin = resolveOrigin(
+    request.headers.get("x-forwarded-host"),
+    request.headers.get("x-forwarded-proto"),
+    request.headers.get("host"),
+  );
+  const appHost = new URL(origin).host;
   const cspValue = buildCspHeader({
     nonce,
     isDev: process.env.NODE_ENV === "development",
     supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
-    appHost: request.nextUrl.host,
+    appHost,
     sentryReportUri: process.env.SENTRY_CSP_REPORT_URI,
   });
 

@@ -12,7 +12,7 @@ Generate and edit images using Google's Gemini API. The environment variable `GE
 Before generating images, verify both environment and quota:
 
 1. **Environment:** Confirm `GEMINI_API_KEY` is set (the scripts check this)
-2. **Python dependencies:** Install in a venv (`python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`) -- bare `pip install` is blocked by PEP 668 on modern Linux
+2. **Python dependencies:** Install in a venv (`python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`) -- bare `pip install` is blocked by PEP 668 on modern Linux; versions are pinned to exact releases for supply chain security
 3. **Image generation quota:** Free-tier API keys authenticate successfully but may have zero quota for image generation. Run a minimal test request before building the full pipeline:
 
 ```bash
@@ -46,14 +46,17 @@ If quota is unavailable, fall back to Pillow-only generation (solid/gradient bac
 ## Quick Reference
 
 ### Default Settings
+
 - **Model:** `gemini-3-pro-image-preview`
 - **Resolution:** 1K (default, options: 1K, 2K, 4K)
 - **Aspect Ratio:** 1:1 (default)
 
 ### Available Aspect Ratios
+
 `1:1`, `2:3`, `3:2`, `3:4`, `4:3`, `4:5`, `5:4`, `9:16`, `16:9`, `21:9`
 
 ### Available Resolutions
+
 `1K` (default), `2K`, `4K`
 
 ## Core API Pattern
@@ -171,24 +174,29 @@ response = chat.send_message("Make the text bolder and add a blue gradient")
 ## Prompting Best Practices
 
 ### Photorealistic Scenes
+
 Include camera details: lens type, lighting, angle, mood.
 > "A photorealistic close-up portrait, 85mm lens, soft golden hour light, shallow depth of field"
 
 ### Stylized Art
+
 Specify style explicitly:
 > "A kawaii-style sticker of a happy red panda, bold outlines, cel-shading, white background"
 
 ### Text in Images
+
 Be explicit about font style and placement:
 > "Create a logo with text 'Daily Grind' in clean sans-serif, black and white, coffee bean motif"
 
 ### Product Mockups
+
 Describe lighting setup and surface:
 > "Studio-lit product photo on polished concrete, three-point softbox setup, 45-degree angle"
 
 ## Advanced Features
 
 ### Google Search Grounding
+
 Generate images based on real-time data:
 
 ```python
@@ -203,6 +211,7 @@ response = client.models.generate_content(
 ```
 
 ### Multiple Reference Images (Up to 14)
+
 Combine elements from multiple sources:
 
 ```python

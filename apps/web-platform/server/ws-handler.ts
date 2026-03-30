@@ -19,6 +19,13 @@ import {
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 import { createChildLogger } from "./logger";
+import {
+  connectionThrottle,
+  sessionThrottle,
+  pendingConnections,
+  extractClientIp,
+  logRateLimitRejection,
+} from "./rate-limiter";
 
 const log = createChildLogger("ws");
 
@@ -149,6 +156,19 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
     // start_session: create conversation, boot agent, reply with ID
     // ------------------------------------------------------------------
     case "start_session": {
+      // Layer 3: Agent session creation rate limit (per-user, post-auth)
+      if (!sessionThrottle.isAllowed(userId)) {
+        logRateLimitRejection("session-limit", userId);
+        sendToClient(userId, {
+          type: "error",
+          message: sanitizeErrorForClient(
+            new Error("Rate limited: too many sessions"),
+          ),
+          errorCode: "rate_limited",
+        });
+        return;
+      }
+
       try {
         abortActiveSession(userId, session);
 
@@ -358,13 +378,37 @@ export function setupWebSocket(server: HTTPServer) {
       return;
     }
 
+    // Layer 1: IP-based connection throttle (pre-auth)
+    const clientIp = extractClientIp(req);
+    if (!connectionThrottle.isAllowed(clientIp)) {
+      logRateLimitRejection("connection-throttle", clientIp);
+      // Fixed Retry-After to avoid leaking exact window config (CWE-209)
+      socket.write(
+        "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 120\r\nConnection: close\r\n\r\n",
+      );
+      socket.destroy();
+      return;
+    }
+
+    // Layer 2: Concurrent unauthenticated connection limit per IP
+    if (!pendingConnections.add(clientIp)) {
+      logRateLimitRejection("pending-limit", clientIp, {
+        pending: pendingConnections.get(clientIp),
+      });
+      socket.write(
+        "HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n",
+      );
+      socket.destroy();
+      return;
+    }
+
     wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit("connection", ws, req);
+      wss.emit("connection", ws, req, clientIp);
     });
   });
 
   // New connection — auth moves to first message
-  wss.on("connection", (ws: WebSocket) => {
+  wss.on("connection", (ws: WebSocket, _req: unknown, clientIp: string) => {
     let authenticated = false;
     let userId: string | null = null;
 
@@ -415,10 +459,11 @@ export function setupWebSocket(server: HTTPServer) {
           return;
         }
 
-        // Auth success
+        // Auth success — no longer pending
         clearTimeout(authTimer);
         authenticated = true;
         userId = user.id;
+        pendingConnections.remove(clientIp);
 
         // Enforce T&C acceptance (version-aware)
         const { data: userRow, error: tcError } = await supabase
@@ -486,6 +531,10 @@ export function setupWebSocket(server: HTTPServer) {
     ws.on("close", () => {
       clearTimeout(authTimer);
       if (pingInterval) clearInterval(pingInterval);
+      // If not yet authenticated, release the pending connection slot
+      if (!authenticated) {
+        pendingConnections.remove(clientIp);
+      }
       if (userId) {
         const current = sessions.get(userId);
         if (current?.ws === ws) {
