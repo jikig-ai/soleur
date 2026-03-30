@@ -1,0 +1,67 @@
+# Bi-weekly audit of always-loaded governance rules (AGENTS.md + constitution.md).
+# Counts rules, identifies hook-enforced migration candidates, and creates/updates
+# a GitHub issue with findings.
+#
+# Security: No untrusted user input is used in run: commands.
+# All strings are hardcoded or come from safe GitHub context values.
+# Uses GITHUB_TOKEN only (no additional secrets except optional Discord webhook).
+#
+# Related: #451, #422
+
+name: "Scheduled: Rule Audit"
+
+on:
+  schedule:
+    - cron: '0 9 1,15 * *'
+  workflow_dispatch:
+
+concurrency:
+  group: scheduled-rule-audit
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Run rule audit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash scripts/rule-audit.sh
+
+      - name: Discord notification (failure)
+        if: failure()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if [[ -z "${DISCORD_WEBHOOK_URL:-}" ]]; then
+            echo "DISCORD_WEBHOOK_URL not set, skipping failure notification"
+            exit 0
+          fi
+          RUN_URL="${REPO_URL}/actions/runs/${RUN_ID}"
+          MESSAGE=$(printf '**Rule Audit failed**\n\nWorkflow run: %s\n\nCheck logs for details.' \
+            "$RUN_URL")
+          PAYLOAD=$(jq -n \
+            --arg content "$MESSAGE" \
+            --arg username "Sol" \
+            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
+            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL")
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
+            echo "Discord failure notification sent (HTTP $HTTP_CODE)"
+          else
+            echo "::warning::Discord failure notification failed (HTTP $HTTP_CODE)"
+          fi
