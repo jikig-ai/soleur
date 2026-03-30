@@ -211,6 +211,14 @@ main() {
       exit 1
     fi
 
+    if [[ "$http_code" == "402" ]]; then
+      echo "Plausible API returned 402 -- Stats API requires a Business plan or higher."
+      echo "Skipping analytics snapshot. The dashboard remains available at https://plausible.io/soleur.ai"
+      echo "This workflow will generate snapshots automatically once the plan includes Stats API access."
+      rm -f "$response_file"
+      exit 0
+    fi
+
     if [[ "$http_code" == "429" ]]; then
       echo "Plausible API rate limited (HTTP 429). Try again later." >&2
       rm -f "$response_file"
