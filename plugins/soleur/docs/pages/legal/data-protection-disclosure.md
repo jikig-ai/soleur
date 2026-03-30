@@ -18,7 +18,7 @@ permalink: pages/legal/data-protection-disclosure.html
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** March 20, 2026 (added Web Platform notification channel to Section 13.2, added Web Platform email notification to Section 8.2(b), added Web Platform to Section 7.2 breach notification scope, renamed Section 3.1 heading, removed Buttondown from Section 4.3, updated Cloudflare legal basis to dual basis, added Section 10.3 Web Platform account deletion, added Section 5.3 Web Platform data subject rights, harmonized Cloudflare dual legal basis in Section 2.1b(d), added Article 12(3) two-month extension provision to response timeline)
+**Last Updated:** March 29, 2026 (added conversation data to Section 2.1b(c), added Section 2.3(i) conversation management, updated Supabase processor row in Section 4.2, added conversation data to Section 10.3 account deletion)
 
 This Data Protection Disclosure ("DPD") describes the data processing relationship between:
 
@@ -77,7 +77,7 @@ For the Web Platform:
 
 - **(a)** Jikigai acts as the **data controller** for User account data, workspace data, and subscription data processed through the Web Platform.
 - **(b)** Jikigai engages the following **data processors** under Article 28 of the GDPR: Supabase (authentication and database), Stripe (payment processing), Hetzner (infrastructure hosting), and Cloudflare (CDN/proxy). See Section 4.2 for the full processor table.
-- **(c)** Data processed includes: email addresses, hashed passwords, authentication tokens, session data, encrypted API keys, subscription metadata, and technical data (IP addresses, request headers).
+- **(c)** Data processed includes: email addresses, hashed passwords, authentication tokens, session data, encrypted API keys, subscription metadata, conversation metadata, message content, and technical data (IP addresses, request headers).
 - **(d)** The legal basis for this processing is **contract performance** (Article 6(1)(b) GDPR) -- processing is necessary to provide the Web Platform service the User signed up for. For Cloudflare CDN/proxy processing of unauthenticated traffic (visitors who have not signed up), the legal basis is **legitimate interest** (Article 6(1)(f) GDPR) -- see Section 4.2 for the full dual-basis disclosure.
 
 This section fulfills the commitment made in Section 8.1(a) to update this DPD with Article 28-compliant terms when cloud features are introduced.
@@ -105,6 +105,7 @@ Soleur's data processing activities are limited to:
 - **(f)** **Web Platform account management:** The Web Platform (app.soleur.ai) processes email addresses, hashed passwords (managed by Supabase), authentication tokens, and session data for user account management and authentication. Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: while account is active; deleted on account deletion request.
 - **(g)** **Web Platform payment processing:** The Web Platform processes customer email addresses and subscription metadata via Stripe Checkout. Card data is handled exclusively by Stripe and never reaches Jikigai servers (PCI SAQ-A). Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: subscription records retained for 10 years per French tax law (Code de commerce Art. L123-22).
 - **(h)** **Web Platform infrastructure hosting:** The Web Platform hosts user workspaces, encrypted API keys (AES-256-GCM), and Docker containers on Hetzner servers in Helsinki, Finland (EU-only). Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: while account is active.
+- **(i)** **Web Platform conversation management:** The Web Platform stores conversation metadata and message content associated with user accounts. Data processed: conversation status, domain leader assignment, user messages, assistant responses, tool call metadata. Legal basis: contract performance (Article 6(1)(b) GDPR). Retention: while account is active; deleted on account deletion request (cascade delete).
 
 For these activities, Jikigai acts as a Controller with respect to data it directly collects and processes (including CLA signature data and Web Platform account data). Third-party processors are engaged as described in Section 4.2.
 
@@ -155,12 +156,12 @@ For processing activities where Jikigai acts as Controller (see Sections 2.1b an
 
 | Processor | Processing Activity | Data Processed | Legal Basis | Sub-processor List |
 |-----------|-------------------|----------------|-------------|-------------------|
-| Supabase Inc ([supabase.com](https://supabase.com)) | Web Platform auth + database | Email addresses, hashed passwords, auth tokens, session data | Contract performance (Article 6(1)(b)) | [Supabase DPA](https://supabase.com/legal/dpa) |
+| Supabase Inc ([supabase.com](https://supabase.com)) | Web Platform auth + database | Email addresses, hashed passwords, auth tokens, session data, conversation metadata, message content | Contract performance (Article 6(1)(b)) | [Supabase DPA](https://supabase.com/legal/dpa) |
 | Stripe Inc ([stripe.com](https://stripe.com)) | Web Platform payment processing (Stripe Checkout, PCI SAQ-A) | Customer email, subscription metadata (card data handled exclusively by Stripe) | Contract performance (Article 6(1)(b)) | [Stripe Sub-processors](https://stripe.com/legal/service-providers) |
 | Hetzner Online GmbH ([hetzner.com](https://hetzner.com)) | Web Platform infrastructure hosting (Helsinki, EU-only) | User workspaces, encrypted API keys, Docker containers | Contract performance (Article 6(1)(b)) | [Hetzner DPA](https://www.hetzner.com/legal/terms-and-conditions/) |
 | Cloudflare Inc ([cloudflare.com](https://cloudflare.com)) | Web Platform CDN/proxy (`app.soleur.ai`, extending existing `soleur.ai` zone) | IP addresses, request headers, TLS termination data | Contract performance (Article 6(1)(b)) for authenticated users; legitimate interest (Article 6(1)(f)) for unauthenticated traffic | [Cloudflare DPA](https://www.cloudflare.com/cloudflare-customer-dpa/) |
 
-This disclosure is consistent with Sections 2.1b, 2.3(a), 2.3(e), 2.3(f), 2.3(g), and 2.3(h).
+This disclosure is consistent with Sections 2.1b, 2.3(a), 2.3(e), 2.3(f), 2.3(g), 2.3(h), and 2.3(i).
 
 ### 4.3 Third-Party Services Used by Users
 
@@ -191,7 +192,7 @@ For data processed through the Docs Site or GitHub repository:
 
 ### 5.3 Web Platform Data
 
-For data processed through the Web Platform (app.soleur.ai) where Jikigai acts as controller (see Section 2.1b), data subjects may exercise the following rights by contacting legal@jikigai.com:
+For data processed through the Web Platform (app.soleur.ai) where Jikigai acts as controller (see Section 2.1b), data subjects may exercise the following rights by contacting <legal@jikigai.com>:
 
 - **(a)** **Right of Access (Article 15):** Request confirmation of whether personal data is being processed and obtain a copy of the data (account data, workspace data, subscription metadata).
 - **(b)** **Right to Rectification (Article 16):** Request correction of inaccurate personal data held by Jikigai.
@@ -287,7 +288,7 @@ Given the local-only nature of the Plugin, traditional audit rights under Articl
 
 ### 9.2 Web Platform Audit Rights
 
-For the Web Platform, audit rights consistent with Article 28(3)(h) are provided through the individual processor DPAs: [Supabase DPA](https://supabase.com/legal/dpa), [Stripe DPA](https://stripe.com/legal/dpa), and [Hetzner DPA](https://www.hetzner.com/legal/terms-and-conditions/). Users may request audit information from Jikigai regarding Web Platform data processing by contacting legal@jikigai.com.
+For the Web Platform, audit rights consistent with Article 28(3)(h) are provided through the individual processor DPAs: [Supabase DPA](https://supabase.com/legal/dpa), [Stripe DPA](https://stripe.com/legal/dpa), and [Hetzner DPA](https://www.hetzner.com/legal/terms-and-conditions/). Users may request audit information from Jikigai regarding Web Platform data processing by contacting <legal@jikigai.com>.
 
 ---
 
@@ -312,7 +313,8 @@ Users may delete their Web Platform account at any time via account settings. Up
 - **(a)** Account data (email, authentication tokens, session data) is deleted from Supabase.
 - **(b)** Encrypted API keys and workspace data are deleted from Hetzner infrastructure.
 - **(c)** Stripe retains payment records (subscription metadata, invoices) for 10 years per French tax law (Code de commerce Art. L123-22).
-- **(d)** Cloudflare cache entries expire per standard TTL; no persistent user data is stored by Cloudflare.
+- **(d)** Conversation data (messages and conversation metadata) is deleted from Supabase (cascade delete via foreign key).
+- **(e)** Cloudflare cache entries expire per standard TTL; no persistent user data is stored by Cloudflare.
 
 See the [Terms and Conditions](/pages/legal/terms-and-conditions.html) Section 14.1b for the full account termination procedure.
 
@@ -332,7 +334,7 @@ See the [Terms and Conditions](/pages/legal/terms-and-conditions.html) Section 1
 
 For questions, concerns, or requests related to this DPD:
 
-- **Email:** legal@jikigai.com
+- **Email:** <legal@jikigai.com>
 - **GitHub Repository:** [https://github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur)
 - **Website:** [https://soleur.ai](https://soleur.ai)
 
