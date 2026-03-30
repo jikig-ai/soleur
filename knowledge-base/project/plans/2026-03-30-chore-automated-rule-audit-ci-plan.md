@@ -6,12 +6,15 @@ date: 2026-03-30
 
 # chore: automated rule audit CI
 
+[Updated 2026-03-30: Simplified after plan review — single script, issue-only,
+title-based dedup. DHH, simplicity, and Kieran reviewers all recommended cutting
+from 4 scripts + PR generation to 1 script + issue reporting.]
+
 ## Overview
 
 Implement a bi-weekly GitHub Actions workflow that audits always-loaded
-governance rules for budget compliance and cross-layer duplication, then creates
-GitHub issues and PRs with tier migration proposals. Uses fingerprint-based
-deduplication for idempotent issue/PR creation.
+governance rules for budget compliance and hook-enforced migration candidates,
+then creates or updates a GitHub issue with findings.
 
 ## Problem Statement / Motivation
 
@@ -22,109 +25,79 @@ automated cleanup, context cost will continue to grow unchecked.
 
 ## Proposed Solution
 
-Four modular shell scripts in `scripts/rule-audit/` orchestrated by a GitHub
-Actions workflow (`rule-audit.yml`), following patterns from existing scheduled
-workflows (e.g., `scheduled-cf-token-expiry-check.yml`).
+One shell script (`scripts/rule-audit.sh`, ~80-120 lines) called by a GitHub
+Actions workflow (`rule-audit.yml`). The script counts rules, identifies
+hook-enforced migration candidates, and creates/updates a GitHub issue.
+
+No automated PRs — the issue lists findings with file:line references and a
+human (or agent session) makes the actual edits. This matches the existing
+`scheduled-cf-token-expiry-check.yml` pattern: one script, one issue,
+title-based dedup.
 
 ### File Structure
 
 ```text
-scripts/rule-audit/
-  count-rules.sh         # FR1: Count always-loaded rules
-  detect-duplication.sh  # FR2: Cross-reference tiers for duplication
-  generate-report.sh     # FR3: Build issue body + PR branch
-  fingerprint.sh         # FR4: SHA256 dedup check
+scripts/rule-audit.sh              # All logic: count, detect, report, dedup
 
-.github/workflows/
-  rule-audit.yml         # FR5: Bi-weekly scheduled workflow
+.github/workflows/rule-audit.yml   # Bi-weekly scheduled workflow
 ```
 
 ## Technical Considerations
 
-### Rule Counting (count-rules.sh)
+### Rule Counting
 
-The current compound Phase 1.5 uses `grep -c '^- '` which counts ALL top-level
-bullet points including non-rule items (section descriptions, list preambles).
-This is acceptable for a warning but the CI audit should be more precise.
+Use `grep -c '^- '` on both AGENTS.md and constitution.md. This matches the
+compound Phase 1.5 approach (`plugins/soleur/skills/compound/SKILL.md:194`).
+May over-count by 2-3 non-rule bullets in AGENTS.md — acceptable for a budget
+threshold check.
 
-**Approach:** Count lines matching `^-` in rule sections only:
+Output: total count, per-file breakdown, whether threshold is exceeded.
 
-- AGENTS.md: Count under `## Hard Rules`, `## Workflow Gates`, `## Code Quality`,
-  `## Review & Feedback`, `## Communication` headings
-- constitution.md: Count all `^-` lines (entire file is rules/conventions)
+### Migration Candidate Detection
 
-Output format: JSON for machine consumption by downstream scripts.
+Primary signal: `[hook-enforced: ...]` annotations in AGENTS.md and
+constitution.md. These rules already have hook enforcement (Tier 1) and their
+prose copies in Tier 2 (AGENTS.md) are candidates for migration to Tier 3
+(constitution.md) to reduce always-loaded context.
 
-```json
-{"total": 313, "agents_md": 62, "constitution_md": 251, "threshold": 300, "over": true}
+The script:
+
+1. Extracts all `[hook-enforced: X]` annotated rules from AGENTS.md
+2. Extracts all `[hook-enforced: X]` annotated rules from constitution.md
+3. Verifies referenced hook scripts exist in `.claude/hooks/`
+4. Lists AGENTS.md rules that could move to constitution.md (they're already
+   hook-enforced, so the AGENTS.md copy is redundant defense-in-depth)
+5. Flags any broken hook references (script renamed or deleted)
+
+No cross-tier phrase matching against agent descriptions or skill instructions.
+That's deferred to #1304 (semantic matching) if the false negative rate proves
+problematic.
+
+### Issue Deduplication
+
+Title-based search, matching the CF token check pattern:
+
+```bash
+EXISTING=$(gh issue list --state open \
+  --search "in:title \"rule audit findings\"" \
+  --json number --jq '.[0].number // empty')
 ```
 
-### Duplication Detection (detect-duplication.sh)
+- If open issue exists: add a comment with updated findings
+- If no open issue: create a new one
 
-Cross-reference always-loaded rules against cheaper enforcement tiers:
+No fingerprint labels, no SHA hashing. A bi-weekly audit doesn't need
+collision-resistant deduplication.
 
-**Tier 1 (hooks) vs Tier 2/3 (AGENTS.md/constitution.md):**
+### Issue Body
 
-- Extract key phrases from `[hook-enforced: ...]` annotations in AGENTS.md and
-  constitution.md
-- For each annotated rule, verify the referenced hook script still exists and
-  the guard still functions
-- Flag rules with `[hook-enforced]` annotation that could migrate from Tier 2
-  (AGENTS.md) to Tier 3 (constitution.md) — they're already hook-enforced, so
-  the always-loaded AGENTS.md copy is redundant defense-in-depth
+Markdown with:
 
-**Tier 2/3 vs Tier 4/5 (agent descriptions/skill instructions):**
-
-- Extract key phrases (3+ word sequences after stripping common words) from each
-  always-loaded rule
-- Search `plugins/soleur/agents/**/*.md` and `plugins/soleur/skills/*/SKILL.md`
-  for matching phrases
-- Flag matches where the agent/skill instruction duplicates an always-loaded rule
-
-**Output format:** JSON array of findings.
-
-```json
-[
-  {
-    "source_tier": 2,
-    "source_file": "AGENTS.md",
-    "source_line": 7,
-    "target_tier": 1,
-    "target_file": ".claude/hooks/guardrails.sh",
-    "matched_phrase": "never commit directly to main",
-    "recommendation": "migrate_to_tier3",
-    "type": "hook_superseded"
-  }
-]
-```
-
-### Report Generation (generate-report.sh)
-
-Takes count JSON + findings JSON as input. Produces:
-
-1. **Issue body** (Markdown): Budget stats table, findings table with migration
-   recommendations, tier model reference, deletion candidates
-2. **PR branch**: Creates `chore/rule-audit-YYYY-MM-DD` branch with proposed
-   file edits (rule movements between AGENTS.md and constitution.md)
-
-PR changes are limited to:
-
-- Moving rules from AGENTS.md to constitution.md (adding `[hook-enforced]`
-  annotation if migrating due to hook coverage)
-- Adding `[CANDIDATE FOR DELETION]` comments next to potentially obsolete rules
-- Never deletes rules — human review required
-
-### Fingerprint Deduplication (fingerprint.sh)
-
-1. Sort findings JSON keys alphabetically
-2. SHA256 hash the sorted output
-3. Take first 12 characters as fingerprint
-4. Search open issues: `gh issue list --label "rule-audit:<fingerprint>" --state open`
-5. If match found: exit 0 with "skip" status
-6. If no match: exit 0 with "create" status
-
-GitHub label length limit is 50 characters. `rule-audit:` (12) + hash (12) = 24
-characters — well within limit.
+- **Budget stats table:** Total count, per-file breakdown, threshold, delta
+- **Migration candidates table:** Rule text (truncated), source file:line,
+  hook reference, recommendation
+- **Broken hook references:** Any `[hook-enforced: X]` where X doesn't exist
+- **Tier model reference:** For reviewer context
 
 ### Workflow (rule-audit.yml)
 
@@ -138,80 +111,69 @@ concurrency:
   group: scheduled-rule-audit
   cancel-in-progress: false
 permissions:
-  contents: write
   issues: write
-  pull-requests: write
 ```
 
 Steps:
 
-1. Checkout repo
-2. Run `count-rules.sh` → save output to `$GITHUB_OUTPUT`
-3. Run `detect-duplication.sh` → save findings to temp file
-4. Run `fingerprint.sh` with findings → check dedup status
-5. If skip: exit early with summary annotation
-6. If create: run `generate-report.sh` → create issue + PR via `gh`
-7. Pre-create `rule-audit:<fingerprint>` label if missing
-8. Apply label to issue
+1. `actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1`
+2. Run `scripts/rule-audit.sh`
+3. Discord failure notification on `if: failure()`
 
-**Edge cases handled:**
+Job-level: `timeout-minutes: 5`, `runs-on: ubuntu-latest`
 
-- Branch `chore/rule-audit-YYYY-MM-DD` already exists: delete remote branch
-  first (`git push origin --delete`)
-- No findings: create issue with "clean audit" body, no PR
-- `gh` rate limited: retry once after 60s, then fail workflow (visible in
-  Actions UI)
-- Files don't exist: `count-rules.sh` checks file existence, exits 1 with
-  clear error message
+Environment: `GH_TOKEN: ${{ github.token }}`, `GH_REPO: ${{ github.repository }}`
 
 ### Security
 
 - No untrusted user input in `run:` blocks (scheduled trigger only)
 - Uses `${{ github.token }}` (GITHUB_TOKEN) — no additional secrets
-- No heredoc indentation in workflow YAML (per AGENTS.md rule)
-- Shell scripts use `set -euo pipefail`
+- No heredoc indentation in workflow YAML (per AGENTS.md rule). Issue body
+  generated by the script and written to a temp file, not inline heredoc
+- Shell script uses `set -euo pipefail`
 
 ## Acceptance Criteria
 
-- [ ] `scripts/rule-audit/count-rules.sh` counts always-loaded rules from
-  AGENTS.md and constitution.md, outputs JSON
-- [ ] `scripts/rule-audit/detect-duplication.sh` finds cross-layer duplicates
-  between all 5 tiers, outputs JSON findings
-- [ ] `scripts/rule-audit/generate-report.sh` produces issue body and PR branch
-  from findings
-- [ ] `scripts/rule-audit/fingerprint.sh` computes SHA256 fingerprint and checks
-  for existing open issues with matching label
+- [ ] `scripts/rule-audit.sh` counts always-loaded rules from AGENTS.md and
+  constitution.md using `grep -c '^- '`
+- [ ] Script identifies `[hook-enforced]` annotated rules as migration candidates
+- [ ] Script verifies referenced hook scripts exist
+- [ ] Script creates GitHub issue with `--milestone "Post-MVP / Later"` when no
+  open audit issue exists
+- [ ] Script adds comment to existing open issue when findings change
 - [ ] `rule-audit.yml` runs bi-weekly (1st and 15th at 09:00 UTC) and supports
   manual dispatch
-- [ ] Workflow creates GitHub issue with findings when fingerprint is new
-- [ ] Workflow creates PR with tier migration proposals when duplicates found
-- [ ] Workflow skips issue/PR creation when fingerprint matches existing open issue
-- [ ] All scripts independently executable with `bash scripts/rule-audit/<name>.sh`
+- [ ] Workflow includes `timeout-minutes: 5` and Discord failure notification
 - [ ] `workflow_dispatch` manual trigger verified working after merge
 
 ## Test Scenarios
 
-- Given a clean repo with 313 rules, when `count-rules.sh` runs, then output
-  JSON shows `total: 313, over: true`
-- Given AGENTS.md has 7 `[hook-enforced]` rules, when `detect-duplication.sh`
-  runs, then findings include 7 `hook_superseded` entries
-- Given findings JSON with 3 entries, when `fingerprint.sh` runs and no matching
-  label exists, then exit status is "create"
-- Given findings JSON identical to previous run, when `fingerprint.sh` runs and
-  matching label exists on open issue, then exit status is "skip"
-- Given `generate-report.sh` runs with findings, when the issue body is created,
-  then it contains budget stats table and tier model reference
-- Given workflow runs via `workflow_dispatch`, when all scripts succeed, then a
-  GitHub issue and PR are created with the fingerprint label
+- Given a repo with 313 rules, when `rule-audit.sh` runs, then the issue body
+  shows total: 313, over threshold: true
+- Given AGENTS.md has 7 `[hook-enforced]` rules, when the script runs, then the
+  issue lists 7 migration candidates with source file:line
+- Given a `[hook-enforced: missing-script.sh]` annotation, when the script runs,
+  then the issue flags the broken reference
+- Given no open issue titled "rule audit findings", when the script runs, then a
+  new issue is created with `--milestone "Post-MVP / Later"`
+- Given an existing open issue titled "rule audit findings", when the script runs
+  with same findings, then it adds a comment (not a duplicate issue)
+- Given `gh` API is rate-limited (HTTP 429), when the script retries once after
+  60s, then it either succeeds or fails with visible error in Actions UI
+- Given `constitution.md` does not exist, when `rule-audit.sh` runs, then it
+  exits 1 with a clear error message
+- Given workflow runs via `workflow_dispatch`, when all steps succeed, then a
+  GitHub issue is created or updated
 
 ## Alternative Approaches Considered
 
 | Approach | Why Rejected |
 |----------|-------------|
-| Single monolithic script | Harder to test individual pieces, doesn't match modular pattern |
-| Node.js/Bun scripts | Heavier CI setup, no build-step advantage for text parsing |
-| Inline shell in workflow | Too much code for workflow `run:` blocks, not testable locally |
-| Extend compound Phase 1.5 | Different contexts (in-session vs headless CI), coupling risk |
+| 4 modular scripts + JSON interchange | Over-factored for scope; scripts have exactly one consumer and always run in sequence |
+| Automated PR with file edits | Markdown surgery in shell is brittle; human reviews anyway; 90% value from issue alone |
+| SHA256 fingerprint dedup via labels | Over-engineered for bi-weekly frequency; title-based search is sufficient |
+| Section-scoped counting in AGENTS.md | Marginal accuracy (2-3 bullets) not worth parsing complexity |
+| Cross-tier phrase matching | Fuzzy NLP in bash produces noise; `[hook-enforced]` is the real signal |
 
 ## Domain Review
 
@@ -219,28 +181,26 @@ Steps:
 
 ### Engineering
 
-**Status:** reviewed (carry-forward from brainstorm)
+**Status:** reviewed (carry-forward from brainstorm + plan review)
 **Assessment:** CI/CD infrastructure feature using established GitHub Actions and
-shell script patterns. No architectural concerns — follows existing scheduled
-workflow patterns. Key technical risks: grep pattern precision for rule counting,
-fingerprint collision (mitigated by 12-char prefix = 48 bits), PR branch
-conflicts on concurrent runs (mitigated by concurrency group).
+shell script patterns. Simplified after plan review to match `scheduled-cf-token-expiry-check.yml`
+pattern. No architectural concerns. Single script eliminates all inter-script
+coordination complexity.
 
 ## Dependencies & Risks
 
 | Risk | Mitigation |
 |------|-----------|
-| `grep '^- '` matches non-rule bullets | Section-scoped counting in AGENTS.md |
-| Keyword matching has false positives | Require 3+ word phrase match, human review of PR |
-| PR branch name collision | `concurrency` group prevents parallel runs; delete stale branch before creating |
-| GitHub API rate limits | Retry once after 60s; workflow failure is visible in Actions UI |
-| Hook script format changes | Detect-duplication reads `[hook-enforced: ...]` annotations, not hook internals |
+| `grep '^- '` counts non-rule bullets | Acceptable for threshold check (delta ~2-3) |
+| Hook script renamed/deleted | Script detects broken `[hook-enforced]` references |
+| GitHub API rate limits | Retry once after 60s; workflow failure visible in Actions UI |
+| Silent workflow failure | Discord failure notification step |
 
 ## Success Metrics
 
-- Rule audit creates actionable issues bi-weekly with migration proposals
-- Always-loaded rule count trends downward after migration PRs are merged
-- No duplicate issues created (fingerprint deduplication works)
+- Rule audit creates actionable issue bi-weekly with migration candidates
+- Always-loaded rule count trends downward after human-applied migrations
+- No duplicate issues created (title-based dedup works)
 
 ## References & Research
 
