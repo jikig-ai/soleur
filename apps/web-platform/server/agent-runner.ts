@@ -249,6 +249,7 @@ export async function startAgentSession(
   resumeSessionId?: string,
   userMessage?: string,
   context?: import("@/lib/types").ConversationContext,
+  routeSource?: "auto" | "mention",
 ): Promise<void> {
   const key = sessionKey(userId, conversationId);
 
@@ -469,7 +470,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
     const streamLeaderId = effectiveLeaderId;
 
     // Notify client that this leader is about to stream
-    sendToClient(userId, { type: "stream_start", leaderId: streamLeaderId });
+    sendToClient(userId, { type: "stream_start", leaderId: streamLeaderId, source: routeSource });
 
     for await (const message of q) {
       if (controller.signal.aborted) break;
@@ -598,10 +599,11 @@ async function dispatchToLeaders(
   message: string,
   context?: import("@/lib/types").ConversationContext,
   resumeSessionId?: string,
+  routeSource?: "auto" | "mention",
 ): Promise<void> {
   if (leaders.length === 1) {
     // Single leader — use standard session flow
-    await startAgentSession(userId, conversationId, leaders[0], resumeSessionId, message, context);
+    await startAgentSession(userId, conversationId, leaders[0], resumeSessionId, message, context, routeSource);
     return;
   }
 
@@ -611,7 +613,7 @@ async function dispatchToLeaders(
   // client can multiplex them into separate bubbles.
   const results = await Promise.allSettled(
     leaders.map((leaderId) =>
-      startAgentSession(userId, conversationId, leaderId, undefined, message, context),
+      startAgentSession(userId, conversationId, leaderId, undefined, message, context, routeSource),
     ),
   );
 
@@ -681,7 +683,7 @@ export async function sendUserMessage(
       const apiKey = await getUserApiKey(userId);
       const route = await routeMessage(content, apiKey, conversationContext);
       log.info({ leaders: route.leaders, source: route.source }, "Routed message to leaders");
-      dispatchToLeaders(userId, conversationId, route.leaders, content, conversationContext)
+      dispatchToLeaders(userId, conversationId, route.leaders, content, conversationContext, undefined, route.source)
         .catch(handleSessionError);
     } catch (err) {
       handleSessionError(err);
