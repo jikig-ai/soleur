@@ -1,0 +1,75 @@
+---
+title: About Jean Deruelle
+description: "Jean Deruelle is the founder of Soleur, a Company-as-a-Service platform giving solo founders the operational capacity of a full organization through AI agents."
+layout: base.njk
+permalink: about/index.html
+---
+
+    <section class="page-hero">
+      <div class="container">
+        <h1>About</h1>
+        <p>The founder behind Soleur.</p>
+      </div>
+    </section>
+
+    <div class="container">
+      <section class="category-section">
+        <div class="category-header">
+          <h2 class="category-title">Jean Deruelle</h2>
+          <span class="category-count">Founder</span>
+        </div>
+        <div class="prose">
+          <p>
+            Jean Deruelle is the founder of Soleur. He built Soleur to solve the problem he faced as a solo founder: running eight departments with the time and budget for none of them.
+          </p>
+          <p>
+            Soleur is the result: a Company-as-a-Service platform that deploys {{ stats.agents }} AI agents across {{ stats.departments }} business departments, all sharing a compounding knowledge base. The platform is built using Soleur itself — every agent, workflow, and decision compounds into the product.
+          </p>
+          <p>
+            Jean writes about agentic engineering, solo founding, and the mechanics of the billion-dollar one-person company on the <a href="/blog/">Soleur blog</a>.
+          </p>
+          <ul>
+            <li><a href="{{ site.x }}" target="_blank" rel="noopener">@soleur_ai on X / Twitter</a></li>
+            <li><a href="{{ site.linkedin }}" target="_blank" rel="noopener">LinkedIn</a></li>
+            <li><a href="{{ site.github }}" target="_blank" rel="noopener">GitHub</a></li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="category-section">
+        <div class="category-header">
+          <h2 class="category-title">About Soleur</h2>
+        </div>
+        <p class="community-text">
+          Soleur is an open-source Claude Code plugin that turns a solo founder into a full AI organization. The cloud platform is in development. Everything Soleur does is built using Soleur &mdash; the platform is its own proving ground.
+        </p>
+        <p class="community-text">
+          <a href="/pages/getting-started.html">Get started</a> &mdash; <a href="/pages/agents.html">See the agents</a> &mdash; <a href="/blog/">Read the blog</a>
+        </p>
+      </section>
+    </div>
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "ProfilePage",
+      "name": "{{ title }}",
+      "url": "{{ site.url }}/about/",
+      "mainEntity": {
+        "@type": "Person",
+        "name": "Jean Deruelle",
+        "url": "{{ site.url }}/about/",
+        "jobTitle": "Founder",
+        "worksFor": {
+          "@type": "Organization",
+          "name": "{{ site.name }}",
+          "url": "{{ site.url }}"
+        },
+        "sameAs": [
+          "{{ site.x }}",
+          "{{ site.linkedin }}",
+          "{{ site.github }}"
+        ]
+      }
+    }
+    </script>
