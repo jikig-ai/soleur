@@ -260,7 +260,7 @@ After constitution promotion, compound routes the captured learning to the skill
 2. Route **two categories** of insights:
    - **Solution insight:** The main learning (what was solved and how). Propose a one-line bullet edit to the most relevant section of the target definition file.
    - **Error prevention:** For each session error that could have been prevented by a skill instruction, propose a one-line bullet to the skill that was active when the error occurred. Example: if a plan skill prescribed wrong paths, add a bullet to the plan skill's Sharp Edges saying "Verify relative paths by tracing each `../` step before prescribing them."
-3. **Headless mode:** If `HEADLESS_MODE=true`, auto-accept the LLM-proposed edit without prompting.
+3. **Headless mode:** If `HEADLESS_MODE=true`, do not apply the edit directly. Instead, file a GitHub issue to track the proposal. Use `gh issue create` with the title `compound: route-to-definition proposal for <target-file-basename>`, a body containing the proposed edit text and target file path and source learning file path, and `--milestone "Post-MVP / Later"`. If the proposed edit is not actionable (empty or target file missing), skip silently. Do not prompt.
 4. **Interactive mode:** User confirms with Accept/Skip/Edit
 
 See compound-capture Step 8 for the full flow.
