@@ -107,12 +107,12 @@ The web-platform also has `package-lock.json` (used by Docker builds), so its de
 
 ## Acceptance Criteria
 
-- [ ] `dependency-review.yml` includes `retry-on-snapshot-warnings: true` to handle snapshot race conditions
-- [ ] Dependency graph SBOM shows >700 packages (verified via `gh api repos/jikig-ai/soleur/dependency-graph/sbom --jq '.sbom.packages | length'`)
+- [x] `dependency-review.yml` includes `retry-on-snapshot-warnings: true` to handle snapshot race conditions
+- [x] Dependency graph SBOM shows >700 packages (verified via `gh api repos/jikig-ai/soleur/dependency-graph/sbom --jq '.sbom.packages | length'`)
 - [ ] Dependency review action detects actual dependency changes on a test PR (not "No snapshots found")
-- [ ] Dependabot alert triage tracked in a separate GitHub issue
-- [ ] `apps/telegram-bridge/package-lock.json` generated for dependency graph coverage
-- [ ] `scheduled-content-publisher.yml` posts synthetic `dependency-review` check run alongside existing `test` and `cla-check` synthetics
+- [x] Dependabot alert triage tracked in a separate GitHub issue
+- [x] `apps/telegram-bridge/package-lock.json` generated for dependency graph coverage
+- [x] `scheduled-content-publisher.yml` posts synthetic `dependency-review` check run alongside existing `test` and `cla-check` synthetics
 - [ ] `dependency-review` added to CI Required ruleset (after content-publisher update merges)
 
 ## Test Scenarios
