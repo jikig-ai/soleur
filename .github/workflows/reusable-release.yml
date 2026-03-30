@@ -45,6 +45,9 @@ on:
       released:
         description: "Whether a release was created (true/false)"
         value: ${{ jobs.release.outputs.released }}
+      docker_pushed:
+        description: "Whether Docker image was built and pushed (true/false)"
+        value: ${{ jobs.release.outputs.docker_pushed }}
 
 concurrency:
   group: release-${{ inputs.component }}
@@ -60,6 +63,7 @@ jobs:
       version: ${{ steps.version.outputs.next }}
       tag: ${{ steps.version.outputs.tag }}
       released: ${{ steps.create_release.outputs.released || 'false' }}
+      docker_pushed: ${{ steps.docker_pushed.outputs.pushed || 'false' }}
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -263,7 +267,8 @@ jobs:
           echo "Created release $TAG"
 
       - name: Docker login
-        if: steps.create_release.outputs.released == 'true' && inputs.docker_image != ''
+        id: docker_login
+        if: steps.version.outputs.next != '' && inputs.docker_image != ''
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
@@ -271,7 +276,8 @@ jobs:
           password: ${{ github.token }}
 
       - name: Build and push Docker image
-        if: steps.create_release.outputs.released == 'true' && inputs.docker_image != ''
+        id: docker_build
+        if: steps.version.outputs.next != '' && inputs.docker_image != ''
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ${{ inputs.docker_context }}
@@ -288,6 +294,11 @@ jobs:
             SENTRY_ORG=${{ secrets.SENTRY_ORG }}
             SENTRY_PROJECT=${{ secrets.SENTRY_PROJECT }}
             BUILD_VERSION=${{ steps.version.outputs.next }}
+
+      - name: Set docker_pushed output
+        id: docker_pushed
+        if: steps.docker_build.outcome == 'success'
+        run: printf 'pushed=%s\n' "true" >> "$GITHUB_OUTPUT"
 
       - name: Post to Discord
         if: steps.create_release.outputs.released == 'true'
