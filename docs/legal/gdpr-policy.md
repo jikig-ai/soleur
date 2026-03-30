@@ -119,7 +119,8 @@ The following data may be processed by third-party services when users interact 
 | Name, email, inquiry content | Proton AG (via Proton Mail) | Handling legal and GDPR inquiries (<legal@jikigai.com>) |
 | GitHub username, signature timestamp, PR reference | GitHub (via CLA Assistant) | Recording CLA signature for contributor IP license grants |
 | Email address, IP address, referrer URL, subscription timestamp, browser/device metadata | Buttondown (via newsletter signup) | Managing newsletter subscriptions and delivering newsletter emails |
-| Email address, hashed password, auth tokens, session data, conversation metadata, message content | Supabase (via Web Platform) | Account management, authentication, and conversation storage |
+| Email address, auth tokens, session data, conversation metadata, message content | Supabase (via Web Platform) | Account management, authentication, and conversation storage |
+| OAuth provider user ID, display name, profile picture URL | Google, Apple, GitHub, Microsoft (via Web Platform OAuth sign-in) | Authentication and account linking (auto-link on verified email) |
 | Customer email, subscription metadata | Stripe (via Web Platform Checkout) | Payment processing (card data handled by Stripe, never reaches Jikigai) |
 | User workspaces, encrypted API keys | Hetzner (via Web Platform hosting) | Infrastructure hosting for workspace environments |
 | IP addresses, request headers | Cloudflare (via `app.soleur.ai` proxy) | CDN/proxy and DDoS protection |

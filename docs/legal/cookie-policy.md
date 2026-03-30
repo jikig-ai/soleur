@@ -45,6 +45,8 @@ The Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) uses a limited
 | `sb-*-auth-token-code-verifier` | Supabase (via app.soleur.ai) | PKCE code verifier for OAuth flow | Strictly necessary (first-party) | Session (consumed and cleared after OAuth exchange) |
 | `__stripe_mid` / `__stripe_sid` | Stripe (via Stripe Checkout redirect) | Fraud prevention during checkout | Strictly necessary (third-party) | Session / 1 year |
 
+**Note on OAuth sign-in:** When you sign in via an OAuth provider (Google, Apple, GitHub, or Microsoft), your browser is temporarily redirected to the provider's consent page and back. The Supabase PKCE code verifier cookie listed above secures this exchange. No additional cookies are set by the OAuth providers during this redirect flow.
+
 **Note on CSRF protection:** The Web Platform validates the Origin header on state-changing requests as CSRF protection. This is not a cookie but is documented here for transparency. No CSRF token cookie is set.
 
 ## 4. Types of Cookies
