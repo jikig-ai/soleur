@@ -23,8 +23,8 @@
 
 ### 2.2 Verify acceptance criteria
 
-- [ ] "Rate Limit Fallback" section exists in SKILL.md
-- [ ] Fallback triggers only when ALL agents fail
-- [ ] Inline review covers 4 dimensions
-- [ ] Uses `<decision_gate>` XML tag
-- [ ] Markdown lint clean
+- [x] "Rate Limit Fallback" section exists in SKILL.md
+- [x] Fallback triggers only when ALL agents fail
+- [x] Inline review covers 4 dimensions
+- [x] Uses `<decision_gate>` XML tag
+- [x] Markdown lint clean

@@ -68,11 +68,11 @@ inline execution. The review fallback follows the same pattern.
 
 ## Acceptance Criteria
 
-- [ ] Review SKILL.md contains a "Rate Limit Fallback" section
-- [ ] Fallback triggers only when ALL agents return empty/error (not when some succeed)
-- [ ] Inline review covers security, architecture, performance, and simplicity dimensions
-- [ ] Section uses `<decision_gate>` XML tag per constitution conventions
-- [ ] Markdown passes `npx markdownlint-cli2 --fix`
+- [x] Review SKILL.md contains a "Rate Limit Fallback" section
+- [x] Fallback triggers only when ALL agents return empty/error (not when some succeed)
+- [x] Inline review covers security, architecture, performance, and simplicity dimensions
+- [x] Section uses `<decision_gate>` XML tag per constitution conventions
+- [x] Markdown passes `npx markdownlint-cli2 --fix`
 
 ## Test Scenarios
 
