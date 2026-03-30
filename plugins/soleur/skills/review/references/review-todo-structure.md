@@ -1,118 +1,112 @@
-# Todo File Structure and Creation
+# GitHub Issue Creation for Review Findings
 
-## Implementation Options
+## Label Prerequisite
 
-**Option A: Direct File Creation (Fast)**
-
-- Create todo files directly using Write tool
-- All findings in parallel for speed
-- Use standard template from `plugins/soleur/skills/file-todos/assets/todo-template.md`
-- Follow naming convention: `{issue_id}-pending-{priority}-{description}.md`
-
-**Option B: Sub-Agents in Parallel (Recommended for Scale)** For large PRs with 15+ findings, use sub-agents to create finding files in parallel:
+Before creating the first issue, verify the `code-review` label exists:
 
 ```bash
-# Launch multiple finding-creator agents in parallel
-Task() - Create todos for first finding
-Task() - Create todos for second finding
-Task() - Create todos for third finding
-etc. for each finding.
+gh label list --search "code-review" --json name --jq '.[0].name // empty'
 ```
 
-Sub-agents can:
+If empty, create it:
 
-- Process multiple findings simultaneously
-- Write detailed todo files with all sections filled
-- Organize findings by severity
-- Create comprehensive Proposed Solutions
-- Add acceptance criteria and work logs
-- Complete much faster than sequential processing
+```bash
+gh label create code-review --description "Finding from code review" --color 0E8A16
+```
+
+## Issue Body Template
+
+The body is written to a temporary file and passed via `--body-file` to avoid `$()` command substitution permission prompts and handle arbitrary markdown safely.
+
+**Template content (write to `/tmp/review-finding-NNN.md`):**
+
+```markdown
+**Source:** PR #<pr_number> review | **Effort:** <Small|Medium|Large>
+
+## Problem
+
+<description>
+
+**Location:** `<file_path>:<line_number>`
+
+## Proposed Fix
+
+<recommended fix>
+
+## Acceptance Criteria
+
+- [ ] <criterion_1>
+- [ ] <criterion_2>
+```
+
+## Label Selection
+
+| Review Severity    | Priority Label       | Domain Label          |
+|--------------------|----------------------|-----------------------|
+| P1 (CRITICAL)      | `priority/p1-high`   | `domain/engineering`  |
+| P2 (IMPORTANT)     | `priority/p2-medium` | `domain/engineering`  |
+| P3 (NICE-TO-HAVE)  | `priority/p3-low`    | `domain/engineering`  |
+
+Default domain is `domain/engineering`. Override to `domain/product` for agent-native findings that are clearly product-scoped.
+
+Every issue gets the `code-review` label in addition to priority and domain labels.
+
+## Milestone Selection
+
+P1 findings get the current active milestone. P2/P3 findings get `Post-MVP / Later`.
+
+Detect the active milestone:
+
+```bash
+gh api repos/:owner/:repo/milestones --jq '[.[] | select(.state=="open") | select(.title | startswith("Phase"))] | sort_by(.due_on) | .[0].title // "Post-MVP / Later"'
+```
+
+## Duplicate Detection
+
+Before creating an issue, check if one already exists for this finding from the same PR:
+
+```bash
+gh issue list --label code-review --search "review: <description>" --json number,title --jq '.[0].number // empty'
+```
+
+If a match exists, skip creation and reference the existing issue in the summary.
+
+## Creation Command
+
+```text
+# 1. Write body to temp file (using Write tool, not echo/cat)
+# 2. Create issue with --body-file
+gh issue create \
+  --title "review: <description>" \
+  --body-file /tmp/review-finding-NNN.md \
+  --label code-review \
+  --label priority/p2-medium \
+  --label domain/engineering \
+  --milestone "Post-MVP / Later"
+```
+
+## Error Handling
+
+If `gh issue create` exits non-zero for a finding, log the error and continue to the next finding. Do not block the entire review synthesis on one failed issue creation. Report failed creations in the summary.
+
+## Batch Strategy
+
+For reviews with 15+ findings, create issues sequentially to avoid GitHub API rate limits. For smaller batches, parallel creation via sub-agents is acceptable.
 
 ## Execution Strategy
 
 1. Synthesize all findings into categories (P1/P2/P3)
-2. Group findings by severity
-3. Launch 3 parallel sub-agents (one per severity level)
-4. Each sub-agent creates its batch of todos using the file-todos skill
-5. Consolidate results and present summary
+2. Run label prerequisite check
+3. Detect active milestone for P1 findings
+4. For each finding:
+   - Run duplicate detection
+   - Write issue body to temp file
+   - Create GitHub issue with appropriate labels and milestone
+   - Record issue URL for summary
+5. Present summary with all created issue URLs
 
-## Process (Using file-todos Skill)
+## Severity Values
 
-1. For each finding:
-
-   - Determine severity (P1/P2/P3)
-   - Write detailed Problem Statement and Findings
-   - Create 2-3 Proposed Solutions with pros/cons/effort/risk
-   - Estimate effort (Small/Medium/Large)
-   - Add acceptance criteria and work log
-
-2. Use file-todos skill for structured todo management:
-
-   ```bash
-   skill: file-todos
-   ```
-
-   The skill provides:
-
-   - Template location: `plugins/soleur/skills/file-todos/assets/todo-template.md`
-   - Naming convention: `{issue_id}-{status}-{priority}-{description}.md`
-   - YAML frontmatter structure: status, priority, issue_id, tags, dependencies
-   - All required sections: Problem Statement, Findings, Solutions, etc.
-
-3. Create todo files in parallel:
-
-   ```bash
-   {next_id}-pending-{priority}-{description}.md
-   ```
-
-4. Examples:
-
-   ```text
-   001-pending-p1-path-traversal-vulnerability.md
-   002-pending-p1-api-response-validation.md
-   003-pending-p2-concurrency-limit.md
-   004-pending-p3-unused-parameter.md
-   ```
-
-5. Follow template structure from file-todos skill: `plugins/soleur/skills/file-todos/assets/todo-template.md`
-
-## Todo File Template
-
-Each todo must include:
-
-- **YAML frontmatter**: status, priority, issue_id, tags, dependencies
-- **Problem Statement**: What's broken/missing, why it matters
-- **Findings**: Discoveries from agents with evidence/location
-- **Proposed Solutions**: 2-3 options, each with pros/cons/effort/risk
-- **Recommended Action**: (Filled during triage, leave blank initially)
-- **Technical Details**: Affected files, components, database changes
-- **Acceptance Criteria**: Testable checklist items
-- **Work Log**: Dated record with actions and learnings
-- **Resources**: Links to PR, issues, documentation, similar patterns
-
-## File Naming Convention
-
-```text
-{issue_id}-{status}-{priority}-{description}.md
-
-Examples:
-- 001-pending-p1-security-vulnerability.md
-- 002-pending-p2-performance-optimization.md
-- 003-pending-p3-code-cleanup.md
-```
-
-## Status Values
-
-- `pending` - New findings, needs triage/decision
-- `ready` - Approved by manager, ready to work
-- `complete` - Work finished
-
-## Priority Values
-
-- `p1` - Critical (blocks merge, security/data issues)
-- `p2` - Important (should fix, architectural/performance)
-- `p3` - Nice-to-have (enhancements, cleanup)
-
-## Tagging
-
-Always add `code-review` tag, plus: `security`, `performance`, `architecture`, `rails`, `quality`, etc.
+- `P1` - Critical (blocks merge, security/data issues)
+- `P2` - Important (should fix, architectural/performance)
+- `P3` - Nice-to-have (enhancements, cleanup)
