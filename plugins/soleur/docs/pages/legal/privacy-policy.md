@@ -8,7 +8,7 @@ permalink: pages/legal/privacy-policy.html
 <section class="page-hero">
   <div class="container">
     <h1>Privacy Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated March 20, 2026 (added Web Platform to scope introduction, added Web Platform security measures to Section 11, removed infrastructure identifiers from processing descriptions, added Cloudflare dual legal basis to Section 6, added Article 12(3) two-month extension provision to response timeline)</p>
+    <p>Effective February 20, 2026 | Last Updated March 29, 2026</p>
   </div>
 </section>
 
@@ -17,7 +17,7 @@ permalink: pages/legal/privacy-policy.html
     <div class="prose">
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 20, 2026 (added Web Platform to scope introduction, added Web Platform security measures to Section 11, removed infrastructure identifiers from processing descriptions, added Cloudflare dual legal basis to Section 6, added Article 12(3) two-month extension provision to response timeline)
+**Last Updated:** March 29, 2026 (added conversation data as PII category in Section 4.7, updated purpose and retention for conversation history, added conversation data retention to Section 7, added conversation data export right to Section 8, added Web Platform cookies cross-reference to Section 12)
 
 ## 1. Introduction
 
@@ -31,7 +31,7 @@ We are committed to protecting your privacy. This Policy explains what data is a
 
 The Soleur source code is available at the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur).
 
-For privacy inquiries, you may contact us at legal@jikigai.com (include "Privacy" in the subject line), by opening an issue on the GitHub repository, or through the website at [soleur.ai](https://soleur.ai).
+For privacy inquiries, you may contact us at <legal@jikigai.com> (include "Privacy" in the subject line), by opening an issue on the GitHub repository, or through the website at [soleur.ai](https://soleur.ai).
 
 ## 3. What the Plugin Does
 
@@ -97,7 +97,7 @@ If you subscribe to the Soleur newsletter via the signup form on the Docs Site, 
 - **Data collected:** Email address (actively provided by you); IP address, referrer URL, subscription timestamp, and browser/device metadata (automatically collected by Buttondown during the subscription request).
 - **Purpose:** Sending periodic newsletter emails about Soleur updates, features, and content.
 - **Lawful basis (email address):** Consent (Article 6(1)(a) GDPR) -- you actively opt in by submitting the signup form and confirming your subscription via the double opt-in confirmation email.
-- **Lawful basis (technical metadata):** Legitimate interest (Article 6(1)(f) GDPR) -- Buttondown automatically collects IP address, referrer URL, subscription timestamp, and browser/device metadata as part of standard service operation. This data is necessary for service delivery, abuse prevention, and maintaining the security of the newsletter infrastructure. The processing is minimal, within the reasonable expectations of a newsletter subscriber, and does not involve profiling or automated decision-making. You may object to this processing under Article 21 by contacting us at legal@jikigai.com.
+- **Lawful basis (technical metadata):** Legitimate interest (Article 6(1)(f) GDPR) -- Buttondown automatically collects IP address, referrer URL, subscription timestamp, and browser/device metadata as part of standard service operation. This data is necessary for service delivery, abuse prevention, and maintaining the security of the newsletter infrastructure. The processing is minimal, within the reasonable expectations of a newsletter subscriber, and does not involve profiling or automated decision-making. You may object to this processing under Article 21 by contacting us at <legal@jikigai.com>.
 - **Double opt-in:** After submitting your email, Buttondown sends a confirmation email. Your subscription is only activated after you click the confirmation link. This ensures informed, verified consent.
 - **Retention (email address):** Your email address is retained by Buttondown until you unsubscribe. You can unsubscribe at any time via the link in every newsletter email. Upon unsubscription, your email is removed from the active subscriber list.
 - **Retention (technical metadata):** Governed by Buttondown's data retention practices. See [Buttondown's Privacy Policy](https://buttondown.com/legal/privacy) for details.
@@ -110,13 +110,14 @@ The Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) is a cloud-hos
 - **Account data:** Email address (registration), hashed password (managed by Supabase), authentication tokens, and session cookies.
 - **Workspace data:** User workspaces and encrypted API keys (BYOK -- bring your own key). API keys are encrypted using AES-256-GCM before storage.
 - **Subscription data:** Subscription status and billing metadata (managed by Stripe). Card data is handled exclusively by Stripe via Stripe Checkout and never reaches Jikigai servers (PCI SAQ-A).
+- **Conversation data:** Conversation metadata (domain leader, status, timestamps) and message content (user messages, assistant responses, tool call metadata) stored in the Supabase database. Conversations are associated with the user's account via user_id.
 - **Technical data:** IP addresses and request headers processed by Cloudflare CDN/proxy.
 
-**Purpose:** Providing the Web Platform service, including account management, workspace provisioning, and subscription billing.
+**Purpose:** Providing the Web Platform service, including account management, workspace provisioning, subscription billing, and conversational AI interactions with domain-specific agents.
 
 **Legal basis:** Contract performance (Article 6(1)(b) GDPR) -- processing is necessary to provide the Web Platform service you signed up for.
 
-**Retention:** Account data is retained while your account is active and deleted upon account deletion request. Payment records are retained per French tax law (10 years, Code de commerce Art. L123-22).
+**Retention:** Account data is retained while your account is active and deleted upon account deletion request. Conversation data is retained while the account is active and deleted upon account deletion request (cascade delete via foreign key). Payment records are retained per French tax law (10 years, Code de commerce Art. L123-22).
 
 ## 5. Third-Party Services
 
@@ -205,7 +206,7 @@ For newsletter subscriptions, the legal basis for processing your email address 
 ## 7. Data Retention
 
 - **Plugin data:** All data created by the Plugin is stored locally on your machine. You control its retention and deletion entirely.
-- **Web Platform data:** Account data (email, auth tokens) is retained while your account is active and deleted upon account deletion request. Encrypted API keys are deleted with the associated workspace. Payment records (subscription metadata, invoices) are retained for 10 years per French tax law (Code de commerce Art. L123-22).
+- **Web Platform data:** Account data (email, auth tokens) is retained while your account is active and deleted upon account deletion request. Conversation data (messages and conversation metadata) is retained while the user's account is active and deleted upon account deletion request (cascade delete via foreign key). Encrypted API keys are deleted with the associated workspace. Payment records (subscription metadata, invoices) are retained for 10 years per French tax law (Code de commerce Art. L123-22).
 - **Docs Site data:** Any data collected by GitHub Pages is retained according to GitHub's data retention policies.
 - **Repository interaction data:** Issues, pull requests, and other contributions are retained on GitHub according to its standard policies and your own account settings.
 - **Newsletter subscription data:** Your email address is retained by Buttondown for as long as you remain subscribed. Upon unsubscription, your email is removed from the active subscriber list. Technical metadata (IP address, referrer URL, subscription timestamp, browser/device metadata) is retained according to Buttondown's data retention practices. Buttondown may retain anonymized aggregate data (e.g., subscriber counts) after unsubscription.
@@ -224,11 +225,11 @@ If you are located in the EU or EEA, you have the following rights with respect 
 - **Right to object** (Article 21) -- the right to object to processing based on legitimate interests.
 - **Right to lodge a complaint** -- the right to file a complaint with your local Data Protection Authority.
 
-For the Plugin, these rights are most relevant to your interactions with GitHub (the hosting platform). For the Web Platform (app.soleur.ai), you may exercise these rights directly against Jikigai for account data, workspace data, and subscription data by contacting legal@jikigai.com. To exercise rights related to GitHub-collected data, contact GitHub directly through their privacy channels.
+For the Plugin, these rights are most relevant to your interactions with GitHub (the hosting platform). For the Web Platform (app.soleur.ai), you may exercise these rights directly against Jikigai for account data, workspace data, conversation data, and subscription data by contacting <legal@jikigai.com>. You may request export of your conversation history (messages and metadata) in a structured, machine-readable format under the right to data portability (Article 20). To exercise rights related to GitHub-collected data, contact GitHub directly through their privacy channels.
 
 ### 8.2 Rights Under US Privacy Laws
 
-Users in the United States may have additional rights under state privacy laws (such as the California Consumer Privacy Act). For the Plugin, these rights are primarily relevant to any data collected by GitHub as the hosting provider. For the Web Platform, you may exercise these rights by contacting legal@jikigai.com.
+Users in the United States may have additional rights under state privacy laws (such as the California Consumer Privacy Act). For the Plugin, these rights are primarily relevant to any data collected by GitHub as the hosting provider. For the Web Platform, you may exercise these rights by contacting <legal@jikigai.com>.
 
 ## 9. Children's Privacy
 
@@ -276,6 +277,8 @@ The Soleur Plugin does not use cookies.
 
 The Docs Site, hosted on GitHub Pages, may use cookies as determined by GitHub's platform. Soleur does not add any first-party cookies to the Docs Site. For details on GitHub's cookie practices, see [GitHub's cookie documentation](https://docs.github.com/en/site-policy/privacy-policies/github-cookies).
 
+The Web Platform at app.soleur.ai uses strictly necessary cookies for authentication (Supabase session cookies) and payment security (Stripe fraud prevention cookies). These cookies are exempt from consent requirements under ePrivacy Directive Article 5(3). For full details, see the [Cookie Policy](/pages/legal/cookie-policy.html).
+
 ## 13. Changes to This Policy
 
 We may update this Privacy Policy from time to time. Changes will be posted to the GitHub repository and/or the Docs Site. The "Last Updated" date at the top of this document will be revised accordingly.
@@ -290,12 +293,12 @@ GDPR Article 27 requires a representative in the EU for controllers not establis
 
 If you have questions about this Privacy Policy or our data practices, you can reach us through:
 
-- **Email:** legal@jikigai.com
+- **Email:** <legal@jikigai.com>
 - **GitHub:** Open an issue at [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur)
 - **Website:** [soleur.ai](https://soleur.ai)
-- **GDPR / Data Protection Inquiries:** legal@jikigai.com (include "GDPR" in the subject line)
+- **GDPR / Data Protection Inquiries:** <legal@jikigai.com> (include "GDPR" in the subject line)
 
-To exercise your data subject rights under GDPR, send a written request to legal@jikigai.com. We will acknowledge your request within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3). This period may be extended by two further months where necessary, taking into account the complexity or volume of requests, in which case we will inform you of the extension and reasons within the initial one-month period.
+To exercise your data subject rights under GDPR, send a written request to <legal@jikigai.com>. We will acknowledge your request within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3). This period may be extended by two further months where necessary, taking into account the complexity or volume of requests, in which case we will inform you of the extension and reasons within the initial one-month period.
 
 ---
 
