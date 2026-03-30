@@ -117,7 +117,7 @@ The Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) is a cloud-hos
 
 **Legal basis:** Contract performance (Article 6(1)(b) GDPR) -- processing is necessary to provide the Web Platform service you signed up for.
 
-**Retention:** Account data is retained while your account is active and deleted upon account deletion request. Payment records are retained per French tax law (10 years, Code de commerce Art. L123-22).
+**Retention:** Account data is retained while your account is active and deleted upon account deletion request. Conversation data is retained while the account is active and deleted upon account deletion request (cascade delete via foreign key). Payment records are retained per French tax law (10 years, Code de commerce Art. L123-22).
 
 ## 5. Third-Party Services
 

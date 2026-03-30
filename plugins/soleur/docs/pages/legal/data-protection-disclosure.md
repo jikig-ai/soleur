@@ -194,7 +194,7 @@ For data processed through the Docs Site or GitHub repository:
 
 For data processed through the Web Platform (app.soleur.ai) where Jikigai acts as controller (see Section 2.1b), data subjects may exercise the following rights by contacting <legal@jikigai.com>:
 
-- **(a)** **Right of Access (Article 15):** Request confirmation of whether personal data is being processed and obtain a copy of the data (account data, workspace data, subscription metadata).
+- **(a)** **Right of Access (Article 15):** Request confirmation of whether personal data is being processed and obtain a copy of the data (account data, workspace data, conversation data, subscription metadata).
 - **(b)** **Right to Rectification (Article 16):** Request correction of inaccurate personal data held by Jikigai.
 - **(c)** **Right to Erasure (Article 17):** Request deletion of personal data under applicable conditions. Note: subscription records subject to French tax law retention (Code de commerce Art. L123-22) may be retained for up to 10 years (see Section 2.3(g)).
 - **(d)** **Right to Restriction of Processing (Article 18):** Request that Jikigai restrict processing of personal data.
