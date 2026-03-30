@@ -277,7 +277,7 @@ Remove duplicates, prioritize by severity and impact.
 
 - [ ] Collect findings from all parallel agents
 - [ ] Categorize by type: security, performance, architecture, quality, etc.
-- [ ] Assign severity levels: 🔴 CRITICAL (P1), 🟡 IMPORTANT (P2), 🔵 NICE-TO-HAVE (P3)
+- [ ] Assign severity levels: CRITICAL (P1), IMPORTANT (P2), NICE-TO-HAVE (P3)
 - [ ] Remove duplicate or overlapping findings
 - [ ] Estimate effort for each finding (Small/Medium/Large)
 
@@ -347,30 +347,26 @@ After creating all GitHub issues, present comprehensive summary:
    gh issue list --label code-review  # View all review findings
    ```
 
-3. **Resolve Issues**:
-
-   ```bash
-   /resolve-todo-parallel  # Fix all approved items efficiently
-   ```
+3. **Resolve Issues**: Fix each issue on its branch, referencing the GitHub issue number in the commit
 ````
 
 ### Severity Breakdown:
 
-**🔴 P1 (Critical - Blocks Merge):**
+**P1 (Critical - Blocks Merge):**
 
 - Security vulnerabilities
 - Data corruption risks
 - Breaking changes
 - Critical architectural issues
 
-**🟡 P2 (Important - Should Fix):**
+**P2 (Important - Should Fix):**
 
 - Performance issues
 - Significant architectural concerns
 - Major code quality problems
 - Reliability issues
 
-**🔵 P3 (Nice-to-Have):**
+**P3 (Nice-to-Have):**
 
 - Minor improvements
 - Code cleanup
@@ -387,4 +383,4 @@ Review agent suggestions that modify workflow `if` conditions or event filters m
 
 ### Important: P1 Findings Block Merge
 
-Any **🔴 P1 (CRITICAL)** findings must be addressed before merging the PR. Present these prominently and ensure they're resolved before accepting the PR.
+Any **P1 (CRITICAL)** findings must be addressed before merging the PR. Present these prominently and ensure they're resolved before accepting the PR.
