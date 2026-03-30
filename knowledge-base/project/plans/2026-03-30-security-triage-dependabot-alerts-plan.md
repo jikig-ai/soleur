@@ -48,7 +48,7 @@ These are runtime dependencies with available patches. Upgrade immediately.
 - **Current:** 15.5.12, **Target:** latest 15.5.x (>=15.5.14)
 - **Alerts fixed:** GHSA-ggv3-7p47-pfv8 (HTTP request smuggling in rewrites), GHSA-3x4c-7xq6-9pq8 (unbounded next/image disk cache)
 - **Applicability:** Both are runtime in a production web platform. Request smuggling is exploitable if rewrites are configured. Disk cache exhaustion is a DoS vector. Both warrant patching.
-- **Action:** `cd apps/web-platform && npm install next@latest` then regenerate both lockfiles (bun.lock + package-lock.json per constitution).
+- **Action:** `cd apps/web-platform && npm install next@latest` then regenerate lockfiles in order: `bun install` first, then `npm install` to regenerate `package-lock.json` (Dockerfile uses `npm ci`).
 - **Risk:** Minor -- patch-level Next.js update within the 15.5.x line.
 - **Files:** `apps/web-platform/package.json`, `apps/web-platform/package-lock.json`, `apps/web-platform/bun.lock`
 
@@ -59,7 +59,7 @@ These are runtime dependencies with available patches. Upgrade immediately.
 - **Alert fixed:** GHSA-cfh3-3jmp-rvhc (OOB write when loading PSD images)
 - **Applicability:** Runtime dependency used for image processing. Although PSD loading may not be a primary use case, the OOB write is a memory safety issue. Major version bump (11->12) requires testing.
 - **Action:** Update `requirements.txt` pin from `Pillow==11.3.0` to `Pillow==12.1.1`.
-- **Risk:** Medium -- major version bump. Test `gemini-imagegen` skill after upgrade. Check Pillow 12.x changelog for breaking changes.
+- **Risk:** Medium -- major version bump. Test `gemini-imagegen` skill after upgrade. Review [Pillow 12.x release notes](https://pillow.readthedocs.io/en/stable/releasenotes/) for breaking API changes before upgrading.
 - **Files:** `plugins/soleur/skills/gemini-imagegen/requirements.txt`
 
 #### 1.3 path-to-regexp 8.3.0 -> 8.4.0 (alerts #24, #25)
@@ -141,7 +141,7 @@ These are dev-scope dependencies. The `dependency-review.yml` workflow already u
 
 1. Dismiss esbuild alert #1 (dev-only, local dev server only)
 2. Dismiss liquidjs alerts #15, #16 if no patch available (dev-only, trusted templates)
-3. Add `allow-ghsas` to `dependency-review.yml` for any dismissed advisories that are known-acceptable to prevent future noise
+3. Consider adding `allow-ghsas` to `dependency-review.yml` for dismissed advisories only if they cause PR failures (GHSA-67mh-4wv8-2f99 for esbuild, GHSA-6q5m-63h6-5x4v and GHSA-9r5m-9576-7f6x for liquidjs if no patch available). Defer if no PR is actually blocked.
 
 #### Phase 4: Verification
 
@@ -152,13 +152,13 @@ These are dev-scope dependencies. The `dependency-review.yml` workflow already u
 
 ## Acceptance Criteria
 
-- [ ] All 7 high-severity alerts resolved (upgraded or dismissed with documented justification)
-- [ ] All 8 medium-severity alerts triaged (upgraded, dismissed, or tracked)
-- [ ] No runtime-scope alerts remain open
-- [ ] Both lockfiles regenerated in `apps/web-platform/` (bun.lock + package-lock.json)
-- [ ] `apps/web-platform` builds successfully after upgrades
-- [ ] Docs site builds successfully after root dependency updates
-- [ ] Each dismissal includes a GHSA ID, reason, and scope justification
+- [x] All 7 high-severity alerts resolved (upgraded or dismissed with documented justification)
+- [x] All 8 medium-severity alerts triaged (upgraded, dismissed, or tracked)
+- [x] No runtime-scope alerts remain open
+- [x] Both lockfiles regenerated in `apps/web-platform/` (bun.lock + package-lock.json)
+- [x] `apps/web-platform` builds successfully after upgrades
+- [x] Docs site builds successfully after root dependency updates
+- [x] Each dismissal includes a GHSA ID, reason, and scope justification
 
 ## Test Scenarios
 
