@@ -25,18 +25,15 @@ Additionally, setting up React component testing in vitest required discovering 
 
 ## Solution
 
-### TDD Enforcement
+### TDD Enforcement (Two-Layer Fix)
 
-Added a **TDD hard gate** to both AGENTS.md (Code Quality section) and `/work` SKILL.md (Phase 2 execution loop):
+**Layer 1 — Phase 2 TDD Gate (from #1289):** Added a TDD hard gate to both AGENTS.md (Code Quality section) and `/work` SKILL.md (Phase 2 execution loop). Before writing ANY implementation code for a task, determine if it has testable behavior. Write the failing test first, verify RED, then implement (GREEN).
 
-- Before writing ANY implementation code for a task, determine if it has testable behavior
-- If the plan has Test Scenarios or Acceptance Criteria, write the failing test file FIRST
-- The test must import the not-yet-created module (import will fail — that's correct)
-- Run the test to verify RED (must fail)
-- Only then write the minimum implementation (GREEN)
-- Infrastructure-only tasks (config, CI, scaffolding) are exempt
+**Layer 2 — Phase 1 Task Structure (from #1210):** The Phase 2 gate was insufficient. During OAuth sign-in implementation (#1210), the agent again created tasks as `[implement, implement, ..., test, lint]` and the user caught it. The root cause: Phase 1 Step 3 "Create Todo List" said "Include testing and quality check tasks" but didn't enforce TDD ordering. By Phase 2, the task structure was already locked in.
 
-The key insight: "The rationalization 'this is simple enough to not need test-first' is exactly the reasoning TDD is designed to prevent."
+Fix: Updated Phase 1 Step 3 to require RED/GREEN task pairing with `blockedBy` dependencies. Each feature task must be preceded by its corresponding test task. The anti-pattern (`[implement, implement, ..., test]`) is documented explicitly so agents see it during task creation, not after.
+
+**Enforcement must happen at the point of structure creation, not at the point of execution.** A gate that checks "are you doing TDD right now?" during execution cannot fix a task list that was fundamentally structured wrong during planning.
 
 ### React Test Setup
 
@@ -106,6 +103,9 @@ For React testing: use `happy-dom` over `jsdom` (fewer ESM conflicts), use `esbu
 
 ## Prevention
 
-- The TDD gate in `/work` Phase 2 now structurally prevents implementation-before-tests
+- Phase 1 Step 3 now enforces RED/GREEN task pairing with `blockedBy` dependencies (structural fix)
+- Phase 2 TDD Gate remains as defense-in-depth (runtime check)
+- AGENTS.md hard rule provides a third enforcement layer
+- Pattern generalization: any discipline that must be reflected in task structure must be specified in Phase 1, not just Phase 2
 - The vitest config with happy-dom + esbuild JSX is documented for future React component test setup
 - `test-all.sh` uses vitest for web-platform to support per-file environment selection
