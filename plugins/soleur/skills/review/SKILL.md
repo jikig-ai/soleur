@@ -262,9 +262,9 @@ Complete system context map with component interactions
 
 Run the Task code-simplicity-reviewer() to see if we can simplify the code.
 
-### 5. Findings Synthesis and Todo Creation Using file-todos Skill
+### 5. Findings Synthesis and GitHub Issue Creation
 
-<critical_requirement> ALL findings MUST be stored in the todos/ directory using the file-todos skill. Create todo files immediately after synthesis - do NOT present findings for user approval first. Use the skill for structured todo management. </critical_requirement>
+<critical_requirement> ALL findings MUST be stored as GitHub issues via `gh issue create`. Create issues immediately after synthesis - do NOT present findings for user approval first. Every issue must include `--milestone` (AGENTS.md Guard 5). </critical_requirement>
 
 #### Step 1: Synthesize All Findings
 
@@ -283,78 +283,76 @@ Remove duplicates, prioritize by severity and impact.
 
 </synthesis_tasks>
 
-#### Step 2: Create Todo Files Using file-todos Skill
+#### Step 2: Create GitHub Issues
 
-<critical_instruction> Use the file-todos skill to create todo files for ALL findings immediately. Do NOT present findings one-by-one asking for user approval. Create all todo files in parallel using the skill, then summarize results to user. </critical_instruction>
+<critical_instruction> Create GitHub issues for ALL findings immediately using `gh issue create` with `--body-file`. Do NOT present findings one-by-one asking for user approval. Create all issues, then summarize results to user. </critical_instruction>
 
-**Read `plugins/soleur/skills/review/references/review-todo-structure.md` now** for implementation options (direct vs sub-agents), execution strategy, file-todos skill process, todo template structure, naming conventions, status/priority values, and tagging rules.
+**Read `plugins/soleur/skills/review/references/review-todo-structure.md` now** for the complete GitHub issue creation flow: label prerequisite, issue body template, `--body-file` pattern, label/milestone selection, duplicate detection, error handling, and batch strategy.
 
 #### Step 3: Summary Report
 
-After creating all todo files, present comprehensive summary:
+After creating all GitHub issues, present comprehensive summary:
 
 ````markdown
-## ✅ Code Review Complete
+## Code Review Complete
 
 **Review Target:** PR #XXXX - [PR Title] **Branch:** [branch-name]
 
-### Findings Summary:
+### Findings Summary
 
 - **Total Findings:** [X]
-- **🔴 CRITICAL (P1):** [count] - BLOCKS MERGE
-- **🟡 IMPORTANT (P2):** [count] - Should Fix
-- **🔵 NICE-TO-HAVE (P3):** [count] - Enhancements
+- **P1 CRITICAL:** [count] - BLOCKS MERGE
+- **P2 IMPORTANT:** [count] - Should Fix
+- **P3 NICE-TO-HAVE:** [count] - Enhancements
 
-### Created Todo Files:
+### Created GitHub Issues
 
 **P1 - Critical (BLOCKS MERGE):**
 
-- `001-pending-p1-{finding}.md` - {description}
-- `002-pending-p1-{finding}.md` - {description}
+- #NNN - review: {description}
+- #NNN - review: {description}
 
 **P2 - Important:**
 
-- `003-pending-p2-{finding}.md` - {description}
-- `004-pending-p2-{finding}.md` - {description}
+- #NNN - review: {description}
+- #NNN - review: {description}
 
 **P3 - Nice-to-Have:**
 
-- `005-pending-p3-{finding}.md` - {description}
+- #NNN - review: {description}
 
-### Review Agents Used:
+**Failed (if any):**
 
-- kieran-rails-reviewer
+- {description} - Error: {error message}
+
+### Review Agents Used
+
 - security-sentinel
 - performance-oracle
 - architecture-strategist
 - agent-native-reviewer
 - [other agents]
 
-### Next Steps:
+### Next Steps
 
 1. **Address P1 Findings**: CRITICAL - must be fixed before merge
 
-   - Review each P1 todo in detail
+   - Review each P1 issue in detail
    - Implement fixes or request exemption
    - Verify fixes before merging PR
 
-2. **Triage All Todos**:
+2. **View All Review Issues**:
+
    ```bash
-   ls todos/*-pending-*.md  # View all pending todos
-   /triage                  # Use slash command for interactive triage
+   gh issue list --label code-review  # View all review findings
+   ```
+
+3. **Resolve Issues**:
+
+   ```bash
+   /resolve-todo-parallel  # Fix all approved items efficiently
    ```
 ````
-
-3. **Work on Approved Todos**:
-
-   ```bash
-   /resolve_todo_parallel  # Fix all approved items efficiently
-   ```
-
-4. **Track Progress**:
-   - Rename file when status changes: pending → ready → complete
-   - Update Work Log as you work
-   - Commit todos: `git add todos/ && git commit -m "refactor: add code review findings"`
 
 ### Severity Breakdown:
 

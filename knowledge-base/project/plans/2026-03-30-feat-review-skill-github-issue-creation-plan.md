@@ -174,16 +174,16 @@ gh issue create --title "review: {description}" --body-file /tmp/review-finding-
 
 ## Acceptance Criteria
 
-- [ ] `/soleur:review` creates GitHub issues for each finding via `gh issue create`
-- [ ] Each issue has `code-review` label plus appropriate `priority/*` and `domain/*` labels
-- [ ] Each issue has a milestone (`--milestone` flag always present, per AGENTS.md Guard 5)
-- [ ] P1 findings get the current active milestone; P2/P3 get `Post-MVP / Later`
-- [ ] Issue body contains structured markdown with Problem Statement, Location, Findings, and Proposed Solution
-- [ ] Issue title follows format: `review: <description>` with PR back-link in body
-- [ ] Summary Report shows GitHub issue URLs instead of todo file paths
-- [ ] The `review-todo-structure.md` reference is rewritten to describe GitHub issue creation
-- [ ] The `code-review` label exists (created if missing)
-- [ ] Backward compatibility: `/triage` skill still works for any remaining legacy local todos
+- [x] `/soleur:review` creates GitHub issues for each finding via `gh issue create`
+- [x] Each issue has `code-review` label plus appropriate `priority/*` and `domain/*` labels
+- [x] Each issue has a milestone (`--milestone` flag always present, per AGENTS.md Guard 5)
+- [x] P1 findings get the current active milestone; P2/P3 get `Post-MVP / Later`
+- [x] Issue body contains structured markdown with Problem Statement, Location, Findings, and Proposed Solution
+- [x] Issue title follows format: `review: <description>` with PR back-link in body
+- [x] Summary Report shows GitHub issue URLs instead of todo file paths
+- [x] The `review-todo-structure.md` reference is rewritten to describe GitHub issue creation
+- [x] The `code-review` label exists (created if missing)
+- [x] Backward compatibility: `/triage` skill still works for any remaining legacy local todos
 
 ## Test Scenarios
 
