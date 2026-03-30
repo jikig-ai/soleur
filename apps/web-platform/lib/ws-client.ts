@@ -130,7 +130,6 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "stream_start": {
-          if (msg.type !== "stream_start") break;
           // Store routing source from first stream_start
           if (msg.source) {
             setRouteSource(msg.source);
@@ -152,7 +151,6 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "stream": {
-          if (msg.type !== "stream") break;
           const streamLeaderId = msg.leaderId;
 
           setMessages((prev) => {
@@ -185,7 +183,6 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "stream_end": {
-          if (msg.type !== "stream_end") break;
           // Finalize this leader's stream — remove from active streams map
           activeStreamsRef.current.delete(msg.leaderId);
           setActiveLeaderIds(Array.from(activeStreamsRef.current.keys()) as DomainLeaderId[]);
@@ -193,7 +190,6 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "review_gate": {
-          if (msg.type !== "review_gate") break;
           activeStreamsRef.current.clear();
           setMessages((prev) => [
             ...prev,
@@ -211,7 +207,6 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "error": {
-          if (msg.type !== "error") break;
           activeStreamsRef.current.clear();
 
           // Key invalidation: redirect to setup instead of showing error
@@ -234,7 +229,6 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "session_ended": {
-          if (msg.type !== "session_ended") break;
           activeStreamsRef.current.clear();
           // Don't display "turn_complete" as a visible message — it's a lifecycle signal
           if (msg.reason !== "turn_complete") {

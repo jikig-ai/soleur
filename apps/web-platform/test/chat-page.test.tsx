@@ -23,9 +23,12 @@ vi.mock("@/lib/ws-client", () => ({
 
 // Mock next/navigation
 const mockSearchParams = new URLSearchParams();
+const mockReplace = vi.fn();
 vi.mock("next/navigation", () => ({
   useParams: () => ({ conversationId: "new" }),
   useSearchParams: () => mockSearchParams,
+  useRouter: () => ({ replace: mockReplace }),
+  usePathname: () => "/dashboard/chat/new",
 }));
 
 describe("ChatPage", () => {

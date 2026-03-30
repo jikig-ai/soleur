@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { LEADER_BG_COLORS } from "./leader-colors";
@@ -20,15 +20,16 @@ export function AtMentionDropdown({
 }: AtMentionDropdownProps) {
   const [activeIndex, setActiveIndex] = useState(0);
 
-  const filtered = DOMAIN_LEADERS.filter((leader) => {
-    if (!query) return true;
-    const q = query.toLowerCase();
-    return (
-      leader.id.includes(q) ||
-      leader.name.toLowerCase().includes(q) ||
-      leader.title.toLowerCase().includes(q)
-    );
-  });
+  const filtered = useMemo(() =>
+    DOMAIN_LEADERS.filter((leader) => {
+      if (!query) return true;
+      const q = query.toLowerCase();
+      return (
+        leader.id.includes(q) ||
+        leader.name.toLowerCase().includes(q) ||
+        leader.title.toLowerCase().includes(q)
+      );
+    }), [query]);
 
   // Reset active index when query or visibility changes
   useEffect(() => {

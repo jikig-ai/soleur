@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useWebSocket } from "@/lib/ws-client";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
@@ -12,6 +12,8 @@ import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 export default function ChatPage() {
   const params = useParams<{ conversationId: string }>();
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const conversationId = params.conversationId;
   const leaderId = searchParams.get("leader") as DomainLeaderId | null;
   const msgParam = searchParams.get("msg");
@@ -35,8 +37,6 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const insertRef = useRef<((text: string, replaceFrom: number) => void) | null>(null);
 
-  // Track which leaders have been seen for "first appearance" logic
-  const seenLeadersRef = useRef(new Set<string>());
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -56,8 +56,10 @@ export default function ChatPage() {
     if (sessionStarted && msgParam && !initialMsgSent && status === "connected") {
       sendMessage(msgParam);
       setInitialMsgSent(true);
+      // Clean URL params to prevent duplicate sends on refresh
+      router.replace(pathname, { scroll: false });
     }
-  }, [sessionStarted, msgParam, initialMsgSent, status, sendMessage]);
+  }, [sessionStarted, msgParam, initialMsgSent, status, sendMessage, router, pathname]);
 
   // Derive leader names for routing badge
   const respondingLeaders = messages
@@ -145,32 +147,33 @@ export default function ChatPage() {
         )}
 
         <div className="mx-auto max-w-3xl space-y-4">
-          {messages.map((msg) => {
-            const isFirstAppearance = msg.leaderId && !seenLeadersRef.current.has(msg.leaderId);
-            if (msg.leaderId && isFirstAppearance) {
-              seenLeadersRef.current.add(msg.leaderId);
-            }
+          {(() => {
+            const seenSoFar = new Set<string>();
+            return messages.map((msg) => {
+              const isFirst = msg.leaderId && !seenSoFar.has(msg.leaderId);
+              if (msg.leaderId) seenSoFar.add(msg.leaderId);
 
-            return (
-              <div key={msg.id}>
-                {msg.type === "review_gate" ? (
-                  <ReviewGateCard
-                    gateId={msg.gateId!}
-                    question={msg.question!}
-                    options={msg.options!}
-                    onSelect={sendReviewGateResponse}
+              return (
+                <div key={msg.id}>
+                  {msg.type === "review_gate" ? (
+                    <ReviewGateCard
+                      gateId={msg.gateId!}
+                      question={msg.question!}
+                      options={msg.options!}
+                      onSelect={sendReviewGateResponse}
                   />
                 ) : (
                   <MessageBubble
                     role={msg.role}
                     content={msg.content}
                     leaderId={msg.leaderId}
-                    showFullTitle={!!isFirstAppearance}
+                    showFullTitle={!!isFirst}
                   />
                 )}
               </div>
-            );
-          })}
+              );
+            });
+          })()}
 
           {/* Pulsing classification indicator */}
           {isClassifying && (
