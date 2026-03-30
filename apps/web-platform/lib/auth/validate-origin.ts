@@ -1,3 +1,5 @@
+import logger from "@/server/logger";
+
 const PRODUCTION_ORIGINS = new Set(["https://app.soleur.ai"]);
 const DEV_ORIGINS = new Set(["https://app.soleur.ai", "http://localhost:3000"]);
 
@@ -31,6 +33,6 @@ export function validateOrigin(request: Request): {
 
 export function rejectCsrf(route: string, origin: string | null): Response {
   const sanitized = (origin ?? "none").slice(0, 100).replace(/[\x00-\x1f]/g, "");
-  console.warn(`[${route}] CSRF: rejected origin ${sanitized}`);
+  logger.warn({ route, rejectedOrigin: sanitized }, "CSRF: rejected origin");
   return Response.json({ error: "Forbidden" }, { status: 403 });
 }

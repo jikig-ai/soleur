@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { provisionWorkspace } from "@/server/workspace";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
+import logger from "@/server/logger";
 
 export async function POST(request: Request) {
   const { valid, origin } = validateOrigin(request);
@@ -64,7 +65,7 @@ export async function POST(request: Request) {
       workspace_path: workspacePath,
     });
   } catch (err) {
-    console.error(`[api/workspace] Provisioning failed for ${user.id}:`, err);
+    logger.error({ err, userId: user.id }, "Workspace provisioning failed");
     return NextResponse.json(
       { error: "Workspace provisioning failed" },
       { status: 500 },

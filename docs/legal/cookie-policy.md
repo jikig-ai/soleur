@@ -9,11 +9,11 @@ generated-date: 2026-02-20
 
 **Soleur -- Company-as-a-Service Platform**
 
-**Last updated:** February 21, 2026
+**Last updated:** March 29, 2026
 
 ## 1. Introduction
 
-This Cookie Policy explains how Jikigai ("we," "us," or "our"), operator of Soleur, uses cookies and similar tracking technologies on our documentation website at [soleur.ai](https://soleur.ai) and in connection with our Company-as-a-Service platform (the "Service"). This policy is designed to comply with the EU General Data Protection Regulation (GDPR), the ePrivacy Directive, and applicable US privacy laws.
+This Cookie Policy explains how Jikigai ("we," "us," or "our"), operator of Soleur, uses cookies and similar tracking technologies on our documentation website at [soleur.ai](https://soleur.ai), our web platform at [app.soleur.ai](https://app.soleur.ai), and in connection with our Company-as-a-Service platform (the "Service"). This policy is designed to comply with the EU General Data Protection Regulation (GDPR), the ePrivacy Directive, and applicable US privacy laws.
 
 Soleur is a Claude Code plugin providing a full-stack AI organization with 45 agents, 45 skills, and a compounding knowledge base, designed for solo founders and technical builders.
 
@@ -35,6 +35,18 @@ Our documentation website is hosted on **GitHub Pages**. We use **Plausible Anal
 
 However, GitHub Pages, as our hosting provider, may set certain cookies necessary for the operation and security of the platform. These are third-party cookies controlled by GitHub (Microsoft Corporation). We do not control the cookies set by GitHub Pages.
 
+### 3.3 The Web Platform (app.soleur.ai)
+
+The Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) uses a limited set of strictly necessary cookies for authentication and payment security. No analytics, advertising, or tracking cookies are deployed on the Web Platform.
+
+| Cookie | Provider | Purpose | Type | Duration |
+|--------|----------|---------|------|----------|
+| `sb-*-auth-token` | Supabase (via app.soleur.ai) | Authentication session (JWT) | Strictly necessary (first-party) | Persistent (400 days; SameSite=Lax, HttpOnly=false per Supabase SSR defaults) |
+| `sb-*-auth-token-code-verifier` | Supabase (via app.soleur.ai) | PKCE code verifier for OAuth flow | Strictly necessary (first-party) | Session (consumed and cleared after OAuth exchange) |
+| `__stripe_mid` / `__stripe_sid` | Stripe (via Stripe Checkout redirect) | Fraud prevention during checkout | Strictly necessary (third-party) | Session / 1 year |
+
+**Note on CSRF protection:** The Web Platform validates the Origin header on state-changing requests as CSRF protection. This is not a cookie but is documented here for transparency. No CSRF token cookie is set.
+
 ## 4. Types of Cookies
 
 The following categories describe the types of cookies that may be encountered when visiting soleur.ai:
@@ -46,6 +58,8 @@ These cookies are essential for the website to function and cannot be switched o
 | Cookie Provider | Purpose | Duration |
 |-----------------|---------|----------|
 | GitHub Pages | Platform operation, security, and abuse prevention | Varies (session or persistent) |
+| Supabase (via app.soleur.ai) | Authentication session (JWT) and PKCE code verifier | Persistent (400 days) / Session |
+| Stripe (via Stripe Checkout) | Fraud prevention during payment checkout | Session / 1 year |
 
 ### 4.2 Analytics
 
@@ -77,6 +91,11 @@ As noted above, GitHub Pages may set cookies when you visit soleur.ai. For infor
 
 - [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement)
 - [GitHub Subprocessors and Cookies](https://docs.github.com/en/site-policy/privacy-policies/github-subprocessors-and-cookies)
+
+Additionally, when you initiate a payment through the Web Platform (app.soleur.ai), you are redirected to **Stripe Checkout**, which sets cookies (`__stripe_mid`, `__stripe_sid`) for fraud prevention. For information about how Stripe handles cookies and your data, please refer to:
+
+- [Stripe Privacy Policy](https://stripe.com/privacy)
+- [Stripe Cookie Policy](https://stripe.com/cookie-settings)
 
 We do not have control over these third-party cookies and are not responsible for the practices of third-party providers. We encourage you to review their policies directly.
 
@@ -124,7 +143,7 @@ Where cookies process personal data, the legal basis depends on the type of cook
 - **Strictly necessary cookies:** Legitimate interest (Article 6(1)(f) GDPR) -- these are essential for the website to function.
 - **Non-essential cookies:** Consent (Article 6(1)(a) GDPR) -- we will obtain your consent before setting any non-essential cookies, should we introduce them in the future.
 
-Currently, as we do not set non-essential cookies, no consent mechanism is required on our part under Article 5(3) of the ePrivacy Directive (2002/58/EC, as amended by 2009/136/EC), which exempts strictly necessary cookies from consent requirements. If we introduce non-essential cookies in the future, we will implement an appropriate consent management mechanism before doing so, in compliance with Article 5(3).
+The app.soleur.ai session cookies (Supabase authentication, Stripe fraud prevention) are strictly necessary for the service the user explicitly requested -- authentication and secure payment processing. These cookies are exempt from consent requirements under Article 5(3) of the ePrivacy Directive (2002/58/EC, as amended by 2009/136/EC). We do not set non-essential cookies. If we introduce non-essential cookies in the future, we will implement an appropriate consent management mechanism before doing so, in compliance with Article 5(3).
 
 **Note for UK users:** The UK Privacy and Electronic Communications Regulations 2003 (PECR) applies post-Brexit in place of the ePrivacy Directive. The same strictly necessary exemption applies under PECR Regulation 6.
 
@@ -144,10 +163,10 @@ Soleur is a source-available project maintained by Jikigai, a company incorporat
 
 If you have questions about this Cookie Policy or our data practices, you can reach us through:
 
-- **Email:** legal@jikigai.com
+- **Email:** <legal@jikigai.com>
 - **GitHub Repository:** [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur)
 - **Website:** [soleur.ai](https://soleur.ai)
-- **GDPR / Data Protection Inquiries:** legal@jikigai.com (include "GDPR" in the subject line)
+- **GDPR / Data Protection Inquiries:** <legal@jikigai.com> (include "GDPR" in the subject line)
 
 ---
 

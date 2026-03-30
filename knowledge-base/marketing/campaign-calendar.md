@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-03-23
+last_updated: 2026-03-29
 ---
 
 # Campaign Calendar
@@ -10,6 +10,8 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|-------------|----------|--------|
+| Your AI Team Now Works From Your Actual Codebase | feature-launch | 2026-03-29 | discord, x, bluesky, linkedin-personal, linkedin-company, indiehackers, reddit, hackernews | draft |
+| Credential Helper Isolation: Secure Git Auth in Sandboxed Environments | technical | 2026-04-05 | discord, x, linkedin-personal, hackernews | draft |
 | From Scattered Positioning to a Full Brand Guide in Two Sessions | case-study | 2026-03-24 | discord, x, bluesky, linkedin-company | scheduled |
 | Running a Business Validation Workshop With AI Gates | case-study | 2026-03-26 | discord, x, bluesky, linkedin-company | scheduled |
 

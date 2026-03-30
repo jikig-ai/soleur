@@ -1,25 +1,42 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useWebSocket } from "@/lib/ws-client";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
+import { LEADER_COLORS, LEADER_BG_COLORS } from "@/components/chat/leader-colors";
+import { ChatInput } from "@/components/chat/chat-input";
+import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 
 export default function ChatPage() {
   const params = useParams<{ conversationId: string }>();
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const conversationId = params.conversationId;
   const leaderId = searchParams.get("leader") as DomainLeaderId | null;
+  const msgParam = searchParams.get("msg");
 
-  const { messages, startSession, sendMessage, sendReviewGateResponse, status } =
-    useWebSocket(conversationId);
+  const {
+    messages,
+    startSession,
+    sendMessage,
+    sendReviewGateResponse,
+    status,
+    disconnectReason,
+    routeSource,
+    activeLeaderIds,
+  } = useWebSocket(conversationId);
 
-  const [input, setInput] = useState("");
   const [sessionStarted, setSessionStarted] = useState(false);
+  const [initialMsgSent, setInitialMsgSent] = useState(false);
+  const [atQuery, setAtQuery] = useState("");
+  const [atVisible, setAtVisible] = useState(false);
+  const [atPosition, setAtPosition] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const insertRef = useRef<((text: string, replaceFrom: number) => void) | null>(null);
 
-  const leader = DOMAIN_LEADERS.find((l) => l.id === leaderId);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -28,102 +45,200 @@ export default function ChatPage() {
 
   // Start session when connection is established for a new conversation
   useEffect(() => {
-    if (
-      status === "connected" &&
-      conversationId === "new" &&
-      leaderId &&
-      !sessionStarted
-    ) {
-      startSession(leaderId);
+    if (status === "connected" && conversationId === "new" && !sessionStarted) {
+      startSession(leaderId ?? undefined);
       setSessionStarted(true);
     }
   }, [status, conversationId, leaderId, sessionStarted, startSession]);
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const trimmed = input.trim();
-    if (!trimmed || status !== "connected") return;
-    sendMessage(trimmed);
-    setInput("");
+  // Send initial message from ?msg= param after session starts
+  useEffect(() => {
+    if (sessionStarted && msgParam && !initialMsgSent && status === "connected") {
+      sendMessage(msgParam);
+      setInitialMsgSent(true);
+      // Clean URL params to prevent duplicate sends on refresh
+      router.replace(pathname, { scroll: false });
+    }
+  }, [sessionStarted, msgParam, initialMsgSent, status, sendMessage, router, pathname]);
+
+  // Derive leader names for routing badge
+  const respondingLeaders = messages
+    .filter((m) => m.role === "assistant" && m.leaderId)
+    .reduce<DomainLeaderId[]>((acc, m) => {
+      if (m.leaderId && !acc.includes(m.leaderId)) acc.push(m.leaderId);
+      return acc;
+    }, []);
+
+  const hasUserMessage = messages.some((m) => m.role === "user");
+  const hasAssistantMessage = messages.some((m) => m.role === "assistant");
+  const isClassifying = hasUserMessage && !hasAssistantMessage && routeSource === null;
+
+  function handleSend(message: string) {
+    if (status !== "connected") return;
+    sendMessage(message);
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-[100dvh] flex-col md:h-full">
       {/* Top bar */}
-      <header className="flex shrink-0 items-center justify-between border-b border-neutral-800 px-6 py-3">
+      <header className="flex shrink-0 items-center justify-between border-b border-neutral-800 px-4 py-3 md:px-6">
         <div className="flex items-center gap-3">
-          {leader && (
-            <>
-              <span className="text-sm font-semibold text-white">
-                {leader.name}
-              </span>
-              <span className="text-sm text-neutral-500">{leader.title}</span>
-            </>
+          {/* Mobile back arrow */}
+          <a
+            href="/dashboard"
+            aria-label="Back to dashboard"
+            className="flex items-center text-neutral-400 hover:text-white md:hidden"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </a>
+
+          {/* Mobile status bar: leader names */}
+          {activeLeaderIds.length > 0 && (
+            <span className="text-sm text-neutral-400 md:hidden">
+              {activeLeaderIds
+                .map((id) => DOMAIN_LEADERS.find((l) => l.id === id)?.name)
+                .filter(Boolean)
+                .join(", ")}{" "}
+              responding
+            </span>
           )}
-          {!leader && (
-            <span className="text-sm text-neutral-500">Chat</span>
-          )}
+
+          {/* Desktop header */}
+          <span className="hidden text-sm font-semibold text-white md:inline">
+            Command Center
+          </span>
         </div>
-        <StatusIndicator status={status} />
+        <StatusIndicator status={status} disconnectReason={disconnectReason} />
       </header>
 
+      {/* Routing badge */}
+      {routeSource && respondingLeaders.length > 0 && (
+        <div className="border-b border-neutral-800/50 px-4 py-2 md:px-6">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-neutral-800/50 px-3 py-1 text-xs text-neutral-400">
+            {routeSource === "auto" ? (
+              <>
+                Auto-routed to{" "}
+                {respondingLeaders
+                  .map((id) => DOMAIN_LEADERS.find((l) => l.id === id)?.name)
+                  .join(", ")}
+              </>
+            ) : (
+              <>
+                Directed to @
+                {respondingLeaders
+                  .map((id) => DOMAIN_LEADERS.find((l) => l.id === id)?.name)
+                  .join(", @")}
+              </>
+            )}
+          </span>
+        </div>
+      )}
+
       {/* Message list */}
-      <div className="flex-1 overflow-y-auto px-6 py-4">
-        {messages.length === 0 && (
+      <div className="flex-1 overflow-y-auto px-4 py-4 md:px-6">
+        {messages.length === 0 && !isClassifying && (
           <div className="flex h-full items-center justify-center">
             <p className="text-sm text-neutral-600">
-              {leader
-                ? `Start a conversation with ${leader.name}`
-                : "Send a message to get started"}
+              Send a message to get started
             </p>
           </div>
         )}
 
         <div className="mx-auto max-w-3xl space-y-4">
-          {messages.map((msg) => (
-            <div key={msg.id}>
-              {msg.type === "review_gate" ? (
-                <ReviewGateCard
-                  gateId={msg.gateId!}
-                  question={msg.question!}
-                  options={msg.options!}
-                  onSelect={sendReviewGateResponse}
-                />
-              ) : (
-                <MessageBubble role={msg.role} content={msg.content} />
-              )}
+          {(() => {
+            const seenSoFar = new Set<string>();
+            return messages.map((msg) => {
+              const isFirst = msg.leaderId && !seenSoFar.has(msg.leaderId);
+              if (msg.leaderId) seenSoFar.add(msg.leaderId);
+
+              return (
+                <div key={msg.id}>
+                  {msg.type === "review_gate" ? (
+                    <ReviewGateCard
+                      gateId={msg.gateId!}
+                      question={msg.question!}
+                      options={msg.options!}
+                      onSelect={sendReviewGateResponse}
+                  />
+                ) : (
+                  <MessageBubble
+                    role={msg.role}
+                    content={msg.content}
+                    leaderId={msg.leaderId}
+                    showFullTitle={!!isFirst}
+                  />
+                )}
+              </div>
+              );
+            });
+          })()}
+
+          {/* Pulsing classification indicator */}
+          {isClassifying && (
+            <div className="flex justify-start">
+              <div className="flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-900 px-4 py-3">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
+                <span className="text-sm text-neutral-400">
+                  Routing to the right experts...
+                </span>
+              </div>
             </div>
-          ))}
+          )}
+
           <div ref={messagesEndRef} />
         </div>
       </div>
 
+      {/* Status bar */}
+      {activeLeaderIds.length > 0 && (
+        <div className="hidden border-t border-neutral-800/50 px-4 py-1.5 md:block md:px-6">
+          <p className="text-xs text-neutral-500">
+            {activeLeaderIds.length} leaders responding
+          </p>
+        </div>
+      )}
+
       {/* Input bar */}
-      <div className="shrink-0 border-t border-neutral-800 bg-neutral-950 px-6 py-4">
-        <form
-          onSubmit={handleSubmit}
-          className="mx-auto flex max-w-3xl items-center gap-3"
-        >
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
+      <div className="shrink-0 border-t border-neutral-800 bg-neutral-950 px-4 py-3 safe-bottom md:px-6">
+        <div className="relative mx-auto max-w-3xl">
+          <AtMentionDropdown
+            query={atQuery}
+            visible={atVisible}
+            onSelect={(id) => {
+              setAtVisible(false);
+              if (insertRef.current) {
+                insertRef.current(`@${id}`, atPosition);
+              }
+            }}
+            onDismiss={() => setAtVisible(false)}
+          />
+          <ChatInput
+            onSend={handleSend}
+            onAtTrigger={(query, pos) => {
+              setAtQuery(query);
+              setAtPosition(pos);
+              setAtVisible(true);
+            }}
+            onAtDismiss={() => setAtVisible(false)}
+            disabled={status !== "connected"}
             placeholder={
               status === "connected"
-                ? "Type a message..."
+                ? "Follow up or ask another question..."
                 : "Reconnecting..."
             }
-            disabled={status !== "connected"}
-            className="flex-1 rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-3 text-sm text-white placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none disabled:opacity-50"
+            insertRef={insertRef}
           />
-          <button
-            type="submit"
-            disabled={!input.trim() || status !== "connected"}
-            className="rounded-lg bg-white px-5 py-3 text-sm font-medium text-black transition-colors hover:bg-neutral-200 disabled:opacity-50 disabled:hover:bg-white"
-          >
-            Send
-          </button>
-        </form>
+        </div>
+        <div className="mx-auto mt-1 flex max-w-3xl items-center justify-between text-xs text-neutral-600">
+          {activeLeaderIds.length > 0 && (
+            <span className="md:hidden">
+              {activeLeaderIds.length} leaders responding
+            </span>
+          )}
+          <span className="ml-auto hidden md:inline">Type @ to switch leader</span>
+        </div>
       </div>
     </div>
   );
@@ -136,22 +251,49 @@ export default function ChatPage() {
 function MessageBubble({
   role,
   content,
+  leaderId,
+  showFullTitle = false,
 }: {
   role: "user" | "assistant";
   content: string;
+  leaderId?: DomainLeaderId;
+  showFullTitle?: boolean;
 }) {
   const isUser = role === "user";
+  const leader = leaderId ? DOMAIN_LEADERS.find((l) => l.id === leaderId) : null;
+  const colorClass = leaderId ? (LEADER_COLORS[leaderId] ?? "border-l-neutral-500") : "";
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-      <div
-        className={`max-w-[80%] rounded-xl px-4 py-3 text-sm leading-relaxed ${
-          isUser
-            ? "bg-white text-black"
-            : "bg-neutral-900 text-neutral-200 border border-neutral-800"
-        }`}
-      >
-        <p className="whitespace-pre-wrap">{content}</p>
+      <div className={`flex max-w-[90%] gap-3 md:max-w-[80%] ${isUser ? "flex-row-reverse" : ""}`}>
+        {/* Leader avatar */}
+        {leader && (
+          <span
+            className={`mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-semibold text-white ${LEADER_BG_COLORS[leaderId!]}`}
+          >
+            {leader.name.slice(0, 2)}
+          </span>
+        )}
+
+        <div
+          className={`rounded-xl px-4 py-3 text-sm leading-relaxed ${
+            isUser
+              ? "bg-neutral-800 text-neutral-100"
+              : `bg-neutral-900 text-neutral-200 border border-neutral-800 ${leader ? `border-l-2 ${colorClass}` : ""}`
+          }`}
+        >
+          {leader && (
+            <div className="mb-1 flex items-center gap-2">
+              <span className="text-xs font-semibold text-neutral-300">
+                {leader.name}
+              </span>
+              {showFullTitle && (
+                <span className="text-xs text-neutral-500">{leader.title}</span>
+              )}
+            </div>
+          )}
+          <p className="whitespace-pre-wrap">{content}</p>
+        </div>
       </div>
     </div>
   );
@@ -171,7 +313,7 @@ function ReviewGateCard({
   const [selected, setSelected] = useState<string | null>(null);
 
   function handleSelect(option: string) {
-    if (selected) return; // Already answered
+    if (selected) return;
     setSelected(option);
     onSelect(gateId, option);
   }
@@ -203,8 +345,10 @@ function ReviewGateCard({
 
 function StatusIndicator({
   status,
+  disconnectReason,
 }: {
   status: "connecting" | "connected" | "reconnecting" | "disconnected";
+  disconnectReason?: string;
 }) {
   const config = {
     connecting: { color: "bg-yellow-500", label: "Connecting" },
@@ -218,7 +362,9 @@ function StatusIndicator({
   return (
     <div className="flex items-center gap-2">
       <span className={`h-2 w-2 rounded-full ${color}`} />
-      <span className="text-xs text-neutral-500">{label}</span>
+      <span className="text-xs text-neutral-500">
+        {status === "disconnected" && disconnectReason ? disconnectReason : label}
+      </span>
     </div>
   );
 }

@@ -137,28 +137,70 @@ copy_env_files() {
 install_deps() {
   local worktree_path="$1"
 
-  if [[ ! -f "$worktree_path/package.json" ]]; then
-    return
+  # --- Root-level dependency install ---
+  if [[ -f "$worktree_path/package.json" ]] && [[ ! -d "$worktree_path/node_modules" ]]; then
+    if ! command -v bun &>/dev/null; then
+      echo -e "  ${YELLOW}Warning: bun not found -- install root dependencies manually${NC}" >&2
+    else
+      echo -e "${BLUE}Installing dependencies...${NC}"
+      local install_output
+      if install_output=$(bun install --frozen-lockfile --cwd "$worktree_path" 2>&1); then
+        echo -e "  ${GREEN}Dependencies installed${NC}"
+      else
+        echo -e "  ${YELLOW}Warning: bun install failed -- run manually in the worktree${NC}" >&2
+        echo "  $install_output" >&2
+      fi
+    fi
   fi
 
-  if [[ -d "$worktree_path/node_modules" ]]; then
-    return
-  fi
+  # --- Subdirectory dependency install ---
+  # Scan apps/*/ for package.json files and install per-directory.
+  # Follows the same null-glob-safe pattern as copy_env_files().
+  local app_dir
+  for app_dir in "$worktree_path"/apps/*/; do
+    [[ -d "$app_dir" ]] || continue
+    [[ -f "$app_dir/package.json" ]] || continue
+    [[ -d "$app_dir/node_modules" ]] && continue
 
-  if ! command -v bun &>/dev/null; then
-    echo -e "  ${YELLOW}Warning: bun not found -- install dependencies manually${NC}"
-    return
-  fi
+    local app_name
+    app_name=$(basename "$app_dir")
 
-  echo -e "${BLUE}Installing dependencies...${NC}"
+    local -a install_cmd=()
+    if [[ -f "$app_dir/bun.lockb" ]] || [[ -f "$app_dir/bun.lock" ]]; then
+      if command -v bun &>/dev/null; then
+        install_cmd=(bun install --frozen-lockfile --cwd "$app_dir")
+      else
+        echo -e "  ${YELLOW}Warning: $app_name has bun lockfile but bun not found -- skip${NC}" >&2
+        continue
+      fi
+    elif [[ -f "$app_dir/package-lock.json" ]]; then
+      if command -v npm &>/dev/null; then
+        install_cmd=(npm ci --prefix "$app_dir")
+      else
+        echo -e "  ${YELLOW}Warning: $app_name has package-lock.json but npm not found -- skip${NC}" >&2
+        continue
+      fi
+    elif [[ -f "$app_dir/yarn.lock" ]]; then
+      if command -v yarn &>/dev/null; then
+        install_cmd=(yarn install --frozen-lockfile --cwd "$app_dir")
+      else
+        echo -e "  ${YELLOW}Warning: $app_name has yarn.lock but yarn not found -- skip${NC}" >&2
+        continue
+      fi
+    else
+      echo -e "  ${YELLOW}Warning: $app_name has package.json but no lockfile -- skip${NC}" >&2
+      continue
+    fi
 
-  local install_output
-  if install_output=$(bun install --frozen-lockfile --cwd "$worktree_path" 2>&1); then
-    echo -e "  ${GREEN}Dependencies installed${NC}"
-  else
-    echo -e "  ${YELLOW}Warning: bun install failed -- run manually in the worktree${NC}"
-    echo "  $install_output"
-  fi
+    echo -e "${BLUE}Installing dependencies for $app_name...${NC}"
+    local app_install_output
+    if app_install_output=$("${install_cmd[@]}" 2>&1); then
+      echo -e "  ${GREEN}$app_name dependencies installed${NC}"
+    else
+      echo -e "  ${YELLOW}Warning: $app_name install failed -- run manually${NC}" >&2
+      echo "  $app_install_output" >&2
+    fi
+  done
 }
 
 # Create a new worktree

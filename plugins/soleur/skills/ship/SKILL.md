@@ -222,34 +222,37 @@ Ship Checklist for [branch name]:
 
 ### Code Review Completion Gate (mandatory)
 
-Before creating a PR, verify that code review has been run. This gate prevents shipping unreviewed code even when the work skill's handoff instructions are skipped.
+Defense-in-depth check that review ran before shipping. Phase 1.5 catches this earlier, but if context compaction erased Phase 1.5's check or the skill was invoked mid-flow, this gate is the second net.
 
-**Detection:** Check the git log for review evidence on this branch:
+**Detection:** Check for review evidence using the same signals as Phase 1.5:
 
 ```bash
-git log --oneline origin/main..HEAD --grep="review"
+grep -rl "code-review" todos/ 2>/dev/null | head -1 || true
 ```
 
-Also check if the conversation contains output from `soleur:review` (look for review agent findings, "Review complete", or review-related skill invocations in the current context).
+```bash
+git log origin/main..HEAD --oneline | grep "refactor: add code review findings" || true
+```
+
+**Note:** The commit message grep is coupled to review SKILL.md Step 5. If that message changes, update both Phase 1.5 and this grep.
 
 **If review evidence is found:** Pass silently.
 
 **If no review evidence is found:**
 
-1. **Headless mode:** Auto-invoke `skill: soleur:review --headless`. If review finds critical issues, abort the pipeline.
-2. **Interactive mode:** Display warning: "No code review was run before ship. This is required by the work skill handoff (Phase 4, step 1)." Then invoke `skill: soleur:review`. After review completes, if findings include critical or high severity issues, resolve them before continuing to Phase 6.
+**Headless mode:** Abort with: "Error: no review evidence found on this branch. Run `/review` before `/ship`, or use `/one-shot` for the full pipeline."
 
-**Why:** In #1044 (multi-turn continuity), the work skill's Phase 4 handoff specifies review as step 1 before compound and ship, but the agent skipped directly to compound. The ship skill must enforce review as a last-chance gate since it is the final step before merge.
+**Interactive mode:** Display warning: "No code review was run before ship." Then invoke `skill: soleur:review`. After review completes, if findings include critical or high severity issues, resolve them before continuing to Phase 6.
 
 ### Pre-Ship Domain Review (conditional)
 
-Domain leaders are consulted at brainstorm time but not at ship time. The actual deliverables may have implications the brainstorm couldn't predict. This phase runs two conditional gates in parallel.
+Domain leaders are consulted at brainstorm time but not at ship time. The actual deliverables may have implications the brainstorm couldn't predict. This phase runs three conditional gates in parallel.
 
 ### CMO Content-Opportunity Gate
 
-**Trigger:** PR touches files in `knowledge-base/product/research/`, `knowledge-base/marketing/`, or adds new workflow patterns (new AGENTS.md rules, new skill phases). Skip for code-only PRs, bug fixes, and pure infrastructure changes.
+**Trigger:** PR matches ANY of: (a) touches files in `knowledge-base/product/research/`, `knowledge-base/marketing/`, or adds new workflow patterns (new AGENTS.md rules, new skill phases); (b) has a `semver:minor` or `semver:major` label; (c) title matches `^feat(\(.*\))?:` pattern.
 
-**Detection:** Run `git diff --name-only origin/main...HEAD` and check if any path matches the trigger patterns.
+**Detection:** Run `git diff --name-only origin/main...HEAD` and check file paths against trigger (a). Run `gh pr view --json labels,title` and check against triggers (b) and (c). If any trigger matches, proceed to "If triggered."
 
 **If triggered:**
 
@@ -292,6 +295,23 @@ Domain leaders are consulted at brainstorm time but not at ship time. The actual
 **If not triggered:** Skip silently.
 
 **Why:** New tools and subscriptions adopted during implementation often go unrecorded in the expense ledger because they feel incidental to the engineering work. The COO gate ensures every new cost is tracked at ship time, not discovered months later during a financial review.
+
+### Retroactive Gate Application (conditional)
+
+**Trigger:** The PR fixes a gate's detection logic (trigger conditions, assessment questions, or routing rules) AND the fix was motivated by a specific case that the gate missed.
+
+**Detection:** Check if the PR modifies any of: Phase 5.5 gate trigger/detection sections in this file, assessment questions in `brainstorm-domain-config.md`, or domain routing rules in AGENTS.md. If yes, check the linked issue or brainstorm document for the original missed case (e.g., a PR number, feature name, or issue that exposed the gap).
+
+**If triggered:**
+
+1. Identify the original missed case from the issue/brainstorm (e.g., "PR #1256 PWA was not assessed for content").
+2. Run the fixed gate retroactively against the missed case: spawn the relevant domain leader with the original PR/feature context and the same assessment prompt the gate would have used.
+3. Produce the artifacts that would have been created if the gate had worked (content briefs, expense entries, website audits, etc.).
+4. Commit the artifacts before proceeding to Phase 6.
+
+**If not triggered:** Skip silently.
+
+**Why:** In #1265, the CMO content gate was fixed to catch product features but the PWA feature itself was never assessed — the fix shipped without remediating the original gap. "Gate fixed" is not done — "gate fixed AND missed case remediated" is done.
 
 ## Phase 6: Push and Create PR
 
@@ -538,7 +558,37 @@ Poll every 10 seconds until state is `MERGED`.
 
    If the workflow did not fire (e.g., no semver label was set), run `/release-announce` manually as a fallback.
 
-2. **Post-merge validation of new or modified workflows.** If the PR added or modified GitHub Actions workflow files (`.github/workflows/*.yml`), validate them by triggering each affected workflow via `workflow_dispatch` and polling for completion. This is mandatory — never leave validation as a manual step for the user.
+2. **Verify all release/deploy workflows triggered by the merge.** The push to main triggers release workflows based on path filters (e.g., `web-platform-release.yml` when `apps/web-platform/**` changed). These can fail for reasons unrelated to PR CI (Docker build failures, lockfile drift, deploy health mismatches). A failing release workflow means the old version keeps running in production — this is a silent outage.
+
+   **Step 1:** Get the merge commit SHA. Use the PR number from Phase 6:
+
+   ```bash
+   gh pr view <number> --json mergeCommit --jq .mergeCommit.oid
+   ```
+
+   **Step 2:** Wait 15 seconds for workflows to trigger, then list all runs on the merge commit:
+
+   ```bash
+   gh run list --branch main --commit <merge-sha> --json databaseId,workflowName,status,conclusion
+   ```
+
+   **Step 3:** For each run that is not yet `completed`, poll every 30 seconds:
+
+   ```bash
+   gh run view <id> --json status,conclusion --jq '"\(.status) \(.conclusion)"'
+   ```
+
+   Poll until all runs complete. Expected max wait: ~5 minutes for Docker builds + deploy verification.
+
+   **Step 4:** Check conclusions:
+   - All `success`: Report "Release verification: N/N workflows passed" and continue.
+   - Any `failure`: Report which workflow failed, fetch logs with `gh run view <id> --log-failed | tail -n 50`, and investigate. Do NOT silently proceed. If the failure is in the release/deploy pipeline, it must be fixed before ending the session — production is running stale code.
+
+   **If no workflows were triggered** (the PR only touched files outside all path filters): Skip this step.
+
+   **Why this matters:** In #1293, PR #1275 added `@playwright/test` to `package.json` but didn't update `package-lock.json`. PR CI passed (it uses `bun test`, not `npm ci`), but the Docker build uses `npm ci` which requires lockfile sync. Five consecutive release runs failed silently — production stayed on v0.8.6 for hours while new PRs kept merging.
+
+3. **Post-merge validation of new or modified workflows.** If the PR added or modified GitHub Actions workflow files (`.github/workflows/*.yml`), validate them by triggering each affected workflow via `workflow_dispatch` and polling for completion. This is mandatory — never leave validation as a manual step for the user.
 
    **Step 1:** Detect new or modified workflow files in this PR. Use the merge base hash from Phase 3:
 
@@ -572,7 +622,7 @@ Poll every 10 seconds until state is `MERGED`.
 
    **Why this matters:** The founder is a solo operator. Every "please run this manually" is a context switch. `gh workflow run` exists — use it. Modified workflows are equally risky — a prompt change, a new step, or a timeout bump can all cause failures that are invisible without a live run. **Why `AM` not just `A`:** In #1126, a modified workflow (new Steps 5.5/5.6 in growth audit) was merged without validation because the ship skill only checked for new files.
 
-3. Clean up worktree and local branch:
+4. Clean up worktree and local branch:
 
    Navigate to the repository root directory, then run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged`.
 

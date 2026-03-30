@@ -5,15 +5,21 @@ import { readFileSync, writeFileSync } from "fs";
 import path from "path";
 
 import { DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
+import { routeMessage } from "./domain-router";
 import { KeyInvalidError } from "@/lib/types";
 import { decryptKey, decryptKeyLegacy, encryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
+import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 import { isPathInWorkspace } from "./sandbox";
 import { UNVERIFIED_PARAM_TOOLS, extractToolPath, isFileTool, isSafeTool } from "./tool-path-checker";
 import { buildAgentEnv } from "./agent-env";
 import { createSandboxHook } from "./sandbox-hook";
 import { abortableReviewGate, validateSelection, type AgentSession } from "./review-gate";
+import { createChildLogger } from "./logger";
+import { syncPull, syncPush } from "./session-sync";
+
+const log = createChildLogger("agent");
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -115,6 +121,7 @@ async function saveMessage(
   role: "user" | "assistant",
   content: string,
   toolCalls?: unknown,
+  leaderId?: string,
 ) {
   const { error } = await supabase.from("messages").insert({
     id: randomUUID(),
@@ -122,6 +129,7 @@ async function saveMessage(
     role,
     content,
     tool_calls: toolCalls || null,
+    leader_id: leaderId ?? null,
   });
 
   if (error) {
@@ -160,7 +168,7 @@ async function loadConversationHistory(
     .order("created_at", { ascending: true });
 
   if (error) {
-    console.error(`[agent] Failed to load conversation history: ${error.message}`);
+    log.error({ err: error }, "Failed to load conversation history");
     return [];
   }
 
@@ -195,7 +203,7 @@ export async function cleanupOrphanedConversations(): Promise<void> {
     .lt("last_active", fiveMinutesAgo);
 
   if (error) {
-    console.error(`[agent] Failed to clean up orphaned conversations: ${error.message}`);
+    log.error({ err: error }, "Failed to clean up orphaned conversations");
   }
 }
 
@@ -216,7 +224,7 @@ export function startInactivityTimer(): void {
       .select("id, user_id");
 
     if (error) {
-      console.error(`[agent] Inactivity cleanup error: ${error.message}`);
+      log.error({ err: error }, "Inactivity cleanup error");
       return;
     }
 
@@ -225,7 +233,7 @@ export function startInactivityTimer(): void {
       for (const conv of data) {
         abortSession(conv.user_id, conv.id);
       }
-      console.log(`[agent] Cleaned up ${data.length} inactive conversation(s)`);
+      log.info({ count: data.length }, "Cleaned up inactive conversations");
     }
   }, INACTIVITY_CHECK_INTERVAL_MS);
   timer.unref();
@@ -237,9 +245,11 @@ export function startInactivityTimer(): void {
 export async function startAgentSession(
   userId: string,
   conversationId: string,
-  leaderId: DomainLeaderId,
+  leaderId?: DomainLeaderId,
   resumeSessionId?: string,
   userMessage?: string,
+  context?: import("@/lib/types").ConversationContext,
+  routeSource?: "auto" | "mention",
 ): Promise<void> {
   const key = sessionKey(userId, conversationId);
 
@@ -259,14 +269,15 @@ export async function startAgentSession(
     // Get user's decrypted API key
     const apiKey = await getUserApiKey(userId);
 
-    // Get leader config
-    const leader = DOMAIN_LEADERS.find((l) => l.id === leaderId);
-    if (!leader) throw new Error(`Unknown leader: ${leaderId}`);
+    // Get leader config (default to CPO as general advisor if no leader specified)
+    const effectiveLeaderId = leaderId ?? "cpo";
+    const leader = DOMAIN_LEADERS.find((l) => l.id === effectiveLeaderId);
+    if (!leader) throw new Error(`Unknown leader: ${effectiveLeaderId}`);
 
-    // Get user workspace path
+    // Get user workspace path and repo status
     const { data: user } = await supabase
       .from("users")
-      .select("workspace_path")
+      .select("workspace_path, repo_status")
       .eq("id", userId)
       .single();
 
@@ -282,12 +293,22 @@ export async function startAgentSession(
     // no-op for already-migrated workspaces.
     patchWorkspacePermissions(workspacePath);
 
+    // Sync: pull latest from remote before session (connected repos only)
+    if (user.repo_status === "ready") {
+      await syncPull(userId, workspacePath);
+    }
+
     // Build system prompt for the domain leader
-    const systemPrompt = `You are the ${leader.title} (${leader.name}) for this user's business. ${leader.description}
+    let systemPrompt = `You are the ${leader.title} (${leader.name}) for this user's business. ${leader.description}
 
 Use the tools available to you to read and write to the knowledge-base directory. The user's workspace is at ${workspacePath}.
 
 When you need user input for important decisions, use the AskUserQuestion tool.`;
+
+    // Inject artifact context when conversation started from a specific page
+    if (context?.content) {
+      systemPrompt += `\n\nThe user is currently viewing: ${context.path}\n\nArtifact content:\n${context.content}\n\nAnswer in the context of this artifact.`;
+    }
 
     // Run the Agent SDK query
     const prompt = userMessage
@@ -323,7 +344,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           },
           filesystem: {
             allowWrite: [workspacePath],
-            denyRead: ["/workspaces"],
+            denyRead: ["/workspaces", "/proc"],
           },
         },
         plugins: [{ type: "local" as const, path: pluginPath }],
@@ -341,9 +362,9 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             hooks: [async (input) => {
               const subInput = input as Record<string, unknown>;
               const sanitize = (v: unknown) => String(v ?? '').replace(/[\r\n]/g, ' ').slice(0, 200);
-              console.log(
-                `[sec] Subagent started: agent_id=${sanitize(subInput.agent_id)}, ` +
-                `type=${sanitize(subInput.agent_type)}`,
+              log.info(
+                { sec: true, agentId: sanitize(subInput.agent_id), agentType: sanitize(subInput.agent_type) },
+                "Subagent started",
               );
               return {};
             }],
@@ -371,10 +392,9 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               };
             }
             if (!filePath && (UNVERIFIED_PARAM_TOOLS as readonly string[]).includes(toolName) && Object.keys(toolInput).length > 0) {
-              console.warn(
-                `[sec] ${toolName} invoked without recognized path parameter. ` +
-                `Keys: ${Object.keys(toolInput).join(", ")}. ` +
-                `SDK version may have changed parameter names. See #891.`,
+              log.warn(
+                { sec: true, toolName, inputKeys: Object.keys(toolInput) },
+                "Tool invoked without recognized path parameter; SDK may have changed parameter names (see #891)",
               );
             }
             return { behavior: "allow" as const };
@@ -423,7 +443,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           // auto-allow for auditability. See #910.
           if (toolName === "Agent") {
             if (subagentCtx) {
-              console.log(`[sec] Agent tool invoked${subagentCtx}`);
+              log.info({ sec: true, agentId: options.agentID }, "Agent tool invoked by subagent");
             }
             return { behavior: "allow" as const };
           }
@@ -445,8 +465,12 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
       },
     });
 
-    // Stream messages to client
+    // Stream messages to client with leader attribution
     let fullText = "";
+    const streamLeaderId = effectiveLeaderId;
+
+    // Notify client that this leader is about to stream
+    sendToClient(userId, { type: "stream_start", leaderId: streamLeaderId, source: routeSource });
 
     for await (const message of q) {
       if (controller.signal.aborted) break;
@@ -460,7 +484,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           .update({ session_id: message.session_id })
           .eq("id", conversationId);
         if (updateErr) {
-          console.error(`[agent] Failed to store session_id: ${updateErr.message}`);
+          log.error({ err: updateErr, conversationId }, "Failed to store session_id");
         }
       }
 
@@ -474,15 +498,24 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
                 type: "stream",
                 content: block.text,
                 partial: false,
+                leaderId: streamLeaderId,
               });
             }
           }
         }
       } else if (message.type === "result") {
-        // Save the full assistant response
+        // Save the full assistant response with leader attribution
         if (fullText) {
-          await saveMessage(conversationId, "assistant", fullText);
+          await saveMessage(conversationId, "assistant", fullText, undefined, streamLeaderId);
         }
+
+        // Sync: push changes to remote after session (connected repos only)
+        if (user.repo_status === "ready") {
+          await syncPush(userId, workspacePath);
+        }
+
+        // Notify client that this leader finished streaming
+        sendToClient(userId, { type: "stream_end", leaderId: streamLeaderId });
 
         // Mark as waiting_for_user instead of completed -- conversation
         // continues until explicit close or inactivity timeout.
@@ -505,6 +538,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               type: "stream",
               content: lastBlock.text,
               partial: true,
+              leaderId: streamLeaderId,
             });
           }
         }
@@ -520,15 +554,16 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         // stay stuck in "waiting_for_user" or "active" status forever.
         await updateConversationStatus(conversationId, "failed").catch(
           (statusErr) => {
-            console.error(
-              `[agent] Failed to mark aborted conversation ${conversationId} as failed:`,
-              statusErr,
+            log.error(
+              { err: statusErr, conversationId },
+              "Failed to mark aborted conversation as failed",
             );
           },
         );
       }
     } else {
-      console.error(`[agent] Session error for ${userId}/${conversationId}:`, err);
+      Sentry.captureException(err);
+      log.error({ err, userId, conversationId }, "Session error");
       const message = sanitizeErrorForClient(err);
       sendToClient(userId, {
         type: "error",
@@ -537,9 +572,9 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
       });
       await updateConversationStatus(conversationId, "failed").catch(
         (statusErr) => {
-          console.error(
-            `[agent] Failed to mark conversation ${conversationId} as failed:`,
-            statusErr,
+          log.error(
+            { err: statusErr, conversationId },
+            "Failed to mark conversation as failed",
           );
         },
       );
@@ -550,12 +585,57 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
 }
 
 // ---------------------------------------------------------------------------
+// Multi-leader dispatch
+// ---------------------------------------------------------------------------
+
+/**
+ * Dispatch a user message to multiple leaders in parallel.
+ * Each leader gets its own agent session with context injection.
+ */
+async function dispatchToLeaders(
+  userId: string,
+  conversationId: string,
+  leaders: import("./domain-leaders").DomainLeaderId[],
+  message: string,
+  context?: import("@/lib/types").ConversationContext,
+  resumeSessionId?: string,
+  routeSource?: "auto" | "mention",
+): Promise<void> {
+  if (leaders.length === 1) {
+    // Single leader — use standard session flow
+    await startAgentSession(userId, conversationId, leaders[0], resumeSessionId, message, context, routeSource);
+    return;
+  }
+
+  // Multiple leaders — dispatch in parallel
+  // Each leader runs its own startAgentSession with its own system prompt.
+  // stream_start/stream/stream_end messages are tagged with leaderId so the
+  // client can multiplex them into separate bubbles.
+  const results = await Promise.allSettled(
+    leaders.map((leaderId) =>
+      startAgentSession(userId, conversationId, leaderId, undefined, message, context, routeSource),
+    ),
+  );
+
+  // Log failures but don't fail the whole dispatch
+  for (let i = 0; i < results.length; i++) {
+    if (results[i].status === "rejected") {
+      log.error(
+        { err: (results[i] as PromiseRejectedResult).reason, leaderId: leaders[i] },
+        "Leader dispatch failed",
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Send user message into running session
 // ---------------------------------------------------------------------------
 export async function sendUserMessage(
   userId: string,
   conversationId: string,
   content: string,
+  conversationContext?: import("@/lib/types").ConversationContext,
 ): Promise<void> {
   // Verify conversation ownership BEFORE saving the message to prevent
   // cross-user writes (the message insert has no user_id check itself).
@@ -577,9 +657,10 @@ export async function sendUserMessage(
   const resumeSessionId = activeSession?.sessionId ?? conv.session_id ?? undefined;
 
   const handleSessionError = (err: unknown) => {
-    console.error(
-      `[agent] sendUserMessage session error for ${userId}/${conversationId}:`,
-      err,
+    Sentry.captureException(err);
+    log.error(
+      { err, userId, conversationId },
+      "sendUserMessage session error",
     );
     const message = sanitizeErrorForClient(err);
     sendToClient(userId, {
@@ -588,30 +669,46 @@ export async function sendUserMessage(
       errorCode: err instanceof KeyInvalidError ? "key_invalid" : undefined,
     });
     updateConversationStatus(conversationId, "failed").catch((statusErr) => {
-      console.error(
-        `[agent] Failed to mark conversation ${conversationId} as failed:`,
-        statusErr,
+      log.error(
+        { err: statusErr, conversationId },
+        "Failed to mark conversation as failed",
       );
     });
   };
 
+  // If no domain_leader is set (tag-and-route mode), use the router
+  // to determine which leaders should respond
+  if (!conv.domain_leader) {
+    try {
+      const apiKey = await getUserApiKey(userId);
+      const route = await routeMessage(content, apiKey, conversationContext);
+      log.info({ leaders: route.leaders, source: route.source }, "Routed message to leaders");
+      dispatchToLeaders(userId, conversationId, route.leaders, content, conversationContext, undefined, route.source)
+        .catch(handleSessionError);
+    } catch (err) {
+      handleSessionError(err);
+    }
+    return;
+  }
+
+  // Legacy single-leader flow (conversation has explicit domain_leader)
   if (resumeSessionId) {
     // Try SDK resume first; fall back to message replay if it fails
     startAgentSession(
       userId,
       conversationId,
-      conv.domain_leader as DomainLeaderId,
+      (conv.domain_leader as DomainLeaderId) ?? undefined,
       resumeSessionId,
       content,
     ).catch(async (err) => {
-      console.warn(`[agent] SDK resume failed, falling back to message replay: ${err}`);
+      log.warn({ err }, "SDK resume failed, falling back to message replay");
       // Clear stale session_id
       const { error: clearErr } = await supabase
         .from("conversations")
         .update({ session_id: null })
         .eq("id", conversationId);
       if (clearErr) {
-        console.error(`[agent] Failed to clear session_id: ${clearErr.message}`);
+        log.error({ err: clearErr, conversationId }, "Failed to clear session_id");
       }
 
       // Load history and build replay prompt
@@ -621,7 +718,7 @@ export async function sendUserMessage(
       startAgentSession(
         userId,
         conversationId,
-        conv.domain_leader as DomainLeaderId,
+        (conv.domain_leader as DomainLeaderId) ?? undefined,
         undefined,
         replayPrompt,
       ).catch(handleSessionError);
@@ -636,7 +733,7 @@ export async function sendUserMessage(
     startAgentSession(
       userId,
       conversationId,
-      conv.domain_leader as DomainLeaderId,
+      (conv.domain_leader as DomainLeaderId) ?? undefined,
       undefined,
       prompt,
     ).catch(handleSessionError);

@@ -58,6 +58,7 @@ $ROUTER discord messages "<channel_id>" 100
 
 Run this for each channel.
 
+```bash
 # Discord: fetch guild info and members
 $ROUTER discord guild-info
 $ROUTER discord members
@@ -66,6 +67,7 @@ $ROUTER discord members
 $ROUTER github activity 7
 $ROUTER github contributors 7
 $ROUTER github discussions 7
+$ROUTER github fetch-interactions 7
 ```
 
 X/Twitter (if enabled): fetch account metrics and monitoring data:
@@ -92,7 +94,6 @@ $ROUTER hn trending --limit 30
 ```
 
 If `$ROUTER hn` fails, log the error and continue with other platforms.
-
 
 ### Step 2: Analyze Data
 
@@ -158,7 +159,7 @@ Digest markdown files follow this heading contract. Downstream tools depend on t
 | `## Top Contributors` | Yes | Most active community members |
 | `## Trending Topics` | No | Most discussed topics |
 | `## Unanswered Questions` | No | Questions needing response |
-| `## GitHub Activity` | No | Issues, PRs, discussions during period |
+| `## GitHub Activity` | No | Issues, PRs, discussions during period. Optional `**Community Interactions**` sub-section: table of external user comments (user, issue/PR, snippet). Omit sub-section if no external interactions. |
 | `## X/Twitter Metrics` | No | Follower count, engagement stats (if X enabled) |
 | `## Bluesky Metrics` | No | Follower count, post count, engagement stats (if Bluesky enabled) |
 | `## Hacker News Activity` | No | Mention count, notable threads, trending topics |

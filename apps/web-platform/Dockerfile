@@ -12,11 +12,16 @@ COPY . .
 # NEXT_PUBLIC_ vars must be present at build time for client-side inlining
 ARG NEXT_PUBLIC_SUPABASE_URL
 ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+ARG NEXT_PUBLIC_SENTRY_DSN
+# Sentry source map upload (builder stage only — not present in runner image)
+ARG SENTRY_AUTH_TOKEN
+ARG SENTRY_ORG
+ARG SENTRY_PROJECT
 
 RUN npm run build
 RUN npm run build:server
 # Compile next.config.ts to .mjs so the runner stage doesn't need TypeScript
-RUN ./node_modules/.bin/esbuild next.config.ts --bundle --format=esm --platform=node --outfile=next.config.mjs
+RUN ./node_modules/.bin/esbuild next.config.ts --bundle --format=esm --platform=node --external:@sentry/nextjs --outfile=next.config.mjs
 
 # Stage 3: Production image with only runtime artifacts
 FROM node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d AS runner
@@ -33,11 +38,16 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 
+# Version injected at build time for /health endpoint verification
+ARG BUILD_VERSION=dev
+ENV BUILD_VERSION=$BUILD_VERSION
+
 # Production dependencies only
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-# Next.js build output (add COPY --from=builder /app/public ./public when public/ exists)
+# Next.js build output + public assets (icons, service worker)
+COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next ./.next
 
 # Compiled custom server

@@ -38,9 +38,30 @@ jobs:
       force_run: ${{ github.event_name == 'workflow_dispatch' }}
     secrets: inherit
 
-  deploy:
+  migrate:
     needs: release
     if: needs.release.outputs.version != '' && (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
+    runs-on: ubuntu-latest
+    concurrency:
+      group: migrate-web-platform
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+      - name: Run migrations
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
+        run: |
+          doppler run -c prd -- bash apps/web-platform/scripts/run-migrations.sh
+
+  deploy:
+    needs: [release, migrate]
+    if: >-
+      always() &&
+      needs.release.outputs.version != '' &&
+      (needs.migrate.result == 'success' || needs.migrate.result == 'skipped') &&
+      (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
     runs-on: ubuntu-latest
     concurrency:
       group: deploy-web-platform
@@ -70,18 +91,24 @@ jobs:
           fi
           echo "Deploy initiated (HTTP 202), polling health endpoint..."
 
-      - name: Verify deploy health
+      - name: Verify deploy health and version
         env:
           VERSION: ${{ needs.release.outputs.version }}
         run: |
-          for i in $(seq 1 30); do
+          for i in $(seq 1 12); do
             HEALTH=$(curl -sf "https://app.soleur.ai/health" 2>/dev/null || echo "")
             if echo "$HEALTH" | grep -q "ok"; then
-              echo "Deploy verified: $HEALTH"
-              exit 0
+              DEPLOYED_VERSION=$(echo "$HEALTH" | jq -r '.version // empty')
+              if [ "$DEPLOYED_VERSION" = "$VERSION" ]; then
+                echo "Deploy verified: version $VERSION running"
+                echo "$HEALTH" | jq .
+                exit 0
+              fi
+              echo "Version mismatch: expected $VERSION, got $DEPLOYED_VERSION (attempt $i/12)"
+            else
+              echo "Attempt $i/12: waiting for healthy response..."
             fi
-            echo "Attempt $i/30: waiting for healthy response..."
             sleep 10
           done
-          echo "::error::Deploy verification timed out after 300s"
+          echo "::error::Deploy verification failed after 120s"
           exit 1

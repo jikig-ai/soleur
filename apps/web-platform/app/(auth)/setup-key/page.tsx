@@ -35,7 +35,7 @@ export default function SetupKeyPage() {
       if (body.valid) {
         setStatus("valid");
         // Brief delay so the user sees the success state
-        setTimeout(() => router.push("/dashboard"), 600);
+        setTimeout(() => router.push("/connect-repo"), 600);
       } else {
         setStatus("invalid");
         setErrorMsg("Invalid API key. Please check and try again.");

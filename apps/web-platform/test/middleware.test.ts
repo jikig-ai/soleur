@@ -1,12 +1,7 @@
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { describe, test, expect } from "vitest";
-
-// Test the middleware path routing logic directly (middleware uses Next.js
-// internals that can't run outside the framework, so we test the routing logic).
-// These arrays must mirror middleware.ts exactly.
-const PUBLIC_PATHS = ["/login", "/signup", "/callback", "/api/webhooks", "/ws"];
-const TC_EXEMPT_PATHS = ["/accept-terms", "/api/accept-terms"];
+import { PUBLIC_PATHS, TC_EXEMPT_PATHS } from "@/lib/routes";
 
 function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"));
@@ -24,6 +19,7 @@ describe("middleware path routing", () => {
       expect(isPublicPath("/callback")).toBe(true);
       expect(isPublicPath("/api/webhooks/stripe")).toBe(true);
       expect(isPublicPath("/ws")).toBe(true);
+      expect(isPublicPath("/manifest.webmanifest")).toBe(true);
     });
 
     test("public path sub-routes are allowed", () => {

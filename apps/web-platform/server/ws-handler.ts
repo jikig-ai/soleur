@@ -4,7 +4,7 @@ import { parse } from "url";
 import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
 
-import { KeyInvalidError, type WSMessage, type Conversation } from "@/lib/types";
+import { KeyInvalidError, WS_CLOSE_CODES, type WSMessage, type Conversation } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { MAX_SELECTION_LENGTH } from "./review-gate";
@@ -16,7 +16,18 @@ import {
   resolveReviewGate,
   abortSession,
 } from "./agent-runner";
+import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
+import { createChildLogger } from "./logger";
+import {
+  connectionThrottle,
+  sessionThrottle,
+  pendingConnections,
+  extractClientIp,
+  logRateLimitRejection,
+} from "./rate-limiter";
+
+const log = createChildLogger("ws");
 
 // ---------------------------------------------------------------------------
 // Supabase admin client (service role -- server-side only)
@@ -56,23 +67,27 @@ export function abortActiveSession(userId: string, session: ClientSession): void
   if (!session.conversationId) return;
 
   const oldConvId = session.conversationId;
-  console.log(`[ws] Aborting active session ${oldConvId} for user ${userId} (superseded)`);
+  log.info({ userId, conversationId: oldConvId }, "Aborting active session (superseded)");
 
   abortSession(userId, oldConvId, "superseded");
 
-  // Fire-and-forget — orphan cleanup catches failures on restart
+  // Fire-and-forget — orphan cleanup catches failures on restart.
+  // Supabase query builders return PromiseLike (not Promise), so use
+  // .then(onFulfilled, onRejected) instead of .then().catch().
   supabase
     .from("conversations")
     .update({ status: "completed", last_active: new Date().toISOString() })
     .eq("id", oldConvId)
-    .then(({ error }) => {
-      if (error) {
-        console.error(`[ws] Failed to mark conversation ${oldConvId} as completed: ${error.message}`);
-      }
-    })
-    .catch((err) => {
-      console.error(`[ws] Failed to update conversation ${oldConvId}: ${err}`);
-    });
+    .then(
+      ({ error }) => {
+        if (error) {
+          log.error({ conversationId: oldConvId, err: error.message }, "Failed to mark conversation as completed");
+        }
+      },
+      (err) => {
+        log.error({ conversationId: oldConvId, err }, "Failed to update conversation");
+      },
+    );
 
   session.conversationId = undefined;
 }
@@ -95,14 +110,14 @@ const AUTH_TIMEOUT_MS = 5_000;
  */
 async function createConversation(
   userId: string,
-  leaderId: DomainLeaderId,
+  leaderId?: DomainLeaderId,
 ): Promise<string> {
   const id = randomUUID();
 
   const { error } = await supabase.from("conversations").insert({
     id,
     user_id: userId,
-    domain_leader: leaderId,
+    domain_leader: leaderId ?? null,
     status: "active" as Conversation["status"],
     last_active: new Date().toISOString(),
   });
@@ -130,29 +145,43 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
 
   const session = sessions.get(userId);
   if (!session) {
-    console.warn(`[ws] No session found for user ${userId} — message dropped`);
+    log.warn({ userId }, "No session found — message dropped");
     return;
   }
 
-  console.log(`[ws] Message from ${userId}: ${msg.type}`);
+  log.debug({ userId, msgType: msg.type }, "Message received");
 
   switch (msg.type) {
     // ------------------------------------------------------------------
     // start_session: create conversation, boot agent, reply with ID
     // ------------------------------------------------------------------
     case "start_session": {
+      // Layer 3: Agent session creation rate limit (per-user, post-auth)
+      if (!sessionThrottle.isAllowed(userId)) {
+        logRateLimitRejection("session-limit", userId);
+        sendToClient(userId, {
+          type: "error",
+          message: sanitizeErrorForClient(
+            new Error("Rate limited: too many sessions"),
+          ),
+          errorCode: "rate_limited",
+        });
+        return;
+      }
+
       try {
         abortActiveSession(userId, session);
 
-        console.log(`[ws] start_session for user ${userId}, leader ${msg.leaderId}`);
+        log.info({ userId, leaderId: msg.leaderId ?? "auto-route" }, "start_session");
         const conversationId = await createConversation(userId, msg.leaderId);
         session.conversationId = conversationId;
-        console.log(`[ws] Conversation ${conversationId} created, booting agent`);
+        log.info({ conversationId }, "Conversation created, booting agent");
 
         // Boot the agent runner (async -- streams will flow via sendToClient)
-        startAgentSession(userId, conversationId, msg.leaderId).catch(
+        startAgentSession(userId, conversationId, msg.leaderId, undefined, undefined, msg.context).catch(
           (err) => {
-            console.error(`[ws] startAgentSession error for user ${userId}:`, err);
+            Sentry.captureException(err);
+            log.error({ userId, err }, "startAgentSession error");
             sendToClient(userId, {
               type: "error",
               message: sanitizeErrorForClient(err),
@@ -163,9 +192,10 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
         );
 
         sendToClient(userId, { type: "session_started", conversationId });
-        console.log(`[ws] session_started sent to client`);
+        log.debug("session_started sent to client");
       } catch (err) {
-        console.error(`[ws] start_session error for user ${userId}:`, err);
+        Sentry.captureException(err);
+        log.error({ userId, err }, "start_session error");
         sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
       }
       break;
@@ -197,7 +227,8 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
           conversationId: msg.conversationId,
         });
       } catch (err) {
-        console.error(`[ws] resume_session error for user ${userId}:`, err);
+        Sentry.captureException(err);
+        log.error({ userId, err }, "resume_session error");
         sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
       }
       break;
@@ -225,7 +256,8 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
         session.conversationId = undefined;
         sendToClient(userId, { type: "session_ended", reason: "closed" });
       } catch (err) {
-        console.error(`[ws] close_conversation error for user ${userId}:`, err);
+        Sentry.captureException(err);
+        log.error({ userId, err }, "close_conversation error");
         sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
       }
       break;
@@ -250,7 +282,8 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
           msg.content,
         );
       } catch (err) {
-        console.error(`[ws] chat error for user ${userId}:`, err);
+        Sentry.captureException(err);
+        log.error({ userId, err }, "chat error");
         sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
       }
       break;
@@ -281,7 +314,8 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
           msg.selection,
         );
       } catch (err) {
-        console.error(`[ws] review_gate_response error for user ${userId}:`, err);
+        Sentry.captureException(err);
+        log.error({ userId, err }, "review_gate_response error");
         sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
       }
       break;
@@ -303,6 +337,8 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
     // ------------------------------------------------------------------
     case "auth_ok":
     case "stream":
+    case "stream_start":
+    case "stream_end":
     case "review_gate":
     case "session_started":
     case "session_ended":
@@ -342,20 +378,44 @@ export function setupWebSocket(server: HTTPServer) {
       return;
     }
 
+    // Layer 1: IP-based connection throttle (pre-auth)
+    const clientIp = extractClientIp(req);
+    if (!connectionThrottle.isAllowed(clientIp)) {
+      logRateLimitRejection("connection-throttle", clientIp);
+      // Fixed Retry-After to avoid leaking exact window config (CWE-209)
+      socket.write(
+        "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 120\r\nConnection: close\r\n\r\n",
+      );
+      socket.destroy();
+      return;
+    }
+
+    // Layer 2: Concurrent unauthenticated connection limit per IP
+    if (!pendingConnections.add(clientIp)) {
+      logRateLimitRejection("pending-limit", clientIp, {
+        pending: pendingConnections.get(clientIp),
+      });
+      socket.write(
+        "HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n",
+      );
+      socket.destroy();
+      return;
+    }
+
     wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit("connection", ws, req);
+      wss.emit("connection", ws, req, clientIp);
     });
   });
 
   // New connection — auth moves to first message
-  wss.on("connection", (ws: WebSocket) => {
+  wss.on("connection", (ws: WebSocket, _req: unknown, clientIp: string) => {
     let authenticated = false;
     let userId: string | null = null;
 
     // ---- Auth timeout: close if no auth message within 5 seconds ----
     const authTimer = setTimeout(() => {
       if (!authenticated) {
-        ws.close(4001, "Auth timeout");
+        ws.close(WS_CLOSE_CODES.AUTH_TIMEOUT, "Auth timeout");
       }
     }, AUTH_TIMEOUT_MS);
 
@@ -371,13 +431,13 @@ export function setupWebSocket(server: HTTPServer) {
           msg = JSON.parse(data.toString());
         } catch {
           clearTimeout(authTimer);
-          ws.close(4003, "Auth required");
+          ws.close(WS_CLOSE_CODES.AUTH_REQUIRED, "Auth required");
           return;
         }
 
         if (msg.type !== "auth" || !msg.token) {
           clearTimeout(authTimer);
-          ws.close(4003, "Auth required");
+          ws.close(WS_CLOSE_CODES.AUTH_REQUIRED, "Auth required");
           return;
         }
 
@@ -389,7 +449,7 @@ export function setupWebSocket(server: HTTPServer) {
 
         if (error || !user) {
           clearTimeout(authTimer);
-          ws.close(4001, "Unauthorized");
+          ws.close(WS_CLOSE_CODES.AUTH_TIMEOUT, "Unauthorized");
           return;
         }
 
@@ -399,10 +459,11 @@ export function setupWebSocket(server: HTTPServer) {
           return;
         }
 
-        // Auth success
+        // Auth success — no longer pending
         clearTimeout(authTimer);
         authenticated = true;
         userId = user.id;
+        pendingConnections.remove(clientIp);
 
         // Enforce T&C acceptance (version-aware)
         const { data: userRow, error: tcError } = await supabase
@@ -417,20 +478,20 @@ export function setupWebSocket(server: HTTPServer) {
         }
 
         if (tcError) {
-          console.error(`[ws] tc_accepted_version query failed for ${user.id}: ${tcError.message}`);
-          ws.close(4005, "Internal error");
+          log.error({ userId: user.id, err: tcError.message }, "tc_accepted_version query failed");
+          ws.close(WS_CLOSE_CODES.INTERNAL_ERROR, "Internal error");
           return;
         }
 
         if (userRow?.tc_accepted_version !== TC_VERSION) {
-          ws.close(4004, "T&C not accepted");
+          ws.close(WS_CLOSE_CODES.TC_NOT_ACCEPTED, "T&C not accepted");
           return;
         }
 
         // If user already has an open socket, close the old one
         const existing = sessions.get(userId);
         if (existing && existing.ws.readyState === WebSocket.OPEN) {
-          existing.ws.close(4002, "Superseded by new connection");
+          existing.ws.close(WS_CLOSE_CODES.SUPERSEDED, "Superseded by new connection");
         }
 
         // Register session — cancel any pending disconnect grace period
@@ -439,10 +500,10 @@ export function setupWebSocket(server: HTTPServer) {
           if (key.startsWith(`${userId}:`)) {
             clearTimeout(timer);
             pendingDisconnects.delete(key);
-            console.log(`[ws] Cancelled pending disconnect for ${key} (user reconnected)`);
+            log.info({ key }, "Cancelled pending disconnect (user reconnected)");
           }
         }
-        console.log(`[ws] User ${userId} connected`);
+        log.info({ userId }, "User connected");
 
         // Start heartbeat after auth
         pingInterval = setInterval(() => {
@@ -457,7 +518,8 @@ export function setupWebSocket(server: HTTPServer) {
 
       // Authenticated — route to handleMessage
       handleMessage(userId!, data.toString()).catch((err) => {
-        console.error(`[ws] Unhandled error for user ${userId}:`, err);
+        Sentry.captureException(err);
+        log.error({ userId, err }, "Unhandled message error");
         sendToClient(userId!, {
           type: "error",
           message: "Internal server error",
@@ -469,6 +531,10 @@ export function setupWebSocket(server: HTTPServer) {
     ws.on("close", () => {
       clearTimeout(authTimer);
       if (pingInterval) clearInterval(pingInterval);
+      // If not yet authenticated, release the pending connection slot
+      if (!authenticated) {
+        pendingConnections.remove(clientIp);
+      }
       if (userId) {
         const current = sessions.get(userId);
         if (current?.ws === ws) {
@@ -478,7 +544,7 @@ export function setupWebSocket(server: HTTPServer) {
             const convId = current.conversationId;
             const uid = userId;
             const timer = setTimeout(() => {
-              console.log(`[ws] Grace period expired for ${uid}/${convId}, aborting session`);
+              log.info({ userId: uid, conversationId: convId }, "Grace period expired, aborting session");
               abortSession(uid, convId);
             }, DISCONNECT_GRACE_MS);
             timer.unref();
@@ -486,12 +552,13 @@ export function setupWebSocket(server: HTTPServer) {
             pendingDisconnects.set(`${uid}:${convId}`, timer);
           }
         }
-        console.log(`[ws] User ${userId} disconnected (${DISCONNECT_GRACE_MS / 1000}s grace period)`);
+        log.info({ userId, gracePeriodSec: DISCONNECT_GRACE_MS / 1000 }, "User disconnected");
       }
     });
 
     ws.on("error", (err) => {
-      console.error(`[ws] Socket error${userId ? ` for user ${userId}` : ""}:`, err);
+      Sentry.captureException(err);
+      log.error({ userId, err }, "Socket error");
     });
   });
 

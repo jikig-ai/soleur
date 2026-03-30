@@ -98,19 +98,19 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 1.7 | Verify production deployment (end-to-end loop) | P1 | [#1075](https://github.com/jikig-ai/soleur/issues/1075) | Not started |
 | 1.8 | **Multi-turn conversation continuity** (architecture choice deferred to CTO during spec) | P1 | [#1044](https://github.com/jikig-ai/soleur/issues/1044) | **Broken** — agent has amnesia between turns (CTO review) |
 | 1.9 | Pin Agent SDK to exact version (`0.2.80`) | P1 | [#1045](https://github.com/jikig-ai/soleur/issues/1045) | Not started |
-| 1.10 | **Project repo connection** — clone founder's public git repo, install latest Soleur plugin, keep plugin updated | P1 | [#1060](https://github.com/jikig-ai/soleur/issues/1060) | Not started |
+| 1.10 | **Project repo connection** — clone founder's GitHub repo (public or private via GitHub App), install latest Soleur plugin, keep plugin updated | P1 | [#1060](https://github.com/jikig-ai/soleur/issues/1060) | In progress |
 | 1.11 | **Tag-and-route conversation model** — one chat input, system routes to relevant leaders, no dedicated domain leader pages | P1 | [#1059](https://github.com/jikig-ai/soleur/issues/1059) | Not started |
 
 **Why 1.8 is P1 (CTO review):** "A chat product where the agent forgets everything after one turn is not viable even for beta. It will be the first thing every user notices." Each message currently spawns a fresh agent with no memory of prior exchange. `persistSession: false` is explicitly set. **Dependency note:** The multi-turn architecture choice (CTO decision during spec) has downstream implications for 2.4 (GDPR account deletion — what conversation data must be purged?), 2.9 (privacy docs — what is stored?), and 3.3 (conversation inbox — what is displayed?).
 
-**Why 1.10 is P1:** Without the founder's actual project repo and the Soleur plugin installed, agents operate in a vacuum — no codebase context, no skills, no domain leaders, no institutional memory. The workspace must be the founder's real project, not an empty shell. Scoped to **public repos only** for P1 — private repo support (OAuth/deploy keys) deferred to a later phase.
+**Why 1.10 is P1:** Without the founder's actual project repo and the Soleur plugin installed, agents operate in a vacuum — no codebase context, no skills, no domain leaders, no institutional memory. The workspace must be the founder's real project, not an empty shell. Supports both public and private repos via GitHub App installation tokens — no deploy keys or long-lived credentials needed.
 
 **Why 1.11 is P1:** The current domain leader selector page consumes significant UI real estate and will be torn down for tag-and-route in P3 — building throwaway pages is wasted effort. The tag-and-route model is simpler for P1: one chat input with system routing (same pattern as the brainstorm skill's domain assessment) instead of 8 dedicated domain leader pages. Build the right UX once rather than building and tearing down the wrong one.
 
 **Deferred from P1:**
 
 - ~~1.12 Telegram bridge~~ → Deferred to a later phase. Reach is meaningless with 0 users.
-- Private repo support for 1.10 → Deferred. Public repos prove the pattern in 3 days.
+- ~~Private repo support for 1.10~~ → Included in P1. GitHub App tokens provide identical security for both public and private repos.
 
 **UX Vision: L2 → L4**
 
@@ -183,7 +183,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 3.6 | Usage/cost indicator (BYOK spending) | P2 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
 | 3.7 | Review gate notifications (PWA push + email fallback for iOS) | P2 | [#1049](https://github.com/jikig-ai/soleur/issues/1049) | Not started |
 | 3.8 | Guided instructions fallback (deep links + review gates for services without API/MCP) | P2 | [#1077](https://github.com/jikig-ai/soleur/issues/1077) | Not started |
-| 3.9 | Tag-and-route UX enhancements (@-mentions syntax, multi-leader threads, context-aware suggestions) | P2 | [#1059](https://github.com/jikig-ai/soleur/issues/1059) | Depends on P1 foundation |
+| 3.9 | Chat UX redesign — remove department grid, @-mention autocomplete, auto-routing, sidebar | P2 | [#1289](https://github.com/jikig-ai/soleur/issues/1289) | Wireframes approved, spec complete |
 | 3.10 | CI/CD integration (agents trigger deploys, run tests, open PRs on founder's repo) | P1 | [#1062](https://github.com/jikig-ai/soleur/issues/1062) | Not started |
 | 3.11 | Product analytics instrumentation for P4 validation metrics (domain engagement, session frequency, KB growth) | P1 | [#1063](https://github.com/jikig-ai/soleur/issues/1063) | Not started |
 | 3.12 | Pricing page (soleur.ai) | P1 | [#656](https://github.com/jikig-ai/soleur/issues/656) | Not started |

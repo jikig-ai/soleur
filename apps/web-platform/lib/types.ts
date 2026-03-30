@@ -1,7 +1,18 @@
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
 // Typed error codes for structured error handling over WebSocket
-export type WSErrorCode = "key_invalid" | "session_expired" | "session_resumed";
+export type WSErrorCode = "key_invalid" | "session_expired" | "session_resumed" | "rate_limited";
+
+// Shared WebSocket close codes — single source of truth for server, client, and tests.
+// See: https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent/code (4000-4999 = application-reserved)
+export const WS_CLOSE_CODES = {
+  AUTH_TIMEOUT: 4001,
+  SUPERSEDED: 4002,
+  AUTH_REQUIRED: 4003,
+  TC_NOT_ACCEPTED: 4004,
+  INTERNAL_ERROR: 4005,
+  RATE_LIMITED: 4008,
+} as const;
 
 export class KeyInvalidError extends Error {
   constructor() {
@@ -10,16 +21,25 @@ export class KeyInvalidError extends Error {
   }
 }
 
+// Context passed when starting a conversation from a specific page
+export interface ConversationContext {
+  path: string;    // artifact path (e.g., "knowledge-base/product/roadmap.md")
+  type: string;    // page type (e.g., "kb-viewer", "dashboard", "roadmap")
+  content?: string; // full artifact content for system prompt injection
+}
+
 // WebSocket message protocol
 export type WSMessage =
   | { type: "auth"; token: string }
   | { type: "auth_ok" }
   | { type: "chat"; content: string }
-  | { type: "start_session"; leaderId: DomainLeaderId }
+  | { type: "start_session"; leaderId?: DomainLeaderId; context?: ConversationContext }
   | { type: "resume_session"; conversationId: string }
   | { type: "close_conversation" }
   | { type: "review_gate_response"; gateId: string; selection: string }
-  | { type: "stream"; content: string; partial: boolean }
+  | { type: "stream"; content: string; partial: boolean; leaderId: DomainLeaderId }
+  | { type: "stream_start"; leaderId: DomainLeaderId; source?: "auto" | "mention" }
+  | { type: "stream_end"; leaderId: DomainLeaderId }
   | { type: "review_gate"; gateId: string; question: string; options: string[] }
   | { type: "session_started"; conversationId: string }
   | { type: "session_ended"; reason: string }
@@ -51,7 +71,7 @@ export interface ApiKey {
 export interface Conversation {
   id: string;
   user_id: string;
-  domain_leader: DomainLeaderId;
+  domain_leader: DomainLeaderId | null;
   session_id: string | null;
   status: "active" | "waiting_for_user" | "completed" | "failed";
   last_active: string;
@@ -63,5 +83,6 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   tool_calls: unknown | null;
+  leader_id: DomainLeaderId | null;
   created_at: string;
 }

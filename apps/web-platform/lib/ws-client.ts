@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import type { WSMessage } from "@/lib/types";
+import { WS_CLOSE_CODES, type WSMessage, type ConversationContext } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
 type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
@@ -12,6 +12,7 @@ interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   type: "text" | "review_gate";
+  leaderId?: DomainLeaderId;
   /** Present only when type === "review_gate" */
   gateId?: string;
   question?: string;
@@ -20,25 +21,53 @@ interface ChatMessage {
 
 interface UseWebSocketReturn {
   messages: ChatMessage[];
-  startSession: (leaderId: DomainLeaderId) => void;
+  startSession: (leaderId?: DomainLeaderId, context?: ConversationContext) => void;
   sendMessage: (content: string) => void;
   sendReviewGateResponse: (gateId: string, selection: string) => void;
   status: ConnectionStatus;
+  disconnectReason: string | undefined;
+  routeSource: "auto" | "mention" | null;
+  activeLeaderIds: DomainLeaderId[];
 }
 
 const MAX_BACKOFF = 30_000;
 const INITIAL_BACKOFF = 1_000;
 
+/** Close codes where reconnecting will never succeed. */
+const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason: string }> = {
+  [WS_CLOSE_CODES.AUTH_TIMEOUT]: { target: "/login", reason: "Session expired" },
+  [WS_CLOSE_CODES.SUPERSEDED]: { reason: "Superseded by another tab" },
+  [WS_CLOSE_CODES.AUTH_REQUIRED]: { target: "/login", reason: "Authentication required" },
+  [WS_CLOSE_CODES.TC_NOT_ACCEPTED]: { target: "/accept-terms", reason: "Terms acceptance required" },
+  [WS_CLOSE_CODES.INTERNAL_ERROR]: { reason: "Server error" },
+  [WS_CLOSE_CODES.RATE_LIMITED]: { reason: "Too many requests. Please try again later." },
+};
+
 export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
+  const [disconnectReason, setDisconnectReason] = useState<string>();
+  const [routeSource, setRouteSource] = useState<"auto" | "mention" | null>(null);
+  const [activeLeaderIds, setActiveLeaderIds] = useState<DomainLeaderId[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mountedRef = useRef(true);
 
-  /** Stable ref to the latest partial assistant message index for streaming */
-  const streamIndexRef = useRef<number | null>(null);
+  /** Map of active leader streams: leaderId → message index in the messages array */
+  const activeStreamsRef = useRef<Map<string, number>>(new Map());
+
+  /** Permanently tear down the WebSocket — prevents reconnect loop.
+   *  Mirrors the key_invalid teardown pattern. */
+  const teardown = useCallback(() => {
+    mountedRef.current = false;
+    clearTimeout(reconnectTimerRef.current);
+    activeStreamsRef.current.clear();
+    if (wsRef.current) {
+      wsRef.current.onclose = null;
+      wsRef.current.close();
+    }
+  }, []);
 
   const getWsUrlAndToken = useCallback(async () => {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -100,67 +129,68 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           break;
         }
 
-        case "stream": {
+        case "stream_start": {
+          // Store routing source from first stream_start
+          if (msg.source) {
+            setRouteSource(msg.source);
+          }
+          // Create a new empty message bubble for this leader
           setMessages((prev) => {
-            if (msg.type !== "stream") return prev;
-
-            if (streamIndexRef.current !== null && msg.partial) {
-              // Append to existing partial message
-              const updated = [...prev];
-              const idx = streamIndexRef.current!;
-              if (idx < updated.length) {
-                updated[idx] = {
-                  ...updated[idx],
-                  content: updated[idx].content + msg.content,
-                };
-              }
-              return updated;
-            }
-
-            if (msg.partial) {
-              // Start a new streaming message
-              const newMsg: ChatMessage = {
-                id: `stream-${Date.now()}`,
-                role: "assistant",
-                content: msg.content,
-                type: "text",
-              };
-              streamIndexRef.current = prev.length;
-              return [...prev, newMsg];
-            }
-
-            // Final chunk — append remaining content and close stream
-            if (streamIndexRef.current !== null) {
-              const updated = [...prev];
-              const idx = streamIndexRef.current;
-              if (idx < updated.length) {
-                updated[idx] = {
-                  ...updated[idx],
-                  content: updated[idx].content + msg.content,
-                };
-              }
-              streamIndexRef.current = null;
-              return updated;
-            }
-
-            // Non-partial, non-streaming message — full assistant response
-            streamIndexRef.current = null;
-            return [
-              ...prev,
-              {
-                id: `msg-${Date.now()}`,
-                role: "assistant",
-                content: msg.content,
-                type: "text",
-              },
-            ];
+            const newMsg: ChatMessage = {
+              id: `stream-${msg.leaderId}-${Date.now()}`,
+              role: "assistant",
+              content: "",
+              type: "text",
+              leaderId: msg.leaderId,
+            };
+            activeStreamsRef.current.set(msg.leaderId, prev.length);
+            setActiveLeaderIds(Array.from(activeStreamsRef.current.keys()) as DomainLeaderId[]);
+            return [...prev, newMsg];
           });
           break;
         }
 
+        case "stream": {
+          const streamLeaderId = msg.leaderId;
+
+          setMessages((prev) => {
+            // Look up the message index for this leader's active stream
+            const idx = activeStreamsRef.current.get(streamLeaderId);
+
+            if (idx !== undefined && idx < prev.length) {
+              // Append to existing bubble for this leader
+              const updated = [...prev];
+              updated[idx] = {
+                ...updated[idx],
+                content: updated[idx].content + msg.content,
+              };
+              return updated;
+            }
+
+            // No active stream for this leader (stream_start may have been missed)
+            // Create a new bubble
+            const newMsg: ChatMessage = {
+              id: `stream-${streamLeaderId}-${Date.now()}`,
+              role: "assistant",
+              content: msg.content,
+              type: "text",
+              leaderId: streamLeaderId,
+            };
+            activeStreamsRef.current.set(streamLeaderId, prev.length);
+            return [...prev, newMsg];
+          });
+          break;
+        }
+
+        case "stream_end": {
+          // Finalize this leader's stream — remove from active streams map
+          activeStreamsRef.current.delete(msg.leaderId);
+          setActiveLeaderIds(Array.from(activeStreamsRef.current.keys()) as DomainLeaderId[]);
+          break;
+        }
+
         case "review_gate": {
-          if (msg.type !== "review_gate") break;
-          streamIndexRef.current = null;
+          activeStreamsRef.current.clear();
           setMessages((prev) => [
             ...prev,
             {
@@ -177,17 +207,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "error": {
-          if (msg.type !== "error") break;
-          streamIndexRef.current = null;
+          activeStreamsRef.current.clear();
 
           // Key invalidation: redirect to setup instead of showing error
           if (msg.errorCode === "key_invalid") {
-            mountedRef.current = false;
-            clearTimeout(reconnectTimerRef.current);
-            if (wsRef.current) {
-              wsRef.current.onclose = null;
-              wsRef.current.close();
-            }
+            teardown();
             window.location.href = "/setup-key";
             return; // Prevent post-redirect state updates
           }
@@ -205,17 +229,19 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "session_ended": {
-          if (msg.type !== "session_ended") break;
-          streamIndexRef.current = null;
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: `end-${Date.now()}`,
-              role: "assistant",
-              content: `Session ended: ${msg.reason}`,
-              type: "text",
-            },
-          ]);
+          activeStreamsRef.current.clear();
+          // Don't display "turn_complete" as a visible message — it's a lifecycle signal
+          if (msg.reason !== "turn_complete") {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `end-${Date.now()}`,
+                role: "assistant",
+                content: `Session ended: ${msg.reason}`,
+                type: "text",
+              },
+            ]);
+          }
           break;
         }
 
@@ -225,10 +251,22 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event: CloseEvent) => {
       if (!mountedRef.current) return;
-      setStatus("reconnecting");
 
+      const entry = NON_TRANSIENT_CLOSE_CODES[event.code];
+      if (entry) {
+        teardown();
+        setStatus("disconnected");
+        setDisconnectReason(entry.reason);
+        if (entry.target) {
+          window.location.href = entry.target;
+        }
+        return;
+      }
+
+      // Transient failure — reconnect with exponential backoff
+      setStatus("reconnecting");
       const delay = backoffRef.current;
       backoffRef.current = Math.min(backoffRef.current * 2, MAX_BACKOFF);
 
@@ -242,7 +280,48 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     ws.onerror = () => {
       // onclose will fire after onerror — reconnect logic lives there
     };
-  }, [getWsUrlAndToken]);
+  }, [getWsUrlAndToken, teardown]);
+
+  // Fetch conversation history on mount (once per conversationId)
+  useEffect(() => {
+    if (conversationId === "new") return;
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        const supabase = createClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token) return;
+
+        const res = await fetch(
+          `/api/conversations/${conversationId}/messages`,
+          {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+            signal: controller.signal,
+          },
+        );
+        if (!res.ok) return;
+
+        const { messages: history } = await res.json();
+        const mapped: ChatMessage[] = history.map((m: { id: string; role: string; content: string; leader_id: string | null }) => ({
+          id: m.id,
+          role: m.role as "user" | "assistant",
+          content: m.content,
+          type: "text" as const,
+          leaderId: m.leader_id ?? undefined,
+        }));
+
+        if (activeStreamsRef.current.size === 0) {
+          setMessages(prev => [...mapped, ...prev]);
+        }
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.error("Failed to load history:", err);
+      }
+    })();
+
+    return () => controller.abort();
+  }, [conversationId]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -259,8 +338,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   }, [connect, conversationId]);
 
   const startSession = useCallback(
-    (leaderId: DomainLeaderId) => {
-      send({ type: "start_session", leaderId });
+    (leaderId?: DomainLeaderId, context?: ConversationContext) => {
+      send({ type: "start_session", leaderId, context });
     },
     [send],
   );
@@ -289,5 +368,5 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     [send],
   );
 
-  return { messages, startSession, sendMessage, sendReviewGateResponse, status };
+  return { messages, startSession, sendMessage, sendReviewGateResponse, status, disconnectReason, routeSource, activeLeaderIds };
 }

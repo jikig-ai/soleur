@@ -11,7 +11,7 @@ Verify that features actually work before merge -- not just that pages render, b
 
 ## Prerequisites
 
-- Local development server running (e.g., `npm run dev`, `bin/dev`)
+- Local development server running OR a `dev` script in the project's `package.json` (auto-started if not running)
 - Playwright MCP available (for browser scenarios)
 - Doppler CLI installed and configured (for API verification scenarios)
 
@@ -32,6 +32,22 @@ Read the plan file passed as `$ARGUMENTS`. Find the `## Test Scenarios` section.
 **If no Test Scenarios section exists:** Output "No test scenarios found in plan — skipping QA" and stop. Do not block the pipeline.
 
 **If Test Scenarios section is empty:** Same as above — warn and skip.
+
+### Step 1.5: Ensure Dev Server is Running
+
+Before executing any browser scenarios, check whether the dev server is reachable. If not, attempt to start it automatically.
+
+1. **Check if already running:** `curl -sf --max-time 3 http://localhost:3000/ >/dev/null 2>&1`. If reachable, skip to Step 2 — no action needed. Record that the server was NOT started by QA (so cleanup skips it).
+
+2. **Detect the dev command:** Read `apps/web-platform/package.json` and extract the `scripts.dev` field. If no `dev` script exists, warn: "No dev script found in package.json — cannot auto-start server. Skipping browser scenarios." Continue to API verification steps (do not block the pipeline).
+
+3. **Start the server:** Change to the `apps/web-platform/` directory first (the dev command must run from the app root). Check if Doppler is available (`command -v doppler`). If available, start via `doppler run -p soleur -c dev -- <dev-command> > /tmp/qa-dev-server.log 2>&1 &`. If Doppler is unavailable, start via `<dev-command> > /tmp/qa-dev-server.log 2>&1 &`. Record the background PID.
+
+4. **Poll for readiness (30s timeout):** Poll `http://localhost:3000/` until it responds or 30 seconds have elapsed, whichever comes first. If the server responds, proceed to Step 2. If the timeout elapses:
+   - Kill the background process by PID
+   - Include the last 20 lines of `/tmp/qa-dev-server.log` in the failure report
+   - Report: "Dev server failed to start within 30s. See server output above."
+   - Continue to API verification steps (do not block the pipeline)
 
 ### Step 2: Detect Environment
 
@@ -97,7 +113,15 @@ After all scenarios complete, output a report in this format:
 ### Step 5: Pass/Fail Gate
 
 - If **all scenarios passed**: Output the report and continue. The pipeline proceeds to the next step.
-- If **any scenario failed**: Output the report with detailed failure information (expected vs actual values, screenshot of failure state). Block the pipeline — output "QA FAILED — fix the issues above and re-run QA."
+- If **any scenario failed**: Output the report with detailed failure information (expected vs actual values, screenshot of failure state). Output "QA FAILED — fix the issues above and re-run QA."
+
+After outputting the result (pass or fail), always proceed to Step 5.5 for cleanup before returning.
+
+### Step 5.5: Cleanup Dev Server
+
+If the dev server was started in Step 1.5 (a background PID was recorded), kill the process by PID, remove `/tmp/qa-dev-server.log`, and report: "Stopped auto-started dev server (PID <pid>)." If the server was already running before QA (no PID recorded), do nothing.
+
+This step runs regardless of whether scenarios passed or failed.
 
 ## Graceful Degradation
 
@@ -108,7 +132,9 @@ The skill handles missing prerequisites without blocking the pipeline:
 | No Test Scenarios section in plan | Warn and skip QA entirely |
 | Playwright MCP unavailable | Skip browser steps, still run API verification |
 | Doppler secret not found | Skip that API verification step with warning |
-| Dev server not running | Fail browser scenarios with "Server not reachable" |
+| Dev server not running | Auto-start via package.json dev script; if startup fails, report reason and skip browser scenarios |
+| No dev script in package.json | Warn and skip browser scenarios (API verification still runs) |
+| Dev server startup timeout (30s) | Report failure reason and skip browser scenarios |
 | curl command fails (network error) | Fail that scenario with error details |
 
 ## Notes

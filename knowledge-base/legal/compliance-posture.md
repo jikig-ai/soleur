@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-03-23
+last_updated: 2026-03-29
 ---
 
 # Legal Compliance Posture
@@ -36,7 +36,7 @@ Source: `knowledge-base/project/specs/feat-vendor-ops-legal/dpa-verification-mem
 
 | Item | Issue | Status | Deadline | Notes |
 |------|-------|--------|----------|-------|
-| Supabase DPA update (Braintrust sub-processor) | #1056 | PENDING RESPONSE | ~30 days from 2026-03-23 | Email sent to `privacy@supabase.io`. Do NOT sign updated DPA until questions answered. Objection window: 5 days from notice per Section 6.5 |
+| Supabase DPA update (Braintrust sub-processor) | #1056 | FOLLOW-UP SENT | 2026-04-05 (response deadline) | Initial questions sent 2026-03-23. Follow-up sent 2026-03-29 preserving objection rights under Section 6.5 (5-day contractual window passed, but email stated 30 days + questions unanswered = defensible position). Formal objection to be filed if no response by 2026-04-05. Do NOT sign updated DPA until questions answered. |
 | T&C blanket statement contradictions | #736 | OPEN | - | Identified during #670 review |
 
 ## Completed Compliance Work

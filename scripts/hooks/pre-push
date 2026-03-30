@@ -94,8 +94,27 @@ done
 failed=0
 
 if [[ ${#bun_tests[@]} -gt 0 ]]; then
-  if ! bun test "${bun_tests[@]}"; then
-    failed=1
+  # Separate web-platform .tsx tests (need vitest + happy-dom) from bun tests
+  vitest_tests=()
+  pure_bun_tests=()
+  for bt in "${bun_tests[@]}"; do
+    if [[ "$bt" == apps/web-platform/test/*.tsx ]]; then
+      vitest_tests+=("$bt")
+    else
+      pure_bun_tests+=("$bt")
+    fi
+  done
+
+  if [[ ${#pure_bun_tests[@]} -gt 0 ]]; then
+    if ! bun test "${pure_bun_tests[@]}"; then
+      failed=1
+    fi
+  fi
+
+  if [[ ${#vitest_tests[@]} -gt 0 ]]; then
+    if ! (cd apps/web-platform && npx vitest run "${vitest_tests[@]/#apps\/web-platform\//}" 2>&1); then
+      failed=1
+    fi
   fi
 fi
 

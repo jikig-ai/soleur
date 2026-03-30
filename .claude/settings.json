@@ -12,6 +12,7 @@
   "env": {
     "CLAUDE_CODE_EFFORT_LEVEL": "high"
   },
+  "enabledMcpjsonServers": ["playwright"],
   "hooks": {
     "PreToolUse": [
       {
