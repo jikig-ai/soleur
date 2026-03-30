@@ -17,7 +17,7 @@ preconditions:
 
 ## Headless Mode Detection
 
-If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headless` from `$ARGUMENTS` before processing remaining args. Headless mode affects Steps 2, 3, 5, and auto-consolidation Step E.
+If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headless` from `$ARGUMENTS` before processing remaining args. Headless mode affects Steps 2, 3, 5, 8, and auto-consolidation Step E.
 
 ## Overview
 
@@ -335,7 +335,7 @@ This dual-routing ensures session errors feed back into the definitions that cau
 2. Run: `gh issue create --title "compound: route-to-definition proposal for <target-basename>" --body-file /tmp/compound-rtd-body.md --milestone "Post-MVP / Later"`
 3. If `gh issue create` fails (network error, auth failure), log the error and continue to the decision menu -- do not block the pipeline on issue creation failure
 4. If successful, log the created issue URL
-5. Update the learning file's `synced_to` frontmatter with `<definition-name>-issue-<number>` to prevent re-proposing
+5. Update the learning file's `synced_to` frontmatter with the bare `<definition-name>` (same format as interactive mode) to prevent `/soleur:sync` from re-proposing this pair
 6. Proceed to the decision menu
 
 **Interactive mode:** Use **AskUserQuestion** with options:
