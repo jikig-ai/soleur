@@ -212,11 +212,9 @@ main() {
     fi
 
     if [[ "$http_code" == "402" ]]; then
-      echo "Plausible API returned 402 -- Stats API requires a Business plan or higher."
-      echo "Skipping analytics snapshot. The dashboard remains available at https://plausible.io/soleur.ai"
-      echo "This workflow will generate snapshots automatically once the plan includes Stats API access."
+      echo "Plausible API returned 402 -- Stats API requires a Business plan or higher." >&2
       rm -f "$response_file"
-      exit 0
+      exit 1
     fi
 
     if [[ "$http_code" == "429" ]]; then
@@ -246,6 +244,21 @@ main() {
       echo "${secs}s"
     fi
   }
+
+  # --- Preflight: Check API Plan Access ---
+  # Runs outside $() so exit 0 terminates the script gracefully.
+  # api_get is called inside $() (subshell) where exit only exits the subshell,
+  # so plan-limitation checks must happen here before any $() calls.
+
+  _preflight_code=$(curl -s -o /dev/null -w "%{http_code}" \
+    -H "Authorization: Bearer ${PLAUSIBLE_API_KEY}" \
+    "${PLAUSIBLE_BASE_URL}/api/v1/stats/aggregate?site_id=${PLAUSIBLE_SITE_ID}&period=day&metrics=visitors")
+  if [[ "$_preflight_code" == "402" ]]; then
+    echo "Plausible API returned 402 -- Stats API requires a Business plan or higher."
+    echo "Skipping analytics snapshot. The dashboard remains available at https://plausible.io/${PLAUSIBLE_SITE_ID}"
+    echo "This workflow will generate snapshots automatically once the plan includes Stats API access."
+    exit 0
+  fi
 
   # --- Fetch Data ---
 
