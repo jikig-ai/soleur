@@ -157,9 +157,9 @@ echo ""
 
 test_duplicate_pair_detected
 echo ""
-test_colon_in_rule_text
-echo ""
 test_unrelated_pair_not_flagged
+echo ""
+test_colon_in_rule_text
 echo ""
 
 echo "Results: $PASS passed, $FAIL failed"

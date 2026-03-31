@@ -114,7 +114,6 @@ echo "Broken hook references: $BROKEN_COUNT"
 detect_duplicates() {
   local duplicates_file="$TMPDIR_AUDIT/duplicates.txt"
   local all_rules="$TMPDIR_AUDIT/all_rules.tsv"
-  touch "$duplicates_file"
 
   # Extract rules as TAB-delimited: file\tlineno\ttext
   {
@@ -201,11 +200,13 @@ detect_duplicates() {
         }
 
         if (score >= 60) {
-          # Truncate display text to 60 chars
+          # Truncate display text to 60 chars, escape pipe for Markdown tables
           a_short = substr(raw[i], 1, 60)
           c_short = substr(raw[j], 1, 60)
-          printf "%d\t%s\t%s\t%s\t%s\t%s\t%s\n", \
-            score, files[i], lines[i], files[j], lines[j], a_short, c_short
+          gsub(/\|/, "\\|", a_short)
+          gsub(/\|/, "\\|", c_short)
+          printf "%d\t%s\t%s\t%s\t%s\n", \
+            score, lines[i], lines[j], a_short, c_short
         }
       }
     }
@@ -273,28 +274,27 @@ if [[ "$BROKEN_COUNT" -gt 0 ]]; then
   } >> "$ISSUE_BODY_FILE"
 fi
 
-# Append suspected duplicates section
-DUPLICATES_FILE="$TMPDIR_AUDIT/duplicates.txt"
-if [[ -s "$DUPLICATES_FILE" ]]; then
+# Append suspected duplicates section (file already sorted by detect_duplicates)
+if [[ -s "$TMPDIR_AUDIT/duplicates.txt" ]]; then
   {
     echo ""
     echo "## Suspected Duplicates"
     echo ""
-    echo "Rules in AGENTS.md and constitution.md with Jaccard word similarity >= 0.6"
+    echo "Rules in AGENTS.md and constitution.md with Jaccard word similarity >= 60%"
     echo "(after stopword removal). These may be candidates for consolidation."
     echo ""
-    echo "| Score | AGENTS.md Line | constitution.md Line | Rule A (truncated) | Rule B (truncated) |"
-    echo "|-------|---------------|---------------------|--------------------|--------------------|"
-    sort -t$'\t' -k1 -rn "$DUPLICATES_FILE" | while IFS=$'\t' read -r score _afile a_line _cfile c_line a_text c_text; do
-      echo "| 0.$score | $a_line | $c_line | $a_text | $c_text |"
-    done
+    echo "| Similarity | AGENTS.md Line | constitution.md Line | Rule A (truncated) | Rule B (truncated) |"
+    echo "|-----------|---------------|---------------------|--------------------|--------------------|"
+    while IFS=$'\t' read -r score a_line c_line a_text c_text; do
+      echo "| ${score}% | $a_line | $c_line | $a_text | $c_text |"
+    done < "$TMPDIR_AUDIT/duplicates.txt"
   } >> "$ISSUE_BODY_FILE"
 else
   {
     echo ""
     echo "## Suspected Duplicates"
     echo ""
-    echo "*No cross-layer duplicates detected (Jaccard threshold: 0.6).*"
+    echo "*No cross-layer duplicates detected (Jaccard threshold: 60%).*"
   } >> "$ISSUE_BODY_FILE"
 fi
 
