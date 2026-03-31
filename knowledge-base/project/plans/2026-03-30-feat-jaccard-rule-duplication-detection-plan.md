@@ -99,13 +99,13 @@ Insert Phase 2.5 between Phase 2 (hook extraction, ends at line ~106) and Phase 
 
 ## Acceptance Criteria
 
-- [ ] `detect_duplicates()` function added to `rule-audit.sh`
-- [ ] Compares AGENTS.md rules vs constitution.md rules using Jaccard on stopword-filtered tokens
-- [ ] Pairs with score >= 0.6 appear in a "Suspected Duplicates" markdown table in the issue body
-- [ ] Rules with < 4 content words after stopword removal are excluded
-- [ ] Dry-run mode (no `GH_TOKEN`) outputs the duplicates table to stdout
-- [ ] `rule-audit.yml` workflow requires no secret or permission changes
-- [ ] All tests pass
+- [x] `detect_duplicates()` function added to `rule-audit.sh`
+- [x] Compares AGENTS.md rules vs constitution.md rules using Jaccard on stopword-filtered tokens
+- [x] Pairs with score >= 0.6 appear in a "Suspected Duplicates" markdown table in the issue body
+- [x] Rules with < 4 content words after stopword removal are excluded
+- [x] Dry-run mode (no `GH_TOKEN`) outputs the duplicates table to stdout
+- [x] `rule-audit.yml` workflow requires no secret or permission changes
+- [x] All tests pass
 
 ## Test Scenarios
 
