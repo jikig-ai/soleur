@@ -40,7 +40,10 @@ jobs:
 
   deploy:
     needs: release
-    if: needs.release.outputs.version != '' && (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
+    if: >-
+      always() &&
+      needs.release.outputs.docker_pushed == 'true' &&
+      (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
     runs-on: ubuntu-latest
     concurrency:
       group: deploy-telegram-bridge

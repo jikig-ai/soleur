@@ -19,6 +19,7 @@
   <meta name="twitter:title" content="{{ title }}{% if title != site.name %} - {{ site.name }}{% endif %}">
   <meta name="twitter:description" content="{{ description }}">
   <meta name="twitter:image" content="{{ site.url }}/images/{{ ogImage | default('og-image.png') }}">
+  <meta name="twitter:image:alt" content="{{ ogImageAlt | default(site.name + ' - ' + site.tagline) }}">
   <meta name="twitter:site" content="@soleur_ai">
   <meta name="twitter:creator" content="@soleur_ai">
   <!-- CSP: Cloudflare Bot Fight Mode injects an inline script with per-request
@@ -33,13 +34,27 @@
         "@type": "WebSite",
         "name": "{{ site.name }}",
         "url": "{{ site.url }}",
-        "description": "{{ site.description }}"
+        "description": "{{ site.description }}",
+        "potentialAction": {
+          "@type": "SearchAction",
+          "target": {
+            "@type": "EntryPoint",
+            "urlTemplate": "{{ site.url }}/blog/?q={search_term_string}"
+          },
+          "query-input": "required name=search_term_string"
+        }
       },
       {
         "@type": "WebPage",
         "name": "{{ title }}",
         "description": "{{ description }}",
-        "url": "{{ site.url }}{{ page.url }}"
+        "url": "{{ site.url }}{{ page.url }}",
+        "inLanguage": "en-US",
+        "publisher": {
+          "@type": "Organization",
+          "name": "{{ site.name }}",
+          "url": "{{ site.url }}"
+        }
       }{% if page.url == "/" or page.url == "/index.html" %},
       {
         "@type": "SoftwareApplication",
@@ -51,6 +66,22 @@
         "downloadUrl": "{{ site.github }}",
         "releaseNotes": "{{ site.url }}/pages/changelog.html",
         "featureList": "AI Agents, Skills, Commands, Knowledge Compounding, Code Review, Planning, Deployment",
+        "offers": [
+          {
+            "@type": "Offer",
+            "name": "Self-Hosted (Open Source)",
+            "price": "0",
+            "priceCurrency": "USD",
+            "description": "Full platform with all agents and skills. Free and open source."
+          },
+          {
+            "@type": "Offer",
+            "name": "Spark (Cloud Platform)",
+            "price": "49",
+            "priceCurrency": "USD",
+            "description": "Managed infrastructure, web dashboard, and priority support."
+          }
+        ],
         "author": {
           "@type": "Organization",
           "name": "{{ site.name }}",
@@ -63,6 +94,7 @@
   <base href="/">
   <link rel="icon" type="image/png" href="images/favicon.png">
   <title>{% if title == site.name %}{{ site.name }} - {{ site.tagline }}{% else %}{{ seoTitle if seoTitle else title }} - {{ site.name }}{% endif %}</title>
+  <link rel="preload" href="css/style.css" as="style">
   <link rel="stylesheet" href="css/style.css">
   <!-- Privacy-friendly analytics by Plausible -->
   <script async src="https://plausible.io/js/pa-unmpBTT7YXW_UsDCGRfHH.js"></script>

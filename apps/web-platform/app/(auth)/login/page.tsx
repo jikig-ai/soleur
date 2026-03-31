@@ -1,17 +1,46 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState, useEffect, useRef } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import Link from "next/link";
 
+const CALLBACK_ERRORS: Record<string, string> = {
+  auth_failed: "Sign-in failed. Please try again.",
+  provider_disabled:
+    "This sign-in provider is not enabled. Please use a different method.",
+};
+
 export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otp, setOtp] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const otpRef = useRef<HTMLInputElement>(null);
 
-  async function handleSubmit(e: React.FormEvent) {
+  useEffect(() => {
+    const callbackError = searchParams.get("error");
+    if (callbackError) {
+      setError(
+        CALLBACK_ERRORS[callbackError] ??
+          "Something went wrong. Please try again.",
+      );
+    }
+  }, [searchParams]);
+
+  async function handleSendOtp(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError("");
@@ -19,10 +48,7 @@ export default function LoginPage() {
     const supabase = createClient();
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: {
-        emailRedirectTo: `${window.location.origin}/callback`,
-        shouldCreateUser: false,
-      },
+      options: { shouldCreateUser: false },
     });
 
     setLoading(false);
@@ -30,22 +56,76 @@ export default function LoginPage() {
     if (error) {
       setError(error.message);
     } else {
-      setSent(true);
+      setOtpSent(true);
+      setTimeout(() => otpRef.current?.focus(), 100);
     }
   }
 
-  if (sent) {
+  async function handleVerifyOtp(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+
+    const supabase = createClient();
+    const { error } = await supabase.auth.verifyOtp({
+      email,
+      token: otp,
+      type: "email",
+    });
+
+    setLoading(false);
+
+    if (error) {
+      setError(error.message);
+    } else {
+      router.push("/dashboard");
+    }
+  }
+
+  if (otpSent) {
     return (
       <main className="flex min-h-screen items-center justify-center p-4">
-        <div className="w-full max-w-sm space-y-4 text-center">
-          <h1 className="text-2xl font-semibold">Check your email</h1>
-          <p className="text-neutral-400">
-            We sent a magic link to <strong className="text-white">{email}</strong>.
-            Click the link to sign in.
-          </p>
+        <div className="w-full max-w-sm space-y-6">
+          <div className="space-y-2 text-center">
+            <h1 className="text-2xl font-semibold">Enter verification code</h1>
+            <p className="text-sm text-neutral-400">
+              We sent a 6-digit code to{" "}
+              <strong className="text-white">{email}</strong>
+            </p>
+          </div>
+
+          <form onSubmit={handleVerifyOtp} className="space-y-4">
+            <input
+              ref={otpRef}
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              required
+              maxLength={6}
+              value={otp}
+              onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
+              placeholder="000000"
+              className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-3 text-center text-lg tracking-[0.3em] placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none"
+            />
+
+            {error && <p className="text-sm text-red-400">{error}</p>}
+
+            <button
+              type="submit"
+              disabled={loading || otp.length !== 6}
+              className="w-full rounded-lg bg-white px-4 py-3 text-sm font-medium text-black hover:bg-neutral-200 disabled:opacity-50"
+            >
+              {loading ? "Verifying..." : "Sign in"}
+            </button>
+          </form>
+
           <button
-            onClick={() => setSent(false)}
-            className="text-sm text-neutral-500 hover:text-neutral-300"
+            onClick={() => {
+              setOtpSent(false);
+              setOtp("");
+              setError("");
+            }}
+            className="block w-full text-center text-sm text-neutral-500 hover:text-neutral-300"
           >
             Try a different email
           </button>
@@ -60,11 +140,11 @@ export default function LoginPage() {
         <div className="space-y-2 text-center">
           <h1 className="text-2xl font-semibold">Sign in to Soleur</h1>
           <p className="text-sm text-neutral-400">
-            Enter your email to receive a magic link
+            Enter your email to receive a sign-in code
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSendOtp} className="space-y-4">
           <input
             type="email"
             required
@@ -81,7 +161,7 @@ export default function LoginPage() {
             disabled={loading}
             className="w-full rounded-lg bg-white px-4 py-3 text-sm font-medium text-black hover:bg-neutral-200 disabled:opacity-50"
           >
-            {loading ? "Sending..." : "Send magic link"}
+            {loading ? "Sending..." : "Send sign-in code"}
           </button>
         </form>
 

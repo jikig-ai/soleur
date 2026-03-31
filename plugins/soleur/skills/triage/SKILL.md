@@ -1,12 +1,14 @@
 ---
 name: triage
-description: "This skill should be used when triaging findings into CLI todo files. Presents items for approval or customization. For GitHub issues, use ticket-triage agent."
+description: "This skill should be used when triaging legacy local todo files in todos/. For GitHub issues, use ticket-triage agent."
 ---
 
 - First set the /model to Haiku
 - Then read all pending todos in the todos/ directory
 
 Present all findings, decisions, or issues here one by one for triage. The goal is to go through each item and decide whether to add it to the CLI todo system.
+
+> **Note:** The `/soleur:review` skill now creates GitHub issues directly for all new findings. This triage skill handles only legacy local `todos/*.md` files that predate the GitHub issue integration.
 
 **IMPORTANT: DO NOT CODE ANYTHING DURING TRIAGE!**
 

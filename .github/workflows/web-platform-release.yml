@@ -59,7 +59,7 @@ jobs:
     needs: [release, migrate]
     if: >-
       always() &&
-      needs.release.outputs.version != '' &&
+      needs.release.outputs.docker_pushed == 'true' &&
       (needs.migrate.result == 'success' || needs.migrate.result == 'skipped') &&
       (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
     runs-on: ubuntu-latest

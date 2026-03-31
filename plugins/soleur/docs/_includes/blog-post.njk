@@ -15,6 +15,11 @@ layout: base.njk
   "datePublished": "{{ date | dateToRfc3339 }}",
   "dateModified": "{{ updated | dateToRfc3339 if updated else date | dateToRfc3339 }}",
   "url": "{{ site.url }}{{ page.url }}",
+  "mainEntityOfPage": {
+    "@type": "WebPage",
+    "@id": "{{ site.url }}{{ page.url }}"
+  },
+  "inLanguage": "en-US",
   "image": "{{ site.url }}/images/og-image.png",
   "author": {
     "@type": "Person",
