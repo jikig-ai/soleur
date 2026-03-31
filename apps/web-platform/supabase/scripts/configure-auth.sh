@@ -46,7 +46,7 @@ RESPONSE=$(curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" -X PAT
       "smtp_user": "resend",
       "smtp_pass": $smtp_pass,
       "smtp_sender_name": "Soleur",
-      "mailer_subjects_magic_link": "Sign in to Soleur",
+      "mailer_subjects_magic_link": "Your Soleur verification code",
       "mailer_templates_magic_link_content": $template
     }'
   )")
