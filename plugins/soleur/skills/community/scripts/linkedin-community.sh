@@ -39,17 +39,8 @@ require_jq() {
 # --- Credential validation ---
 
 require_credentials() {
-  local missing=()
-
   if [[ -z "${LINKEDIN_ACCESS_TOKEN:-}" ]]; then
-    missing+=("LINKEDIN_ACCESS_TOKEN")
-  fi
-  if [[ -z "${LINKEDIN_PERSON_URN:-}" ]]; then
-    missing+=("LINKEDIN_PERSON_URN")
-  fi
-
-  if [[ ${#missing[@]} -gt 0 ]]; then
-    echo "Error: Missing LinkedIn credentials: ${missing[*]}" >&2
+    echo "Error: Missing LinkedIn credentials: LINKEDIN_ACCESS_TOKEN" >&2
     echo "" >&2
     echo "To configure:" >&2
     echo "  1. Run: linkedin-setup.sh generate-token" >&2
@@ -270,7 +261,11 @@ cmd_post_content() {
   fi
 
   # Build request body (--author overrides default LINKEDIN_PERSON_URN)
-  local author="${author_override:-$LINKEDIN_PERSON_URN}"
+  local author="${author_override:-${LINKEDIN_PERSON_URN:-}}"
+  if [[ -z "$author" ]]; then
+    echo "Error: No author specified. Provide --author or set LINKEDIN_PERSON_URN." >&2
+    exit 1
+  fi
   local json_body
   json_body=$(jq -n \
     --arg author "$author" \
