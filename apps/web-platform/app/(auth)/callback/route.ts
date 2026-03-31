@@ -51,7 +51,15 @@ export async function GET(request: NextRequest) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
 
     if (error) {
-      logger.error({ err: error, status: error.status }, "exchangeCodeForSession failed");
+      logger.error(
+        { err: error, status: error.status, errorName: error.name },
+        "exchangeCodeForSession failed",
+      );
+      // Return specific error so the login page can show a helpful message
+      const errorCode = error.message?.includes("code verifier")
+        ? "code_verifier_missing"
+        : "auth_failed";
+      return NextResponse.redirect(`${origin}/login?error=${errorCode}`);
     }
 
     if (!error) {

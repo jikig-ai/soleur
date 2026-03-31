@@ -10,7 +10,7 @@
   <![endif]-->
 </head>
 <body style="margin:0;padding:0;background-color:#0a0a0a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
-  <div style="display:none;max-height:0;overflow:hidden;">Sign in to your Soleur account</div>
+  <div style="display:none;max-height:0;overflow:hidden;">Your Soleur verification code</div>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#0a0a0a;padding:40px 20px;">
     <tr>
       <td align="center">
@@ -22,20 +22,19 @@
           </tr>
           <tr>
             <td style="color:#a3a3a3;font-size:14px;line-height:1.6;padding-bottom:24px;text-align:center;">
-              Click the button below to sign in to your Soleur account.
+              Enter this code to sign in to your Soleur account.
             </td>
           </tr>
           <tr>
             <td align="center" style="padding-bottom:24px;">
-              <a href="{{ .ConfirmationURL }}"
-                 style="display:inline-block;background-color:#ffffff;color:#000000;font-size:14px;font-weight:500;text-decoration:none;padding:12px 32px;border-radius:8px;mso-padding-alt:12px 32px;">
-                Sign in to Soleur
-              </a>
+              <div style="display:inline-block;background-color:#262626;color:#ffffff;font-size:32px;font-weight:600;letter-spacing:0.3em;padding:16px 32px;border-radius:8px;font-family:'Courier New',Courier,monospace;">
+                {{ .Token }}
+              </div>
             </td>
           </tr>
           <tr>
             <td style="color:#525252;font-size:12px;line-height:1.5;text-align:center;padding-bottom:16px;">
-              This link expires in 24 hours. If you didn't request this email, you can safely ignore it.
+              This code expires in 10 minutes. If you didn't request this email, you can safely ignore it.
             </td>
           </tr>
           <tr>
