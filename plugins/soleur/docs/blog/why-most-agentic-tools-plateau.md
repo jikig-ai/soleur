@@ -1,6 +1,7 @@
 ---
 title: "Why Most Agentic Engineering Tools Plateau"
 date: 2026-03-14
+updated: 2026-04-01
 description: "Most AI coding tools plateau after week two. Compound knowledge fixes this: a system that learns from every task and routes those learnings back into its rules."
 tags:
   - agentic-engineering
@@ -144,14 +145,54 @@ The first billion-dollar company run by one person is not science fiction. It is
 
 ## Frequently Asked Questions
 
-### What is compound engineering?
+<div class="faq-list">
 
-Compound engineering is the practice of designing AI-assisted development systems where each unit of work makes subsequent work easier. Unlike traditional development where technical debt accumulates, compound engineering inverts the curve: every feature, bug fix, and code review generates learnings that are captured, routed, and — in the most mature implementations — enforced mechanically.
+<details class="faq-item">
+<summary class="faq-question">What is compound engineering?</summary>
+<p class="faq-answer">Compound engineering is the practice of designing AI-assisted development systems where each unit of work makes subsequent work easier. Unlike traditional development where technical debt accumulates, compound engineering inverts the curve: every feature, bug fix, and code review generates learnings that are captured, routed, and &mdash; in the most mature implementations &mdash; enforced mechanically.</p>
+</details>
 
-### How does knowledge compounding work in AI-assisted development?
+<details class="faq-item">
+<summary class="faq-question">How does knowledge compounding work in AI-assisted development?</summary>
+<p class="faq-answer">A compound knowledge system follows a four-stage loop: <strong>work</strong> (execute a task), <strong>capture</strong> (document what was learned, including failures), <strong>route</strong> (feed the insight back to the specific agent or workflow that was active), and <strong>enforce</strong> (promote critical learnings to code-level guardrails that prevent recurrence). The key distinction from documentation-only approaches is the enforcement stage &mdash; where learnings change the system&rsquo;s behavior, not just its memory.</p>
+</details>
 
-A compound knowledge system follows a four-stage loop: **work** (execute a task), **capture** (document what was learned, including failures), **route** (feed the insight back to the specific agent or workflow that was active), and **enforce** (promote critical learnings to code-level guardrails that prevent recurrence). The key distinction from documentation-only approaches is the enforcement stage — where learnings change the system's behavior, not just its memory.
+<details class="faq-item">
+<summary class="faq-question">What is the difference between vibe coding and agentic engineering?</summary>
+<p class="faq-answer">Vibe coding, coined by Andrej Karpathy in February 2025, describes ad-hoc AI-assisted development: prompting a model conversationally and accepting the output. Agentic engineering, which Karpathy introduced in February 2026, describes the structured orchestration of AI agents with human oversight &mdash; using specifications, workflow gates, and quality checks to produce reliable output. The shift is from conversation to governance: from &ldquo;tell the AI what you want&rdquo; to &ldquo;define the constraints, delegate execution, verify the results.&rdquo;</p>
+</details>
 
-### What is the difference between vibe coding and agentic engineering?
+</div>
 
-Vibe coding, coined by Andrej Karpathy in February 2025, describes ad-hoc AI-assisted development: prompting a model conversationally and accepting the output. Agentic engineering, which Karpathy introduced in February 2026, describes the structured orchestration of AI agents with human oversight — using specifications, workflow gates, and quality checks to produce reliable output. The shift is from conversation to governance: from "tell the AI what you want" to "define the constraints, delegate execution, verify the results."
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "What is compound engineering?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Compound engineering is the practice of designing AI-assisted development systems where each unit of work makes subsequent work easier. Unlike traditional development where technical debt accumulates, compound engineering inverts the curve: every feature, bug fix, and code review generates learnings that are captured, routed, and — in the most mature implementations — enforced mechanically."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How does knowledge compounding work in AI-assisted development?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "A compound knowledge system follows a four-stage loop: work (execute a task), capture (document what was learned, including failures), route (feed the insight back to the specific agent or workflow that was active), and enforce (promote critical learnings to code-level guardrails that prevent recurrence). The key distinction from documentation-only approaches is the enforcement stage — where learnings change the system's behavior, not just its memory."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What is the difference between vibe coding and agentic engineering?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Vibe coding, coined by Andrej Karpathy in February 2025, describes ad-hoc AI-assisted development: prompting a model conversationally and accepting the output. Agentic engineering, which Karpathy introduced in February 2026, describes the structured orchestration of AI agents with human oversight — using specifications, workflow gates, and quality checks to produce reliable output. The shift is from conversation to governance: from 'tell the AI what you want' to 'define the constraints, delegate execution, verify the results.'"
+      }
+    }
+  ]
+}
+</script>
