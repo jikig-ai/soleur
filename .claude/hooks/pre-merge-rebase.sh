@@ -2,8 +2,10 @@
 # PreToolUse hook: review evidence gate + auto-sync against origin/main before gh pr merge.
 #
 # Guard 6 (review evidence): blocks gh pr merge when no review evidence exists on the branch.
-# Review evidence is detected via: (1) todos/ files tagged "code-review", or
-# (2) a commit matching "refactor: add code review findings" (coupled to review SKILL.md Step 5).
+# Review evidence is detected via three signals (any one suffices):
+# (1) todos/ files tagged "code-review" (legacy, pre-#1329)
+# (2) a commit matching "refactor: add code review findings" (legacy, pre-#1329)
+# (3) GitHub issues with "code-review" label referencing the branch's PR (current, post-#1329)
 # No escape hatch — run /review before merging.
 #
 # Auto-sync: merges origin/main into the feature branch to ensure it is current before merge.
@@ -52,19 +54,37 @@ fi
 
 # Guard 6: Review evidence gate.
 # Block gh pr merge when no review evidence exists on the branch.
-# Purely local check -- no network calls, no PR number needed.
+# Signals 1-2 are local; Signal 3 requires network (gh API).
 # Fires before detached HEAD exit because gh pr merge operates on a PR number,
 # not the local checkout state -- review evidence is still visible in detached HEAD.
 
-# Check 1: todo files tagged "code-review"
+# Check 1 (legacy): todo files tagged "code-review"
 REVIEW_TODOS=$(grep -rl "code-review" "$WORK_DIR/todos/" 2>/dev/null | head -1 || true)
 
-# Check 2: review commit (coupled to review SKILL.md Step 5 commit message;
+# Check 2 (legacy): review commit (coupled to review SKILL.md Step 5 commit message;
 # uses locally-cached origin/main — may be stale if not recently fetched)
 REVIEW_COMMIT=$(git -C "$WORK_DIR" log origin/main..HEAD --oneline 2>/dev/null \
   | grep "refactor: add code review findings" || true)
 
+# Check 3 (current): GitHub issues with "code-review" label referencing this PR.
+# Coupled to review-todo-structure.md issue body template ("**Source:** PR #<number>").
+# Fail open if gh is unavailable or network fails (Signal 3 is additive, not required).
+REVIEW_ISSUES=""
 if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]]; then
+  # Only run the network check if local signals found nothing
+  PR_NUMBER=$(echo "$CMD" | grep -oE 'gh\s+pr\s+merge\s+([0-9]+)' | grep -oE '[0-9]+' || true)
+  if [[ -z "$PR_NUMBER" ]]; then
+    # No PR number in command args -- fall back to branch-based lookup
+    PR_NUMBER=$(gh pr list --repo "$(git -C "$WORK_DIR" remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||')" \
+      --head "$CURRENT_BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
+  fi
+  if [[ -n "$PR_NUMBER" ]]; then
+    REVIEW_ISSUES=$(gh issue list --label code-review --search "PR #${PR_NUMBER}" \
+      --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null || true)
+  fi
+fi
+
+if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]] && [[ -z "$REVIEW_ISSUES" ]]; then
   jq -n '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
