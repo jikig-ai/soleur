@@ -33,6 +33,8 @@
     { "label": "Community", "url": "pages/community.html" },
     { "label": "Vision", "url": "pages/vision.html" },
     { "label": "About", "url": "about/" },
-    { "label": "Legal", "url": "pages/legal.html" }
+    { "label": "Legal", "url": "pages/legal.html" },
+    { "label": "Privacy Policy", "url": "pages/legal/privacy-policy.html" },
+    { "label": "Terms of Service", "url": "pages/legal/terms-and-conditions.html" }
   ]
 }
