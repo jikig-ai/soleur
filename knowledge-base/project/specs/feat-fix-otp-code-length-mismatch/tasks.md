@@ -9,8 +9,8 @@
 ## Phase 2: Extract Constant and Fix UI
 
 - [ ] 2.1 Create `apps/web-platform/lib/auth/constants.ts` with `EMAIL_OTP_LENGTH = 6`
-- [ ] 2.2 Update `apps/web-platform/app/(auth)/login/page.tsx` to import and use `EMAIL_OTP_LENGTH` for maxLength, disabled check, placeholder, and instructional text
-- [ ] 2.3 Update `apps/web-platform/app/(auth)/signup/page.tsx` to import and use `EMAIL_OTP_LENGTH` for maxLength, disabled check, placeholder, and instructional text
+- [ ] 2.2 Update `apps/web-platform/app/(auth)/login/page.tsx` to import and use `EMAIL_OTP_LENGTH` for maxLength, disabled check, and instructional text (keep placeholder hardcoded with comment)
+- [ ] 2.3 Update `apps/web-platform/app/(auth)/signup/page.tsx` to import and use `EMAIL_OTP_LENGTH` for maxLength, disabled check, and instructional text (keep placeholder hardcoded with comment)
 - [ ] 2.4 Verify no hardcoded OTP length `6` remains in login or signup pages (grep check)
 
 ## Phase 3: Fix Email Template Expiry Text
@@ -20,12 +20,11 @@
 
 ## Phase 4: E2E Test Improvements
 
-- [ ] 4.1 Write unit test `apps/web-platform/test/otp-constants.test.ts` verifying `EMAIL_OTP_LENGTH` is between 6 and 10
+- [ ] 4.1 Add E2E test: paste 8-digit code, verify truncation to `EMAIL_OTP_LENGTH` digits (primary regression test)
 - [ ] 4.2 Add E2E test: OTP input accepts exactly `EMAIL_OTP_LENGTH` digits on login page
-- [ ] 4.3 Add E2E test: OTP input rejects non-numeric characters
-- [ ] 4.4 Add E2E test: submit button disabled until OTP is complete
-- [ ] 4.5 Add E2E test: instructional text shows correct digit count
-- [ ] 4.6 Add E2E test: OTP input maxLength attribute matches `EMAIL_OTP_LENGTH`
+- [ ] 4.3 Add E2E test: submit button disabled until OTP is complete
+- [ ] 4.4 Add E2E test: instructional text shows correct digit count
+- [ ] 4.5 Add E2E test: OTP input maxLength attribute matches `EMAIL_OTP_LENGTH`
 
 ## Phase 5: Verification
 

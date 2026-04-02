@@ -60,10 +60,10 @@ export const EMAIL_OTP_LENGTH = 6;
 - `apps/web-platform/app/(auth)/login/page.tsx` -- replace all three hardcoded `6` references with `EMAIL_OTP_LENGTH`
 - `apps/web-platform/app/(auth)/signup/page.tsx` -- replace all three hardcoded `6` references with `EMAIL_OTP_LENGTH`
 
-The placeholder and instructional text should also derive from the constant:
+The instructional text should derive from the constant:
 
-- Placeholder: `"0".repeat(EMAIL_OTP_LENGTH)` instead of `"000000"`
 - Text: `` `We sent a ${EMAIL_OTP_LENGTH}-digit code to` `` instead of `"We sent a 6-digit code to"`
+- Placeholder: keep hardcoded `"000000"` with a comment referencing `EMAIL_OTP_LENGTH` -- the placeholder is a visual hint, not a functional contract
 
 ### Phase 3: Fix secondary inconsistency in email template
 
@@ -94,19 +94,17 @@ They do NOT test:
 
 Add tests for:
 
+- `test("OTP input truncates pasted 8-digit code to EMAIL_OTP_LENGTH digits")` -- paste an 8-digit string, verify only 6 characters accepted (primary regression test -- directly reproduces this bug)
 - `test("OTP input accepts exactly EMAIL_OTP_LENGTH digits")` -- fill input, verify value length
-- `test("OTP input rejects non-numeric characters")` -- type letters, verify they are stripped
 - `test("submit button is disabled until OTP is complete")` -- type partial code, check disabled; complete code, check enabled
 - `test("instructional text shows correct digit count")` -- verify text contains the expected digit count
 - `test("OTP input maxLength matches EMAIL_OTP_LENGTH")` -- verify the input's maxLength attribute
 
-**File (new):** `apps/web-platform/test/otp-constants.test.ts`
-
-Add a unit test that verifies `EMAIL_OTP_LENGTH` is between 6 and 10 (Supabase constraint), ensuring the constant stays within valid bounds.
-
 **File (modify):** `apps/web-platform/supabase/scripts/configure-auth.sh`
 
 Add a comment documenting that `mailer_otp_length` must match `EMAIL_OTP_LENGTH` in `lib/auth/constants.ts`.
+
+**Note:** Phase 3 (expiry text fix) should be a separate commit from the OTP length fix -- it is a separate concern.
 
 ## Technical Considerations
 
@@ -127,7 +125,7 @@ Add a comment documenting that `mailer_otp_length` must match `EMAIL_OTP_LENGTH`
 - [ ] E2E tests verify OTP input accepts exactly the correct number of digits
 - [ ] E2E tests verify submit button disabled state based on OTP length
 - [ ] E2E tests verify instructional text contains correct digit count
-- [ ] Unit test verifies `EMAIL_OTP_LENGTH` is within Supabase valid range (6-10)
+- [ ] E2E test reproduces the original bug (paste 8-digit code, verify truncation to 6)
 - [ ] Email template expiry text matches actual `mailer_otp_exp` config
 
 ## Test Scenarios
