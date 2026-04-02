@@ -40,6 +40,19 @@ AVATAR_URL="https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleu
 # Global set per-file in the scan loop, used by fallback issue creators
 CASE_NAME=""
 
+# --- Temp File Cleanup ---
+# Track all temp files and clean up on any exit (normal, error, or signal).
+# Prevents temp file leaks under set -e when a command fails between mktemp and rm.
+_TMPFILES=()
+trap 'rm -f "${_TMPFILES[@]}"' EXIT
+
+make_tmp() {
+  local f
+  f=$(mktemp)
+  _TMPFILES+=("$f")
+  echo "$f"
+}
+
 # --- Frontmatter Parsing ---
 
 parse_frontmatter() {
@@ -254,7 +267,7 @@ post_x_thread() {
   # Post hook tweet -- capture stdout (JSON) and stderr separately
   local hook_result hook_id hook_stderr
   local prev_id reply_result reply_id reply_stderr i
-  hook_stderr=$(mktemp)
+  hook_stderr=$(make_tmp)
   hook_result=$(bash "$X_SCRIPT" post-tweet "${tweets[0]}" 2>"$hook_stderr") || {
     local exit_code=$?
     local err_text
@@ -281,7 +294,7 @@ post_x_thread() {
 
   # Chain body tweets -- each reply references the immediately preceding tweet
   prev_id="$hook_id"
-  reply_stderr=$(mktemp)
+  reply_stderr=$(make_tmp)
   for (( i = 1; i < ${#tweets[@]}; i++ )); do
     sleep 2  # Rate-limit guard: pause between thread tweets to avoid X API 429s
     reply_result=$(bash "$X_SCRIPT" post-tweet "${tweets[$i]}" --reply-to "$prev_id" 2>"$reply_stderr") || {
@@ -317,12 +330,17 @@ post_x_thread() {
 create_linkedin_fallback_issue() {
   local file="$1"
   local section="${2:-LinkedIn Personal}"
+  local error_reason="${3:-}"
   local linkedin_content
   linkedin_content=$(extract_section "$file" "$section")
 
   local title="[Content Publisher] LinkedIn API failed -- manual posting required for $CASE_NAME ($section)"
+  local error_section=""
+  if [[ -n "$error_reason" ]]; then
+    error_section=$(printf '\n\n**Error:**\n```\n%s\n```' "${error_reason:0:1000}")
+  fi
   local body
-  body=$(printf '## Manual LinkedIn Posting Required\n\nThe scheduled content publisher could not post to LinkedIn for **%s** (%s).\n\nPost this content manually at https://www.linkedin.com/feed/:\n\n---\n\n%s' "$CASE_NAME" "$section" "$linkedin_content")
+  body=$(printf '## Manual LinkedIn Posting Required\n\nThe scheduled content publisher could not post to LinkedIn for **%s** (%s).%s\n\nPost this content manually at https://www.linkedin.com/feed/:\n\n---\n\n%s' "$CASE_NAME" "$section" "$error_section" "$linkedin_content")
 
   create_dedup_issue "$title" "$body" "action-required,content-publisher" || {
     echo "FATAL: LinkedIn posting failed AND fallback issue creation failed." >&2
@@ -346,11 +364,17 @@ post_linkedin() {
     return 0
   fi
 
-  bash "$LINKEDIN_SCRIPT" post-content --text "$content" || {
+  local stderr_file
+  stderr_file=$(make_tmp)
+  if ! bash "$LINKEDIN_SCRIPT" post-content --text "$content" 2>"$stderr_file"; then
+    local error_reason
+    error_reason=$(head -c 1000 "$stderr_file")
+    rm -f "$stderr_file"
     echo "Error: LinkedIn posting failed ($section). Creating fallback issue." >&2
-    create_linkedin_fallback_issue "$file" "$section"
+    create_linkedin_fallback_issue "$file" "$section" "$error_reason"
     return 1
-  }
+  fi
+  rm -f "$stderr_file"
   echo "[ok] LinkedIn post published ($section)."
 }
 
@@ -379,11 +403,17 @@ post_linkedin_company() {
     return 0
   fi
 
-  bash "$LINKEDIN_SCRIPT" post-content --text "$content" --author "urn:li:organization:${LINKEDIN_ORG_ID}" || {
+  local stderr_file
+  stderr_file=$(make_tmp)
+  if ! bash "$LINKEDIN_SCRIPT" post-content --text "$content" --author "urn:li:organization:${LINKEDIN_ORG_ID}" 2>"$stderr_file"; then
+    local error_reason
+    error_reason=$(head -c 1000 "$stderr_file")
+    rm -f "$stderr_file"
     echo "Error: LinkedIn Company Page posting failed. Creating fallback issue." >&2
-    create_linkedin_fallback_issue "$file" "LinkedIn Company Page"
+    create_linkedin_fallback_issue "$file" "LinkedIn Company Page" "$error_reason"
     return 1
-  }
+  fi
+  rm -f "$stderr_file"
   echo "[ok] LinkedIn Company Page post published."
 }
 
