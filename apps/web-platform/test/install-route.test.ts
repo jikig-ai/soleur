@@ -102,18 +102,132 @@ describe("verifyInstallationOwnership", () => {
     expect(result.verified).toBe(true);
   });
 
-  test("rejects organization installations with 403", async () => {
+  // --- Organization installation tests ---
+  // Each org test uses a unique installationId (200-204) to avoid tokenCache
+  // persistence across tests causing unpredictable mock sequences.
+
+  test("returns verified=true when user is a member of the org (Organization type)", async () => {
+    // Mock 1: GET /app/installations/200 — returns org account
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
         account: { login: "my-org", id: 3, type: "Organization" },
       }),
     });
+    // Mock 2: POST /app/installations/200/access_tokens — token exchange
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        token: "ghs_org200",
+        expires_at: new Date(Date.now() + 3600000).toISOString(),
+      }),
+    });
+    // Mock 3: GET /orgs/my-org/members/alice — 204 (is a member)
+    mockFetch.mockResolvedValueOnce({ status: 204 });
 
-    const result = await verifyInstallationOwnership(123, "alice");
+    const result = await verifyInstallationOwnership(200, "alice");
+    expect(result.verified).toBe(true);
+    expect(result.error).toBeUndefined();
+  });
+
+  test("returns verified=false with 403 when user is NOT a member of the org", async () => {
+    // Mock 1: GET /app/installations/201 — returns org account
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        account: { login: "my-org", id: 3, type: "Organization" },
+      }),
+    });
+    // Mock 2: POST /app/installations/201/access_tokens — token exchange
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        token: "ghs_org201",
+        expires_at: new Date(Date.now() + 3600000).toISOString(),
+      }),
+    });
+    // Mock 3: GET /orgs/my-org/members/alice — 404 (not a member)
+    mockFetch.mockResolvedValueOnce({ status: 404 });
+
+    const result = await verifyInstallationOwnership(201, "alice");
     expect(result.verified).toBe(false);
     expect(result.status).toBe(403);
-    expect(result.error).toMatch(/organization/i);
+    expect(result.error).toMatch(/not a member/i);
+  });
+
+  test("returns verified=false with 403 when membership check returns 302 redirect", async () => {
+    // Mock 1: GET /app/installations/202 — returns org account
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        account: { login: "my-org", id: 3, type: "Organization" },
+      }),
+    });
+    // Mock 2: POST /app/installations/202/access_tokens — token exchange
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        token: "ghs_org202",
+        expires_at: new Date(Date.now() + 3600000).toISOString(),
+      }),
+    });
+    // Mock 3: GET /orgs/my-org/members/alice — 302 (non-member perspective)
+    mockFetch.mockResolvedValueOnce({ status: 302 });
+
+    const result = await verifyInstallationOwnership(202, "alice");
+    expect(result.verified).toBe(false);
+    expect(result.status).toBe(403);
+    expect(result.error).toMatch(/not a member/i);
+  });
+
+  test("returns verified=false with 502 when membership check returns 403 (missing Members permission)", async () => {
+    // Mock 1: GET /app/installations/203 — returns org account
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        account: { login: "my-org", id: 3, type: "Organization" },
+      }),
+    });
+    // Mock 2: POST /app/installations/203/access_tokens — token exchange
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        token: "ghs_org203",
+        expires_at: new Date(Date.now() + 3600000).toISOString(),
+      }),
+    });
+    // Mock 3: GET /orgs/my-org/members/alice — 403 (App lacks Members permission)
+    mockFetch.mockResolvedValueOnce({ status: 403 });
+
+    const result = await verifyInstallationOwnership(203, "alice");
+    expect(result.verified).toBe(false);
+    expect(result.status).toBe(502);
+    expect(result.error).toMatch(/failed to verify/i);
+  });
+
+  test("returns verified=false with 502 when membership check returns 500", async () => {
+    // Mock 1: GET /app/installations/204 — returns org account
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        account: { login: "my-org", id: 3, type: "Organization" },
+      }),
+    });
+    // Mock 2: POST /app/installations/204/access_tokens — token exchange
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        token: "ghs_org204",
+        expires_at: new Date(Date.now() + 3600000).toISOString(),
+      }),
+    });
+    // Mock 3: GET /orgs/my-org/members/alice — 500 (server error)
+    mockFetch.mockResolvedValueOnce({ status: 500 });
+
+    const result = await verifyInstallationOwnership(204, "alice");
+    expect(result.verified).toBe(false);
+    expect(result.status).toBe(502);
+    expect(result.error).toMatch(/failed to verify/i);
   });
 
   test("returns 502 when account is missing from response", async () => {
@@ -143,5 +257,15 @@ describe("install route structural enforcement", () => {
     expect(verifyIndex).toBeGreaterThan(-1);
     expect(updateIndex).toBeGreaterThan(-1);
     expect(verifyIndex).toBeLessThan(updateIndex);
+  });
+
+  test("githubLogin assignment does not reference user_metadata for user_name", () => {
+    const routeSource = readFileSync(
+      join(__dirname, "../app/api/repo/install/route.ts"),
+      "utf-8",
+    );
+    // The route must not use user_metadata?.user_name anywhere — it's user-mutable
+    // and must never be trusted for security decisions (GitHub identity extraction).
+    expect(routeSource).not.toMatch(/user_metadata\?\.user_name/);
   });
 });
