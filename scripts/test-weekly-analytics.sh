@@ -222,6 +222,61 @@ assert_eq "kpi-miss-has-visitors" "true" "$(grep -q 'kpi_visitors=30' "$GITHUB_O
 rm -rf "$kpi_dir"
 
 # ============================================================
+# Test Suite: validate_json_response
+# ============================================================
+
+echo "--- validate_json_response tests ---"
+
+VJR_DIR=$(mktemp -d)
+
+# Test: valid JSON passes validation
+echo '{"results": {"visitors": {"value": 42}}}' > "$VJR_DIR/valid.json"
+if validate_json_response "$VJR_DIR/valid.json" "test" 2>/dev/null; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL: validate_json-valid: should pass for valid JSON" >&2
+fi
+
+# Test: non-JSON text fails validation
+echo "402 Payment Required" > "$VJR_DIR/invalid.txt"
+if validate_json_response "$VJR_DIR/invalid.txt" "test" 2>/dev/null; then
+  FAIL=$((FAIL + 1))
+  echo "FAIL: validate_json-invalid: should fail for non-JSON" >&2
+else
+  PASS=$((PASS + 1))
+fi
+
+# Test: empty file fails validation
+> "$VJR_DIR/empty.txt"
+if validate_json_response "$VJR_DIR/empty.txt" "test" 2>/dev/null; then
+  FAIL=$((FAIL + 1))
+  echo "FAIL: validate_json-empty: should fail for empty file" >&2
+else
+  PASS=$((PASS + 1))
+fi
+
+# Test: error message includes context string
+vjr_error=$(validate_json_response "$VJR_DIR/invalid.txt" "preflight check" 2>&1 || true)
+assert_eq "validate_json-error-context" "true" "$(echo "$vjr_error" | grep -q 'preflight check' && echo "true" || echo "false")"
+
+# Test: error message includes response body snippet
+assert_eq "validate_json-error-body" "true" "$(echo "$vjr_error" | grep -q '402 Payment Required' && echo "true" || echo "false")"
+
+# Test: HTML error page (realistic proxy error) fails validation
+cat > "$VJR_DIR/html.txt" <<'HTML'
+<!DOCTYPE html><html><body><h1>502 Bad Gateway</h1></body></html>
+HTML
+if validate_json_response "$VJR_DIR/html.txt" "test" 2>/dev/null; then
+  FAIL=$((FAIL + 1))
+  echo "FAIL: validate_json-html: should fail for HTML response" >&2
+else
+  PASS=$((PASS + 1))
+fi
+
+rm -rf "$VJR_DIR"
+
+# ============================================================
 # Results
 # ============================================================
 
