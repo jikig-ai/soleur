@@ -12,17 +12,19 @@ export default function Error({
   useEffect(() => {
     Sentry.captureException(error);
   }, [error]);
+
   return (
-    <div className="flex items-center justify-center min-h-screen">
-      <div className="text-center">
-        <h2 className="text-xl mb-4">Something went wrong</h2>
-        <button
-          onClick={reset}
-          className="px-4 py-2 bg-neutral-800 rounded"
-        >
-          Try again
-        </button>
-      </div>
+    <div className="flex min-h-[50vh] flex-col items-center justify-center gap-4">
+      <h2 className="text-xl font-semibold text-white">Something went wrong</h2>
+      <p className="text-sm text-neutral-400">
+        {error.digest ? `Error ID: ${error.digest}` : "An unexpected error occurred."}
+      </p>
+      <button
+        onClick={reset}
+        className="rounded-lg border border-neutral-700 px-4 py-2 text-sm text-neutral-300 transition-colors hover:border-neutral-500 hover:text-white"
+      >
+        Try again
+      </button>
     </div>
   );
 }
