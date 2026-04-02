@@ -1,7 +1,7 @@
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
 // Typed error codes for structured error handling over WebSocket
-export type WSErrorCode = "key_invalid" | "session_expired" | "session_resumed" | "rate_limited";
+export type WSErrorCode = "key_invalid" | "session_expired" | "session_resumed" | "rate_limited" | "idle_timeout";
 
 // Shared WebSocket close codes — single source of truth for server, client, and tests.
 // See: https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent/code (4000-4999 = application-reserved)
@@ -12,6 +12,7 @@ export const WS_CLOSE_CODES = {
   TC_NOT_ACCEPTED: 4004,
   INTERNAL_ERROR: 4005,
   RATE_LIMITED: 4008,
+  IDLE_TIMEOUT: 4009,
 } as const;
 
 export class KeyInvalidError extends Error {

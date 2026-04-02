@@ -72,6 +72,16 @@ export function abortSession(userId: string, conversationId: string, reason?: "d
   }
 }
 
+/** Abort ALL sessions for a user (called during account deletion). */
+export function abortAllUserSessions(userId: string): void {
+  const prefix = `${userId}:`;
+  for (const [key, session] of activeSessions) {
+    if (key.startsWith(prefix)) {
+      session.abort.abort(new Error("Session aborted: account_deleted"));
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // BYOK key retrieval
 // ---------------------------------------------------------------------------
@@ -210,7 +220,7 @@ export async function cleanupOrphanedConversations(): Promise<void> {
 // ---------------------------------------------------------------------------
 // Inactivity timeout (runs as periodic background check)
 // ---------------------------------------------------------------------------
-const INACTIVITY_TIMEOUT_MS = 24 * 60 * 60 * 1_000; // 24 hours
+const INACTIVITY_TIMEOUT_MS = 2 * 60 * 60 * 1_000; // 2 hours
 const INACTIVITY_CHECK_INTERVAL_MS = 60 * 60 * 1_000; // Check every hour
 
 export function startInactivityTimer(): void {
