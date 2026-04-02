@@ -86,6 +86,14 @@ exit 0
 MOCK
     chmod +x "$MOCK_DIR/flock"
 
+    # Mock df (reports plenty of disk space by default)
+    cat > "$MOCK_DIR/df" << 'MOCK'
+#!/bin/bash
+echo "Avail"
+echo "20000000"
+MOCK
+    chmod +x "$MOCK_DIR/df"
+
     export PATH="$MOCK_DIR:$PATH"
     bash "$DEPLOY_SCRIPT" 2>&1
   )
@@ -220,6 +228,14 @@ exit 0
 MOCK
     chmod +x "$MOCK_DIR/flock"
 
+    # Mock df (reports plenty of disk space by default)
+    cat > "$MOCK_DIR/df" << 'MOCK'
+#!/bin/bash
+echo "Avail"
+echo "20000000"
+MOCK
+    chmod +x "$MOCK_DIR/df"
+
     export PATH="$MOCK_DIR:$PATH"
     bash "$DEPLOY_SCRIPT" 2>&1
   )
@@ -313,10 +329,10 @@ assert_prune_before_pull() {
   local actual_exit
   output=$(run_deploy_traced "$cmd" 2>&1) && actual_exit=0 || actual_exit=$?
 
-  # Check that DOCKER_TRACE:system appears before DOCKER_TRACE:pull in output
+  # Check that DOCKER_TRACE:image appears before DOCKER_TRACE:pull in output
   local prune_line pull_line
-  prune_line=$(printf '%s\n' "$output" | grep -n "DOCKER_TRACE:system" | head -1 | cut -d: -f1)
-  pull_line=$(printf '%s\n' "$output" | grep -n "DOCKER_TRACE:pull" | head -1 | cut -d: -f1)
+  prune_line=$(printf '%s\n' "$output" | { grep -n "DOCKER_TRACE:image" || true; } | head -1 | cut -d: -f1)
+  pull_line=$(printf '%s\n' "$output" | { grep -n "DOCKER_TRACE:pull" || true; } | head -1 | cut -d: -f1)
 
   if [[ "$actual_exit" -eq 0 ]] && [[ -n "$prune_line" ]] && [[ -n "$pull_line" ]] && [[ "$prune_line" -lt "$pull_line" ]]; then
     PASS=$((PASS + 1))
@@ -335,13 +351,60 @@ assert_prune_before_pull "telegram-bridge: prune runs before pull" \
   "deploy telegram-bridge ghcr.io/jikig-ai/soleur-telegram-bridge v2.3.1"
 
 echo ""
+echo "--- Disk space pre-flight check ---"
+
+assert_disk_space_rejection() {
+  TOTAL=$((TOTAL + 1))
+
+  local output actual_exit
+  output=$(
+    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+    MOCK_DIR=$(mktemp -d)
+    trap 'rm -rf "$MOCK_DIR"' EXIT
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+
+    # Standard mocks
+    for cmd in logger docker curl sudo chown seq flock; do
+      cat > "$MOCK_DIR/$cmd" << 'MOCK'
+#!/bin/bash
+if [[ "${1:-}" == "run" ]]; then echo "abc123"; fi
+exit 0
+MOCK
+      chmod +x "$MOCK_DIR/$cmd"
+    done
+
+    # Mock df to report LOW disk space (1GB = 1000000 KB, below 5GB threshold)
+    cat > "$MOCK_DIR/df" << 'MOCK'
+#!/bin/bash
+echo "Avail"
+echo "1000000"
+MOCK
+    chmod +x "$MOCK_DIR/df"
+
+    export PATH="$MOCK_DIR:$PATH"
+    bash "$DEPLOY_SCRIPT" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -qF "insufficient disk space"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: low disk space rejects deploy"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: low disk space rejects deploy (exit=$actual_exit)"
+    echo "        output: $output"
+  fi
+}
+
+assert_disk_space_rejection
+
+echo ""
 echo "--- Canary rollback (web-platform) ---"
 
 assert_canary_trace_order() {
   # Verify canary deploy produces correct Docker trace ordering.
   local description="$1"
   local cmd="$2"
-  local expected_order="$3"  # pipe-separated trace markers, e.g., "system|pull|stop|rm|run|stop|rm|run|stop|rm"
+  local expected_order="$3"  # pipe-separated trace markers, e.g., "image|pull|stop|rm|run|stop|rm|run|stop|rm"
   local extra_env="${4:-}"
 
   TOTAL=$((TOTAL + 1))
@@ -372,7 +435,7 @@ assert_canary_trace_order() {
 #   stop(old) → rm(old) → run(prod) → stop(canary) → rm(canary)
 assert_canary_trace_order "canary success: correct docker trace order" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
-  "system|pull|stop|rm|run|stop|rm|run|stop|rm"
+  "image|pull|stop|rm|run|stop|rm|run|stop|rm"
 
 # Canary failure / rollback: prune → pull → stop(stale) → rm(stale) → run(canary) →
 #   logs(canary) → stop(canary) → rm(canary)
@@ -396,7 +459,7 @@ assert_canary_rollback() {
   # (prune, pull, stale canary cleanup [stop, rm], canary run, canary stop, canary rm)
   # Note: docker logs is piped to logger so its trace marker is consumed.
   # Crucially: only 2 stop/rm pairs (stale cleanup + canary cleanup), NOT 3 (no old production stop/rm)
-  local expected="system|pull|stop|rm|run|stop|rm"
+  local expected="image|pull|stop|rm|run|stop|rm"
 
   if [[ "$actual_exit" -eq 1 ]] && [[ "$traces" == "$expected" ]]; then
     PASS=$((PASS + 1))
@@ -426,7 +489,7 @@ assert_pull_failure() {
   traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
 
   # Should only have prune and pull (which fails), then script exits
-  local expected="system|pull"
+  local expected="image|pull"
 
   if [[ "$actual_exit" -ne 0 ]] && [[ "$traces" == "$expected" ]]; then
     PASS=$((PASS + 1))
@@ -455,7 +518,7 @@ assert_canary_crash() {
   traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
 
   # prune, pull, stale cleanup (stop, rm), canary run (fails) → script exits via set -e
-  local expected="system|pull|stop|rm|run"
+  local expected="image|pull|stop|rm|run"
 
   if [[ "$actual_exit" -ne 0 ]] && [[ "$traces" == "$expected" ]]; then
     PASS=$((PASS + 1))
@@ -485,7 +548,7 @@ assert_prod_start_failure() {
 
   # prune, pull, stale cleanup (stop, rm), canary run (ok), canary health ok,
   # old stop, old rm, prod run (fails), canary stop, canary rm
-  local expected="system|pull|stop|rm|run|stop|rm|run|stop|rm"
+  local expected="image|pull|stop|rm|run|stop|rm|run|stop|rm"
 
   if [[ "$actual_exit" -ne 0 ]] && [[ "$traces" == "$expected" ]]; then
     PASS=$((PASS + 1))
