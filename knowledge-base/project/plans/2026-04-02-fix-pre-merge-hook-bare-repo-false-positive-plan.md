@@ -2,9 +2,27 @@
 title: "fix: pre-merge hook false positive in bare repo worktree setups"
 type: fix
 date: 2026-04-02
+deepened: 2026-04-02
 ---
 
 # fix: pre-merge hook false positive in bare repo worktree setups
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-02
+**Sections enhanced:** 3 (Proposed Solution, MVP, Test Scenarios)
+
+### Key Improvements
+
+1. Fixed `set -e` interaction in MVP code: bare `git diff ...; DIFF_EXIT=$?` would terminate the script before `$?` capture under `set -eo pipefail`. Changed to `DIFF_EXIT=0; git ... || DIFF_EXIT=$?` pattern that correctly captures all exit codes without triggering errexit.
+2. Verified `git diff --quiet` exit code semantics empirically: 0 = clean, 1 = dirty, 128 = bare repo/no work tree, 129 = invalid usage. The `$? -eq 1` check is precise and correct.
+3. Simplified test case to reuse existing `remoteDir` bare repo fixture instead of creating a new one (per reviewer feedback).
+
+### New Considerations Discovered
+
+- The `|| VAR=$?` pattern is already documented in `knowledge-base/project/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md` as the canonical approach for capturing exit codes under `set -e`. The learning's audit checklist item: "Commands whose failure is intentional (e.g., `grep`, `git diff`) must use `|| true` or `if !`" applies directly here -- `git diff --quiet` is intentionally non-zero on dirty trees.
+- `git diff --quiet` returns exit 129 on invalid flags (e.g., `--invalid-flag`). The `$? -eq 1` check correctly ignores this too, failing open on usage errors.
+- The `2>/dev/null` on both git diff commands suppresses stderr but does NOT affect the exit code. The `||` captures the actual exit code from git, not from the stderr redirection.
 
 ## Overview
 
@@ -65,6 +83,35 @@ if [[ $DIFF_EXIT -eq 1 ]] || [[ $CACHED_EXIT -eq 1 ]]; then
 fi
 # Exit 0 (clean) or 128+ (not a work tree / error) -- proceed
 ```
+
+### Research Insights: `git diff --quiet` exit code semantics
+
+Verified empirically (2026-04-02):
+
+| Exit Code | Meaning | Example Trigger |
+|-----------|---------|-----------------|
+| 0 | Clean working tree | No changes |
+| 1 | Dirty working tree | Modified tracked files |
+| 128 | Not a work tree | Bare repo, `core.bare=true` bleed |
+| 129 | Invalid usage | Bad flag, e.g., `--invalid-flag` |
+
+The `$? -eq 1` check is the most precise gate: it blocks only on genuinely dirty trees and fails open on every other exit code. This aligns with the hook's existing fail-open philosophy for infrastructure errors.
+
+### Research Insights: `set -e` and exit code capture
+
+Per `knowledge-base/project/learnings/2026-03-03-set-euo-pipefail-upgrade-pitfalls.md`, under `set -e` (errexit), a bare command that exits non-zero terminates the script before `$?` can be captured on the next line. The `|| VAR=$?` pattern prevents this because `||` makes the compound command always succeed:
+
+```bash
+# WRONG under set -e: script terminates on exit 128 before $? capture
+git diff --quiet HEAD 2>/dev/null
+DIFF_EXIT=$?  # never reached if git exits 128
+
+# CORRECT under set -e: || captures exit code without triggering errexit
+DIFF_EXIT=0
+git diff --quiet HEAD 2>/dev/null || DIFF_EXIT=$?
+```
+
+The existing code's `if ! git diff ...` pattern was accidentally safe under `set -e` because the `!` + `if` consumes the exit code as a conditional. The proposed fix intentionally uses `||` to achieve the same safety while enabling precise exit code discrimination.
 
 ### Why not resolve the worktree path instead?
 
