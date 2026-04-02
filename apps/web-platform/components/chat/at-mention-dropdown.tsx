@@ -114,7 +114,7 @@ export function AtMentionDropdown({
           ))}
         </ul>
       )}
-      <div className="flex items-center gap-3 border-t border-neutral-800 px-3 py-1.5 text-xs text-neutral-600">
+      <div className="flex items-center gap-3 border-t border-neutral-800 px-3 py-1.5 text-xs text-neutral-400">
         <span>{filtered.length} {filtered.length === 1 ? "match" : "matches"}</span>
         <span className="ml-auto flex items-center gap-1">
           <kbd className="rounded border border-neutral-700 px-1">↑</kbd>

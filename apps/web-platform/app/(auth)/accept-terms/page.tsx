@@ -73,7 +73,7 @@ export default function AcceptTermsPage() {
             </span>
           </label>
 
-          {error && <p className="text-sm text-red-400">{error}</p>}
+          {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
 
           <button
             type="submit"

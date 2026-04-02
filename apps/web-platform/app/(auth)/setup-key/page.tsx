@@ -81,7 +81,7 @@ export default function SetupKeyPage() {
             </p>
           )}
           {(status === "invalid" || status === "error") && (
-            <p className="text-sm text-red-400">{errorMsg}</p>
+            <p role="alert" className="text-sm text-red-400">{errorMsg}</p>
           )}
 
           <button
