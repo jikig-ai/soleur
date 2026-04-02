@@ -791,6 +791,7 @@
   .footer-links a:hover { color: var(--color-text); }
   .footer-legal {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-4);
     list-style: none;
   }
