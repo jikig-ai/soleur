@@ -42,6 +42,9 @@ layout: base.njk
     <p class="subtitle">{{ description }}</p>
     <div class="blog-post-meta">
       <time datetime="{{ date | dateToRfc3339 }}">{{ date | readableDate }}</time>
+      {% if updated %}
+      <span class="blog-post-updated">Updated <time datetime="{{ updated | dateToRfc3339 }}">{{ updated | readableDate }}</time></span>
+      {% endif %}
       <span class="blog-post-author">by <a href="{{ site.author.url }}" rel="author">{{ site.author.name }}</a></span>
     </div>
     {% if tags %}

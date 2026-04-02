@@ -22,6 +22,17 @@ fi
 # their temp directories. Unsetting them restores normal git discovery behavior.
 unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE
 
+# --- Bare Repo Guard ---
+# Bare repos contain stale working-tree files that diverge from HEAD.
+# Running tests from a bare root produces phantom failures.
+# Use a worktree instead: cd .worktrees/<name> && bash ../../scripts/test-all.sh
+if git rev-parse --is-bare-repository 2>/dev/null | grep -q true; then
+  echo "ERROR: Cannot run tests from a bare repository root." >&2
+  echo "Stale files at the bare root diverge from HEAD and produce phantom test failures." >&2
+  echo "Run from a worktree instead: cd .worktrees/<name> && bash ../../scripts/test-all.sh" >&2
+  exit 1
+fi
+
 # --- Run Tests Per Directory ---
 failed=0
 suites=0

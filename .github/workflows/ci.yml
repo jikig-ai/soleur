@@ -42,6 +42,8 @@ jobs:
 
       - name: Run tests
         run: bash scripts/test-all.sh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Enforce telegram-bridge coverage
         run: bun test --coverage
