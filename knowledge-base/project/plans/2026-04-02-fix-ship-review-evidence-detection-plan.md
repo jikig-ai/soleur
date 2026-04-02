@@ -73,15 +73,15 @@ The hook intercepts `gh pr merge <number>`. The PR number can be extracted from 
 
 ## Acceptance Criteria
 
-- [ ] Ship Phase 1.5 checks all three signals (local todos, commit message, GitHub issues)
-- [ ] Ship Phase 5.5 checks all three signals (same)
-- [ ] Pre-merge hook Guard 6 checks all three signals (same)
-- [ ] Old `todos/` signal still works for branches reviewed before #1329
-- [ ] Old commit-message signal still works for branches reviewed before #1329
-- [ ] New GitHub issue signal detects review evidence created by the current review skill
-- [ ] Hook fails open if `gh` is unavailable or returns an error (no network)
-- [ ] Ship SKILL.md coupling note is updated to reference all three signals and their sources
-- [ ] AGENTS.md PreToolUse hooks description is accurate (currently says "gh pr merge without review evidence" which is still correct)
+- [x] Ship Phase 1.5 checks all three signals (local todos, commit message, GitHub issues)
+- [x] Ship Phase 5.5 checks all three signals (same)
+- [x] Pre-merge hook Guard 6 checks all three signals (same)
+- [x] Old `todos/` signal still works for branches reviewed before #1329
+- [x] Old commit-message signal still works for branches reviewed before #1329
+- [x] New GitHub issue signal detects review evidence created by the current review skill
+- [x] Hook fails open if `gh` is unavailable or returns an error (no network)
+- [x] Ship SKILL.md coupling note is updated to reference all three signals and their sources
+- [x] AGENTS.md PreToolUse hooks description is accurate (currently says "gh pr merge without review evidence" which is still correct)
 
 ## Test Scenarios
 
