@@ -12,35 +12,29 @@ Update documentation metadata and verify the docs site builds correctly after pl
 The documentation site auto-generates agent and skill catalog pages from source file frontmatter via Eleventy. This skill handles the metadata files that still need manual updates.
 
 **What is automated (no action needed):**
+
 - Agent catalog page (`pages/agents.html`) -- built from `agents/**/*.md` frontmatter
 - Skill catalog page (`pages/skills.html`) -- built from `skills/*/SKILL.md` frontmatter
 - Stats on landing page -- counted from file system at build time
 
 **What still needs manual updates:**
+
 - `plugins/soleur/.claude-plugin/plugin.json` description with counts
-- `plugins/soleur/README.md` component tables and counts
 - `knowledge-base/marketing/brand-guide.md` agent/skill counts (if it exists)
 
-## Step 1: Inventory Current Components
+## Step 1: Sync README Counts
 
-Count all current components:
+Run the automated sync script to update counts in both `README.md` and `plugins/soleur/README.md`:
 
-Count each component type using Glob:
+```bash
+bash scripts/sync-readme-counts.sh
+```
 
-- **Agents:** Count `.md` files (excluding README.md) under `plugins/soleur/agents/`
-- **Commands:** Count `.md` files (excluding README.md) under `plugins/soleur/commands/`
-- **Skills:** Count `SKILL.md` files under `plugins/soleur/skills/`
+This updates: root README intro line, root README "What is Soleur?" counts, plugin README component count table, and plugin README domain section headers.
 
-## Step 2: Update Metadata Files
+## Step 2: Update plugin.json
 
-Ensure counts are consistent across:
-
-1. **`plugins/soleur/.claude-plugin/plugin.json`**
-   - Update `description` with correct counts
-
-2. **`plugins/soleur/README.md`**
-   - Update intro paragraph with counts
-   - Update component lists and tables
+Update `plugins/soleur/.claude-plugin/plugin.json` description with correct counts (not covered by the sync script).
 
 ## Step 3: Update Skill Category Mapping (if needed)
 
@@ -88,6 +82,7 @@ Provide a summary of what was updated:
 ## Post-Release
 
 After successful release:
+
 1. Suggest updating CHANGELOG.md with documentation changes
 2. Remind to commit with message: `docs: Update documentation metadata to match plugin components`
 3. Remind to push changes -- the deploy workflow will rebuild the site automatically

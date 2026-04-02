@@ -187,12 +187,11 @@ Replace `HASH` with the actual commit hash from Step 1. Do NOT use `$()` to comb
 
 **If new components were added:**
 
-1. Verify `plugins/soleur/README.md` component counts are accurate
-2. Verify new entries appear in the correct tables
-3. If counts are wrong, fix them
-4. If `knowledge-base/marketing/brand-guide.md` exists, check for stale agent/skill counts and update them
+1. Run `bash scripts/sync-readme-counts.sh` to auto-update counts in both `README.md` and `plugins/soleur/README.md`
+2. Verify new entries appear in the correct tables in `plugins/soleur/README.md`
+3. If `knowledge-base/marketing/brand-guide.md` exists, check for stale agent/skill counts and update them
 
-**If no new components:** Skip this step.
+**If no new components:** Run `bash scripts/sync-readme-counts.sh --check` to verify counts are still in sync. Fix if drifted.
 
 ## Phase 4: Run Tests
 
@@ -237,7 +236,7 @@ Ship Checklist for [branch name]:
 
 - [x/skip] Artifacts committed (brainstorm/spec/plan)
 - [x/skip] Learnings captured (/compound)
-- [x/skip] README updated (component counts)
+- [x/skip] README counts synced (`bash scripts/sync-readme-counts.sh`)
 - [x/skip] Tests pass
 - [ ] Code review completed (Phase 5.5 gate)
 - [ ] Push to remote

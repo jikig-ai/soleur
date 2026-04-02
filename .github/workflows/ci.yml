@@ -7,6 +7,13 @@ on:
   workflow_dispatch:
 
 jobs:
+  readme-counts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Verify README component counts match filesystem
+        run: bash scripts/sync-readme-counts.sh --check
+
   lint-bot-statuses:
     runs-on: ubuntu-latest
     steps:
