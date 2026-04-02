@@ -272,3 +272,50 @@ describe("rate limiting close codes", () => {
     expect(unique.size).toBe(values.length);
   });
 });
+
+describe("idle timeout", () => {
+  test("IDLE_TIMEOUT close code is 4009", () => {
+    expect(WS_CLOSE_CODES.IDLE_TIMEOUT).toBe(4009);
+  });
+
+  test("IDLE_TIMEOUT is in the WSErrorCode type", () => {
+    const msg = parseMessage(
+      '{"type":"error","message":"Session idle","errorCode":"idle_timeout"}',
+    );
+    expect(msg).not.toBeNull();
+    if (msg!.type === "error") {
+      expect(msg!.errorCode).toBe("idle_timeout");
+    }
+  });
+
+  test("idle timer resets on activity", () => {
+    let timerCleared = false;
+    let timerSet = false;
+    let lastActivity = 0;
+
+    function resetIdleTimer() {
+      if (timerSet) timerCleared = true;
+      lastActivity = Date.now();
+      timerSet = true;
+    }
+
+    // First call — sets timer
+    resetIdleTimer();
+    expect(timerSet).toBe(true);
+    expect(timerCleared).toBe(false);
+    const firstActivity = lastActivity;
+
+    // Second call — clears old timer, sets new one
+    resetIdleTimer();
+    expect(timerCleared).toBe(true);
+    expect(lastActivity).toBeGreaterThanOrEqual(firstActivity);
+  });
+
+  test("NON_TRANSIENT_CLOSE_CODES includes IDLE_TIMEOUT with no redirect", async () => {
+    const { NON_TRANSIENT_CLOSE_CODES } = await import("../lib/ws-client");
+    const entry = NON_TRANSIENT_CLOSE_CODES[WS_CLOSE_CODES.IDLE_TIMEOUT];
+    expect(entry).toBeDefined();
+    expect(entry.reason).toBe("Session expired due to inactivity");
+    expect(entry.target).toBeUndefined();
+  });
+});

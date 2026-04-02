@@ -31,7 +31,7 @@ describe("abortActiveSession", () => {
 
   test("aborts the active session and clears conversationId", () => {
     if (!abortActiveSession) return; // SDK not available in CI
-    const session: ClientSession = { ws: mockWs, conversationId: "conv-A" };
+    const session: ClientSession = { ws: mockWs, conversationId: "conv-A", lastActivity: Date.now() };
 
     abortActiveSession("user-1", session);
 
@@ -41,7 +41,7 @@ describe("abortActiveSession", () => {
 
   test("no-ops when conversationId is undefined", () => {
     if (!abortActiveSession) return;
-    const session: ClientSession = { ws: mockWs };
+    const session: ClientSession = { ws: mockWs, lastActivity: Date.now() };
 
     abortActiveSession("user-1", session);
 
@@ -51,7 +51,7 @@ describe("abortActiveSession", () => {
 
   test("is idempotent — second call is a no-op after first clears conversationId", () => {
     if (!abortActiveSession) return;
-    const session: ClientSession = { ws: mockWs, conversationId: "conv-C" };
+    const session: ClientSession = { ws: mockWs, conversationId: "conv-C", lastActivity: Date.now() };
 
     abortActiveSession("user-1", session);
     abortActiveSession("user-1", session);

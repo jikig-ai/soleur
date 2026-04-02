@@ -221,6 +221,24 @@ export async function provisionWorkspaceWithRepo(
   return workspacePath;
 }
 
+/**
+ * Deletes a user's workspace directory.
+ *
+ * Used during account deletion (GDPR Art. 17) to remove all local files.
+ * Uses execFileSync to avoid shell injection via userId.
+ */
+export async function deleteWorkspace(userId: string): Promise<void> {
+  if (!UUID_RE.test(userId)) {
+    throw new Error(`Invalid userId format: ${userId}`);
+  }
+  const workspacePath = join(getWorkspacesRoot(), userId);
+
+  if (existsSync(workspacePath)) {
+    execFileSync("rm", ["-rf", workspacePath], { stdio: "pipe" });
+    log.info({ userId }, "Workspace deleted");
+  }
+}
+
 function ensureDir(dirPath: string): void {
   if (!existsSync(dirPath)) {
     mkdirSync(dirPath, { recursive: true });
