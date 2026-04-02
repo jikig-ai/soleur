@@ -124,10 +124,10 @@ Two GitHub API endpoints can verify org membership:
 
 ## Acceptance Criteria
 
-- [ ] `verifyInstallationOwnership()` handles `account.type === "Organization"` by checking org membership via `GET /orgs/{org}/members/{username}`
-- [ ] Tests cover org member verification: happy path (member, verified=true), non-member rejection (verified=false, 403), and API error handling (502)
-- [ ] Error message updated from "Organization installations are not yet supported" to specific success/failure messages
-- [ ] Existing User-type tests continue to pass unchanged
+- [x] `verifyInstallationOwnership()` handles `account.type === "Organization"` by checking org membership via `GET /orgs/{org}/members/{username}`
+- [x] Tests cover org member verification: happy path (member, verified=true), non-member rejection (verified=false, 403), and API error handling (502)
+- [x] Error message updated from "Organization installations are not yet supported" to specific success/failure messages
+- [x] Existing User-type tests continue to pass unchanged
 
 ## Domain Review
 
