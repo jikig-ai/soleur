@@ -145,13 +145,13 @@ The `triage` SKILL.md still references `/resolve-todo-parallel` in its "Next Ste
 
 ## Acceptance Criteria
 
-- [ ] One-shot Step 5 fetches `code-review` + `priority/p1-high` issues scoped to the current PR and resolves them
-- [ ] One-shot Step 5 is a no-op when no P1 `code-review` issues exist (does not error or block)
-- [ ] One-shot Step 5 no longer invokes `soleur:resolve-todo-parallel`
-- [ ] Issue scoping filters by `Source: PR #<number>` in issue body (does not pick up issues from unrelated reviews)
-- [ ] `resolve-todo-parallel` skill description clarifies it handles `todos/*.md` only (required, not optional)
-- [ ] The `pr-comment-resolver` agent is reused (no new agent needed)
-- [ ] Closed P1 issues include a reference to the fixing commit
+- [x] One-shot Step 5 fetches `code-review` + `priority/p1-high` issues scoped to the current PR and resolves them
+- [x] One-shot Step 5 is a no-op when no P1 `code-review` issues exist (does not error or block)
+- [x] One-shot Step 5 no longer invokes `soleur:resolve-todo-parallel`
+- [x] Issue scoping filters by `Source: PR #<number>` in issue body (does not pick up issues from unrelated reviews)
+- [x] `resolve-todo-parallel` skill description clarifies it handles `todos/*.md` only (required, not optional)
+- [x] The `pr-comment-resolver` agent is reused (no new agent needed)
+- [x] Closed P1 issues include a reference to the fixing commit
 
 ## Test Scenarios
 
