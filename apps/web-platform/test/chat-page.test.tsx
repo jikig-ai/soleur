@@ -13,6 +13,8 @@ let wsReturn = {
   sendReviewGateResponse: mockSendReviewGateResponse,
   status: "connected" as const,
   disconnectReason: undefined as string | undefined,
+  lastError: null as import("@/lib/ws-client").WebSocketError | null,
+  reconnect: vi.fn(),
   routeSource: null as "auto" | "mention" | null,
   activeLeaderIds: [] as string[],
 };
@@ -42,6 +44,8 @@ describe("ChatPage", () => {
       sendReviewGateResponse: mockSendReviewGateResponse,
       status: "connected",
       disconnectReason: undefined,
+      lastError: null,
+      reconnect: vi.fn(),
       routeSource: null,
       activeLeaderIds: [],
     };
