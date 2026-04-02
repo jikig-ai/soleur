@@ -14,8 +14,13 @@ export interface DeleteAccountResult {
  * Deletes a user account with full cascade:
  * 1. Abort any active agent session
  * 2. Delete the workspace directory
- * 3. Delete the public.users row (cascades to api_keys, conversations, messages)
- * 4. Delete the auth.users record
+ * 3. Delete the auth.users record (FK cascade handles public.users and all children)
+ *
+ * Auth deletion MUST come first among destructive steps. If it fails, no data
+ * is lost and the user can retry. The FK constraint (public.users.id REFERENCES
+ * auth.users(id) ON DELETE CASCADE) ensures public.users, api_keys,
+ * conversations, and messages are deleted atomically within the same Postgres
+ * transaction as the auth record.
  *
  * GDPR Article 17 — Right to Erasure
  */
@@ -51,23 +56,15 @@ export async function deleteAccount(
     log.warn({ userId, err }, "Failed to delete workspace during deletion (non-fatal)");
   }
 
-  // 4. Delete public.users row (FK cascade deletes api_keys, conversations, messages)
-  const { error: deletePublicError } = await service
-    .from("users")
-    .delete()
-    .eq("id", userId);
-
-  if (deletePublicError) {
-    log.error({ userId, err: deletePublicError }, "Failed to delete public.users");
-    return { success: false, error: "Account deletion failed. Please try again." };
-  }
-
-  // 5. Delete auth record
+  // 4. Delete auth record — FK cascade handles public.users and all children
+  //    IMPORTANT: auth deletion must come first. If it fails, no data is lost.
+  //    If public.users were deleted first and auth deletion failed, the user
+  //    would have an auth record but no data (GDPR Article 17 violation).
   const { error: deleteAuthError } = await service.auth.admin.deleteUser(userId);
 
   if (deleteAuthError) {
     log.error({ userId, err: deleteAuthError }, "Failed to delete auth record");
-    return { success: false, error: "Account deletion failed. Auth record could not be removed." };
+    return { success: false, error: "Account deletion failed. Please try again." };
   }
 
   log.info({ userId }, "Account deleted successfully (GDPR Art. 17)");

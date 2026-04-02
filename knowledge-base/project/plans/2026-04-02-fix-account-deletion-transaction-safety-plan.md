@@ -128,13 +128,13 @@ if (deleteAuthError) {
 
 ## Acceptance Criteria
 
-- [ ] If `auth.admin.deleteUser()` fails, `public.users` and all cascaded data remain intact
-- [ ] If `auth.admin.deleteUser()` succeeds, `public.users` and all FK-cascaded rows (`api_keys`, `conversations`, `messages`) are deleted by the database
-- [ ] No orphaned auth records can persist after a partial deletion attempt
-- [ ] The explicit `public.users` deletion is removed (FK cascade handles it)
-- [ ] Existing tests updated to reflect the new deletion order
-- [ ] New test covers the partial-failure scenario (auth fails -> data intact)
-- [ ] GDPR Article 17 compliance maintained -- successful deletion still removes all user data
+- [x] If `auth.admin.deleteUser()` fails, `public.users` and all cascaded data remain intact
+- [x] If `auth.admin.deleteUser()` succeeds, `public.users` and all FK-cascaded rows (`api_keys`, `conversations`, `messages`) are deleted by the database
+- [x] No orphaned auth records can persist after a partial deletion attempt
+- [x] The explicit `public.users` deletion is removed (FK cascade handles it)
+- [x] Existing tests updated to reflect the new deletion order
+- [x] New test covers the partial-failure scenario (auth fails -> data intact)
+- [x] GDPR Article 17 compliance maintained -- successful deletion still removes all user data
 
 ## Test Scenarios
 
