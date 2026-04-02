@@ -107,10 +107,10 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 5. **Resolve P1 review findings.** List open GitHub issues with `code-review` + `priority/p1-high` labels:
 
    ```bash
-   gh issue list --label code-review --label priority/p1-high --state open --json number,title,body
+   gh issue list --label code-review --label priority/p1-high --state open --search "PR #<current_pr_number>" --json number,title,body
    ```
 
-   Filter results to issues whose body contains `Source: PR #<current_pr_number>` (scopes to this review session; the review skill's issue template includes this line). If zero P1 issues match, proceed immediately to Step 5.5.
+   The `--search` flag scopes results to issues from this review session (the review skill's issue template includes `PR #<number>` in the body). If zero issues match, proceed immediately to Step 5.5.
 
    For each matching P1 issue, spawn a parallel `pr-comment-resolver` agent. Pass the issue body's `## Problem`, `## Proposed Fix`, and `Location:` fields as the agent's input. After all agents return, commit fixes and close each resolved issue:
 
