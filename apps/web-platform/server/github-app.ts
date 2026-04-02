@@ -27,6 +27,18 @@ export interface Repo {
   updatedAt: string;
 }
 
+interface InstallationAccount {
+  login: string;
+  id: number;
+  type: string; // "User" or "Organization"
+}
+
+interface VerifyResult {
+  verified: boolean;
+  error?: string;
+  status?: number; // HTTP status to return to client
+}
+
 interface GitHubInstallationTokenResponse {
   token: string;
   expires_at: string;
@@ -103,6 +115,65 @@ async function githubFetch(
     },
   });
   return response;
+}
+
+// ---------------------------------------------------------------------------
+// Installation ownership verification
+// ---------------------------------------------------------------------------
+
+/**
+ * Verify that a GitHub App installation belongs to the expected user.
+ * Calls GET /app/installations/{id} with the App JWT and compares
+ * account.login against the expected GitHub username.
+ */
+export async function verifyInstallationOwnership(
+  installationId: number,
+  expectedLogin: string,
+): Promise<VerifyResult> {
+  const jwt = createAppJwt();
+  const response = await githubFetch(
+    `${GITHUB_API}/app/installations/${installationId}`,
+    { headers: { Authorization: `Bearer ${jwt}` } },
+  );
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      return { verified: false, error: "Installation not found", status: 404 };
+    }
+    log.error(
+      { status: response.status, installationId },
+      "GitHub API error during installation verification",
+    );
+    return { verified: false, error: "Failed to verify installation", status: 502 };
+  }
+
+  const data = (await response.json()) as { account?: InstallationAccount };
+  const account = data.account;
+  if (!account?.login) {
+    return { verified: false, error: "Installation has no account", status: 502 };
+  }
+
+  // Organization installations: account.login is the org name, not the user.
+  // For MVP, reject org installations until membership verification is implemented.
+  if (account.type === "Organization") {
+    log.warn(
+      { installationId, orgLogin: account.login, expectedLogin },
+      "Organization installation not yet supported for ownership verification",
+    );
+    return {
+      verified: false,
+      error: "Organization installations are not yet supported",
+      status: 403,
+    };
+  }
+
+  // SECURITY: Case-insensitive comparison — GitHub usernames are case-insensitive
+  const matches = account.login.toLowerCase() === expectedLogin.toLowerCase();
+  return {
+    verified: matches,
+    error: matches ? undefined : "Installation does not belong to this user",
+    status: matches ? undefined : 403,
+  };
 }
 
 // ---------------------------------------------------------------------------

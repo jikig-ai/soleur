@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
+import { verifyInstallationOwnership } from "@/server/github-app";
 import logger from "@/server/logger";
 
 /**
@@ -8,6 +9,7 @@ import logger from "@/server/logger";
  *
  * Stores the GitHub App installation ID on the user record after
  * the user completes the GitHub App installation flow.
+ * Verifies the authenticated user owns the installation before storing.
  *
  * Body: { installationId: number }
  */
@@ -29,6 +31,41 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: "Missing or invalid installationId" },
       { status: 400 },
+    );
+  }
+
+  // SECURITY: Extract GitHub username from auth metadata and verify ownership
+  const githubLogin =
+    user.user_metadata?.user_name ??
+    user.identities?.find(
+      (i: { provider: string; identity_data?: { user_name?: string } }) =>
+        i.provider === "github",
+    )?.identity_data?.user_name;
+
+  if (!githubLogin) {
+    logger.warn(
+      { userId: user.id },
+      "User has no GitHub identity — cannot verify installation ownership",
+    );
+    return NextResponse.json(
+      { error: "No GitHub identity found on this account" },
+      { status: 403 },
+    );
+  }
+
+  const verification = await verifyInstallationOwnership(
+    body.installationId,
+    githubLogin,
+  );
+
+  if (!verification.verified) {
+    logger.warn(
+      { userId: user.id, installationId: body.installationId, error: verification.error },
+      "Installation ownership verification failed",
+    );
+    return NextResponse.json(
+      { error: verification.error },
+      { status: verification.status ?? 403 },
     );
   }
 

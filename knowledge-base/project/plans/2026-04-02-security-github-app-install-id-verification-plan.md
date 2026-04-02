@@ -165,16 +165,16 @@ Only the `/api/repo/install` route accepts installation IDs from untrusted input
 
 ## Acceptance Criteria
 
-- [ ] Server-side ownership verification before storing installation ID
-- [ ] `verifyInstallationOwnership()` function in `server/github-app.ts` calls `GET /app/installations/{id}` with App JWT
-- [ ] Route compares `account.login` against user's GitHub identity (case-insensitive)
-- [ ] Returns 403 when installation does not belong to the authenticated user
-- [ ] Returns 404 when installation does not exist
-- [ ] Returns 403 when user has no GitHub identity (signed in with non-GitHub provider)
-- [ ] Returns 403 for organization installations (MVP scope -- see Edge Cases)
-- [ ] Test covers the case where installation ID does not belong to the user (mocked)
-- [ ] Test covers the happy path (installation matches user)
-- [ ] No regression in the existing connect-repo onboarding flow
+- [x] Server-side ownership verification before storing installation ID
+- [x] `verifyInstallationOwnership()` function in `server/github-app.ts` calls `GET /app/installations/{id}` with App JWT
+- [x] Route compares `account.login` against user's GitHub identity (case-insensitive)
+- [x] Returns 403 when installation does not belong to the authenticated user
+- [x] Returns 404 when installation does not exist
+- [x] Returns 403 when user has no GitHub identity (signed in with non-GitHub provider)
+- [x] Returns 403 for organization installations (MVP scope -- see Edge Cases)
+- [x] Test covers the case where installation ID does not belong to the user (mocked)
+- [x] Test covers the happy path (installation matches user)
+- [x] No regression in the existing connect-repo onboarding flow
 
 ## Test Scenarios
 
