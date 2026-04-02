@@ -358,6 +358,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
   useEffect(() => {
     mountedRef.current = true;
+    setLastError(null);
+    setDisconnectReason(undefined);
     connect();
 
     return () => {

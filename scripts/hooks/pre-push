@@ -94,11 +94,11 @@ done
 failed=0
 
 if [[ ${#bun_tests[@]} -gt 0 ]]; then
-  # Separate web-platform .tsx tests (need vitest + happy-dom) from bun tests
+  # Separate web-platform tests (need vitest) from bun tests
   vitest_tests=()
   pure_bun_tests=()
   for bt in "${bun_tests[@]}"; do
-    if [[ "$bt" == apps/web-platform/test/*.tsx ]]; then
+    if [[ "$bt" == apps/web-platform/test/*.tsx || "$bt" == apps/web-platform/test/*.ts ]]; then
       vitest_tests+=("$bt")
     else
       pure_bun_tests+=("$bt")

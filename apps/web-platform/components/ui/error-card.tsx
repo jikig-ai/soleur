@@ -10,7 +10,7 @@ interface ErrorCardProps {
 
 export function ErrorCard({ title, message, onRetry, retryLabel = "Try again", action }: ErrorCardProps) {
   return (
-    <div className="rounded-xl border border-red-900/50 bg-red-950/20 p-5">
+    <div role="alert" className="rounded-xl border border-red-900/50 bg-red-950/20 p-5">
       <h3 className="mb-1 text-sm font-semibold text-red-300">{title}</h3>
       <p className="text-sm text-neutral-400">{message}</p>
       <div className="mt-3 flex gap-2">

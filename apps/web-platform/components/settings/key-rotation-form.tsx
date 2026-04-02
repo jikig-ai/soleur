@@ -65,13 +65,13 @@ export function KeyRotationForm({ hasExistingKey }: KeyRotationFormProps) {
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           placeholder="sk-ant-..."
-          className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white placeholder:text-neutral-600 focus:border-amber-600 focus:outline-none focus:ring-1 focus:ring-amber-600"
+          className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white placeholder:text-neutral-400 focus:border-amber-600 focus:outline-none focus:ring-1 focus:ring-amber-600"
           autoComplete="off"
         />
       </div>
 
       {error && (
-        <p className="text-sm text-red-400">{error}</p>
+        <p role="alert" className="text-sm text-red-400">{error}</p>
       )}
 
       {success && (

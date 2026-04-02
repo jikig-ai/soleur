@@ -1,6 +1,7 @@
-import { describe, test, expect } from "vitest";
+import { describe, test, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ErrorCard } from "../components/ui/error-card";
+import type { WebSocketError } from "@/lib/ws-client";
 
 describe("ErrorCard component", () => {
   test("renders error message", () => {
@@ -70,5 +71,106 @@ describe("WebSocketError interface", () => {
     expect(errorMap.key_invalid.action?.href).toBe("/dashboard/settings");
     expect(errorMap.rate_limited.message).toContain("rate limited");
     expect(errorMap.connection_failed.message).toContain("connect");
+  });
+});
+
+// --- Hook contract tests for error state clearing (#1377) ---
+
+const mockStartSession = vi.fn();
+const mockSendMessage = vi.fn();
+const mockSendReviewGateResponse = vi.fn();
+const mockReconnect = vi.fn();
+
+let wsReturn: {
+  messages: Array<{ id: string; role: "user" | "assistant"; content: string; type: "text" | "review_gate"; leaderId?: string }>;
+  startSession: typeof mockStartSession;
+  sendMessage: typeof mockSendMessage;
+  sendReviewGateResponse: typeof mockSendReviewGateResponse;
+  status: "connecting" | "connected" | "reconnecting" | "disconnected";
+  disconnectReason: string | undefined;
+  lastError: WebSocketError | null;
+  reconnect: typeof mockReconnect;
+  routeSource: "auto" | "mention" | null;
+  activeLeaderIds: string[];
+};
+
+vi.mock("@/lib/ws-client", () => ({
+  useWebSocket: () => wsReturn,
+}));
+
+vi.mock("next/navigation", () => ({
+  useParams: () => ({ conversationId: "test-conv" }),
+  useSearchParams: () => new URLSearchParams(),
+  useRouter: () => ({ replace: vi.fn() }),
+  usePathname: () => "/dashboard/chat/test-conv",
+}));
+
+describe("Error state clearing on remount (#1377)", () => {
+  beforeEach(() => {
+    mockReconnect.mockClear();
+    wsReturn = {
+      messages: [],
+      startSession: mockStartSession,
+      sendMessage: mockSendMessage,
+      sendReviewGateResponse: mockSendReviewGateResponse,
+      status: "connected",
+      disconnectReason: undefined,
+      lastError: null,
+      reconnect: mockReconnect,
+      routeSource: null,
+      activeLeaderIds: [],
+    };
+  });
+
+  async function renderChatPage() {
+    const mod = await import(
+      "@/app/(dashboard)/dashboard/chat/[conversationId]/page"
+    );
+    return render(<mod.default />);
+  }
+
+  test("error card is NOT shown when lastError is null (clean remount)", async () => {
+    wsReturn.lastError = null;
+    await renderChatPage();
+    expect(screen.queryByText("Invalid API Key")).toBeNull();
+    expect(screen.queryByText("Rate Limited")).toBeNull();
+  });
+
+  test("error card IS shown when lastError is set to key_invalid", async () => {
+    wsReturn.lastError = {
+      code: "key_invalid",
+      message: "Your API key is invalid or expired.",
+      action: { label: "Update key", href: "/dashboard/settings" },
+    };
+    await renderChatPage();
+    expect(screen.getByText("Invalid API Key")).toBeInTheDocument();
+    expect(screen.getByText("Update key")).toBeInTheDocument();
+  });
+
+  test("error card disappears when lastError is cleared (simulates remount clearing)", async () => {
+    // First render: error present
+    wsReturn.lastError = {
+      code: "key_invalid",
+      message: "Your API key is invalid or expired.",
+      action: { label: "Update key", href: "/dashboard/settings" },
+    };
+    const { unmount } = await renderChatPage();
+    expect(screen.getByText("Invalid API Key")).toBeInTheDocument();
+    unmount();
+
+    // Second render: error cleared (simulates what the fix does on remount)
+    wsReturn.lastError = null;
+    await renderChatPage();
+    expect(screen.queryByText("Invalid API Key")).toBeNull();
+  });
+
+  test("reconnect button not shown for key_invalid errors", async () => {
+    wsReturn.lastError = {
+      code: "key_invalid",
+      message: "Your API key is invalid or expired.",
+      action: { label: "Update key", href: "/dashboard/settings" },
+    };
+    await renderChatPage();
+    expect(screen.queryByText("Reconnect")).toBeNull();
   });
 });

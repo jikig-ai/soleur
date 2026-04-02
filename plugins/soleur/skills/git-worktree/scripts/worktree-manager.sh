@@ -4,11 +4,14 @@
 # Handles creating, listing, switching, and cleaning up Git worktrees
 # KISS principle: Simple, interactive, opinionated
 #
-# BARE REPO NOTE: This repo uses core.bare=true. On-disk files at the bare root
-# are never updated by git -- they become stale after every merge. The IS_BARE
-# flag (computed at init) guards all working-tree-dependent operations. If this
-# script crashes with "must be run in a work tree", the on-disk copy is stale.
-# Run from a worktree instead, or use: worktree-manager.sh sync-bare
+# BARE REPO NOTE: This repo uses core.bare=true with extensions.worktreeConfig=true
+# and repositoryformatversion=1. The per-worktree config (.git/config.worktree)
+# holds core.bare=true ONLY for the bare root; linked worktrees inherit
+# core.bare=false by default. On-disk files at the bare root are never updated
+# by git -- they become stale after every merge. The IS_BARE flag (computed at
+# init) guards all working-tree-dependent operations. If this script crashes with
+# "must be run in a work tree", the on-disk copy is stale. Run from a worktree
+# instead, or use: worktree-manager.sh sync-bare
 
 set -euo pipefail
 
@@ -63,6 +66,39 @@ require_working_tree() {
     echo -e "${RED}Error: Cannot run from bare repo root (no working tree available).${NC}"
     echo -e "${YELLOW}Run from an existing worktree, or use: git worktree add .worktrees/<name> -b <branch> main${NC}"
     exit 1
+  fi
+}
+
+# Ensure bare repo config uses per-worktree core.bare (defense-in-depth).
+# Without this, core.bare=true in shared config bleeds into all worktrees,
+# causing git commit/push to fail with "must be run in a work tree".
+# Requires: repositoryformatversion=1, extensions.worktreeConfig=true,
+# core.bare=true ONLY in .git/config.worktree (not shared config).
+ensure_bare_config() {
+  local git_dir="$GIT_ROOT/.git"
+  # Only relevant for bare repos (git dir IS the repo root)
+  if [[ ! -d "$git_dir" ]]; then
+    git_dir="$GIT_ROOT"
+  fi
+
+  local shared_config="$git_dir/config"
+
+  # Check if core.bare is in shared config (the broken state)
+  if git config --file "$shared_config" core.bare &>/dev/null; then
+    local bare_val
+    bare_val=$(git config --file "$shared_config" core.bare)
+    if [[ "$bare_val" == "true" ]]; then
+      echo -e "${BLUE}Fixing bare repo config: moving core.bare to per-worktree config...${NC}"
+      # Ensure prerequisites
+      git config --file "$shared_config" core.repositoryformatversion 1
+      git config --file "$shared_config" extensions.worktreeConfig true
+      # Remove from shared config
+      git config --file "$shared_config" --unset core.bare
+      # Set in per-worktree config (bare root only)
+      local wt_config="$git_dir/config.worktree"
+      git config --file "$wt_config" core.bare true
+      echo -e "${GREEN}Fixed: core.bare now per-worktree only${NC}"
+    fi
   fi
 }
 
@@ -205,6 +241,7 @@ install_deps() {
 
 # Create a new worktree
 create_worktree() {
+  ensure_bare_config
   local branch_name="$1"
   local from_branch="${2:-main}"
 
@@ -274,6 +311,7 @@ create_worktree() {
 # Create a worktree for a feature with spec directory
 # Simplified version: no prompts, just creates everything
 create_for_feature() {
+  ensure_bare_config
   local name="$1"
   local from_branch="${2:-main}"
 
@@ -344,7 +382,7 @@ list_worktrees() {
 
   local count=0
   for worktree_path in "$WORKTREE_DIR"/*; do
-    if [[ -d "$worktree_path" && -d "$worktree_path/.git" ]]; then
+    if [[ -d "$worktree_path" && -e "$worktree_path/.git" ]]; then
       count=$((count + 1))
       local worktree_name=$(basename "$worktree_path")
       local branch=$(git -C "$worktree_path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
@@ -450,7 +488,7 @@ cleanup_worktrees() {
   local to_remove=()
 
   for worktree_path in "$WORKTREE_DIR"/*; do
-    if [[ -d "$worktree_path" && -d "$worktree_path/.git" ]]; then
+    if [[ -d "$worktree_path" && -e "$worktree_path/.git" ]]; then
       local worktree_name=$(basename "$worktree_path")
 
       # Skip if current worktree
