@@ -176,18 +176,18 @@ test("OTP input truncates pasted 8-digit code", async ({ page }) => {
 
 ## Acceptance Criteria
 
-- [ ] Supabase production `mailer_otp_length` is set to 6
-- [ ] Supabase production `mailer_otp_exp` is set to 600 (10 minutes)
-- [ ] `configure-auth.sh` includes `mailer_otp_length: 6` and `mailer_otp_exp: 600` in the PATCH payload
-- [ ] `EMAIL_OTP_LENGTH` constant exists in `apps/web-platform/lib/auth/constants.ts`
-- [ ] Login page uses `EMAIL_OTP_LENGTH` for maxLength, disabled check, and instructional text
-- [ ] Signup page uses `EMAIL_OTP_LENGTH` for maxLength, disabled check, and instructional text
-- [ ] No hardcoded `6` for OTP length remains in login or signup pages
-- [ ] E2E tests verify OTP input accepts exactly the correct number of digits
-- [ ] E2E tests verify submit button disabled state based on OTP length
-- [ ] E2E tests verify instructional text contains correct digit count
-- [ ] E2E test reproduces the original bug (paste 8-digit code, verify truncation to 6)
-- [ ] Email template expiry text matches actual `mailer_otp_exp` config
+- [x] Supabase production `mailer_otp_length` is set to 6
+- [x] Supabase production `mailer_otp_exp` is set to 600 (10 minutes)
+- [x] `configure-auth.sh` includes `mailer_otp_length: 6` and `mailer_otp_exp: 600` in the PATCH payload
+- [x] `EMAIL_OTP_LENGTH` constant exists in `apps/web-platform/lib/auth/constants.ts`
+- [x] Login page uses `EMAIL_OTP_LENGTH` for maxLength, disabled check, and instructional text
+- [x] Signup page uses `EMAIL_OTP_LENGTH` for maxLength, disabled check, and instructional text
+- [x] No hardcoded `6` for OTP length remains in login or signup pages
+- [x] E2E tests verify OTP input accepts exactly the correct number of digits
+- [x] E2E tests verify submit button disabled state based on OTP length
+- [x] E2E tests verify instructional text contains correct digit count
+- [x] E2E test reproduces the original bug (paste 8-digit code, verify truncation to 6)
+- [x] Email template expiry text matches actual `mailer_otp_exp` config
 
 ## Test Scenarios
 
