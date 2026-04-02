@@ -68,9 +68,9 @@ jobs:
 
           if [[ -n "$EXISTING" ]]; then
             echo "Open tracking issue already exists: #$EXISTING. Adding comment."
-            gh issue comment "$EXISTING" --body "Main branch tests still failing as of $(date -u +%Y-%m-%dT%H:%M:%SZ).
-
-Run: $RUN_URL"
+            COMMENT="Main branch tests still failing as of $(date -u +%Y-%m-%dT%H:%M:%SZ)."
+            COMMENT="${COMMENT}"$'\n\n'"Run: ${RUN_URL}"
+            gh issue comment "$EXISTING" --body "$COMMENT"
             exit 0
           fi
 
@@ -82,30 +82,30 @@ Run: $RUN_URL"
             --color "B60205" \
             --force 2>/dev/null || true
 
-          # Write issue body to temp file to avoid heredoc indentation issues
-          cat > /tmp/issue-body.md <<ISSUE_EOF
-## Main branch tests are failing
-
-The scheduled health monitor detected test failures on the main branch.
-
-### Failure summary
-
-\`\`\`
-${SUMMARY}
-\`\`\`
-
-### Actions required
-
-1. Identify the commit that introduced the failure
-2. Fix the tests or revert the breaking change
-3. Verify CI passes on main before closing this issue
-
-### Run details
-
-- **Run:** ${RUN_URL}
-- **Commit:** ${COMMIT_SHA}
-- **Detected:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
-ISSUE_EOF
+          # Build issue body without heredoc (heredocs break YAML literal blocks)
+          {
+            echo "## Main branch tests are failing"
+            echo ""
+            echo "The scheduled health monitor detected test failures on the main branch."
+            echo ""
+            echo "### Failure summary"
+            echo ""
+            echo '```'
+            echo "${SUMMARY}"
+            echo '```'
+            echo ""
+            echo "### Actions required"
+            echo ""
+            echo "1. Identify the commit that introduced the failure"
+            echo "2. Fix the tests or revert the breaking change"
+            echo "3. Verify CI passes on main before closing this issue"
+            echo ""
+            echo "### Run details"
+            echo ""
+            echo "- **Run:** ${RUN_URL}"
+            echo "- **Commit:** ${COMMIT_SHA}"
+            echo "- **Detected:** $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > /tmp/issue-body.md
 
           gh issue create \
             --title "CI: main branch tests failing" \
@@ -130,9 +130,8 @@ ISSUE_EOF
             --jq '.[0].number // empty' 2>/dev/null || true)
 
           if [[ -n "$EXISTING" ]]; then
-            gh issue close "$EXISTING" \
-              --comment "Main branch tests are passing again. Auto-closing.
-
-Run: $RUN_URL"
+            COMMENT="Main branch tests are passing again. Auto-closing."
+            COMMENT="${COMMENT}"$'\n\n'"Run: ${RUN_URL}"
+            gh issue close "$EXISTING" --comment "$COMMENT"
             echo "Closed issue #$EXISTING -- main is green again."
           fi
