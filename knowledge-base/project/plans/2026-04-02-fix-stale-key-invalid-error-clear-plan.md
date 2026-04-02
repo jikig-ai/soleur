@@ -102,11 +102,11 @@ No changes needed in `page.tsx` -- the error card already renders conditionally 
 
 ## Acceptance Criteria
 
-- [ ] After rotating an invalid API key and navigating back to chat, the error card is cleared
-- [ ] The WebSocket attempts reconnection on remount (already works via `connect()` call; verified by `mountedRef.current = true` preceding it)
-- [ ] Changing `conversationId` clears any prior error state
-- [ ] The `reconnect()` callback still works correctly for manual retry (it already calls `setLastError(null)`)
-- [ ] Existing error display behavior is unchanged for active sessions (errors still appear when the server sends them)
+- [x] After rotating an invalid API key and navigating back to chat, the error card is cleared
+- [x] The WebSocket attempts reconnection on remount (already works via `connect()` call; verified by `mountedRef.current = true` preceding it)
+- [x] Changing `conversationId` clears any prior error state
+- [x] The `reconnect()` callback still works correctly for manual retry (it already calls `setLastError(null)`)
+- [x] Existing error display behavior is unchanged for active sessions (errors still appear when the server sends them)
 
 ## Test Scenarios
 
