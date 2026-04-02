@@ -196,7 +196,7 @@ runcmd:
   - |
     cat > /etc/cron.weekly/docker-cleanup << 'CRONEOF'
     #!/bin/sh
-    docker image prune -af --filter "until=168h" > /dev/null 2>&1
+    docker image prune -af --filter "until=72h" > /dev/null 2>&1
     CRONEOF
     chmod +x /etc/cron.weekly/docker-cleanup
 

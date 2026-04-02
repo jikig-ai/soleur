@@ -98,11 +98,19 @@ LOCK_FILE="${CI_DEPLOY_LOCK:-/var/lock/ci-deploy.lock}"
 exec 200>"$LOCK_FILE"
 flock -n 200 || { logger -t "$LOG_TAG" "REJECTED: another deploy in progress"; echo "Error: another deploy in progress" >&2; exit 1; }
 
+# Check available disk space (minimum 5GB required for image pull + extraction)
+AVAIL_KB=$(df --output=avail / | tail -1 | tr -d ' ')
+if [[ "$AVAIL_KB" -lt 5242880 ]]; then
+  logger -t "$LOG_TAG" "REJECTED: insufficient disk space (${AVAIL_KB}KB available, 5GB required)"
+  echo "Error: insufficient disk space for deploy" >&2
+  exit 1
+fi
+
 # Component-specific deploy logic
 case "$COMPONENT" in
   web-platform)
-    echo "Pruning old Docker images (>48h)..."
-    docker system prune -f --filter "until=48h"
+    echo "Pruning unused Docker images..."
+    docker image prune -af
     docker pull "$IMAGE:$TAG"
 
     # Clean stale canary from previous failed deploy
@@ -175,8 +183,8 @@ case "$COMPONENT" in
     fi
     ;;
   telegram-bridge)
-    echo "Pruning old Docker images (>48h)..."
-    docker system prune -f --filter "until=48h"
+    echo "Pruning unused Docker images..."
+    docker image prune -af
     docker pull "$IMAGE:$TAG"
     { docker stop soleur-bridge || true; }
     { docker rm soleur-bridge || true; }
