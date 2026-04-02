@@ -41,6 +41,8 @@ This immediately improves the consent screen to show "Soleur" instead of the cry
 
 **Automation approach:** Use Playwright MCP to navigate to Google Cloud Console > APIs & Services > OAuth consent screen and configure these fields. The Google Cloud project number is `972366012527` (extracted from the client ID `972366012527-drkik8tidmfidprooi8kguqmdjcguik6.apps.googleusercontent.com`). If the consent screen requires Google verification for external publishing (which requires domain verification), drive up to that point and hand off to the user for the verification step only.
 
+**Verification status check:** Before configuring branding, check the current OAuth app publishing status (testing vs production) and verification state. If the app is unverified in production mode, Google shows a scary "This app isn't verified" warning. If in testing mode, only test users can sign in. Document the current state and submit for verification if needed (verification can take weeks).
+
 ### Part 2: Supabase Custom Domain (requires plan upgrade)
 
 **Blocker discovered during research:** Both Supabase custom domains and vanity subdomains require the **Pro plan** ($25/mo). The Supabase project `ifsccnjhymdmidffkzhl` is currently on the **free tier** (confirmed via `knowledge-base/operations/expenses.md` and API response: "upgrade your plan to access this feature").
@@ -64,8 +66,8 @@ This immediately improves the consent screen to show "Soleur" instead of the cry
 6. Update `NEXT_PUBLIC_SUPABASE_URL` in Doppler `prd` config from `https://ifsccnjhymdmidffkzhl.supabase.co` to `https://api.soleur.ai`
 7. Rebuild and redeploy Docker image (NEXT_PUBLIC_ vars are baked at build time per `.env.example`)
 8. Update `configure-auth.sh` `uri_allow_list` if needed
-9. Update Google OAuth authorized redirect URIs to use `api.soleur.ai`
-10. Verify CSP still works (dynamically reads `NEXT_PUBLIC_SUPABASE_URL` -- no code change needed in `lib/csp.ts`)
+9. Update ALL OAuth providers' authorized redirect URIs to use `api.soleur.ai` (Google and GitHub currently enabled; Apple and Microsoft tracked in #1341)
+10. Verify Supabase custom domain auto-updates the auth callback URL used during OAuth flows, or manually update via Management API
 
 ### Part 3: OAuth Setup Checklist (documentation/workflow improvement)
 
@@ -80,7 +82,7 @@ Add an OAuth provider setup checklist to prevent branding gaps when adding futur
    - Supabase provider enablement via `configure-auth.sh`
    - Post-setup verification (test sign-in flow end-to-end)
 
-2. **Enhancement to `configure-auth.sh`:** Add a post-configuration verification step that checks each enabled provider's consent screen displays the correct app name. This could query the Google OAuth consent screen API or output a checklist of manual verification steps with URLs.
+~~2. **Enhancement to `configure-auth.sh`:** Removed per review -- the script runs rarely and a checklist document is sufficient. Adding programmatic consent screen verification would be fragile (no simple API) and YAGNI.~~
 
 ## Technical Considerations
 
@@ -103,7 +105,6 @@ Add an OAuth provider setup checklist to prevent branding gaps when adding futur
 **Part 3 code changes:**
 
 - New file: `knowledge-base/engineering/checklists/oauth-provider-setup.md`
-- `apps/web-platform/supabase/scripts/configure-auth.sh` -- Add verification step
 
 ### Security Considerations
 
@@ -128,6 +129,7 @@ Add an OAuth provider setup checklist to prevent branding gaps when adding futur
 - [ ] Terms of service link points to `https://soleur.ai/pages/legal/terms-and-conditions.html`
 - [ ] Authorized domains include `soleur.ai`
 - [ ] Application home page set to `https://soleur.ai`
+- [ ] OAuth app publishing status checked and verification submitted if needed
 
 ### Part 2: Supabase Custom Domain (conditional on plan upgrade)
 
@@ -137,7 +139,8 @@ Add an OAuth provider setup checklist to prevent branding gaps when adding futur
 - [ ] `NEXT_PUBLIC_SUPABASE_URL` updated in Doppler to `https://api.soleur.ai`
 - [ ] Docker image rebuilt with new URL
 - [ ] Auth callback works end-to-end with new domain
-- [ ] Google OAuth redirect URI updated to use `api.soleur.ai`
+- [ ] ALL OAuth provider redirect URIs updated (Google, GitHub; Apple/Microsoft per #1341)
+- [ ] Supabase auth callback URL verified or updated for custom domain
 - [ ] Expense entry updated in `knowledge-base/operations/expenses.md` ($0 -> $25/mo)
 
 ### Part 3: OAuth Setup Checklist
@@ -145,7 +148,7 @@ Add an OAuth provider setup checklist to prevent branding gaps when adding futur
 - [ ] Checklist document created at `knowledge-base/engineering/checklists/oauth-provider-setup.md`
 - [ ] Covers all 4 current providers (Google, Apple, GitHub, Microsoft)
 - [ ] Includes consent screen branding as a required step
-- [ ] `configure-auth.sh` enhanced with verification guidance
+- [ ] Includes post-setup verification steps with provider console URLs
 
 ## Test Scenarios
 
@@ -189,6 +192,22 @@ Add an OAuth provider setup checklist to prevent branding gaps when adding futur
 | Vanity subdomain (`soleur.supabase.co`) | Still shows `supabase.co` in the redirect URL -- not fully branded |
 | Proxy Supabase auth through app domain | Complex, fragile, adds latency, and Supabase doesn't support it |
 | Do nothing (just fix consent screen name) | Redirect URL still shows cryptic `ifsccnjhymdmidffkzhl.supabase.co` |
+
+## Plan Review Findings [Updated 2026-04-02]
+
+Three reviewers (DHH, Kieran, Code Simplicity) provided feedback. All agreed:
+
+1. **Part 1 is the right fix.** Ship immediately -- zero code changes, high impact.
+2. **Part 2 should be deferred** unless Supabase Pro is needed for other reasons. The redirect URL is a minor trust signal compared to the consent screen app name.
+3. **Part 3 simplified** to just the checklist document. Dropped `configure-auth.sh` enhancement (YAGNI -- script runs rarely, checklist is sufficient).
+
+**Changes applied from review:**
+
+- Added Google OAuth app verification status check to Part 1
+- Changed Part 2 step 9 to cover ALL OAuth providers' redirect URIs (not just Google)
+- Added Part 2 step 10 to verify Supabase custom domain auto-updates auth callback URLs
+- Removed `configure-auth.sh` enhancement from Part 3
+- Added verification status acceptance criterion to Part 1
 
 ## References
 

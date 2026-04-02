@@ -11,8 +11,10 @@ Source plan: `knowledge-base/project/plans/2026-04-02-fix-google-oauth-consent-s
 - [ ] 1.5 Set authorized domains to `soleur.ai`
 - [ ] 1.6 Set privacy policy URL to `https://soleur.ai/pages/legal/privacy-policy.html`
 - [ ] 1.7 Set terms of service URL to `https://soleur.ai/pages/legal/terms-and-conditions.html`
-- [ ] 1.8 Save consent screen configuration
-- [ ] 1.9 Verify by initiating Google OAuth from `https://app.soleur.ai/login` and checking consent screen
+- [ ] 1.8 Check OAuth app publishing status (testing/production) and verification state
+- [ ] 1.9 Submit for Google verification if needed (can take weeks; branding still shows for <100 users)
+- [ ] 1.10 Save consent screen configuration
+- [ ] 1.11 Verify by initiating Google OAuth from `https://app.soleur.ai/login` and checking consent screen
 
 ## Phase 2: Supabase Custom Domain (requires plan upgrade decision)
 
@@ -28,11 +30,11 @@ Source plan: `knowledge-base/project/plans/2026-04-02-fix-google-oauth-consent-s
 - [ ] 2.9 Activate custom domain: `supabase domains activate --project-ref ifsccnjhymdmidffkzhl`
 - [ ] 2.10 Update Doppler `prd` config: `NEXT_PUBLIC_SUPABASE_URL` -> `https://api.soleur.ai`
 - [ ] 2.11 Rebuild and redeploy Docker image
-- [ ] 2.12 Update Google OAuth authorized redirect URIs to include `api.soleur.ai`
-- [ ] 2.13 Update Supabase auth config `uri_allow_list` via `configure-auth.sh`
-- [ ] 2.14 Update `knowledge-base/operations/expenses.md` Supabase entry: $0 -> $25/mo
-- [ ] 2.15 Verify end-to-end auth flow with new domain
-- [ ] 2.16 Verify CSP headers allow `api.soleur.ai` in connect-src
+- [ ] 2.12 Update ALL OAuth providers' redirect URIs (Google, GitHub; Apple/Microsoft per #1341)
+- [ ] 2.13 Verify Supabase custom domain auto-updates auth callback URL, or update via Management API
+- [ ] 2.14 Update Supabase auth config `uri_allow_list` via `configure-auth.sh`
+- [ ] 2.15 Update `knowledge-base/operations/expenses.md` Supabase entry: $0 -> $25/mo
+- [ ] 2.16 Verify end-to-end auth flow with new domain (all enabled providers)
 
 ## Phase 3: OAuth Setup Checklist (documentation)
 
@@ -43,9 +45,7 @@ Source plan: `knowledge-base/project/plans/2026-04-02-fix-google-oauth-consent-s
   - [ ] 3.1.4 Section: Credential Storage (Doppler `prd` config)
   - [ ] 3.1.5 Section: Supabase Provider Enablement (`configure-auth.sh`)
   - [ ] 3.1.6 Section: Post-Setup Verification Checklist
-- [ ] 3.2 Add verification guidance to `apps/web-platform/supabase/scripts/configure-auth.sh`
-  - [ ] 3.2.1 Add post-configuration echo with verification URLs for each enabled provider
-  - [ ] 3.2.2 Add comment block referencing the checklist document
+~~- [ ] 3.2 Removed per review -- `configure-auth.sh` enhancement is YAGNI; checklist document is sufficient~~
 
 ## Phase 4: Verification
 
