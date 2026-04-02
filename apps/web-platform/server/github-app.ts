@@ -153,18 +153,28 @@ export async function verifyInstallationOwnership(
     return { verified: false, error: "Installation has no account", status: 502 };
   }
 
-  // Organization installations: account.login is the org name, not the user.
-  // For MVP, reject org installations until membership verification is implemented.
+  // Organization installations: verify the user is a member of the org.
   if (account.type === "Organization") {
-    log.warn(
-      { installationId, orgLogin: account.login, expectedLogin },
-      "Organization installation not yet supported for ownership verification",
+    const token = await generateInstallationToken(installationId);
+    const memberResponse = await githubFetch(
+      `${GITHUB_API}/orgs/${account.login}/members/${expectedLogin}`,
+      { headers: { Authorization: `token ${token}` }, redirect: "manual" },
     );
-    return {
-      verified: false,
-      error: "Organization installations are not yet supported",
-      status: 403,
-    };
+    if (memberResponse.status === 204) {
+      return { verified: true };
+    }
+    if (memberResponse.status === 404 || memberResponse.status === 302) {
+      return {
+        verified: false,
+        error: "User is not a member of the organization",
+        status: 403,
+      };
+    }
+    log.error(
+      { status: memberResponse.status, installationId, org: account.login, expectedLogin },
+      "Failed to verify organization membership",
+    );
+    return { verified: false, error: "Failed to verify organization membership", status: 502 };
   }
 
   // SECURITY: Case-insensitive comparison — GitHub usernames are case-insensitive
