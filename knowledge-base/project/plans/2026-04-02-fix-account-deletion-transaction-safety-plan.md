@@ -2,9 +2,23 @@
 title: "fix: account deletion cascade lacks transaction safety"
 type: fix
 date: 2026-04-02
+deepened: 2026-04-02
 ---
 
 # fix: account deletion cascade lacks transaction safety
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-02
+**Sections enhanced:** 3 (Technical Approach, Test Scenarios, Edge Cases)
+**Research sources:** Supabase docs (Context7), codebase FK schema analysis, institutional learnings
+
+### Key Improvements
+
+1. Added concrete before/after code snippets for the implementation change
+2. Identified edge case: workspace deletion is non-reversible but happens before auth deletion -- documented as acceptable pre-existing behavior
+3. Confirmed `auth.admin.deleteUser()` returns a proper `Promise` (not `PromiseLike`), so standard `await`/destructuring is correct
+4. Verified `handle_new_user` trigger fires only on INSERT, not affected by DELETE flow
 
 ## Overview
 
@@ -51,6 +65,60 @@ The account deletion cascade in `apps/web-platform/server/account-delete.ts` del
 3. Delete workspace directory (best-effort, unchanged)
 4. Delete `auth.users` via admin API (FK cascade handles `public.users` and all children)
 
+### Research Insights
+
+**FK cascade mechanics (verified via Supabase docs and schema):**
+
+- `public.users.id REFERENCES auth.users(id) ON DELETE CASCADE` (migration 001, line 7) means Postgres deletes the `public.users` row in the same transaction that deletes the `auth.users` row
+- Downstream cascades (`api_keys`, `conversations`, `messages`) all reference `public.users(id) ON DELETE CASCADE`, so they are included in the same transaction
+- The `handle_new_user()` trigger fires `AFTER INSERT ON auth.users` only -- it is not involved in the deletion path
+
+**`auth.admin.deleteUser()` API behavior:**
+
+- Returns `Promise<{ data: { user: User }; error: AuthError | null }>` -- a proper `Promise`, not a Supabase query-builder `PromiseLike`
+- The existing `await` + destructured `{ error }` pattern is correct
+- GoTrue performs the `auth.users` DELETE server-side; the FK cascade fires within that same Postgres transaction
+
+**Concrete before/after for `account-delete.ts`:**
+
+Before (current, lines 54-71):
+
+```typescript
+// 4. Delete public.users row (FK cascade deletes api_keys, conversations, messages)
+const { error: deletePublicError } = await service
+  .from("users")
+  .delete()
+  .eq("id", userId);
+
+if (deletePublicError) {
+  log.error({ userId, err: deletePublicError }, "Failed to delete public.users");
+  return { success: false, error: "Account deletion failed. Please try again." };
+}
+
+// 5. Delete auth record
+const { error: deleteAuthError } = await service.auth.admin.deleteUser(userId);
+
+if (deleteAuthError) {
+  log.error({ userId, err: deleteAuthError }, "Failed to delete auth record");
+  return { success: false, error: "Account deletion failed. Auth record could not be removed." };
+}
+```
+
+After (fixed):
+
+```typescript
+// 4. Delete auth record -- FK cascade handles public.users and all children
+//    IMPORTANT: auth deletion must come first. If it fails, no data is lost.
+//    If public.users were deleted first and auth deletion failed, the user
+//    would have an auth record but no data (GDPR Article 17 violation).
+const { error: deleteAuthError } = await service.auth.admin.deleteUser(userId);
+
+if (deleteAuthError) {
+  log.error({ userId, err: deleteAuthError }, "Failed to delete auth record");
+  return { success: false, error: "Account deletion failed. Please try again." };
+}
+```
+
 ### Changes to `apps/web-platform/test/account-delete.test.ts`
 
 1. **Update the cascade order test** to expect: `abort -> workspace -> auth -> (cascade)` instead of `abort -> workspace -> public.users -> auth`.
@@ -75,6 +143,16 @@ The account deletion cascade in `apps/web-platform/server/account-delete.ts` del
 - Given a valid user, when deletion succeeds, then the cascade order is `abort -> workspace -> auth` (no explicit `public.users` delete step)
 - Given an invalid email confirmation, when `deleteAccount` is called, then no deletion occurs (unchanged behavior)
 - Given a non-existent user, when `deleteAccount` is called, then it returns an error (unchanged behavior)
+
+## Edge Cases and Considerations
+
+**Workspace deletion ordering:** Step 3 (workspace directory deletion) runs before step 4 (auth deletion). If auth deletion fails, the workspace directory is already gone but the user account persists. This is a pre-existing behavior, not introduced by this fix. It is acceptable because: (a) workspace deletion is already marked best-effort with try/catch, (b) the workspace is re-provisioned on next login via `ensureWorkspaceProvisioned()`, and (c) workspace files are ephemeral session data, not user-owned content.
+
+**Session abort ordering:** Step 2 (abort active sessions) also runs before auth deletion. If auth deletion fails, any active WebSocket sessions have already been aborted. This is benign -- the user can start a new session on next page load.
+
+**Rate limiting interaction:** The route handler (`app/api/account/delete/route.ts`) rate-limits to 1 request per 60 seconds per user. If auth deletion fails and the user retries within 60 seconds, they will be rate-limited. This is acceptable -- the error message tells them to try again, and the 60-second window is short enough to not impede a legitimate retry.
+
+**No migration required:** This fix changes only application code ordering. The FK constraint (`ON DELETE CASCADE`) already exists in the schema. No new migration is needed.
 
 ## Domain Review
 
