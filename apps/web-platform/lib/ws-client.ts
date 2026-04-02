@@ -12,7 +12,7 @@ export interface WebSocketError {
   message: string;
   action?: {
     label: string;
-    href?: string;
+    href: string;
   };
 }
 
