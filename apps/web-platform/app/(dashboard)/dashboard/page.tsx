@@ -129,7 +129,7 @@ export default function DashboardPage() {
           insertRef={insertRef}
         />
       </div>
-      <div className="mb-8 flex w-full items-center justify-between text-xs text-neutral-600">
+      <div className="mb-8 flex w-full items-center justify-between text-xs text-neutral-400">
         <span>Type @ to mention a specific leader</span>
         <span>Enter to send</span>
       </div>
@@ -162,7 +162,7 @@ export default function DashboardPage() {
       </div>
 
       {/* YOUR ORGANIZATION leader strip */}
-      <p className="mb-4 text-xs font-medium tracking-widest text-neutral-600">
+      <p className="mb-4 text-xs font-medium tracking-widest text-neutral-400">
         YOUR ORGANIZATION
       </p>
       <div className="flex flex-wrap justify-center gap-3">

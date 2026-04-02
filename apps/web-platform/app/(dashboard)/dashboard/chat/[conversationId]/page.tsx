@@ -171,7 +171,7 @@ export default function ChatPage() {
 
         {messages.length === 0 && !isClassifying && !lastError && (
           <div className="flex h-full items-center justify-center">
-            <p className="text-sm text-neutral-600">
+            <p className="text-sm text-neutral-400">
               Send a message to get started
             </p>
           </div>
@@ -262,7 +262,7 @@ export default function ChatPage() {
             insertRef={insertRef}
           />
         </div>
-        <div className="mx-auto mt-1 flex max-w-3xl items-center justify-between text-xs text-neutral-600">
+        <div className="mx-auto mt-1 flex max-w-3xl items-center justify-between text-xs text-neutral-400">
           {activeLeaderIds.length > 0 && (
             <span className="md:hidden">
               {activeLeaderIds.length} leaders responding
@@ -323,7 +323,7 @@ function MessageBubble({
               )}
             </div>
           )}
-          <p className="whitespace-pre-wrap">{content}</p>
+          <p className="whitespace-pre-wrap" style={{ overflowWrap: "anywhere" }}>{content}</p>
         </div>
       </div>
     </div>

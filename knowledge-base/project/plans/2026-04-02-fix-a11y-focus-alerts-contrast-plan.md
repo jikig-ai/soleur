@@ -69,12 +69,12 @@ Add `overflow-wrap: anywhere` to message bubble `<p>` in the chat conversation p
 
 ## Acceptance Criteria
 
-- [ ] All interactive elements have visible focus indicators (amber ring on focus-visible)
-- [ ] Custom focus rings on key-rotation-form and delete-account-dialog are preserved
-- [ ] Mouse clicks do not trigger focus rings (focus-visible, not focus)
-- [ ] All error messages have `role="alert"` for screen reader announcement
-- [ ] All text meets WCAG AA contrast ratios (4.5:1 normal, 3:1 large)
-- [ ] Chat messages with long unbroken strings wrap without horizontal overflow
+- [x] All interactive elements have visible focus indicators (amber ring on focus-visible)
+- [x] Custom focus rings on key-rotation-form and delete-account-dialog are preserved
+- [x] Mouse clicks do not trigger focus rings (focus-visible, not focus)
+- [x] All error messages have `role="alert"` for screen reader announcement
+- [x] All text meets WCAG AA contrast ratios (4.5:1 normal, 3:1 large)
+- [x] Chat messages with long unbroken strings wrap without horizontal overflow
 
 ## Test Scenarios
 

@@ -76,13 +76,13 @@ export function DeleteAccountDialog({ userEmail }: DeleteAccountDialogProps) {
         value={confirmEmail}
         onChange={(e) => setConfirmEmail(e.target.value)}
         placeholder={userEmail}
-        className="mb-4 w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white placeholder:text-neutral-600 focus:border-red-700 focus:outline-none focus:ring-1 focus:ring-red-700"
+        className="mb-4 w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white placeholder:text-neutral-400 focus:border-red-700 focus:outline-none focus:ring-1 focus:ring-red-700"
         autoComplete="off"
         spellCheck={false}
       />
 
       {error && (
-        <p className="mb-4 text-sm text-red-400">{error}</p>
+        <p role="alert" className="mb-4 text-sm text-red-400">{error}</p>
       )}
 
       <div className="flex gap-3">
