@@ -405,6 +405,60 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     expect(result.stdout).toBe("");
   });
 
+  test("bare repo cwd does not false-positive on uncommitted changes", async () => {
+    // remoteDir is already a bare repo (created in beforeAll) with commits
+    // on main (pushed in beforeAll). Create test-feature branch pointing to
+    // the same commit so rev-parse --abbrev-ref HEAD returns "test-feature"
+    // (not literal "HEAD" which triggers the detached HEAD exit).
+    const mainSha = new TextDecoder().decode(
+      spawnChecked(["git", "rev-parse", "main"], { cwd: remoteDir }).stdout
+    ).trim();
+    spawnChecked(
+      ["git", "update-ref", "refs/heads/test-feature", mainSha],
+      { cwd: remoteDir }
+    );
+    spawnChecked(
+      ["git", "symbolic-ref", "HEAD", "refs/heads/test-feature"],
+      { cwd: remoteDir }
+    );
+
+    // Add review evidence via filesystem todos/ directory so Guard 6 passes.
+    // Bare repos have no working tree, but the grep -rl check on $WORK_DIR/todos/
+    // just reads regular files at that path — works regardless of bare status.
+    const { mkdirSync, writeFileSync } = await import("fs");
+    mkdirSync(join(remoteDir, "todos"), { recursive: true });
+    writeFileSync(join(remoteDir, "todos", "review.md"), "tags: code-review\n");
+
+    try {
+      const result = await runHook(
+        makeInput("gh pr merge 123 --squash --auto", remoteDir)
+      );
+
+      expect(result.exitCode).toBe(0);
+      // The hook must NOT deny with "Uncommitted changes" — exit 128 from
+      // git diff in a bare repo should be treated as fail-open, not dirty.
+      if (result.stdout) {
+        const output = JSON.parse(result.stdout);
+        if (output.hookSpecificOutput?.permissionDecision === "deny") {
+          expect(output.hookSpecificOutput.permissionDecisionReason).not.toContain(
+            "Uncommitted changes"
+          );
+        }
+      }
+    } finally {
+      // Restore HEAD to main and clean up
+      spawnChecked(
+        ["git", "symbolic-ref", "HEAD", "refs/heads/main"],
+        { cwd: remoteDir }
+      );
+      Bun.spawnSync(
+        ["git", "update-ref", "-d", "refs/heads/test-feature"],
+        { cwd: remoteDir, env: GIT_ENV }
+      );
+      rmSync(join(remoteDir, "todos"), { recursive: true, force: true });
+    }
+  });
+
   test("push failure after merge blocks with deny", async () => {
     spawnChecked(["git", "checkout", "-b", "test-pushfail"], { cwd: repoDir });
     spawnChecked(

@@ -158,13 +158,13 @@ The existing test suite (`test/pre-merge-rebase.test.ts`) creates regular (non-b
 
 ## Acceptance Criteria
 
-- [ ] `git diff --quiet HEAD` exit code 128 (bare repo) does NOT trigger "uncommitted changes" deny
-- [ ] `git diff --quiet HEAD` exit code 1 (genuinely dirty) still triggers deny
-- [ ] `git diff --cached --quiet` exit code 128 does NOT trigger deny
-- [ ] `git diff --cached --quiet` exit code 1 still triggers deny
-- [ ] Exit code 0 (clean) passes through as before
-- [ ] New test case: bare repo `.cwd` with non-main HEAD passes diff check
-- [ ] Existing test suite passes unchanged
+- [x] `git diff --quiet HEAD` exit code 128 (bare repo) does NOT trigger "uncommitted changes" deny
+- [x] `git diff --quiet HEAD` exit code 1 (genuinely dirty) still triggers deny
+- [x] `git diff --cached --quiet` exit code 128 does NOT trigger deny
+- [x] `git diff --cached --quiet` exit code 1 still triggers deny
+- [x] Exit code 0 (clean) passes through as before
+- [x] New test case: bare repo `.cwd` with non-main HEAD passes diff check
+- [x] Existing test suite passes unchanged
 
 ## Test Scenarios
 

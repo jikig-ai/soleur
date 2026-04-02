@@ -102,17 +102,22 @@ if [[ "$CURRENT_BRANCH" == "HEAD" ]]; then
 fi
 
 # Check for uncommitted changes (tracked files only -- untracked files
-# cannot conflict with merge and should not block it)
-if ! git -C "$WORK_DIR" diff --quiet HEAD 2>/dev/null || \
-   ! git -C "$WORK_DIR" diff --cached --quiet 2>/dev/null; then
-  jq -n '{
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: "BLOCKED: Uncommitted changes detected. Commit before merging."
-    }
-  }'
-  exit 0
+# cannot conflict with merge and should not block it).
+# Skip if not inside a work tree (bare repo context): git diff --quiet HEAD
+# returns 128 and git diff --cached --quiet returns 1 (empty index vs HEAD),
+# both false positives. Fail open in bare repo setups (#1386).
+if [[ "$(git -C "$WORK_DIR" rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]]; then
+  if ! git -C "$WORK_DIR" diff --quiet HEAD 2>/dev/null || \
+     ! git -C "$WORK_DIR" diff --cached --quiet 2>/dev/null; then
+    jq -n '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "BLOCKED: Uncommitted changes detected. Commit before merging."
+      }
+    }'
+    exit 0
+  fi
 fi
 
 # Fetch latest main -- fail open on network error
