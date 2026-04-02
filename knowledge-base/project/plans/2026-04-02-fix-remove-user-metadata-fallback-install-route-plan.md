@@ -55,11 +55,11 @@ Note: the code comment on line 43 says "Extract GitHub username from provider-co
 
 ## Acceptance Criteria
 
-- [ ] Remove `user_metadata?.user_name` fallback on line 50 of `apps/web-platform/app/api/repo/install/route.ts`
-- [ ] Ensure non-GitHub-identity users get a clear 403 error with message "No GitHub identity found on this account"
-- [ ] Add test coverage for the rejection path when user has no GitHub identity in `identities` array
-- [ ] Add structural enforcement test verifying `user_metadata` is not referenced for `user_name` in the install route
-- [ ] Existing 12 tests continue to pass
+- [x] Remove `user_metadata?.user_name` fallback on line 50 of `apps/web-platform/app/api/repo/install/route.ts`
+- [x] Ensure non-GitHub-identity users get a clear 403 error with message "No GitHub identity found on this account"
+- [x] Add test coverage for the rejection path when user has no GitHub identity in `identities` array
+- [x] Add structural enforcement test verifying `user_metadata` is not referenced for `user_name` in the install route
+- [x] Existing 12 tests continue to pass
 
 ## Test Scenarios
 
