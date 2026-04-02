@@ -23,11 +23,11 @@ PR: [#1361](https://github.com/jikig-ai/soleur/pulls/1361)
 
 ### 2. Session Timeout + WebSocket Idle Expiry
 
-- [ ] 2.1 Add `WS_IDLE_TIMEOUT_MS` env var (default 30min), track last user message timestamp
-- [ ] 2.2 Add `IDLE_TIMEOUT` close code to `lib/types.ts`
-- [ ] 2.3 Handle idle timeout close code in `ws-client.ts` (show reason, offer reconnect)
-- [ ] 2.4 Reduce inactivity timeout from 24h to 2h for waiting_for_user conversations
-- [ ] 2.5 Write tests: `test/ws-protocol.test.ts` — idle timeout, timer reset on user message
+- [x] 2.1 Add `WS_IDLE_TIMEOUT_MS` env var (default 30min), track last user message timestamp
+- [x] 2.2 Add `IDLE_TIMEOUT` close code to `lib/types.ts`
+- [x] 2.3 Handle idle timeout close code in `ws-client.ts` (show reason, offer reconnect)
+- [x] 2.4 Reduce inactivity timeout from 24h to 2h for waiting_for_user conversations
+- [x] 2.5 Write tests: `test/ws-protocol.test.ts` — idle timeout, timer reset on user message
 
 ### 3. UX Audit of Phase 1 Screens
 
@@ -46,37 +46,37 @@ PR: [#1361](https://github.com/jikig-ai/soleur/pulls/1361)
 
 ### 4. User Settings Page (API Key Rotation + GDPR Deletion)
 
-- [ ] 4.1 Create `app/(dashboard)/dashboard/settings/page.tsx` — simple flat layout with section headings
-- [ ] 4.2 Implement API key status display (valid/invalid, provider, last validated)
-- [ ] 4.3 Implement key rotation flow (validate -> encrypt -> upsert)
-- [ ] 4.4 Implement key deletion
-- [ ] 4.5 Create `app/api/account/delete/route.ts` — account deletion endpoint
-  - [ ] 4.5.1 Origin validation + auth check + rate limiting
-  - [ ] 4.5.2 Abort active agent session
-  - [ ] 4.5.3 Delete workspace directory
-  - [ ] 4.5.4 Delete database records (cascade from public.users)
-  - [ ] 4.5.5 Delete Supabase auth record (after public.users)
-- [ ] 4.6 Add `deleteWorkspace(userId)` to `server/workspace.ts`
-- [ ] 4.7 Implement confirmation dialog (type email to confirm)
-- [ ] 4.8 Redirect to `/login` with "Account deleted" flash after success
-- [ ] 4.9 Handle stale auth cookies on `/login` after deletion (clear cookie, no error)
-- [ ] 4.10 Add settings link to dashboard layout navigation
-- [ ] 4.11 Write tests: `test/settings-page.test.tsx`, `test/account-delete.test.ts`
+- [x] 4.1 Create `app/(dashboard)/dashboard/settings/page.tsx` — simple flat layout with section headings
+- [x] 4.2 Implement API key status display (valid/invalid, provider, last validated)
+- [x] 4.3 Implement key rotation flow (validate -> encrypt -> upsert)
+- [x] 4.4 Implement key deletion
+- [x] 4.5 Create `app/api/account/delete/route.ts` — account deletion endpoint
+  - [x] 4.5.1 Origin validation + auth check + rate limiting
+  - [x] 4.5.2 Abort active agent session
+  - [x] 4.5.3 Delete workspace directory
+  - [x] 4.5.4 Delete database records (cascade from public.users)
+  - [x] 4.5.5 Delete Supabase auth record (after public.users)
+- [x] 4.6 Add `deleteWorkspace(userId)` to `server/workspace.ts`
+- [x] 4.7 Implement confirmation dialog (type email to confirm)
+- [x] 4.8 Redirect to `/login` with "Account deleted" flash after success
+- [x] 4.9 Handle stale auth cookies on `/login` after deletion (clear cookie, no error)
+- [x] 4.10 Add settings link to dashboard layout navigation
+- [x] 4.11 Write tests: `test/settings-page.test.tsx`, `test/account-delete.test.ts`
 
 ## Phase B: Error/Empty States (after Phase A remediation)
 
 ### 5. Error States and Empty States
 
-- [ ] 5.1 Chat page: connection failure error card with retry
-- [ ] 5.2 Chat page: agent failure error card (key_invalid -> link to settings)
-- [ ] 5.3 Chat page: network loss banner with manual retry
-- [ ] 5.4 Chat page: rate limited message with countdown
-- [ ] 5.5 Update `app/error.tsx` — branded error boundary
-- [ ] 5.6 Update `app/global-error.tsx` — minimal recovery UI
-- [ ] 5.7 Dashboard: first-visit welcome copy
-- [ ] 5.8 KB viewer: empty state with explanation
-- [ ] 5.9 Settings: no API key configured state
-- [ ] 5.10 Surface specific error codes from `ws-client.ts` to UI components
+- [x] 5.1 Chat page: connection failure error card with retry
+- [x] 5.2 Chat page: agent failure error card (key_invalid -> link to settings)
+- [x] 5.3 Chat page: network loss banner with manual retry
+- [x] 5.4 Chat page: rate limited message with countdown
+- [x] 5.5 Update `app/error.tsx` — branded error boundary
+- [x] 5.6 Update `app/global-error.tsx` — minimal recovery UI
+- [x] 5.7 Dashboard: first-visit welcome copy
+- [x] 5.8 KB viewer: empty state with explanation
+- [x] 5.9 Settings: no API key configured state
+- [x] 5.10 Surface specific error codes from `ws-client.ts` to UI components
 
 ## Deferred: Onboarding Walkthrough
 

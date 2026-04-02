@@ -518,16 +518,16 @@ Task 6: Onboarding walkthrough ──→ DEFERRED to post-beta
 - [ ] OWASP Top 10 audit completed, 0 critical/high findings open
 - [ ] CSP headers verified on all response types (middleware, API, error pages)
 - [ ] CORS validation on all mutating API endpoints
-- [ ] WebSocket idle timeout closes connections after configurable period (default 30min)
-- [ ] Inactivity timeout reduced from 24h to 2h for waiting_for_user conversations
+- [x] WebSocket idle timeout closes connections after configurable period (default 30min)
+- [x] Inactivity timeout reduced from 24h to 2h for waiting_for_user conversations
 - [ ] All Phase 1 screens reviewed by ux-design-lead
-- [ ] User settings page accessible at `/dashboard/settings`
-- [ ] API key rotation works (validate + encrypt + upsert)
-- [ ] Account deletion purges all user data (workspace, DB records, auth record)
-- [ ] Account deletion redirects to login with confirmation, no stale cookie errors
-- [ ] Error states visible for: connection failure, agent failure, network loss, invalid key, rate limit
-- [ ] Empty states visible for: no conversations, empty KB, no API key
-- [ ] All new code has corresponding test files
+- [x] User settings page accessible at `/dashboard/settings`
+- [x] API key rotation works (validate + encrypt + upsert)
+- [x] Account deletion purges all user data (workspace, DB records, auth record)
+- [x] Account deletion redirects to login with confirmation, no stale cookie errors
+- [x] Error states visible for: connection failure, agent failure, network loss, invalid key, rate limit
+- [x] Empty states visible for: no conversations, empty KB, no API key
+- [x] All new code has corresponding test files
 
 ## Domain Review
 
