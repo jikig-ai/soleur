@@ -7,6 +7,16 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
 
 type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
 
+export interface WebSocketError {
+  code: string;
+  message: string;
+  action?: {
+    label: string;
+    href?: string;
+    onClick?: () => void;
+  };
+}
+
 interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -26,6 +36,8 @@ interface UseWebSocketReturn {
   sendReviewGateResponse: (gateId: string, selection: string) => void;
   status: ConnectionStatus;
   disconnectReason: string | undefined;
+  lastError: WebSocketError | null;
+  reconnect: () => void;
   routeSource: "auto" | "mention" | null;
   activeLeaderIds: DomainLeaderId[];
 }
@@ -48,6 +60,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [disconnectReason, setDisconnectReason] = useState<string>();
+  const [lastError, setLastError] = useState<WebSocketError | null>(null);
   const [routeSource, setRouteSource] = useState<"auto" | "mention" | null>(null);
   const [activeLeaderIds, setActiveLeaderIds] = useState<DomainLeaderId[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
@@ -210,11 +223,22 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "error": {
           activeStreamsRef.current.clear();
 
-          // Key invalidation: redirect to setup instead of showing error
+          // Key invalidation: set structured error instead of redirect
           if (msg.errorCode === "key_invalid") {
+            setLastError({
+              code: "key_invalid",
+              message: "Your API key is invalid or expired.",
+              action: { label: "Update key", href: "/dashboard/settings" },
+            });
             teardown();
-            window.location.href = "/setup-key";
-            return; // Prevent post-redirect state updates
+            return;
+          }
+
+          if (msg.errorCode === "rate_limited") {
+            setLastError({
+              code: "rate_limited",
+              message: "You've been rate limited. Please wait before trying again.",
+            });
           }
 
           setMessages((prev) => [
@@ -260,6 +284,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         teardown();
         setStatus("disconnected");
         setDisconnectReason(entry.reason);
+
+        // Set structured error for non-redirect disconnections
+        if (!entry.target) {
+          setLastError({
+            code: "disconnected",
+            message: entry.reason,
+          });
+        }
+
         if (entry.target) {
           window.location.href = entry.target;
         }
@@ -369,5 +402,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     [send],
   );
 
-  return { messages, startSession, sendMessage, sendReviewGateResponse, status, disconnectReason, routeSource, activeLeaderIds };
+  const reconnect = useCallback(() => {
+    setLastError(null);
+    setDisconnectReason(undefined);
+    mountedRef.current = true;
+    backoffRef.current = INITIAL_BACKOFF;
+    connect();
+  }, [connect]);
+
+  return { messages, startSession, sendMessage, sendReviewGateResponse, status, disconnectReason, lastError, reconnect, routeSource, activeLeaderIds };
 }

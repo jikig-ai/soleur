@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useWebSocket } from "@/lib/ws-client";
+import { ErrorCard } from "@/components/ui/error-card";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { LEADER_COLORS, LEADER_BG_COLORS } from "@/components/chat/leader-colors";
@@ -25,6 +26,8 @@ export default function ChatPage() {
     sendReviewGateResponse,
     status,
     disconnectReason,
+    lastError,
+    reconnect,
     routeSource,
     activeLeaderIds,
   } = useWebSocket(conversationId);
@@ -136,9 +139,37 @@ export default function ChatPage() {
         </div>
       )}
 
+      {/* Network loss banner */}
+      {status === "reconnecting" && (
+        <div className="border-b border-yellow-800/50 bg-yellow-950/20 px-4 py-2 md:px-6">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-yellow-300">Connection lost. Reconnecting...</span>
+            <button
+              onClick={reconnect}
+              className="text-xs text-yellow-400 underline hover:text-yellow-300"
+            >
+              Retry now
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Message list */}
       <div className="flex-1 overflow-y-auto px-4 py-4 md:px-6">
-        {messages.length === 0 && !isClassifying && (
+        {/* Error states */}
+        {lastError && (
+          <div className="mx-auto mb-4 max-w-3xl">
+            <ErrorCard
+              title={lastError.code === "key_invalid" ? "Invalid API Key" : lastError.code === "rate_limited" ? "Rate Limited" : "Connection Error"}
+              message={lastError.message}
+              onRetry={lastError.code !== "key_invalid" ? reconnect : undefined}
+              retryLabel="Reconnect"
+              action={lastError.action}
+            />
+          </div>
+        )}
+
+        {messages.length === 0 && !isClassifying && !lastError && (
           <div className="flex h-full items-center justify-center">
             <p className="text-sm text-neutral-600">
               Send a message to get started
