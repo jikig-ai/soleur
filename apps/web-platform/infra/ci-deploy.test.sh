@@ -86,11 +86,15 @@ exit 0
 MOCK
     chmod +x "$MOCK_DIR/flock"
 
-    # Mock df (reports plenty of disk space by default)
+    # Mock df (reports plenty of disk space; MOCK_DF_LOW=1 simulates low disk)
     cat > "$MOCK_DIR/df" << 'MOCK'
 #!/bin/bash
 echo "Avail"
-echo "20000000"
+if [[ "${MOCK_DF_LOW:-}" == "1" ]]; then
+  echo "1000000"
+else
+  echo "20000000"
+fi
 MOCK
     chmod +x "$MOCK_DIR/df"
 
@@ -228,11 +232,15 @@ exit 0
 MOCK
     chmod +x "$MOCK_DIR/flock"
 
-    # Mock df (reports plenty of disk space by default)
+    # Mock df (reports plenty of disk space; MOCK_DF_LOW=1 simulates low disk)
     cat > "$MOCK_DIR/df" << 'MOCK'
 #!/bin/bash
 echo "Avail"
-echo "20000000"
+if [[ "${MOCK_DF_LOW:-}" == "1" ]]; then
+  echo "1000000"
+else
+  echo "20000000"
+fi
 MOCK
     chmod +x "$MOCK_DIR/df"
 
@@ -355,35 +363,8 @@ echo "--- Disk space pre-flight check ---"
 
 assert_disk_space_rejection() {
   TOTAL=$((TOTAL + 1))
-
   local output actual_exit
-  output=$(
-    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
-    MOCK_DIR=$(mktemp -d)
-    trap 'rm -rf "$MOCK_DIR"' EXIT
-    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
-
-    # Standard mocks
-    for cmd in logger docker curl sudo chown seq flock; do
-      cat > "$MOCK_DIR/$cmd" << 'MOCK'
-#!/bin/bash
-if [[ "${1:-}" == "run" ]]; then echo "abc123"; fi
-exit 0
-MOCK
-      chmod +x "$MOCK_DIR/$cmd"
-    done
-
-    # Mock df to report LOW disk space (1GB = 1000000 KB, below 5GB threshold)
-    cat > "$MOCK_DIR/df" << 'MOCK'
-#!/bin/bash
-echo "Avail"
-echo "1000000"
-MOCK
-    chmod +x "$MOCK_DIR/df"
-
-    export PATH="$MOCK_DIR:$PATH"
-    bash "$DEPLOY_SCRIPT" 2>&1
-  ) && actual_exit=0 || actual_exit=$?
+  output=$(export MOCK_DF_LOW=1; run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
 
   if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -qF "insufficient disk space"; then
     PASS=$((PASS + 1))
