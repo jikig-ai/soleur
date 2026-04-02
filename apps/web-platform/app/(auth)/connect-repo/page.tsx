@@ -441,7 +441,7 @@ function CreateProjectState({
           </div>
         </div>
 
-        {error && <p className="text-sm text-red-400">{error}</p>}
+        {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
 
         <div className="flex items-center gap-3">
           <GoldButton type="submit" disabled={!slug || submitting}>
@@ -638,7 +638,7 @@ function SelectProjectState({
                   </p>
                 )}
               </div>
-              <span className="shrink-0 text-xs text-neutral-600">
+              <span className="shrink-0 text-xs text-neutral-400">
                 Updated {relativeTime(repo.updatedAt)}
               </span>
             </button>
@@ -797,7 +797,7 @@ function SettingUpState({ steps }: { steps: SetupStep[] }) {
                   ? "text-neutral-300"
                   : step.status === "active"
                     ? "text-neutral-100"
-                    : "text-neutral-600"
+                    : "text-neutral-400"
               }`}
             >
               {step.label}
