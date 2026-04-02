@@ -52,3 +52,12 @@ resource "cloudflare_record" "dmarc" {
   type    = "TXT"
   ttl     = 1
 }
+
+# Google Search Console domain verification (required for OAuth consent screen branding, see #1398)
+resource "cloudflare_record" "google_site_verification" {
+  zone_id = var.cf_zone_id
+  name    = "@"
+  content = "google-site-verification=zbo0JKaBz4mZwUq9sv_gXtmw5RmiN6dw_O8bqK2nq6s"
+  type    = "TXT"
+  ttl     = 1
+}
