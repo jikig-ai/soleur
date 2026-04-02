@@ -2,9 +2,23 @@
 title: "fix: OTP code length mismatch between Supabase config and UI input"
 type: fix
 date: 2026-04-02
+deepened: 2026-04-02
 ---
 
 # fix: OTP code length mismatch between Supabase config and UI input
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-02
+**Sections enhanced:** 4 (Supabase config, UI constant, E2E tests, security)
+**Research sources:** Supabase Management API docs (Context7), Playwright OTP testing patterns (web search), 5 institutional learnings, Supabase community discussion #40187, database trigger testing approach
+
+### Key Improvements
+
+1. Added concrete `configure-auth.sh` payload showing exact JSON fields to set
+2. Added database trigger approach for deterministic E2E OTP testing (eliminates need for email interception)
+3. Added `autoComplete="one-time-code"` verification to E2E tests (WebOTP API compatibility)
+4. Added Supabase Management API response verification pattern for CI smoke tests
 
 ## Overview
 
@@ -42,7 +56,22 @@ Update `configure-auth.sh` to explicitly set `mailer_otp_length: 6` in the PATCH
 
 **File:** `apps/web-platform/supabase/scripts/configure-auth.sh`
 
-Add `"mailer_otp_length": 6` to the JSON payload in the curl PATCH request (line ~36-52).
+Add `"mailer_otp_length": 6` and `"mailer_otp_exp": 600` to the JSON payload in the curl PATCH request (line ~36-52).
+
+#### Research Insights
+
+**Exact PATCH payload fields** (confirmed via Supabase Management API docs and Context7):
+
+```json
+{
+  "mailer_otp_length": 6,
+  "mailer_otp_exp": 600
+}
+```
+
+These fields are accepted alongside the existing SMTP and template fields in the same PATCH request -- no separate API call needed.
+
+**Institutional learning** (`2026-03-18-supabase-resend-email-configuration.md`): The `smtp_port` field must be a string, not an integer. While `mailer_otp_length` and `mailer_otp_exp` are numeric, verify the API accepts them as integers in the `jq` payload (use `--argjson` not `--arg` for numeric values).
 
 ### Phase 2: Extract OTP length constant and fix UI
 
@@ -106,12 +135,44 @@ Add a comment documenting that `mailer_otp_length` must match `EMAIL_OTP_LENGTH`
 
 **Note:** Phase 3 (expiry text fix) should be a separate commit from the OTP length fix -- it is a separate concern.
 
+### Phase 5: Future consideration -- deterministic OTP testing via database trigger
+
+For full end-to-end OTP verification testing (beyond the UI-level tests in Phase 4), consider a database trigger approach that makes OTP codes deterministic for test email addresses. This pattern is documented in the [Supabase OTP Playwright testing community](https://www.amillionmonkeys.co.uk/blog/2025-11-06-testing-supabase-otp-playwright-database-trigger):
+
+1. Create a PostgreSQL trigger on `auth.users` that watches for `@example.com` emails
+2. When a test email is detected, set `recovery_token` to a SHA-224 hash of the email + a known code (e.g., `"123456"`)
+3. E2E tests use `test+{timestamp}@example.com` addresses and always enter `"123456"` as the OTP
+4. Tests exercise real Supabase auth flows without email interception or mocking
+
+This is a separate effort tracked for post-fix implementation. The Phase 4 tests cover the immediate regression (UI-level digit count validation). This approach would enable testing the full `signInWithOtp` -> `verifyOtp` round-trip.
+
 ## Technical Considerations
 
-- **Why change Supabase config, not UI?** 6-digit codes are the industry standard (Google, Apple, Microsoft all use 6). Longer codes increase user friction without meaningful security benefit for email OTP (the code is already rate-limited and time-bound). Supabase docs describe email OTP as "a six digit code" despite defaulting to 8.
+- **Why change Supabase config, not UI?** 6-digit codes are the industry standard (Google, Apple, Microsoft all use 6). Longer codes increase user friction without meaningful security benefit for email OTP (the code is already rate-limited and time-bound). Supabase docs describe email OTP as "a six digit code" despite defaulting to 8. The `mailer_otp_length` field accepts values 6-10 (validated by GoTrue, [PR #513](https://github.com/supabase/auth/pull/513)).
 - **Why extract a constant?** The current bug exists because the length is hardcoded in 6+ places across 2 files. A single constant prevents future divergence.
 - **Security:** 6-digit OTP with 10-minute expiry and rate limiting (`rate_limit_otp: 30` per hour) provides adequate security. The code space is 1,000,000 combinations; at 30 attempts/hour max, brute force is infeasible within the expiry window.
 - **Email template already uses `{{ .Token }}`:** The template renders whatever Supabase generates. No template change needed for the digit count itself -- only the expiry text needs updating.
+
+### Research Insights
+
+**Supabase `verifyOtp` error handling** (institutional learning: `2026-03-20-supabase-silent-error-return-values.md`): Both login and signup pages correctly destructure `{ error }` from `verifyOtp()` and display it. No silent error gap here -- but verify the error message for a wrong-length code is user-friendly (Supabase returns "Token has expired or is invalid" which is adequate).
+
+**`autoComplete="one-time-code"` attribute** is already present on both OTP inputs. This enables the [WebOTP API](https://developer.mozilla.org/en-US/docs/Web/API/WebOTP_API) on mobile devices -- Android Chrome can auto-fill OTP codes from SMS. While this project uses email OTP, the attribute does no harm and is best practice.
+
+**Playwright E2E testing** (institutional learning: `2026-03-29-playwright-e2e-test-setup-for-nextjs-custom-server.md`): The existing Playwright config uses `tsx server/index.ts` with dummy Supabase env vars. The Phase 4 E2E tests do not need real Supabase connectivity -- they test UI behavior only (input field constraints, button state). The OTP verification step in the form triggers a Supabase API call that will fail against the dummy URL, which is acceptable for UI-level tests. The form `onSubmit` handler can be tested by verifying the button becomes enabled at the correct digit count, not by completing the auth flow.
+
+**E2E test for pasting 8-digit codes**: Playwright's `page.fill()` method respects `maxLength` on input elements. To test paste truncation, use `page.evaluate` to set the value directly via the DOM, or use `page.fill()` and verify the resulting value length. Example:
+
+```typescript
+test("OTP input truncates pasted 8-digit code", async ({ page }) => {
+  // Navigate to login, enter email, submit to reach OTP step
+  // ... (setup steps to reach OTP input)
+  const otpInput = page.getByRole("textbox");
+  await otpInput.fill("12345678"); // 8 digits
+  const value = await otpInput.inputValue();
+  expect(value.length).toBe(6); // maxLength truncates to 6
+});
+```
 
 ## Acceptance Criteria
 
@@ -174,3 +235,13 @@ No cross-domain implications detected -- this is a bug fix aligning existing con
 - [Supabase Auth Email Passwordless docs](https://supabase.com/docs/guides/auth/auth-email-passwordless) -- describes OTP as "six digit code"
 - [Supabase GoTrue PR #513: fix: shorten email otp length](https://github.com/supabase/auth/pull/513) -- historical PR that added configurable email OTP length
 - Supabase Management API: `PATCH /v1/projects/{ref}/config/auth` with `mailer_otp_length` field
+- [Supabase OTP Playwright testing via database triggers](https://www.amillionmonkeys.co.uk/blog/2025-11-06-testing-supabase-otp-playwright-database-trigger) -- deterministic OTP testing without email interception
+- [2FA testing with Playwright and Mailosaur](https://filiphric.com/2fa-testing-with-playwright-and-mailosaur) -- email-based OTP testing patterns
+
+### Institutional Learnings Applied
+
+- `2026-03-30-pkce-magic-link-same-browser-context.md` -- documents the switch from magic links to OTP (root cause context)
+- `2026-03-18-supabase-resend-email-configuration.md` -- `smtp_port` is string-typed in the API; verify numeric fields
+- `2026-03-29-playwright-e2e-test-setup-for-nextjs-custom-server.md` -- Playwright config with dummy Supabase env vars
+- `2026-03-30-tdd-enforcement-gap-and-react-test-setup.md` -- vitest/happy-dom setup for component tests
+- `2026-03-20-supabase-silent-error-return-values.md` -- always destructure `{ error }` from Supabase calls (already done in login/signup pages)
