@@ -2,9 +2,22 @@
 title: "feat: support GitHub App organization installations in ownership verification"
 type: feat
 date: 2026-04-02
+deepened: 2026-04-02
 ---
 
 # feat: support GitHub App organization installations in ownership verification
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-02
+**Sections enhanced:** 4 (Proposed Solution, Test Scenarios, Edge Cases, Context)
+**Research sources:** GitHub REST API docs (Context7), institutional learnings (vitest cross-runner compat, repo-connection implementation), source code analysis
+
+### Key Improvements
+
+1. Token cache test isolation issue identified -- `tokenCache` is module-level and persists across tests; org tests must use unique installationIds or the mock sequence count will vary unpredictably
+2. API behavior with installation tokens clarified -- GitHub App installation tokens on orgs get the "org member" view (204/404), not the "external requester" view (302 redirect)
+3. `302` redirect response identified as an additional edge case to handle -- if the App somehow gets a non-member perspective, the API returns 302, not 404
 
 ## Overview
 
@@ -37,16 +50,57 @@ Two GitHub API endpoints can verify org membership:
 
 **Auth token:** Use the installation token (not the App JWT). The installation token is scoped to the org and has the permissions the org admin granted. If the App lacks "Members" read permission, the API returns 403, which the code handles as a verification failure with a clear error message.
 
+### Research Insights: API Behavior
+
+**GitHub REST API docs confirm** (via Context7, source: docs.github.com/en/rest/orgs/members):
+
+- GitHub App installation access tokens are explicitly listed as a supported token type for both `/orgs/{org}/members/{username}` and `/orgs/{org}/memberships/{username}`
+- The required permission is "Members" organization permission (read)
+- `GET /orgs/{org}/members/{username}` returns different status codes based on the requester's relationship:
+  - **204** -- requester is an org member AND the target user is also a member
+  - **404** -- requester is an org member AND the target user is NOT a member
+  - **302** -- requester is NOT an org member (redirect to the public members endpoint)
+- GitHub App installation tokens on an org have the "org member" perspective (they see 204/404), since the App is installed on the org
+- The implementation should treat 302 as a non-member response (defensive handling in case the token somehow loses the org-member perspective)
+
 ### Implementation Steps
 
 **File:** `apps/web-platform/server/github-app.ts`
 
 1. Replace the org rejection block (lines 156-168) with:
    - Generate an installation token via `generateInstallationToken(installationId)`
-   - Call `GET /orgs/{account.login}/members/{expectedLogin}` with the installation token
+   - Call `GET /orgs/{account.login}/members/{expectedLogin}` with the installation token, using `redirect: "manual"` in the fetch options to prevent automatic redirect following (catches the 302 non-member case)
    - 204 response: return `{ verified: true }`
-   - 404 response: return `{ verified: false, error: "User is not a member of the organization", status: 403 }`
-   - Other errors (403 for missing permissions, 5xx): return `{ verified: false, error: "Failed to verify organization membership", status: 502 }`
+   - 404 or 302 response: return `{ verified: false, error: "User is not a member of the organization", status: 403 }`
+   - 403 (missing Members permission): log a specific warning about missing org permission, return `{ verified: false, error: "Failed to verify organization membership", status: 502 }`
+   - Other errors (5xx): return `{ verified: false, error: "Failed to verify organization membership", status: 502 }`
+
+   Concrete implementation pattern:
+
+   ```typescript
+   if (account.type === "Organization") {
+     const token = await generateInstallationToken(installationId);
+     const memberResponse = await githubFetch(
+       `${GITHUB_API}/orgs/${account.login}/members/${expectedLogin}`,
+       { headers: { Authorization: `token ${token}` }, redirect: "manual" },
+     );
+     if (memberResponse.status === 204) {
+       return { verified: true };
+     }
+     if (memberResponse.status === 404 || memberResponse.status === 302) {
+       return {
+         verified: false,
+         error: "User is not a member of the organization",
+         status: 403,
+       };
+     }
+     log.error(
+       { status: memberResponse.status, installationId, org: account.login, expectedLogin },
+       "Failed to verify organization membership",
+     );
+     return { verified: false, error: "Failed to verify organization membership", status: 502 };
+   }
+   ```
 
 2. The case-insensitive comparison is handled by the GitHub API itself (org names and usernames are case-insensitive in GitHub's API routing), so no manual `toLowerCase()` is needed for the API call. However, GitHub's API path parameters are case-insensitive, so passing the values as-is from the installation response is correct.
 
@@ -54,11 +108,19 @@ Two GitHub API endpoints can verify org membership:
 
 3. Update the existing "rejects organization installations with 403" test to instead verify the new org membership flow.
 
-4. Add new test cases (note: each org test requires three mock fetch calls -- (1) installation lookup GET, (2) token exchange POST from `generateInstallationToken`, (3) membership check GET):
-   - Org installation where user IS a member (mocks: installation returns org account, token exchange succeeds, membership returns 204) -- expect `verified: true`
-   - Org installation where user is NOT a member (mocks: installation returns org account, token exchange succeeds, membership returns 404) -- expect `verified: false, status: 403`
-   - Org installation where membership check fails with 403 (missing Members permission) (mocks: installation returns org account, token exchange succeeds, membership returns 403) -- expect `verified: false, status: 502` with descriptive error
-   - Org installation where membership check returns 500 (mocks: installation returns org account, token exchange succeeds, membership returns 500) -- expect `verified: false, status: 502`
+4. Add new test cases.
+
+   **Token cache isolation:** The `tokenCache` Map in `github-app.ts` is module-level and persists across tests. `mockFetch.mockReset()` in `beforeEach` clears mocks but not the cache. If test A calls `generateInstallationToken(123)` and caches the token, test B with the same installationId will skip the POST and only need 2 mocks. **Solution:** Use a unique installationId per org test (e.g., 200, 201, 202, 203) so each test has a fresh cache miss and predictable mock sequences. This insight comes from the vitest-bun-test cross-runner compat learning.
+
+   Each org test requires three mock fetch calls (with a fresh cache for that installationId): (1) installation lookup GET, (2) token exchange POST from `generateInstallationToken`, (3) membership check GET.
+
+   Test cases:
+
+   - Org installation where user IS a member (installationId: 200; mocks: installation returns org account, token exchange succeeds, membership returns 204) -- expect `verified: true`
+   - Org installation where user is NOT a member (installationId: 201; mocks: installation returns org account, token exchange succeeds, membership returns 404) -- expect `verified: false, status: 403`
+   - Org installation where membership check returns 302 (redirect, non-member perspective) (installationId: 202; mocks: installation returns org account, token exchange succeeds, membership returns 302) -- expect `verified: false, status: 403`
+   - Org installation where membership check fails with 403 (missing Members permission) (installationId: 203; mocks: installation returns org account, token exchange succeeds, membership returns 403) -- expect `verified: false, status: 502` with descriptive error
+   - Org installation where membership check returns 500 (installationId: 204; mocks: installation returns org account, token exchange succeeds, membership returns 500) -- expect `verified: false, status: 502`
 
 ## Acceptance Criteria
 
@@ -85,6 +147,8 @@ No cross-domain implications detected -- server-side security logic change with 
 - **Token generation failure:** `generateInstallationToken()` already throws on failure. The caller (`POST /api/repo/install`) does not catch this, so it will propagate as a 500. This is acceptable -- the existing token generation path has the same behavior for `listInstallationRepos` and `createRepo`.
 - **Pending org invitations:** `GET /orgs/{org}/members/{username}` returns 404 for pending invitations (only confirmed members return 204). This is the desired behavior -- pending members should not be able to claim the installation.
 - **GitHub App "Members" permission not granted:** The org admin may not have granted the "Members" organization permission. The API returns 403, which the code handles as a 502 with "Failed to verify organization membership". The error is clear enough for the user to understand the App needs additional permissions.
+- **302 redirect (non-member requester perspective):** Per GitHub docs, if the requester is not an org member, the API returns 302 instead of 404. GitHub App installation tokens on an org should always get the member perspective (204/404), but defensively handle 302 as a non-member response. Use `redirect: "manual"` in the fetch options to prevent Node's `fetch` from automatically following the redirect, which would return a 200 from the public members endpoint and produce a false positive.
+- **Token cache side effects in tests:** The `tokenCache` is a module-level `Map` that persists across test cases. Use unique installationIds per test to avoid unpredictable mock sequences. See the vitest-bun-test cross-runner compat learning (`knowledge-base/project/learnings/integration-issues/vitest-bun-test-cross-runner-compat-20260402.md`).
 
 ## Context
 
