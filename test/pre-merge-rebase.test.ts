@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
-import { mkdtempSync, rmSync, chmodSync } from "fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -425,7 +425,6 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     // Add review evidence via filesystem todos/ directory so Guard 6 passes.
     // Bare repos have no working tree, but the grep -rl check on $WORK_DIR/todos/
     // just reads regular files at that path — works regardless of bare status.
-    const { mkdirSync, writeFileSync } = await import("fs");
     mkdirSync(join(remoteDir, "todos"), { recursive: true });
     writeFileSync(join(remoteDir, "todos", "review.md"), "tags: code-review\n");
 
@@ -435,16 +434,9 @@ describe("pre-merge-rebase hook (with git repo)", () => {
       );
 
       expect(result.exitCode).toBe(0);
-      // The hook must NOT deny with "Uncommitted changes" — exit 128 from
-      // git diff in a bare repo should be treated as fail-open, not dirty.
-      if (result.stdout) {
-        const output = JSON.parse(result.stdout);
-        if (output.hookSpecificOutput?.permissionDecision === "deny") {
-          expect(output.hookSpecificOutput.permissionDecisionReason).not.toContain(
-            "Uncommitted changes"
-          );
-        }
-      }
+      // Hook must pass through without any deny — bare repo context skips
+      // the work-tree-only diff check entirely. Empty stdout = no deny output.
+      expect(result.stdout).toBe("");
     } finally {
       // Restore HEAD to main and clean up
       spawnChecked(
