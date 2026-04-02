@@ -2,8 +2,6 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { SlidingWindowCounter } from "@/server/rate-limiter";
-import { deleteAccount } from "@/server/account-delete";
-import logger from "@/server/logger";
 
 // Rate limit: 1 deletion attempt per 60 seconds per user
 const deletionLimiter = new SlidingWindowCounter({
@@ -43,11 +41,17 @@ export async function POST(request: Request) {
     );
   }
 
+  // Dynamic import to avoid module-level Supabase client creation during build
+  // (account-delete imports agent-runner which creates a client at module scope)
+  const { deleteAccount } = await import("@/server/account-delete");
+  const { createChildLogger } = await import("@/server/logger");
+  const log = createChildLogger("account-delete-route");
+
   // Execute deletion cascade
   const result = await deleteAccount(user.id, body.confirmEmail);
 
   if (!result.success) {
-    logger.warn(
+    log.warn(
       { userId: user.id, error: result.error },
       "Account deletion failed",
     );
