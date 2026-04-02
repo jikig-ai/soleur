@@ -39,15 +39,13 @@ export async function POST(request: Request) {
     );
   }
 
-  // SECURITY: Extract GitHub username from provider-controlled identity first.
+  // SECURITY: Extract GitHub username from provider-controlled identity only.
   // user_metadata is user-mutable via auth.updateUser() — never trust it for
   // security decisions when an immutable source exists.
-  const githubLogin =
-    user.identities?.find(
-      (i: { provider: string; identity_data?: { user_name?: string } }) =>
-        i.provider === "github",
-    )?.identity_data?.user_name ??
-    user.user_metadata?.user_name;
+  const githubLogin = user.identities?.find(
+    (i: { provider: string; identity_data?: { user_name?: string } }) =>
+      i.provider === "github",
+  )?.identity_data?.user_name;
 
   if (!githubLogin) {
     logger.warn(

@@ -258,4 +258,14 @@ describe("install route structural enforcement", () => {
     expect(updateIndex).toBeGreaterThan(-1);
     expect(verifyIndex).toBeLessThan(updateIndex);
   });
+
+  test("githubLogin assignment does not reference user_metadata for user_name", () => {
+    const routeSource = readFileSync(
+      join(__dirname, "../app/api/repo/install/route.ts"),
+      "utf-8",
+    );
+    // The route must not use user_metadata?.user_name anywhere — it's user-mutable
+    // and must never be trusted for security decisions (GitHub identity extraction).
+    expect(routeSource).not.toMatch(/user_metadata\?\.user_name/);
+  });
 });
