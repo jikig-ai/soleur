@@ -9,7 +9,7 @@ semver: minor
 
 ## Overview
 
-Phase 2 is the mandatory gate before inviting beta users. It covers seven workstreams: OWASP security audit, CSP/CORS hardening, session timeout + WebSocket expiry, UX audit of Phase 1 screens, user settings page (API key rotation, GDPR account deletion), error/empty states, and first-time onboarding. All items in this plan are traced to [#674](https://github.com/jikig-ai/soleur/issues/674) and the Phase 2 milestone.
+Phase 2 is the mandatory gate before inviting beta users. It covers five active workstreams: OWASP security audit (including CSP/CORS verification), session idle timeout, UX audit of Phase 1 screens, user settings page (API key rotation, GDPR account deletion), and error/empty states. One workstream (onboarding walkthrough) is deferred to post-beta. All items traced to [#674](https://github.com/jikig-ai/soleur/issues/674) and the Phase 2 milestone.
 
 **Preconditions (all CLOSED):** #667 (BYOK fix), #668 (integration tests), #670 (DPA review).
 
@@ -56,7 +56,7 @@ From CPO review: "The platform must be functional and secure before any founder 
 
 ## Proposed Solution
 
-Seven tasks organized in dependency order. Tasks 1-3 are security hardening (can partially parallelize). Task 4 is UX audit (can run in parallel with 1-3). Tasks 5-7 depend on having the security foundation stable.
+Six tasks organized in two phases. The security audit now subsumes CSP/CORS verification (previously a separate task). Onboarding walkthrough deferred to post-beta (existing dashboard copy with suggested prompts and @-mention hints is sufficient for <10 invited founders). Tasks 1-4 can run in parallel. Tasks 5-6 follow once the security foundation is stable.
 
 ### Task 1: Security Audit (OWASP Top 10)
 
@@ -70,7 +70,7 @@ Seven tasks organized in dependency order. Tasks 1-3 are security hardening (can
 - [ ] **A02:2021 Cryptographic Failures** — Review BYOK encryption (AES-256-GCM + HKDF). Verify IV is random per encryption, auth tags are validated, key derivation uses proper info parameter per RFC 5869. Check TLS enforcement (HSTS preload).
 - [ ] **A03:2021 Injection** — Review Bash command execution in agent-runner. Verify execFileSync usage (not exec). Check SQL injection vectors (Supabase client parameterizes, but verify custom queries). Review message content handling in ws-handler.
 - [ ] **A04:2021 Insecure Design** — Review the agent permission model (canUseTool). Verify deny-by-default for unknown tools. Check that the Agent tool spawns subagents with parent sandbox constraints.
-- [ ] **A05:2021 Security Misconfiguration** — Verify CSP headers on all response paths (middleware, static, API). Check CORS validation covers all API routes. Verify no debug endpoints exposed in production.
+- [ ] **A05:2021 Security Misconfiguration** — Verify CSP headers on all response paths (middleware responses, API Route Handler responses, error pages, static files). Verify `connect-src` includes all legitimate WebSocket origins. Check CORS preflight handling on all mutating API routes. Verify Stripe webhook handles origin-less requests. Verify no debug endpoints exposed in production. Add integration test for CSP header presence on every response type.
 - [ ] **A06:2021 Vulnerable and Outdated Components** — Check npm audit. Verify dependency pinning (bunfig.toml minimumReleaseAge). Review Dockerfile base image pinning.
 - [ ] **A07:2021 Identification and Authentication Failures** — Review Supabase auth token validation in WS handler. Check session fixation vectors. Verify token is validated on every connection (not cached).
 - [ ] **A08:2021 Software and Data Integrity Failures** — Review CI pipeline integrity. Check GitHub Actions workflow permissions. Verify no user-controlled inputs flow into `run:` blocks unvalidated.
@@ -102,28 +102,9 @@ Seven tasks organized in dependency order. Tasks 1-3 are security hardening (can
 - [ ] 0 critical or high severity findings remain open after remediation
 - [ ] Medium/low findings tracked with milestone assignment
 
-### Task 2: CSP Headers + CORS Hardening
+### Task 2: Session Timeout + WebSocket Idle Expiry
 
-**Scope:** Verify existing CSP and CORS coverage is complete. The foundation is already strong (nonce-based strict-dynamic CSP, origin validation). This task is about gap-filling.
-
-**Work items:**
-
-- [ ] Audit all response paths for CSP header presence: middleware responses, API route responses (Next.js Route Handlers bypass middleware for direct responses), static file responses, error pages (`error.tsx`, `global-error.tsx`)
-- [ ] Verify `connect-src` includes all legitimate WebSocket origins (dev and prod)
-- [ ] Add `report-to` directive alongside `report-uri` for CSP Level 3 (Reporting API v1)
-- [ ] Verify CORS preflight handling on all API routes that accept POST/PUT/DELETE
-- [ ] Verify the Stripe webhook endpoint (`/api/webhooks/stripe`) correctly handles origin-less requests (webhooks have no Origin header)
-- [ ] Add integration test: CSP header present on every response type
-
-**Files to modify:**
-
-- `lib/csp.ts` — Add report-to directive
-- `test/csp.test.ts` — Additional coverage for response paths
-- API route handlers — Verify origin validation on all mutating endpoints
-
-### Task 3: Session Timeout + WebSocket Expiry
-
-**Scope:** Add configurable idle timeout and maximum connection lifetime to the WebSocket handler.
+**Scope:** Add configurable idle timeout to the WebSocket handler. Close idle connections cleanly with a specific close code so the client can show "Session expired" and offer reconnect.
 
 **Current state:**
 
@@ -135,21 +116,21 @@ Seven tasks organized in dependency order. Tasks 1-3 are security hardening (can
 **Work items:**
 
 - [ ] Add `WS_IDLE_TIMEOUT_MS` env var (default: 30 minutes). Track last user message timestamp per session. Close with a new `WS_CLOSE_CODES.IDLE_TIMEOUT` code when exceeded.
-- [ ] Add `WS_MAX_LIFETIME_MS` env var (default: 8 hours). Close with `WS_CLOSE_CODES.MAX_LIFETIME` code when connection age exceeds limit.
-- [ ] Add `SESSION_EXPIRED` close code and client-side handling in `ws-client.ts` — show "Session expired" message and offer reconnect.
+- [ ] Add `IDLE_TIMEOUT` close code to `lib/types.ts` and handle in `ws-client.ts` — show "Session expired due to inactivity" and offer reconnect button.
 - [ ] Reduce inactivity timeout from 24h to 2h for waiting_for_user conversations.
-- [ ] Send a `session_expiring` warning message 2 minutes before idle timeout fires, giving the client time to show a warning toast.
-- [ ] Add tests for idle timeout, max lifetime, and warning message timing.
+- [ ] Add tests for idle timeout reset on user message, idle close code propagation.
+
+**Deferred (review consensus):** Max WebSocket lifetime (8h cap) dropped — idle timeout handles abandoned connections; max lifetime interrupts active users with no benefit at beta scale. Pre-close warning message dropped — just close the connection; the client already handles reconnection.
 
 **Files to modify:**
 
-- `server/ws-handler.ts` — Add idle tracking, max lifetime timer, warning message
-- `lib/types.ts` — Add new WS_CLOSE_CODES
-- `lib/ws-client.ts` — Handle new close codes (display reason, offer reconnect)
-- `server/agent-runner.ts` — Reduce INACTIVITY_TIMEOUT_MS
-- `test/ws-protocol.test.ts` — Timeout and expiry tests
+- `server/ws-handler.ts` — Add idle tracking per session
+- `lib/types.ts` — Add IDLE_TIMEOUT close code
+- `lib/ws-client.ts` — Handle idle timeout close code
+- `server/agent-runner.ts` — Reduce INACTIVITY_TIMEOUT_MS from 24h to 2h
+- `test/ws-protocol.test.ts` — Idle timeout tests
 
-### Task 4: UX Audit of Phase 1 Screens
+### Task 3: UX Audit of Phase 1 Screens
 
 **Scope:** Systematic review of all existing screens built in Phase 1 via ux-design-lead agent. 5+ screens were built without design review (per #671).
 
@@ -181,9 +162,9 @@ Seven tasks organized in dependency order. Tasks 1-3 are security hardening (can
 - [ ] P2 issues either fixed or tracked as GitHub issues
 - [ ] Accessibility: all interactive elements have labels, color contrast meets AA, keyboard navigation works
 
-### Task 5: User Settings Page (API Key Rotation + GDPR Account Deletion)
+### Task 4: User Settings Page (API Key Rotation + GDPR Account Deletion)
 
-**Scope:** New `/dashboard/settings` page with two sections: API key management and account management (GDPR).
+**Scope:** New `/dashboard/settings` page with two sections: API key management and account management (GDPR). Simple flat layout with section headings — no tabs or complex navigation until there are 3+ sections.
 
 **API Key Management:**
 
@@ -203,6 +184,7 @@ Seven tasks organized in dependency order. Tasks 1-3 are security hardening (can
 - [ ] POST `/api/account/delete` route with origin validation, auth check, and rate limiting
 - [ ] Client redirects to `/login` after successful deletion with "Account deleted" flash message
 - [ ] Audit: verify no orphaned data remains (check all tables with user_id FK)
+- [ ] After deletion, `/login` page handles stale auth cookies gracefully (clears cookie, no error displayed)
 
 **Files to create:**
 
@@ -221,7 +203,7 @@ Seven tasks organized in dependency order. Tasks 1-3 are security hardening (can
 - Supabase auth.users deletion must happen AFTER public.users deletion (foreign key order)
 - The `handle_new_user()` trigger only fires on INSERT, no conflict with DELETE
 
-### Task 6: Error States and Empty States
+### Task 5: Error States and Empty States
 
 **Scope:** Ensure every failure path shows a meaningful UI state instead of a blank screen or cryptic error.
 
@@ -256,37 +238,23 @@ Seven tasks organized in dependency order. Tasks 1-3 are security hardening (can
 - `lib/ws-client.ts` — Surface specific error codes to UI
 - New component: `components/ui/error-card.tsx` — Reusable error display
 
-### Task 7: First-Time Onboarding Walkthrough
+### Task 6 (Deferred): First-Time Onboarding Walkthrough
 
-**Scope:** Guide new users through their first session: explain the Command Center, demonstrate @-mentions, surface key features.
+**Status:** Deferred to post-beta. The dashboard already provides onboarding through suggested prompts and "@-mention" hint text. With fewer than 10 personally invited beta founders, a tooltip walkthrough adds complexity without proportional value. A tracking GitHub issue will be created.
 
-**Approach:** Lightweight, non-blocking tooltip walkthrough (not a modal wizard). Triggered on first dashboard visit. Tracks completion in localStorage (no database state needed for MVP).
-
-**Steps in walkthrough:**
-
-1. **Welcome** — "Welcome to your Command Center. Your 8 department leaders are ready."
-2. **Chat input** — "Type your question here. Your leaders will auto-route to the right experts."
-3. **@-mention** — "Type @ to direct your question to a specific leader."
-4. **Suggested prompts** — "Or start with one of these templates."
-5. **PWA install** — (iOS only) "Add to Home Screen for the best experience." Show iOS-specific instructions (Share > Add to Home Screen).
-
-**Implementation:**
-
-- [ ] Create `components/onboarding/walkthrough.tsx` — Tooltip overlay component
-- [ ] Create `lib/onboarding.ts` — localStorage state management (`onboarding_completed` flag)
-- [ ] Modify `app/(dashboard)/dashboard/page.tsx` — Mount walkthrough on first visit
-- [ ] Add iOS PWA detection (`navigator.standalone === undefined && /iPad|iPhone/.test(navigator.userAgent)`)
-- [ ] Add "Skip walkthrough" and "Don't show again" options
-- [ ] Test: walkthrough shows on first visit, does not show on subsequent visits
+**Re-evaluation criteria:** Defer until beta user count exceeds 10 or user feedback indicates confusion about the Command Center UI.
 
 ## Non-Goals
 
+- **First-time onboarding walkthrough** — Deferred to post-beta (review consensus: existing dashboard copy is sufficient for <10 invited founders). Tracking issue to be created.
 - **Full offline mode** — PWA offline support is Phase 1 scope (#1042), not Phase 2
-- **Conversation history export** — GDPR Article 20 (data portability) is a valid requirement but deferred to Phase 3. Account deletion (Article 17) is the beta gate requirement.
+- **Conversation history export** — GDPR Article 20 (data portability) deferred to Phase 3. Account deletion (Article 17) is the beta gate requirement.
 - **Multi-factor authentication** — Beyond scope for beta. Supabase auth handles this if enabled later.
 - **Automated penetration testing** — Manual OWASP audit is sufficient for beta. Automated scanning (ZAP, Nuclei) deferred to Phase 3.
 - **Admin dashboard** — No admin UI for managing users. Server-side Supabase queries suffice for beta.
-- **Audit logging to external SIEM** — Sentry + Better Stack structured logging is sufficient. External SIEM integration deferred.
+- **Audit logging to external SIEM** — Sentry + Better Stack structured logging is sufficient.
+- **CSP Level 3 `report-to` directive** — `report-uri` works. Browser support for Reporting API v1 is inconsistent. Defer.
+- **Max WebSocket lifetime** — Idle timeout handles abandoned connections. Max lifetime interrupts active users with no benefit at beta scale.
 
 ## Alternative Approaches Considered
 
@@ -308,18 +276,16 @@ Seven tasks organized in dependency order. Tasks 1-3 are security hardening (can
 ## Implementation Order
 
 ```text
-Phase A (parallel):
-  Task 1: Security audit ──→ remediate findings
-  Task 2: CSP/CORS gaps ──→ fix gaps
-  Task 3: Session timeout ──→ implement + test
+Phase A (parallel — all can start immediately):
+  Task 1: Security audit (OWASP + CSP/CORS verification) ──→ remediate findings
+  Task 2: Session timeout ──→ implement + test
+  Task 3: UX audit ──→ fix P1/P2 issues
+  Task 4: Settings page (key rotation + GDPR deletion) ──→ implement + test
 
-Phase B (parallel, after Phase A stable):
-  Task 4: UX audit ──→ fix P1/P2 issues
-  Task 5: Settings page ──→ implement + test
+Phase B (after Phase A remediation):
+  Task 5: Error/empty states ──→ implement (informed by UX audit findings)
 
-Phase C (after Phase B):
-  Task 6: Error/empty states ──→ implement
-  Task 7: Onboarding walkthrough ──→ implement + test
+Task 6: Onboarding walkthrough ──→ DEFERRED to post-beta
 ```
 
 ## Acceptance Criteria
@@ -327,18 +293,15 @@ Phase C (after Phase B):
 - [ ] OWASP Top 10 audit completed, 0 critical/high findings open
 - [ ] CSP headers verified on all response types (middleware, API, error pages)
 - [ ] CORS validation on all mutating API endpoints
-- [ ] WebSocket idle timeout closes connections after configurable period
-- [ ] WebSocket max lifetime enforced
-- [ ] Session expiry warning sent before timeout
+- [ ] WebSocket idle timeout closes connections after configurable period (default 30min)
+- [ ] Inactivity timeout reduced from 24h to 2h for waiting_for_user conversations
 - [ ] All Phase 1 screens reviewed by ux-design-lead
 - [ ] User settings page accessible at `/dashboard/settings`
 - [ ] API key rotation works (validate + encrypt + upsert)
 - [ ] Account deletion purges all user data (workspace, DB records, auth record)
-- [ ] Account deletion redirects to login with confirmation
+- [ ] Account deletion redirects to login with confirmation, no stale cookie errors
 - [ ] Error states visible for: connection failure, agent failure, network loss, invalid key, rate limit
 - [ ] Empty states visible for: no conversations, empty KB, no API key
-- [ ] First-time onboarding walkthrough triggers on first dashboard visit
-- [ ] Onboarding can be skipped and does not re-trigger
 - [ ] All new code has corresponding test files
 
 ## Domain Review
@@ -371,19 +334,20 @@ Phase C (after Phase B):
 
 ## Test Scenarios
 
-### Task 1: Security Audit
+### Task 1: Security Audit + CSP/CORS
 
-- Given the security audit agent reviews all OWASP categories, when findings are reported, then each finding has a severity rating and a GitHub issue
+- Given the security audit reviews all OWASP categories, when findings are reported, then each finding has a severity rating and a GitHub issue
 - Given a path traversal attempt via `../../etc/passwd` in a tool input, when the sandbox checks it, then it is denied and logged
+- Given a POST request to `/api/keys` with a spoofed Origin header, then the request returns 403
+- Given any HTTP response from the application, then the `Content-Security-Policy` header is present
 
-### Task 3: Session Timeout
+### Task 2: Session Timeout
 
-- Given a WebSocket connection with no user messages for 30 minutes, when the idle timeout fires, then the server sends a `session_expiring` warning 2 minutes before closing
-- Given a WebSocket connection that has been open for 8 hours, when the max lifetime is reached, then the connection is closed with `MAX_LIFETIME` code
-- Given the client receives a `session_expiring` message, when the user sends a message before timeout, then the idle timer resets and the session continues
-- Given the client receives an idle timeout close, when it processes the close event, then it shows "Session expired" and offers a reconnect button
+- Given a WebSocket connection with no user messages for 30 minutes, when the idle timeout fires, then the connection is closed with `IDLE_TIMEOUT` code
+- Given the user sends a message during an active session, when the idle timer is running, then the timer resets to the full idle timeout period
+- Given the client receives an idle timeout close, when it processes the close event, then it shows "Session expired due to inactivity" and offers a reconnect button
 
-### Task 5: Account Deletion
+### Task 4: Account Deletion
 
 - Given an authenticated user on the settings page, when they click "Delete Account" and confirm by typing their email, then the API deletes workspace, DB records, and auth record
 - Given an unauthenticated request to POST `/api/account/delete`, then it returns 401
@@ -391,21 +355,15 @@ Phase C (after Phase B):
 - Given an account deletion succeeds, when the user is redirected to `/login`, then no stale auth cookie errors are shown
 - Given an account deletion is in progress, when another request arrives, then it is rate-limited
 
-### Task 5: API Key Rotation
+### Task 4: API Key Rotation
 
 - Given a user with an existing valid key, when they submit a new key via settings, then the old key is replaced and the new key is validated and encrypted
 - Given a user submits an invalid Anthropic key, then the UI shows "Invalid key" and does not store it
 
-### Task 6: Error States
+### Task 5: Error States
 
 - Given the WebSocket connection fails, when the chat page renders, then an error card with "Connection failed" and a retry button is shown
 - Given the agent returns an `error` message with `errorCode: "key_invalid"`, then the chat shows an inline card linking to settings
-
-### Task 7: Onboarding
-
-- Given a user visits the dashboard for the first time, when the page loads, then the onboarding walkthrough tooltip appears
-- Given the user clicks "Skip", then the walkthrough closes and `onboarding_completed` is set in localStorage
-- Given the user visits the dashboard a second time, when `onboarding_completed` is true, then no walkthrough appears
 
 ## References
 
