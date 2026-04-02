@@ -7,6 +7,25 @@ semver: minor
 
 # Phase 2: Security Audit, GDPR, Onboarding (Beta Gate)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-02
+**Sections enhanced:** 5 of 5 active tasks
+**Research sources:** Context7 (Supabase, Next.js), 12 institutional learnings, OWASP Top 10 2021
+
+### Key Improvements
+
+1. Explicit account deletion order with Supabase cascade semantics and stale cookie clearing strategy
+2. Security audit checklist enriched with 8 codebase-specific learnings (TOCTOU race, CSP strict-dynamic, /proc sandbox, attack surface enumeration)
+3. Error boundary implementation updated to Next.js `unstable_retry` API (replaces deprecated `reset`)
+4. WebSocket idle timeout implementation pattern with timer cleanup to prevent memory leaks
+
+### New Considerations Discovered
+
+- Supabase `auth.admin.deleteUser()` also cascades to `public.users` via the `on_auth_user_deleted` trigger if one exists -- verify trigger state to avoid double-delete errors
+- Next.js `global-error.tsx` must include its own `<html>` and `<body>` tags (replaces root layout when active)
+- Stale auth cookies after account deletion cause wasted `getUser()` calls on every middleware invocation until cleared -- must explicitly clear Supabase cookies on the redirect response
+
 ## Overview
 
 Phase 2 is the mandatory gate before inviting beta users. It covers five active workstreams: OWASP security audit (including CSP/CORS verification), session idle timeout, UX audit of Phase 1 screens, user settings page (API key rotation, GDPR account deletion), and error/empty states. One workstream (onboarding walkthrough) is deferred to post-beta. All items traced to [#674](https://github.com/jikig-ai/soleur/issues/674) and the Phase 2 milestone.
@@ -96,6 +115,26 @@ Six tasks organized in two phases. The security audit now subsumes CSP/CORS veri
 | `lib/auth/validate-origin.ts` | CSRF protection |
 | `lib/csp.ts` | CSP construction |
 
+#### Research Insights
+
+**Institutional learnings to apply during audit (from `knowledge-base/project/learnings/`):**
+
+- **TOCTOU race in WS auth** (`2026-03-20-websocket-first-message-auth-toctou-race.md`): The auth timeout can fire during the async `getUser()` call, creating a phantom session. Already fixed with `readyState` guard, but verify this guard is still present and covers all async gaps.
+- **CSP strict-dynamic requires dynamic rendering** (`2026-03-27-csp-strict-dynamic-requires-dynamic-rendering.md`): Root layout must call `await headers()` or equivalent to force dynamic rendering. Without it, Next.js renders scripts without nonces and strict-dynamic blocks everything. Verify root layout is still dynamic.
+- **CSP connect-src needs explicit WS schemes** (`2026-03-28-csp-connect-src-websocket-scheme-mismatch.md`): `'self'` does not cover `wss://` in all browsers. Verify `buildCspHeader()` still includes explicit `wss://app.soleur.ai` in connect-src.
+- **CSP localhost forwarded-host validation** (`2026-03-29-csp-localhost-forwarded-host-validation.md`): `request.nextUrl.host` returns `localhost:3000` behind Cloudflare. Verify middleware still uses `resolveOrigin()` for CSP host, not `request.nextUrl.host`.
+- **/proc in sandbox deny list** (`2026-03-29-proc-sandbox-deny-session.md`): `/proc` added to `denyRead` in agent-runner.ts. Verify it is still present. Check if `/sys` follow-up (#1285) is tracked.
+- **Attack surface enumeration pattern** (`2026-03-20-security-fix-attack-surface-enumeration.md`): When auditing, enumerate ALL code paths that touch each security surface, not just the reported vector. Write negative-space tests that assert every tool routes through the security check or is explicitly documented as exempt.
+- **Adjacent config audit** (`2026-03-20-security-refactor-adjacent-config-audit.md`): When reviewing config objects (AgentRunner config, sandbox config), verify no adjacent options were accidentally removed in prior refactors. Check `settingSources: []` is still present.
+- **Agent tool not in SAFE_TOOLS** (`2026-03-20-agent-safe-tools-audit.md`): Agent tool was removed from SAFE_TOOLS and given an explicit block in canUseTool for auditability. Verify this is still the case.
+
+**OWASP audit methodology:**
+
+- For each category, enumerate the full attack surface before checking individual files
+- Write at least one negative-space test per category (test that the boundary works, not just that expected paths work)
+- Document findings inline only (constitution rule: never persist aggregated security findings to open-source repo files)
+- Create GitHub issues with severity labels for each finding, milestoned to Phase 2
+
 **Acceptance criteria:**
 
 - [ ] All 10 OWASP categories reviewed with findings documented as GitHub issues
@@ -122,13 +161,46 @@ Six tasks organized in two phases. The security audit now subsumes CSP/CORS veri
 
 **Deferred (review consensus):** Max WebSocket lifetime (8h cap) dropped — idle timeout handles abandoned connections; max lifetime interrupts active users with no benefit at beta scale. Pre-close warning message dropped — just close the connection; the client already handles reconnection.
 
+#### Research Insights
+
+**Implementation pattern:**
+
+```typescript
+// In ClientSession interface (ws-handler.ts), add:
+interface ClientSession {
+  ws: WebSocket;
+  conversationId?: string;
+  disconnectTimer?: ReturnType<typeof setTimeout>;
+  lastActivity: number;        // Date.now() timestamp
+  idleTimer?: ReturnType<typeof setTimeout>;
+}
+
+// On session creation and each user message:
+function resetIdleTimer(userId: string, session: ClientSession): void {
+  if (session.idleTimer) clearTimeout(session.idleTimer);
+  session.lastActivity = Date.now();
+  const timeoutMs = parseInt(process.env.WS_IDLE_TIMEOUT_MS ?? "1800000", 10);
+  session.idleTimer = setTimeout(() => {
+    session.ws.close(WS_CLOSE_CODES.IDLE_TIMEOUT, "Idle timeout");
+  }, timeoutMs);
+  session.idleTimer.unref(); // Do not prevent Node.js exit
+}
+```
+
+**Edge cases:**
+
+- Timer must be cleared on disconnect (`ws.on("close")`) to prevent memory leaks from accumulated `setTimeout` references for disconnected users
+- Timer must be cleared when session is superseded (existing `abortActiveSession` path)
+- `timer.unref()` prevents idle timers from keeping the Node.js process alive during graceful shutdown
+- The `handleMessage` switch for `chat` type is the correct place to reset the timer (only user-initiated messages count as activity, not server-to-client streams)
+
 **Files to modify:**
 
-- `server/ws-handler.ts` — Add idle tracking per session
+- `server/ws-handler.ts` — Add idle tracking per session, clear timer on close/supersede
 - `lib/types.ts` — Add IDLE_TIMEOUT close code
-- `lib/ws-client.ts` — Handle idle timeout close code
+- `lib/ws-client.ts` — Handle idle timeout close code (add to `NON_TRANSIENT_CLOSE_CODES` with reconnect button, no redirect)
 - `server/agent-runner.ts` — Reduce INACTIVITY_TIMEOUT_MS from 24h to 2h
-- `test/ws-protocol.test.ts` — Idle timeout tests
+- `test/ws-protocol.test.ts` — Idle timeout tests (timer reset, timer cleanup on close, close code propagation)
 
 ### Task 3: UX Audit of Phase 1 Screens
 
@@ -154,6 +226,24 @@ Six tasks organized in two phases. The security audit now subsumes CSP/CORS veri
 2. Document findings per screen
 3. Prioritize fixes: P1 (blocks beta), P2 (should fix before beta), P3 (post-beta polish)
 4. Implement P1 and P2 fixes
+
+#### Research Insights
+
+**WCAG 2.1 AA priority checklist for this audit:**
+
+- **Color contrast** — The dashboard uses `text-neutral-400` on `bg-neutral-950`. Verify contrast ratio meets 4.5:1 for normal text, 3:1 for large text. The amber accent colors (`text-amber-500`, `bg-amber-950/30`) must also meet ratio against their backgrounds.
+- **Keyboard navigation** — Tab order must be logical across: chat input, suggested prompts, leader strip. The `@-mention` dropdown must be navigable with arrow keys and dismissible with Escape.
+- **Focus indicators** — Verify all interactive elements have visible focus rings. Tailwind's default `focus-visible:ring` may be suppressed by custom styles.
+- **Screen reader** — Chat messages need `role="log"` or `aria-live="polite"` for dynamic updates. The routing badge ("Auto-routed to CMO") needs `aria-live="polite"`. The status indicator dot needs an `aria-label`.
+- **Touch targets** — The leader strip buttons (`px-2 py-1`) may be too small for mobile (44x44px minimum per WCAG). The suggested prompt cards look adequate.
+- **Motion** — The `animate-pulse` on the classification indicator respects `prefers-reduced-motion` if Tailwind's config includes the default animation utilities. Verify.
+
+**Common P1 issues in dark-theme chat UIs:**
+
+- Placeholder text that is invisible or nearly invisible against the dark background
+- Error states that use red-on-dark-red which fails contrast
+- Links that are indistinguishable from surrounding text without color differentiation
+- Missing focus management when modals/dialogs open (trap focus) and close (return focus)
 
 **Acceptance criteria:**
 
@@ -203,6 +293,46 @@ Six tasks organized in two phases. The security audit now subsumes CSP/CORS veri
 - Supabase auth.users deletion must happen AFTER public.users deletion (foreign key order)
 - The `handle_new_user()` trigger only fires on INSERT, no conflict with DELETE
 
+#### Research Insights
+
+**Deletion order (verified against Supabase docs and schema):**
+
+The correct server-side deletion sequence:
+
+1. **Abort active agent session** — Call `abortSession(userId, convId)` for any active conversation
+2. **Delete workspace directory** — `rm -rf /workspaces/{userId}` via `deleteWorkspace()`. Use `execFileSync("rm", ["-rf", path])` (not `exec`) to prevent shell injection via crafted userId (though UUID validation already blocks this)
+3. **Delete `public.users` row** — This cascades to `api_keys`, `conversations`, and `messages` via FK constraints. Use service role client to bypass RLS.
+4. **Delete `auth.users` record** — Call `supabase.auth.admin.deleteUser(userId)`. This must happen AFTER step 3 because `public.users.id` references `auth.users(id)` with `ON DELETE CASCADE`. If we deleted auth first, the cascade would also delete `public.users`, which is fine functionally but means step 3 would be a no-op. Keeping explicit step 3 first gives us a clean audit trail (we know public data was deleted before auth).
+
+**Critical: Check for `on_auth_user_deleted` trigger.** The schema has `on_auth_user_created` trigger but no `on_auth_user_deleted`. If a delete trigger exists on `auth.users` that cascades to `public.users`, deleting auth first would double-cascade. Verify with `SELECT tgname FROM pg_trigger WHERE tgrelid = 'auth.users'::regclass;`
+
+**Stale cookie clearing strategy:**
+
+After account deletion, the response must clear Supabase auth cookies to prevent wasted `getUser()` calls on every subsequent request:
+
+```typescript
+// In the delete API route, after successful deletion:
+const response = NextResponse.json({ success: true });
+// Clear all Supabase auth cookies (prefixed with sb-)
+const cookieNames = request.cookies.getAll()
+  .filter(c => c.name.startsWith("sb-"))
+  .map(c => c.name);
+for (const name of cookieNames) {
+  response.cookies.delete(name);
+}
+return response;
+```
+
+The client-side redirect to `/login` should also clear local Supabase state by calling `supabase.auth.signOut()` before navigation, which clears the in-memory session and local storage tokens.
+
+**Rate limiting the delete endpoint:**
+
+Apply a strict per-user rate limit (1 request per 60 seconds) using the existing `SlidingWindowCounter` pattern from `rate-limiter.ts`. Account deletion is an irreversible operation — rate limiting prevents accidental double-submissions and abuse.
+
+**Confirmation dialog security:**
+
+The "type your email to confirm" pattern is standard (GitHub, Heroku, AWS all use it). Verify the typed email against `user.email` server-side, not just client-side. The API route should reject the request if the confirmation email does not match.
+
 ### Task 5: Error States and Empty States
 
 **Scope:** Ensure every failure path shows a meaningful UI state instead of a blank screen or cryptic error.
@@ -237,6 +367,101 @@ Six tasks organized in two phases. The security audit now subsumes CSP/CORS veri
 - `app/global-error.tsx` — Global error boundary
 - `lib/ws-client.ts` — Surface specific error codes to UI
 - New component: `components/ui/error-card.tsx` — Reusable error display
+
+#### Research Insights
+
+**Next.js error boundary API (verified via Context7, Next.js v16):**
+
+The error boundary API now uses `unstable_retry` instead of the deprecated `reset` function:
+
+```typescript
+// app/error.tsx — Route-level error boundary
+'use client';
+
+import { useEffect } from 'react';
+import * as Sentry from '@sentry/nextjs';
+
+export default function Error({
+  error,
+  unstable_retry,
+}: {
+  error: Error & { digest?: string };
+  unstable_retry: () => void;
+}) {
+  useEffect(() => {
+    Sentry.captureException(error);
+  }, [error]);
+
+  return (
+    <div className="flex min-h-[50vh] flex-col items-center justify-center gap-4">
+      <h2 className="text-xl font-semibold text-white">Something went wrong</h2>
+      <p className="text-sm text-neutral-400">
+        {error.digest ? `Error ID: ${error.digest}` : 'An unexpected error occurred.'}
+      </p>
+      <button
+        onClick={() => unstable_retry()}
+        className="rounded-lg border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:border-neutral-500"
+      >
+        Try again
+      </button>
+    </div>
+  );
+}
+```
+
+```typescript
+// app/global-error.tsx — MUST include <html> and <body> tags
+// Replaces root layout when active
+'use client';
+
+export default function GlobalError({
+  error,
+  unstable_retry,
+}: {
+  error: Error & { digest?: string };
+  unstable_retry: () => void;
+}) {
+  return (
+    <html lang="en">
+      <body className="bg-neutral-950 text-white">
+        <div className="flex min-h-screen flex-col items-center justify-center gap-4">
+          <h2 className="text-xl font-semibold">Something went wrong</h2>
+          <button
+            onClick={() => unstable_retry()}
+            className="rounded-lg border border-neutral-700 px-4 py-2 text-sm"
+          >
+            Try again
+          </button>
+        </div>
+      </body>
+    </html>
+  );
+}
+```
+
+**WebSocket error surfacing pattern:**
+
+The `ws-client.ts` hook already has `NON_TRANSIENT_CLOSE_CODES` mapping. For error states, expose a structured `lastError` field from the hook:
+
+```typescript
+interface WebSocketError {
+  code: string;        // 'key_invalid' | 'rate_limited' | 'connection_failed' | 'internal'
+  message: string;     // User-friendly message
+  action?: {           // Optional recovery action
+    label: string;     // "Update key" | "Try again" | "Reconnect"
+    href?: string;     // "/dashboard/settings" for key_invalid
+    onClick?: () => void; // reconnect function for connection errors
+  };
+}
+```
+
+This structured error object lets the chat page render appropriate inline cards without parsing error message strings.
+
+**Empty state design principles:**
+
+- Every empty state must have a clear CTA (call to action) that leads to the next step
+- Use the same visual language (neutral-400 text, neutral-800 borders) as existing dashboard components
+- Empty states should feel inviting, not broken — "Your knowledge base is empty" with "Start a conversation to build it" is better than "No data found"
 
 ### Task 6 (Deferred): First-Time Onboarding Walkthrough
 
