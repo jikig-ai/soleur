@@ -81,6 +81,18 @@ Tests follow the existing pattern in `install-route.test.ts` -- structural (sour
 
 `apps/web-platform/test/install-route.test.ts` has 12 passing tests covering `verifyInstallationOwnership` (User/Org paths, error cases) and a structural test verifying ownership check precedes the `.update()` call. No existing tests cover the GitHub identity extraction logic or the rejection path at line 52.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-02
+**Sections enhanced:** 1 (security audit)
+**Research agents used:** codebase grep audit for `user_metadata` usage patterns
+
+### Key Findings
+
+1. **No other security-relevant `user_metadata` usage exists.** Grep of `apps/web-platform/` confirms only two `user_metadata` references: (a) `install/route.ts:50` -- the vulnerable fallback being removed, and (b) `setup/route.ts:90` -- display-name-only usage (`full_name` for git commit author). No additional routes need remediation.
+2. **Supabase trust model context.** `user.identities[].identity_data` is populated by the OAuth provider during authentication and is immutable by the user. `user.user_metadata` is mutable via `supabase.auth.updateUser({ data: {...} })` -- any authenticated user can set arbitrary key-value pairs. The plan correctly identifies this trust boundary.
+3. **No deepening needed beyond audit.** This is a minimal security fix (1 line removal + 1 structural test). The plan already contains exact before/after code, file manifest, and test scenarios. Additional research would not change the implementation.
+
 ## Domain Review
 
 **Domains relevant:** none
