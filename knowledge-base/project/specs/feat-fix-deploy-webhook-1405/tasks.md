@@ -2,12 +2,12 @@
 
 ## Phase 1: Immediate Recovery
 
-- [ ] 1.1 SSH to server and run `docker image prune -af` to free disk space
-- [ ] 1.2 Verify root disk has >50% free space via `df -h /`
-- [ ] 1.3 Copy updated `ci-deploy.sh` to live server via SCP
-- [ ] 1.4 Re-run the web-platform release workflow or trigger a manual deploy of v0.13.8
+- [x] 1.1 SSH to server and run `docker image prune -af` to free disk space (reclaimed 16.76GB)
+- [x] 1.2 Verify root disk has >50% free space via `df -h /` (10% used, 66GB free)
+- [ ] 1.3 Copy updated `ci-deploy.sh` to live server via SCP (after merge)
+- [ ] 1.4 Re-run the web-platform release workflow or trigger a manual deploy
 - [ ] 1.5 Verify production health endpoint reports correct version with low uptime
-- [ ] 1.6 Check telegram-bridge server disk usage and clean if needed
+- [x] 1.6 Check telegram-bridge server disk usage and clean if needed (same host, no separate cleanup needed)
 
 ## Phase 2: Fix ci-deploy.sh Cleanup Logic
 
