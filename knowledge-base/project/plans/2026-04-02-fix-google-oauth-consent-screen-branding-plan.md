@@ -223,13 +223,13 @@ Add an OAuth provider setup checklist to prevent branding gaps when adding futur
 
 ### Part 1: Google OAuth Consent Screen
 
-- [ ] Google OAuth consent screen shows "Soleur" as app name
-- [ ] Consent screen displays Soleur logo
-- [ ] Privacy policy link points to `https://soleur.ai/pages/legal/privacy-policy.html`
-- [ ] Terms of service link points to `https://soleur.ai/pages/legal/terms-and-conditions.html`
-- [ ] Authorized domains include `soleur.ai`
-- [ ] Application home page set to `https://soleur.ai`
-- [ ] OAuth app publishing status checked and verification submitted if needed
+- [x] Google OAuth consent screen shows "Soleur" as app name
+- [x] Consent screen displays Soleur logo
+- [x] Privacy policy link points to `https://soleur.ai/pages/legal/privacy-policy.html`
+- [x] Terms of service link points to `https://soleur.ai/pages/legal/terms-and-conditions.html`
+- [x] Authorized domains include `soleur.ai`
+- [x] Application home page set to `https://soleur.ai`
+- [x] OAuth app publishing status checked — published to production. Brand verification blocked on domain ownership (#1403) and homepage privacy link (#1404)
 
 ### Part 2: Supabase Custom Domain (conditional on plan upgrade)
 
@@ -245,10 +245,10 @@ Add an OAuth provider setup checklist to prevent branding gaps when adding futur
 
 ### Part 3: OAuth Setup Checklist
 
-- [ ] Checklist document created at `knowledge-base/engineering/checklists/oauth-provider-setup.md`
-- [ ] Covers all 4 current providers (Google, Apple, GitHub, Microsoft)
-- [ ] Includes consent screen branding as a required step
-- [ ] Includes post-setup verification steps with provider console URLs
+- [x] Checklist document created at `knowledge-base/engineering/checklists/oauth-provider-setup.md`
+- [x] Covers all 4 current providers (Google, Apple, GitHub, Microsoft)
+- [x] Includes consent screen branding as a required step
+- [x] Includes post-setup verification steps with provider console URLs
 
 ## Test Scenarios
 
