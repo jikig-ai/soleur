@@ -53,7 +53,7 @@ After adding the global base layer rule, the per-component `focus:outline-none` 
 
 Add `role="alert"` to every conditional error `<p>` element so screen readers announce errors immediately when they appear.
 
-**Affected files (11 instances):**
+**Affected files (12 instances across 9 files):**
 
 - `apps/web-platform/app/(auth)/setup-key/page.tsx:84`
 - `apps/web-platform/app/(auth)/signup/page.tsx:84,130`
@@ -64,6 +64,7 @@ Add `role="alert"` to every conditional error `<p>` element so screen readers an
 - `apps/web-platform/components/auth/oauth-buttons.tsx:99`
 - `apps/web-platform/components/settings/key-rotation-form.tsx:74`
 - `apps/web-platform/components/settings/delete-account-dialog.tsx:85`
+- `apps/web-platform/components/ui/error-card.tsx:13` -- the `ErrorCard` container div also renders error content and needs `role="alert"` on the outer `<div>`
 
 Each follows the same pattern:
 
@@ -93,7 +94,7 @@ Each follows the same pattern:
 
 ### Fix 4: Add `overflow-wrap: anywhere` to chat message bubbles
 
-Add `break-anywhere` (Tailwind's `overflow-wrap: anywhere` utility, or a custom class if the version does not include it) to the `<p>` element inside `MessageBubble`.
+Add `overflow-wrap: anywhere` to the `<p>` element inside `MessageBubble`. This property only breaks words when they would overflow -- unlike `break-all` (`word-break: break-all`) which breaks normal words at any character.
 
 **Affected file:**
 
@@ -104,10 +105,10 @@ Add `break-anywhere` (Tailwind's `overflow-wrap: anywhere` utility, or a custom 
 <p className="whitespace-pre-wrap">{content}</p>
 
 // After
-<p className="whitespace-pre-wrap break-all">{content}</p>
+<p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{content}</p>
 ```
 
-Note: Tailwind v4 may use `overflow-wrap-anywhere` or `break-all` -- verify the correct utility class. `break-all` (`word-break: break-all`) is the most broadly supported fallback.
+Note: Tailwind v4 may expose `overflow-wrap-anywhere` as a utility. If not, use the arbitrary property syntax `[overflow-wrap:anywhere]`. Do NOT use `break-all` -- it breaks normal words at any character, making text ugly. Verify the correct utility during implementation.
 
 ## Technical Considerations
 
@@ -127,12 +128,23 @@ Note: Tailwind v4 may use `overflow-wrap-anywhere` or `break-all` -- verify the 
 
 ## Test Scenarios
 
+### Unit tests (vitest + testing-library)
+
+- Given an error `<p>` element renders, when queried by role, then `role="alert"` attribute is present
+- Given the `ErrorCard` component renders, when queried by role, then `role="alert"` is on the container
+- Given the `MessageBubble` component renders a long unbroken string, when examining the `<p>` element, then it has `overflow-wrap: anywhere` style
+- Given hint text elements render, when examining classNames, then none contain `text-neutral-600` (all use `text-neutral-500`)
+
+### Browser QA (Playwright / manual)
+
 - Given a user tabs through the login page, when focus lands on the email input, then a visible amber ring appears around the input
-- Given a user submits the signup form with invalid data, when the error message appears, then a screen reader announces the error text immediately
-- Given the dashboard page loads, when examining hint text elements, then all have a contrast ratio of at least 4.5:1 against the background
-- Given a chat message contains a 200-character unbroken URL, when rendered in the message bubble, then the text wraps without horizontal overflow
 - Given a user clicks a button with a mouse, when the click completes, then no focus ring is visible (focus-visible only fires on keyboard)
 - Given the delete account dialog input, when tabbed into, then the red focus ring appears (not the global amber ring)
+- Given a chat message contains a 200-character unbroken URL, when rendered in the message bubble, then the text wraps without horizontal overflow
+
+### Verification step
+
+- During implementation, verify Tailwind v4 actual hex values for `neutral-600` and `neutral-500` against `bg-neutral-950` using a contrast checker to confirm the claimed ratios (~3.8:1 and ~5.6:1)
 
 ## Domain Review
 
@@ -142,24 +154,14 @@ No cross-domain implications detected -- this is a CSS/HTML accessibility bug fi
 
 ## Implementation Notes
 
-### Phase 1: Global focus-visible ring + overflow-wrap
+All three fixes are independent and can be applied in a single pass through affected files:
 
 1. Edit `apps/web-platform/app/globals.css` to add the `@layer base` focus-visible rule
-2. Edit `MessageBubble` in chat page to add `break-all` to the message `<p>` element
-
-### Phase 2: Error message `role="alert"`
-
-3. Add `role="alert"` to all 11 error `<p>` elements across 8 files
-
-### Phase 3: Contrast fix
-
+2. Edit `MessageBubble` in chat page to add `overflow-wrap: anywhere` to the message `<p>` element
+3. Add `role="alert"` to all 12 error elements across 9 files (including `ErrorCard` container)
 4. Replace `text-neutral-600` with `text-neutral-500` across 7 files (text content instances)
 5. Replace `placeholder:text-neutral-600` with `placeholder:text-neutral-500` in 2 settings files
-
-### Phase 4: Cleanup (optional)
-
-6. Convert per-component `focus:outline-none` to `focus-visible:outline-none` for consistency (the global rule makes these redundant, but explicit is better)
-7. Convert `focus:border-neutral-500` to `focus-visible:border-neutral-500` on input elements for consistency
+6. Verify contrast ratios against actual Tailwind v4 color values during step 4
 
 ## References
 
