@@ -40,6 +40,8 @@ RESPONSE=$(curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" -X PAT
       "site_url": "https://app.soleur.ai",
       "uri_allow_list": "http://localhost:3000/**,https://app.soleur.ai/**",
       "external_email_enabled": true,
+      "mailer_otp_length": 6,
+      "mailer_otp_exp": 600,
       "smtp_admin_email": "noreply@soleur.ai",
       "smtp_host": "smtp.resend.com",
       "smtp_port": "465",
