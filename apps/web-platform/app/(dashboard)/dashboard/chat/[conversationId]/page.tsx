@@ -323,7 +323,7 @@ function MessageBubble({
               )}
             </div>
           )}
-          <p className="whitespace-pre-wrap" style={{ overflowWrap: "anywhere" }}>{content}</p>
+          <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{content}</p>
         </div>
       </div>
     </div>
