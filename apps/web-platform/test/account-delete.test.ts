@@ -33,7 +33,7 @@ vi.mock("@/server/workspace", () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Import the module under test (does not exist yet — tests should FAIL)
+// Import the module under test
 // ---------------------------------------------------------------------------
 
 import { deleteAccount } from "../server/account-delete";
@@ -45,7 +45,6 @@ import { deleteAccount } from "../server/account-delete";
 function setupSupabaseMocks(overrides: {
   user?: { id: string; email: string } | null;
   getUserError?: { message: string };
-  deletePublicError?: { message: string } | null;
   deleteAuthError?: { message: string } | null;
 } = {}) {
   const user = overrides.user ?? { id: "user-123", email: "test@example.com" };
@@ -55,21 +54,6 @@ function setupSupabaseMocks(overrides: {
       ? { data: { user: null }, error: overrides.getUserError }
       : { data: { user }, error: null },
   );
-
-  // Mock `from("users").delete().eq("id", userId)`
-  mockFrom.mockImplementation((table: string) => {
-    if (table === "users") {
-      return {
-        delete: () => ({
-          eq: () =>
-            Promise.resolve({
-              error: overrides.deletePublicError ?? null,
-            }),
-        }),
-      };
-    }
-    return { delete: () => ({ eq: () => Promise.resolve({ error: null }) }) };
-  });
 
   mockAuth.admin.deleteUser.mockResolvedValue({
     data: {},
@@ -110,7 +94,7 @@ describe("deleteAccount", () => {
     expect(result.error).toMatch(/not found/i);
   });
 
-  test("executes deletion cascade in correct order: abort → workspace → public.users → auth", async () => {
+  test("executes deletion cascade in correct order: abort → workspace → auth (FK cascade)", async () => {
     setupSupabaseMocks();
     const callOrder: string[] = [];
 
@@ -141,7 +125,8 @@ describe("deleteAccount", () => {
     const result = await deleteAccount("user-123", "test@example.com");
 
     expect(result.success).toBe(true);
-    expect(callOrder).toEqual(["abort", "workspace", "public.users", "auth"]);
+    // Auth deletion triggers FK cascade — no explicit public.users delete step
+    expect(callOrder).toEqual(["abort", "workspace", "auth"]);
   });
 
   test("returns success on successful deletion", async () => {
@@ -169,15 +154,17 @@ describe("deleteAccount", () => {
     expect(mockDeleteWorkspace).toHaveBeenCalledWith("user-123");
   });
 
-  test("returns error when public.users deletion fails", async () => {
+  test("when auth deletion fails, public.users data remains intact (no partial deletion)", async () => {
     setupSupabaseMocks({
-      deletePublicError: { message: "FK constraint violation" },
+      deleteAuthError: { message: "Auth API unavailable" },
     });
 
     const result = await deleteAccount("user-123", "test@example.com");
 
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/failed/i);
+    // Critical: from("users").delete() must NOT be called when auth fails first
+    expect(mockFrom).not.toHaveBeenCalledWith("users");
   });
 
   test("returns error when auth deletion fails", async () => {
