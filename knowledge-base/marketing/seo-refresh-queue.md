@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-20
-last_reviewed: 2026-03-20
+last_updated: 2026-04-01
+last_reviewed: 2026-04-01
 review_cadence: monthly
 owner: CMO
 depends_on:
@@ -29,8 +29,8 @@ Pages that exist on soleur.ai but have SEO deficiencies identified in the conten
 | Badge is only instance of "Company-as-a-Service" | Now in H2 and body text | — | — | **Done** |
 | No FAQ schema | 6 FAQ items with FAQPage JSON-LD | — | — | **Done** |
 | No internal links with keyword-rich anchor text | CTAs updated | — | — | **Done** |
-| "Plugin" in meta description and FAQ texts | Meta description and 3 FAQ answers use "plugin" | Remove "plugin" per brand guide. Rewrite meta to: "Soleur is the open-source company-as-a-service platform..." | Low | **NEW -- from 2026-03-17 audit** |
-| Missing "open source" and "solopreneur" | Not present on homepage | Add to hero section or body text | Low | **NEW -- from 2026-03-17 audit** |
+| "Plugin" in meta description and FAQ texts | Meta description and 3 FAQ answers use "plugin" | Remove "plugin" per brand guide. Rewrite meta to: "Soleur is the open-source company-as-a-service platform..." | Low | **Done -- meta rewritten 2026-04-01** |
+| Missing "open source" and "solopreneur" | Not present on homepage | Add to hero section or body text | Low | **Done -- "solopreneur" added to meta and FAQ answer 2026-04-01** |
 
 **Remaining effort:** 1-2 hours (new items only).
 
@@ -40,9 +40,9 @@ Pages that exist on soleur.ai but have SEO deficiencies identified in the conten
 |-------|--------------|--------|--------|--------|
 | H1 is bare "Agents" | Now "Soleur AI Agents" | — | — | **Done** |
 | No introductory prose | Intro paragraph added | — | — | **Done** |
-| No FAQ section | 3 FAQ items exist but no JSON-LD FAQPage schema | Add FAQPage JSON-LD to match existing HTML FAQ | Low | **NEW -- from 2026-03-17 audit** |
-| Missing "open source AI agents" keyword | Not mentioned | Add note that agents are open source and inspectable | Low | **NEW -- from 2026-03-17 audit** |
-| No definition of "agentic engineering" | Term used without definition | Add one-sentence definition near first usage | Low | **NEW -- from 2026-03-17 audit** |
+| No FAQ section | 3 FAQ items exist but no JSON-LD FAQPage schema | Add FAQPage JSON-LD to match existing HTML FAQ | Low | **Done -- FAQPage JSON-LD present** |
+| Missing "open source AI agents" keyword | Not mentioned | Add note that agents are open source and inspectable | Low | **Done -- added to intro prose 2026-04-01** |
+| No definition of "agentic engineering" | Term used without definition | Add one-sentence definition near first usage | Low | **Done -- definition present in intro** |
 
 **Remaining effort:** 1 hour (new items only).
 
@@ -52,8 +52,8 @@ Pages that exist on soleur.ai but have SEO deficiencies identified in the conten
 |-------|--------------|--------|--------|--------|
 | H1 is bare "Skills" | Now "Agentic Engineering Skills" | — | — | **Done** |
 | No introductory prose | Lifecycle explanation added | — | — | **Done** |
-| No FAQ section | Absent | Add FAQ with JSON-LD: "What is a skill in Soleur?", "How do skills differ from agents?" | Low | **NEW -- from 2026-03-17 audit** |
-| Missing "AI workflow automation" keyword | Not present | Add commercially-searched term naturally | Low | **NEW -- from 2026-03-17 audit** |
+| No FAQ section | Absent | Add FAQ with JSON-LD: "What is a skill in Soleur?", "How do skills differ from agents?" | Low | **Done -- FAQ + JSON-LD present** |
+| Missing "AI workflow automation" keyword | Not present | Add commercially-searched term naturally | Low | **Done -- added to intro prose 2026-04-01** |
 
 **Remaining effort:** 1 hour (new items only).
 
@@ -62,8 +62,8 @@ Pages that exist on soleur.ai but have SEO deficiencies identified in the conten
 | Issue | Current State | Action | Effort | Status |
 |-------|--------------|--------|--------|--------|
 | No "What is Soleur?" context | Context paragraph added | — | — | **Done** |
-| "Plugin" in meta description | "Install the Soleur Claude Code plugin..." | Rewrite meta to: "Get started with Soleur in one command..." | Low | **NEW -- from 2026-03-17 audit** |
-| No FAQ section | Absent | Add FAQ: installation, pricing, prerequisites | Low | **NEW -- from 2026-03-17 audit** |
+| "Plugin" in meta description | "Install the Soleur Claude Code plugin..." | Rewrite meta to: "Get started with Soleur in one command..." | Low | **Done -- meta already correct** |
+| No FAQ section | Absent | Add FAQ: installation, pricing, prerequisites | Low | **Done -- FAQ + JSON-LD present** |
 
 **Remaining effort:** 30 minutes (new items only).
 
@@ -78,10 +78,10 @@ Pages that exist on soleur.ai but have SEO deficiencies identified in the conten
 
 | Issue | Current State | Action | Effort | Status |
 |-------|--------------|--------|--------|--------|
-| H1 is "Vision" -- zero keyword value | Single generic word | Rewrite to "The Soleur Vision: Building the Company-as-a-Service Platform" | Low | NEW |
-| Uses "synthetic labor," "soloentrepreneurs" | Not in brand guide vocabulary | Align with brand voice | Low | NEW |
-| No FAQ section | Absent | Add FAQ: roadmap, model-agnostic, CaaS | Low | NEW |
-| No external citations | Zero | Add 1-2 authoritative citations | Low | NEW |
+| H1 is "Vision" -- zero keyword value | Single generic word | Rewrite to "The Soleur Vision: Building the Company-as-a-Service Platform" | Low | **Done -- H1 is "The Soleur Vision: Company-as-a-Service for the Solo Founder"** |
+| Uses "synthetic labor," "soloentrepreneurs" | Not in brand guide vocabulary | Align with brand voice | Low | **Done -- "synthetic labor" replaced with "AI agent swarms" 2026-04-01** |
+| No FAQ section | Absent | Add FAQ: roadmap, model-agnostic, CaaS | Low | **Done -- FAQ + JSON-LD present** |
+| No external citations | Zero | Add 1-2 authoritative citations | Low | **Done -- Dario Amodei citation added 2026-04-01** |
 
 **Combined effort:** 1-2 hours.
 
@@ -89,9 +89,9 @@ Pages that exist on soleur.ai but have SEO deficiencies identified in the conten
 
 | Issue | Current State | Action | Effort | Status |
 |-------|--------------|--------|--------|--------|
-| No `updated` frontmatter on any blog post | `dateModified` always equals `datePublished` in BlogPosting JSON-LD | Add `updated` field to blog posts that have been revised | Low | NEW |
-| No visible "Last Updated" display | Only `datePublished` shown | Add conditional "Last Updated" display to `blog-post.njk` template | Low | NEW |
-| "Why Tools Plateau" FAQ missing JSON-LD | 3 FAQ items formatted as H3 headings, no FAQPage schema | Convert to `<details>/<summary>` + add JSON-LD | Low | NEW |
+| No `updated` frontmatter on any blog post | `dateModified` always equals `datePublished` in BlogPosting JSON-LD | Add `updated` field to blog posts that have been revised | Low | **Done -- `updated: 2026-04-01` added to Why Tools Plateau post** |
+| No visible "Last Updated" display | Only `datePublished` shown | Add conditional "Last Updated" display to `blog-post.njk` template | Low | **Done -- conditional Last Updated added to blog-post.njk 2026-04-01** |
+| "Why Tools Plateau" FAQ missing JSON-LD | 3 FAQ items formatted as H3 headings, no FAQPage schema | Convert to `<details>/<summary>` + add JSON-LD | Low | **Done -- converted to details/summary + FAQPage JSON-LD added 2026-04-01** |
 
 **Combined effort:** 1-2 hours.
 
@@ -109,7 +109,7 @@ Pages that do not exist but should, based on keyword research and competitive po
 | **Soleur vs. Notion Custom Agents** | soleur vs notion ai, company as a service vs notion | Commercial | P1 | **PUBLISHED** (2026-03-17). |
 | **Soleur vs. Cursor** | soleur vs cursor, cursor automations vs soleur | Commercial | P1 | **PUBLISHED** (2026-03-19). Addresses Automations + Marketplace. |
 | **Soleur vs. Polsia** | soleur vs polsia, autonomous AI company, autopilot vs decision-maker | Commercial | P1 | **PUBLISHED** (2026-03-26). FAQ JSON-LD present. generated_date: 2026-03-26 |
-| **Soleur vs. Paperclip** | soleur vs paperclip, AI company orchestration, zero-human company, company orchestration open source | Commercial | **P2** (new) | Paperclip at 14.6k GitHub stars. Infrastructure-layer orchestration vs. domain intelligence. Complementary positioning opportunity. Clipmart upcoming. |
+| **Soleur vs. Paperclip** | soleur vs paperclip, AI company orchestration, zero-human company, company orchestration open source | Commercial | **P2** (new) | Paperclip at 14.6k GitHub stars. Infrastructure-layer orchestration vs. domain intelligence. Complementary positioning opportunity. Clipmart upcoming. generated_date: 2026-03-31 |
 | **Soleur vs. Devin** | soleur vs devin, AI software engineer vs AI organization, autonomous coding comparison | Commercial | P2 | Devin at $20/month is the price anchor for autonomous agents. Differentiation: engineering-only vs. 8-domain organization. |
 | **Soleur vs. Tanka** | soleur vs tanka, AI co-founder comparison, memory AI platform comparison | Commercial | P3 | Tanka claims memory compounding. Need to differentiate: communication-scoped memory vs. cross-domain business memory. |
 | **Soleur vs. CrewAI** | soleur vs crewai, AI agent framework vs AI organization, multi-agent comparison | Commercial | P3 | Different categories (framework vs. product) but searchers compare them. Honest positioning: CrewAI is for building custom agents, Soleur is a ready-made organization. |
@@ -212,4 +212,4 @@ Based on competitive intelligence scan of 2026-03-12, the following comparison p
 
 ---
 
-_Updated: 2026-03-20. Sources: content-audit.md (2026-03-17), aeo-audit.md (2026-03-17), seo-audit.md (2026-03-17), content-plan.md (2026-03-17), competitive-intelligence.md (2026-03-12)._
+_Updated: 2026-04-01. Sources: content-audit.md (2026-03-17), aeo-audit.md (2026-03-17), seo-audit.md (2026-03-17), content-plan.md (2026-03-17), competitive-intelligence.md (2026-03-12). Priority 1 items completed in biweekly growth execution 2026-04-01._

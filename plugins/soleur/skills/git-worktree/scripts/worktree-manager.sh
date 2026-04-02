@@ -520,7 +520,44 @@ archive_kb_files() {
   done
 }
 
-# Clean up worktrees for merged branches (detects [gone] status)
+# Clean up orphan directories in .worktrees/ that aren't registered as git worktrees.
+# These can be left behind by interrupted worktree creation, manual deletion of .git files,
+# or other edge cases where the directory exists but git doesn't know about it.
+cleanup_orphan_worktree_dirs() {
+  local verbose="${1:-false}"
+  [[ ! -d "$WORKTREE_DIR" ]] && return 0
+
+  # Build set of registered worktree paths
+  local -A registered_paths
+  while IFS= read -r line; do
+    if [[ "$line" == "worktree "* ]]; then
+      registered_paths["${line#worktree }"]=1
+    fi
+  done < <(git worktree list --porcelain 2>/dev/null)
+
+  local orphans_cleaned=0
+  for dir in "$WORKTREE_DIR"/*/; do
+    [[ ! -d "$dir" ]] && continue
+    # Normalize path (remove trailing slash)
+    dir="${dir%/}"
+    if [[ -z "${registered_paths[$dir]:-}" ]]; then
+      # Not a registered worktree — check if it's safe to remove (no .git file = definitely orphaned)
+      if [[ ! -f "$dir/.git" ]]; then
+        rm -rf "$dir"
+        orphans_cleaned=$((orphans_cleaned + 1))
+        [[ "$verbose" == "true" ]] && echo -e "${BLUE}Removed orphan directory: $(basename "$dir")${NC}"
+      else
+        [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) orphan $(basename "$dir") - has .git file, run 'git worktree prune' first${NC}"
+      fi
+    fi
+  done
+
+  if [[ $orphans_cleaned -gt 0 ]]; then
+    [[ "$verbose" == "true" ]] && echo -e "${GREEN}Cleaned $orphans_cleaned orphan directory(ies)${NC}"
+  fi
+}
+
+# Clean up worktrees for merged branches (detects [gone] and merged-to-main)
 cleanup_merged_worktrees() {
   # Determine output mode: verbose if TTY, quiet otherwise
   local verbose=false
@@ -533,12 +570,28 @@ cleanup_merged_worktrees() {
     return 0
   fi
 
-  # Find branches with [gone] tracking (robust detection)
+  # Find stale branches using two complementary detection methods:
+  # 1. [gone] tracking: remote branch was deleted (e.g., GitHub auto-delete after PR merge)
+  # 2. Merged to main: branch is fully merged but remote still exists (e.g., auto-delete disabled)
   local gone_branches
   gone_branches=$(git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads 2>/dev/null | grep '\[gone\]' | cut -d' ' -f1 || true)
 
-  if [[ -z "$gone_branches" ]]; then
+  local merged_branches
+  # git branch uses: * = current, + = checked out in another worktree
+  # Strip all prefix markers and whitespace, then exclude main/master and current branch
+  merged_branches=$(git branch --merged main 2>/dev/null \
+    | sed 's/^[*+[:space:]]*//' \
+    | grep -v -E '^(main|master)$' \
+    || true)
+
+  # Combine both lists, deduplicate
+  local all_stale_branches
+  all_stale_branches=$(printf '%s\n%s' "$gone_branches" "$merged_branches" | sort -u | sed '/^$/d' || true)
+
+  if [[ -z "$all_stale_branches" ]]; then
     [[ "$verbose" == "true" ]] && echo -e "${GREEN}No merged branches to clean up${NC}"
+    # Still check for orphan directories below
+    cleanup_orphan_worktree_dirs "$verbose"
     return 0
   fi
 
@@ -561,7 +614,7 @@ cleanup_merged_worktrees() {
 
   local cleaned=()
 
-  for branch in $gone_branches; do
+  for branch in $all_stale_branches; do
     local worktree_path="${branch_to_worktree[$branch]:-}"
     local safe_branch
     safe_branch=$(echo "$branch" | tr '/' '-')
@@ -617,8 +670,14 @@ cleanup_merged_worktrees() {
       fi
     fi
 
-    # Delete branch - force delete since [gone] means remote was deleted (PR merged or intentionally deleted)
-    # Using -D because local main may be behind, causing -d to fail even for merged branches
+    # Delete remote branch if it still exists (prevents stale remote refs from accumulating)
+    if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+      if git push origin --delete "$branch" 2>/dev/null; then
+        [[ "$verbose" == "true" ]] && echo -e "${BLUE}Deleted remote branch: $branch${NC}"
+      fi
+    fi
+
+    # Delete local branch
     if ! git branch -D "$branch" 2>/dev/null; then
       [[ "$verbose" == "true" ]] && echo -e "${YELLOW}Warning: Could not delete branch $branch${NC}"
     fi
@@ -668,6 +727,9 @@ cleanup_merged_worktrees() {
       fi
     fi
   fi
+
+  # Clean up orphan directories in .worktrees/ that aren't registered as git worktrees
+  cleanup_orphan_worktree_dirs "$verbose"
 
   # Always clean up stale Claude tmp files (RAM-backed, can be huge)
   cleanup_claude_tmp
@@ -1000,9 +1062,10 @@ Commands:
                                       (if name omitted, uses current worktree)
   cleanup | clean                     Clean up inactive worktrees
   cleanup-merged                      Clean up worktrees for merged branches
-                                      (detects [gone] branches, archives specs,
-                                      removes stale Claude tmp files, kills
-                                      runaway processes)
+                                      (detects [gone] + merged-to-main branches,
+                                      deletes stale remote branches, removes
+                                      orphan directories, archives specs,
+                                      cleans Claude tmp files, kills runaway procs)
   cleanup-tmp                         Remove stale Claude task output files
                                       (reclaims RAM from /tmp/claude-<uid>/)
   cleanup-procs                       Kill runaway processes wasting CPU

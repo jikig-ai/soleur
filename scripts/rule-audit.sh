@@ -6,8 +6,9 @@
 #   No arguments. Reads environment variables for configuration.
 #
 # Environment variables:
-#   GH_TOKEN  - GitHub token for issue creation (required in CI; optional locally)
-#   GH_REPO   - GitHub repository in owner/repo format (required in CI; optional locally)
+#   GH_TOKEN   - GitHub token for issue creation (required in CI; optional locally)
+#   GH_REPO    - GitHub repository in owner/repo format (required in CI; optional locally)
+#   REPO_ROOT  - Override repository root (for testing; default: computed from script location)
 #
 # Exit codes:
 #   0 - Audit complete (issue created, updated, or skipped)
@@ -22,7 +23,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 AGENTS_MD="$REPO_ROOT/AGENTS.md"
 CONSTITUTION_MD="$REPO_ROOT/knowledge-base/project/constitution.md"
@@ -92,7 +93,7 @@ extract_hook_enforced() {
     else
       echo "$label:$lineno|$hook_ref|MISSING: $script_path" >> "$BROKEN_FILE"
     fi
-  done
+  done || true  # grep exits 1 when no matches under pipefail
 }
 
 extract_hook_enforced "$AGENTS_MD" "AGENTS.md"
@@ -104,6 +105,119 @@ BROKEN_COUNT=$(wc -l < "$BROKEN_FILE" | tr -d ' ')
 
 echo "Hook-enforced rules: AGENTS.md=$AGENTS_HOOK_COUNT, constitution.md=$CONSTITUTION_HOOK_COUNT"
 echo "Broken hook references: $BROKEN_COUNT"
+
+# --- Phase 2.5: Cross-Layer Duplicate Detection ---
+# Compare AGENTS.md rules vs constitution.md rules using Jaccard word similarity.
+# Pairs with score >= 0.6 after stopword removal are flagged as suspected duplicates.
+# Related: #1304
+
+detect_duplicates() {
+  local duplicates_file="$TMPDIR_AUDIT/duplicates.txt"
+  local all_rules="$TMPDIR_AUDIT/all_rules.tsv"
+
+  # Extract rules as TAB-delimited: file\tlineno\ttext
+  {
+    grep -n '^- ' "$AGENTS_MD" 2>/dev/null \
+      | sed 's/^\([0-9]*\):/AGENTS.md\t\1\t/' || true
+    grep -n '^- ' "$CONSTITUTION_MD" 2>/dev/null \
+      | sed 's/^\([0-9]*\):/constitution.md\t\1\t/' || true
+  } > "$all_rules"
+
+  # Single awk pass: tokenize all rules, compute pairwise Jaccard, emit matches.
+  # Stopwords: articles, prepositions, pronouns, conjunctions.
+  # Governance modals (never, always, must, should) are kept -- they carry polarity.
+  awk -F'\t' '
+  BEGIN {
+    # Stopword set
+    split("a an the is are was were be been to of in for on at by with from as " \
+          "and or but if it its this that these those he she they them their " \
+          "what which who whom do does did not", sw_arr)
+    for (i in sw_arr) stopwords[sw_arr[i]] = 1
+    n = 0
+  }
+
+  {
+    file = $1; lineno = $2; text = $3
+    # Strip leading "- "
+    sub(/^- /, "", text)
+    raw[n] = text
+    files[n] = file
+    lines[n] = lineno
+
+    # Tokenize: lowercase, strip annotations, split on non-alnum
+    t = tolower(text)
+    gsub(/\[hook-enforced:[^\]]*\]/, "", t)
+    gsub(/\[skill-enforced:[^\]]*\]/, "", t)
+    gsub(/[^a-z0-9]/, " ", t)
+
+    # Build unique word set, filtering stopwords
+    delete words
+    wcount = 0
+    m = split(t, parts, " ")
+    for (i = 1; i <= m; i++) {
+      w = parts[i]
+      if (w != "" && !(w in stopwords) && !(w in words)) {
+        words[w] = 1
+        wcount++
+      }
+    }
+
+    # Store word set as space-separated string and count
+    ws = ""
+    for (w in words) ws = ws (ws == "" ? "" : " ") w
+    wordsets[n] = ws
+    wordcounts[n] = wcount
+    n++
+  }
+
+  END {
+    # Pairwise comparison: AGENTS.md rules vs constitution.md rules
+    for (i = 0; i < n; i++) {
+      if (files[i] != "AGENTS.md") continue
+      if (wordcounts[i] < 4) continue
+
+      # Build word set for rule i
+      delete set_i
+      split(wordsets[i], wi, " ")
+      for (k in wi) set_i[wi[k]] = 1
+
+      for (j = 0; j < n; j++) {
+        if (files[j] != "constitution.md") continue
+        if (wordcounts[j] < 4) continue
+
+        # Compute intersection
+        split(wordsets[j], wj, " ")
+        common = 0
+        for (k in wj) {
+          if (wj[k] in set_i) common++
+        }
+
+        union = wordcounts[i] + wordcounts[j] - common
+        if (union > 0) {
+          score = int(common * 100 / union)
+        } else {
+          score = 0
+        }
+
+        if (score >= 60) {
+          # Truncate display text to 60 chars, escape pipe for Markdown tables
+          a_short = substr(raw[i], 1, 60)
+          c_short = substr(raw[j], 1, 60)
+          gsub(/\|/, "\\|", a_short)
+          gsub(/\|/, "\\|", c_short)
+          printf "%d\t%s\t%s\t%s\t%s\n", \
+            score, lines[i], lines[j], a_short, c_short
+        }
+      }
+    }
+  }
+  ' "$all_rules" | sort -t$'\t' -k1 -rn > "$duplicates_file"
+
+  DUPLICATE_COUNT=$(wc -l < "$duplicates_file" | tr -d ' ')
+  echo "Suspected cross-layer duplicates: $DUPLICATE_COUNT"
+}
+
+detect_duplicates
 
 # --- Phase 3: Build Issue Body ---
 
@@ -119,6 +233,7 @@ cat > "$ISSUE_BODY_FILE" << BODY_EOF
 | **Total always-loaded** | **$TOTAL** |
 | Threshold | $THRESHOLD |
 | Status | $BUDGET_STATUS |
+| Suspected duplicates | $DUPLICATE_COUNT |
 
 ## Migration Candidates
 
@@ -156,6 +271,30 @@ if [[ "$BROKEN_COUNT" -gt 0 ]]; then
     while IFS='|' read -r loc hook_ref status; do
       echo "| $loc | \`$hook_ref\` | $status |"
     done < "$BROKEN_FILE"
+  } >> "$ISSUE_BODY_FILE"
+fi
+
+# Append suspected duplicates section (file already sorted by detect_duplicates)
+if [[ -s "$TMPDIR_AUDIT/duplicates.txt" ]]; then
+  {
+    echo ""
+    echo "## Suspected Duplicates"
+    echo ""
+    echo "Rules in AGENTS.md and constitution.md with Jaccard word similarity >= 60%"
+    echo "(after stopword removal). These may be candidates for consolidation."
+    echo ""
+    echo "| Similarity | AGENTS.md Line | constitution.md Line | Rule A (truncated) | Rule B (truncated) |"
+    echo "|-----------|---------------|---------------------|--------------------|--------------------|"
+    while IFS=$'\t' read -r score a_line c_line a_text c_text; do
+      echo "| ${score}% | $a_line | $c_line | $a_text | $c_text |"
+    done < "$TMPDIR_AUDIT/duplicates.txt"
+  } >> "$ISSUE_BODY_FILE"
+else
+  {
+    echo ""
+    echo "## Suspected Duplicates"
+    echo ""
+    echo "*No cross-layer duplicates detected (Jaccard threshold: 60%).*"
   } >> "$ISSUE_BODY_FILE"
 fi
 

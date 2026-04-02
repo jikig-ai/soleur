@@ -146,6 +146,17 @@ TREND_HEADER
   echo "Trend summary updated: Week ${week_number}, status: ${status}"
 }
 
+validate_json_response() {
+  local response_file="$1"
+  local context="${2:-API response}"
+  if ! jq -e '.' "$response_file" >/dev/null 2>&1; then
+    echo "Plausible ${context} is not valid JSON" >&2
+    echo "Response (first 200 chars): $(head -c 200 "$response_file")" >&2
+    return 1
+  fi
+  return 0
+}
+
 emit_kpi_status() {
   local key="$1" value="$2"
   if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
@@ -230,6 +241,11 @@ main() {
       exit 1
     fi
 
+    if ! validate_json_response "$response_file" "API response for $url"; then
+      rm -f "$response_file"
+      exit 1
+    fi
+
     cat "$response_file"
     rm -f "$response_file"
   }
@@ -250,15 +266,35 @@ main() {
   # api_get is called inside $() (subshell) where exit only exits the subshell,
   # so plan-limitation checks must happen here before any $() calls.
 
-  _preflight_code=$(curl -s -o /dev/null -w "%{http_code}" \
+  _preflight_file=$(mktemp)
+  trap 'rm -f "$_preflight_file"' EXIT
+  _preflight_code=$(curl -s -o "$_preflight_file" -w "%{http_code}" \
     -H "Authorization: Bearer ${PLAUSIBLE_API_KEY}" \
-    "${PLAUSIBLE_BASE_URL}/api/v1/stats/aggregate?site_id=${PLAUSIBLE_SITE_ID}&period=day&metrics=visitors")
+    "${PLAUSIBLE_BASE_URL}/api/v1/stats/aggregate?site_id=${PLAUSIBLE_SITE_ID}&period=7d&metrics=visitors,pageviews&compare=previous_period")
+  if [[ "$_preflight_code" == "401" ]]; then
+    echo "Plausible API authentication failed (HTTP 401). Check PLAUSIBLE_API_KEY." >&2
+    exit 1
+  fi
   if [[ "$_preflight_code" == "402" ]]; then
     echo "Plausible API returned 402 -- Stats API requires a Business plan or higher."
     echo "Skipping analytics snapshot. The dashboard remains available at https://plausible.io/${PLAUSIBLE_SITE_ID}"
     echo "This workflow will generate snapshots automatically once the plan includes Stats API access."
     exit 0
   fi
+  if [[ "$_preflight_code" == "429" ]]; then
+    echo "Plausible API rate limited (HTTP 429). Try again later." >&2
+    exit 1
+  fi
+  if [[ ! "$_preflight_code" =~ ^2 ]]; then
+    echo "Plausible API error (HTTP $_preflight_code) during preflight" >&2
+    cat "$_preflight_file" >&2
+    exit 1
+  fi
+  if ! validate_json_response "$_preflight_file" "preflight check"; then
+    exit 1
+  fi
+  trap - EXIT
+  rm -f "$_preflight_file"
 
   # --- Fetch Data ---
 

@@ -1,28 +1,49 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import Link from "next/link";
 
 export default function SignupPage() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otp, setOtp] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [tcAccepted, setTcAccepted] = useState(false);
+  const otpRef = useRef<HTMLInputElement>(null);
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSendOtp(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError("");
 
     const supabase = createClient();
-    const { error } = await supabase.auth.signInWithOtp({
+    const { error } = await supabase.auth.signInWithOtp({ email });
+
+    setLoading(false);
+
+    if (error) {
+      setError(error.message);
+    } else {
+      setOtpSent(true);
+      setTimeout(() => otpRef.current?.focus(), 100);
+    }
+  }
+
+  async function handleVerifyOtp(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+
+    const supabase = createClient();
+    const { error } = await supabase.auth.verifyOtp({
       email,
-      options: {
-        emailRedirectTo: `${window.location.origin}/callback`,
-      },
+      token: otp,
+      type: "email",
     });
 
     setLoading(false);
@@ -30,19 +51,57 @@ export default function SignupPage() {
     if (error) {
       setError(error.message);
     } else {
-      setSent(true);
+      router.push("/accept-terms");
     }
   }
 
-  if (sent) {
+  if (otpSent) {
     return (
       <main className="flex min-h-screen items-center justify-center p-4">
-        <div className="w-full max-w-sm space-y-4 text-center">
-          <h1 className="text-2xl font-semibold">Check your email</h1>
-          <p className="text-neutral-400">
-            We sent a magic link to <strong className="text-white">{email}</strong>.
-            Click the link to complete signup.
-          </p>
+        <div className="w-full max-w-sm space-y-6">
+          <div className="space-y-2 text-center">
+            <h1 className="text-2xl font-semibold">Enter verification code</h1>
+            <p className="text-sm text-neutral-400">
+              We sent a 6-digit code to{" "}
+              <strong className="text-white">{email}</strong>
+            </p>
+          </div>
+
+          <form onSubmit={handleVerifyOtp} className="space-y-4">
+            <input
+              ref={otpRef}
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              required
+              maxLength={6}
+              value={otp}
+              onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
+              placeholder="000000"
+              className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-3 text-center text-lg tracking-[0.3em] placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none"
+            />
+
+            {error && <p className="text-sm text-red-400">{error}</p>}
+
+            <button
+              type="submit"
+              disabled={loading || otp.length !== 6}
+              className="w-full rounded-lg bg-white px-4 py-3 text-sm font-medium text-black hover:bg-neutral-200 disabled:opacity-50"
+            >
+              {loading ? "Verifying..." : "Create account"}
+            </button>
+          </form>
+
+          <button
+            onClick={() => {
+              setOtpSent(false);
+              setOtp("");
+              setError("");
+            }}
+            className="block w-full text-center text-sm text-neutral-500 hover:text-neutral-300"
+          >
+            Try a different email
+          </button>
         </div>
       </main>
     );
@@ -58,7 +117,7 @@ export default function SignupPage() {
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSendOtp} className="space-y-4">
           <input
             type="email"
             required
@@ -105,7 +164,7 @@ export default function SignupPage() {
             disabled={loading || !tcAccepted}
             className="w-full rounded-lg bg-white px-4 py-3 text-sm font-medium text-black hover:bg-neutral-200 disabled:opacity-50"
           >
-            {loading ? "Sending..." : "Sign up with magic link"}
+            {loading ? "Sending..." : "Send verification code"}
           </button>
         </form>
 
