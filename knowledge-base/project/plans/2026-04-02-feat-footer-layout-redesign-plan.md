@@ -132,15 +132,15 @@ The `.footer-inner` flex layout already handles spacing between children. The le
 
 ## Acceptance Criteria
 
-- [ ] Footer renders primary navigation links (Get Started, Pricing, Blog, Community, Vision, About) in the main link row
-- [ ] Footer renders legal links (Legal, Privacy Policy, Terms of Service) in a visually distinct secondary row
-- [ ] Legal links use `--color-text-tertiary` color (not `--color-text-secondary` like nav links)
-- [ ] Legal links hover to `--color-text-secondary` (not full white like nav links)
-- [ ] Footer layout stacks correctly on mobile (below 768px)
-- [ ] All 9 links point to the correct URLs (no broken links)
-- [ ] Eleventy build completes without errors
-- [ ] Update learning file `knowledge-base/project/learnings/docs-site/2026-02-19-adding-docs-pages-pattern.md` to reference `footerNav`/`footerLegal` instead of `footerLinks`
-- [ ] No other functional references to `site.footerLinks` exist (`.pen` files and archived plans are documentation-only)
+- [x] Footer renders primary navigation links (Get Started, Pricing, Blog, Community, Vision, About) in the main link row
+- [x] Footer renders legal links (Legal, Privacy Policy, Terms of Service) in a visually distinct secondary row
+- [x] Legal links use `--color-text-tertiary` color (not `--color-text-secondary` like nav links)
+- [x] Legal links hover to `--color-text-secondary` (not full white like nav links)
+- [x] Footer layout stacks correctly on mobile (below 768px)
+- [x] All 9 links point to the correct URLs (no broken links)
+- [x] Eleventy build completes without errors
+- [x] Update learning file `knowledge-base/project/learnings/docs-site/2026-02-19-adding-docs-pages-pattern.md` to reference `footerNav`/`footerLegal` instead of `footerLinks`
+- [x] No other functional references to `site.footerLinks` exist (`.pen` files and archived plans are documentation-only)
 
 ## Test Scenarios
 

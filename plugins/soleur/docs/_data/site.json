@@ -26,13 +26,15 @@
     "name": "Jean Deruelle",
     "url": "https://soleur.ai/about/"
   },
-  "footerLinks": [
+  "footerNav": [
     { "label": "Get Started", "url": "pages/getting-started.html" },
     { "label": "Pricing", "url": "pages/pricing.html" },
     { "label": "Blog", "url": "blog/" },
     { "label": "Community", "url": "pages/community.html" },
     { "label": "Vision", "url": "pages/vision.html" },
-    { "label": "About", "url": "about/" },
+    { "label": "About", "url": "about/" }
+  ],
+  "footerLegal": [
     { "label": "Legal", "url": "pages/legal.html" },
     { "label": "Privacy Policy", "url": "pages/legal/privacy-policy.html" },
     { "label": "Terms of Service", "url": "pages/legal/terms-and-conditions.html" }
