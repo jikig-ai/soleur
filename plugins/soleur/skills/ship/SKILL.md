@@ -74,7 +74,7 @@ Extract the feature name from the result by stripping the `feat-`, `feature/`, `
 Check for evidence that `/review` ran on the current branch. This is defense-in-depth --
 `/one-shot` already enforces review ordering, but direct `/ship` invocations bypass it.
 
-**Step 1: Check for review artifacts.**
+**Step 1: Check for review artifacts (legacy).**
 
 Search for todo files tagged as code-review findings:
 
@@ -82,7 +82,7 @@ Search for todo files tagged as code-review findings:
 grep -rl "code-review" todos/ 2>/dev/null | head -1 || true
 ```
 
-**Step 2: Check commit history for review evidence.**
+**Step 2: Check commit history for review evidence (legacy).**
 
 If Step 1 found nothing, check for the review commit pattern:
 
@@ -90,11 +90,39 @@ If Step 1 found nothing, check for the review commit pattern:
 git log origin/main..HEAD --oneline | grep "refactor: add code review findings" || true
 ```
 
-**Note:** This commit message is coupled to review SKILL.md Step 5. If that message changes, update this grep to match.
+**Step 3: Check for GitHub issues with `code-review` label (current).**
 
-**If either step produced output:** Review evidence found. Continue to Phase 2.
+If Steps 1 and 2 found nothing, check for review issues linked to this branch's PR. This requires two separate Bash calls (no command substitution):
 
-**If both steps produced no output:**
+Step 3a — get the current branch name:
+
+```bash
+git branch --show-current
+```
+
+Step 3b — get the PR number for that branch (use the branch name from Step 3a literally):
+
+```bash
+gh pr list --head <branch-name> --state open --json number --jq '.[0].number // empty'
+```
+
+Step 3c — if Step 3b returned a PR number, search for code-review issues referencing it:
+
+```bash
+gh issue list --label code-review --search "PR #<number>" --limit 1 --json number --jq '.[0].number // empty'
+```
+
+If `gh` fails or is unavailable, treat as no output (fail open on Signal 3).
+
+**Note:** Three signals are checked, any one suffices:
+
+- Signal 1 (`todos/` grep): coupled to legacy review workflow (pre-#1329)
+- Signal 2 (commit message grep): coupled to legacy review SKILL.md Step 5 commit message (pre-#1329)
+- Signal 3 (`gh issue list`): coupled to `review-todo-structure.md` issue body template (`**Source:** PR #<number>`)
+
+**If any step produced output:** Review evidence found. Continue to Phase 2.
+
+**If no step produced output:**
 
 **Headless mode:** Abort with: "Error: no review evidence found on this branch. Run `/review` before `/ship`, or use `/one-shot` for the full pipeline."
 
@@ -224,17 +252,7 @@ Ship Checklist for [branch name]:
 
 Defense-in-depth check that review ran before shipping. Phase 1.5 catches this earlier, but if context compaction erased Phase 1.5's check or the skill was invoked mid-flow, this gate is the second net.
 
-**Detection:** Check for review evidence using the same signals as Phase 1.5:
-
-```bash
-grep -rl "code-review" todos/ 2>/dev/null | head -1 || true
-```
-
-```bash
-git log origin/main..HEAD --oneline | grep "refactor: add code review findings" || true
-```
-
-**Note:** The commit message grep is coupled to review SKILL.md Step 5. If that message changes, update both Phase 1.5 and this grep.
+**Detection:** Check for review evidence using the same three signals described in Phase 1.5 (Signal 1: `todos/` grep, Signal 2: commit message grep, Signal 3: GitHub issues with `code-review` label). Run the same commands in the same order. See Phase 1.5 for full details and coupling notes.
 
 **If review evidence is found:** Pass silently.
 

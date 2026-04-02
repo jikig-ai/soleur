@@ -104,7 +104,22 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 > **CONTINUATION GATE**: When work outputs `## Work Phase Complete`, that is your signal to continue. Do NOT end your turn. Do NOT treat "Implementation complete" or similar phrases as a stopping point. Immediately proceed to step 4 in the same response.
 
 4. Use the **Skill tool**: `skill: soleur:review`
-5. Use the **Skill tool**: `skill: soleur:resolve-todo-parallel`
+5. **Resolve P1 review findings.** List open GitHub issues with `code-review` + `priority/p1-high` labels:
+
+   ```bash
+   gh issue list --label code-review --label priority/p1-high --state open --search "PR #<current_pr_number>" --json number,title,body
+   ```
+
+   The `--search` flag scopes results to issues from this review session (the review skill's issue template includes `PR #<number>` in the body). If zero issues match, proceed immediately to Step 5.5.
+
+   For each matching P1 issue, spawn a parallel `pr-comment-resolver` agent. Pass the issue body's `## Problem`, `## Proposed Fix`, and `Location:` fields as the agent's input. After all agents return, commit fixes and close each resolved issue:
+
+   ```bash
+   gh issue close <number> --comment "Fixed in <commit-sha>"
+   ```
+
+   Do NOT end your turn after this step. Proceed to Step 5.5.
+
 5.5. Use the **Skill tool**: `skill: soleur:qa`, args: "<plan_file_path>". QA verifies features work end-to-end by executing the plan's Test Scenarios (browser flows via Playwright MCP, API verification via Doppler + curl). If QA fails, fix the issues and re-run QA before proceeding. If the plan has no Test Scenarios section, QA skips gracefully.
 6. Use the **Skill tool**: `skill: soleur:compound`
 7. Use the **Skill tool**: `skill: soleur:ship`. Ship handles compound re-check (Phase 2), documentation verification (Phase 3), tests (Phase 4), semver label assignment, push, PR creation, CI, merge, and cleanup.
