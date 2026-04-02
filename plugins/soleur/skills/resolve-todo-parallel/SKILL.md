@@ -5,6 +5,9 @@ description: "This skill should be used when resolving all pending CLI todos fro
 
 # Resolve CLI Todos in Parallel
 
+> **Note:** The `/soleur:review` skill now creates GitHub issues directly for all new findings.
+> This skill handles only legacy local `todos/*.md` files that predate the GitHub issue integration.
+
 Resolve all TODO items from the /todos/*.md directory using parallel processing.
 
 ## Workflow
