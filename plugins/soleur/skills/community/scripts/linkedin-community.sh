@@ -3,13 +3,13 @@
 #
 # Usage: linkedin-community.sh <command> [args]
 # Commands:
-#   post-content --text "<text>"   - Post to LinkedIn (person posting, PUBLIC visibility)
+#   post-content --text "<text>" [--author "<urn>"]  - Post to LinkedIn (person or company page)
 #   fetch-metrics                  - Fetch account metrics (requires Marketing API)
 #   fetch-activity                 - Fetch account activity (requires Marketing API)
 #
 # Environment variables (required):
 #   LINKEDIN_ACCESS_TOKEN  - OAuth 2.0 Bearer token (60-day TTL)
-#   LINKEDIN_PERSON_URN    - Person URN for posting (urn:li:person:{id})
+#   LINKEDIN_PERSON_URN    - Person URN for posting (urn:li:person:{id}), optional if --author provided
 #   LINKEDIN_ALLOW_POST    - Set to "true" to enable posting (safety guard, default: disabled)
 #
 # Exit codes:
@@ -44,7 +44,7 @@ require_credentials() {
     echo "" >&2
     echo "To configure:" >&2
     echo "  1. Run: linkedin-setup.sh generate-token" >&2
-    echo "  2. Or set LINKEDIN_ACCESS_TOKEN and LINKEDIN_PERSON_URN manually" >&2
+    echo "  2. Or set LINKEDIN_ACCESS_TOKEN manually" >&2
     echo "  3. Run: linkedin-setup.sh verify" >&2
     exit 1
   fi
@@ -312,7 +312,7 @@ main() {
     echo "Usage: linkedin-community.sh <command> [args]" >&2
     echo "" >&2
     echo "Commands:" >&2
-    echo "  post-content --text \"<text>\"  - Post to LinkedIn" >&2
+    echo "  post-content --text \"<text>\" [--author \"<urn>\"]  - Post to LinkedIn" >&2
     echo "  fetch-metrics                 - Fetch account metrics (Marketing API)" >&2
     echo "  fetch-activity                - Fetch account activity (Marketing API)" >&2
     exit 1
