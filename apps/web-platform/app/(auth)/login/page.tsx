@@ -4,6 +4,7 @@ import { Suspense, useState, useEffect, useRef } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
+import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
 import Link from "next/link";
 
 const CALLBACK_ERRORS: Record<string, string> = {
@@ -89,7 +90,7 @@ function LoginForm() {
           <div className="space-y-2 text-center">
             <h1 className="text-2xl font-semibold">Enter verification code</h1>
             <p className="text-sm text-neutral-400">
-              We sent a 6-digit code to{" "}
+              We sent a {EMAIL_OTP_LENGTH}-digit code to{" "}
               <strong className="text-white">{email}</strong>
             </p>
           </div>
@@ -101,7 +102,7 @@ function LoginForm() {
               inputMode="numeric"
               autoComplete="one-time-code"
               required
-              maxLength={6}
+              maxLength={EMAIL_OTP_LENGTH}
               value={otp}
               onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
               placeholder="000000"
@@ -112,7 +113,7 @@ function LoginForm() {
 
             <button
               type="submit"
-              disabled={loading || otp.length !== 6}
+              disabled={loading || otp.length !== EMAIL_OTP_LENGTH}
               className="w-full rounded-lg bg-white px-4 py-3 text-sm font-medium text-black hover:bg-neutral-200 disabled:opacity-50"
             >
               {loading ? "Verifying..." : "Sign in"}
