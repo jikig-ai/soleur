@@ -143,8 +143,8 @@ describe("Error state clearing on remount (#1377)", () => {
       action: { label: "Update key", href: "/dashboard/settings" },
     };
     await renderChatPage();
-    expect(screen.getByText("Invalid API Key")).toBeDefined();
-    expect(screen.getByText("Update key")).toBeDefined();
+    expect(screen.getByText("Invalid API Key")).toBeInTheDocument();
+    expect(screen.getByText("Update key")).toBeInTheDocument();
   });
 
   test("error card disappears when lastError is cleared (simulates remount clearing)", async () => {
@@ -155,7 +155,7 @@ describe("Error state clearing on remount (#1377)", () => {
       action: { label: "Update key", href: "/dashboard/settings" },
     };
     const { unmount } = await renderChatPage();
-    expect(screen.getByText("Invalid API Key")).toBeDefined();
+    expect(screen.getByText("Invalid API Key")).toBeInTheDocument();
     unmount();
 
     // Second render: error cleared (simulates what the fix does on remount)
