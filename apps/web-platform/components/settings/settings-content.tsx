@@ -1,5 +1,3 @@
-"use client";
-
 import { KeyRotationForm } from "./key-rotation-form";
 import { DeleteAccountDialog } from "./delete-account-dialog";
 
@@ -18,9 +16,7 @@ export function SettingsContent({
 }: SettingsContentProps) {
   return (
     <div className="mx-auto max-w-2xl space-y-10 px-4 py-10">
-      <div>
-        <h1 className="mb-8 text-2xl font-semibold text-white">Settings</h1>
-      </div>
+      <h1 className="mb-8 text-2xl font-semibold text-white">Settings</h1>
 
       {/* API Key Section */}
       <section>

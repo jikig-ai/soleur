@@ -1,17 +1,11 @@
 "use client";
 
-interface ErrorCardAction {
-  label: string;
-  href?: string;
-  onClick?: () => void;
-}
-
 interface ErrorCardProps {
   title: string;
   message: string;
   onRetry?: () => void;
   retryLabel?: string;
-  action?: ErrorCardAction;
+  action?: { label: string; href: string };
 }
 
 export function ErrorCard({ title, message, onRetry, retryLabel = "Try again", action }: ErrorCardProps) {
@@ -28,21 +22,13 @@ export function ErrorCard({ title, message, onRetry, retryLabel = "Try again", a
             {retryLabel}
           </button>
         )}
-        {action?.href && (
+        {action && (
           <a
             href={action.href}
             className="rounded-lg border border-neutral-700 px-3 py-1.5 text-sm text-neutral-300 transition-colors hover:border-neutral-500 hover:text-white"
           >
             {action.label}
           </a>
-        )}
-        {action?.onClick && !action.href && (
-          <button
-            onClick={action.onClick}
-            className="rounded-lg border border-neutral-700 px-3 py-1.5 text-sm text-neutral-300 transition-colors hover:border-neutral-500 hover:text-white"
-          >
-            {action.label}
-          </button>
         )}
       </div>
     </div>

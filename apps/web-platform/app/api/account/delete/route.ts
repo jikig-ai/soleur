@@ -36,7 +36,7 @@ export async function POST(request: Request) {
 
   // Parse body
   const body = await request.json().catch(() => null);
-  if (!body?.confirmEmail || typeof body.confirmEmail !== "string") {
+  if (!body?.confirmEmail || typeof body.confirmEmail !== "string" || body.confirmEmail.length > 320) {
     return NextResponse.json(
       { error: "Missing confirmation email" },
       { status: 400 },
@@ -69,6 +69,8 @@ export async function POST(request: Request) {
       response.cookies.set(name, "", {
         maxAge: 0,
         path: "/",
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
       });
     }
   }

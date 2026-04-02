@@ -13,7 +13,6 @@ export interface WebSocketError {
   action?: {
     label: string;
     href?: string;
-    onClick?: () => void;
   };
 }
 

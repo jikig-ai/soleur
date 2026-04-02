@@ -212,6 +212,7 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
         );
 
         sendToClient(userId, { type: "session_started", conversationId });
+        resetIdleTimer(userId, session);
         log.debug("session_started sent to client");
       } catch (err) {
         Sentry.captureException(err);
@@ -242,6 +243,7 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
         }
 
         session.conversationId = msg.conversationId;
+        resetIdleTimer(userId, session);
         sendToClient(userId, {
           type: "session_started",
           conversationId: msg.conversationId,
