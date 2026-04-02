@@ -75,15 +75,15 @@ Plausible's Stats API v1 is [documented as legacy](https://plausible.io/docs/sta
 
 ## Acceptance Criteria
 
-- [ ] `api_get()` validates response body is valid JSON before returning
-- [ ] Non-JSON responses produce a clear error message with the first 200 chars of the response body
-- [ ] Preflight check uses the same v1 endpoint and parameters as the actual data fetch
-- [ ] Preflight check validates JSON response (not just HTTP status)
-- [ ] HTTP 402 response still triggers graceful exit 0 with informative message (not a workflow failure)
-- [ ] Snapshot markdown format is unchanged (same headings, tables, structure)
-- [ ] `scripts/test-weekly-analytics.sh` passes with no regressions
-- [ ] New test cases cover: JSON validation (valid, invalid, empty file, error message content)
-- [ ] `set -euo pipefail` compliance maintained throughout
+- [x] `api_get()` validates response body is valid JSON before returning
+- [x] Non-JSON responses produce a clear error message with the first 200 chars of the response body
+- [x] Preflight check uses the same v1 endpoint and parameters as the actual data fetch
+- [x] Preflight check validates JSON response (not just HTTP status)
+- [x] HTTP 402 response still triggers graceful exit 0 with informative message (not a workflow failure)
+- [x] Snapshot markdown format is unchanged (same headings, tables, structure)
+- [x] `scripts/test-weekly-analytics.sh` passes with no regressions
+- [x] New test cases cover: JSON validation (valid, invalid, empty file, error message content)
+- [x] `set -euo pipefail` compliance maintained throughout
 
 ## Domain Review
 
