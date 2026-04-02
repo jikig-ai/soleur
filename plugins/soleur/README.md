@@ -39,16 +39,16 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 
 | Component | Count |
 |-----------|-------|
-| Agents | 62 |
+| Agents | 63 |
 | Commands | 3 |
-| Skills | 61 |
+| Skills | 62 |
 | MCP Servers | 3 |
 
 ## Agents
 
 Agents are organized by domain, then by function.
 
-### Marketing (11)
+### Marketing (12)
 
 | Agent | Description |
 |-------|-------------|
@@ -81,7 +81,7 @@ Agents are organized by domain, then by function.
 | `legal-document-generator` | Generate draft legal documents (Terms, Privacy Policy, Cookie Policy, GDPR, AUP, DPA, Disclaimer) |
 | `legal-compliance-auditor` | Audit legal documents for compliance gaps, outdated clauses, and cross-document consistency |
 
-### Engineering (27)
+### Engineering (28)
 
 | Agent | Description |
 |-------|-------------|
@@ -318,9 +318,10 @@ The `agent-browser` skill provides comprehensive documentation on usage.
 
 ## Installation
 
-**From the registry (recommended):**
+**From the marketplace (recommended):**
 
 ```bash
+claude plugin marketplace add jikig-ai/soleur
 claude plugin install soleur
 ```
 

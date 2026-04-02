@@ -2,7 +2,7 @@
 
 The Company-as-a-Service platform. Collapse the friction between a startup idea and a billion-dollar outcome.
 
-61 agents across engineering, finance, marketing, legal, operations, product, sales, and support -- compounding your company knowledge with every session.
+63 agents across engineering, finance, marketing, legal, operations, product, sales, and support -- compounding your company knowledge with every session.
 
 [![Version](https://img.shields.io/github/v/release/jikig-ai/soleur)](https://github.com/jikig-ai/soleur/releases)
 [![License](https://img.shields.io/badge/License-BSL_1.1-blue.svg)](LICENSE)
@@ -11,13 +11,14 @@ The Company-as-a-Service platform. Collapse the friction between a startup idea 
 
 ## What is Soleur?
 
-Soleur gives a single founder the leverage of a full organization. **61 agents**, **3 commands**, and **61 skills** that compound your company knowledge over time -- every problem you solve makes the next one easier.
+Soleur gives a single founder the leverage of a full organization. **63 agents**, **3 commands**, and **62 skills** that compound your company knowledge over time -- every problem you solve makes the next one easier.
 
 ## Installation
 
-**From the registry (recommended):**
+**From the marketplace (recommended):**
 
 ```bash
+claude plugin marketplace add jikig-ai/soleur
 claude plugin install soleur
 ```
 
