@@ -34,13 +34,14 @@ const MAX_BACKOFF = 30_000;
 const INITIAL_BACKOFF = 1_000;
 
 /** Close codes where reconnecting will never succeed. */
-const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason: string }> = {
+export const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason: string }> = {
   [WS_CLOSE_CODES.AUTH_TIMEOUT]: { target: "/login", reason: "Session expired" },
   [WS_CLOSE_CODES.SUPERSEDED]: { reason: "Superseded by another tab" },
   [WS_CLOSE_CODES.AUTH_REQUIRED]: { target: "/login", reason: "Authentication required" },
   [WS_CLOSE_CODES.TC_NOT_ACCEPTED]: { target: "/accept-terms", reason: "Terms acceptance required" },
   [WS_CLOSE_CODES.INTERNAL_ERROR]: { reason: "Server error" },
   [WS_CLOSE_CODES.RATE_LIMITED]: { reason: "Too many requests. Please try again later." },
+  [WS_CLOSE_CODES.IDLE_TIMEOUT]: { reason: "Session expired due to inactivity" },
 };
 
 export function useWebSocket(conversationId: string): UseWebSocketReturn {

@@ -48,6 +48,10 @@ export interface ClientSession {
   conversationId?: string;
   /** Timer for deferred abort on disconnect — cleared if user reconnects. */
   disconnectTimer?: ReturnType<typeof setTimeout>;
+  /** Timestamp of last user activity (auth or chat message). */
+  lastActivity: number;
+  /** Timer that closes the connection after WS_IDLE_TIMEOUT_MS of inactivity. */
+  idleTimer?: ReturnType<typeof setTimeout>;
 }
 
 /** Active connections keyed by Supabase user ID. */
@@ -69,6 +73,7 @@ export function abortActiveSession(userId: string, session: ClientSession): void
   const oldConvId = session.conversationId;
   log.info({ userId, conversationId: oldConvId }, "Aborting active session (superseded)");
 
+  if (session.idleTimer) clearTimeout(session.idleTimer);
   abortSession(userId, oldConvId, "superseded");
 
   // Fire-and-forget — orphan cleanup catches failures on restart.
@@ -104,6 +109,21 @@ export function sendToClient(userId: string, message: WSMessage): void {
 
 /** Auth timeout: close unauthenticated connections after 5 seconds. */
 const AUTH_TIMEOUT_MS = 5_000;
+
+/** Idle timeout: close connections with no user activity (default 30 min). */
+const WS_IDLE_TIMEOUT_MS = parseInt(process.env.WS_IDLE_TIMEOUT_MS ?? "1800000", 10);
+
+/** Reset the idle timer for a session. Called after auth and on each chat message. */
+function resetIdleTimer(userId: string, session: ClientSession): void {
+  if (session.idleTimer) clearTimeout(session.idleTimer);
+  session.lastActivity = Date.now();
+  const timer = setTimeout(() => {
+    log.info({ userId }, "Idle timeout — closing connection");
+    session.ws.close(WS_CLOSE_CODES.IDLE_TIMEOUT, "Idle timeout");
+  }, WS_IDLE_TIMEOUT_MS);
+  timer.unref();
+  session.idleTimer = timer;
+}
 
 /**
  * Create a conversation row in the database and return its ID.
@@ -274,6 +294,9 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
         });
         return;
       }
+
+      // User activity resets idle timer
+      resetIdleTimer(userId, session);
 
       try {
         await sendUserMessage(
@@ -495,7 +518,8 @@ export function setupWebSocket(server: HTTPServer) {
         }
 
         // Register session — cancel any pending disconnect grace period
-        sessions.set(userId, { ws });
+        const newSession: ClientSession = { ws, lastActivity: Date.now() };
+        sessions.set(userId, newSession);
         for (const [key, timer] of pendingDisconnects) {
           if (key.startsWith(`${userId}:`)) {
             clearTimeout(timer);
@@ -504,6 +528,9 @@ export function setupWebSocket(server: HTTPServer) {
           }
         }
         log.info({ userId }, "User connected");
+
+        // Start idle timer after auth
+        resetIdleTimer(userId, newSession);
 
         // Start heartbeat after auth
         pingInterval = setInterval(() => {
@@ -538,6 +565,7 @@ export function setupWebSocket(server: HTTPServer) {
       if (userId) {
         const current = sessions.get(userId);
         if (current?.ws === ws) {
+          if (current.idleTimer) clearTimeout(current.idleTimer);
           sessions.delete(userId);
           // Grace period: defer abort to allow reconnection
           if (current.conversationId) {
