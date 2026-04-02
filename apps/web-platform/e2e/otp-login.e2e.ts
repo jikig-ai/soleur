@@ -179,14 +179,15 @@ test.describe("OTP input validation", () => {
     ).toBeVisible();
   });
 
-  test("OTP input truncates pasted 8-digit code to EMAIL_OTP_LENGTH digits", async ({
+  test("OTP input truncates over-length code to EMAIL_OTP_LENGTH digits", async ({
     page,
   }) => {
     await navigateToOtpStep(page, "/login");
     const otpInput = page.locator('input[autocomplete="one-time-code"]');
 
-    // Paste an 8-digit code — maxLength should truncate to EMAIL_OTP_LENGTH
-    await otpInput.fill("12345678");
+    // Fill a code longer than EMAIL_OTP_LENGTH — maxLength should truncate
+    const overLengthCode = "1".repeat(EMAIL_OTP_LENGTH + 2);
+    await otpInput.fill(overLengthCode);
     const value = await otpInput.inputValue();
     expect(value.length).toBe(EMAIL_OTP_LENGTH);
   });
