@@ -317,12 +317,17 @@ post_x_thread() {
 create_linkedin_fallback_issue() {
   local file="$1"
   local section="${2:-LinkedIn Personal}"
+  local error_reason="${3:-}"
   local linkedin_content
   linkedin_content=$(extract_section "$file" "$section")
 
   local title="[Content Publisher] LinkedIn API failed -- manual posting required for $CASE_NAME ($section)"
+  local error_section=""
+  if [[ -n "$error_reason" ]]; then
+    error_section=$(printf '\n\n**Error:** `%s`' "$error_reason")
+  fi
   local body
-  body=$(printf '## Manual LinkedIn Posting Required\n\nThe scheduled content publisher could not post to LinkedIn for **%s** (%s).\n\nPost this content manually at https://www.linkedin.com/feed/:\n\n---\n\n%s' "$CASE_NAME" "$section" "$linkedin_content")
+  body=$(printf '## Manual LinkedIn Posting Required\n\nThe scheduled content publisher could not post to LinkedIn for **%s** (%s).%s\n\nPost this content manually at https://www.linkedin.com/feed/:\n\n---\n\n%s' "$CASE_NAME" "$section" "$error_section" "$linkedin_content")
 
   create_dedup_issue "$title" "$body" "action-required,content-publisher" || {
     echo "FATAL: LinkedIn posting failed AND fallback issue creation failed." >&2
@@ -346,11 +351,17 @@ post_linkedin() {
     return 0
   fi
 
-  bash "$LINKEDIN_SCRIPT" post-content --text "$content" || {
+  local stderr_file
+  stderr_file=$(mktemp)
+  if ! bash "$LINKEDIN_SCRIPT" post-content --text "$content" 2>"$stderr_file"; then
+    local error_reason
+    error_reason=$(cat "$stderr_file")
+    rm -f "$stderr_file"
     echo "Error: LinkedIn posting failed ($section). Creating fallback issue." >&2
-    create_linkedin_fallback_issue "$file" "$section"
+    create_linkedin_fallback_issue "$file" "$section" "$error_reason"
     return 1
-  }
+  fi
+  rm -f "$stderr_file"
   echo "[ok] LinkedIn post published ($section)."
 }
 
@@ -379,11 +390,17 @@ post_linkedin_company() {
     return 0
   fi
 
-  bash "$LINKEDIN_SCRIPT" post-content --text "$content" --author "urn:li:organization:${LINKEDIN_ORG_ID}" || {
+  local stderr_file
+  stderr_file=$(mktemp)
+  if ! bash "$LINKEDIN_SCRIPT" post-content --text "$content" --author "urn:li:organization:${LINKEDIN_ORG_ID}" 2>"$stderr_file"; then
+    local error_reason
+    error_reason=$(cat "$stderr_file")
+    rm -f "$stderr_file"
     echo "Error: LinkedIn Company Page posting failed. Creating fallback issue." >&2
-    create_linkedin_fallback_issue "$file" "LinkedIn Company Page"
+    create_linkedin_fallback_issue "$file" "LinkedIn Company Page" "$error_reason"
     return 1
-  }
+  fi
+  rm -f "$stderr_file"
   echo "[ok] LinkedIn Company Page post published."
 }
 
