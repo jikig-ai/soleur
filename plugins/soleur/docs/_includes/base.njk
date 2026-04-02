@@ -132,11 +132,18 @@
         <div class="footer-mark">S</div>
         <span class="footer-name">{{ site.name }}</span>
       </div>
-      <ul class="footer-links">
-        {%- for link in site.footerLinks %}
-        <li><a href="{{ link.url }}"{% if link.external %} target="_blank" rel="noopener"{% endif %}>{{ link.label }}</a></li>
-        {%- endfor %}
-      </ul>
+      <div class="footer-nav-group">
+        <ul class="footer-links">
+          {%- for link in site.footerNav %}
+          <li><a href="{{ link.url }}"{% if link.external %} target="_blank" rel="noopener"{% endif %}>{{ link.label }}</a></li>
+          {%- endfor %}
+        </ul>
+        <ul class="footer-legal">
+          {%- for link in site.footerLegal %}
+          <li><a href="{{ link.url }}">{{ link.label }}</a></li>
+          {%- endfor %}
+        </ul>
+      </div>
       <div class="footer-social">
         <a href="{{ site.discord }}" target="_blank" rel="noopener" aria-label="Discord">Discord</a>
         <a href="{{ site.github }}" target="_blank" rel="noopener" aria-label="GitHub">GitHub</a>

@@ -30,7 +30,7 @@ Three files to touch for a new page:
 
 2. **Add to navigation** in `plugins/soleur/docs/_data/site.json`:
    - Add entry to `nav` array for header
-   - Add entry to `footerLinks` array for footer (if desired)
+   - Add entry to `footerNav` array for footer navigation links, or `footerLegal` for legal links
 
 3. **Template changes** (if needed): Edit `base.njk` only if hardcoded elements need removing (e.g., the GitHub/Discord links were hardcoded outside the `site.nav` loop).
 
