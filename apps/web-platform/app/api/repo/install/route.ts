@@ -27,20 +27,27 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json().catch(() => null);
-  if (!body?.installationId || typeof body.installationId !== "number") {
+  if (
+    !body?.installationId ||
+    typeof body.installationId !== "number" ||
+    !Number.isInteger(body.installationId) ||
+    body.installationId <= 0
+  ) {
     return NextResponse.json(
       { error: "Missing or invalid installationId" },
       { status: 400 },
     );
   }
 
-  // SECURITY: Extract GitHub username from auth metadata and verify ownership
+  // SECURITY: Extract GitHub username from provider-controlled identity first.
+  // user_metadata is user-mutable via auth.updateUser() — never trust it for
+  // security decisions when an immutable source exists.
   const githubLogin =
-    user.user_metadata?.user_name ??
     user.identities?.find(
       (i: { provider: string; identity_data?: { user_name?: string } }) =>
         i.provider === "github",
-    )?.identity_data?.user_name;
+    )?.identity_data?.user_name ??
+    user.user_metadata?.user_name;
 
   if (!githubLogin) {
     logger.warn(

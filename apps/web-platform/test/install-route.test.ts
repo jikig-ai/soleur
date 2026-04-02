@@ -1,32 +1,28 @@
-// Set env BEFORE any imports (module reads at load time)
+// Generate a real RSA key for JWT signing during tests.
+// This avoids mocking crypto, which differs between vitest and bun test.
+import { generateKeyPairSync } from "crypto";
+
+const { privateKey } = generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+  publicKeyEncoding: { type: "pkcs1", format: "pem" },
+  privateKeyEncoding: { type: "pkcs1", format: "pem" },
+});
+
+// Set env BEFORE any imports that read them at load time
 process.env.GITHUB_APP_ID = "12345";
-process.env.GITHUB_APP_PRIVATE_KEY = "fake-key";
+process.env.GITHUB_APP_PRIVATE_KEY = privateKey;
 
 import { describe, test, expect, vi, beforeEach, afterAll } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
 
 // ---------------------------------------------------------------------------
-// Mocks — override global fetch and crypto.createSign before import
+// Mock global fetch for GitHub API calls
 // ---------------------------------------------------------------------------
 
 const mockFetch = vi.fn();
 const originalFetch = globalThis.fetch;
 globalThis.fetch = mockFetch as unknown as typeof fetch;
-
-// Mock crypto module to avoid needing a real RSA private key
-vi.mock("crypto", async () => {
-  const actual =
-    await vi.importActual<typeof import("crypto")>("crypto");
-  return {
-    ...actual,
-    createSign: () => ({
-      update: () => {},
-      end: () => {},
-      sign: () => Buffer.from("fake-signature"),
-    }),
-  };
-});
 
 afterAll(() => {
   globalThis.fetch = originalFetch;
