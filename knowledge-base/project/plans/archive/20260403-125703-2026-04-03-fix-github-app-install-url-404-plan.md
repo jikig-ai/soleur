@@ -1,0 +1,244 @@
+---
+title: "fix: GitHub App install URL returns 404 for non-owner users"
+type: fix
+date: 2026-04-03
+---
+
+# fix: GitHub App install URL returns 404 for non-owner users
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-03
+**Sections enhanced:** 5
+**Research sources:** GitHub Docs (App visibility, GET /app API, best practices), codebase analysis (Dockerfile, ci-deploy.sh, reusable-release.yml, CSRF coverage test), institutional learnings (repo-connection, CSRF defense, Doppler scope, OAuth branding)
+
+### Key Improvements
+
+1. Added `NEXT_PUBLIC_GITHUB_APP_SLUG` as a build-time Docker ARG -- `NEXT_PUBLIC_` vars are inlined by Next.js at build time, not runtime
+2. Added GitHub best practice: cache the JWT-fetched slug but never use slugs as persistent identifiers
+3. Identified that `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` were never provisioned to any environment -- the entire GitHub App integration is non-functional in production
+4. Added edge case: the `getAppSlug()` function must handle JWT creation failure gracefully when env vars are missing (currently throws)
+5. Added security consideration: the new GET route must still require authentication to prevent slug enumeration
+
+### New Considerations Discovered
+
+- The Dockerfile does not list `NEXT_PUBLIC_GITHUB_APP_SLUG` as a build ARG -- it must be added alongside the existing `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` ARGs
+- The `reusable-release.yml` workflow must pass the new build-arg to the Docker build step
+- The GitHub App may need `members:read` permission for organization installs (already in the plan, confirmed by `verifyInstallationOwnership` org check code)
+- Runtime env vars (non-`NEXT_PUBLIC_`) are injected via Doppler `prd` config download at deploy time -- adding to Doppler is sufficient for `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY`
+
+## Problem Statement
+
+During new account setup via GitHub OAuth, the "connect repo" onboarding step redirects users to `https://github.com/apps/soleur-ai/installations/new`. This URL returns a 404 page.
+
+**Root cause (two issues):**
+
+1. **GitHub App visibility is set to private.** Private GitHub Apps can only be installed by the account that owns the app. Any other user visiting the install URL sees a 404 page. For Soleur to work for any user, the app must be set to **public**.
+
+2. **The app slug `soleur-ai` is hardcoded as a fallback.** The frontend uses `process.env.NEXT_PUBLIC_GITHUB_APP_SLUG ?? "soleur-ai"` (line 54 of `connect-repo/page.tsx`). The env var `NEXT_PUBLIC_GITHUB_APP_SLUG` is not set in any Doppler config or GitHub Actions secret. If the actual GitHub App was registered with a different slug, the hardcoded fallback is wrong. Additionally, hardcoding the slug is fragile -- if the app is ever renamed, the URL breaks silently.
+
+**Evidence:**
+
+- `gh api /apps/soleur-ai` returns 404 (app either doesn't exist or is private)
+- Tried all slug variants (`soleur`, `soleur-app`, `soleur-dev`, `soleur-ai-app`, `soleur-github-app`) -- all 404
+- `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` are not in any Doppler config (`dev`, `prd`, `ci`, `prd_terraform`)
+- `NEXT_PUBLIC_GITHUB_APP_SLUG` is not set anywhere (not in Doppler, not in GitHub Actions secrets)
+- `NEXT_PUBLIC_GITHUB_APP_SLUG` is not listed as a Docker build ARG in the Dockerfile (only `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_SENTRY_DSN` are)
+- `reusable-release.yml` does not pass `NEXT_PUBLIC_GITHUB_APP_SLUG` as a build-arg
+- GitHub docs confirm: private apps show a 404 to non-owners at the `/installations/new` URL
+- The entire GitHub App server module (`server/github-app.ts`) throws `Error("GITHUB_APP_ID is not set")` on any call because the env var was never provisioned
+
+### Research Insights: GitHub App Visibility
+
+Per [GitHub Docs](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/making-a-github-app-public-or-private):
+
+- **Private apps** can only be installed by the account that owns the app. Other users see a landing page with limited info but **no Install button**. Most users see a 404.
+- **Public apps** show an Install button to any GitHub user, enabling the multi-user flow Soleur needs.
+- Changing visibility from private to public is a one-way toggle in the GitHub App settings. Once public, the app cannot be made private again if it has installations from other accounts.
+
+## Proposed Solution
+
+### Phase 1: Verify/Create the GitHub App (configuration)
+
+1. **Check if the GitHub App exists.** Use Playwright MCP to navigate to `https://github.com/organizations/jikig-ai/settings/apps` (or the personal account settings if registered under a personal account) to verify whether a GitHub App has been registered.
+
+2. **If the app does not exist:** Create it via GitHub's app registration page (`https://github.com/settings/apps/new`) with:
+   - Name: `Soleur` (slug will be auto-generated by GitHub, e.g., `soleur`)
+   - Permissions: `contents:read+write`, `metadata:read`, `members:read` (for org install verification -- used by `verifyInstallationOwnership` in `server/github-app.ts`)
+   - Setup URL: `https://app.soleur.ai/connect-repo` (note: `app.soleur.ai`, not `soleur.ai` -- the web platform runs on `app.soleur.ai`)
+   - Callback URL: `https://app.soleur.ai/connect-repo` (same page handles the `?installation_id=&setup_action=install` query params)
+   - Webhook: disabled (not needed for this flow -- no webhook events are consumed)
+   - Visibility: **Public** (critical for multi-user access)
+   - Where can this app be installed: **Any account** (not just the owner)
+
+3. **If the app exists but is private:** Change visibility to public via GitHub App settings. Note: this is irreversible once other accounts install the app.
+
+4. **Store credentials in Doppler `prd` config:**
+   - `GITHUB_APP_ID` -- the numeric App ID from the app settings page
+   - `GITHUB_APP_PRIVATE_KEY` -- generate a new private key and store it (PEM format, escape newlines as `\n` for Doppler storage -- `server/github-app.ts:71` already handles this with `.replace(/\\n/g, "\n")`)
+   - `NEXT_PUBLIC_GITHUB_APP_SLUG` -- the app slug from the settings page (the URL-safe identifier, e.g., `soleur` from `github.com/apps/soleur`)
+
+5. **Verify the slug is publicly accessible:** `curl -s https://api.github.com/apps/<slug> | jq '.slug'` should return the slug (not 404)
+
+#### Research Insights: GitHub App Best Practices
+
+Per [GitHub App Best Practices](https://docs.github.com/en/apps/creating-github-apps/about-creating-github-apps/best-practices-for-creating-a-github-app):
+
+- **Minimum permissions:** Select only the permissions the app needs. Current set (`contents:read+write`, `metadata:read`, `members:read`) is appropriate for repo operations and org membership verification.
+- **Private key security:** Store in a secrets manager (Doppler), never in committed files. The key grants access to every installation.
+- **Token caching:** Cache installation tokens to reduce API requests. The existing `tokenCache` in `server/github-app.ts` already implements this with a 5-minute safety margin.
+- **Avoid slug as persistent identifier:** GitHub docs warn against using slugs/handles as persistent IDs since they can change. The server-side `getAppSlug()` mitigates this by fetching from the API rather than relying on a hardcoded value.
+
+### Phase 2: Add server-side slug resolution (defense-in-depth)
+
+Instead of relying solely on a hardcoded env var for the slug, add a server-side API route that fetches the app slug dynamically from GitHub's `GET /app` API endpoint (authenticated with the App JWT). This provides a robust fallback if the slug ever changes.
+
+**Files to create/modify:**
+
+- `apps/web-platform/server/github-app.ts` -- add `getAppSlug()` function:
+  - Calls `GET https://api.github.com/app` with `Authorization: Bearer <JWT>` header
+  - Returns the `slug` field from the response (per [GitHub Docs: GET /app](https://docs.github.com/en/rest/apps/apps))
+  - Caches the result in a module-level variable (slug never changes at runtime, no TTL needed)
+  - If `GITHUB_APP_ID` or `GITHUB_APP_PRIVATE_KEY` are not set, falls back to `process.env.NEXT_PUBLIC_GITHUB_APP_SLUG` instead of throwing -- this prevents the entire server from crashing in development environments where the App credentials may not be configured
+  - Exports the function for use by the API route
+
+- `apps/web-platform/app/api/repo/app-info/route.ts` -- new API route `GET /api/repo/app-info`:
+  - Requires authenticated user (use `createClient()` + `supabase.auth.getUser()` pattern from sibling routes like `repos/route.ts`)
+  - Returns `{ slug: string }`
+  - Calls `getAppSlug()` server-side
+  - Falls back to `NEXT_PUBLIC_GITHUB_APP_SLUG` env var if server-side fetch fails
+  - This is a GET route, so no CSRF protection needed (the structural CSRF test in `lib/auth/csrf-coverage.test.ts` only checks POST handlers)
+
+- `apps/web-platform/app/(auth)/connect-repo/page.tsx`:
+  - Replace the hardcoded `GITHUB_APP_SLUG` constant (line 54) with state initialized from the `NEXT_PUBLIC_GITHUB_APP_SLUG` env var
+  - On mount (in the existing `useEffect`), fetch slug from `/api/repo/app-info` and update state
+  - If the fetch fails, retain the env var value as fallback
+  - All three redirect URLs (lines 1185, 1202, 1210) use the stateful slug value
+
+#### Research Insights: Implementation Patterns
+
+**Existing route pattern to follow** (from `repos/route.ts`):
+
+```typescript
+// Authentication check pattern used by all /api/repo/* routes
+const supabase = await createClient();
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) {
+  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+}
+```
+
+**Edge case: slug fetch timing.** The connect-repo page may redirect to GitHub before the `/api/repo/app-info` fetch completes. Mitigate by:
+
+1. Using the `NEXT_PUBLIC_GITHUB_APP_SLUG` env var as the initial value (available immediately since it's inlined at build time)
+2. Only updating the slug state if the API returns a different value
+3. Disabling the "Connect" button until the slug is resolved (optional -- depends on UX preference)
+
+**Edge case: missing credentials in dev.** In development environments, `GITHUB_APP_ID` may not be set. The `getAppSlug()` function must not throw in this case -- it should fall back to the env var. This matches the existing pattern where `getAppId()` throws but is only called during actual GitHub operations, not slug resolution.
+
+### Phase 3: Update deployment configuration
+
+There are two categories of env vars with different provisioning paths:
+
+**Runtime env vars** (`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`):
+
+- These are server-only secrets consumed by `server/github-app.ts` at runtime
+- Add to Doppler `prd` config -- the `ci-deploy.sh` script downloads all Doppler secrets and passes them via `--env-file` to the Docker container
+- No Dockerfile or CI workflow changes needed for runtime vars
+- Per [Doppler service token learning](knowledge-base/project/learnings/2026-03-29-doppler-service-token-config-scope-mismatch.md): ensure the `DOPPLER_TOKEN_PRD` GitHub secret is scoped to the `prd` config (it already is for existing secrets)
+
+**Build-time env vars** (`NEXT_PUBLIC_GITHUB_APP_SLUG`):
+
+- `NEXT_PUBLIC_` prefixed vars are inlined by Next.js at build time into client-side JavaScript bundles
+- They are NOT available at runtime via `process.env` in client components -- they must be present during `npm run build`
+- Required changes:
+  1. `apps/web-platform/Dockerfile` -- add `ARG NEXT_PUBLIC_GITHUB_APP_SLUG` alongside the existing `NEXT_PUBLIC_*` ARGs (line 13-15 of Stage 2)
+  2. `.github/workflows/reusable-release.yml` -- add `NEXT_PUBLIC_GITHUB_APP_SLUG=${{ secrets.NEXT_PUBLIC_GITHUB_APP_SLUG }}` to the `build-args` section (line 289-292)
+  3. GitHub Actions secrets -- add `NEXT_PUBLIC_GITHUB_APP_SLUG` as a repository secret via `gh secret set`
+- Also add to Doppler `prd` for the runtime fallback path in the server-side `getAppSlug()` function
+
+#### Research Insights: Deployment Pipeline
+
+**Existing pattern** (from `reusable-release.yml:289-292`):
+
+```yaml
+build-args: |
+  NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+  NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+  NEXT_PUBLIC_SENTRY_DSN=${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
+  NEXT_PUBLIC_GITHUB_APP_SLUG=${{ secrets.NEXT_PUBLIC_GITHUB_APP_SLUG }}
+```
+
+**Existing Dockerfile pattern** (Stage 2, builder):
+
+```dockerfile
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+ARG NEXT_PUBLIC_SENTRY_DSN
+ARG NEXT_PUBLIC_GITHUB_APP_SLUG
+```
+
+**Lockfile sync warning** (per constitution rule): if any `package.json` changes are made, regenerate both `bun.lock` and `package-lock.json`. This fix should not require dependency changes, but verify before pushing.
+
+## Acceptance Criteria
+
+- [x] GitHub App exists and is set to **public** visibility
+- [x] `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, and `NEXT_PUBLIC_GITHUB_APP_SLUG` are stored in Doppler `prd` config
+- [x] Visiting `https://github.com/apps/soleur-ai/installations/new` as a non-owner GitHub user shows the install page (not 404)
+- [x] The connect-repo page correctly redirects to the working GitHub App install URL
+- [x] Server-side `getAppSlug()` function fetches and caches the slug from GitHub API
+- [x] New `/api/repo/app-info` route returns the correct slug for authenticated users
+- [x] Frontend falls back gracefully if `/api/repo/app-info` fails (uses env var)
+
+## Domain Review
+
+**Domains relevant:** none
+
+No cross-domain implications detected -- this is a bug fix for an existing onboarding flow. The fix involves GitHub App configuration (ops), a small server-side function addition, and deployment env var provisioning. No new user-facing pages, no marketing implications, no legal/financial/sales impact.
+
+## Test Scenarios
+
+### Unit Tests (`apps/web-platform/test/install-route.test.ts`)
+
+- Given `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` are set, when `getAppSlug()` is called, then it calls `GET /app` with a valid JWT and returns the `slug` field from the response
+- Given `getAppSlug()` has been called once, when called again, then it returns the cached value without making another API request
+- Given `GITHUB_APP_ID` is not set, when `getAppSlug()` is called, then it returns the `NEXT_PUBLIC_GITHUB_APP_SLUG` env var instead of throwing
+- Given a user is not authenticated, when they call `GET /api/repo/app-info`, then they receive a 401 response
+- Given a user is authenticated, when they call `GET /api/repo/app-info`, then they receive `{ slug: "<app-slug>" }`
+
+### Integration Tests (browser/QA)
+
+- Given a new user completes GitHub OAuth, when they reach the connect-repo page and click "Connect", then they are redirected to a working GitHub App install URL (no 404)
+- Given the `NEXT_PUBLIC_GITHUB_APP_SLUG` env var is set, when `/api/repo/app-info` fails (e.g., GitHub API down), then the frontend falls back to the env var value for the redirect URL
+- **Browser:** Navigate to `https://github.com/apps/<slug>/installations/new` in an incognito window (not logged in as app owner) -- verify the page loads with an "Install" button, not a 404
+- **API verify:** `curl -s https://api.github.com/apps/<slug>` returns 200 with `"slug": "<slug>"` field
+
+### Regression Tests
+
+- Existing `verifyInstallationOwnership` tests in `install-route.test.ts` continue to pass (no regressions from changes to `server/github-app.ts`)
+- The CSRF coverage test (`lib/auth/csrf-coverage.test.ts`) continues to pass (new route is GET, not POST)
+
+## Context
+
+- The connect-repo feature was implemented in the feat-repo-connection session (2026-03-29) but the GitHub App credentials were never provisioned to production
+- The `server/github-app.ts` file has working JWT auth, token exchange, and repo operations -- but they all throw on startup because `GITHUB_APP_ID` is not set
+- Three places in `connect-repo/page.tsx` redirect to the install URL (lines 1185, 1202, 1210): `handleGitHubInstall()`, `handleUpdateAccess()`, and `handleResume()`
+- The connect-repo page has a 9-state state machine (`choose`, `create_project`, `github_redirect`, `select_project`, `no_projects`, `setting_up`, `ready`, `failed`, `interrupted`)
+- The GitHub OAuth consent screen branding was recently fixed in a parallel effort (Supabase custom domain, Google OAuth branding) -- see learning `supabase-custom-domain-oauth-branding-20260403.md`
+- The `ci-deploy.sh` script uses a canary deployment pattern (start on port 3001, health check, then swap to production) -- new env vars are automatically available via Doppler download
+
+### Institutional Learnings Applied
+
+- **Doppler service token scope** (`2026-03-29`): Ensure the `DOPPLER_TOKEN_PRD` secret used in CI is scoped to the `prd` config. Do not set `DOPPLER_PROJECT`/`DOPPLER_CONFIG` env vars alongside service tokens.
+- **CSRF three-layer defense** (`2026-03-20`): The new `/api/repo/app-info` route is a GET (read-only), so no CSRF protection is needed. The structural CSRF test only checks POST handlers.
+- **OAuth branding** (`2026-04-02`, `2026-04-03`): The GitHub App setup URL must use `app.soleur.ai` (the web platform domain), consistent with the OAuth callback URL pattern established for GitHub and Google OAuth.
+- **Repo connection implementation** (`2026-03-29`): The existing JWT signing, token caching, and credential helper patterns in `server/github-app.ts` are well-tested -- the new `getAppSlug()` function follows the same patterns.
+
+## References
+
+- `apps/web-platform/app/(auth)/connect-repo/page.tsx:54` -- hardcoded slug fallback
+- `apps/web-platform/server/github-app.ts` -- GitHub App JWT and token exchange
+- `apps/web-platform/app/api/repo/install/route.ts` -- install callback handler
+- [GitHub Docs: Making a GitHub App public or private](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/making-a-github-app-public-or-private)
+- [GitHub Docs: GET /app endpoint](https://docs.github.com/en/rest/apps/apps)
+- `knowledge-base/project/learnings/2026-03-29-repo-connection-implementation.md` -- original implementation learnings
