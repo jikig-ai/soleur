@@ -1022,25 +1022,59 @@ export default function ConnectRepoPage() {
     const installationId = searchParams.get("installation_id");
     const setupAction = searchParams.get("setup_action");
 
-    if (installationId && setupAction === "install") {
-      // GitHub App was installed — register it and fetch repos
-      (async () => {
+    if (!installationId || setupAction !== "install") return;
+
+    // Single atomic effect: register install, then handle pending create or
+    // fetch repos. Merging these prevents concurrent useEffect race conditions
+    // where stale sessionStorage could overwrite the install callback state.
+    (async () => {
+      try {
+        // Step 1: Register the installation
+        const installRes = await fetch("/api/repo/install", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ installationId: Number(installationId) }),
+        });
+        if (!installRes.ok) {
+          setState("interrupted");
+          return;
+        }
+
+        // Step 2: Check for pending create (from "Start Fresh" flow)
+        let pendingCreateData: { name: string; isPrivate: boolean } | null =
+          null;
         try {
-          const res = await fetch("/api/repo/install", {
+          const raw = sessionStorage.getItem("soleur_create_project");
+          if (raw) {
+            pendingCreateData = JSON.parse(raw);
+            sessionStorage.removeItem("soleur_create_project");
+          }
+        } catch {
+          // sessionStorage unavailable
+        }
+
+        if (pendingCreateData) {
+          const createRes = await fetch("/api/repo/create", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ installationId: Number(installationId) }),
+            body: JSON.stringify({
+              name: pendingCreateData.name,
+              private: pendingCreateData.isPrivate,
+            }),
           });
-          if (!res.ok) {
-            setState("interrupted");
+          if (!createRes.ok) {
+            setState("failed");
             return;
           }
+          const data = await createRes.json();
+          startSetup(data.repoUrl, data.fullName);
+        } else {
           await fetchRepos();
-        } catch {
-          setState("interrupted");
         }
-      })();
-    }
+      } catch {
+        setState("interrupted");
+      }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1108,11 +1142,15 @@ export default function ConnectRepoPage() {
 
       // Kick off setup
       try {
-        await fetch("/api/repo/setup", {
+        const res = await fetch("/api/repo/setup", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ repoUrl }),
         });
+        if (!res.ok) {
+          setState("failed");
+          return;
+        }
       } catch {
         setState("failed");
         return;
@@ -1256,46 +1294,6 @@ export default function ConnectRepoPage() {
   function handleOpenDashboard() {
     router.push(consumeReturnTo());
   }
-
-  // ---------------------------------------------------------------------------
-  // On mount: check sessionStorage for pending create
-  // ---------------------------------------------------------------------------
-  useEffect(() => {
-    const installationId = searchParams.get("installation_id");
-    if (!installationId) return;
-
-    try {
-      const raw = sessionStorage.getItem("soleur_create_project");
-      if (raw) {
-        const pending = JSON.parse(raw) as { name: string; isPrivate: boolean };
-        sessionStorage.removeItem("soleur_create_project");
-        // Create the repo, then start setup
-        (async () => {
-          try {
-            const res = await fetch("/api/repo/create", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                name: pending.name,
-                private: pending.isPrivate,
-              }),
-            });
-            if (!res.ok) {
-              setState("failed");
-              return;
-            }
-            const data = await res.json();
-            startSetup(data.repoUrl, data.fullName);
-          } catch {
-            setState("failed");
-          }
-        })();
-      }
-    } catch {
-      // sessionStorage unavailable
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // ---------------------------------------------------------------------------
   // Render
