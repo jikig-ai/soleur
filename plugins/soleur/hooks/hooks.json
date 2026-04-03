@@ -20,6 +20,14 @@
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop-hook.sh"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/browser-cleanup-hook.sh"
+          }
+        ]
       }
     ]
   }
