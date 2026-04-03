@@ -3,29 +3,26 @@
 **Plan:** [2026-04-03-feat-follow-through-tracking-plan.md](../../plans/2026-04-03-feat-follow-through-tracking-plan.md)
 **Spec:** [spec.md](./spec.md)
 
-## Phase 1: /ship Phase 7.5 — Detection & Issue Creation
+## Phase 1: /ship Step 3.5 — Detection & Issue Creation
 
-### 1.1 Add Phase 7.5 section to /ship SKILL.md
+### 1.1 Add Step 3.5 to /ship SKILL.md "If merged" block
 
 - [ ] Read `plugins/soleur/skills/ship/SKILL.md`
-- [ ] Insert Phase 7.5 after Phase 7 Step 3 (post-merge workflow validation), before Step 4 (cleanup)
-- [ ] Write detection instructions: read PR body via `gh pr view`, scan for `- [ ] ⏳` pattern
-- [ ] Write inline hint parser: extract predicate type, parameters, SLA from parenthetical hints
+- [ ] Insert Step 3.5 inside Phase 7's "If merged" block, after Step 3 (post-merge workflow validation), before Step 4 (cleanup)
+- [ ] Write detection instructions: read PR body via `gh pr view`, scan for `- [ ] ⏳` pattern (also handle `- [X] ⏳` uppercase variant)
 - [ ] Write label creation instructions (follow-through, needs-attention) with `gh label create`
-- [ ] Write issue creation instructions with structured body template
-- [ ] Add duplicate detection guard: check for existing open follow-through issues referencing same PR
+- [ ] Write issue creation instructions with fenced YAML verification block template (all issues default to `manual` type, `5 business days` SLA)
 - [ ] Add "If no ⏳-marked items found: skip silently" guard
 - [ ] Ensure all instructions use angle-bracket placeholders (no `$()` command substitution)
 - [ ] Run `npx markdownlint-cli2 --fix plugins/soleur/skills/ship/SKILL.md`
 
-### 1.2 Write failing tests for Phase 7.5 detection (TDD gate)
+### 1.2 Write failing tests for detection (TDD gate)
 
 - [ ] Create test file for ⏳ detection regex: various PR body formats
 - [ ] Test: unchecked ⏳ item detected
-- [ ] Test: checked ⏳ item ignored
+- [ ] Test: checked ⏳ item ignored (`- [x]` lowercase)
+- [ ] Test: checked ⏳ item ignored (`- [X]` uppercase)
 - [ ] Test: non-⏳ unchecked item ignored
-- [ ] Test: inline hint parsing (predicate type, SLA, parameters)
-- [ ] Test: default values when no hints provided (manual, 5 business days)
 - [ ] Test: empty PR body produces zero items
 
 ## Phase 2: Daily Monitor Workflow
@@ -44,15 +41,17 @@
 - [ ] Configure: `concurrency: group: schedule-follow-through, cancel-in-progress: false`
 - [ ] Configure: `permissions: contents: read, issues: write, id-token: write`
 - [ ] Configure: `timeout-minutes: 15`
+- [ ] Configure: `claude_args` with `--allowedTools Bash,Read,Glob,Grep`
 - [ ] Add label pre-creation step (follow-through, needs-attention)
 - [ ] Write agent prompt with:
   - [ ] List open follow-through issues
-  - [ ] Parse Verification block from issue body
+  - [ ] Extract fenced YAML code block from issue body
+  - [ ] Calculate business days elapsed (skip weekends)
   - [ ] Execute predicates (curl for http-200, dig for dns-txt/dns-a)
-  - [ ] Comment status updates (day N/M: still pending)
-  - [ ] Auto-close on predicate pass
-  - [ ] Escalate on SLA exceeded (add needs-attention label)
-  - [ ] Close on 30-day max with escalation comment
+  - [ ] Auto-close on predicate pass with "Verified" comment
+  - [ ] Escalate on SLA exceeded: add needs-attention label, @-mention author
+  - [ ] Close on 30 business day max with @-mention and escalation comment
+  - [ ] No comments within SLA when no state change (silent)
 - [ ] Add sharp edges (never modify issue body, never create issues, handle failures gracefully)
 - [ ] Validate YAML: `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/scheduled-follow-through.yml'))"`
 - [ ] Run `npx markdownlint-cli2 --fix` on any changed .md files
