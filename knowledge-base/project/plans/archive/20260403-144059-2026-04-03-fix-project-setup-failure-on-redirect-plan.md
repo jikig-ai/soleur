@@ -107,6 +107,8 @@ Replace the `identities`-only check with a secure multi-source resolution that a
 
 **Why this is secure:** The `auth.identities` table is populated by the OAuth provider during authentication. It is not mutable by `auth.updateUser()`. Querying it via the service client (which bypasses RLS) gives us the ground truth about the user's linked providers.
 
+**Implementation risk (from review):** The `.schema("auth" as "public")` TypeScript cast suggests the Supabase JS client may not officially support querying the `auth` schema via the query builder. Verify this works against the production Supabase instance before committing to this approach. If the query builder does not support `auth` schema access, use the Supabase admin API instead: `GET /auth/v1/admin/users/{user_id}` with the service role key, which returns the full user object including identities.
+
 **Alternative considered:** Re-adding the `user_metadata` fallback with a warning log. Rejected because `user_metadata` IS mutable and the IDOR vector from PR #1400 would be reintroduced.
 
 ### Phase 2: Check setup response status (RC2)
