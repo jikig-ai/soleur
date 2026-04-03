@@ -135,6 +135,13 @@ export async function getAppSlug(): Promise<string> {
   }
 
   const data = (await response.json()) as { slug: string };
+  // Validate slug format to prevent open redirect via path traversal
+  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(data.slug)) {
+    const fallback = process.env.NEXT_PUBLIC_GITHUB_APP_SLUG ?? "soleur-ai";
+    log.error({ slug: data.slug }, "Invalid slug format from GitHub API — using fallback");
+    cachedSlug = fallback;
+    return fallback;
+  }
   cachedSlug = data.slug;
   return data.slug;
 }

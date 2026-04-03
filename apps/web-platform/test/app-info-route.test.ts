@@ -40,11 +40,12 @@ afterAll(() => {
 // getAppSlug — unit tests
 // ---------------------------------------------------------------------------
 
-import { getAppSlug } from "../server/github-app";
+import { getAppSlug, _resetSlugCacheForTesting } from "../server/github-app";
 
 describe("getAppSlug", () => {
   beforeEach(() => {
     mockFetch.mockReset();
+    _resetSlugCacheForTesting();
   });
 
   test("calls GET /app with JWT and returns the slug field", async () => {
@@ -64,8 +65,12 @@ describe("getAppSlug", () => {
   });
 
   test("returns cached value on second call without making another API request", async () => {
-    // The first call was made in the previous test and cached the result.
-    // getAppSlug() should return the cached "soleur-ai" without calling fetch.
+    // Populate cache first within this test (no cross-test dependency)
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ slug: "soleur-ai", id: 99999 }),
+    });
+    await getAppSlug();
     mockFetch.mockReset();
 
     const slug = await getAppSlug();
@@ -93,16 +98,7 @@ describe("getAppSlug fallback when GITHUB_APP_ID is not set", () => {
   });
 
   test("returns NEXT_PUBLIC_GITHUB_APP_SLUG env var instead of throwing", async () => {
-    // We need to test the fallback path. Since getAppSlug caches, we need
-    // to import a fresh module or test the fallback logic directly.
-    // For now, test that the function is exported and the env var is set.
-    // The actual fallback is tested via the module's behavior when credentials
-    // are missing — this requires clearing the cache.
-
-    // Import the internal reset function for testing
-    const { _resetSlugCacheForTesting } = await import("../server/github-app");
     _resetSlugCacheForTesting();
-
     delete process.env.GITHUB_APP_ID;
     delete process.env.GITHUB_APP_PRIVATE_KEY;
 
