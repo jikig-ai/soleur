@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { ChatInput } from "@/components/chat/chat-input";
 import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { LEADER_BG_COLORS } from "@/components/chat/leader-colors";
+import { WelcomeCard } from "@/components/chat/welcome-card";
+import { createClient } from "@/lib/supabase/client";
 
 const SUGGESTED_PROMPTS = [
   {
@@ -37,9 +39,52 @@ export default function DashboardPage() {
   const [atVisible, setAtVisible] = useState(false);
   const [atPosition, setAtPosition] = useState(0);
   const insertRef = useRef<((text: string, replaceFrom: number) => void) | null>(null);
+  const [onboardingLoaded, setOnboardingLoaded] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) {
+        setOnboardingLoaded(true);
+        return;
+      }
+      supabase
+        .from("users")
+        .select("onboarding_completed_at, pwa_banner_dismissed_at")
+        .eq("id", user.id)
+        .single()
+        .then(({ data, error }) => {
+          if (error) {
+            console.error("[onboarding] fetch error:", error.message);
+          } else if (data && !data.onboarding_completed_at) {
+            setShowOnboarding(true);
+          }
+          setOnboardingLoaded(true);
+        });
+    });
+  }, []);
 
   const handleSend = useCallback(
     (message: string) => {
+      // Complete onboarding on first message (fire-and-forget DB update)
+      if (showOnboarding) {
+        setShowOnboarding(false);
+        const supabase = createClient();
+        supabase.auth.getUser().then(({ data: { user } }) => {
+          if (user) {
+            supabase
+              .from("users")
+              .update({ onboarding_completed_at: new Date().toISOString() })
+              .eq("id", user.id)
+              .then(({ error }) => {
+                if (error) console.error("[onboarding] update error:", error.message);
+                else console.debug("[onboarding]", "first_message_sent");
+              });
+          }
+        });
+      }
+
       // Extract @-mentions to determine leader param
       const mentionPattern = /@(\w+)/g;
       const leaders: string[] = [];
@@ -59,7 +104,7 @@ export default function DashboardPage() {
       }
       router.push(`/dashboard/chat/new?${params.toString()}`);
     },
-    [router],
+    [router, showOnboarding],
   );
 
   const handleAtTrigger = useCallback((query: string, cursorPosition: number) => {
@@ -114,6 +159,9 @@ export default function DashboardPage() {
         experts.
       </p>
 
+      {/* Welcome card for first-time users */}
+      {onboardingLoaded && showOnboarding && <WelcomeCard />}
+
       {/* Chat input with @-mention dropdown */}
       <div className="relative mb-2 w-full">
         <AtMentionDropdown
@@ -130,7 +178,9 @@ export default function DashboardPage() {
         />
       </div>
       <div className="mb-8 flex w-full items-center justify-between text-xs text-neutral-400">
-        <span>Type @ to mention a specific leader</span>
+        <span className={showOnboarding ? "animate-pulse text-amber-500/80" : ""}>
+          Type @ to mention a specific leader
+        </span>
         <span>Enter to send</span>
       </div>
 

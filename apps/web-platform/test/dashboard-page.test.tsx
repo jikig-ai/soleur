@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // Mock next/navigation
@@ -7,6 +7,43 @@ const mockPush = vi.fn();
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mockPush }),
   useSearchParams: () => new URLSearchParams(),
+}));
+
+// Mock Supabase client for onboarding state
+const mockSelect = vi.fn();
+const mockEq = vi.fn();
+const mockSingle = vi.fn();
+const mockUpdate = vi.fn();
+
+vi.mock("@/lib/supabase/client", () => ({
+  createClient: () => ({
+    auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: "test-user-id" } } }) },
+    from: () => ({
+      select: (...args: unknown[]) => {
+        mockSelect(...args);
+        return {
+          eq: (...eqArgs: unknown[]) => {
+            mockEq(...eqArgs);
+            return {
+              single: () => {
+                mockSingle();
+                return Promise.resolve({
+                  data: { onboarding_completed_at: null, pwa_banner_dismissed_at: null },
+                  error: null,
+                });
+              },
+            };
+          },
+        };
+      },
+      update: (...args: unknown[]) => {
+        mockUpdate(...args);
+        return {
+          eq: () => Promise.resolve({ error: null }),
+        };
+      },
+    }),
+  }),
 }));
 
 describe("DashboardPage", () => {
@@ -111,5 +148,47 @@ describe("DashboardPage", () => {
     expect(mockPush).toHaveBeenCalledWith(
       expect.stringContaining("leader=cmo"),
     );
+  });
+
+  describe("onboarding", () => {
+    it("shows welcome card for new user", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<DashboardPage />);
+      await waitFor(() => {
+        expect(
+          screen.getByText("Your Organization Is Ready"),
+        ).toBeInTheDocument();
+      });
+    });
+
+    it("shows pulsing hint for new user", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<DashboardPage />);
+      await waitFor(() => {
+        const hint = screen.getByText(/Type @ to mention/i);
+        expect(hint.className).toMatch(/animate-pulse/);
+      });
+    });
+
+    it("hides welcome card for returning user", async () => {
+      // Override mock to return completed onboarding
+      mockSingle.mockImplementationOnce(() =>
+        Promise.resolve({
+          data: { onboarding_completed_at: "2026-01-01T00:00:00Z", pwa_banner_dismissed_at: null },
+          error: null,
+        }),
+      );
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<DashboardPage />);
+      await waitFor(() => {
+        expect(screen.queryByText("Your Organization Is Ready")).not.toBeInTheDocument();
+      });
+    });
   });
 });
