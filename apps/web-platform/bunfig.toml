@@ -2,3 +2,8 @@
 # Reject packages published less than 3 days ago (supply chain defense).
 # See: https://github.com/jikig-ai/soleur/issues/1174
 minimumReleaseAge = 259200
+
+[test]
+# Fallback for ad-hoc `bun test` runs. The canonical test path is
+# `bash scripts/test-all.sh` which uses vitest for web-platform.
+preload = ["./test/happy-dom.ts"]

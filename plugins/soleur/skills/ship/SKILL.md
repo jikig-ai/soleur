@@ -219,10 +219,10 @@ For each new source file, check if a corresponding test file exists (e.g., `foo.
 
 **Interactive mode:** Ask the user whether to write tests now or continue without them. Do not silently proceed.
 
-Then run the project's test suite:
+Then run the project's full test suite (matches CI):
 
 ```bash
-bun test
+bash scripts/test-all.sh
 ```
 
 **If tests fail:**
@@ -711,6 +711,34 @@ Poll every 10 seconds until state is `MERGED`.
    **Step 4:** Report: "Created N follow-through issue(s): #X, #Y, #Z"
 
    **Why this matters:** PR #1398 (Google OAuth brand verification) had no tracking mechanism after the session ended. External dependencies that outlive a session — DNS propagation, app store reviews, certificate issuance, brand verification — get forgotten without automated tracking. See [#1433](https://github.com/jikig-ai/soleur/issues/1433).
+
+3.6. **Post-merge Supabase migration verification.** If the PR includes database migration files (`supabase/migrations/`), verify each migration was applied to production before proceeding to cleanup.
+
+   **Step 1:** Detect migration files in the PR diff. Use the merge base hash from Phase 3:
+
+   ```bash
+   git diff --name-only --diff-filter=A HASH..HEAD -- '*/supabase/migrations/*.sql'
+   ```
+
+   If no migration files found, skip to Step 4.
+
+   **Step 2:** For each new migration file, extract the column additions or table changes. Read the SQL file and identify `ADD COLUMN`, `CREATE TABLE`, or other schema changes.
+
+   **Step 3:** Verify each schema change is live in production by querying the Supabase REST API:
+
+   ```bash
+   SUPABASE_URL=$(doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain)
+   SUPABASE_KEY=$(doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c prd --plain)
+   curl -s "$SUPABASE_URL/rest/v1/<table>?select=<new_column>&limit=1" \
+     -H "apikey: $SUPABASE_KEY" -H "Authorization: Bearer $SUPABASE_KEY"
+   ```
+
+- If the query returns data (even `null` values): the column exists. Report "Migration verified: `<column>` exists in `<table>`."
+- If the query returns a 400/404 or `column not found` error: the migration was NOT applied. Report the failure and attempt to apply it using the Supabase CLI or Management API. Do NOT silently proceed — the deployed code expects the new schema.
+
+   **Step 4:** Report: "Migration verification: N/N columns confirmed in production" or "Migration verification: FAILED — <details>."
+
+   **Why this matters:** In the 2026-03-28 session, migration `010_tag_and_route.sql` was committed and deployed but never applied, causing `NOT NULL` constraint failures on every Command Center session start. In the 2026-04-03 session (#1375), migration verification was left as a manual "post-merge todo" instead of being executed — violating the "execute, don't list" rule. This step ensures migrations are verified automatically.
 
 4. Clean up worktree and local branch:
 
