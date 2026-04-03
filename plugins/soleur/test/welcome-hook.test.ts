@@ -7,16 +7,26 @@ const HOOK_PATH = join(import.meta.dir, "../hooks/welcome-hook.sh");
 
 function createTempGitRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "welcome-hook-test-"));
-  Bun.spawnSync(["git", "init", dir], { stdout: "ignore", stderr: "ignore" });
+  // Unset git env vars so git init creates a standalone repo,
+  // not one linked to the parent (lefthook sets GIT_DIR in pre-commit).
+  Bun.spawnSync(
+    ["bash", "-c", `unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE; git init "${dir}"`],
+    { stdout: "ignore", stderr: "ignore" },
+  );
   return dir;
 }
 
 function runHook(cwd: string): { exitCode: number; stdout: string; stderr: string } {
-  const result = Bun.spawnSync(["bash", HOOK_PATH], {
-    cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  // Unset git env vars so git rev-parse resolves to the temp dir,
+  // not the parent repo (lefthook sets these in pre-commit context).
+  const result = Bun.spawnSync(
+    ["bash", "-c", `unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE; bash "${HOOK_PATH}"`],
+    {
+      cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
   return {
     exitCode: result.exitCode,
     stdout: result.stdout.toString(),

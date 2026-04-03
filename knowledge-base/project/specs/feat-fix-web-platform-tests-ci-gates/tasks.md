@@ -2,6 +2,10 @@
 
 ## Phase 1: Fix bun test DOM environment
 
+- [ ] 1.0 Install `@happy-dom/global-registrator` as devDependency (CRITICAL: separate package from `happy-dom`)
+  - `cd apps/web-platform && bun add -d @happy-dom/global-registrator`
+  - `cd apps/web-platform && npm install` (regenerate package-lock.json for Dockerfile)
+  - Verify version matches `happy-dom` (both should be 20.8.9)
 - [ ] 1.1 Create `apps/web-platform/test/happy-dom.ts` preload script
   - Import `@happy-dom/global-registrator` and call `GlobalRegistrator.register()`
 - [ ] 1.2 Update `apps/web-platform/bunfig.toml` with `[test]` section
@@ -16,12 +20,9 @@
   - Change `bun test` to `bash scripts/test-all.sh`
   - Update surrounding context to explain why test-all.sh is used (per-directory isolation, vitest for web-platform)
 
-## Phase 3: CI gate hardening (evaluate and apply)
+## Phase 3: CI gate hardening (deferred)
 
-- [ ] 3.1 Check recent e2e CI run history for flakiness
-  - `gh run list --workflow ci.yml --limit 20` and check e2e job conclusions
-- [ ] 3.2 If e2e is stable, add `e2e` to CI Required ruleset via GitHub API
-- [ ] 3.3 If e2e is flaky, create a GitHub issue to track stabilization before requiring it
+- [ ] 3.1 Create GitHub issue to track adding `e2e` to required status checks (separate concern)
 
 ## Phase 4: Quality and verification
 
