@@ -34,6 +34,7 @@ interface UseWebSocketReturn {
   sendMessage: (content: string) => void;
   sendReviewGateResponse: (gateId: string, selection: string) => void;
   status: ConnectionStatus;
+  sessionConfirmed: boolean;
   disconnectReason: string | undefined;
   lastError: WebSocketError | null;
   reconnect: () => void;
@@ -62,6 +63,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [lastError, setLastError] = useState<WebSocketError | null>(null);
   const [routeSource, setRouteSource] = useState<"auto" | "mention" | null>(null);
   const [activeLeaderIds, setActiveLeaderIds] = useState<DomainLeaderId[]>([]);
+  const [sessionConfirmed, setSessionConfirmed] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -76,6 +78,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     mountedRef.current = false;
     clearTimeout(reconnectTimerRef.current);
     activeStreamsRef.current.clear();
+    setSessionConfirmed(false);
     if (wsRef.current) {
       wsRef.current.onclose = null;
       wsRef.current.close();
@@ -99,6 +102,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
   const connect = useCallback(async () => {
     if (!mountedRef.current) return;
+    setSessionConfirmed(false);
 
     // Clean up any existing connection
     if (wsRef.current) {
@@ -269,7 +273,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           break;
         }
 
-        // auth (client-only), session_started, chat — no UI message needed
+        case "session_started": {
+          setSessionConfirmed(true);
+          break;
+        }
+
+        // auth (client-only), chat — no UI message needed
         default:
           break;
       }
@@ -360,6 +369,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     mountedRef.current = true;
     setLastError(null);
     setDisconnectReason(undefined);
+    setSessionConfirmed(false);
     connect();
 
     return () => {
@@ -374,6 +384,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
   const startSession = useCallback(
     (leaderId?: DomainLeaderId, context?: ConversationContext) => {
+      setSessionConfirmed(false);
       send({ type: "start_session", leaderId, context });
     },
     [send],
@@ -411,5 +422,5 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     connect();
   }, [connect]);
 
-  return { messages, startSession, sendMessage, sendReviewGateResponse, status, disconnectReason, lastError, reconnect, routeSource, activeLeaderIds };
+  return { messages, startSession, sendMessage, sendReviewGateResponse, status, sessionConfirmed, disconnectReason, lastError, reconnect, routeSource, activeLeaderIds };
 }
