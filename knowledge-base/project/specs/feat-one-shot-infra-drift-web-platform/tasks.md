@@ -8,12 +8,12 @@ date: 2026-04-03
 
 ## Phase 1: Fix
 
-- [ ] 1.1 Update `apps/web-platform/infra/dns.tf` line 59: change `name = "@"` to `name = "soleur.ai"`
+- [x] 1.1 Update `apps/web-platform/infra/dns.tf` line 59: change `name = "@"` to `name = "soleur.ai"`
 
 ## Phase 2: Verify
 
-- [ ] 2.1 Run `terraform init` in `apps/web-platform/infra/`
-- [ ] 2.2 Run `terraform plan -detailed-exitcode` and confirm exit code 0 (no changes)
+- [x] 2.1 Run `terraform init` in `apps/web-platform/infra/`
+- [x] 2.2 Run `terraform plan -detailed-exitcode` and confirm exit code 0 (no changes)
 
 ## Phase 3: Ship
 

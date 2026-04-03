@@ -92,8 +92,8 @@ Exit code 0 confirms the drift is resolved. If exit code 2 persists, run `terraf
 
 ## Acceptance Criteria
 
-- [ ] `cloudflare_record.google_site_verification` in `apps/web-platform/infra/dns.tf` uses `name = "soleur.ai"` instead of `name = "@"`
-- [ ] `terraform plan` for `apps/web-platform/infra/` returns exit code 0 (no changes)
+- [x] `cloudflare_record.google_site_verification` in `apps/web-platform/infra/dns.tf` uses `name = "soleur.ai"` instead of `name = "@"`
+- [x] `terraform plan` for `apps/web-platform/infra/` returns exit code 0 (no changes)
 - [ ] Drift detection workflow run succeeds without creating/updating issue #1412
 - [ ] Issue #1412 is closed
 
