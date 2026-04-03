@@ -70,10 +70,13 @@ require_working_tree() {
 }
 
 # Ensure bare repo config uses per-worktree core.bare (defense-in-depth).
-# Without this, core.bare=true in shared config bleeds into all worktrees,
-# causing git commit/push to fail with "must be run in a work tree".
-# Requires: repositoryformatversion=1, extensions.worktreeConfig=true,
-# core.bare=true ONLY in .git/config.worktree (not shared config).
+# Fixes TWO broken states that git worktree add creates on bare repos:
+#   1. core.bare=true in shared config — bleeds into worktrees, breaks git commit/push
+#   2. core.bare=false + core.worktree=<path> in shared config — "do not make sense" warning
+# Both are caused by git worktree add writing to the shared config on bare repos.
+# Fix: core.bare must ONLY exist in .git/config.worktree, never in .git/config.
+# Called before AND after git worktree add (add re-corrupts the shared config).
+# Safe for parallel sessions: all operations are idempotent.
 ensure_bare_config() {
   local git_dir="$GIT_ROOT/.git"
   # Only relevant for bare repos (git dir IS the repo root)
@@ -82,23 +85,37 @@ ensure_bare_config() {
   fi
 
   local shared_config="$git_dir/config"
+  local wt_config="$git_dir/config.worktree"
+  local fixed=false
 
-  # Check if core.bare is in shared config (the broken state)
+  # Ensure prerequisites for per-worktree config
+  git config --file "$shared_config" core.repositoryformatversion 1
+  git config --file "$shared_config" extensions.worktreeConfig true
+
+  # Remove core.bare from shared config (any value — it belongs in per-worktree only)
   if git config --file "$shared_config" core.bare &>/dev/null; then
-    local bare_val
-    bare_val=$(git config --file "$shared_config" core.bare)
-    if [[ "$bare_val" == "true" ]]; then
-      echo -e "${BLUE}Fixing bare repo config: moving core.bare to per-worktree config...${NC}"
-      # Ensure prerequisites
-      git config --file "$shared_config" core.repositoryformatversion 1
-      git config --file "$shared_config" extensions.worktreeConfig true
-      # Remove from shared config
-      git config --file "$shared_config" --unset core.bare
-      # Set in per-worktree config (bare root only)
-      local wt_config="$git_dir/config.worktree"
-      git config --file "$wt_config" core.bare true
-      echo -e "${GREEN}Fixed: core.bare now per-worktree only${NC}"
-    fi
+    echo -e "${BLUE}Fixing bare repo config: removing core.bare from shared config...${NC}"
+    git config --file "$shared_config" --unset core.bare
+    fixed=true
+  fi
+
+  # Remove stale core.worktree from shared config (leftover from worktree operations)
+  if git config --file "$shared_config" core.worktree &>/dev/null; then
+    echo -e "${BLUE}Fixing bare repo config: removing stale core.worktree from shared config...${NC}"
+    git config --file "$shared_config" --unset core.worktree
+    fixed=true
+  fi
+
+  # Ensure per-worktree config has core.bare=true for the bare root
+  local current_bare
+  current_bare=$(git config --file "$wt_config" core.bare 2>/dev/null || echo "")
+  if [[ "$current_bare" != "true" ]]; then
+    git config --file "$wt_config" core.bare true
+    fixed=true
+  fi
+
+  if [[ "$fixed" == "true" ]]; then
+    echo -e "${GREEN}Fixed: core.bare per-worktree only, no stale core.worktree${NC}"
   fi
 }
 
@@ -295,6 +312,9 @@ create_worktree() {
   echo -e "${BLUE}Creating worktree...${NC}"
   git worktree add -b "$branch_name" "$worktree_path" "$from_branch"
 
+  # git worktree add on bare repos writes core.bare=false to shared config — fix it
+  ensure_bare_config
+
   # Copy environment files
   copy_env_files "$worktree_path"
 
@@ -348,6 +368,9 @@ create_for_feature() {
   # Create worktree with new branch
   echo -e "${BLUE}Creating worktree...${NC}"
   git worktree add -b "$branch_name" "$worktree_path" "$from_branch"
+
+  # git worktree add on bare repos writes core.bare=false to shared config — fix it
+  ensure_bare_config
 
   # Create spec directory in main repo (shared across worktrees)
   if [[ -d "$GIT_ROOT/knowledge-base" ]]; then
