@@ -12,11 +12,11 @@
 
 ## Phase 2: Remove Default CPO Boot (Bug 1)
 
-- [ ] 2.1 In `apps/web-platform/server/ws-handler.ts` `start_session` handler, skip `startAgentSession` call when `msg.leaderId` is falsy
-- [ ] 2.2 Verify `session_started` message is still sent to client (conversation creation + session_started reply must remain)
-- [ ] 2.3 For directed sessions (msg.leaderId is truthy), keep existing `startAgentSession` call
-- [ ] 2.4 Add test: auto-route session start does NOT trigger `stream_start` before first chat message
-- [ ] 2.5 Add test: directed @CPO session start still triggers agent boot with greeting
+- [x] 2.1 In `apps/web-platform/server/ws-handler.ts` `start_session` handler, skip `startAgentSession` call when `msg.leaderId` is falsy
+- [x] 2.2 Verify `session_started` message is still sent to client (conversation creation + session_started reply must remain)
+- [x] 2.3 For directed sessions (msg.leaderId is truthy), keep existing `startAgentSession` call
+- [x] 2.4 Add test: auto-route session start does NOT trigger `stream_start` before first chat message
+- [x] 2.5 Add test: directed @CPO session start still triggers agent boot with greeting
 
 ## Phase 3: Add Thinking Indicators (Bug 2)
 
