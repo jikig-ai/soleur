@@ -21,6 +21,28 @@ jobs:
       - name: Lint bot synthetic statuses
         run: bash scripts/lint-bot-synthetic-statuses.sh
 
+  lockfile-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Regenerate package-lock.json
+        working-directory: apps/web-platform
+        run: npm install --package-lock-only
+
+      - name: Check lockfile sync
+        run: |
+          if ! git diff --exit-code apps/web-platform/package-lock.json; then
+            echo "::error::package-lock.json is out of sync with package.json in apps/web-platform/."
+            echo "::error::Run 'npm install' in apps/web-platform/ and commit the updated package-lock.json."
+            exit 1
+          fi
+
   test:
     runs-on: ubuntu-latest
 
