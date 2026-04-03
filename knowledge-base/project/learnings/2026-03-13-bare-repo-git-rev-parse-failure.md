@@ -42,6 +42,15 @@ The `--absolute-git-dir` returns the `.git` directory path. For repos with a `.g
 
 `git rev-parse --show-toplevel` assumes a working tree exists. In bare repos, use `--is-bare-repository` to detect the repo type and `--absolute-git-dir` to derive the root. Other scripts in the codebase use `|| pwd` or `|| "."` fallbacks which survive but may resolve to wrong paths in edge cases.
 
+**Additional discovery (2026-04-03):** `core.bare=true` also leaks into worktree git commands when the Bash tool's CWD is the bare repo root (CWD doesn't persist between calls). Even `git -C /path/to/worktree` and `cd /path && git status` fail because the shared config's `core.bare=true` overrides the worktree context. The reliable workaround is explicit env vars:
+
+```bash
+WT=/path/to/worktree
+GIT_WORK_TREE=$WT GIT_DIR=$WT/.git git status
+```
+
+This pattern must be used for ALL git commands (add, commit, status, diff, log) when the shell CWD cannot be guaranteed to be inside the worktree.
+
 ## Session Errors
 
 1. `worktree-manager.sh cleanup-merged` exit code 128 — the bug itself

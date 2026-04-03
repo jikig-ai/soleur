@@ -24,6 +24,16 @@ v4 → v5 renames relevant to Cloudflare Tunnel:
 
 The `cloudflare_zero_trust_*` resource names work in both v4 and v5 (introduced late in v4).
 
+**Zone-apex DNS record naming (v4 and v5):**
+
+| Config value | API stores | Result |
+|---|---|---|
+| `name = "@"` | `"soleur.ai"` (FQDN) | **Perpetual drift** — `name` is ForceNew, every plan shows destroy+recreate |
+| `name = "soleur.ai"` | `"soleur.ai"` | Clean plan — config matches stored state |
+| `name = "app"` (subdomain) | `"app"` | Clean plan — subdomains stored as-is |
+
+Always use the FQDN for zone-apex records, never `@`. The Cloudflare API normalizes `@` to the FQDN on storage, but the provider reads it back as-is, creating a permanent config-vs-state mismatch. See #1412 / PR #1414.
+
 ## Key Insight
 
 When research agents return Terraform resource schemas, verify against the actual provider version pinned in `main.tf`. Documentation and LLM training data skew toward the latest version. A 30-second `terraform validate` catches these mismatches before they become debugging sessions.
