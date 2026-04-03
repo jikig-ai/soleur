@@ -6,6 +6,23 @@ date: 2026-04-03
 
 # fix: Add project setup to settings page for users who skipped onboarding
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-03
+**Sections enhanced:** Technical Approach
+**Research focus:** Security (open redirect), state persistence (sessionStorage), Next.js patterns
+
+### Key Improvements
+
+1. **Open redirect prevention** -- `return_to` param validated against allowlist (must start with `/dashboard`, no protocol-relative URLs)
+2. **sessionStorage persistence** -- `return_to` survives the GitHub OAuth redirect cycle using the same pattern as `soleur_create_project`
+3. **Supabase PromiseLike** -- confirmed existing query patterns are correct, no `.catch()` needed
+
+### New Considerations Discovered
+
+- The `return_to` query param is lost during the GitHub App installation redirect (GitHub strips unknown params). Must persist in `sessionStorage` before redirect.
+- `ProjectSetupCard` should not cache repo status in local state to avoid bfcache stale state issues.
+
 ## Overview
 
 Users who skip the project setup step during onboarding see the message "you can connect a project later from Settings" (`apps/web-platform/app/(auth)/connect-repo/page.tsx:334`). However, the settings page (`apps/web-platform/components/settings/settings-content.tsx`) only contains API Key and Account sections -- there is no project creation or connection functionality. This is a broken promise in the onboarding flow.
@@ -92,6 +109,55 @@ Two visual states:
 
 - Shows "Setting up..." with a spinner
 - Note: This state is rare in settings since cloning happens during onboarding, but handle gracefully
+
+### Research Insights
+
+**Open redirect prevention:** The `return_to` query param must be validated server-side to prevent open redirect attacks. Only allow relative paths starting with `/dashboard`. Reject absolute URLs, protocol-relative URLs (`//evil.com`), and paths outside the dashboard.
+
+```typescript
+// Allowlist validation for return_to param
+function safeReturnTo(param: string | null): string {
+  const fallback = "/dashboard";
+  if (!param) return fallback;
+  // Must be relative path within /dashboard
+  if (!param.startsWith("/dashboard")) return fallback;
+  // Block protocol-relative URLs and encoded characters
+  if (param.includes("//") || param.includes("\\")) return fallback;
+  return param;
+}
+```
+
+**return_to param survives GitHub redirect:** The `connect-repo` page redirects to GitHub for App installation, and GitHub redirects back with `?installation_id=...&setup_action=install` -- the `return_to` param is lost. Solution: persist `return_to` in `sessionStorage` alongside the existing `soleur_create_project` key before redirecting to GitHub, then read it back after the callback. This follows the existing pattern at line 1176-1183 of `connect-repo/page.tsx` where `pendingCreate` is stored in `sessionStorage`.
+
+```typescript
+// Before GitHub redirect (in handleGitHubRedirectContinue)
+try {
+  if (returnTo) {
+    sessionStorage.setItem("soleur_return_to", returnTo);
+  }
+} catch {
+  // sessionStorage unavailable
+}
+
+// After GitHub callback completes (in handleOpenDashboard)
+function handleOpenDashboard() {
+  let returnPath = "/dashboard";
+  try {
+    const stored = sessionStorage.getItem("soleur_return_to");
+    if (stored) {
+      sessionStorage.removeItem("soleur_return_to");
+      returnPath = safeReturnTo(stored);
+    }
+  } catch {
+    // sessionStorage unavailable
+  }
+  router.push(returnPath);
+}
+```
+
+**Relevant institutional learning:** `2026-04-02-defensive-state-clear-on-useeffect-remount.md` -- when navigating back to the settings page after project setup, React may restore stale state from bfcache. The settings page is a server component that re-fetches data on each navigation, so this is less of a concern, but the `ProjectSetupCard` client component should not cache repo status in local state.
+
+**Supabase PromiseLike pattern (constitution.md line 100):** The server-side query in `page.tsx` uses Supabase query builders which return `PromiseLike`, not `Promise`. Use `.then(onFulfilled, onRejected)` -- not `.then().catch()`. The existing code in the settings page already follows this pattern (single `.single()` call with destructured result).
 
 ## Acceptance Criteria
 

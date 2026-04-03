@@ -14,8 +14,9 @@ Source plan: `knowledge-base/project/plans/2026-04-03-fix-settings-project-setup
 - [ ] 2.3 Create `project-setup-card.tsx` client component with four visual states
 - [ ] 2.4 Update `settings-content.tsx` to accept repo props and render `ProjectSetupCard`
 - [ ] 2.5 Update `settings/page.tsx` to query `repo_url`, `repo_status`, `repo_last_synced_at` from users table
-- [ ] 2.6 Update `connect-repo/page.tsx` to read `return_to` query param and use it in `handleOpenDashboard` and `handleSkip`
-- [ ] 2.7 Verify all tests pass
+- [ ] 2.6 Add `safeReturnTo()` validation helper (allowlist `/dashboard` prefix, block `//` and `\`)
+- [ ] 2.7 Update `connect-repo/page.tsx`: read `return_to` from query params, persist in `sessionStorage` before GitHub redirect, read back in `handleOpenDashboard` and `handleSkip`
+- [ ] 2.8 Verify all tests pass
 
 ## Phase 3: Testing
 
