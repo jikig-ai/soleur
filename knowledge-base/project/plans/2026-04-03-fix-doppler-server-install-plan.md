@@ -316,7 +316,7 @@ After this change, the drift detection workflow will report `terraform_data.dopp
 ## Acceptance Criteria
 
 - [ ] Doppler CLI is installed on the Hetzner server and `doppler --version` returns a valid version (verified at apply time)
-- [ ] `DOPPLER_TOKEN` is set in `/etc/environment` on the server (verified at apply time)
+- [x] `DOPPLER_TOKEN` is NOT written to `/etc/environment` (security: world-readable file)
 - [ ] `/etc/default/webhook-deploy` exists with `DOPPLER_TOKEN` set, owned by `deploy:deploy`, mode `600` (verified at apply time)
 - [x] `webhook.service` includes `EnvironmentFile=/etc/default/webhook-deploy`
 - [x] `ci-deploy.sh` `resolve_env_file()` exits with error when Doppler is unavailable (no `.env` fallback)

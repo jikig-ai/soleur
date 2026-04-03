@@ -58,17 +58,15 @@ resource "terraform_data" "doppler_install" {
   provisioner "remote-exec" {
     inline = [
       "curl -Ls --tlsv1.2 --proto '=https' --retry 3 https://cli.doppler.com/install.sh | sh",
-      "grep -q '^DOPPLER_TOKEN=' /etc/environment && sed -i 's|^DOPPLER_TOKEN=.*|DOPPLER_TOKEN=${var.doppler_token}|' /etc/environment || echo 'DOPPLER_TOKEN=${var.doppler_token}' >> /etc/environment",
       "printf 'DOPPLER_TOKEN=%s\\n' '${var.doppler_token}' > /etc/default/webhook-deploy",
       "chmod 600 /etc/default/webhook-deploy",
       "chown deploy:deploy /etc/default/webhook-deploy",
       "doppler --version",
-      "DOPPLER_TOKEN=${var.doppler_token} doppler secrets --only-names --project soleur --config prd | head -5",
+      # Source token from the 600-permission file to avoid exposing it in /proc/<pid>/cmdline
+      "set -a; . /etc/default/webhook-deploy; set +a; doppler secrets --only-names --project soleur --config prd | head -5",
       "systemctl restart webhook || true",
     ]
   }
-
-  depends_on = [hcloud_server.web]
 }
 
 resource "hcloud_volume" "workspaces" {

@@ -125,10 +125,8 @@ runcmd:
 
   # Install Doppler CLI (for secrets injection)
   - curl -Ls --tlsv1.2 --proto "=https" --retry 3 https://cli.doppler.com/install.sh | sh
-  # Persist Doppler token for interactive SSH sessions
-  - echo "DOPPLER_TOKEN=${doppler_token}" >> /etc/environment
-  # Create dedicated env file for webhook systemd service
-  # (systemd does NOT source /etc/environment -- it uses EnvironmentFile directives)
+  # Create dedicated env file for webhook systemd service (chmod 600, deploy:deploy).
+  # Token is NOT written to /etc/environment (world-readable) -- only this restricted file.
   - printf 'DOPPLER_TOKEN=%s\n' '${doppler_token}' > /etc/default/webhook-deploy
   - chmod 600 /etc/default/webhook-deploy
   - chown deploy:deploy /etc/default/webhook-deploy
@@ -200,8 +198,8 @@ runcmd:
   # Pull and run container (secrets from Doppler -- no .env fallback)
   - docker pull ${image_name}
   - |
-    DOPPLER_TOKEN="${doppler_token}"
-    export DOPPLER_TOKEN
+    # Source token from the restricted env file (avoids exposing it in /proc/<pid>/cmdline)
+    set -a; . /etc/default/webhook-deploy; set +a
     TMPENV=$(mktemp /tmp/doppler-env.XXXXXX)
     chmod 600 "$TMPENV"
     doppler secrets download --no-file --format docker --project soleur --config prd > "$TMPENV"
