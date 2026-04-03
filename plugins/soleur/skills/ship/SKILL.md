@@ -225,7 +225,11 @@ Then run the project's test suite:
 bun test
 ```
 
-**If tests fail:** Stop and fix before proceeding.
+**If tests fail:**
+
+1. **Check if failures are pre-existing:** Run the same test command on an unmodified checkout (or compare failure count/names with main). If the exact same tests fail on main, the failures are pre-existing.
+2. **If failures are caused by this branch:** Stop and fix before proceeding.
+3. **If failures are pre-existing:** Create a GitHub issue to track them (`gh issue create --title "fix: N pre-existing test failures in <app>" --milestone "Post-MVP / Later" --label bug`), then continue. Do not silently bypass pre-existing failures — a red test suite normalizes breakage and masks future regressions. **Why:** In #1411, 71 pre-existing web-platform test failures were silently bypassed during ship. The tracking issue (#1413) was only created after the founder noticed post-session.
 
 ## Phase 5: Final Checklist
 
