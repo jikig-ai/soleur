@@ -643,6 +643,75 @@ Poll every 10 seconds until state is `MERGED`.
 
    **Why this matters:** The founder is a solo operator. Every "please run this manually" is a context switch. `gh workflow run` exists — use it. Modified workflows are equally risky — a prompt change, a new step, or a timeout bump can all cause failures that are invisible without a live run. **Why `AM` not just `A`:** In #1126, a modified workflow (new Steps 5.5/5.6 in growth audit) was merged without validation because the ship skill only checked for new files.
 
+3.5. **Follow-Through: detect unchecked external dependencies and create tracking issues.** Scan the merged PR body for unchecked test plan items marked with the ⏳ emoji. For each detected item, create a GitHub issue so external dependencies are tracked and monitored after the session ends.
+
+   **Step 1:** Read the PR body. Use the PR number from Phase 6:
+
+   ```bash
+   gh pr view <PR_NUMBER> --json body --jq .body
+   ```
+
+   **Step 2:** Scan the body for lines matching unchecked items with the ⏳ marker. Match this pattern (both lowercase `x` and uppercase `X` mean checked — skip those):
+
+- Unchecked with marker: `- [ ] ⏳ <description>` → **create issue**
+- Checked (lowercase): `- [x] ⏳ <description>` → skip
+- Checked (uppercase): `- [X] ⏳ <description>` → skip
+- No marker: `- [ ] <description>` → skip
+
+   If zero unchecked ⏳ items are found, skip to Step 4 (cleanup) silently.
+
+   **Step 3:** For each detected item, create a tracking issue.
+
+   First, ensure labels exist:
+
+   ```bash
+   gh label create "follow-through" --description "External dependency awaiting verification" --color "C5DEF5" 2>/dev/null || true
+   gh label create "needs-attention" --description "SLA exceeded, requires human action" --color "D93F0B" 2>/dev/null || true
+   ```
+
+   Then read `knowledge-base/product/roadmap.md` to determine the appropriate milestone. Default to "Post-MVP / Later" if unclear.
+
+   For each item, write the issue body to a temp file (do NOT use heredocs in this step — write with `{ echo "..."; } > /tmp/follow-through-body.md`), then create the issue:
+
+   ```bash
+   gh issue create --title "follow-through: <ITEM_DESCRIPTION>" --label "follow-through" --milestone "<MILESTONE>" --body-file /tmp/follow-through-body.md
+   ```
+
+   Replace `<ITEM_DESCRIPTION>` with the text after the ⏳ emoji (trimmed). Replace `<MILESTONE>` with the value from the roadmap or "Post-MVP / Later".
+
+   **Issue body template** (write to the temp file):
+
+   ````text
+   ## Follow-Through Item
+
+   <ITEM_DESCRIPTION>
+
+   **Source PR:** #<PR_NUMBER>
+   **Created by:** /ship Phase 7 Step 3.5
+   **Created:** <YYYY-MM-DD>
+
+   ## Verification
+
+   ```yaml
+   type: manual
+   sla_business_days: 5
+   ```
+
+   To enable automated verification, edit the YAML block above. Supported types:
+
+   - `http-200` — add `url: https://example.com`
+   - `dns-txt` — add `domain: example.com` and `expected: verification-string`
+   - `dns-a` — add `domain: example.com` and `expected: 1.2.3.4`
+
+   ## Status
+
+   Awaiting verification. The daily follow-through monitor will check this issue.
+   ````
+
+   **Step 4:** Report: "Created N follow-through issue(s): #X, #Y, #Z"
+
+   **Why this matters:** PR #1398 (Google OAuth brand verification) had no tracking mechanism after the session ended. External dependencies that outlive a session — DNS propagation, app store reviews, certificate issuance, brand verification — get forgotten without automated tracking. See [#1433](https://github.com/jikig-ai/soleur/issues/1433).
+
 4. Clean up worktree and local branch:
 
    Navigate to the repository root directory, then run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged`.

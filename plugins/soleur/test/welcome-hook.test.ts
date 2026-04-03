@@ -5,28 +5,34 @@ import { tmpdir } from "os";
 
 const HOOK_PATH = join(import.meta.dir, "../hooks/welcome-hook.sh");
 
+// Build a clean env excluding all GIT_* variables that lefthook injects.
+// Both git init and the hook must use this env — otherwise GIT_DIR from
+// the parent process causes git to resolve the wrong repository.
+function gitCleanEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, val] of Object.entries(process.env)) {
+    if (!key.startsWith("GIT_") && val !== undefined) env[key] = val;
+  }
+  return env;
+}
+
 function createTempGitRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "welcome-hook-test-"));
-  // Unset git env vars so git init creates a standalone repo,
-  // not one linked to the parent (lefthook sets GIT_DIR in pre-commit).
-  Bun.spawnSync(
-    ["bash", "-c", `unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE; git init "${dir}"`],
-    { stdout: "ignore", stderr: "ignore" },
-  );
+  Bun.spawnSync(["git", "init", dir], {
+    env: gitCleanEnv(),
+    stdout: "ignore",
+    stderr: "ignore",
+  });
   return dir;
 }
 
 function runHook(cwd: string): { exitCode: number; stdout: string; stderr: string } {
-  // Unset git env vars so git rev-parse resolves to the temp dir,
-  // not the parent repo (lefthook sets these in pre-commit context).
-  const result = Bun.spawnSync(
-    ["bash", "-c", `unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE; bash "${HOOK_PATH}"`],
-    {
-      cwd,
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  );
+  const result = Bun.spawnSync(["bash", HOOK_PATH], {
+    cwd,
+    env: gitCleanEnv(),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   return {
     exitCode: result.exitCode,
     stdout: result.stdout.toString(),
