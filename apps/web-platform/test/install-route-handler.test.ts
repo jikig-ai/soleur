@@ -6,7 +6,7 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 
 const mockGetUser = vi.fn();
 const mockServiceFrom = vi.fn();
-const mockServiceSchema = vi.fn();
+const mockAdminGetUserById = vi.fn();
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
@@ -14,7 +14,7 @@ vi.mock("@/lib/supabase/server", () => ({
   }),
   createServiceClient: () => ({
     from: mockServiceFrom,
-    schema: mockServiceSchema,
+    auth: { admin: { getUserById: mockAdminGetUserById } },
   }),
 }));
 
@@ -66,7 +66,7 @@ describe("POST /api/repo/install — identity resolution", () => {
     });
   });
 
-  test("succeeds when user.identities is null but auth.identities has GitHub record", async () => {
+  test("succeeds when user.identities is null but admin API has GitHub record", async () => {
     mockGetUser.mockResolvedValue({
       data: {
         user: {
@@ -77,21 +77,16 @@ describe("POST /api/repo/install — identity resolution", () => {
       },
     });
 
-    mockServiceSchema.mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            eq: vi.fn().mockReturnValue({
-              maybeSingle: vi.fn().mockResolvedValue({
-                data: {
-                  identity_data: { user_name: "deruelle" },
-                },
-                error: null,
-              }),
-            }),
-          }),
-        }),
-      }),
+    mockAdminGetUserById.mockResolvedValue({
+      data: {
+        user: {
+          id: "user-abc",
+          identities: [
+            { provider: "email", identity_data: {} },
+            { provider: "github", identity_data: { user_name: "deruelle" } },
+          ],
+        },
+      },
     });
 
     const res = await POST(makeRequest({ installationId: 100 }));
@@ -100,7 +95,7 @@ describe("POST /api/repo/install — identity resolution", () => {
     expect(body.ok).toBe(true);
   });
 
-  test("returns 403 when no GitHub identity in auth.identities table", async () => {
+  test("returns 403 when no GitHub identity found via admin API", async () => {
     mockGetUser.mockResolvedValue({
       data: {
         user: {
@@ -111,19 +106,15 @@ describe("POST /api/repo/install — identity resolution", () => {
       },
     });
 
-    mockServiceSchema.mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            eq: vi.fn().mockReturnValue({
-              maybeSingle: vi.fn().mockResolvedValue({
-                data: null,
-                error: null,
-              }),
-            }),
-          }),
-        }),
-      }),
+    mockAdminGetUserById.mockResolvedValue({
+      data: {
+        user: {
+          id: "user-xyz",
+          identities: [
+            { provider: "email", identity_data: {} },
+          ],
+        },
+      },
     });
 
     const res = await POST(makeRequest({ installationId: 100 }));
@@ -132,42 +123,54 @@ describe("POST /api/repo/install — identity resolution", () => {
     expect(body.error).toMatch(/no github identity/i);
   });
 
-  test("succeeds when user.identities array has GitHub provider (regression)", async () => {
+  test("succeeds when admin API returns GitHub identity (standard flow)", async () => {
     mockGetUser.mockResolvedValue({
       data: {
         user: {
           id: "user-def",
           identities: [
-            {
-              provider: "github",
-              identity_data: { user_name: "alice" },
-            },
+            { provider: "github", identity_data: { user_name: "alice" } },
           ],
           app_metadata: { providers: ["github"] },
         },
       },
     });
 
-    mockServiceSchema.mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            eq: vi.fn().mockReturnValue({
-              maybeSingle: vi.fn().mockResolvedValue({
-                data: {
-                  identity_data: { user_name: "alice" },
-                },
-                error: null,
-              }),
-            }),
-          }),
-        }),
-      }),
+    mockAdminGetUserById.mockResolvedValue({
+      data: {
+        user: {
+          id: "user-def",
+          identities: [
+            { provider: "github", identity_data: { user_name: "alice" } },
+          ],
+        },
+      },
     });
 
     const res = await POST(makeRequest({ installationId: 100 }));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.ok).toBe(true);
+  });
+
+  test("returns 403 when admin getUserById returns null user", async () => {
+    mockGetUser.mockResolvedValue({
+      data: {
+        user: {
+          id: "user-missing",
+          identities: null,
+          app_metadata: { providers: ["email"] },
+        },
+      },
+    });
+
+    mockAdminGetUserById.mockResolvedValue({
+      data: { user: null },
+    });
+
+    const res = await POST(makeRequest({ installationId: 100 }));
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error).toMatch(/no github identity/i);
   });
 });
