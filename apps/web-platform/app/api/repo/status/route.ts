@@ -21,7 +21,7 @@ export async function GET() {
   const serviceClient = createServiceClient();
   const { data: userData, error: fetchError } = await serviceClient
     .from("users")
-    .select("repo_url, repo_status, repo_last_synced_at, workspace_path")
+    .select("repo_url, repo_status, repo_last_synced_at, workspace_path, repo_error")
     .eq("id", user.id)
     .single();
 
@@ -56,5 +56,6 @@ export async function GET() {
     repoName,
     lastSyncedAt: userData.repo_last_synced_at ?? null,
     hasKnowledgeBase,
+    errorMessage: status === "error" ? (userData.repo_error ?? null) : null,
   });
 }
