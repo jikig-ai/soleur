@@ -876,8 +876,10 @@ function ReadyState({
 // ---------------------------------------------------------------------------
 function FailedState({
   onRetry,
+  errorMessage,
 }: {
   onRetry: () => void;
+  errorMessage?: string | null;
 }) {
   return (
     <div className="mx-auto max-w-lg space-y-8 text-center">
@@ -894,6 +896,13 @@ function FailedState({
           temporary issue.
         </p>
       </div>
+
+      {errorMessage && (
+        <Card className="text-left">
+          <h3 className="mb-2 text-sm font-medium text-neutral-200">Error details</h3>
+          <p className="text-sm text-neutral-400 font-mono break-all">{errorMessage}</p>
+        </Card>
+      )}
 
       <Card className="text-left">
         <h3 className="mb-3 text-sm font-medium text-neutral-200">What you can do</h3>
@@ -999,6 +1008,7 @@ export default function ConnectRepoPage() {
   const [reposLoading, setReposLoading] = useState(false);
   const [connectedRepoName, setConnectedRepoName] = useState("");
   const [setupSteps, setSetupSteps] = useState<SetupStep[]>(SETUP_STEPS_TEMPLATE);
+  const [setupError, setSetupError] = useState<string | null>(null);
   const [pendingCreate, setPendingCreate] = useState<{
     name: string;
     isPrivate: boolean;
@@ -1148,10 +1158,12 @@ export default function ConnectRepoPage() {
           body: JSON.stringify({ repoUrl }),
         });
         if (!res.ok) {
+          if (stepTimerRef.current) clearInterval(stepTimerRef.current);
           setState("failed");
           return;
         }
       } catch {
+        if (stepTimerRef.current) clearInterval(stepTimerRef.current);
         setState("failed");
         return;
       }
@@ -1186,6 +1198,7 @@ export default function ConnectRepoPage() {
           } else if (data.status === "error") {
             if (pollRef.current) clearInterval(pollRef.current);
             if (stepTimerRef.current) clearInterval(stepTimerRef.current);
+            setSetupError(data.errorMessage ?? null);
             setState("failed");
           }
         } catch {
@@ -1279,6 +1292,7 @@ export default function ConnectRepoPage() {
   }
 
   function handleRetry() {
+    setSetupError(null);
     setState("choose");
   }
 
@@ -1344,7 +1358,7 @@ export default function ConnectRepoPage() {
             onContinue={handleOpenDashboard}
           />
         )}
-        {state === "failed" && <FailedState onRetry={handleRetry} />}
+        {state === "failed" && <FailedState onRetry={handleRetry} errorMessage={setupError} />}
         {state === "interrupted" && (
           <InterruptedState
             onResume={handleResume}

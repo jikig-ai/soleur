@@ -170,13 +170,13 @@ Reproduce the setup flow after fixes are deployed. Verify setup completes succes
 
 ## Acceptance Criteria
 
-- [ ] The actual root cause is identified via reproduction (Phase 0)
-- [ ] Each step of `provisionWorkspaceWithRepo` has individual error wrapping with git stderr capture
-- [ ] Workspace provisioning errors are reported to Sentry via the setup route `.catch()` handler
-- [ ] Step animation timer is cleared when setup fails at the POST stage
-- [ ] Error details are stored in the `users` table (`repo_error` column) when setup fails
-- [ ] The `/api/repo/status` endpoint returns `errorMessage` when status is "error"
-- [ ] The failure page displays a specific error message when available
+- [x] The actual root cause is identified via reproduction (Phase 0)
+- [x] Each step of `provisionWorkspaceWithRepo` has individual error wrapping with git stderr capture
+- [x] Workspace provisioning errors are reported to Sentry via the setup route `.catch()` handler
+- [x] Step animation timer is cleared when setup fails at the POST stage
+- [x] Error details are stored in the `users` table (`repo_error` column) when setup fails
+- [x] The `/api/repo/status` endpoint returns `errorMessage` when status is "error"
+- [x] The failure page displays a specific error message when available
 - [ ] The setup flow completes successfully for at least one test repository
 
 ## Test Scenarios
