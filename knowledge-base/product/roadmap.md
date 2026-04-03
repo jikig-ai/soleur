@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-04-03
 last_reviewed: 2026-04-03
-review_cadence: monthly
+review_cadence: weekly
 owner: CPO
 depends_on:
   - knowledge-base/product/business-validation.md
@@ -73,10 +73,10 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 |-----------|--------|
 | Phase 1 (Close the Loop) | Complete. Milestone closed. All 15 issues closed. |
 | Phase 2 (Secure for Beta) | Near-complete. 13/14 items done. Remaining: #1375 (onboarding walkthrough). |
-| Phase 3 (Make it Sticky) | In progress. 12 open, 4 closed. |
-| Phase 4 (Validate + Scale) | Not started. 8 open, 7 closed (pre-phase marketing gate items closed). |
+| Phase 3 (Make it Sticky) | In progress. 11 open, 2 closed. |
+| Phase 4 (Validate + Scale) | Not started. 14 open, 7 closed (6 issues added in 2026-04-03 review for missing rows 4.1–4.5, 4.10). |
 | Phase 5 (Desktop Native App) | Defined. 5 issues created (#1423-#1429). Trigger-gated on user demand. |
-| Post-MVP / Later | 51 open, 72 closed. |
+| Post-MVP / Later | 56 open, 75 closed. |
 | Beta users | 0 |
 | Pricing gates passed | 0 of 5 |
 
@@ -218,9 +218,9 @@ Before recruiting founders, all public surfaces must reflect the cloud platform 
 | M1 | Update brand guide positioning (remove plugin framing, cloud platform as primary) | 30 min | Done — [#1004](https://github.com/jikig-ai/soleur/issues/1004) |
 | M2 | Update homepage hero subtitle + meta description (remove "plugin" from meta descriptions) | 30 min | Done — [#1129](https://github.com/jikig-ai/soleur/issues/1129) |
 | M3 | Update marketing strategy for cloud pivot | 2 hours | Not started — [#1051](https://github.com/jikig-ai/soleur/issues/1051) |
-| M4 | Draft recruitment messaging templates per channel | 2 hours | Not started |
-| M5 | Update Getting Started page (cloud platform primary, CLI plugin secondary) | 2 hours | Not started |
-| M6 | Standardize agent/skill counts across all surfaces | 2 hours | Not started |
+| M4 | Draft recruitment messaging templates per channel | 2 hours | Not started — [#1445](https://github.com/jikig-ai/soleur/issues/1445) |
+| M5 | Update Getting Started page (cloud platform primary, CLI plugin secondary) | 2 hours | Not started — [#1446](https://github.com/jikig-ai/soleur/issues/1446) |
+| M6 | Standardize agent/skill counts across all surfaces | 2 hours | Not started — [#1447](https://github.com/jikig-ai/soleur/issues/1447) |
 | M7 | Exclude feed.xml from sitemap.xml | 15 min | Done — [#1122](https://github.com/jikig-ai/soleur/issues/1122) |
 | M8 | Add case studies to Atom feed entries | 30 min | Done — [#1123](https://github.com/jikig-ai/soleur/issues/1123) |
 | M9 | Fix author URL to point to About page (blocked by About page creation) | 30 min | Done — [#1124](https://github.com/jikig-ai/soleur/issues/1124) |
@@ -237,9 +237,9 @@ Before recruiting founders, the platform must handle multiple users signing up a
 
 | # | Item | Status |
 |---|------|--------|
-| MU1 | Signup provisions a workspace (git clone + plugin install per user) | Depends on P1 item 1.10 |
-| MU2 | BYOK encryption works per-tenant (each user's API key isolated) | Existing — verify |
-| MU3 | Workspace isolation at process level (container isolation is P4 hardening, but basic isolation must work) | Existing bubblewrap sandbox — verify with cross-workspace integration test |
+| MU1 | Signup provisions a workspace (git clone + plugin install per user) | [#1448](https://github.com/jikig-ai/soleur/issues/1448) Depends on P1 item 1.10 — verify |
+| MU2 | BYOK encryption works per-tenant (each user's API key isolated) | [#1449](https://github.com/jikig-ai/soleur/issues/1449) Existing — verify |
+| MU3 | Workspace isolation at process level (container isolation is P4 hardening, but basic isolation must work) | [#1450](https://github.com/jikig-ai/soleur/issues/1450) Existing bubblewrap sandbox — verify with cross-workspace integration test |
 
 **Gate:** All three must pass before any recruitment outreach.
 
@@ -251,16 +251,16 @@ Before recruiting founders, the platform must handle multiple users signing up a
 
 | # | Feature | Priority | Trigger | Status |
 |---|---------|----------|---------|--------|
-| 4.1 | Recruit 10 solo founders (mixed channels) | P1 | Phase 2 + Marketing Gate + Multi-User Gate complete | Not started |
-| 4.2 | Problem interviews (no demo) | P1 | 10 founders recruited | Not started |
-| 4.3 | Guided onboarding with top 5 | P1 | 5+ pass problem interviews | Not started |
-| 4.4 | 2-week unassisted usage tracking | P1 | Onboarding complete | Not started |
-| 4.5 | Exit interviews + willingness-to-pay | P1 | 2 weeks elapsed | Not started |
+| 4.1 | Recruit 10 solo founders (mixed channels) | P1 | Phase 2 + Marketing Gate + Multi-User Gate complete | [#1439](https://github.com/jikig-ai/soleur/issues/1439) Not started |
+| 4.2 | Problem interviews (no demo) | P1 | 10 founders recruited | [#1440](https://github.com/jikig-ai/soleur/issues/1440) Not started |
+| 4.3 | Guided onboarding with top 5 | P1 | 5+ pass problem interviews | [#1441](https://github.com/jikig-ai/soleur/issues/1441) Not started |
+| 4.4 | 2-week unassisted usage tracking | P1 | Onboarding complete | [#1442](https://github.com/jikig-ai/soleur/issues/1442) Not started |
+| 4.5 | Exit interviews + willingness-to-pay | P1 | 2 weeks elapsed | [#1443](https://github.com/jikig-ai/soleur/issues/1443) Not started |
 | 4.6 | Container-per-workspace isolation | P1 | 5+ concurrent users | [#673](https://github.com/jikig-ai/soleur/issues/673) |
 | 4.7 | Plan-based agent concurrency enforcement (slot limits per subscription tier) | P1 | Before public launch | [#1162](https://github.com/jikig-ai/soleur/issues/1162), [#673](https://github.com/jikig-ai/soleur/issues/673) |
 | 4.8 | Resource monitoring (CPU/RAM per workspace) | P1 | Before beta invites | [#673](https://github.com/jikig-ai/soleur/issues/673) |
 | 4.9 | Monitoring + error tracking | P2 | 10+ users | [#673](https://github.com/jikig-ai/soleur/issues/673) |
-| 4.10 | Stripe live mode activation | P1 | 4 of 5 pricing gates pass | Not started |
+| 4.10 | Stripe live mode activation | P1 | 4 of 5 pricing gates pass | [#1444](https://github.com/jikig-ai/soleur/issues/1444) Not started |
 
 **Recruitment channels:** Claude Code Discord, GitHub (developers with business-operations repos), IndieHackers, X/Twitter solopreneur network, direct network.
 
@@ -362,13 +362,13 @@ Full analysis: `knowledge-base/product/pricing-strategy.md`.
 
 ## Review Cadence
 
-Monthly CPO review. Pre-product-market-fit: the landscape changes faster than a quarter allows.
+Weekly CPO review (every Monday). Pre-product-market-fit: the landscape changes faster than a month allows.
 
-- **Monthly:** Review phase progress. Update statuses. Re-assess priorities based on user signal.
+- **Weekly:** Review phase progress. Update statuses. Re-assess priorities based on user signal.
 - **After each beta cohort:** Update validation findings. Adjust Phase 3 scope.
 - **Quarterly:** Full roadmap revision. Cross-reference with competitive intelligence and marketing strategy.
 
-Next review: 2026-04-23.
+Next review: 2026-04-10.
 
 ---
 
