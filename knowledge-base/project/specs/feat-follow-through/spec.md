@@ -24,11 +24,11 @@ When `/ship` produces a PR with unchecked test plan items that depend on externa
 
 ## Functional Requirements
 
-- **FR1:** `/ship` Phase 7.5 parses PR body for unchecked test plan items marked with ⏳ emoji
+- **FR1:** `/ship` Phase 7 Step 3.5 parses PR body for unchecked test plan items marked with ⏳ emoji
 - **FR2:** For each detected item, creates a GitHub issue with `follow-through` label, structured body (description, source PR, SLA, predicate type)
 - **FR3:** A daily cron workflow (`scheduled-follow-through.yml`) scans all open `follow-through` issues
 - **FR4:** For issues with a predicate defined, the agent runs the check and auto-closes if verification passes
-- **FR5:** For issues within SLA, the agent comments a status update
+- **FR5:** For issues within SLA with no state change, the agent takes no action (silent monitoring — comments only on state transitions)
 - **FR6:** For issues exceeding SLA, the agent adds `needs-attention` label and @mentions the user
 - **FR7:** Supported predicate types at launch: `manual`, `http-200`, `dns-txt`, `dns-a`
 
