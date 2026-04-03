@@ -2,9 +2,23 @@
 title: "fix: resolve web-platform infrastructure drift — apply terraform_data.doppler_install"
 type: fix
 date: 2026-04-03
+deepened: 2026-04-03
 ---
 
 # fix: resolve web-platform infrastructure drift — apply terraform_data.doppler_install
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-03
+**Sections enhanced:** 4 (Root Cause, Phase 1, Risk Assessment, Test Scenarios)
+**Research sources:** Context7 Terraform docs, institutional learnings (3 files), local terraform plan confirmation
+
+### Key Improvements
+
+1. Added SSH connectivity prerequisite check (Phase 0) before terraform apply to prevent 5-minute timeout failures
+2. Documented `triggers_replace` token rotation behavior -- future token rotations will re-trigger the provisioner automatically
+3. Added rollback procedure and failure mode table for provisioner mid-execution failures
+4. Added future drift prevention note for the `/ship` skill's Phase 7 enforcement
 
 ## Overview
 
@@ -37,6 +51,15 @@ The `terraform_data.doppler_install` resource uses a `remote-exec` provisioner t
 
 This cannot run in CI (the drift workflow uses a dummy SSH key), so it must be applied locally with real SSH access.
 
+### Research Insights: terraform_data Lifecycle
+
+The `terraform_data` resource (HashiCorp docs) is the recommended replacement for `null_resource` for one-time provisioning operations not tied to resource creation. Key behavior:
+
+- **triggers_replace:** Set to `sha256(var.doppler_token)`. This means the provisioner will re-execute if the Doppler service token is rotated. This is correct behavior -- token rotation should update `/etc/default/webhook-deploy` on the server.
+- **State tracking:** Once applied, Terraform stores the resource in state with the trigger hash. Subsequent `terraform plan` runs will show no changes unless the token changes.
+- **Idempotency:** The remote-exec commands are idempotent -- reinstalling Doppler CLI overwrites the existing binary, writing the token file overwrites the existing file, and `systemctl restart` is always safe.
+- **CI limitation:** The drift workflow generates a dummy SSH key (`ssh-keygen -t ed25519 -f /tmp/ci_ssh_key`), so the `connection` block's `private_key` will never match the server's authorized keys. This means drift detection will always show this resource as "to create" until it is applied locally. After the first apply, the resource exists in state and subsequent plans show no changes (the SSH connection is only evaluated during apply, not plan).
+
 ## Proposed Solution
 
 Run `terraform apply` locally from the worktree to execute the `terraform_data.doppler_install` provisioner. This is a one-time operation that will:
@@ -47,6 +70,22 @@ Run `terraform apply` locally from the worktree to execute the `terraform_data.d
 4. Restart the webhook service
 
 After apply, the drift detection workflow will report exit code 0 (no changes) on the next run.
+
+### Phase 0: Prerequisites Check
+
+```bash
+cd apps/web-platform/infra
+
+# Verify SSH connectivity before attempting terraform apply.
+# terraform_data with remote-exec will timeout (default 5min) on SSH failure,
+# wasting time and producing confusing errors.
+SERVER_IP=$(AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain -p soleur -c prd_terraform) \
+  AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain -p soleur -c prd_terraform) \
+  terraform output -raw server_ipv4)
+ssh -o ConnectTimeout=5 -o BatchMode=yes root@"$SERVER_IP" 'echo "SSH OK"'
+```
+
+If SSH fails, check: (1) local SSH key exists at `~/.ssh/id_ed25519`, (2) server firewall allows the current IP in `admin_ips`, (3) server is running (`hcloud server list`).
 
 ### Phase 1: Apply Terraform
 
@@ -64,6 +103,8 @@ doppler run -p soleur -c prd_terraform -- \
     -var="ssh_private_key_path=$HOME/.ssh/id_ed25519" \
     -target=terraform_data.doppler_install
 ```
+
+**Rollback if provisioner fails mid-execution:** If the provisioner fails partway through (e.g., Doppler install succeeds but token write fails), the resource will NOT be recorded in state (Terraform only records on full success). Re-running `terraform apply` with the same target will retry from scratch. The commands are idempotent, so partial application is safe to retry.
 
 ### Phase 2: Verify Clean State
 
@@ -102,12 +143,12 @@ gh issue close 1505 --comment "Resolved — terraform apply executed doppler_ins
 
 ## Acceptance Criteria
 
-- [ ] `terraform apply -target=terraform_data.doppler_install` completes successfully
-- [ ] `terraform plan` returns exit code 0 (no drift)
-- [ ] Doppler CLI is installed on the Hetzner server (`doppler --version` succeeds via SSH)
-- [ ] `/etc/default/webhook-deploy` exists with correct permissions (600, deploy:deploy)
-- [ ] Webhook service is running and uses Doppler for secrets
-- [ ] Issue #1505 is closed
+- [x] `terraform apply -target=terraform_data.doppler_install` completes successfully
+- [x] `terraform plan` returns exit code 0 (no drift)
+- [x] Doppler CLI is installed on the Hetzner server (`doppler --version` succeeds via SSH)
+- [x] `/etc/default/webhook-deploy` exists with correct permissions (600, deploy:deploy)
+- [x] Webhook service is running and uses Doppler for secrets
+- [x] Issue #1505 is closed
 
 ## Test Scenarios
 
@@ -116,6 +157,10 @@ gh issue close 1505 --comment "Resolved — terraform apply executed doppler_ins
 - Given the service token is written to `/etc/default/webhook-deploy`, when `systemctl restart webhook` runs, then the webhook process can access Doppler secrets
 - Given terraform apply completed, when `terraform plan -detailed-exitcode` runs, then exit code is 0
 - **Drift workflow verify:** `gh workflow run scheduled-terraform-drift.yml`, then poll until complete, then verify web-platform job shows steps 9-11 (issue creation, Discord) as skipped
+
+### Future Drift Prevention Note
+
+This drift occurred because PR #1496 added a Terraform resource that requires `terraform apply` to take effect, but the apply was deferred to a post-merge step that was never executed. The existing AGENTS.md rule (constitution line 122) states: "When adding Terraform variables without defaults, provision the corresponding Doppler secret before merging." A parallel rule should be considered: **when adding `terraform_data` resources with provisioners that cannot run in CI, the apply must be completed in the same session as the merge.** The `/ship` skill's Phase 7 (post-merge verification) is the enforcement point.
 
 ## Domain Review
 
@@ -141,6 +186,16 @@ No cross-domain implications detected — infrastructure operations task (applyi
 ### Risk Assessment
 
 **Risk: Low.** This is applying an already-reviewed, already-merged Terraform resource. The `terraform_data` resource with `remote-exec` is idempotent in effect (reinstalling Doppler CLI is safe, overwriting the token file is safe). The `-target` flag limits the apply to only this single resource. No existing resources are modified or destroyed.
+
+**Failure modes and mitigations:**
+
+| Failure Mode | Impact | Mitigation |
+|---|---|---|
+| SSH connection refused | Apply fails, no state change | Phase 0 pre-check catches this |
+| Doppler CLI install fails | Partial provisioning, no state change | Retry (idempotent) |
+| Token write fails (permission) | Server has Doppler but no token | SSH in manually, write token |
+| Webhook restart fails | Service temporarily down | `systemctl status webhook` in Phase 4 catches this |
+| Token in Doppler rotated since PR merge | New token written (correct behavior) | triggers_replace detects hash change |
 
 ## References
 
