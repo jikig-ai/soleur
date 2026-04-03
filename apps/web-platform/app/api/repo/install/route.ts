@@ -47,15 +47,32 @@ export async function POST(request: Request) {
   // NOTE: PostgREST does not expose the auth schema, so querying
   // auth.identities via .schema("auth") silently fails in production.
   const serviceClient = createServiceClient();
-  const { data: adminUser } = await serviceClient.auth.admin.getUserById(
-    user.id,
-  );
-  const githubIdentity = adminUser?.user?.identities?.find(
-    (i) => i.provider === "github",
-  );
-  const githubLogin = githubIdentity?.identity_data?.user_name as
-    | string
-    | undefined;
+  let githubLogin: string | undefined;
+  try {
+    const { data: adminUser, error: adminError } =
+      await serviceClient.auth.admin.getUserById(user.id);
+    if (adminError) {
+      logger.error(
+        { err: adminError, userId: user.id },
+        "auth.admin.getUserById failed",
+      );
+    }
+    const githubIdentity = adminUser?.user?.identities?.find(
+      (i) => i.provider === "github",
+    );
+    githubLogin = githubIdentity?.identity_data?.user_name as
+      | string
+      | undefined;
+  } catch (err) {
+    logger.error(
+      { err, userId: user.id },
+      "auth.admin.getUserById threw — check SUPABASE_SERVICE_ROLE_KEY and server connectivity",
+    );
+    return NextResponse.json(
+      { error: "Failed to resolve GitHub identity" },
+      { status: 500 },
+    );
+  }
 
   if (!githubLogin) {
     logger.warn(
