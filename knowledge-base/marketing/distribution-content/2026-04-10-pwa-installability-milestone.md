@@ -1,9 +1,9 @@
 ---
 title: "Platform Milestone: Soleur Is Now Installable on Any Device"
 type: milestone-announcement
-publish_date: "2026-03-29"
+publish_date: "2026-04-10"
 channels: discord, x, bluesky, linkedin-personal, linkedin-company
-status: draft
+status: scheduled
 pr_reference: "#1256"
 issue_reference: "#1042"
 roadmap_item: "Phase 1 item 1.6"
