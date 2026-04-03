@@ -1,21 +1,27 @@
 ---
-last_updated: 2026-03-30
+last_updated: 2026-04-03
 ---
 
 # Campaign Calendar
 
 Rolling view of content distributions. Auto-generated from `distribution-content/` frontmatter.
 
+## Upcoming
+
+| Title | Type | Publish Date | Channels | Status |
+|-------|------|-------------|----------|--------|
+| Vibe Coding vs Agentic Engineering: What Solo Founders Need to Know | pillar | 2026-04-07 (Tue) | discord, x, bluesky, linkedin-company | scheduled |
+| Platform Milestone: Soleur Is Now Installable on Any Device | milestone-announcement | 2026-04-10 (Thu) | discord, x, bluesky, linkedin-personal, linkedin-company | scheduled |
+| Soleur vs. Paperclip: Domain Intelligence vs. AI Company Orchestration | comparison | 2026-04-15 (Tue) | discord, x, bluesky, linkedin-company | scheduled |
+| Your AI Team Now Works From Your Actual Codebase | feature-launch | 2026-04-17 (Thu) | discord, x, bluesky, linkedin-personal, linkedin-company, indiehackers, reddit, hackernews | scheduled |
+
 ## Draft
 
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|-------------|----------|--------|
 | AI Agents for Solo Founders: The Definitive Guide | pillar | - | discord, x, bluesky, linkedin-company | draft |
-| From Scattered Positioning to a Full Brand Guide in Two Sessions | case-study | 2026-03-24 | discord, x, bluesky, linkedin-company | draft |
-| Platform Milestone: Soleur Is Now Installable on Any Device | milestone-announcement | 2026-03-29 | discord, x, bluesky, linkedin-personal, linkedin-company | draft |
+| From Scattered Positioning to a Full Brand Guide in Two Sessions | case-study | - | discord, x, bluesky, linkedin-company | draft |
 | Soleur vs. Polsia: Two Architectures for Running a Company with AI | pillar | - | discord, x, bluesky, linkedin-company | draft |
-| Vibe Coding vs Agentic Engineering: What Solo Founders Need to Know | pillar | 2026-03-24 | discord, x, bluesky, linkedin-company | draft |
-| Your AI Team Now Works From Your Actual Codebase | feature-launch | 2026-03-29 | discord, x, bluesky, linkedin-personal, linkedin-company, indiehackers, reddit, hackernews | draft |
 
 ## Published
 

@@ -1,9 +1,9 @@
 ---
 title: "Vibe Coding vs Agentic Engineering: What Solo Founders Need to Know"
 type: pillar
-publish_date: "2026-03-24"
+publish_date: "2026-04-07"
 channels: discord, x, bluesky, linkedin-company
-status: draft
+status: scheduled
 ---
 
 ## Discord
