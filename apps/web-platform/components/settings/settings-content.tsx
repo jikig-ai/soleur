@@ -1,11 +1,15 @@
 import { KeyRotationForm } from "./key-rotation-form";
 import { DeleteAccountDialog } from "./delete-account-dialog";
+import { ProjectSetupCard } from "./project-setup-card";
 
 interface SettingsContentProps {
   userEmail: string;
   hasApiKey: boolean;
   apiKeyProvider: string | null;
   apiKeyLastValidated: string | null;
+  repoUrl: string | null;
+  repoStatus: string;
+  repoLastSyncedAt: string | null;
 }
 
 export function SettingsContent({
@@ -13,10 +17,20 @@ export function SettingsContent({
   hasApiKey,
   apiKeyProvider,
   apiKeyLastValidated,
+  repoUrl,
+  repoStatus,
+  repoLastSyncedAt,
 }: SettingsContentProps) {
   return (
     <div className="mx-auto max-w-2xl space-y-10 px-4 py-10">
       <h1 className="mb-8 text-2xl font-semibold text-white">Settings</h1>
+
+      {/* Project Section */}
+      <ProjectSetupCard
+        repoUrl={repoUrl}
+        repoStatus={repoStatus}
+        repoLastSyncedAt={repoLastSyncedAt}
+      />
 
       {/* API Key Section */}
       <section>

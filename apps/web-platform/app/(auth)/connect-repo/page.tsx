@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Cormorant_Garamond, Inter } from "next/font/google";
+import { safeReturnTo } from "@/lib/safe-return-to";
 
 // ---------------------------------------------------------------------------
 // Fonts — scoped to this page only (layout.tsx is NOT modified)
@@ -1161,7 +1162,21 @@ export default function ConnectRepoPage() {
   }
 
   function handleSkip() {
-    router.push("/dashboard");
+    let returnPath = "/dashboard";
+    try {
+      const stored = sessionStorage.getItem("soleur_return_to");
+      if (stored) {
+        sessionStorage.removeItem("soleur_return_to");
+        returnPath = safeReturnTo(stored);
+      }
+    } catch {
+      // sessionStorage unavailable
+    }
+    if (returnPath === "/dashboard") {
+      // Also check URL param directly (no GitHub redirect happened)
+      returnPath = safeReturnTo(searchParams.get("return_to"));
+    }
+    router.push(returnPath);
   }
 
   function handleCreateSubmit(name: string, isPrivate: boolean) {
@@ -1181,6 +1196,15 @@ export default function ConnectRepoPage() {
       } catch {
         // sessionStorage unavailable — proceed anyway
       }
+    }
+    // Persist return_to so it survives the GitHub redirect
+    try {
+      const returnTo = searchParams.get("return_to");
+      if (returnTo) {
+        sessionStorage.setItem("soleur_return_to", returnTo);
+      }
+    } catch {
+      // sessionStorage unavailable
     }
     window.location.href = `https://github.com/apps/${GITHUB_APP_SLUG}/installations/new`;
   }
@@ -1216,7 +1240,17 @@ export default function ConnectRepoPage() {
   }
 
   function handleOpenDashboard() {
-    router.push("/dashboard");
+    let returnPath = "/dashboard";
+    try {
+      const stored = sessionStorage.getItem("soleur_return_to");
+      if (stored) {
+        sessionStorage.removeItem("soleur_return_to");
+        returnPath = safeReturnTo(stored);
+      }
+    } catch {
+      // sessionStorage unavailable
+    }
+    router.push(returnPath);
   }
 
   // ---------------------------------------------------------------------------

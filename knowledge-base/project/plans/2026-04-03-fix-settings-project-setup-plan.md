@@ -161,14 +161,14 @@ function handleOpenDashboard() {
 
 ## Acceptance Criteria
 
-- [ ] Settings page shows a "Project" section before the API Key section
-- [ ] When no project is connected, the section shows a "Set Up Project" button
-- [ ] Clicking "Set Up Project" navigates to `/connect-repo`
-- [ ] When a project is connected, the section shows the repo name and last synced date
-- [ ] When repo status is "error", the section shows an error state with retry option
-- [ ] After completing project setup from settings, user returns to settings (not dashboard)
-- [ ] Existing settings page tests still pass
-- [ ] New tests cover all four visual states of `ProjectSetupCard`
+- [x] Settings page shows a "Project" section before the API Key section
+- [x] When no project is connected, the section shows a "Set Up Project" button
+- [x] Clicking "Set Up Project" navigates to `/connect-repo`
+- [x] When a project is connected, the section shows the repo name and last synced date
+- [x] When repo status is "error", the section shows an error state with retry option
+- [x] After completing project setup from settings, user returns to settings (not dashboard)
+- [x] Existing settings page tests still pass
+- [x] New tests cover all four visual states of `ProjectSetupCard`
 
 ## Test Scenarios
 
