@@ -120,6 +120,13 @@ jobs:
             -f conclusion=success \
             -f "output[title]=Bot PR" \
             -f "output[summary]=Status metadata only, no dependency changes"
+          gh api "repos/${{ github.repository }}/check-runs" \
+            -f name=e2e \
+            -f head_sha="$COMMIT_SHA" \
+            -f status=completed \
+            -f conclusion=success \
+            -f "output[title]=Bot PR" \
+            -f "output[summary]=Status metadata only, no code changes"
 
           gh pr merge "$BRANCH" --squash --auto
 

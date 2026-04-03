@@ -157,8 +157,8 @@ The `integration_id: 15368` constraint ensures only `github-actions` (GITHUB_TOK
 
 ## Acceptance Criteria
 
-- [ ] `scheduled-content-publisher.yml` includes synthetic `e2e` check-run
-- [ ] `scheduled-weekly-analytics.yml` includes synthetic `e2e` check-run
+- [x] `scheduled-content-publisher.yml` includes synthetic `e2e` check-run
+- [x] `scheduled-weekly-analytics.yml` includes synthetic `e2e` check-run
 - [ ] CI Required ruleset (ID 14145388) lists `e2e` as a required status check
 - [ ] `integration_id: 15368` constraint is set on the `e2e` check
 - [ ] Existing open bot PRs are not stuck after activation
