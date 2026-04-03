@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { SettingsContent } from "@/components/settings/settings-content";
+import type { RepoStatus } from "@/components/settings/project-setup-card";
 
 export default async function SettingsPage() {
   const supabase = await createClient();
@@ -12,7 +13,7 @@ export default async function SettingsPage() {
     redirect("/login");
   }
 
-  // Fetch API key status
+  // Fetch API key status and repo status
   const service = createServiceClient();
   const { data: apiKey } = await service
     .from("api_keys")
@@ -22,12 +23,21 @@ export default async function SettingsPage() {
     .limit(1)
     .single();
 
+  const { data: repoData } = await service
+    .from("users")
+    .select("repo_url, repo_status, repo_last_synced_at")
+    .eq("id", user.id)
+    .single();
+
   return (
     <SettingsContent
       userEmail={user.email ?? ""}
       hasApiKey={!!apiKey}
       apiKeyProvider={apiKey?.provider ?? null}
       apiKeyLastValidated={apiKey?.updated_at ?? null}
+      repoUrl={repoData?.repo_url ?? null}
+      repoStatus={(repoData?.repo_status as RepoStatus) ?? "not_connected"}
+      repoLastSyncedAt={repoData?.repo_last_synced_at ?? null}
     />
   );
 }

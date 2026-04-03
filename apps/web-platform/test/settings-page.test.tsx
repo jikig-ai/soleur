@@ -149,6 +149,9 @@ describe("Settings page sections", () => {
         hasApiKey={false}
         apiKeyProvider={null}
         apiKeyLastValidated={null}
+        repoUrl={null}
+        repoStatus="not_connected"
+        repoLastSyncedAt={null}
       />,
     );
     expect(screen.getByText("API Key")).toBeInTheDocument();
@@ -164,6 +167,9 @@ describe("Settings page sections", () => {
         hasApiKey={false}
         apiKeyProvider={null}
         apiKeyLastValidated={null}
+        repoUrl={null}
+        repoStatus="not_connected"
+        repoLastSyncedAt={null}
       />,
     );
     expect(screen.getByText("Account")).toBeInTheDocument();
@@ -179,6 +185,9 @@ describe("Settings page sections", () => {
         hasApiKey={false}
         apiKeyProvider={null}
         apiKeyLastValidated={null}
+        repoUrl={null}
+        repoStatus="not_connected"
+        repoLastSyncedAt={null}
       />,
     );
     expect(screen.getByText(/no key configured/i)).toBeInTheDocument();
@@ -194,8 +203,52 @@ describe("Settings page sections", () => {
         hasApiKey={true}
         apiKeyProvider="anthropic"
         apiKeyLastValidated="2026-04-01T00:00:00Z"
+        repoUrl={null}
+        repoStatus="not_connected"
+        repoLastSyncedAt={null}
       />,
     );
     expect(screen.getByText(/provider:/i)).toBeInTheDocument();
+  });
+
+  it("renders 'Project' section heading", async () => {
+    const { SettingsContent } = await import(
+      "@/components/settings/settings-content"
+    );
+    render(
+      <SettingsContent
+        userEmail="test@example.com"
+        hasApiKey={false}
+        apiKeyProvider={null}
+        apiKeyLastValidated={null}
+        repoUrl={null}
+        repoStatus="not_connected"
+        repoLastSyncedAt={null}
+      />,
+    );
+    // Project section should appear — look for heading rendered by ProjectSetupCard
+    expect(screen.getByText("Project")).toBeInTheDocument();
+  });
+
+  it("renders Project section before API Key section", async () => {
+    const { SettingsContent } = await import(
+      "@/components/settings/settings-content"
+    );
+    render(
+      <SettingsContent
+        userEmail="test@example.com"
+        hasApiKey={false}
+        apiKeyProvider={null}
+        apiKeyLastValidated={null}
+        repoUrl={null}
+        repoStatus="not_connected"
+        repoLastSyncedAt={null}
+      />,
+    );
+    const headings = screen.getAllByRole("heading", { level: 2 });
+    const headingTexts = headings.map((h) => h.textContent);
+    expect(headingTexts.indexOf("Project")).toBeLessThan(
+      headingTexts.indexOf("API Key"),
+    );
   });
 });
