@@ -48,10 +48,10 @@
 
 ## Phase 3: Deployment Configuration
 
-- [ ] 3.1 Add `ARG NEXT_PUBLIC_GITHUB_APP_SLUG` to `apps/web-platform/Dockerfile` (Stage 2: builder, alongside existing `NEXT_PUBLIC_*` ARGs on lines 13-15)
-- [ ] 3.2 Add `NEXT_PUBLIC_GITHUB_APP_SLUG=${{ secrets.NEXT_PUBLIC_GITHUB_APP_SLUG }}` to `.github/workflows/reusable-release.yml` build-args section (lines 289-292)
-- [ ] 3.3 Add `NEXT_PUBLIC_GITHUB_APP_SLUG` as a GitHub Actions repository secret: `gh secret set NEXT_PUBLIC_GITHUB_APP_SLUG`
-- [ ] 3.4 Verify `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` are available at runtime via Doppler `prd` download (no Dockerfile changes needed for runtime env vars)
+- [x] 3.1 Add `ARG NEXT_PUBLIC_GITHUB_APP_SLUG` to `apps/web-platform/Dockerfile` (Stage 2: builder)
+- [x] 3.2 Add `NEXT_PUBLIC_GITHUB_APP_SLUG=${{ secrets.NEXT_PUBLIC_GITHUB_APP_SLUG }}` to `.github/workflows/reusable-release.yml` build-args section
+- [x] 3.3 Add `NEXT_PUBLIC_GITHUB_APP_SLUG` as a GitHub Actions repository secret (set via `gh secret set`)
+- [x] 3.4 Verified `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` in Doppler `prd` (runtime env vars, no Dockerfile changes needed)
 
 ## Phase 4: Verification
 
