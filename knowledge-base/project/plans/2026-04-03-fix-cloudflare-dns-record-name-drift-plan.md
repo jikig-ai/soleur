@@ -6,6 +6,32 @@ date: 2026-04-03
 
 # fix: use FQDN for Cloudflare DNS record name to prevent perpetual Terraform drift
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-03
+**Sections enhanced:** 2 (Proposed Solution, Prevention)
+**Research conducted:** Codebase-wide `@` pattern scan, learnings cross-reference, Cloudflare provider behavior verification
+
+### Key Improvements
+
+1. Confirmed no other `name = "@"` patterns exist in any `.tf` file across the repo -- this is the only instance
+2. Verified all other DNS records in both `web-platform` and `telegram-bridge` infra use explicit subdomain names, so no other drift risk exists
+3. Clarified that `terraform apply` is likely unnecessary post-merge -- the code change alone aligns config with remote state (plan should show exit code 0 without apply)
+
+### Codebase Scan Results
+
+All DNS records across both Terraform stacks:
+
+| File | Record Name | Risk |
+|---|---|---|
+| `web-platform/infra/dns.tf` | `"app"` | None -- subdomain |
+| `web-platform/infra/dns.tf` | `"deploy"` | None -- subdomain |
+| `web-platform/infra/dns.tf` | `"resend._domainkey"` | None -- subdomain |
+| `web-platform/infra/dns.tf` | `"send"` (x2) | None -- subdomain |
+| `web-platform/infra/dns.tf` | `"_dmarc"` | None -- subdomain |
+| `web-platform/infra/dns.tf` | `"@"` | **DRIFT** -- fix in this PR |
+| `telegram-bridge/infra/tunnel.tf` | `"deploy-bridge"` | None -- subdomain |
+
 ## Overview
 
 The scheduled Terraform drift detection workflow (run #23937776714) flagged infrastructure drift in `apps/web-platform/infra/`. The drift is a perpetual destroy-and-recreate plan on the `cloudflare_record.google_site_verification` TXT record, caused by a mismatch between the Terraform config (`name = "@"`) and how Cloudflare's API stores the record (`name = "soleur.ai"`).
@@ -98,6 +124,30 @@ The Cloudflare Terraform provider v4.x does not normalize `@` to the zone apex o
 ### Prevention
 
 This is a known Cloudflare provider behavior. Future zone-apex DNS records in Terraform should always use the FQDN (e.g., `"soleur.ai"`) rather than `"@"`. The learning from this session should be compounded.
+
+#### Research Insights
+
+**Cloudflare Provider Behavior:**
+
+- The Cloudflare Terraform provider v4.x passes `name` to the API as-is. The API normalizes `@` to the zone apex FQDN on storage. On read-back, the provider receives the FQDN, creating a permanent config-vs-state mismatch.
+- This is specific to zone-apex records. Subdomain names (`"app"`, `"deploy"`, `"_dmarc"`) are stored exactly as provided.
+- The `name` attribute is `ForceNew` in the provider schema, meaning any detected change triggers destroy+recreate rather than an in-place update.
+
+**Concrete Prevention Rule:**
+
+When adding `cloudflare_record` resources for zone-apex records, always use `name = "domain.tld"` (the FQDN), never `name = "@"`. Add a comment explaining why:
+
+```hcl
+resource "cloudflare_record" "example" {
+  zone_id = var.cf_zone_id
+  name    = "soleur.ai"  # Use FQDN, not "@" -- CF API normalizes @ to FQDN, causing perpetual drift
+  content = "..."
+  type    = "TXT"
+  ttl     = 1
+}
+```
+
+This rule should be added to the existing learning `knowledge-base/project/learnings/2026-03-20-cloudflare-terraform-v4-v5-resource-names.md` as an additional row in the v4/v5 differences table.
 
 ## References
 
