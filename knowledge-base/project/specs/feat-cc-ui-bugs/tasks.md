@@ -28,18 +28,20 @@
 
 ## Phase 4: Markdown Rendering (Bug 3)
 
-- [ ] 4.1 Install `react-markdown` in `apps/web-platform` (`bun add react-markdown`)
+- [ ] 4.1 Install `react-markdown` AND `remark-gfm` in `apps/web-platform` (`bun add react-markdown remark-gfm`)
 - [ ] 4.2 Regenerate `apps/web-platform/package-lock.json` via `npm install` (Dockerfile uses `npm ci`)
-- [ ] 4.3 Create `MarkdownContent` component with `react-markdown` and custom element overrides for Tailwind styling
+- [ ] 4.3 Create `MarkdownContent` component with `react-markdown`, `remark-gfm`, and custom `components` prop for Tailwind styling
   - [ ] 4.3.1 Style headings (h1-h3) with appropriate font sizes and margins
-  - [ ] 4.3.2 Style tables with borders, padding, and neutral background for header row
-  - [ ] 4.3.3 Style code blocks with monospace font and dark background
-  - [ ] 4.3.4 Style inline code with subtle background
+  - [ ] 4.3.2 Style tables with borders, padding, and neutral background for header row (requires `remark-gfm`)
+  - [ ] 4.3.3 Style code blocks: detect `language-*` className for block vs inline code
+  - [ ] 4.3.4 Style inline code with subtle background (amber-300 text on neutral-800 bg)
   - [ ] 4.3.5 Style lists (ul/ol) with proper indentation and markers
-  - [ ] 4.3.6 Style bold/italic/links
-- [ ] 4.4 Configure security: set `disallowedElements={["script", "iframe", "form", "object", "embed"]}`, do NOT enable `rehype-raw`
-- [ ] 4.5 Replace `<p className="whitespace-pre-wrap">{content}</p>` in `MessageBubble` with `<MarkdownContent>` for completed messages
-- [ ] 4.6 Optimization: use plain text rendering during active streaming (when leader is in `activeStreamsRef`), switch to markdown after `stream_end`
+  - [ ] 4.3.6 Style bold/italic/links (links open in new tab with `target="_blank" rel="noopener noreferrer"`)
+  - [ ] 4.3.7 Style blockquotes with left border and italic text
+- [ ] 4.4 Configure security: `disallowedElements={["script", "iframe", "form", "object", "embed"]}` + `unwrapDisallowed` -- do NOT enable `rehype-raw`
+- [ ] 4.5 Add `isStreaming` prop to `MessageBubble`, derived from `activeStreamsRef.current.has(msg.leaderId)` in the parent render
+- [ ] 4.6 Implement three-state rendering in `MessageBubble`: thinking dots (empty content) -> plain text (streaming) -> markdown (complete)
 - [ ] 4.7 Add test: markdown headings render as HTML heading elements
-- [ ] 4.8 Add test: dangerous elements (script tags) are stripped
-- [ ] 4.9 Verify both lockfiles are committed (`bun.lock` + `package-lock.json`)
+- [ ] 4.8 Add test: GFM table renders as HTML `<table>` with `<th>` and `<td>`
+- [ ] 4.9 Add test: dangerous elements (script tags) are stripped but text content preserved (`unwrapDisallowed`)
+- [ ] 4.10 Verify both lockfiles are committed (`bun.lock` + `package-lock.json`)
