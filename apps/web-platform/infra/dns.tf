@@ -53,6 +53,27 @@ resource "cloudflare_record" "dmarc" {
   ttl     = 1
 }
 
+# Supabase custom domain -- branded API endpoint for OAuth callbacks and client connections.
+# Must NOT be proxied: Supabase needs direct DNS for SSL certificate verification.
+resource "cloudflare_record" "supabase_custom_domain" {
+  zone_id = var.cf_zone_id
+  name    = "api"
+  content = "ifsccnjhymdmidffkzhl.supabase.co"
+  type    = "CNAME"
+  proxied = false
+  ttl     = 60
+}
+
+# ACME challenge for Supabase custom domain SSL certificate verification.
+# Value from `supabase domains create` output.
+resource "cloudflare_record" "supabase_acme_challenge" {
+  zone_id = var.cf_zone_id
+  name    = "_acme-challenge.api"
+  content = "UQm8-KEXBYA17JfJvT_3STiqv4T-ti6VimNwAxkErFo"
+  type    = "TXT"
+  ttl     = 60
+}
+
 # Google Search Console domain verification (required for OAuth consent screen branding, see #1398)
 resource "cloudflare_record" "google_site_verification" {
   zone_id = var.cf_zone_id

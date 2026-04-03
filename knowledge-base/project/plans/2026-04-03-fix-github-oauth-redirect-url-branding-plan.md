@@ -2,9 +2,30 @@
 title: "fix: GitHub OAuth consent screen shows Supabase URL instead of branded Soleur URL"
 type: fix
 date: 2026-04-03
+deepened: 2026-04-03
 ---
 
 # fix: GitHub OAuth consent screen shows Supabase URL instead of branded Soleur URL
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-03
+**Sections enhanced:** 3 (Parts 1, 2, and Security/CSP)
+**Research sources:** Supabase custom domain docs, GitHub OAuth App docs, 4 institutional learnings
+
+### Key Improvements
+
+1. Added TXT record requirement for Supabase domain verification (CNAME alone is insufficient -- a `_acme-challenge` TXT record is also needed for SSL certificate issuance)
+2. Added CSP automatic compatibility confirmation -- `lib/csp.ts` dynamically constructs `connect-src` from `NEXT_PUBLIC_SUPABASE_URL`, so custom domain change flows through with zero CSP code changes
+3. Added domain verification timeline: SSL certificate provisioning via Let's Encrypt/Google Trust Services/SSL.com can take up to 30 minutes; `reverify` command may need multiple runs
+4. Added GitHub OAuth App logo requirement: any size accepted (unlike Google's strict 120x120px requirement)
+
+### New Considerations Discovered
+
+- Supabase domain verification requires TWO DNS records (CNAME + `_acme-challenge` TXT), not just the CNAME -- the TXT record value is provided by `supabase domains create` output
+- The `supabase domains reverify` command may need to be run multiple times as DNS propagates (up to 30 minutes)
+- CSP `connect-src` for WebSocket connections also updates automatically (`wss://` prefix derived from same URL)
+- GitHub OAuth App settings page also allows setting a "Setup URL" for post-installation redirects (not needed for this fix, but worth knowing)
 
 ## Overview
 
@@ -48,6 +69,24 @@ This improves the GitHub consent screen context (app name, homepage link) but do
 
 **Automation approach:** Use Playwright MCP to navigate to the GitHub Developer Settings, find the Soleur OAuth App, and update the branding fields. The GitHub OAuth App Client ID is stored in Doppler as `GITHUB_CLIENT_ID` (config: `prd`).
 
+#### Research Insights: GitHub OAuth App Configuration
+
+**GitHub OAuth App logo:** Unlike Google (which requires exactly 120x120px), GitHub accepts any size logo upload. Use the existing `plugins/soleur/docs/images/logo-mark-512.png` directly -- no resizing needed.
+
+**GitHub OAuth App fields available ([docs](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app)):**
+
+| Field | Value | Notes |
+|-------|-------|-------|
+| Application name | Soleur | Shown prominently on consent screen |
+| Homepage URL | `https://soleur.ai` | Shown as clickable link on consent screen |
+| Application description | AI-powered development assistant | Shown below app name |
+| Authorization callback URL | `https://ifsccnjhymdmidffkzhl.supabase.co/auth/v1/callback` | Already set; changes to `api.soleur.ai` in Part 2 |
+| Application logo | `plugins/soleur/docs/images/logo-mark-512.png` | Any size accepted |
+
+**No verification required:** Unlike Google (which requires brand verification taking 2-3 business days), GitHub OAuth Apps show branding immediately after saving. No domain verification, no review queue.
+
+**Playwright automation note:** Per institutional learning (`2026-03-09-x-provisioning-playwright-automation.md`), the GitHub Developer Settings page is fully automatable -- no CAPTCHAs or interactive OAuth consent needed. The flow is: navigate to settings > find app by Client ID > click Edit > fill fields > save.
+
 ### Part 2: Supabase Custom Domain (requires Pro plan upgrade, ~$35/mo)
 
 This is the only way to change the redirect URL from `ifsccnjhymdmidffkzhl.supabase.co` to a branded domain. This part is shared with the existing plan at `knowledge-base/project/plans/2026-04-02-fix-google-oauth-consent-screen-branding-plan.md` (Part 2).
@@ -72,9 +111,10 @@ This is the only way to change the redirect URL from `ifsccnjhymdmidffkzhl.supab
    }
    ```
 
-2. Apply Terraform: `doppler run -c prd_terraform --name-transformer tf-var -- terraform apply -target=cloudflare_record.supabase_custom_domain`
-3. Create custom domain: `supabase domains create --custom-hostname api.soleur.ai --project-ref ifsccnjhymdmidffkzhl`
-4. Verify domain: `supabase domains reverify --project-ref ifsccnjhymdmidffkzhl` (poll until verified)
+2. Apply Terraform (CNAME only first): `doppler run -c prd_terraform --name-transformer tf-var -- terraform apply -target=cloudflare_record.supabase_custom_domain`
+3. Create custom domain: `supabase domains create --custom-hostname api.soleur.ai --project-ref ifsccnjhymdmidffkzhl` -- **capture the `_acme-challenge` TXT record value from the output**
+4. Add TXT record to Terraform (`_acme-challenge.api.soleur.ai` with the value from step 3) and apply
+5. Verify domain: `supabase domains reverify --project-ref ifsccnjhymdmidffkzhl` (poll until verified -- may take up to 30 minutes)
 5. **Before activating:** Update GitHub OAuth App callback URL to add `https://api.soleur.ai/auth/v1/callback`
 6. **Before activating:** Update Google OAuth authorized redirect URIs to add `https://api.soleur.ai/auth/v1/callback`
 7. Activate: `supabase domains activate --project-ref ifsccnjhymdmidffkzhl`
@@ -86,6 +126,47 @@ This is the only way to change the redirect URL from `ifsccnjhymdmidffkzhl.supab
 **Critical ordering note (from Supabase docs):** OAuth provider redirect URIs must be updated BEFORE activating the custom domain. After activation, OAuth flows advertise the custom domain as the callback URL. If providers don't have this URL whitelisted, auth breaks.
 
 **Backward compatibility (confirmed by Supabase docs):** The original project URL (`ifsccnjhymdmidffkzhl.supabase.co`) continues to work after custom domain activation. Both domains function simultaneously.
+
+#### Research Insights: Supabase Custom Domain Verification
+
+**Two DNS records required (not one):** The plan's CNAME record is necessary but insufficient. Supabase domain verification also requires a TXT record for SSL certificate issuance:
+
+1. **CNAME record:** `api.soleur.ai` -> `ifsccnjhymdmidffkzhl.supabase.co` (already in plan)
+2. **TXT record:** `_acme-challenge.api.soleur.ai` -> value provided by `supabase domains create` output
+
+The TXT record value is dynamic -- it is returned by the `supabase domains create` command. The Terraform resource for this record must be added AFTER running the create command and reading the output.
+
+**Revised Terraform for dns.tf (both records):**
+
+```hcl
+resource "cloudflare_record" "supabase_custom_domain" {
+  zone_id = var.cf_zone_id
+  name    = "api"
+  content = "ifsccnjhymdmidffkzhl.supabase.co"
+  type    = "CNAME"
+  proxied = false  # Must NOT be proxied -- Supabase needs direct DNS for SSL verification
+  ttl     = 60
+}
+
+# TXT record value from `supabase domains create` output
+# Must be added after running the create command
+resource "cloudflare_record" "supabase_acme_challenge" {
+  zone_id = var.cf_zone_id
+  name    = "_acme-challenge.api"
+  content = var.supabase_acme_challenge_value  # From `supabase domains create` output
+  type    = "TXT"
+  ttl     = 60
+}
+```
+
+**SSL certificate provisioning timeline:** Supabase uses multiple Certificate Authorities (Let's Encrypt, Google Trust Services, SSL.com) for high availability. The verification process can take up to 30 minutes. The `supabase domains reverify` command may need to be run multiple times as DNS records propagate.
+
+**CSP automatic compatibility (confirmed by code review):** The `apps/web-platform/lib/csp.ts` file dynamically constructs `connect-src` from `NEXT_PUBLIC_SUPABASE_URL`:
+
+- `https://${supabaseHost}` for REST API calls
+- `wss://${supabaseHost}` for WebSocket (Realtime) connections
+
+When `NEXT_PUBLIC_SUPABASE_URL` changes from `https://ifsccnjhymdmidffkzhl.supabase.co` to `https://api.soleur.ai`, CSP automatically allows the new domain. No CSP code changes needed.
 
 ## Technical Considerations
 
@@ -202,6 +283,21 @@ This plan shares Part 2 (Supabase custom domain) with `knowledge-base/project/pl
 - **Future providers (Apple, Microsoft per #1341):** Will automatically use `api.soleur.ai`
 
 Part 1 (GitHub App branding) is independent and should be done regardless of Part 2.
+
+## Plan Review Findings [2026-04-03]
+
+Three reviewers (DHH, Kieran, Code Simplicity) provided feedback. All agreed:
+
+1. **Part 1 is the right immediate fix.** Ship it -- zero code changes, pure configuration.
+2. **Part 2 is the correct long-term fix** but depends on cost approval (~$35/mo). It is shared with the existing Google OAuth branding plan and should not be duplicated.
+3. **Plan is already minimal** -- no unnecessary abstractions or code changes.
+
+**Key observation:** Part 2 (Supabase custom domain) is identical across this plan and the Google OAuth plan (`2026-04-02-fix-google-oauth-consent-screen-branding-plan.md`). This plan should focus on Part 1 (GitHub-specific branding) and reference the existing plan for Part 2 rather than duplicating the 11-step implementation sequence. If/when Part 2 is executed, it benefits all providers simultaneously.
+
+**Changes applied from review:**
+
+- Added clarifying note that `configure-auth.sh` `site_url` (`https://app.soleur.ai`) is the frontend URL and is correct as-is; only `uri_allow_list` needs the custom domain addition
+- Noted that Part 2 is a shared dependency across all OAuth providers and should be tracked as a single work item
 
 ## References
 
