@@ -97,6 +97,61 @@ function createAppJwt(): string {
 }
 
 // ---------------------------------------------------------------------------
+// App slug resolution (defense-in-depth)
+// ---------------------------------------------------------------------------
+
+let cachedSlug: string | null = null;
+
+/**
+ * Fetch the GitHub App slug from the API (GET /app), caching the result.
+ * Falls back to NEXT_PUBLIC_GITHUB_APP_SLUG if credentials are not set.
+ */
+export async function getAppSlug(): Promise<string> {
+  if (cachedSlug) return cachedSlug;
+
+  const appId = process.env.GITHUB_APP_ID;
+  const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
+  if (!appId || !privateKey) {
+    const fallback = process.env.NEXT_PUBLIC_GITHUB_APP_SLUG ?? "soleur-ai";
+    log.warn("GITHUB_APP_ID not set — using env var fallback for app slug");
+    cachedSlug = fallback;
+    return fallback;
+  }
+
+  const jwt = createAppJwt();
+  const response = await fetch(`https://api.github.com/app`, {
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+
+  if (!response.ok) {
+    const fallback = process.env.NEXT_PUBLIC_GITHUB_APP_SLUG ?? "soleur-ai";
+    log.error({ status: response.status }, "Failed to fetch app slug from GitHub API — using fallback");
+    cachedSlug = fallback;
+    return fallback;
+  }
+
+  const data = (await response.json()) as { slug: string };
+  // Validate slug format to prevent open redirect via path traversal
+  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(data.slug)) {
+    const fallback = process.env.NEXT_PUBLIC_GITHUB_APP_SLUG ?? "soleur-ai";
+    log.error({ slug: data.slug }, "Invalid slug format from GitHub API — using fallback");
+    cachedSlug = fallback;
+    return fallback;
+  }
+  cachedSlug = data.slug;
+  return data.slug;
+}
+
+/** @internal Test-only: reset the cached slug so fallback paths can be tested. */
+export function _resetSlugCacheForTesting(): void {
+  cachedSlug = null;
+}
+
+// ---------------------------------------------------------------------------
 // GitHub API helpers
 // ---------------------------------------------------------------------------
 
