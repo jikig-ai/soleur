@@ -128,15 +128,24 @@ export async function provisionWorkspaceWithRepo(
   const workspacePath = join(getWorkspacesRoot(), userId);
 
   // 1. Generate installation token for clone authentication
-  const token = await generateInstallationToken(installationId);
+  let token: string;
+  try {
+    token = await generateInstallationToken(installationId);
+  } catch (err) {
+    throw new Error(`Token generation failed: ${(err as Error).message}`);
+  }
 
   // 2. Write temporary credential helper (unpredictable path, outside sandbox)
   const helperPath = randomCredentialPath();
-  writeFileSync(
-    helperPath,
-    `#!/bin/sh\necho "username=x-access-token"\necho "password=${token}"`,
-    { mode: 0o700 },
-  );
+  try {
+    writeFileSync(
+      helperPath,
+      `#!/bin/sh\necho "username=x-access-token"\necho "password=${token}"`,
+      { mode: 0o700 },
+    );
+  } catch (err) {
+    throw new Error(`Credential helper write failed: ${(err as Error).message}`);
+  }
 
   try {
     // 3. Remove existing workspace if present (fresh clone)
@@ -145,17 +154,24 @@ export async function provisionWorkspaceWithRepo(
     }
 
     // 4. Clone the repository (shallow for speed)
-    execFileSync(
-      "git",
-      [
-        "-c", `credential.helper=!${helperPath}`,
-        "clone",
-        "--depth", "1",
-        repoUrl,
-        workspacePath,
-      ],
-      { stdio: "pipe", timeout: 120_000 },
-    );
+    try {
+      execFileSync(
+        "git",
+        [
+          "-c", `credential.helper=!${helperPath}`,
+          "clone",
+          "--depth", "1",
+          repoUrl,
+          workspacePath,
+        ],
+        { stdio: "pipe", timeout: 120_000 },
+      );
+    } catch (err) {
+      const rawStderr = (err as { stderr?: Buffer })?.stderr?.toString() ?? "";
+      // Strip internal paths to avoid leaking server filesystem layout
+      const stderr = rawStderr.replace(/\/[^\s:]+/g, "<path>");
+      throw new Error(`Git clone failed: ${stderr || (err as Error).message}`);
+    }
 
     log.info({ userId, repoUrl }, "Repository cloned successfully");
   } finally {

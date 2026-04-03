@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import * as Sentry from "@sentry/nextjs";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { provisionWorkspaceWithRepo } from "@/server/workspace";
@@ -62,7 +63,7 @@ export async function POST(request: Request) {
   // Prevents race condition from double-click or concurrent requests.
   const { data: lockResult, error: updateError } = await serviceClient
     .from("users")
-    .update({ repo_url: repoUrl, repo_status: "cloning" })
+    .update({ repo_url: repoUrl, repo_status: "cloning", repo_error: null })
     .eq("id", user.id)
     .neq("repo_status", "cloning")
     .select("id")
@@ -119,10 +120,13 @@ export async function POST(request: Request) {
     })
     .catch(async (err) => {
       logger.error({ err, userId: user.id, repoUrl }, "Repo clone failed");
+      Sentry.captureException(err);
 
+      const rawMessage = err instanceof Error ? err.message : String(err);
+      const errorMessage = rawMessage.slice(0, 2000);
       await serviceClient
         .from("users")
-        .update({ repo_status: "error" })
+        .update({ repo_status: "error", repo_error: errorMessage })
         .eq("id", user.id)
         .then(({ error }) => {
           if (error) {
