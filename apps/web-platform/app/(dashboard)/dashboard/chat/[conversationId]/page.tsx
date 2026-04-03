@@ -328,8 +328,10 @@ const MARKDOWN_COMPONENTS: import("react-markdown").Components = {
   td: ({ children }) => (
     <td className="border border-neutral-700 px-3 py-1.5 text-neutral-300">{children}</td>
   ),
-  code: ({ className, children }) => {
-    const isBlock = /language-(\w+)/.test(className || "");
+  code: ({ className, children, node }) => {
+    // Block code: parent is <pre>, or has a language class from fenced blocks
+    const isBlock = node?.position && node.position.start.line !== node.position.end.line
+      || /language-/.test(className || "");
     return isBlock ? (
       <pre className="mb-3 overflow-x-auto rounded-lg bg-neutral-950 p-3">
         <code className="text-xs text-neutral-300">{children}</code>
@@ -352,12 +354,15 @@ const MARKDOWN_COMPONENTS: import("react-markdown").Components = {
   ),
 };
 
+const REMARK_PLUGINS = [remarkGfm];
+const DISALLOWED_ELEMENTS = ["script", "iframe", "form", "object", "embed", "style", "link"];
+
 function MarkdownContent({ content }: { content: string }) {
   return (
     <Markdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={REMARK_PLUGINS}
       components={MARKDOWN_COMPONENTS}
-      disallowedElements={["script", "iframe", "form", "object", "embed"]}
+      disallowedElements={DISALLOWED_ELEMENTS}
       unwrapDisallowed
     >
       {content}

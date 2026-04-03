@@ -782,11 +782,13 @@ export async function resolveReviewGate(
   // Search all sessions for this conversation (any leader) to find the gate.
   // In multi-leader mode, each leader has its own session key.
   const prefix = `${userId}:${conversationId}`;
+  let hasSession = false;
   let foundSession: import("./review-gate").AgentSession | undefined;
   let foundEntry: { resolve: (s: string) => void; options: string[] } | undefined;
 
   for (const [key, session] of activeSessions) {
     if (key === prefix || key.startsWith(`${prefix}:`)) {
+      hasSession = true;
       const entry = session.reviewGateResolvers.get(gateId);
       if (entry) {
         foundSession = session;
@@ -796,8 +798,12 @@ export async function resolveReviewGate(
     }
   }
 
-  if (!foundSession || !foundEntry) {
+  if (!hasSession) {
     throw new Error("No active session");
+  }
+
+  if (!foundSession || !foundEntry) {
+    throw new Error("Review gate not found or already resolved");
   }
 
   validateSelection(foundEntry.options, selection);
