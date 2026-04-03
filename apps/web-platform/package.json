@@ -1,6 +1,7 @@
 {
   "name": "soleur-web-platform",
   "version": "0.0.1",
+  "type": "module",
   "private": true,
   "scripts": {
     "dev": "tsx server/index.ts",

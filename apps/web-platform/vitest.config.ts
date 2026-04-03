@@ -6,12 +6,26 @@ export default defineConfig({
     jsx: "automatic",
   },
   test: {
-    environment: "node",
     exclude: ["e2e/**", "node_modules/**"],
-    environmentMatchGlobs: [
-      ["test/**/*.tsx", "happy-dom"],
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "unit",
+          environment: "node",
+          include: ["test/**/*.test.ts", "lib/**/*.test.ts"],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "component",
+          environment: "happy-dom",
+          include: ["test/**/*.test.tsx"],
+          setupFiles: ["test/setup-dom.ts"],
+        },
+      },
     ],
-    setupFiles: ["test/setup-dom.ts"],
   },
   resolve: {
     alias: {
