@@ -8,6 +8,7 @@ import { ChatInput } from "@/components/chat/chat-input";
 import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { LEADER_BG_COLORS } from "@/components/chat/leader-colors";
 import { WelcomeCard } from "@/components/chat/welcome-card";
+import { PwaInstallBanner } from "@/components/chat/pwa-install-banner";
 import { createClient } from "@/lib/supabase/client";
 
 const SUGGESTED_PROMPTS = [
@@ -41,6 +42,7 @@ export default function DashboardPage() {
   const insertRef = useRef<((text: string, replaceFrom: number) => void) | null>(null);
   const [onboardingLoaded, setOnboardingLoaded] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [pwaDismissed, setPwaDismissed] = useState(true); // default hidden until fetch
 
   useEffect(() => {
     const supabase = createClient();
@@ -57,8 +59,9 @@ export default function DashboardPage() {
         .then(({ data, error }) => {
           if (error) {
             console.error("[onboarding] fetch error:", error.message);
-          } else if (data && !data.onboarding_completed_at) {
-            setShowOnboarding(true);
+          } else if (data) {
+            if (!data.onboarding_completed_at) setShowOnboarding(true);
+            setPwaDismissed(!!data.pwa_banner_dismissed_at);
           }
           setOnboardingLoaded(true);
         });
@@ -145,6 +148,23 @@ export default function DashboardPage() {
     [],
   );
 
+  const handlePwaDismiss = useCallback(() => {
+    setPwaDismissed(true);
+    console.debug("[onboarding]", "pwa_banner_dismissed");
+    const supabase = createClient();
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        supabase
+          .from("users")
+          .update({ pwa_banner_dismissed_at: new Date().toISOString() })
+          .eq("id", user.id)
+          .then(({ error }) => {
+            if (error) console.error("[onboarding] pwa dismiss error:", error.message);
+          });
+      }
+    });
+  }, []);
+
   return (
     <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
       {/* Hero */}
@@ -161,6 +181,11 @@ export default function DashboardPage() {
 
       {/* Welcome card for first-time users */}
       {onboardingLoaded && showOnboarding && <WelcomeCard />}
+
+      {/* iOS Safari PWA install banner */}
+      {onboardingLoaded && (
+        <PwaInstallBanner dismissed={pwaDismissed} onDismiss={handlePwaDismiss} />
+      )}
 
       {/* Chat input with @-mention dropdown */}
       <div className="relative mb-2 w-full">
