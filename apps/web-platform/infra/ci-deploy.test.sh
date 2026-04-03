@@ -98,6 +98,18 @@ fi
 MOCK
     chmod +x "$MOCK_DIR/df"
 
+    # Mock doppler (simulate successful secrets download)
+    cat > "$MOCK_DIR/doppler" << 'MOCK'
+#!/bin/bash
+if [[ "${1:-}" == "secrets" ]]; then
+  echo "KEY=value"
+  exit 0
+fi
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/doppler"
+
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$PATH"
     bash "$DEPLOY_SCRIPT" 2>&1
   )
@@ -244,6 +256,18 @@ fi
 MOCK
     chmod +x "$MOCK_DIR/df"
 
+    # Mock doppler (simulate successful secrets download)
+    cat > "$MOCK_DIR/doppler" << 'MOCK'
+#!/bin/bash
+if [[ "${1:-}" == "secrets" ]]; then
+  echo "KEY=value"
+  exit 0
+fi
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/doppler"
+
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$PATH"
     bash "$DEPLOY_SCRIPT" 2>&1
   )
@@ -586,6 +610,216 @@ MOCK
 }
 
 assert_flock_rejection
+
+echo ""
+echo "--- Doppler hardening (resolve_env_file) ---"
+
+# Helper: run deploy with Doppler-specific environment controls.
+# MOCK_DOPPLER_MISSING=1  -> doppler binary not in PATH
+# MOCK_DOPPLER_TOKEN=""   -> DOPPLER_TOKEN unset
+# MOCK_DOPPLER_FAIL=1     -> doppler secrets download fails
+run_deploy_doppler() {
+  local cmd="${1:-}"
+  (
+    export SSH_ORIGINAL_COMMAND="$cmd"
+    MOCK_DIR=$(mktemp -d)
+    trap 'rm -rf "$MOCK_DIR"' EXIT
+
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+
+    cat > "$MOCK_DIR/logger" << 'MOCK'
+#!/bin/bash
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/logger"
+
+    cat > "$MOCK_DIR/docker" << 'MOCK'
+#!/bin/bash
+if [[ "${1:-}" == "run" ]]; then echo "abc123"; fi
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/docker"
+
+    cat > "$MOCK_DIR/curl" << 'MOCK'
+#!/bin/bash
+for arg in "$@"; do
+  if [[ "$arg" == *"http_code"* ]]; then echo "200"; exit 0; fi
+done
+echo "OK"
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/curl"
+
+    cat > "$MOCK_DIR/sudo" << 'MOCK'
+#!/bin/bash
+exec "$@"
+MOCK
+    chmod +x "$MOCK_DIR/sudo"
+
+    cat > "$MOCK_DIR/chown" << 'MOCK'
+#!/bin/bash
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/chown"
+
+    cat > "$MOCK_DIR/seq" << 'MOCK'
+#!/bin/bash
+echo "1"
+MOCK
+    chmod +x "$MOCK_DIR/seq"
+
+    cat > "$MOCK_DIR/flock" << 'MOCK'
+#!/bin/bash
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/flock"
+
+    cat > "$MOCK_DIR/df" << 'MOCK'
+#!/bin/bash
+echo "Avail"
+echo "20000000"
+MOCK
+    chmod +x "$MOCK_DIR/df"
+
+    # Doppler mock: present unless MOCK_DOPPLER_MISSING=1
+    if [[ "${MOCK_DOPPLER_MISSING:-}" != "1" ]]; then
+      if [[ "${MOCK_DOPPLER_FAIL:-}" == "1" ]]; then
+        cat > "$MOCK_DIR/doppler" << 'MOCK'
+#!/bin/bash
+exit 1
+MOCK
+      else
+        cat > "$MOCK_DIR/doppler" << 'MOCK'
+#!/bin/bash
+# Simulate successful secrets download
+if [[ "${1:-}" == "secrets" ]]; then
+  echo "KEY=value"
+  exit 0
+fi
+echo "doppler mock"
+exit 0
+MOCK
+      fi
+      chmod +x "$MOCK_DIR/doppler"
+    fi
+
+    # Set DOPPLER_TOKEN unless explicitly empty
+    if [[ "${MOCK_DOPPLER_TOKEN_UNSET:-}" != "1" ]]; then
+      export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    else
+      unset DOPPLER_TOKEN
+    fi
+
+    # Restrict PATH to mock dir + standard system dirs (excludes ~/.local/bin
+    # where real doppler lives, so MOCK_DOPPLER_MISSING=1 actually works)
+    export PATH="$MOCK_DIR:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    bash "$DEPLOY_SCRIPT" 2>&1
+  )
+}
+
+# Test: Doppler CLI not installed -> exit with error
+assert_doppler_missing() {
+  TOTAL=$((TOTAL + 1))
+  local output actual_exit
+  output=$(
+    export MOCK_DOPPLER_MISSING=1
+    run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -qF "Doppler CLI not installed"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: missing doppler CLI exits with error"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: missing doppler CLI exits with error (exit=$actual_exit)"
+    echo "        output: $output"
+  fi
+}
+
+assert_doppler_missing
+
+# Test: DOPPLER_TOKEN not set -> exit with error
+assert_doppler_token_missing() {
+  TOTAL=$((TOTAL + 1))
+  local output actual_exit
+  output=$(
+    export MOCK_DOPPLER_TOKEN_UNSET=1
+    run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -qF "DOPPLER_TOKEN environment variable not set"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: missing DOPPLER_TOKEN exits with error"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: missing DOPPLER_TOKEN exits with error (exit=$actual_exit)"
+    echo "        output: $output"
+  fi
+}
+
+assert_doppler_token_missing
+
+# Test: Doppler download fails -> exit with error (no .env fallback)
+assert_doppler_download_fails() {
+  TOTAL=$((TOTAL + 1))
+  local output actual_exit
+  output=$(
+    export MOCK_DOPPLER_FAIL=1
+    run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -qF "Failed to download secrets from Doppler"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: doppler download failure exits with error"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: doppler download failure exits with error (exit=$actual_exit)"
+    echo "        output: $output"
+  fi
+}
+
+assert_doppler_download_fails
+
+# Test: No fallback to /mnt/data/.env in any failure case
+assert_no_env_fallback() {
+  TOTAL=$((TOTAL + 1))
+  local output actual_exit
+  # With Doppler missing, the old code would fall back to /mnt/data/.env
+  # The new code must never reference /mnt/data/.env
+  output=$(
+    export MOCK_DOPPLER_MISSING=1
+    run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  if ! printf '%s\n' "$output" | grep -qF "/mnt/data/.env"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: no fallback to /mnt/data/.env"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: no fallback to /mnt/data/.env (output references .env)"
+    echo "        output: $output"
+  fi
+}
+
+assert_no_env_fallback
+
+# Test: Doppler works -> deploy succeeds
+assert_doppler_success() {
+  TOTAL=$((TOTAL + 1))
+  local output actual_exit
+  output=$(run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1) && actual_exit=0 || actual_exit=$?
+
+  if [[ "$actual_exit" -eq 0 ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: doppler success deploys successfully"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: doppler success deploys successfully (exit=$actual_exit)"
+    echo "        output: $output"
+  fi
+}
+
+assert_doppler_success
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="

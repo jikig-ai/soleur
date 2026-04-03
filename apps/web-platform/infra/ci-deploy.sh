@@ -12,28 +12,38 @@ readonly LOG_TAG="ci-deploy"
 # via journalctl -u webhook, not the HTTP response.
 trap 'echo "DEPLOY_ERROR: ci-deploy.sh failed at line $LINENO (exit $?)" >&2' ERR
 
-# Resolve env file: prefer Doppler secrets download, fall back to /mnt/data/.env.
-# Writes secrets to a temp file (chmod 600) that the caller must clean up via cleanup_env_file.
+# Resolve env file: download secrets from Doppler to a temp file (chmod 600).
+# Caller must clean up via cleanup_env_file. Exits on any failure -- no fallback.
 resolve_env_file() {
-  if command -v doppler >/dev/null 2>&1 && [[ -n "${DOPPLER_TOKEN:-}" ]]; then
-    local tmpenv
-    tmpenv=$(mktemp /tmp/doppler-env.XXXXXX)
-    chmod 600 "$tmpenv"
-    if doppler secrets download --no-file --format docker --project soleur --config prd > "$tmpenv" 2>/dev/null; then
-      echo "$tmpenv"
-      return 0
-    fi
-    rm -f "$tmpenv"
-    logger -t "$LOG_TAG" "WARNING: Doppler download failed, falling back to /mnt/data/.env"
+  if ! command -v doppler >/dev/null 2>&1; then
+    logger -t "$LOG_TAG" "FATAL: Doppler CLI not installed"
+    echo "Error: Doppler CLI not installed on this server" >&2
+    exit 1
   fi
-  echo "/mnt/data/.env"
+
+  if [[ -z "${DOPPLER_TOKEN:-}" ]]; then
+    logger -t "$LOG_TAG" "FATAL: DOPPLER_TOKEN not set"
+    echo "Error: DOPPLER_TOKEN environment variable not set" >&2
+    exit 1
+  fi
+
+  local tmpenv
+  tmpenv=$(mktemp /tmp/doppler-env.XXXXXX)
+  chmod 600 "$tmpenv"
+  if doppler secrets download --no-file --format docker --project soleur --config prd > "$tmpenv" 2>/dev/null; then
+    echo "$tmpenv"
+    return 0
+  fi
+
+  rm -f "$tmpenv"
+  logger -t "$LOG_TAG" "FATAL: Doppler secrets download failed"
+  echo "Error: Failed to download secrets from Doppler" >&2
+  exit 1
 }
 
 # Clean up temp env file after container starts (secrets are in container memory).
 cleanup_env_file() {
-  if [[ "$1" != "/mnt/data/.env" ]]; then
-    rm -f "$1"
-  fi
+  rm -f "$1"
 }
 
 # Exact allowlist of valid images per component (not prefix match -- prevents suffix injection).
