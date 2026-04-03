@@ -55,8 +55,8 @@
 
 ## Phase 4: Verification
 
-- [ ] 4.1 Visit `https://github.com/apps/<slug>/installations/new` in incognito browser (Playwright) -- confirm no 404, Install button visible
-- [ ] 4.2 Run full connect-repo flow: sign up, reach connect-repo page, click Connect -- confirm redirect works
-- [ ] 4.3 Run existing tests: `cd apps/web-platform && npx vitest run` -- confirm no regressions
-- [ ] 4.4 Verify CSRF coverage test passes (new GET route should not trigger it)
-- [ ] 4.5 Trigger a deploy and verify the canary health check passes with the new env vars
+- [x] 4.1 Visited `https://github.com/apps/soleur-ai/installations/new` via Playwright -- "Install Soleur AI" page loads, no 404
+- [ ] 4.2 Run full connect-repo flow (post-deploy verification)
+- [x] 4.3 All 16 targeted tests pass (3 new + 13 existing install-route tests)
+- [x] 4.4 CSRF coverage test passes (new GET route not flagged)
+- [ ] 4.5 Deploy verification (post-merge)

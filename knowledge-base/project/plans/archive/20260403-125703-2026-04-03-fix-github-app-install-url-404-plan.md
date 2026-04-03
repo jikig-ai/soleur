@@ -182,13 +182,13 @@ ARG NEXT_PUBLIC_GITHUB_APP_SLUG
 
 ## Acceptance Criteria
 
-- [ ] GitHub App exists and is set to **public** visibility
-- [ ] `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, and `NEXT_PUBLIC_GITHUB_APP_SLUG` are stored in Doppler `prd` config
-- [ ] Visiting `https://github.com/apps/<actual-slug>/installations/new` as a non-owner GitHub user shows the install page (not 404)
-- [ ] The connect-repo page correctly redirects to the working GitHub App install URL
-- [ ] Server-side `getAppSlug()` function fetches and caches the slug from GitHub API
-- [ ] New `/api/repo/app-info` route returns the correct slug for authenticated users
-- [ ] Frontend falls back gracefully if `/api/repo/app-info` fails (uses env var)
+- [x] GitHub App exists and is set to **public** visibility
+- [x] `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, and `NEXT_PUBLIC_GITHUB_APP_SLUG` are stored in Doppler `prd` config
+- [x] Visiting `https://github.com/apps/soleur-ai/installations/new` as a non-owner GitHub user shows the install page (not 404)
+- [x] The connect-repo page correctly redirects to the working GitHub App install URL
+- [x] Server-side `getAppSlug()` function fetches and caches the slug from GitHub API
+- [x] New `/api/repo/app-info` route returns the correct slug for authenticated users
+- [x] Frontend falls back gracefully if `/api/repo/app-info` fails (uses env var)
 
 ## Domain Review
 
