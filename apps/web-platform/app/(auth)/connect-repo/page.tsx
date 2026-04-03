@@ -1003,7 +1003,16 @@ export default function ConnectRepoPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const [state, setState] = useState<State>("choose");
+  const [state, setState] = useState<State>(() => {
+    // Avoid flashing the "choose" screen when returning from GitHub App install
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("installation_id") && params.get("setup_action") === "install") {
+        return "github_redirect";
+      }
+    }
+    return "choose";
+  });
   const [repos, setRepos] = useState<Repo[]>([]);
   const [reposLoading, setReposLoading] = useState(false);
   const [connectedRepoName, setConnectedRepoName] = useState("");
