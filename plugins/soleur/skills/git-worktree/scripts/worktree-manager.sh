@@ -597,6 +597,9 @@ cleanup_orphan_worktree_dirs() {
 
 # Clean up worktrees for merged branches (detects [gone] and merged-to-main)
 cleanup_merged_worktrees() {
+  # Fix bare repo config if broken (defense-in-depth on every session start)
+  ensure_bare_config
+
   # Determine output mode: verbose if TTY, quiet otherwise
   local verbose=false
   [[ -t 1 ]] && verbose=true
