@@ -59,16 +59,36 @@ function patchWorkspacePermissions(workspacePath: string): void {
 // ---------------------------------------------------------------------------
 const activeSessions = new Map<string, AgentSession>();
 
-function sessionKey(userId: string, conversationId: string) {
-  return `${userId}:${conversationId}`;
+function sessionKey(userId: string, conversationId: string, leaderId?: string) {
+  return leaderId
+    ? `${userId}:${conversationId}:${leaderId}`
+    : `${userId}:${conversationId}`;
 }
 
-/** Abort a running agent session (called from ws-handler on disconnect or supersession). */
-export function abortSession(userId: string, conversationId: string, reason?: "disconnected" | "superseded"): void {
-  const key = sessionKey(userId, conversationId);
-  const session = activeSessions.get(key);
-  if (session) {
-    session.abort.abort(new Error(`Session aborted: ${reason ?? "disconnected"}`));
+/** Abort a running agent session (called from ws-handler on disconnect or supersession).
+ *  When leaderId is provided, only that leader's session is aborted.
+ *  When omitted, ALL leader sessions for the conversation are aborted (prefix match). */
+export function abortSession(
+  userId: string,
+  conversationId: string,
+  reason?: "disconnected" | "superseded",
+  leaderId?: string,
+): void {
+  if (leaderId) {
+    const key = sessionKey(userId, conversationId, leaderId);
+    const session = activeSessions.get(key);
+    if (session) {
+      session.abort.abort(new Error(`Session aborted: ${reason ?? "disconnected"}`));
+    }
+    return;
+  }
+
+  // Broadcast: abort ALL sessions for this conversation (any leader)
+  const prefix = `${userId}:${conversationId}`;
+  for (const [key, session] of activeSessions) {
+    if (key === prefix || key.startsWith(`${prefix}:`)) {
+      session.abort.abort(new Error(`Session aborted: ${reason ?? "disconnected"}`));
+    }
   }
 }
 
@@ -261,9 +281,9 @@ export async function startAgentSession(
   context?: import("@/lib/types").ConversationContext,
   routeSource?: "auto" | "mention",
 ): Promise<void> {
-  const key = sessionKey(userId, conversationId);
+  const key = sessionKey(userId, conversationId, leaderId);
 
-  // Abort any existing session
+  // Abort any existing session for this specific leader (or un-keyed session)
   const existing = activeSessions.get(key);
   if (existing) existing.abort.abort();
 
@@ -759,20 +779,29 @@ export async function resolveReviewGate(
   gateId: string,
   selection: string,
 ): Promise<void> {
-  const key = sessionKey(userId, conversationId);
-  const session = activeSessions.get(key);
+  // Search all sessions for this conversation (any leader) to find the gate.
+  // In multi-leader mode, each leader has its own session key.
+  const prefix = `${userId}:${conversationId}`;
+  let foundSession: import("./review-gate").AgentSession | undefined;
+  let foundEntry: { resolve: (s: string) => void; options: string[] } | undefined;
 
-  if (!session) {
+  for (const [key, session] of activeSessions) {
+    if (key === prefix || key.startsWith(`${prefix}:`)) {
+      const entry = session.reviewGateResolvers.get(gateId);
+      if (entry) {
+        foundSession = session;
+        foundEntry = entry;
+        break;
+      }
+    }
+  }
+
+  if (!foundSession || !foundEntry) {
     throw new Error("No active session");
   }
 
-  const entry = session.reviewGateResolvers.get(gateId);
-  if (!entry) {
-    throw new Error("Review gate not found or already resolved");
-  }
+  validateSelection(foundEntry.options, selection);
 
-  validateSelection(entry.options, selection);
-
-  entry.resolve(selection);
-  session.reviewGateResolvers.delete(gateId);
+  foundEntry.resolve(selection);
+  foundSession.reviewGateResolvers.delete(gateId);
 }

@@ -2,13 +2,13 @@
 
 ## Phase 1: Fix Multi-Leader Session Key Collision (Bug 4)
 
-- [ ] 1.1 Update `sessionKey` in `apps/web-platform/server/agent-runner.ts` to accept optional `leaderId` parameter
-- [ ] 1.2 Update `startAgentSession` to pass `leaderId` to `sessionKey` and use leader-scoped key for `activeSessions`
-- [ ] 1.3 Update `abortSession` to iterate `activeSessions` entries matching `userId:conversationId:*` prefix when no `leaderId` is provided
-- [ ] 1.4 Update `abortAllUserSessions` to work with new key format (prefix still `userId:`)
-- [ ] 1.5 Update `activeSessions.delete` in `startAgentSession` finally block to use the correct leader-scoped key
-- [ ] 1.6 Add test: parallel `startAgentSession` calls for 3 leaders on same conversation produce 3 separate `activeSessions` entries
-- [ ] 1.7 Add test: `abortSession` without `leaderId` aborts all leader sessions for a conversation
+- [x] 1.1 Update `sessionKey` in `apps/web-platform/server/agent-runner.ts` to accept optional `leaderId` parameter
+- [x] 1.2 Update `startAgentSession` to pass `leaderId` to `sessionKey` and use leader-scoped key for `activeSessions`
+- [x] 1.3 Update `abortSession` to iterate `activeSessions` entries matching `userId:conversationId:*` prefix when no `leaderId` is provided
+- [x] 1.4 Update `abortAllUserSessions` to work with new key format (prefix still `userId:`)
+- [x] 1.5 Update `activeSessions.delete` in `startAgentSession` finally block to use the correct leader-scoped key
+- [x] 1.6 Add test: parallel `startAgentSession` calls for 3 leaders on same conversation produce 3 separate `activeSessions` entries
+- [x] 1.7 Add test: `abortSession` without `leaderId` aborts all leader sessions for a conversation
 
 ## Phase 2: Remove Default CPO Boot (Bug 1)
 
