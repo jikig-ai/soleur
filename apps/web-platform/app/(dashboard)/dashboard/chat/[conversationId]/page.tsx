@@ -25,6 +25,7 @@ export default function ChatPage() {
     sendMessage,
     sendReviewGateResponse,
     status,
+    sessionConfirmed,
     disconnectReason,
     lastError,
     reconnect,
@@ -54,15 +55,15 @@ export default function ChatPage() {
     }
   }, [status, conversationId, leaderId, sessionStarted, startSession]);
 
-  // Send initial message from ?msg= param after session starts
+  // Send initial message from ?msg= param after server confirms session
   useEffect(() => {
-    if (sessionStarted && msgParam && !initialMsgSent && status === "connected") {
+    if (sessionConfirmed && msgParam && !initialMsgSent) {
       sendMessage(msgParam);
       setInitialMsgSent(true);
       // Clean URL params to prevent duplicate sends on refresh
       router.replace(pathname, { scroll: false });
     }
-  }, [sessionStarted, msgParam, initialMsgSent, status, sendMessage, router, pathname]);
+  }, [sessionConfirmed, msgParam, initialMsgSent, sendMessage, router, pathname]);
 
   // Derive leader names for routing badge
   const respondingLeaders = messages

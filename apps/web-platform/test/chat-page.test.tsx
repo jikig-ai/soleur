@@ -17,6 +17,7 @@ let wsReturn = {
   reconnect: vi.fn(),
   routeSource: null as "auto" | "mention" | null,
   activeLeaderIds: [] as string[],
+  sessionConfirmed: false,
 };
 
 vi.mock("@/lib/ws-client", () => ({
@@ -48,6 +49,7 @@ describe("ChatPage", () => {
       reconnect: vi.fn(),
       routeSource: null,
       activeLeaderIds: [],
+      sessionConfirmed: false,
     };
     // Reset search params
     for (const key of [...mockSearchParams.keys()]) {
@@ -63,13 +65,44 @@ describe("ChatPage", () => {
     return render(<mod.default />);
   }
 
-  it("reads msg from search params and sends after session_started", async () => {
+  it("does NOT send msg when sessionConfirmed is false", async () => {
     mockSearchParams.set("msg", "help with pricing");
+    wsReturn.sessionConfirmed = false;
     await renderChatPage();
-    // Effects are async — wait for sendMessage to be called
+    // Wait a tick to let effects settle
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockSendMessage).not.toHaveBeenCalled();
+  });
+
+  it("sends msg only after sessionConfirmed becomes true", async () => {
+    mockSearchParams.set("msg", "help with pricing");
+    wsReturn.sessionConfirmed = true;
+    await renderChatPage();
     await waitFor(() => {
       expect(mockSendMessage).toHaveBeenCalledWith("help with pricing");
     });
+  });
+
+  it("does not re-send msg after reconnection resets sessionConfirmed", async () => {
+    mockSearchParams.set("msg", "help with pricing");
+    // First render: sessionConfirmed true, message gets sent
+    wsReturn.sessionConfirmed = true;
+    const { unmount } = await renderChatPage();
+    await waitFor(() => {
+      expect(mockSendMessage).toHaveBeenCalledWith("help with pricing");
+    });
+    unmount();
+
+    // Reset mocks and simulate reconnection: sessionConfirmed back to false
+    mockSendMessage.mockClear();
+    mockStartSession.mockClear();
+    wsReturn.sessionConfirmed = false;
+    wsReturn.status = "connected";
+    mockSearchParams.set("msg", "help with pricing");
+    await renderChatPage();
+    await new Promise((r) => setTimeout(r, 50));
+    // Should NOT send again since sessionConfirmed is false after reconnection
+    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 
   it("shows routing badge for auto-routed messages", async () => {
