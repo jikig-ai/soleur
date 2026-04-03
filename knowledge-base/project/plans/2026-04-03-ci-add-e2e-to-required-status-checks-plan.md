@@ -2,9 +2,20 @@
 title: "ci: add e2e to required status checks"
 type: feat
 date: 2026-04-03
+deepened: 2026-04-03
 ---
 
 # ci: add e2e to required status checks
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-03
+**Sections enhanced:** 1 (Phase 2 -- critical payload fix)
+
+### Key Improvements
+
+1. **Critical: Fixed incomplete ruleset PUT payload** -- original Phase 2 omitted `bypass_actors` and `conditions`, which would strip admin bypass privileges and branch scope on execution
+2. Added reviewer feedback notes from plan review (Phase 3 simplification, claude-code-action caveat)
 
 ## Overview
 
@@ -40,7 +51,7 @@ Two workflows create PRs using `GITHUB_TOKEN` and need synthetic `e2e` check-run
 | `scheduled-content-publisher.yml` | `test`, `cla-check`, `dependency-review` | Yes |
 | `scheduled-weekly-analytics.yml` | `test`, `cla-check`, `dependency-review` | Yes |
 
-Seven other scheduled workflows use `claude-code-action` with `github.token`, but those PRs trigger CI workflows because the `claude-code-action` creates commits as `app/claude` which does trigger `on: pull_request` events (confirmed: recent `app/claude` PRs merged with real CI checks).
+Seven other scheduled workflows use `claude-code-action` with `github.token`, but those PRs trigger CI workflows because the `claude-code-action` creates commits as `app/claude` which does trigger `on: pull_request` events (confirmed: recent `app/claude` PRs merged with real CI checks). **Caveat:** If `claude-code-action` ever changes to use `GITHUB_TOKEN` for PR creation (not just push), those workflows would also need synthetic checks.
 
 ### Rollout Ordering (Critical)
 
@@ -97,6 +108,16 @@ gh api repos/jikig-ai/soleur/rulesets/14145388 \
 {
   "name": "CI Required",
   "enforcement": "active",
+  "bypass_actors": [
+    {"actor_id": null, "actor_type": "OrganizationAdmin", "bypass_mode": "always"},
+    {"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}
+  ],
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": ["~DEFAULT_BRANCH"]
+    }
+  },
   "rules": [
     {
       "type": "required_status_checks",
@@ -117,13 +138,14 @@ RULES
 
 The `integration_id: 15368` constraint ensures only `github-actions` (GITHUB_TOKEN) can satisfy the check, preventing third-party spoofing.
 
-**Note:** The ruleset API `PUT` replaces the entire rules array. The request must include all existing checks (`test`, `dependency-review`) alongside the new `e2e` check.
+**Critical:** The ruleset API `PUT` replaces the **entire** ruleset payload, not just the `rules` array. The request must include `bypass_actors` (OrganizationAdmin + RepositoryRole 5) and `conditions` (targeting `~DEFAULT_BRANCH`) alongside the rules. Omitting these fields would strip admin bypass privileges and branch scope.
 
 ### Phase 3: Verify
 
 1. Confirm the ruleset update: `gh api repos/jikig-ai/soleur/rulesets/14145388 --jq '.rules[].parameters.required_status_checks[].context'` should show `test`, `dependency-review`, `e2e`.
-2. Open a test PR to verify `e2e` appears in the required checks section.
-3. Verify no existing open bot PRs are stuck (check `gh pr list --search "author:app/github-actions" --state open`).
+2. Confirm `bypass_actors` and `conditions` are preserved: `gh api repos/jikig-ai/soleur/rulesets/14145388 --jq '{bypass_actors: (.bypass_actors | length), conditions: .conditions.ref_name.include}'` should show `{"bypass_actors":2,"conditions":["~DEFAULT_BRANCH"]}`.
+3. Verify `e2e` appears as a required check on the next PR (no separate test PR needed -- the current PR or next real PR serves as verification).
+4. Verify no existing open bot PRs are stuck: `gh pr list --search "author:app/github-actions" --state open`.
 
 ## Alternative Approaches Considered
 

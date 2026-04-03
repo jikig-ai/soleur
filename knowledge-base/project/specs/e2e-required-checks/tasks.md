@@ -10,10 +10,11 @@ Source plan: `knowledge-base/project/plans/2026-04-03-ci-add-e2e-to-required-sta
 
 ## Phase 2: Update CI Required ruleset
 
-- [ ] 2.1 After Phase 1 merges to main, update ruleset 14145388 via `gh api` PUT to add `e2e` with `integration_id: 15368`
+- [ ] 2.1 After Phase 1 merges to main, update ruleset 14145388 via `gh api` PUT -- include `bypass_actors`, `conditions`, and all 3 required checks
 - [ ] 2.2 Verify ruleset shows all 3 required checks: `test`, `dependency-review`, `e2e`
+- [ ] 2.3 Verify `bypass_actors` (2 entries) and `conditions` (`~DEFAULT_BRANCH`) are preserved
 
 ## Phase 3: Verification
 
 - [ ] 3.1 Confirm no open bot PRs are stuck (`gh pr list --search "author:app/github-actions" --state open`)
-- [ ] 3.2 Verify a real PR shows `e2e` as a required check in the GitHub checks UI
+- [ ] 3.2 Verify `e2e` appears as required on the next real PR
