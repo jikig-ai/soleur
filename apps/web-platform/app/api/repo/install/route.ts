@@ -39,13 +39,23 @@ export async function POST(request: Request) {
     );
   }
 
-  // SECURITY: Extract GitHub username from provider-controlled identity only.
-  // user_metadata is user-mutable via auth.updateUser() — never trust it for
-  // security decisions when an immutable source exists.
-  const githubLogin = user.identities?.find(
-    (i: { provider: string; identity_data?: { user_name?: string } }) =>
-      i.provider === "github",
-  )?.identity_data?.user_name;
+  // SECURITY: Extract GitHub username from the auth.identities table via
+  // service client. user.identities from getUser() can be null for email-first
+  // users who later linked GitHub. user_metadata is user-mutable via
+  // auth.updateUser() — never trust it for security decisions.
+  // The auth.identities table is provider-controlled and immutable.
+  const serviceClient = createServiceClient();
+  const { data: identityData } = await serviceClient
+    .schema("auth" as "public")
+    .from("identities")
+    .select("identity_data")
+    .eq("user_id", user.id)
+    .eq("provider", "github")
+    .maybeSingle();
+
+  const githubLogin = identityData?.identity_data?.user_name as
+    | string
+    | undefined;
 
   if (!githubLogin) {
     logger.warn(
@@ -53,7 +63,10 @@ export async function POST(request: Request) {
       "User has no GitHub identity — cannot verify installation ownership",
     );
     return NextResponse.json(
-      { error: "No GitHub identity found on this account" },
+      {
+        error:
+          "No GitHub identity linked to this account. Please sign in with GitHub first.",
+      },
       { status: 403 },
     );
   }
@@ -74,7 +87,6 @@ export async function POST(request: Request) {
     );
   }
 
-  const serviceClient = createServiceClient();
   const { error: updateError } = await serviceClient
     .from("users")
     .update({ github_installation_id: body.installationId })
