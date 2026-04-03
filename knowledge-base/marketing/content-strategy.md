@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-29
-last_reviewed: 2026-03-27
-review_cadence: quarterly
+last_updated: 2026-04-03
+last_reviewed: 2026-04-03
+review_cadence: weekly
 owner: CMO
 depends_on:
   - knowledge-base/marketing/brand-guide.md
@@ -265,9 +265,27 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 
 ---
 
+## Publishing Cadence
+
+**Perpetual cadence: 2 posts per week (Tuesday + Thursday), staggered across platforms.**
+
+This cadence is not tied to any campaign. It runs indefinitely. The `scheduled-content-generator.yml` workflow (Tue/Thu 10:00 UTC) generates articles from the SEO refresh queue or via growth plan discovery. The `scheduled-content-publisher.yml` workflow (daily 14:00 UTC) publishes any distribution content file with `publish_date == today` and `status: scheduled`. The `scheduled-campaign-calendar.yml` workflow (Mondays 16:00 UTC) refreshes this calendar and flags overdue items.
+
+**Distribution channels per post:** Discord, X/Twitter, Bluesky, LinkedIn Company. Additional platforms (IndieHackers, Reddit, HN) are selective per content type.
+
+**Content sources (in priority order):**
+
+1. Manually planned articles from the quarterly calendar below
+2. Auto-generated articles from `knowledge-base/marketing/seo-refresh-queue.md`
+3. Growth plan discovery (fallback when queue is exhausted)
+
+**Overdue handling:** If a distribution content file's `publish_date` has passed without publication, the campaign calendar workflow flags it. Overdue items are rescheduled to the next available Tue/Thu slot.
+
+---
+
 ## Rolling Quarterly Content Calendar (March - June 2026)
 
-This calendar replaces the completed 4-week calendar (Phase 0-1). It assumes 8-12 hours per week for content. Capacity constraint: one founder.
+This calendar complements the perpetual cadence above. It defines what to write and when. Assumes 8-12 hours per week for content. Capacity constraint: one founder.
 
 ### Month 1 (March 20 - April 20, 2026): Technical Fixes + First New Article
 
@@ -276,10 +294,10 @@ This calendar replaces the completed 4-week calendar (Phase 0-1). It assumes 8-1
 | Mar 20-26 | P1 technical fixes: FAQ JSON-LD on agents page + "Why Tools Plateau", FAQ sections on 5 case studies, remove "plugin" from meta descriptions, Vision page H1 rewrite, add `updated` frontmatter to blog posts, add "open source" + "solopreneur" to homepage | 6-8 | All P1 technical fixes deployed |
 | Mar 27-Apr 2 | Write "How We Used AI-Generated Personas to Improve Interview Questions by 93%" methodology article (issue #1176). Distribute: Substack comment on Ivelin's article, LinkedIn, X thread. | 6-8 | Blog post + social distribution |
 | Apr 3-6 | Write "From Department Offices to Command Center" narrative (Gap 13). Distribute: X thread, LinkedIn, Discord announcement. | 6-8 | Launch blog post + social distribution |
-| Apr 7-9 | Write "One Chat, 8 Departments: Domain Routing with Claude Haiku" technical deep-dive (Gap 13) | 6-8 | Technical blog post |
-| Apr 10-13 | Write "Vibe Coding vs Agentic Engineering" article (audit P2-1, score 18/20) | 6-8 | Draft + publish |
+| Apr 7 (Tue) | **Distribute** "Vibe Coding vs Agentic Engineering" across all channels (rescheduled from Mar 24). Write "One Chat, 8 Departments: Domain Routing with Claude Haiku" technical deep-dive (Gap 13). | 6-8 | Vibe Coding social posts live + technical blog post |
+| Apr 10 (Thu) | **Distribute** PWA Installability Milestone across all channels (rescheduled from Mar 29). Write "Vibe Coding vs Agentic Engineering" article body if not yet complete (audit P2-1, score 18/20). | 6-8 | PWA social posts live + article draft |
 | Apr 14-20 | Add external citations to 5+ catalog pages (Gap 12). Add FAQ sections to Skills, Getting Started, Community pages. | 4-6 | AEO score improvement |
-| Apr 21-27 | Write About/Founder page (Gap 11). Distribute Vibe Coding article on X, Discord, IndieHackers. Review analytics. | 4-6 | E-E-A-T + distribution |
+| Apr 21-27 | Write About/Founder page (Gap 11). Review analytics. | 4-6 | E-E-A-T improvements |
 
 ### Month 2 (April 28 - May 25, 2026): Pillar Content + Comparisons
 

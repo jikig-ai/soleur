@@ -5,8 +5,12 @@
 
 set -euo pipefail
 
-# Clear git env vars that leak when this test runs inside a git hook
-unset GIT_DIR GIT_WORK_TREE 2>/dev/null || true
+# Clear ALL git env vars that leak when this test runs inside a git hook.
+# lefthook sets GIT_INDEX_FILE; core.bare=true leaks from the parent repo config
+# and overrides detection in freshly-created test repos.
+while IFS= read -r var; do
+  unset "$var" 2>/dev/null || true
+done < <(env | grep -oP '^GIT_\w+' || true)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"

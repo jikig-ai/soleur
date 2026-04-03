@@ -1,9 +1,9 @@
 ---
 title: "Your AI Team Now Works From Your Actual Codebase"
 type: feature-launch
-publish_date: "2026-03-29"
+publish_date: "2026-04-17"
 channels: discord, x, bluesky, linkedin-personal, linkedin-company, indiehackers, reddit, hackernews
-status: draft
+status: scheduled
 pr_reference: "#1257"
 issue_reference: "#1273"
 blog_url: "/blog/your-ai-team-works-from-your-actual-codebase/"

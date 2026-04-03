@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-03-12
-last_reviewed: 2026-03-12
+last_updated: 2026-04-03
+last_reviewed: 2026-04-03
 review_cadence: monthly
 owner: CMO
 depends_on:
@@ -12,8 +12,10 @@ depends_on:
 
 **Goal:** 5+ expressions of interest from solo technical founders for the product validation plan (#430).
 **Signal types:** Discord message, GitHub star from non-creator, social reply asking to try it, DM requesting access.
-**Campaign duration:** 3 weeks (2026-03-12 to 2026-03-30)
+**Campaign duration:** 3 weeks (2026-03-12 to 2026-03-30) — **COMPLETED 2026-03-30**
 **Cadence:** 2 posts per week (Tuesday + Thursday), staggered across platforms
+
+> **[2026-04-03 Post-Campaign Note]** This campaign's Tue/Thu cadence has been adopted as the perpetual publishing standard. See the "Publishing Cadence" section in `content-strategy.md` for the ongoing schedule. The automated content pipeline (`scheduled-content-generator.yml` + `scheduled-content-publisher.yml`) maintains this cadence indefinitely.
 
 ## Publishing Calendar
 
