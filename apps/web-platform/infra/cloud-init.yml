@@ -198,11 +198,16 @@ runcmd:
   # Pull and run container (secrets from Doppler -- no .env fallback)
   - docker pull ${image_name}
   - |
+    set -e
     # Source token from the restricted env file (avoids exposing it in /proc/<pid>/cmdline)
     set -a; . /etc/default/webhook-deploy; set +a
     TMPENV=$(mktemp /tmp/doppler-env.XXXXXX)
     chmod 600 "$TMPENV"
-    doppler secrets download --no-file --format docker --project soleur --config prd > "$TMPENV"
+    if ! doppler secrets download --no-file --format docker --project soleur --config prd > "$TMPENV"; then
+      rm -f "$TMPENV"
+      echo "FATAL: Doppler secrets download failed during initial provisioning" >&2
+      exit 1
+    fi
     docker run -d \
       --name soleur-web-platform \
       --restart unless-stopped \

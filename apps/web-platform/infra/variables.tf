@@ -29,6 +29,12 @@ variable "ssh_key_path" {
   default     = "~/.ssh/id_ed25519.pub"
 }
 
+variable "ssh_private_key_path" {
+  description = "Path to the private SSH key file (used by provisioners, stored in TF state)"
+  type        = string
+  default     = "~/.ssh/id_ed25519"
+}
+
 variable "server_type" {
   description = "Hetzner server type (cx33 = 4 vCPU, 8GB RAM)"
   type        = string

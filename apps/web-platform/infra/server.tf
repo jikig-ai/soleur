@@ -52,7 +52,7 @@ resource "terraform_data" "doppler_install" {
     type        = "ssh"
     host        = hcloud_server.web.ipv4_address
     user        = "root"
-    private_key = file("~/.ssh/id_ed25519")
+    private_key = file(var.ssh_private_key_path)
   }
 
   provisioner "remote-exec" {
