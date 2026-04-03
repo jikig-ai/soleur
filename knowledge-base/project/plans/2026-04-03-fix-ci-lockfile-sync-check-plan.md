@@ -102,12 +102,12 @@ Steps:
 
 ## Acceptance Criteria
 
-- [ ] New `lockfile-sync` job added to `.github/workflows/ci.yml`
-- [ ] Job runs `npm install --package-lock-only` in `apps/web-platform/`
-- [ ] Job fails when `package-lock.json` has uncommitted changes after regeneration
-- [ ] Job passes when `package-lock.json` is already in sync
-- [ ] Error message clearly explains what went wrong and how to fix it
-- [ ] Job uses pinned action SHAs consistent with existing CI jobs
+- [x] New `lockfile-sync` job added to `.github/workflows/ci.yml`
+- [x] Job runs `npm install --package-lock-only` in `apps/web-platform/`
+- [x] Job fails when `package-lock.json` has uncommitted changes after regeneration
+- [x] Job passes when `package-lock.json` is already in sync
+- [x] Error message clearly explains what went wrong and how to fix it
+- [x] Job uses pinned action SHAs consistent with existing CI jobs
 
 ## Test Scenarios
 
