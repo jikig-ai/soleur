@@ -173,4 +173,25 @@ describe("POST /api/repo/install — identity resolution", () => {
     const body = await res.json();
     expect(body.error).toMatch(/no github identity/i);
   });
+
+  test("returns 500 with descriptive error when getUserById throws", async () => {
+    mockGetUser.mockResolvedValue({
+      data: {
+        user: {
+          id: "user-crash",
+          identities: null,
+          app_metadata: { providers: ["email", "github"] },
+        },
+      },
+    });
+
+    mockAdminGetUserById.mockRejectedValue(
+      new Error("localStorage is not defined"),
+    );
+
+    const res = await POST(makeRequest({ installationId: 100 }));
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error).toMatch(/failed to resolve/i);
+  });
 });
