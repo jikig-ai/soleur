@@ -315,20 +315,20 @@ After this change, the drift detection workflow will report `terraform_data.dopp
 
 ## Acceptance Criteria
 
-- [ ] Doppler CLI is installed on the Hetzner server and `doppler --version` returns a valid version
-- [ ] `DOPPLER_TOKEN` is set in `/etc/environment` on the server (for interactive sessions)
-- [ ] `/etc/default/webhook-deploy` exists with `DOPPLER_TOKEN` set, owned by `deploy:deploy`, mode `600`
-- [ ] `webhook.service` includes `EnvironmentFile=/etc/default/webhook-deploy`
-- [ ] `ci-deploy.sh` `resolve_env_file()` exits with error when Doppler is unavailable (no `.env` fallback)
-- [ ] `ci-deploy.sh` `resolve_env_file()` exits with error when `DOPPLER_TOKEN` is not set
-- [ ] `ci-deploy.sh` `resolve_env_file()` exits with error when Doppler secrets download fails
-- [ ] A deploy via the webhook successfully uses Doppler to inject secrets into the container
-- [ ] The `/mnt/data/.env` file is no longer referenced in `ci-deploy.sh` or `cloud-init.yml` initial docker run
-- [ ] `.env.example` header no longer instructs copying to `/mnt/data/.env`
-- [ ] `cloud-init.yml` no longer creates `/mnt/data/.env` placeholder
-- [ ] `cloud-init.yml` creates `/etc/default/webhook-deploy` in runcmd for new servers
-- [ ] Terraform plan shows only `terraform_data.doppler_install` as a new resource (no server replacement)
-- [ ] Pre-removal `.env` audit confirms all server-side secrets exist in Doppler `prd` config
+- [ ] Doppler CLI is installed on the Hetzner server and `doppler --version` returns a valid version (verified at apply time)
+- [ ] `DOPPLER_TOKEN` is set in `/etc/environment` on the server (verified at apply time)
+- [ ] `/etc/default/webhook-deploy` exists with `DOPPLER_TOKEN` set, owned by `deploy:deploy`, mode `600` (verified at apply time)
+- [x] `webhook.service` includes `EnvironmentFile=/etc/default/webhook-deploy`
+- [x] `ci-deploy.sh` `resolve_env_file()` exits with error when Doppler is unavailable (no `.env` fallback)
+- [x] `ci-deploy.sh` `resolve_env_file()` exits with error when `DOPPLER_TOKEN` is not set
+- [x] `ci-deploy.sh` `resolve_env_file()` exits with error when Doppler secrets download fails
+- [ ] A deploy via the webhook successfully uses Doppler to inject secrets into the container (verified at apply time)
+- [x] The `/mnt/data/.env` file is no longer referenced in `ci-deploy.sh` or `cloud-init.yml` initial docker run
+- [x] `.env.example` header no longer instructs copying to `/mnt/data/.env`
+- [x] `cloud-init.yml` no longer creates `/mnt/data/.env` placeholder
+- [x] `cloud-init.yml` creates `/etc/default/webhook-deploy` in runcmd for new servers
+- [ ] Terraform plan shows only `terraform_data.doppler_install` as a new resource (verified at apply time)
+- [ ] Pre-removal `.env` audit confirms all server-side secrets exist in Doppler `prd` config (Phase 2b at apply time)
 
 ## Test Scenarios
 
