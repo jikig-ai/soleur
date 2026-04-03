@@ -2,19 +2,19 @@
 
 ## Phase 1: Verify/Create GitHub App (Configuration)
 
-- [ ] 1.1 Check if the GitHub App already exists via Playwright MCP (navigate to `https://github.com/organizations/jikig-ai/settings/apps` or personal account settings)
-- [ ] 1.2 If not exists: create GitHub App via `https://github.com/settings/apps/new` with:
+- [x] 1.1 Check if the GitHub App already exists via Playwright MCP (navigate to `https://github.com/organizations/jikig-ai/settings/apps` or personal account settings)
+- [x] 1.2 Created GitHub App "Soleur AI" (slug: `soleur-ai`, App ID: `3261325`) under jikig-ai org with:
   - Permissions: `contents:read+write`, `metadata:read`, `members:read`
   - Setup URL: `https://app.soleur.ai/connect-repo`
   - Callback URL: `https://app.soleur.ai/connect-repo`
   - Webhook: disabled
   - Visibility: **Public**
   - Where can this app be installed: **Any account**
-- [ ] 1.3 If exists but private: change visibility to public (irreversible once other accounts install)
-- [ ] 1.4 Store `GITHUB_APP_ID` in Doppler `prd` config (numeric App ID)
-- [ ] 1.5 Store `GITHUB_APP_PRIVATE_KEY` in Doppler `prd` config (PEM format, `\n`-escaped newlines)
-- [ ] 1.6 Store `NEXT_PUBLIC_GITHUB_APP_SLUG` in Doppler `prd` config (URL slug, e.g., `soleur`)
-- [ ] 1.7 Verify app is publicly accessible: `curl -s https://api.github.com/apps/<slug> | jq '.slug'` returns the slug (not 404)
+- [x] 1.3 N/A (app was created new, not existing)
+- [x] 1.4 Store `GITHUB_APP_ID` in Doppler `prd` config (numeric App ID: 3261325)
+- [x] 1.5 Store `GITHUB_APP_PRIVATE_KEY` in Doppler `prd` config (PEM format)
+- [x] 1.6 Store `NEXT_PUBLIC_GITHUB_APP_SLUG` in Doppler `prd` config (slug: `soleur-ai`)
+- [x] 1.7 Verified app is publicly accessible: `curl -s https://api.github.com/apps/soleur-ai` returns 200 with correct slug
 
 ## Phase 2: Server-Side Slug Resolution (Defense-in-Depth)
 

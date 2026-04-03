@@ -51,7 +51,7 @@ type SetupStep = {
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-const GITHUB_APP_SLUG = process.env.NEXT_PUBLIC_GITHUB_APP_SLUG ?? "soleur-ai";
+const DEFAULT_GITHUB_APP_SLUG = process.env.NEXT_PUBLIC_GITHUB_APP_SLUG ?? "soleur-ai";
 const GOLD_GRADIENT = "linear-gradient(135deg, #D4B36A, #B8923E)";
 
 // ---------------------------------------------------------------------------
@@ -1002,13 +1002,21 @@ export default function ConnectRepoPage() {
     name: string;
     isPrivate: boolean;
   } | null>(null);
+  const [appSlug, setAppSlug] = useState(DEFAULT_GITHUB_APP_SLUG);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ---------------------------------------------------------------------------
-  // On mount: check for GitHub callback params
+  // On mount: fetch dynamic app slug and check for GitHub callback params
   // ---------------------------------------------------------------------------
+  useEffect(() => {
+    fetch("/api/repo/app-info")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (data?.slug) setAppSlug(data.slug); })
+      .catch(() => { /* retain env var fallback */ });
+  }, []);
+
   useEffect(() => {
     const installationId = searchParams.get("installation_id");
     const setupAction = searchParams.get("setup_action");
@@ -1182,7 +1190,7 @@ export default function ConnectRepoPage() {
         // sessionStorage unavailable — proceed anyway
       }
     }
-    window.location.href = `https://github.com/apps/${GITHUB_APP_SLUG}/installations/new`;
+    window.location.href = `https://github.com/apps/${appSlug}/installations/new`;
   }
 
   function handleGitHubRedirectBack() {
@@ -1199,7 +1207,7 @@ export default function ConnectRepoPage() {
   }
 
   function handleUpdateAccess() {
-    window.location.href = `https://github.com/apps/${GITHUB_APP_SLUG}/installations/new`;
+    window.location.href = `https://github.com/apps/${appSlug}/installations/new`;
   }
 
   function handleRetry() {
@@ -1207,7 +1215,7 @@ export default function ConnectRepoPage() {
   }
 
   function handleResume() {
-    window.location.href = `https://github.com/apps/${GITHUB_APP_SLUG}/installations/new`;
+    window.location.href = `https://github.com/apps/${appSlug}/installations/new`;
   }
 
   function handleStartOver() {
