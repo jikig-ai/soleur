@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-03-25
-last_reviewed: 2026-03-24
-review_cadence: monthly
+last_updated: 2026-04-03
+last_reviewed: 2026-04-03
+review_cadence: weekly
 owner: CPO
 depends_on:
   - knowledge-base/product/business-validation.md
@@ -67,17 +67,18 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 
 ---
 
-## Current State (2026-03-23)
+## Current State (2026-04-03)
 
 | Dimension | Status |
 |-----------|--------|
-| Phase 1.0 (Working Loop) | Complete. All blocking issues closed (#667, #668, #669, #670, #671). |
-| Phase 1.5 (Secure + Polish) | Open (#674). 7 tasks unchecked. |
-| Phase 2 (Visibility) | Open (#672). Not started. |
-| Phase 3 (Hardening) | Open (#673). Not started. |
+| Phase 1 (Close the Loop) | Complete. Milestone closed. All 15 issues closed. |
+| Phase 2 (Secure for Beta) | Near-complete. 13/14 items done. Remaining: #1375 (onboarding walkthrough). |
+| Phase 3 (Make it Sticky) | In progress. 11 open, 2 closed. |
+| Phase 4 (Validate + Scale) | Not started. 14 open, 7 closed (6 issues added in 2026-04-03 review for missing rows 4.1–4.5, 4.10). |
+| Phase 5 (Desktop Native App) | Defined. 5 issues created (#1423-#1429). Trigger-gated on user demand. |
+| Post-MVP / Later | 56 open, 75 closed. |
 | Beta users | 0 |
 | Pricing gates passed | 0 of 5 |
-| Milestones | 0 |
 
 ---
 
@@ -93,13 +94,13 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 1.2 | Integration tests (WebSocket, auth, session) | P1 | [#668](https://github.com/jikig-ai/soleur/issues/668) | Done |
 | 1.3 | KB 404 placeholder (graceful empty state) | P2 | [#669](https://github.com/jikig-ai/soleur/issues/669) | Done |
 | 1.4 | Vendor DPA review (Supabase, Stripe, Hetzner, Cloudflare) | P1 | [#670](https://github.com/jikig-ai/soleur/issues/670) | Done |
-| 1.5 | Mobile-first responsive UI (sidebar → hamburger menu, touch-optimized nav) | P1 | [#1041](https://github.com/jikig-ai/soleur/issues/1041) | Not started |
-| 1.6 | PWA manifest + service worker + installability (app shell caching only, no offline mode) | P1 | [#1042](https://github.com/jikig-ai/soleur/issues/1042) | Not started |
-| 1.7 | Verify production deployment (end-to-end loop) | P1 | [#1075](https://github.com/jikig-ai/soleur/issues/1075) | Not started |
-| 1.8 | **Multi-turn conversation continuity** (architecture choice deferred to CTO during spec) | P1 | [#1044](https://github.com/jikig-ai/soleur/issues/1044) | **Broken** — agent has amnesia between turns (CTO review) |
-| 1.9 | Pin Agent SDK to exact version (`0.2.80`) | P1 | [#1045](https://github.com/jikig-ai/soleur/issues/1045) | Not started |
-| 1.10 | **Project repo connection** — clone founder's GitHub repo (public or private via GitHub App), install latest Soleur plugin, keep plugin updated | P1 | [#1060](https://github.com/jikig-ai/soleur/issues/1060) | In progress |
-| 1.11 | **Tag-and-route conversation model** — one chat input, system routes to relevant leaders, no dedicated domain leader pages | P1 | [#1059](https://github.com/jikig-ai/soleur/issues/1059) | Not started |
+| 1.5 | Mobile-first responsive UI (sidebar → hamburger menu, touch-optimized nav) | P1 | [#1041](https://github.com/jikig-ai/soleur/issues/1041) | Done |
+| 1.6 | PWA manifest + service worker + installability (app shell caching only, no offline mode) | P1 | [#1042](https://github.com/jikig-ai/soleur/issues/1042) | Done |
+| 1.7 | Verify production deployment (end-to-end loop) | P1 | [#1075](https://github.com/jikig-ai/soleur/issues/1075) | Done |
+| 1.8 | **Multi-turn conversation continuity** (architecture choice deferred to CTO during spec) | P1 | [#1044](https://github.com/jikig-ai/soleur/issues/1044) | Done |
+| 1.9 | Pin Agent SDK to exact version (`0.2.80`) | P1 | [#1045](https://github.com/jikig-ai/soleur/issues/1045) | Done |
+| 1.10 | **Project repo connection** — clone founder's GitHub repo (public or private via GitHub App), install latest Soleur plugin, keep plugin updated | P1 | [#1060](https://github.com/jikig-ai/soleur/issues/1060) | Done |
+| 1.11 | **Tag-and-route conversation model** — one chat input, system routes to relevant leaders, no dedicated domain leader pages | P1 | [#1059](https://github.com/jikig-ai/soleur/issues/1059) | Done |
 
 **Why 1.8 is P1 (CTO review):** "A chat product where the agent forgets everything after one turn is not viable even for beta. It will be the first thing every user notices." Each message currently spawns a fresh agent with no memory of prior exchange. `persistSession: false` is explicitly set. **Dependency note:** The multi-turn architecture choice (CTO decision during spec) has downstream implications for 2.4 (GDPR account deletion — what conversation data must be purged?), 2.9 (privacy docs — what is stored?), and 3.3 (conversation inbox — what is displayed?).
 
@@ -134,20 +135,20 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 
 | # | Feature | Priority | Source | Status |
 |---|---------|----------|--------|--------|
-| 2.1 | Security audit (OWASP top 10, BYOK handling, workspace isolation, path traversal) | P1 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
-| 2.2 | CSP + CORS headers on all routes | P1 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Partially done |
-| 2.3 | Session timeout + WebSocket expiry on idle | P1 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
-| 2.4 | Account deletion + data purge (GDPR) | P1 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
-| 2.5 | Basic WebSocket rate limiting (per-IP connection throttle) | P1 | CTO review | Not started |
-| 2.6 | Add `/proc` to sandbox deny list | P1 | CTO review | Not started |
-| 2.7 | Update AUP for Web Platform scope | P1 | CLO review | Not started |
-| 2.8 | Update Cookie Policy for app.soleur.ai | P1 | CLO review | Not started |
-| 2.9 | Add conversation history to Privacy Policy, DPD, GDPR register | P1 | CLO review | Not started |
-| 2.10 | Error + empty states (agent failure, network loss, rate limit) | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
-| 2.11 | First-time onboarding walkthrough (include PWA install guidance for iOS) | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
-| 2.12 | UX audit of all Phase 1 screens | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Not started |
-| 2.13 | Supply chain dependency hardening (lockfile integrity, pinning, scanning) | P1 | [#1174](https://github.com/jikig-ai/soleur/issues/1174) | Not started |
-| 2.14 | OAuth sign-in (Google, Apple, GitHub, Microsoft) via Supabase redirect flow | P2 | [#1210](https://github.com/jikig-ai/soleur/issues/1210) | Not started |
+| 2.1 | Security audit (OWASP top 10, BYOK handling, workspace isolation, path traversal) | P1 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Done |
+| 2.2 | CSP + CORS headers on all routes | P1 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Done |
+| 2.3 | Session timeout + WebSocket expiry on idle | P1 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Done |
+| 2.4 | Account deletion + data purge (GDPR) | P1 | [#674](https://github.com/jikig-ai/soleur/issues/674), [#1376](https://github.com/jikig-ai/soleur/issues/1376) | Done |
+| 2.5 | Basic WebSocket rate limiting (per-IP connection throttle) | P1 | [#1046](https://github.com/jikig-ai/soleur/issues/1046) | Done |
+| 2.6 | Add `/proc` to sandbox deny list | P1 | [#1047](https://github.com/jikig-ai/soleur/issues/1047) | Done |
+| 2.7 | Update AUP for Web Platform scope | P1 | [#1048](https://github.com/jikig-ai/soleur/issues/1048) | Done |
+| 2.8 | Update Cookie Policy for app.soleur.ai | P1 | [#1048](https://github.com/jikig-ai/soleur/issues/1048) | Done |
+| 2.9 | Add conversation history to Privacy Policy, DPD, GDPR register | P1 | [#1048](https://github.com/jikig-ai/soleur/issues/1048) | Done |
+| 2.10 | Error + empty states (agent failure, network loss, rate limit) | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Done |
+| 2.11 | First-time onboarding walkthrough (include PWA install guidance for iOS) | P2 | [#1375](https://github.com/jikig-ai/soleur/issues/1375) | Not started |
+| 2.12 | UX audit of all Phase 1 screens | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Done |
+| 2.13 | Supply chain dependency hardening (lockfile integrity, pinning, scanning) | P1 | [#1174](https://github.com/jikig-ai/soleur/issues/1174) | Done |
+| 2.14 | OAuth sign-in (Google, Apple, GitHub, Microsoft) via Supabase redirect flow | P2 | [#1210](https://github.com/jikig-ai/soleur/issues/1210) | Done |
 
 **Exit criteria (beta launch gate):**
 
@@ -183,13 +184,13 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 3.6 | Usage/cost indicator (BYOK spending) | P2 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
 | 3.7 | Review gate notifications (PWA push + email fallback for iOS) | P2 | [#1049](https://github.com/jikig-ai/soleur/issues/1049) | Not started |
 | 3.8 | Guided instructions fallback (deep links + review gates for services without API/MCP) | P2 | [#1077](https://github.com/jikig-ai/soleur/issues/1077) | Not started |
-| 3.9 | Chat UX redesign — remove department grid, @-mention autocomplete, auto-routing, sidebar | P2 | [#1289](https://github.com/jikig-ai/soleur/issues/1289) | Wireframes approved, spec complete |
+| 3.9 | Chat UX redesign — remove department grid, @-mention autocomplete, auto-routing, sidebar | P2 | [#1289](https://github.com/jikig-ai/soleur/issues/1289) | Done (completed in P2) |
 | 3.10 | CI/CD integration (agents trigger deploys, run tests, open PRs on founder's repo) | P1 | [#1062](https://github.com/jikig-ai/soleur/issues/1062) | Not started |
 | 3.11 | Product analytics instrumentation for P4 validation metrics (domain engagement, session frequency, KB growth) | P1 | [#1063](https://github.com/jikig-ai/soleur/issues/1063) | Not started |
-| 3.12 | Pricing page (soleur.ai) | P1 | [#656](https://github.com/jikig-ai/soleur/issues/656) | Not started |
+| 3.12 | Pricing page (soleur.ai) | P1 | [#656](https://github.com/jikig-ai/soleur/issues/656) | Done |
 | 3.13 | Subscription management (cancel, upgrade/downgrade) | P1 | [#1078](https://github.com/jikig-ai/soleur/issues/1078) | Not started |
 | 3.14 | Invoice history + failed payment handling | P2 | [#1079](https://github.com/jikig-ai/soleur/issues/1079) | Not started |
-| 3.15 | Fix meta tags not rendering in production HTML (OG, canonical, Twitter cards) | P0 | [#1121](https://github.com/jikig-ai/soleur/issues/1121) | Not started |
+| 3.15 | Fix meta tags not rendering in production HTML (OG, canonical, Twitter cards) | P0 | [#1121](https://github.com/jikig-ai/soleur/issues/1121) | Done |
 
 **Why 3.1-3.2 matter:** The knowledge base is the compounding moat. If founders cannot see plans, brainstorms, brand guides, and competitive analyses their agents produced, the value is invisible. The KB viewer closes the review loop.
 
@@ -214,17 +215,17 @@ Before recruiting founders, all public surfaces must reflect the cloud platform 
 
 | # | Item | Effort | Status |
 |---|------|--------|--------|
-| M1 | Update brand guide positioning (remove plugin framing, cloud platform as primary) | 30 min | Not started |
-| M2 | Update homepage hero subtitle + meta description (remove "plugin" from meta descriptions) | 30 min | Not started — [#1129](https://github.com/jikig-ai/soleur/issues/1129) |
-| M3 | Update marketing strategy for cloud pivot | 2 hours | Not started |
-| M4 | Draft recruitment messaging templates per channel | 2 hours | Not started |
-| M5 | Update Getting Started page (cloud platform primary, CLI plugin secondary) | 2 hours | Not started |
-| M6 | Standardize agent/skill counts across all surfaces | 2 hours | Not started |
-| M7 | Exclude feed.xml from sitemap.xml | 15 min | Not started — [#1122](https://github.com/jikig-ai/soleur/issues/1122) |
-| M8 | Add case studies to Atom feed entries | 30 min | Not started — [#1123](https://github.com/jikig-ai/soleur/issues/1123) |
-| M9 | Fix author URL to point to About page (blocked by About page creation) | 30 min | Blocked — [#1124](https://github.com/jikig-ai/soleur/issues/1124) |
-| M10 | Add external source citations to homepage (AEO/GEO citability — zero citations currently) | 1 hour | Not started — [#1130](https://github.com/jikig-ai/soleur/issues/1130) |
-| M11 | Surface "open source" differentiator on homepage and key pages (absent from headings/meta) | 1 hour | Not started — [#1134](https://github.com/jikig-ai/soleur/issues/1134) |
+| M1 | Update brand guide positioning (remove plugin framing, cloud platform as primary) | 30 min | Done — [#1004](https://github.com/jikig-ai/soleur/issues/1004) |
+| M2 | Update homepage hero subtitle + meta description (remove "plugin" from meta descriptions) | 30 min | Done — [#1129](https://github.com/jikig-ai/soleur/issues/1129) |
+| M3 | Update marketing strategy for cloud pivot | 2 hours | Not started — [#1051](https://github.com/jikig-ai/soleur/issues/1051) |
+| M4 | Draft recruitment messaging templates per channel | 2 hours | Not started — [#1445](https://github.com/jikig-ai/soleur/issues/1445) |
+| M5 | Update Getting Started page (cloud platform primary, CLI plugin secondary) | 2 hours | Not started — [#1446](https://github.com/jikig-ai/soleur/issues/1446) |
+| M6 | Standardize agent/skill counts across all surfaces | 2 hours | Not started — [#1447](https://github.com/jikig-ai/soleur/issues/1447) |
+| M7 | Exclude feed.xml from sitemap.xml | 15 min | Done — [#1122](https://github.com/jikig-ai/soleur/issues/1122) |
+| M8 | Add case studies to Atom feed entries | 30 min | Done — [#1123](https://github.com/jikig-ai/soleur/issues/1123) |
+| M9 | Fix author URL to point to About page (blocked by About page creation) | 30 min | Done — [#1124](https://github.com/jikig-ai/soleur/issues/1124) |
+| M10 | Add external source citations to homepage (AEO/GEO citability — zero citations currently) | 1 hour | Done — [#1130](https://github.com/jikig-ai/soleur/issues/1130) |
+| M11 | Surface "open source" differentiator on homepage and key pages (absent from headings/meta) | 1 hour | Done — [#1134](https://github.com/jikig-ai/soleur/issues/1134) |
 
 **Gate:** No recruitment outreach until M1-M4 complete.
 
@@ -236,9 +237,9 @@ Before recruiting founders, the platform must handle multiple users signing up a
 
 | # | Item | Status |
 |---|------|--------|
-| MU1 | Signup provisions a workspace (git clone + plugin install per user) | Depends on P1 item 1.10 |
-| MU2 | BYOK encryption works per-tenant (each user's API key isolated) | Existing — verify |
-| MU3 | Workspace isolation at process level (container isolation is P4 hardening, but basic isolation must work) | Existing bubblewrap sandbox — verify with cross-workspace integration test |
+| MU1 | Signup provisions a workspace (git clone + plugin install per user) | [#1448](https://github.com/jikig-ai/soleur/issues/1448) Depends on P1 item 1.10 — verify |
+| MU2 | BYOK encryption works per-tenant (each user's API key isolated) | [#1449](https://github.com/jikig-ai/soleur/issues/1449) Existing — verify |
+| MU3 | Workspace isolation at process level (container isolation is P4 hardening, but basic isolation must work) | [#1450](https://github.com/jikig-ai/soleur/issues/1450) Existing bubblewrap sandbox — verify with cross-workspace integration test |
 
 **Gate:** All three must pass before any recruitment outreach.
 
@@ -250,16 +251,16 @@ Before recruiting founders, the platform must handle multiple users signing up a
 
 | # | Feature | Priority | Trigger | Status |
 |---|---------|----------|---------|--------|
-| 4.1 | Recruit 10 solo founders (mixed channels) | P1 | Phase 2 + Marketing Gate + Multi-User Gate complete | Not started |
-| 4.2 | Problem interviews (no demo) | P1 | 10 founders recruited | Not started |
-| 4.3 | Guided onboarding with top 5 | P1 | 5+ pass problem interviews | Not started |
-| 4.4 | 2-week unassisted usage tracking | P1 | Onboarding complete | Not started |
-| 4.5 | Exit interviews + willingness-to-pay | P1 | 2 weeks elapsed | Not started |
+| 4.1 | Recruit 10 solo founders (mixed channels) | P1 | Phase 2 + Marketing Gate + Multi-User Gate complete | [#1439](https://github.com/jikig-ai/soleur/issues/1439) Not started |
+| 4.2 | Problem interviews (no demo) | P1 | 10 founders recruited | [#1440](https://github.com/jikig-ai/soleur/issues/1440) Not started |
+| 4.3 | Guided onboarding with top 5 | P1 | 5+ pass problem interviews | [#1441](https://github.com/jikig-ai/soleur/issues/1441) Not started |
+| 4.4 | 2-week unassisted usage tracking | P1 | Onboarding complete | [#1442](https://github.com/jikig-ai/soleur/issues/1442) Not started |
+| 4.5 | Exit interviews + willingness-to-pay | P1 | 2 weeks elapsed | [#1443](https://github.com/jikig-ai/soleur/issues/1443) Not started |
 | 4.6 | Container-per-workspace isolation | P1 | 5+ concurrent users | [#673](https://github.com/jikig-ai/soleur/issues/673) |
 | 4.7 | Plan-based agent concurrency enforcement (slot limits per subscription tier) | P1 | Before public launch | [#1162](https://github.com/jikig-ai/soleur/issues/1162), [#673](https://github.com/jikig-ai/soleur/issues/673) |
 | 4.8 | Resource monitoring (CPU/RAM per workspace) | P1 | Before beta invites | [#673](https://github.com/jikig-ai/soleur/issues/673) |
 | 4.9 | Monitoring + error tracking | P2 | 10+ users | [#673](https://github.com/jikig-ai/soleur/issues/673) |
-| 4.10 | Stripe live mode activation | P1 | 4 of 5 pricing gates pass | Not started |
+| 4.10 | Stripe live mode activation | P1 | 4 of 5 pricing gates pass | [#1444](https://github.com/jikig-ai/soleur/issues/1444) Not started |
 
 **Recruitment channels:** Claude Code Discord, GitHub (developers with business-operations repos), IndieHackers, X/Twitter solopreneur network, direct network.
 
@@ -291,13 +292,13 @@ Before recruiting founders, the platform must handle multiple users signing up a
 
 **Objective:** Ship a desktop app (Electron or Tauri) that provides local Playwright browser automation — the one capability PWA cannot deliver. Triggered by user demand, not calendar.
 
-| # | Feature | Priority | Trigger | Status |
-|---|---------|----------|---------|--------|
-| 5.1 | Electron/Tauri app wrapping the web platform | P1 | Beta users request browser automation | Not started |
-| 5.2 | Local Playwright integration for third-party service setup | P1 | Desktop app shipped | Not started |
-| 5.3 | Reuse ops-provisioner guided setup pattern (3-phase: Setup, Configure, Verify) | P1 | Playwright integrated | Not started |
-| 5.4 | Auto-update mechanism | P2 | Desktop app shipped | Not started |
-| 5.5 | Code signing (macOS + Windows) | P1 | Before distribution | Not started |
+| # | Feature | Priority | Issue | Trigger | Status |
+|---|---------|----------|-------|---------|--------|
+| 5.1 | Electron/Tauri app wrapping the web platform | P1 | [#1423](https://github.com/jikig-ai/soleur/issues/1423) | Beta users request browser automation | Not started |
+| 5.2 | Local Playwright integration for third-party service setup | P1 | [#1425](https://github.com/jikig-ai/soleur/issues/1425) | Desktop app shipped | Not started |
+| 5.3 | Reuse ops-provisioner guided setup pattern (3-phase: Setup, Configure, Verify) | P1 | [#1427](https://github.com/jikig-ai/soleur/issues/1427) | Playwright integrated | Not started |
+| 5.4 | Auto-update mechanism | P2 | [#1428](https://github.com/jikig-ai/soleur/issues/1428) | Desktop app shipped | Not started |
+| 5.5 | Code signing (macOS + Windows) | P1 | [#1429](https://github.com/jikig-ai/soleur/issues/1429) | Before distribution | Not started |
 
 **Why this phase exists:** Browser automation is impossible on PWA, iOS, and Android due to platform sandboxing. Only a native desktop app can run Playwright locally on the user's machine. This is the desktop app's reason to exist — not wrapping the web app, but providing a capability no other surface can.
 
@@ -318,9 +319,9 @@ Low-priority improvements deferred until after validation. Revisit when the plat
 
 | # | Item | Priority | Issue | Status |
 |---|------|----------|-------|--------|
-| L1 | Vision page H1 rewrite (zero keyword value — "Vision" alone) | P1 | [#1131](https://github.com/jikig-ai/soleur/issues/1131) | Not started |
-| L2 | Add external citations to AI Agents for Solo Founders guide | P1 | [#1132](https://github.com/jikig-ai/soleur/issues/1132) | Not started |
-| L3 | Add source citations to case study cost comparisons (5 posts) | P1 | [#1133](https://github.com/jikig-ai/soleur/issues/1133) | Not started |
+| L1 | Vision page H1 rewrite (zero keyword value — "Vision" alone) | P1 | [#1131](https://github.com/jikig-ai/soleur/issues/1131) | Done |
+| L2 | Add external citations to AI Agents for Solo Founders guide | P1 | [#1132](https://github.com/jikig-ai/soleur/issues/1132) | Done |
+| L3 | Add source citations to case study cost comparisons (5 posts) | P1 | [#1133](https://github.com/jikig-ai/soleur/issues/1133) | Done |
 
 ---
 
@@ -361,14 +362,14 @@ Full analysis: `knowledge-base/product/pricing-strategy.md`.
 
 ## Review Cadence
 
-Monthly CPO review. Pre-product-market-fit: the landscape changes faster than a quarter allows.
+Weekly CPO review (every Monday). Pre-product-market-fit: the landscape changes faster than a month allows.
 
-- **Monthly:** Review phase progress. Update statuses. Re-assess priorities based on user signal.
+- **Weekly:** Review phase progress. Update statuses. Re-assess priorities based on user signal.
 - **After each beta cohort:** Update validation findings. Adjust Phase 3 scope.
 - **Quarterly:** Full roadmap revision. Cross-reference with competitive intelligence and marketing strategy.
 
-Next review: 2026-04-23.
+Next review: 2026-04-10.
 
 ---
 
-_Generated: 2026-03-23. Domain review: CTO, CLO, CFO, CMO (2026-03-23). Sources: business-validation.md (2026-03-12), competitive-intelligence.md (2026-03-12), pricing-strategy.md (2026-03-12), brand-guide.md (2026-02-21). Workshop conducted via /soleur:product-roadmap skill._
+_Generated: 2026-03-23. Domain review: CTO, CLO, CFO, CMO (2026-03-23). Milestone audit: 2026-04-03. Sources: business-validation.md (2026-03-12), competitive-intelligence.md (2026-03-12), pricing-strategy.md (2026-03-12), brand-guide.md (2026-02-21). Workshop conducted via /soleur:product-roadmap skill._

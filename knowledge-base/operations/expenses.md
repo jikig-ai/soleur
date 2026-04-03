@@ -12,7 +12,7 @@ last_updated: 2026-03-28
 | Hetzner CX22 | Hetzner | hosting | 5.83 | active | 2026-03-01 | 2 vCPU, 4 GB RAM, 40 GB SSD, eu-central (telegram-bridge) |
 | Hetzner CX33 | Hetzner | hosting | 15.37 | active | 2026-04-01 | 4 vCPU, 8 GB RAM, 160 GB SSD, hel1 (web platform). DPA: must be signed via Hetzner Console |
 | Hetzner Volume (20 GB) | Hetzner | hosting | 0.88 | active | 2026-04-01 | Persistent storage for /workspaces, hel1 (web platform) |
-| Supabase | Supabase | saas | 0.00 | free-tier | - | Auth + PostgreSQL for web platform. Upgrade triggers: 500 MB DB, 50K MAU, 1 GB file storage, 2 GB bandwidth. Pro tier: $25/mo |
+| Supabase Pro + Custom Domain | Supabase | saas | 35.00 | active | 2026-04-03 | Pro plan ($25/mo) + custom domain add-on ($10/mo). Custom domain: api.soleur.ai for branded OAuth callbacks |
 | Stripe | Stripe | payments | 0.00 | test-mode | - | Payment processing for web platform. Live costs: 2.9% + $0.30/charge (US), 1.5% + EUR 0.25/charge (EU cards). No monthly minimum |
 | soleur.ai | Cloudflare | domain | 70.00 | active | 2028-02-16 | 2-year registration required for .ai TLD. Also proxies app.soleur.ai (A record to Hetzner CX33, free tier) |
 | Plausible Analytics | Plausible | saas | 9.00 | active | 2027-03-28 | Growth plan, 10K pageviews, EUR 9/mo. Annual renewal |
