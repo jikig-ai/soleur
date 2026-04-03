@@ -149,15 +149,15 @@ The server-side guard (`if (!session.conversationId)`) is correct defense-in-dep
 
 ## Acceptance Criteria
 
-- [ ] Sending a message from the dashboard that navigates to `/dashboard/chat/new?msg=<text>` results in the message being delivered after the session is established, with no "No active session" error
-- [ ] The `useWebSocket` hook exposes a `sessionConfirmed` boolean that is `true` only after receiving `session_started` from the server
-- [ ] `sessionConfirmed` resets to `false` when `startSession()` is called (prevents stale state from a previous session)
-- [ ] `sessionConfirmed` resets to `false` inside `connect()` on every reconnection attempt (prevents stale `true` from prior connection)
-- [ ] `sessionConfirmed` resets to `false` inside `teardown()` on non-transient close codes (auth failure, superseded, idle timeout)
-- [ ] Existing behavior is preserved: sessions without `?msg=` param work as before, manual `sendMessage` calls from the input field work as before
-- [ ] Reconnection flows (transient disconnect, reconnect) do not break the new gating logic -- `sessionConfirmed` is `false` until the server re-confirms
-- [ ] The `handleSend` function (manual chat input) is NOT gated on `sessionConfirmed` -- it relies on the existing `status === "connected"` check, since by the time a user manually types, the session is already confirmed
-- [ ] `resume_session` server response also sets `sessionConfirmed` to `true` (the server sends `session_started` for both `start_session` and `resume_session`)
+- [x] Sending a message from the dashboard that navigates to `/dashboard/chat/new?msg=<text>` results in the message being delivered after the session is established, with no "No active session" error
+- [x] The `useWebSocket` hook exposes a `sessionConfirmed` boolean that is `true` only after receiving `session_started` from the server
+- [x] `sessionConfirmed` resets to `false` when `startSession()` is called (prevents stale state from a previous session)
+- [x] `sessionConfirmed` resets to `false` inside `connect()` on every reconnection attempt (prevents stale `true` from prior connection)
+- [x] `sessionConfirmed` resets to `false` inside `teardown()` on non-transient close codes (auth failure, superseded, idle timeout)
+- [x] Existing behavior is preserved: sessions without `?msg=` param work as before, manual `sendMessage` calls from the input field work as before
+- [x] Reconnection flows (transient disconnect, reconnect) do not break the new gating logic -- `sessionConfirmed` is `false` until the server re-confirms
+- [x] The `handleSend` function (manual chat input) is NOT gated on `sessionConfirmed` -- it relies on the existing `status === "connected"` check, since by the time a user manually types, the session is already confirmed
+- [x] `resume_session` server response also sets `sessionConfirmed` to `true` (the server sends `session_started` for both `start_session` and `resume_session`)
 
 ## Test Scenarios
 
