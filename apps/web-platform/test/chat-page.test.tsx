@@ -171,4 +171,61 @@ describe("ChatPage", () => {
     await renderChatPage();
     expect(screen.getByText("help with pricing")).toBeInTheDocument();
   });
+
+  it("shows thinking dots when assistant message has empty content", async () => {
+    wsReturn.messages = [
+      { id: "s1", role: "assistant", content: "", type: "text", leaderId: "cpo" },
+    ];
+    await renderChatPage();
+    // Thinking indicator should be present (3 pulsing dots)
+    const dots = document.querySelectorAll("[data-testid='thinking-dots'] span");
+    expect(dots.length).toBe(3);
+  });
+
+  it("hides thinking dots when assistant content is non-empty", async () => {
+    wsReturn.messages = [
+      { id: "s1", role: "assistant", content: "Here is my response", type: "text", leaderId: "cpo" },
+    ];
+    await renderChatPage();
+    const dots = document.querySelectorAll("[data-testid='thinking-dots']");
+    expect(dots.length).toBe(0);
+    expect(screen.getByText(/Here is my response/)).toBeInTheDocument();
+  });
+
+  it("renders markdown headings as styled elements (not raw ###)", async () => {
+    wsReturn.activeLeaderIds = [];
+    wsReturn.messages = [
+      { id: "s1", role: "assistant", content: "### Current State", type: "text", leaderId: "coo" },
+    ];
+    await renderChatPage();
+    // Should render as an h3, not raw "### Current State" text
+    const heading = document.querySelector("h3");
+    expect(heading).not.toBeNull();
+    expect(heading!.textContent).toBe("Current State");
+  });
+
+  it("renders GFM tables as HTML tables", async () => {
+    wsReturn.activeLeaderIds = [];
+    wsReturn.messages = [
+      { id: "s1", role: "assistant", content: "| Item | Status |\n| --- | --- |\n| Git | Done |", type: "text", leaderId: "coo" },
+    ];
+    await renderChatPage();
+    const table = document.querySelector("table");
+    expect(table).not.toBeNull();
+    const cells = document.querySelectorAll("td");
+    expect(cells.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("strips dangerous script tags from markdown", async () => {
+    wsReturn.activeLeaderIds = [];
+    wsReturn.messages = [
+      { id: "s1", role: "assistant", content: "<script>alert('xss')</script>Safe text", type: "text", leaderId: "cpo" },
+    ];
+    await renderChatPage();
+    // Script tag should not be present
+    const scripts = document.querySelectorAll("script");
+    expect(scripts.length).toBe(0);
+    // Safe text should still render
+    expect(screen.getByText(/Safe text/)).toBeInTheDocument();
+  });
 });

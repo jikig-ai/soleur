@@ -195,21 +195,26 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
         log.info({ userId, leaderId: msg.leaderId ?? "auto-route" }, "start_session");
         const conversationId = await createConversation(userId, msg.leaderId);
         session.conversationId = conversationId;
-        log.info({ conversationId }, "Conversation created, booting agent");
-
-        // Boot the agent runner (async -- streams will flow via sendToClient)
-        startAgentSession(userId, conversationId, msg.leaderId, undefined, undefined, msg.context).catch(
-          (err) => {
-            Sentry.captureException(err);
-            log.error({ userId, err }, "startAgentSession error");
-            sendToClient(userId, {
-              type: "error",
-              message: sanitizeErrorForClient(err),
-              errorCode:
-                err instanceof KeyInvalidError ? "key_invalid" : undefined,
-            });
-          },
-        );
+        // Only boot agent immediately for directed sessions (@-mention).
+        // Auto-route sessions (no leaderId) wait for the first chat message
+        // which triggers sendUserMessage -> routeMessage -> dispatchToLeaders.
+        if (msg.leaderId) {
+          log.info({ conversationId, leaderId: msg.leaderId }, "Directed session, booting agent");
+          startAgentSession(userId, conversationId, msg.leaderId, undefined, undefined, msg.context).catch(
+            (err) => {
+              Sentry.captureException(err);
+              log.error({ userId, err }, "startAgentSession error");
+              sendToClient(userId, {
+                type: "error",
+                message: sanitizeErrorForClient(err),
+                errorCode:
+                  err instanceof KeyInvalidError ? "key_invalid" : undefined,
+              });
+            },
+          );
+        } else {
+          log.info({ conversationId }, "Auto-route session, waiting for first message");
+        }
 
         sendToClient(userId, { type: "session_started", conversationId });
         resetIdleTimer(userId, session);
