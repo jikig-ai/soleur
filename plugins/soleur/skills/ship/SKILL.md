@@ -219,10 +219,10 @@ For each new source file, check if a corresponding test file exists (e.g., `foo.
 
 **Interactive mode:** Ask the user whether to write tests now or continue without them. Do not silently proceed.
 
-Then run the project's test suite:
+Then run the project's full test suite (matches CI):
 
 ```bash
-bun test
+bash scripts/test-all.sh
 ```
 
 **If tests fail:**
