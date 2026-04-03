@@ -37,4 +37,12 @@ describe("safeReturnTo", () => {
   it("blocks paths that start with /dashboard but use // after", () => {
     expect(safeReturnTo("/dashboard//evil.com")).toBe("/dashboard");
   });
+
+  it("blocks path traversal with ..", () => {
+    expect(safeReturnTo("/dashboard/../../etc/passwd")).toBe("/dashboard");
+  });
+
+  it("blocks path traversal escaping dashboard", () => {
+    expect(safeReturnTo("/dashboard/../logout")).toBe("/dashboard");
+  });
 });

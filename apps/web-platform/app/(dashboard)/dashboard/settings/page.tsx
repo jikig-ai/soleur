@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { SettingsContent } from "@/components/settings/settings-content";
+import type { RepoStatus } from "@/components/settings/project-setup-card";
 
 export default async function SettingsPage() {
   const supabase = await createClient();
@@ -35,7 +36,7 @@ export default async function SettingsPage() {
       apiKeyProvider={apiKey?.provider ?? null}
       apiKeyLastValidated={apiKey?.updated_at ?? null}
       repoUrl={repoData?.repo_url ?? null}
-      repoStatus={repoData?.repo_status ?? "not_connected"}
+      repoStatus={(repoData?.repo_status as RepoStatus) ?? "not_connected"}
       repoLastSyncedAt={repoData?.repo_last_synced_at ?? null}
     />
   );

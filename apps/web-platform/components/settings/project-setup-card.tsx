@@ -1,6 +1,8 @@
+export type RepoStatus = "not_connected" | "ready" | "error" | "cloning";
+
 interface ProjectSetupCardProps {
   repoUrl: string | null;
-  repoStatus: string;
+  repoStatus: RepoStatus;
   repoLastSyncedAt: string | null;
 }
 

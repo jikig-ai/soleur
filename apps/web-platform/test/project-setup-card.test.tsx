@@ -113,7 +113,7 @@ describe("ProjectSetupCard", () => {
     expect(screen.getByText(/setting up/i)).toBeInTheDocument();
   });
 
-  it("renders Project heading for all states", async () => {
+  it("renders Project heading", async () => {
     const { ProjectSetupCard } = await import(
       "@/components/settings/project-setup-card"
     );

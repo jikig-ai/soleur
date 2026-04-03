@@ -1161,17 +1161,22 @@ export default function ConnectRepoPage() {
     setState("github_redirect");
   }
 
-  function handleSkip() {
-    let returnPath = "/dashboard";
+  /** Read and clear the stored return path from sessionStorage. */
+  function consumeReturnTo(): string {
     try {
       const stored = sessionStorage.getItem("soleur_return_to");
       if (stored) {
         sessionStorage.removeItem("soleur_return_to");
-        returnPath = safeReturnTo(stored);
+        return safeReturnTo(stored);
       }
     } catch {
       // sessionStorage unavailable
     }
+    return "/dashboard";
+  }
+
+  function handleSkip() {
+    let returnPath = consumeReturnTo();
     if (returnPath === "/dashboard") {
       // Also check URL param directly (no GitHub redirect happened)
       returnPath = safeReturnTo(searchParams.get("return_to"));
@@ -1197,11 +1202,12 @@ export default function ConnectRepoPage() {
         // sessionStorage unavailable — proceed anyway
       }
     }
-    // Persist return_to so it survives the GitHub redirect
+    // Persist return_to so it survives the GitHub redirect (validate before storing)
     try {
       const returnTo = searchParams.get("return_to");
-      if (returnTo) {
-        sessionStorage.setItem("soleur_return_to", returnTo);
+      const validated = safeReturnTo(returnTo);
+      if (validated !== "/dashboard") {
+        sessionStorage.setItem("soleur_return_to", validated);
       }
     } catch {
       // sessionStorage unavailable
@@ -1240,17 +1246,7 @@ export default function ConnectRepoPage() {
   }
 
   function handleOpenDashboard() {
-    let returnPath = "/dashboard";
-    try {
-      const stored = sessionStorage.getItem("soleur_return_to");
-      if (stored) {
-        sessionStorage.removeItem("soleur_return_to");
-        returnPath = safeReturnTo(stored);
-      }
-    } catch {
-      // sessionStorage unavailable
-    }
-    router.push(returnPath);
+    router.push(consumeReturnTo());
   }
 
   // ---------------------------------------------------------------------------

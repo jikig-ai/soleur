@@ -234,7 +234,7 @@ describe("Settings page sections", () => {
     const { SettingsContent } = await import(
       "@/components/settings/settings-content"
     );
-    const { container } = render(
+    render(
       <SettingsContent
         userEmail="test@example.com"
         hasApiKey={false}
@@ -245,12 +245,10 @@ describe("Settings page sections", () => {
         repoLastSyncedAt={null}
       />,
     );
-    const sections = container.querySelectorAll("section");
-    const headings = Array.from(sections).map(
-      (s) => s.querySelector("h2")?.textContent,
-    );
-    expect(headings.indexOf("Project")).toBeLessThan(
-      headings.indexOf("API Key"),
+    const headings = screen.getAllByRole("heading", { level: 2 });
+    const headingTexts = headings.map((h) => h.textContent);
+    expect(headingTexts.indexOf("Project")).toBeLessThan(
+      headingTexts.indexOf("API Key"),
     );
   });
 });

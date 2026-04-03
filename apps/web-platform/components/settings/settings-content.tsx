@@ -1,6 +1,6 @@
 import { KeyRotationForm } from "./key-rotation-form";
 import { DeleteAccountDialog } from "./delete-account-dialog";
-import { ProjectSetupCard } from "./project-setup-card";
+import { ProjectSetupCard, type RepoStatus } from "./project-setup-card";
 
 interface SettingsContentProps {
   userEmail: string;
@@ -8,7 +8,7 @@ interface SettingsContentProps {
   apiKeyProvider: string | null;
   apiKeyLastValidated: string | null;
   repoUrl: string | null;
-  repoStatus: string;
+  repoStatus: RepoStatus;
   repoLastSyncedAt: string | null;
 }
 
