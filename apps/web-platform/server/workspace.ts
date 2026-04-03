@@ -167,7 +167,9 @@ export async function provisionWorkspaceWithRepo(
         { stdio: "pipe", timeout: 120_000 },
       );
     } catch (err) {
-      const stderr = (err as { stderr?: Buffer })?.stderr?.toString() ?? "";
+      const rawStderr = (err as { stderr?: Buffer })?.stderr?.toString() ?? "";
+      // Strip internal paths to avoid leaking server filesystem layout
+      const stderr = rawStderr.replace(/\/[^\s:]+/g, "<path>");
       throw new Error(`Git clone failed: ${stderr || (err as Error).message}`);
     }
 

@@ -56,8 +56,6 @@ export async function GET() {
     repoName,
     lastSyncedAt: userData.repo_last_synced_at ?? null,
     hasKnowledgeBase,
-    ...(status === "error" && userData.repo_error
-      ? { errorMessage: userData.repo_error }
-      : {}),
+    errorMessage: status === "error" ? (userData.repo_error ?? null) : null,
   });
 }

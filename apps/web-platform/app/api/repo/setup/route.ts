@@ -122,7 +122,8 @@ export async function POST(request: Request) {
       logger.error({ err, userId: user.id, repoUrl }, "Repo clone failed");
       Sentry.captureException(err);
 
-      const errorMessage = err instanceof Error ? err.message : String(err);
+      const rawMessage = err instanceof Error ? err.message : String(err);
+      const errorMessage = rawMessage.slice(0, 2000);
       await serviceClient
         .from("users")
         .update({ repo_status: "error", repo_error: errorMessage })
