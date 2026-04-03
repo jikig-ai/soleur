@@ -39,21 +39,21 @@ export async function POST(request: Request) {
     );
   }
 
-  // SECURITY: Extract GitHub username from the auth.identities table via
-  // service client. user.identities from getUser() can be null for email-first
-  // users who later linked GitHub. user_metadata is user-mutable via
-  // auth.updateUser() — never trust it for security decisions.
-  // The auth.identities table is provider-controlled and immutable.
+  // SECURITY: Extract GitHub username via the GoTrue admin API.
+  // user.identities from getUser() can be null for email-first users who
+  // later linked GitHub. user_metadata is user-mutable via auth.updateUser()
+  // — never trust it for security decisions.
+  // auth.admin.getUserById() returns provider-controlled identity data.
+  // NOTE: PostgREST does not expose the auth schema, so querying
+  // auth.identities via .schema("auth") silently fails in production.
   const serviceClient = createServiceClient();
-  const { data: identityData } = await serviceClient
-    .schema("auth" as "public")
-    .from("identities")
-    .select("identity_data")
-    .eq("user_id", user.id)
-    .eq("provider", "github")
-    .maybeSingle();
-
-  const githubLogin = identityData?.identity_data?.user_name as
+  const { data: adminUser } = await serviceClient.auth.admin.getUserById(
+    user.id,
+  );
+  const githubIdentity = adminUser?.user?.identities?.find(
+    (i) => i.provider === "github",
+  );
+  const githubLogin = githubIdentity?.identity_data?.user_name as
     | string
     | undefined;
 
