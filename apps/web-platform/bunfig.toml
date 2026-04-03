@@ -4,4 +4,6 @@
 minimumReleaseAge = 259200
 
 [test]
+# Fallback for ad-hoc `bun test` runs. The canonical test path is
+# `bash scripts/test-all.sh` which uses vitest for web-platform.
 preload = ["./test/happy-dom.ts"]
