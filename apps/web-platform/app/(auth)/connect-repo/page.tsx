@@ -54,6 +54,7 @@ type SetupStep = {
 // ---------------------------------------------------------------------------
 const DEFAULT_GITHUB_APP_SLUG = process.env.NEXT_PUBLIC_GITHUB_APP_SLUG ?? "soleur-ai";
 const GOLD_GRADIENT = "linear-gradient(135deg, #D4B36A, #B8923E)";
+const AGENT_COUNT = 61;
 
 // ---------------------------------------------------------------------------
 // Inline SVG Icons
@@ -829,9 +830,11 @@ function SettingUpState({ steps }: { steps: SetupStep[] }) {
 // ---------------------------------------------------------------------------
 function ReadyState({
   repoName,
+  agentCount,
   onContinue,
 }: {
   repoName: string;
+  agentCount: number;
   onContinue: () => void;
 }) {
   return (
@@ -857,7 +860,7 @@ function ReadyState({
           </div>
           <div className="flex items-center justify-between gap-8">
             <span className="text-sm text-neutral-500">Agents</span>
-            <span className="text-sm font-medium text-green-400">61 ready</span>
+            <span className="text-sm font-medium text-green-400">{agentCount} ready</span>
           </div>
         </div>
       </Card>
@@ -1364,6 +1367,7 @@ export default function ConnectRepoPage() {
         {state === "ready" && (
           <ReadyState
             repoName={connectedRepoName}
+            agentCount={AGENT_COUNT}
             onContinue={handleOpenDashboard}
           />
         )}
