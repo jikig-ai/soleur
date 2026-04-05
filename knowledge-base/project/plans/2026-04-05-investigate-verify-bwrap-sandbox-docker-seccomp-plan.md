@@ -110,22 +110,22 @@ None. Seccomp profiles are compiled to BPF at container start -- no per-syscall 
 
 ### Functional Requirements
 
-- [ ] SSH diagnosis confirms bwrap is currently broken in production (or confirms it works -- in which case, only the canary check is needed)
-- [ ] Custom seccomp profile allows `CLONE_NEWUSER` via `clone(2)` and `unshare(2)` while keeping all other default restrictions
-- [ ] Custom rules do NOT apply to privileged containers (`excludes: { caps: ["CAP_SYS_ADMIN"] }`)
-- [ ] Profile deployed to server at `/etc/docker/seccomp-profiles/soleur-bwrap.json` via Terraform
-- [ ] Docker daemon configured to use custom profile as default (`daemon.json`)
-- [ ] ci-deploy.sh canary validation includes bwrap functionality check
-- [ ] ci-deploy.test.sh updated with bwrap canary test expectations
-- [ ] `bwrap --new-session --die-with-parent --unshare-pid --dev /dev --proc /proc --bind / / -- id` succeeds inside the container after fix
-- [ ] Other namespace operations are still blocked (e.g., `unshare --net` without `CLONE_NEWUSER` fails)
-- [ ] Tracking issue created for periodic seccomp profile review (Docker version drift)
+- [x] SSH diagnosis confirms bwrap is currently broken in production: "No permissions to create new namespace"
+- [x] Custom seccomp profile allows `CLONE_NEWUSER` via `clone(2)` and `unshare(2)` while keeping all other default restrictions
+- [x] Custom rules do NOT apply to privileged containers (`excludes: { caps: ["CAP_SYS_ADMIN"] }`)
+- [ ] Profile deployed to server at `/etc/docker/seccomp-profiles/soleur-bwrap.json` via Terraform (pending terraform apply)
+- [ ] Docker daemon configured to use custom profile as default (`daemon.json`) (pending terraform apply)
+- [x] ci-deploy.sh canary validation includes bwrap functionality check
+- [x] ci-deploy.test.sh updated with bwrap canary test expectations (37/37 pass)
+- [ ] `bwrap --new-session --die-with-parent --dev /dev --unshare-pid --bind / / -- true` succeeds inside the container after fix (pending deploy)
+- [ ] Other namespace operations are still blocked (pending deploy)
+- [x] Tracking issue created for periodic seccomp profile review: #1568
 
 ### Non-Functional Requirements
 
-- [ ] No `seccomp=unconfined` or `--cap-add SYS_ADMIN` -- least-privilege only
-- [ ] All changes via Terraform -- no manual SSH for state changes
-- [ ] Profile documented with source Docker Engine version for future maintenance
+- [x] No `seccomp=unconfined` or `--cap-add SYS_ADMIN` -- least-privilege only
+- [x] All changes via Terraform -- no manual SSH for state changes
+- [x] Profile documented with source Docker Engine version for future maintenance
 
 ## Test Scenarios
 
