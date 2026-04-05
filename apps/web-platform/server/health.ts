@@ -3,7 +3,7 @@ async function checkSupabase(): Promise<boolean> {
     const response = await fetch(
       `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/`,
       {
-        headers: { apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY! },
+        headers: { apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "" },
         signal: AbortSignal.timeout(2000),
       },
     );
