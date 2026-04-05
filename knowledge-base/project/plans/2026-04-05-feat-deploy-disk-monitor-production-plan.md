@@ -22,12 +22,12 @@ Follow-through deployment for #1409 (disk space monitoring and alerting). The im
 
 ## Acceptance Criteria
 
-- [ ] Discord `#ops-alerts` channel exists with a webhook configured
-- [ ] `DISCORD_OPS_WEBHOOK_URL` is set in Doppler `prd` config
-- [ ] `DISCORD_OPS_WEBHOOK_URL` is set in Doppler `prd_terraform` config
-- [ ] `terraform apply` completes successfully for `apps/web-platform/infra/`
-- [ ] `systemctl is-active disk-monitor.timer` returns `active` on the production server
-- [ ] Test webhook delivery by running `bash /usr/local/bin/disk-monitor.sh` on server (disk is at 100%, so both WARNING and CRITICAL alerts should fire)
+- [x] Discord `#ops-alerts` channel exists with a webhook configured
+- [x] `DISCORD_OPS_WEBHOOK_URL` is set in Doppler `prd` config
+- [x] `DISCORD_OPS_WEBHOOK_URL` is set in Doppler `prd_terraform` config
+- [x] `terraform apply` completes successfully for `apps/web-platform/infra/`
+- [x] `systemctl is-active disk-monitor.timer` returns `active` on the production server
+- [x] Test webhook delivery by running `bash /usr/local/bin/disk-monitor.sh` on server (disk at 9% after cleanup, so no alerts fire — correct behavior; webhook confirmed working via direct test in Phase 2)
 
 ## Test Scenarios
 
