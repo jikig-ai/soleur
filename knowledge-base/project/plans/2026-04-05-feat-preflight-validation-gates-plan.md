@@ -39,17 +39,18 @@ Create a new `plugins/soleur/skills/preflight/SKILL.md` that runs 4 validation c
     v
 /soleur:preflight
     |
-    +---> Check 1: DB Migration Status     (inline shell + conditional data-migration-expert Task)
-    +---> Check 2: Production Parity        (inline Playwright MCP + curl)
-    +---> Check 3: Security Header Audit    (inline curl + conditional security-sentinel Task)
-    +---> Check 4: File Freshness           (inline shell -- deterministic)
+    +---> Check 1: DB Migration Status          (inline shell + Supabase REST API)
+    +---> Check 2: Security Headers & Parity    (inline curl, header validation)
+    +---> Assertion: Not-Bare-Repo               (3-line inline check)
     |
     v
-Aggregate go/no-go report
+Aggregate go/no-go report (PASS / FAIL / SKIP per check)
     |
     v
 /soleur:ship Phase 5.5 (continues)
 ```
+
+**v2 deferred:** Conditional agent spawning (data-migration-expert, security-sentinel), Playwright console error checks, lockfile consistency validation. See "Deferred to v2" section below.
 
 ### Check Details
 
@@ -60,107 +61,73 @@ Aggregate go/no-go report
 **Steps:**
 
 1. `git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql'` -- detect new migration files in PR
-2. `git diff --name-only origin/main...HEAD -- '*.sql' '*.ts'` -- detect schema-touching code changes (CREATE TABLE, ALTER TABLE patterns)
+2. `git diff --name-only origin/main...HEAD -- '*.sql' '*.ts'` -- detect schema-touching code changes (grep for CREATE TABLE, ALTER TABLE patterns)
 3. If migration files exist, verify they are applied to production via Supabase REST API:
    - Get credentials from Doppler (`doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain`)
+   - Use only `GET` requests (read-only) -- the service role key has full access, so write operations must never be issued
    - Query for columns/tables added by each migration
    - Report `APPLIED` or `NOT_APPLIED` per migration
 4. If code changes reference new columns/tables but no migration file exists, flag as `MISSING_MIGRATION`
-5. **Conditional agent:** If migration files exist AND contain complex transformations (CASE, UPDATE...SET, data backfill patterns), spawn `data-migration-expert` via Task for code review
 
-**Severity mapping:**
+**Result:** PASS (no migrations, or all applied), FAIL (unapplied migration found), SKIP (no migration files and no schema changes)
 
-- `NOT_APPLIED`: CRITICAL (blocks merge)
-- `MISSING_MIGRATION`: WARNING (may be intentional -- existing column usage)
-- Complex migration without review: WARNING
+#### Check 2: Security Headers & Parity
 
-#### Check 2: Production Parity
-
-**Purpose:** Compare the PR's changes against the production environment to catch environment-specific issues.
+**Purpose:** Validate production response headers against the project's security policy and detect environment-specific issues (merged from original Checks 2 and 3 -- both fetch the same URL).
 
 **Steps:**
 
-1. Detect if the PR touches web-facing files (`.tsx`, `.css`, `.html`, `middleware.ts`, `next.config.*`)
-2. If no web-facing files changed, skip with `N/A`
-3. If web-facing files changed:
-   a. Check if production URL is available (`DEPLOY_URL` env var or Doppler `prd` config)
-   b. Use `curl -sI` to fetch production response headers
-   c. Check for CSP header presence and `strict-dynamic` directive
-   d. Check for third-party script injections by comparing `Content-Security-Policy` against documented policy
-   e. **Conditional Playwright:** If Playwright MCP is available AND a dev server is running, navigate to affected pages and check `browser_console_messages` for CSP violations or errors
-4. If no production URL is available, skip with a warning (not all branches deploy previews)
-
-**Severity mapping:**
-
-- CSP violation detected: HIGH
-- Console errors on affected pages: HIGH
-- No production URL available: INFO (skip)
-
-#### Check 3: Security Header Audit
-
-**Purpose:** Validate response headers against the project's security policy.
-
-**Steps:**
-
-1. Detect if the PR touches middleware, config, or infrastructure files (`middleware.ts`, `next.config.*`, `.tf`, `Dockerfile`, `nginx*`, `.github/workflows/*`)
-2. If no relevant files changed, skip with `N/A`
+1. Detect if the PR touches web-facing or infrastructure files (`.tsx`, `.css`, `.html`, `middleware.ts`, `next.config.*`, `.tf`, `Dockerfile`, `nginx*`, `.github/workflows/*`)
+2. If no relevant files changed, SKIP
 3. If relevant files changed:
-   a. Fetch headers from production (or dev server) via `curl -sI`
-   b. Check mandatory headers: `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, `Strict-Transport-Security`, `Referrer-Policy`
-   c. Validate CSP directive completeness (no `unsafe-inline` without nonce, `strict-dynamic` present)
-   d. Check cookie attributes (`Secure`, `HttpOnly`, `SameSite`)
-   e. **Conditional agent:** If CSP or HSTS issues are detected, spawn `security-sentinel` via Task for deeper analysis
-4. Compare against documented security policy in `knowledge-base/engineering/` if it exists
+   a. Check if production URL is available (`DEPLOY_URL` env var or Doppler `prd` config for `NEXT_PUBLIC_SITE_URL`)
+   b. Fetch headers via single `curl -sI` call
+   c. Validate mandatory headers: `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, `Strict-Transport-Security`, `Referrer-Policy`
+   d. Validate CSP directive completeness (no `unsafe-inline` without nonce, `strict-dynamic` present)
+   e. Check cookie attributes (`Secure`, `HttpOnly`, `SameSite`) if set-cookie headers are present
+   f. Compare CSP against documented policy if `knowledge-base/engineering/` has a security policy file
+4. If no production URL is available, SKIP with a note (not all branches deploy previews)
 
-**Severity mapping:**
+**Result:** PASS (all headers present and valid), FAIL (missing CSP or HSTS), SKIP (no relevant files or no URL)
 
-- Missing CSP: CRITICAL
-- Missing HSTS: HIGH
-- Missing X-Frame-Options: MEDIUM
-- Cookie without Secure flag: HIGH
+**Interactive escalation (not v1):** In v2, if CSP or HSTS issues are detected, spawn `security-sentinel` via Task for deeper analysis.
 
-#### Check 4: File Freshness
+#### Assertion: Not-Bare-Repo
 
-**Purpose:** Verify that all file reads during the current session used `git show HEAD:<path>` rather than stale filesystem reads from the bare repo.
+**Purpose:** Verify the session is running from a worktree, not the bare repo root.
+
+This is a 3-line inline assertion, not a full check. The worktree system and `worktree-write-guard.sh` hook already prevent most stale-file issues. This assertion is defense-in-depth.
 
 **Steps:**
 
-1. This is a **deterministic inline check** -- no agent needed
-2. Check if the current context is a worktree or the bare repo root:
-   - `git rev-parse --is-bare-repository`
-   - If bare: WARNING -- file reads from this directory are stale
-   - If worktree: verify worktree is up to date with its tracking branch
-3. Check that critical files match their git HEAD versions:
-   - `git diff HEAD -- AGENTS.md CLAUDE.md` -- if non-empty, working tree is dirty
-   - `git diff origin/main...HEAD --stat` -- verify the diff reflects the expected changes
-4. Verify no stale `node_modules/` or build artifacts from a different branch:
-   - `git log -1 --format=%H -- bun.lock package.json` vs current lockfile hash
+1. `git rev-parse --is-bare-repository` -- if `true`, FAIL immediately
+2. If false (worktree): PASS
 
-**Severity mapping:**
+**Result:** PASS (in worktree) or FAIL (bare repo -- abort)
 
-- Bare repo without worktree: CRITICAL (must use worktree)
-- Dirty working tree with uncommitted changes: WARNING
-- Stale lockfile: WARNING
+### Deferred to v2
+
+The following capabilities are explicitly deferred to reduce v1 complexity. A tracking issue will be created at ship time.
+
+- **Conditional agent spawning:** Spawn `data-migration-expert` for complex migrations and `security-sentinel` for header issues. v1 uses inline checks only.
+- **Playwright console checks:** Use `browser_console_messages` to detect CSP violations on affected pages. Deferred because the dev server may not be running at Phase 5.4.
+- **Lockfile consistency:** Compare `bun.lock` and `package-lock.json` timestamps/hashes against `package.json`. Deferred because CI already catches this via `npm ci` in Docker builds.
+- **4-tier severity system:** CRITICAL/HIGH/WARNING/INFO with per-check mapping tables. v1 uses simple PASS/FAIL/SKIP.
 
 ## Technical Considerations
 
 ### Agent Token Budget
 
-The agent description word count is at 2,552 (limit 2,500). Adding 4 new agents would increase this by approximately 200+ words. Instead:
-
-- **Reuse existing agents:** `data-migration-expert`, `security-sentinel` are invoked via Task tool with specific prompts when LLM reasoning is needed
-- **Inline checks for deterministic logic:** File freshness and migration status checks are shell commands with binary pass/fail outcomes -- agents add unnecessary latency
-- **No new agent files created:** Zero impact on the system prompt token budget
+The agent description word count is at 2,552 (limit 2,500). No new agents are created in v1. All checks are inline shell commands and curl calls. Agent spawning (data-migration-expert, security-sentinel) is deferred to v2.
 
 ### Parallelism
 
-All 4 checks are independent and can run in parallel. However, the constitution limits parallel subagent fan-out to max 5. Since only Checks 1 and 3 conditionally spawn agents (and the inline checks are fast shell commands), the maximum concurrent agents is 2 -- well within limits.
+Both checks and the assertion are independent and can run in parallel via separate Bash tool calls. No subagent fan-out is needed in v1 -- all logic is inline.
 
 **Execution strategy:**
 
-1. Run all 4 inline check preambles in parallel (shell commands to detect relevance)
-2. For checks that are relevant, run the detailed validation (may include agent spawn)
-3. Aggregate results into the go/no-go report
+1. Run both checks and the assertion in parallel (shell commands)
+2. Aggregate results into the go/no-go report (PASS/FAIL/SKIP per check)
 
 ### Integration with Ship Pipeline
 
@@ -178,47 +145,51 @@ The ship skill will invoke preflight as: `skill: soleur:preflight`
 When `$ARGUMENTS` contains `--headless`:
 
 - Skip interactive confirmations
-- On CRITICAL findings: abort the ship pipeline with error details
-- On WARNING/HIGH findings: log them but continue (CI gate catches these)
-- On INFO findings: log silently
+- On any FAIL: abort with error details (no "Fix and retry" prompt)
+- On all PASS/SKIP: continue silently
+
+When interactive:
+
+- On any FAIL: present findings table, ask "Fix and retry, or abort?"
+- On all PASS/SKIP: print summary table, continue
 
 ### Graceful Degradation
 
+If a check cannot run (missing credentials, no URL, no relevant files), it returns SKIP. One code path, not six.
+
 | Missing Prerequisite | Behavior |
 |---------------------|----------|
-| No Supabase credentials in Doppler | Skip migration verification with WARNING |
-| No production URL | Skip parity and header checks with INFO |
-| Playwright MCP unavailable | Skip browser console check with WARNING |
-| No migration files in PR | Skip Check 1 entirely |
-| No web-facing files in PR | Skip Checks 2-3 entirely |
-| No middleware/config changes | Skip Check 3 header audit |
+| No Supabase credentials in Doppler | Check 1 returns SKIP |
+| No production URL | Check 2 returns SKIP |
+| No migration files in PR | Check 1 returns SKIP |
+| No web-facing or infra files in PR | Check 2 returns SKIP |
 
 ## Non-Goals
 
 - **Preview deployments:** This plan does not create or manage preview environments. It checks against the existing production URL or local dev server.
-- **Visual regression testing:** Screenshot comparison is handled by `/soleur:test-browser`. Preflight checks console errors and headers, not visual layout.
+- **Visual regression testing:** Screenshot comparison is handled by `/soleur:test-browser`. Preflight checks headers, not visual layout.
 - **Automated migration application:** Preflight detects unapplied migrations but does not apply them. Application is a manual step or handled by `/ship` Phase 7 Step 3.6.
 - **New agent creation:** No new agent `.md` files are created due to the token budget constraint.
+- **Lockfile consistency checking:** The `bun.lock` / `package-lock.json` dual-lockfile issue is already caught by CI (`npm ci` in Docker builds). Adding a local check would duplicate CI enforcement.
 
 ## Implementation Phases
 
-### Phase 1: Skill Skeleton and Inline Checks (foundation)
+### Phase 1: Skill Skeleton and All Checks (single phase -- small scope)
 
 **Files:**
 
-- `plugins/soleur/skills/preflight/SKILL.md` -- skill definition with YAML frontmatter and all 4 checks
-- No scripts or reference files needed initially -- all logic is inline in the SKILL.md
+- `plugins/soleur/skills/preflight/SKILL.md` -- skill definition with YAML frontmatter, 2 checks + 1 assertion
 
 **Tasks:**
 
 - [ ] Create `plugins/soleur/skills/preflight/` directory
 - [ ] Write SKILL.md with frontmatter (`name: preflight`, `description: "This skill should be used when..."`)
-- [ ] Implement Check 4 (File Freshness) -- simplest, pure inline shell
-- [ ] Implement Check 1 (DB Migration Status) -- inline shell + conditional agent Task
-- [ ] Implement Check 3 (Security Header Audit) -- inline curl + conditional agent Task
-- [ ] Implement Check 2 (Production Parity) -- inline curl + conditional Playwright
-- [ ] Implement go/no-go report aggregation with severity table
-- [ ] Add headless mode detection and argument parsing
+- [ ] Implement Assertion: Not-Bare-Repo (3 lines)
+- [ ] Implement Check 1: DB Migration Status (inline shell + Supabase REST API)
+- [ ] Implement Check 2: Security Headers & Parity (inline curl + header validation)
+- [ ] Implement go/no-go report (PASS/FAIL/SKIP table)
+- [ ] Add headless mode detection and `$ARGUMENTS` parsing
+- [ ] Add interactive mode: on FAIL, present findings and ask "Fix and retry, or abort?"
 
 ### Phase 2: Ship Pipeline Integration
 
@@ -230,8 +201,8 @@ When `$ARGUMENTS` contains `--headless`:
 
 - [ ] Add Phase 5.4 section to ship SKILL.md between Phase 5 and Phase 5.5
 - [ ] Wire `skill: soleur:preflight` invocation with headless mode forwarding
-- [ ] Add CRITICAL finding abort logic (blocks Phase 6 PR creation)
-- [ ] Add WARNING/HIGH finding passthrough logic (logged but non-blocking)
+- [ ] On FAIL: abort ship pipeline with error details (both headless and interactive)
+- [ ] On all PASS/SKIP: continue to Phase 5.5
 
 ### Phase 3: Documentation and Registration
 
@@ -250,23 +221,21 @@ When `$ARGUMENTS` contains `--headless`:
 
 ### Functional Requirements
 
-- [ ] `/soleur:preflight` runs all 4 checks and produces a structured go/no-go report
-- [ ] Check 1 detects new migration files and verifies their application status via Supabase REST API
-- [ ] Check 1 conditionally spawns `data-migration-expert` for complex migrations
-- [ ] Check 2 detects web-facing file changes and checks production headers
-- [ ] Check 2 conditionally uses Playwright MCP for console error detection
-- [ ] Check 3 validates security headers against documented policy
-- [ ] Check 3 conditionally spawns `security-sentinel` for deep analysis
-- [ ] Check 4 detects bare repo context and stale working tree files
-- [ ] CRITICAL findings abort the ship pipeline in both headless and interactive mode
-- [ ] WARNING/HIGH findings are reported but do not block
-- [ ] All checks gracefully degrade when prerequisites are missing
+- [ ] `/soleur:preflight` runs 2 checks + 1 assertion and produces a PASS/FAIL/SKIP report
+- [ ] Check 1 detects new migration files and verifies their application status via Supabase REST API (read-only GET requests only)
+- [ ] Check 2 detects web-facing/infra file changes and validates production security headers
+- [ ] Assertion detects bare repo context and aborts
+- [ ] FAIL in any check aborts the ship pipeline
+- [ ] All PASS/SKIP continues the pipeline
+- [ ] Checks return SKIP when prerequisites are missing (credentials, URL, relevant files)
+- [ ] Interactive mode: on FAIL, present findings and ask "Fix and retry, or abort?"
+- [ ] Headless mode: on FAIL, abort with error details
 
 ### Non-Functional Requirements
 
 - [ ] No new agent files created (agent description budget constraint)
-- [ ] All checks can run in parallel (no sequential dependencies between checks)
-- [ ] Total preflight execution time under 60 seconds for PRs with no relevant changes (all checks skip)
+- [ ] All checks can run in parallel (no sequential dependencies)
+- [ ] Total preflight execution time under 30 seconds for PRs with no relevant changes (all checks skip)
 - [ ] Follows SKILL.md conventions: YAML frontmatter, third-person description, headless mode support
 
 ## Test Scenarios
@@ -274,34 +243,29 @@ When `$ARGUMENTS` contains `--headless`:
 ### Check 1: DB Migration Status
 
 - Given a PR with new files in `supabase/migrations/`, when preflight runs, then each migration is checked against production Supabase and reported as APPLIED or NOT_APPLIED
-- Given a PR with no migration files, when preflight runs, then Check 1 is skipped with "N/A"
-- Given a PR with code referencing a new column but no migration file, when preflight runs, then a MISSING_MIGRATION warning is reported
-- Given Supabase credentials are missing from Doppler, when preflight runs, then Check 1 reports a WARNING and continues
+- Given a PR with no migration files and no schema changes, when preflight runs, then Check 1 returns SKIP
+- Given a PR with code referencing a new column but no migration file, when preflight runs, then Check 1 returns FAIL with MISSING_MIGRATION detail
+- Given Supabase credentials are missing from Doppler, when preflight runs, then Check 1 returns SKIP
 
-### Check 2: Production Parity
+### Check 2: Security Headers & Parity
 
-- Given a PR touching `.tsx` files and a production URL is available, when preflight runs, then response headers are fetched and CSP is validated
-- Given a PR with no web-facing changes, when preflight runs, then Check 2 is skipped with "N/A"
-- Given no production URL is configured, when preflight runs, then Check 2 reports INFO and continues
+- Given a PR touching `.tsx` files and a production URL is available, when preflight runs, then response headers are fetched and all mandatory headers are validated
+- Given a PR with no web-facing or infra changes, when preflight runs, then Check 2 returns SKIP
+- Given no production URL is configured, when preflight runs, then Check 2 returns SKIP
+- Given a PR modifying `middleware.ts` and a missing CSP header in production, when preflight runs, then Check 2 returns FAIL
 
-### Check 3: Security Header Audit
+### Assertion: Not-Bare-Repo
 
-- Given a PR modifying `middleware.ts`, when preflight runs, then all mandatory security headers are checked
-- Given a missing CSP header, when preflight runs, then a CRITICAL finding is reported
-- Given a PR with no middleware or config changes, when preflight runs, then Check 3 is skipped
-
-### Check 4: File Freshness
-
-- Given the session is running from a bare repo (not a worktree), when preflight runs, then a CRITICAL finding is reported
-- Given the worktree has uncommitted changes, when preflight runs, then a WARNING is reported
-- Given a clean worktree with all changes committed, when preflight runs, then Check 4 passes
+- Given the session is running from a bare repo (not a worktree), when preflight runs, then the assertion returns FAIL and the skill aborts
+- Given the session is running from a worktree, when preflight runs, then the assertion returns PASS
 
 ### Integration
 
-- Given preflight reports a CRITICAL finding, when running inside `/ship`, then the pipeline aborts before Phase 6 (PR creation)
-- Given preflight reports only WARNING findings, when running inside `/ship`, then the pipeline continues to Phase 5.5
-- Given all checks are N/A (no relevant changes), when preflight runs, then it completes in under 60 seconds with an all-clear report
-- Given `--headless` mode, when a CRITICAL finding is detected, then the skill aborts without prompting
+- Given preflight reports any FAIL, when running inside `/ship`, then the pipeline aborts before Phase 6 (PR creation)
+- Given preflight reports all PASS/SKIP, when running inside `/ship`, then the pipeline continues to Phase 5.5
+- Given all checks return SKIP (no relevant changes), when preflight runs, then it completes in under 30 seconds with an all-clear report
+- Given `--headless` mode, when a FAIL is detected, then the skill aborts without prompting
+- Given interactive mode, when a FAIL is detected, then the skill presents findings and asks "Fix and retry, or abort?"
 
 ## Domain Review
 
@@ -321,9 +285,11 @@ Not applicable -- this is an internal developer tool with no user-facing UI comp
 | Approach | Pros | Cons | Decision |
 |----------|------|------|----------|
 | 4 new dedicated agents | Clean separation of concerns, reusable | Exceeds agent token budget (2,552 already over 2,500), adds ~200 words | Rejected -- budget constraint |
+| 4 checks with conditional agent spawning | More thorough analysis | Over-engineered for v1; agent spawning is rare-case complexity | Deferred to v2 |
 | All checks as inline shell in ship SKILL.md | No new files, simplest | Ship SKILL.md is already 750 lines, mixing concerns | Rejected -- separation of concerns |
 | CI workflow instead of skill | Runs on every PR automatically | Cannot reuse existing agents, no Playwright MCP, no Doppler access in CI without service tokens | Rejected -- wrong execution context |
 | Extend postmerge skill | Already exists with similar checks | Different timing (post-merge vs pre-merge), different purpose (verify deploy vs validate readiness) | Rejected -- complementary, not replacement |
+| Migration check only (v1) | Simplest possible, highest value | Headers/CSP caused real production issues too; omitting feels like under-building | Rejected -- both checks have production evidence |
 
 ## Rollback Plan
 
@@ -345,3 +311,16 @@ If the preflight skill causes false positives that block shipping:
 - Existing skill: `plugins/soleur/skills/ship/SKILL.md` (integration target)
 - Existing agent: `plugins/soleur/agents/engineering/review/data-migration-expert.md`
 - Existing agent: `plugins/soleur/agents/engineering/review/security-sentinel.md`
+
+## Plan Review [Updated 2026-04-05]
+
+Three reviewers assessed this plan. Applied changes based on consensus:
+
+1. **Merged Checks 2 and 3** into single "Security Headers & Parity" -- both fetched the same URL
+2. **Reduced Check 4 to 3-line assertion** -- worktrees already prevent stale file reads
+3. **Deferred conditional agent spawning to v2** -- inline checks are sufficient
+4. **Simplified severity to PASS/FAIL/SKIP** -- 4-tier system was premature
+5. **Cut Playwright from v1** -- dev server may not be running at Phase 5.4
+6. **Added lockfile consistency as explicit non-goal** -- CI already catches this
+7. **Added interactive mode FAIL behavior** -- "Fix and retry, or abort?"
+8. **Added production API safety note** -- read-only GET requests only
