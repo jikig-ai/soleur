@@ -368,6 +368,10 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           enabled: true,
           autoAllowBashIfSandboxed: true,
           allowUnsandboxedCommands: false,
+          // Docker containers cannot mount proc inside user namespaces (kernel
+          // restriction). enableWeakerNestedSandbox skips --proc /proc in bwrap,
+          // which is acceptable because /proc is already in denyRead (#1557).
+          enableWeakerNestedSandbox: true,
           network: {
             allowedDomains: [],
             allowManagedDomainsOnly: true,
