@@ -9,13 +9,17 @@
 
 - [ ] 2.1 In `apps/web-platform/server/index.ts`, capture the return value of `setupWebSocket(server)` into a `wss` variable
 - [ ] 2.2 Add `import { WebSocket } from "ws"` to `apps/web-platform/server/index.ts`
-- [ ] 2.3 Replace the SIGTERM handler (lines 74-78) with the graceful shutdown implementation:
-  - [ ] 2.3.1 Define `SHUTDOWN_TIMEOUT_MS = 8_000` constant
-  - [ ] 2.3.2 Start a hard-deadline timer that force-exits after 8s (`.unref()` the timer)
-  - [ ] 2.3.3 Call `server.close()` to stop accepting new connections
-  - [ ] 2.3.4 Iterate `wss.clients` and close each open WebSocket with code `WS_CLOSE_CODES.SERVER_GOING_AWAY` and reason `"Server shutting down"`
-  - [ ] 2.3.5 Call `await Sentry.flush(2_000)` (preserve existing behavior)
-  - [ ] 2.3.6 Log completion and call `process.exit(0)`
+- [ ] 2.3 Add `import { WS_CLOSE_CODES } from "@/lib/types"` to `apps/web-platform/server/index.ts`
+- [ ] 2.4 Replace the SIGTERM handler (lines 74-78) with the graceful shutdown implementation:
+  - [ ] 2.4.1 Define `SHUTDOWN_TIMEOUT_MS = 8_000` constant
+  - [ ] 2.4.2 Add `let shuttingDown = false` re-entrancy guard
+  - [ ] 2.4.3 Add re-entrancy check at handler entry: `if (shuttingDown) return; shuttingDown = true;`
+  - [ ] 2.4.4 Start a hard-deadline timer that force-exits after 8s with `server.closeAllConnections()` before `process.exit(1)` (`.unref()` the timer)
+  - [ ] 2.4.5 Call `server.close()` to stop accepting new connections
+  - [ ] 2.4.6 Call `server.closeIdleConnections()` to immediately release idle keep-alive connections
+  - [ ] 2.4.7 Iterate `wss.clients` and close each open WebSocket with code `WS_CLOSE_CODES.SERVER_GOING_AWAY` and reason `"Server shutting down"`
+  - [ ] 2.4.8 Call `await Sentry.flush(2_000)` (preserve existing behavior)
+  - [ ] 2.4.9 Log completion and call `process.exit(0)`
 
 ## Phase 3: Testing
 
