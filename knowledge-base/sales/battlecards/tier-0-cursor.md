@@ -74,7 +74,7 @@ convergence_risk: High
 |-----------|----------|
 | "Cursor's cloud agents can do anything." | "Cloud agents execute computing tasks. They do not orchestrate business workflows across domains. Running code on a cloud VM is not the same as connecting your engineering decisions to your brand guide, competitive landscape, and legal requirements." |
 | "I do not need marketing/legal agents." | "Most solo founders say this until they have spent 40 hours on a brand identity, 20 hours researching competitors, and $5,000 on a lawyer for terms of service. Those are the hours Soleur saves. If you are building a side project, you do not need it. If you are building a company, you do." |
-| "$20/month for Cursor vs. free for Soleur -- Cursor clearly has more value." | "Cursor's $20/month buys a premium IDE experience. Soleur's free core provides 61 agents across 8 domains. Different products, different value propositions. Use both." |
+| "$20/month for Cursor vs. free for Soleur -- Cursor clearly has more value." | "Cursor's $20/month buys a premium IDE experience. Soleur's free core provides 63 agents across 8 domains. Different products, different value propositions. Use both." |
 
 ## Convergence Watch
 
