@@ -8,6 +8,20 @@ semver: minor
 
 # Pre-flight Validation Gates
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-05
+**Sections enhanced:** 4 (Check 1, Check 2, Ship Integration, Implementation Phase 1)
+**Sources used:** 8 project learnings, codebase analysis (security-headers.ts, middleware.ts, migration files, skills.js)
+
+### Key Improvements
+
+1. Concrete SQL parsing patterns for migration verification with exact Supabase REST API query format
+2. Exact header validation list derived from `apps/web-platform/lib/security-headers.ts` (9 headers, not 5)
+3. Edge case handling for Doppler token scope mismatch (learning: `2026-03-29`)
+4. Ship integration pattern aligned with existing Phase N.5 convention (learning: `2026-03-27`)
+5. Skills.js registration category identified: "Workflow" (alongside ship, deploy, one-shot)
+
 ## Overview
 
 A `/soleur:preflight` skill that runs as a mandatory gate before `/ship`, spawning parallel validation checks to catch the class of bugs that only appear in production context -- unapplied database migrations, CSP violations from injected scripts, stale file reads, and security header misconfigurations. Integrates at Phase 5.4 in the ship pipeline.
@@ -71,6 +85,27 @@ Aggregate go/no-go report (PASS / FAIL / SKIP per check)
 
 **Result:** PASS (no migrations, or all applied), FAIL (unapplied migration found), SKIP (no migration files and no schema changes)
 
+**Research Insights (Check 1):**
+
+**Migration SQL parsing pattern.** Migrations in this project use `ALTER TABLE public.<table> ADD COLUMN IF NOT EXISTS <column> <type>` (see `013_repo_error.sql`). The skill should extract table/column pairs with:
+
+```bash
+grep -iE 'ADD COLUMN|CREATE TABLE' <migration_file> | sed -E 's/.*public\.([a-z_]+).*ADD COLUMN[^a-z]*([a-z_]+).*/\1 \2/'
+```
+
+**Supabase REST API verification.** Query each extracted column via PostgREST:
+
+```bash
+curl -sf "<SUPABASE_URL>/rest/v1/<table>?select=<column>&limit=1" \
+  -H "apikey: <SERVICE_ROLE_KEY>" -H "Authorization: Bearer <SERVICE_ROLE_KEY>"
+```
+
+A 200 response (even `[]` for empty tables) confirms the column exists. A 400 with `column <name> does not exist` confirms the migration was NOT applied. This is the exact pattern from the `2026-03-28-unapplied-migration` learning and ship Phase 7 Step 3.6.
+
+**Doppler credential safety.** Use `doppler secrets get -p soleur -c prd --plain` (not `-c dev`). Per learning `2026-03-29-doppler-service-token-config-scope-mismatch`, the `-c` flag is ignored with service tokens. Since this runs locally (not CI), the personal CLI token is used, so `-c prd` works correctly. If running in CI in the future, a `DOPPLER_TOKEN_PRD` service token would be needed.
+
+**Edge case: duplicate migration numbers.** The project has two files starting with `007_` (`007_remediate_fabricated_tc_accepted_at.sql` and `007_remove_tc_accepted_metadata_trust.sql`). The check should iterate over all files returned by `git diff`, not assume unique numbering.
+
 #### Check 2: Security Headers & Parity
 
 **Purpose:** Validate production response headers against the project's security policy and detect environment-specific issues (merged from original Checks 2 and 3 -- both fetch the same URL).
@@ -91,6 +126,30 @@ Aggregate go/no-go report (PASS / FAIL / SKIP per check)
 **Result:** PASS (all headers present and valid), FAIL (missing CSP or HSTS), SKIP (no relevant files or no URL)
 
 **Interactive escalation (not v1):** In v2, if CSP or HSTS issues are detected, spawn `security-sentinel` via Task for deeper analysis.
+
+**Research Insights (Check 2):**
+
+**Exact header checklist from codebase.** `apps/web-platform/lib/security-headers.ts` returns 9 headers (not the 5 originally planned). The complete validation list:
+
+| Header | Expected Value | Severity if Missing |
+|--------|---------------|-------------------|
+| Content-Security-Policy | Contains `strict-dynamic` + nonce (from middleware.ts) | FAIL |
+| X-Frame-Options | `DENY` | FAIL |
+| X-Content-Type-Options | `nosniff` | FAIL |
+| Strict-Transport-Security | `max-age=63072000; includeSubDomains; preload` | FAIL |
+| Referrer-Policy | `strict-origin-when-cross-origin` | PASS (non-critical) |
+| Permissions-Policy | Contains `camera=(), microphone=()` | PASS (non-critical) |
+| Cross-Origin-Opener-Policy | `same-origin` | PASS (non-critical) |
+| Cross-Origin-Resource-Policy | `same-origin` | PASS (non-critical) |
+| X-DNS-Prefetch-Control | `on` | PASS (non-critical) |
+
+**CSP is generated per-request in middleware.ts** (not static in next.config.ts). The middleware generates a per-request nonce via `crypto.randomUUID()` and calls `buildCspHeader()`. When checking with `curl -sI`, the CSP header will contain a nonce that is valid for that single request. The check should verify the CSP structure (directives present, no `unsafe-inline` without nonce override by `strict-dynamic`) rather than comparing exact nonce values.
+
+**Health endpoint exclusion.** The middleware explicitly skips CSP for `/health` (`if (pathname === "/health") return NextResponse.next()`). The check should fetch a page path (e.g., `/`) rather than `/health` to get the full header set.
+
+**Production URL resolution.** The production URL can be obtained from Doppler: `doppler secrets get NEXT_PUBLIC_SITE_URL -p soleur -c prd --plain`. This is more reliable than `DEPLOY_URL` which may not be set locally.
+
+**Curl pattern for header capture.** Per learning `2026-03-14-curl-response-header-capture-pattern`, use `curl -sI` for header-only requests (HEAD method). For the full response including both headers and body: `curl -D /tmp/headers.txt -s -o /dev/null`. The `-sI` approach is simpler and sufficient since we only need headers.
 
 #### Assertion: Not-Bare-Repo
 
@@ -140,6 +199,16 @@ The skill integrates at **Phase 5.4** -- after Phase 5 (Final Checklist) and bef
 
 The ship skill will invoke preflight as: `skill: soleur:preflight`
 
+**Research Insights (Ship Integration):**
+
+**Phase N.5 convention.** Per learning `2026-03-27-skill-defense-in-depth-gate-pattern`, defense-in-depth gates follow the Phase N.5 naming pattern. Phase 5.4 is slightly unconventional (not N.5) but appropriate here because Phase 5.5 already exists. The placement between Phase 5 (checklist) and Phase 5.5 (domain gates) is correct.
+
+**Ship integration pattern.** Per learning `2026-02-12-ship-integration-pattern-for-post-merge-steps`, ship should remain a thin orchestration layer. The preflight skill is a standalone skill that ship conditionally invokes -- this matches the established pattern. The Phase 5.4 section in ship SKILL.md should be approximately 10-15 lines: invoke the skill, check the result, abort or continue.
+
+**No command substitution.** Ship SKILL.md uses the "no `$()` in Bash commands" pattern throughout. The preflight invocation must follow the same convention -- invoke via the Skill tool, not via bash.
+
+**Continuation marker convention.** Per constitution line 49, sub-skills that return control to an orchestrator must output a structured continuation marker. The preflight skill should end with a heading like `## Preflight Complete` followed by the results table, so the ship skill can detect completion vs. mid-turn abort.
+
 ### Headless Mode
 
 When `$ARGUMENTS` contains `--headless`:
@@ -186,10 +255,30 @@ If a check cannot run (missing credentials, no URL, no relevant files), it retur
 - [ ] Write SKILL.md with frontmatter (`name: preflight`, `description: "This skill should be used when..."`)
 - [ ] Implement Assertion: Not-Bare-Repo (3 lines)
 - [ ] Implement Check 1: DB Migration Status (inline shell + Supabase REST API)
-- [ ] Implement Check 2: Security Headers & Parity (inline curl + header validation)
+- [ ] Implement Check 2: Security Headers & Parity (inline curl + header validation against 9-header checklist)
 - [ ] Implement go/no-go report (PASS/FAIL/SKIP table)
 - [ ] Add headless mode detection and `$ARGUMENTS` parsing
 - [ ] Add interactive mode: on FAIL, present findings and ask "Fix and retry, or abort?"
+- [ ] Add `## Preflight Complete` continuation marker at end of successful run
+
+**Research Insights (Phase 1):**
+
+**SKILL.md structure.** The skill should follow the established pattern from ship/postmerge. Skeleton:
+
+```yaml
+---
+name: preflight
+description: "This skill should be used when validating technical readiness before shipping. It checks database migration status, security headers, and execution context."
+---
+```
+
+**Headless mode per convention.** Per learning `2026-03-03-headless-mode-skill-bypass-convention`, the headless flag is detected in `$ARGUMENTS`, stripped before processing remaining args, and forwarded to any child skill invocations. The pattern is bottom-up: each skill handles its own flag.
+
+**No command substitution rule.** Per ship SKILL.md: "Never use `$()` in Bash commands. When a step says 'get value X, then use it in command Y', run them as two separate Bash tool calls." The preflight SKILL.md must follow this same convention for Doppler credential retrieval and curl commands.
+
+**Skill description budget.** Per learning `2026-03-30-skill-description-word-budget-awareness`, skill descriptions must stay under 1,024 characters and target approximately 30 words. The description above is 26 words.
+
+**Skills.js registration.** The skill should be registered in `plugins/soleur/docs/_data/skills.js` under the "Workflow" category (alongside `ship`, `deploy`, `one-shot`, `postmerge`). Add: `preflight: "Workflow"` to `SKILL_CATEGORIES`. Note: `postmerge` is not currently in the SKILL_CATEGORIES map -- it should be added simultaneously.
 
 ### Phase 2: Ship Pipeline Integration
 
@@ -208,14 +297,16 @@ If a check cannot run (missing credentials, no URL, no relevant files), it retur
 
 **Files:**
 
-- `docs/_data/skills.js` -- register new skill in SKILL_CATEGORIES
+- `plugins/soleur/docs/_data/skills.js` -- register new skill in SKILL_CATEGORIES
 - `plugins/soleur/README.md` -- update skill count (via `sync-readme-counts.sh`)
 
 **Tasks:**
 
-- [ ] Register preflight in `docs/_data/skills.js` SKILL_CATEGORIES
-- [ ] Run `bash scripts/sync-readme-counts.sh` to update counts
-- [ ] Verify docs build: `npx @11ty/eleventy --input=docs --dryrun` (after `npm install`)
+- [ ] Register `preflight` in `plugins/soleur/docs/_data/skills.js` SKILL_CATEGORIES under "Workflow"
+- [ ] Also register `postmerge` and `qa` -- both exist as skills but are missing from SKILL_CATEGORIES (discovered during deepening)
+- [ ] Update the skill count comment at top of SKILL_CATEGORIES (currently says "62 skills")
+- [ ] Run `bash scripts/sync-readme-counts.sh` to update README counts
+- [ ] Verify docs build: `cd plugins/soleur/docs && npm install && npx @11ty/eleventy --dryrun`
 
 ## Acceptance Criteria
 
@@ -290,6 +381,20 @@ Not applicable -- this is an internal developer tool with no user-facing UI comp
 | CI workflow instead of skill | Runs on every PR automatically | Cannot reuse existing agents, no Playwright MCP, no Doppler access in CI without service tokens | Rejected -- wrong execution context |
 | Extend postmerge skill | Already exists with similar checks | Different timing (post-merge vs pre-merge), different purpose (verify deploy vs validate readiness) | Rejected -- complementary, not replacement |
 | Migration check only (v1) | Simplest possible, highest value | Headers/CSP caused real production issues too; omitting feels like under-building | Rejected -- both checks have production evidence |
+
+## Edge Cases Discovered During Research
+
+1. **Migration with IF NOT EXISTS:** The `ADD COLUMN IF NOT EXISTS` pattern means the REST API query will succeed even if the migration was re-run. This is the correct behavior -- the check verifies the column exists, not whether the specific migration was applied.
+
+2. **CSP nonce rotation:** Each curl request gets its own nonce. The check must validate CSP directive structure (`strict-dynamic` present, no standalone `unsafe-inline`), not the specific nonce value. Parse CSP as directive-level tokens.
+
+3. **Production URL may use Cloudflare proxy:** Response headers from `curl -sI` may include Cloudflare-injected headers (`cf-ray`, `server: cloudflare`). These are expected and should not trigger failures. The check validates security headers only, not infrastructure headers.
+
+4. **No production URL for plugin-only changes:** PRs that only touch `plugins/soleur/` have no web deployment. Check 2 correctly returns SKIP when no production URL exists.
+
+5. **Middleware CSP vs next.config headers:** CSP is set in middleware.ts (per-request nonce). Other 8 security headers are set in `next.config.ts` via `buildSecurityHeaders()`. Both appear in the same curl response. The check does not need to distinguish their source.
+
+6. **Skill invocation from bare repo root:** If someone runs `/ship` from the bare repo root (violating worktree convention), the Not-Bare-Repo assertion fires before any checks that would fail with confusing git errors. This is the correct fail-fast ordering.
 
 ## Rollback Plan
 
