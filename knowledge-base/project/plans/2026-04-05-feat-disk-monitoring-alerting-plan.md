@@ -123,7 +123,7 @@ Hetzner CX33 (web-platform)          Hetzner CX22 (telegram-bridge)
 
 #### Phase 1: Script and Systemd Units
 
-- [ ] Create `apps/web-platform/infra/disk-monitor.sh` -- the monitoring script
+- [x] Create `apps/web-platform/infra/disk-monitor.sh` -- the monitoring script
   - Parse `df --output=pcent / | tail -1 | tr -d ' %'` for integer percentage
   - Parse `df --output=avail / | tail -1 | tr -d ' '` for available KB
   - Load `DISCORD_OPS_WEBHOOK_URL` from `/etc/default/disk-monitor`
@@ -131,10 +131,10 @@ Hetzner CX33 (web-platform)          Hetzner CX22 (telegram-bridge)
   - If usage >= 80%: POST Discord webhook with structured embed (hostname, percentage, available space, top 5 disk consumers via `timeout 10 du -sh /* 2>/dev/null | sort -rh | head -5`), `allowed_mentions: {parse: []}`
   - If usage >= 95%: POST Discord webhook with `@here` mention for critical urgency, `allowed_mentions: {parse: ["everyone"]}`
   - Always exit 0
-- [ ] Create systemd unit files (embedded in cloud-init.yml via `write_files`):
+- [x] Create systemd unit files (embedded in cloud-init.yml via `write_files`):
   - `disk-monitor.service` -- `Type=oneshot`, `ExecStart=/usr/local/bin/disk-monitor.sh`, runs as root
   - `disk-monitor.timer` -- `OnBootSec=5min`, `OnUnitActiveSec=5min`, `Persistent=true`
-- [ ] Write tests for disk-monitor.sh in `apps/web-platform/infra/disk-monitor.test.sh` (following existing ci-deploy.test.sh pattern):
+- [x] Write tests for disk-monitor.sh in `apps/web-platform/infra/disk-monitor.test.sh` (following existing ci-deploy.test.sh pattern):
   - Test: normal disk usage (below 80%) produces no output and exit 0
   - Test: 80% usage triggers Discord webhook POST (mock `curl`)
   - Test: 95% usage includes `@here` mention
@@ -338,12 +338,12 @@ This requires the script to use `COOLDOWN_DIR` as a configurable variable (alrea
 
 - [ ] Create a dedicated `#ops-alerts` Discord channel and webhook URL for infrastructure alerts
 - [ ] Add `DISCORD_OPS_WEBHOOK_URL` to Doppler `prd` config with the new webhook URL
-- [ ] Update `apps/web-platform/infra/cloud-init.yml`:
+- [x] Update `apps/web-platform/infra/cloud-init.yml`:
   - Add `write_files` entries for `disk-monitor.sh`, `disk-monitor.service`, `disk-monitor.timer`
   - Add `write_files` entry for `/etc/default/disk-monitor` with `DISCORD_OPS_WEBHOOK_URL` from Terraform variable
   - Add `runcmd` entries to enable the systemd timer: `systemctl daemon-reload && systemctl enable --now disk-monitor.timer`
-- [ ] Add `var.discord_ops_webhook_url` to `apps/web-platform/infra/variables.tf` (sensitive string)
-- [ ] Add `terraform_data.disk_monitor_install` resource to `apps/web-platform/infra/server.tf`:
+- [x] Add `var.discord_ops_webhook_url` to `apps/web-platform/infra/variables.tf` (sensitive string)
+- [x] Add `terraform_data.disk_monitor_install` resource to `apps/web-platform/infra/server.tf`:
   - Uses `remote-exec` provisioner to deploy the script and systemd units to the existing server
   - Triggers on `sha256(var.discord_ops_webhook_url)` (re-deploys if webhook URL changes)
   - Same SSH connection pattern as `terraform_data.doppler_install`
@@ -413,16 +413,16 @@ With `disk_monitor_script_b64 = base64encode(file("${path.module}/disk-monitor.s
 
 The telegram-bridge CX22 server has a different Terraform structure (no `server.tf`, no SSH provisioner wired). Applying the same monitoring requires different plumbing (adding `hcloud` provider, server data source, SSH connection). This is deferred to a separate tracking issue to keep this plan focused on the web-platform server.
 
-- [ ] Create GitHub issue to track telegram-bridge disk monitoring (milestone: "Post-MVP / Later")
+- [x] Create GitHub issue to track telegram-bridge disk monitoring (milestone: "Post-MVP / Later") -- #1530
 
 #### Phase 4: Documentation and NFR Update
 
-- [ ] Create runbook: `knowledge-base/engineering/ops/runbooks/disk-monitoring.md`
+- [x] Create runbook: `knowledge-base/engineering/ops/runbooks/disk-monitoring.md`
   - Alert response procedure (what to do when you get the alert)
   - Manual cleanup commands (`docker image prune -af`, `journalctl --vacuum-size=100M`, `apt clean`)
   - How to adjust thresholds
   - How to test the alert manually (`bash /usr/local/bin/disk-monitor.sh`)
-- [ ] Update `knowledge-base/engineering/architecture/nfr-register.md`:
+- [x] Update `knowledge-base/engineering/architecture/nfr-register.md`:
   - NFR-002 (System-Level Monitoring): Update Compute row from "Partial | Hetzner Console" to "Partial | Hetzner Console + disk-monitor.sh (disk usage alerts at 80%/95%)"
 
 ##### Research Insights: Runbook Structure
