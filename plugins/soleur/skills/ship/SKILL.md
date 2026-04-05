@@ -249,6 +249,19 @@ Ship Checklist for [branch name]:
 - [ ] CI checks pass
 ```
 
+## Phase 5.4: Pre-Flight Validation
+
+Run technical readiness checks before creating the PR. This catches unapplied migrations, missing security headers, and bare-repo execution context.
+
+Invoke the preflight skill via the **Skill tool**:
+
+- If `HEADLESS_MODE=true`: `skill: soleur:preflight`, args: `--headless`
+- Otherwise: `skill: soleur:preflight`
+
+**If preflight reports any FAIL:** Abort the ship pipeline. Display the preflight results table and stop. Do not proceed to Phase 5.5 or Phase 6.
+
+**If preflight reports all PASS or SKIP:** Continue to Phase 5.5.
+
 ## Phase 5.5: Pre-Ship Review Gates
 
 ### Code Review Completion Gate (mandatory)

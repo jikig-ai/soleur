@@ -288,10 +288,10 @@ description: "This skill should be used when validating technical readiness befo
 
 **Tasks:**
 
-- [ ] Add Phase 5.4 section to ship SKILL.md between Phase 5 and Phase 5.5
-- [ ] Wire `skill: soleur:preflight` invocation with headless mode forwarding
-- [ ] On FAIL: abort ship pipeline with error details (both headless and interactive)
-- [ ] On all PASS/SKIP: continue to Phase 5.5
+- [x] Add Phase 5.4 section to ship SKILL.md between Phase 5 and Phase 5.5
+- [x] Wire `skill: soleur:preflight` invocation with headless mode forwarding
+- [x] On FAIL: abort ship pipeline with error details (both headless and interactive)
+- [x] On all PASS/SKIP: continue to Phase 5.5
 
 ### Phase 3: Documentation and Registration
 

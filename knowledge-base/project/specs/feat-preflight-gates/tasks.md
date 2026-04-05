@@ -55,12 +55,12 @@ Source plan: `knowledge-base/project/plans/2026-04-05-feat-preflight-validation-
 
 ### 2.1 Add Phase 5.4 to ship SKILL.md
 
-- [ ] Insert Phase 5.4 section between Phase 5 (Final Checklist) and Phase 5.5 (Pre-Ship Review Gates)
-- [ ] Wire `skill: soleur:preflight` invocation (via Skill tool, not bash)
-- [ ] Forward `--headless` flag when `HEADLESS_MODE=true`
-- [ ] On FAIL: abort ship pipeline with error details
-- [ ] On all PASS/SKIP: continue to Phase 5.5
-- [ ] Keep section to ~10-15 lines (thin orchestration layer)
+- [x] Insert Phase 5.4 section between Phase 5 (Final Checklist) and Phase 5.5 (Pre-Ship Review Gates)
+- [x] Wire `skill: soleur:preflight` invocation (via Skill tool, not bash)
+- [x] Forward `--headless` flag when `HEADLESS_MODE=true`
+- [x] On FAIL: abort ship pipeline with error details
+- [x] On all PASS/SKIP: continue to Phase 5.5
+- [x] Keep section to ~10-15 lines (thin orchestration layer)
 
 ## Phase 3: Documentation and Registration
 
