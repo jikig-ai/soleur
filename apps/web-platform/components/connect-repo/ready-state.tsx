@@ -34,7 +34,7 @@ export function ReadyState({ repoName, onContinue }: ReadyStateProps) {
           </div>
           <div className="flex items-center justify-between gap-8">
             <span className="text-sm text-neutral-500">Agents</span>
-            <span className="text-sm font-medium text-green-400">61 ready</span>
+            <span className="text-sm font-medium text-green-400">{process.env.NEXT_PUBLIC_AGENT_COUNT || "60+"} ready</span>
           </div>
         </div>
       </Card>

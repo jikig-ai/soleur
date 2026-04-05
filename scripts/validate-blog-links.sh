@@ -24,7 +24,7 @@ pass() {
 # Build site if no site-dir provided
 if [[ -z "$SITE_DIR" ]]; then
   echo "Building site..."
-  (cd "$REPO_ROOT" && npx @11ty/eleventy --quiet)
+  (cd "$REPO_ROOT" && npx --yes @11ty/eleventy --quiet)
   SITE_DIR="$REPO_ROOT/_site"
 fi
 
