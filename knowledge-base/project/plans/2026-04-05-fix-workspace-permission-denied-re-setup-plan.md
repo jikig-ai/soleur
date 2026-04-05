@@ -166,12 +166,12 @@ The application-level fix above is a defensive workaround. The upstream fix is t
 
 ## Acceptance Criteria
 
-- [ ] `provisionWorkspaceWithRepo` succeeds when workspace contains files with restrictive permissions
-- [ ] `deleteWorkspace` succeeds when workspace contains files with restrictive permissions
-- [ ] When both cleanup phases fail, a clear error message is thrown with actionable manual cleanup instructions
-- [ ] A warning log is emitted when the Phase 2 fallback activates
-- [ ] Existing tests continue to pass (no regression on normal workspace provisioning)
-- [ ] The fix is contained to `workspace.ts` -- no Dockerfile, cloud-init, or CI changes required
+- [x] `provisionWorkspaceWithRepo` succeeds when workspace contains files with restrictive permissions
+- [x] `deleteWorkspace` succeeds when workspace contains files with restrictive permissions
+- [x] When both cleanup phases fail, a clear error message is thrown with actionable manual cleanup instructions
+- [x] A warning log is emitted when the Phase 2 fallback activates
+- [x] Existing tests continue to pass (no regression on normal workspace provisioning)
+- [x] The fix is contained to `workspace.ts` -- no Dockerfile, cloud-init, or CI changes required
 
 ## Test Scenarios
 
