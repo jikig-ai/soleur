@@ -238,9 +238,12 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    Skipping this gate — writing implementation before tests — is a workflow violation equivalent to committing directly to main. The rationalization "this is simple enough to not need test-first" is exactly the reasoning TDD is designed to prevent.
 
+   - When adding route handler tests that require `vi.mock()`, create a separate test file from existing unit tests that import the real module. Vitest hoists all `vi.mock()` calls to the top of the file, clobbering real imports for the entire file regardless of describe block scope.
+
    **Test environment setup:** If the project's test runner cannot run the type of test needed (e.g., React component tests require jsdom but vitest is configured for node), set up the test environment BEFORE starting the task. This is part of RED — the test infrastructure must exist for the test to fail properly.
 
    - When configuring bun preload scripts that register DOM globals (e.g., happy-dom), use dynamic `await import()` for all subsequent dependencies — static ES imports are hoisted before any imperative code, causing libraries like @testing-library/react to initialize without DOM globals. See `knowledge-base/project/learnings/test-failures/2026-04-03-bun-test-dom-preload-execution-order.md`.
+   - When uploading files via Playwright MCP, save files to repo-accessible paths (not `/tmp/`). Playwright MCP restricts file access to the repo root. When Google Search Console offers Cloudflare auto-verification, prefer "Any DNS provider" manual flow — the popup OAuth flow opens an external tab that crashes the Playwright browser context.
 
    **IMPORTANT**: Always update the original plan document by checking off completed items. Use the Edit tool to change `- [ ]` to `- [x]` for each task you finish. This keeps the plan as a living document showing progress and ensures no checkboxes are left unchecked.
 
@@ -257,6 +260,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    | UX specialist produces artifacts (wireframes, copy, brief) | Specialist is still generating (mid-output) |
    | Domain leader review cycle completes (feedback applied) | Review feedback not yet incorporated |
    | Brand guide alignment pass completes | Alignment still in progress |
+
+   - When lefthook hangs during commit in a worktree (common with `core.bare=true` repos), verify typecheck and tests pass manually, then use `LEFTHOOK=0 git commit`. Always check for stalled lefthook processes (`pgrep -fa lefthook`) before retrying.
 
    **Heuristic:** "Can I write a commit message that describes a complete, valuable change? If yes, commit. If the message would be 'WIP' or 'partial X', wait."
 
@@ -312,6 +317,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
       `terraform init -backend=false` then `terraform validate` -- catches HCL syntax errors and undefined references without requiring provider credentials.
 
    These checks replace the "tests may be skipped" exemption for infra files. If any check fails, fix before proceeding to the next task.
+
+   - When cloud-init has `lifecycle { ignore_changes = [user_data] }`, changes to cloud-init templates are never applied to existing servers. Use a `terraform_data` provisioner with `remote-exec` to bridge the gap. Verify systemd services use `EnvironmentFile=` directives (not `/etc/environment`) for token injection.
 
 7. **Track Progress**
    - Keep TodoWrite updated as you complete tasks
