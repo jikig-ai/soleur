@@ -7,6 +7,18 @@ issue: "#1501"
 
 # Remove terraform_data.doppler_install from server.tf
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-05
+**Sections enhanced:** 1 (Proposed Solution)
+**Research agents used:** learnings-researcher (2 relevant learnings verified)
+
+### Key Findings
+
+1. **`removed` block alternative considered and rejected.** Terraform 1.7+ supports declarative `removed { from = terraform_data.doppler_install }` blocks as an alternative to `terraform state rm`. Rejected because it requires two commits (add block, then remove it) for no benefit -- `state rm` is a single imperative step appropriate for one-time cleanup.
+2. **Learnings fully incorporated.** Both referenced learnings (`2026-04-03-terraform-data-remote-exec-drift-encrypted-ssh-key.md` and `2026-03-21-terraform-drift-dead-code-and-missing-secrets.md`) confirm the resource was applied successfully and document the exact drift pattern this plan resolves.
+3. **No additional research warranted.** This is a mechanical deletion of dead infrastructure code with a state cleanup step. No frameworks, APIs, UI, security surfaces, or architectural decisions are involved.
+
 ## Overview
 
 The `terraform_data.doppler_install` resource was a one-time bootstrap provisioner that installed Doppler CLI on the existing Hetzner server via SSH `remote-exec`. It was added in PR #1496, applied successfully (confirmed in learning `2026-04-03-terraform-data-remote-exec-drift-encrypted-ssh-key.md`), and its purpose is complete.
