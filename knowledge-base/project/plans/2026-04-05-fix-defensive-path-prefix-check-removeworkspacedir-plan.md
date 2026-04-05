@@ -2,9 +2,22 @@
 title: "fix: add defensive path prefix check to removeWorkspaceDir"
 type: fix
 date: 2026-04-05
+deepened: 2026-04-05
 ---
 
 # fix: Add defensive path prefix check to removeWorkspaceDir
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-05
+**Sections enhanced:** 3 (Proposed Fix, Test Scenarios, Implementation Notes)
+**Research sources:** 4 institutional learnings (CWE-22, CWE-59, defense-in-depth, attack surface enumeration)
+
+### Key Improvements
+
+1. Added caller enumeration to confirm all current call sites are safe (attack surface audit)
+2. Strengthened test scenarios with TOCTOU consideration and caller-contract documentation
+3. Added edge case for empty string input based on CWE-22 learning
 
 ## Problem
 
@@ -41,6 +54,23 @@ The existing `isPathInWorkspace()` in `server/sandbox.ts` uses `fs.realpathSync(
 
 Use a generic error message that does not leak the workspace root path: `"Refusing to remove path outside workspace root"`.
 
+### Research Insights
+
+**From institutional learnings (CWE-22, CWE-59, defense-in-depth, attack surface enumeration):**
+
+**Caller enumeration (attack surface audit):** Per the security-fix-attack-surface-enumeration learning, every security boundary change should enumerate all code paths that touch the surface. Current callers of `removeWorkspaceDir`:
+
+1. `provisionWorkspaceWithRepo()` at line 152 -- path is `join(getWorkspacesRoot(), userId)` where `userId` is UUID-validated. Safe.
+2. `deleteWorkspace()` at line 251 -- same pattern: UUID-validated userId, `join()` construction. Safe.
+
+Both callers construct the path from `getWorkspacesRoot() + "/" + UUID`, so the prefix check will always pass for legitimate calls. The guard protects against future callers that skip UUID validation or pass raw user input.
+
+**Empty string guard:** The CWE-22 learning documents that `path.resolve("")` returns the current working directory, which could coincidentally be inside the workspace root. The prefix check already handles this because `path.resolve("")` returns CWD (e.g., `/app`), which will not start with the workspace root (`/workspaces/`). No additional guard needed, but worth a test case.
+
+**TOCTOU note:** The CWE-59 learning emphasizes TOCTOU race conditions between path validation and file operations. This is not a concern here because: (a) the path is constructed server-side, not from user input that could change between check and use, and (b) the bubblewrap sandbox (layer 1) provides OS-level protection even if application-level checks could be raced.
+
+**Trailing slash is critical:** Multiple learnings (CWE-22, defense-in-depth) emphasize that `startsWith` without trailing slash creates prefix collisions (`/workspaces-evil` matching `/workspaces`). The plan already includes `root + "/"` -- this is correct and must not be simplified.
+
 ## Acceptance Criteria
 
 - [ ] `removeWorkspaceDir` rejects paths outside workspace root (throws Error)
@@ -56,6 +86,7 @@ Use a generic error message that does not leak the workspace root path: `"Refusi
 - Given a path that is a string prefix collision (e.g., `/workspaces-evil`), when `removeWorkspaceDir` is called, then it throws because `"/workspaces-evil"` does not start with `"/workspaces/"`.
 - Given a path with `../` traversal segments that resolve outside the root, when `removeWorkspaceDir` is called, then it throws (because `path.resolve()` canonicalizes the path first).
 - Given a valid workspace subdirectory (e.g., `/workspaces/some-uuid`), when `removeWorkspaceDir` is called, then it proceeds to the existing removal logic.
+- Given an empty string, when `removeWorkspaceDir` is called, then it throws (because `path.resolve("")` returns CWD, which is not under workspace root).
 
 ## Implementation Notes
 
@@ -78,6 +109,7 @@ Add a new `describe` block for path validation tests. These tests do not need fi
 - Root itself: `removeWorkspaceDir(process.env.WORKSPACES_ROOT!)` should throw
 - Prefix collision: `removeWorkspaceDir("/tmp/soleur-test-workspaces-cleanup-evil")` should throw
 - Traversal: `removeWorkspaceDir("/tmp/soleur-test-workspaces-cleanup/user/../../../etc")` should throw
+- Empty string: `removeWorkspaceDir("")` should throw (CWE-22 learning: `path.resolve("")` returns CWD)
 
 ## Domain Review
 

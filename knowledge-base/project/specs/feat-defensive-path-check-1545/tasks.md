@@ -7,7 +7,8 @@
   - [ ] 1.1.2 Test: rejects the workspace root itself
   - [ ] 1.1.3 Test: rejects prefix collision paths (`/tmp/soleur-test-workspaces-cleanup-evil`)
   - [ ] 1.1.4 Test: rejects `../` traversal paths that resolve outside root
-  - [ ] 1.1.5 Test: accepts valid workspace subdirectory paths (existing behavior)
+  - [ ] 1.1.5 Test: rejects empty string input
+  - [ ] 1.1.6 Test: accepts valid workspace subdirectory paths (existing behavior)
 - [ ] 1.2 Run tests, confirm new tests fail (RED phase)
 
 ## Phase 2: Implementation (TDD GREEN)
