@@ -147,7 +147,7 @@ write_files:
       ProtectSystem=strict
       ProtectHome=read-only
       PrivateTmp=true
-      ReadWritePaths=/mnt/data
+      ReadWritePaths=/mnt/data /var/lock
       ReadOnlyPaths=/etc/webhook /usr/local/bin /etc/default/webhook-deploy
       TimeoutStopSec=180
 

@@ -76,6 +76,48 @@ resource "terraform_data" "disk_monitor_install" {
   }
 }
 
+# Fix deploy pipeline: push current ci-deploy.sh, update webhook.service
+# (EnvironmentFile + ReadWritePaths=/var/lock), and delete stale /mnt/data/.env.
+# Cloud-init handles new servers; this provisioner fixes the existing one
+# (ignore_changes on user_data means cloud-init changes do not apply to it).
+# Shows as "will be created" in CI drift reports -- expected behavior (#1409).
+# Source of truth for webhook.service: cloud-init.yml (search "path: /etc/systemd/system/webhook.service").
+# The standalone webhook.service file keeps triggers_replace and the file provisioner in sync.
+resource "terraform_data" "deploy_pipeline_fix" {
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/ci-deploy.sh"),
+    file("${path.module}/webhook.service"),
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = file(var.ssh_private_key_path)
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/ci-deploy.sh"
+    destination = "/usr/local/bin/ci-deploy.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/webhook.service"
+    destination = "/etc/systemd/system/webhook.service"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "chmod +x /usr/local/bin/ci-deploy.sh",
+      "systemctl daemon-reload",
+      "systemctl restart webhook",
+      # One-time cleanup: delete stale .env so deploys fail loudly if Doppler is unavailable.
+      # rm -f is idempotent -- safe to re-run if this resource is tainted and re-created.
+      "rm -f /mnt/data/.env",
+    ]
+  }
+}
+
 resource "hcloud_volume" "workspaces" {
   name     = "soleur-web-platform-data"
   size     = var.volume_size

@@ -1,0 +1,22 @@
+[Unit]
+Description=Webhook deploy listener
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/webhook-deploy
+ExecStart=/usr/local/bin/webhook -verbose -hooks /etc/webhook/hooks.json -port 9000 -ip 127.0.0.1
+Restart=on-failure
+RestartSec=5
+User=deploy
+Group=deploy
+# NoNewPrivileges omitted: ci-deploy.sh requires sudo for chown (#967)
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/mnt/data /var/lock
+ReadOnlyPaths=/etc/webhook /usr/local/bin /etc/default/webhook-deploy
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target
