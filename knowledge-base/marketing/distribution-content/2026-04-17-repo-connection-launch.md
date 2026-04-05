@@ -38,7 +38,7 @@ Connect your GitHub repo during onboarding. Every agent conversation starts with
 
 You brief it from scratch. Every. Single. Session.
 
-3/ Now: connect your GitHub repo, and 61 agents across 8 departments read your knowledge base, brand guide, specs, and learnings. Context carries forward. Knowledge compounds.
+3/ Now: connect your GitHub repo, and 63 agents across 8 departments read your knowledge base, brand guide, specs, and learnings. Context carries forward. Knowledge compounds.
 
 4/ How it works behind the scenes:
 
@@ -118,7 +118,7 @@ Shipped the repo connection feature for Soleur today. This is the feature I have
 
 The problem: every AI dev tool starts with a blank workspace. The AI does not know your project, your decisions, your constraints. You re-explain everything every session.
 
-The fix: connect your GitHub repo during onboarding. Your AI team (61 agents across 8 departments) reads your codebase, knowledge base, brand guide, and learnings. Context carries forward. Knowledge compounds.
+The fix: connect your GitHub repo during onboarding. Your AI team (63 agents across 8 departments) reads your codebase, knowledge base, brand guide, and learnings. Context carries forward. Knowledge compounds.
 
 Technical details for the curious:
 
@@ -137,7 +137,7 @@ Open source. Free. Built by a solo founder for solo founders.
 
 **Your AI team now operates on your actual codebase -- not a blank workspace**
 
-I built an AI team platform (Soleur) that deploys 61 agents across 8 business departments. The biggest missing piece was always: these agents start from zero every session.
+I built an AI team platform (Soleur) that deploys 63 agents across 8 business departments. The biggest missing piece was always: these agents start from zero every session.
 
 Shipped the fix today. Connect your GitHub repo during onboarding, and every agent conversation starts with full project context.
 

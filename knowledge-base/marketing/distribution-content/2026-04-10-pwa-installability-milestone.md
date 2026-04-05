@@ -17,7 +17,7 @@ Open app.soleur.ai in your browser, tap "Install" or "Add to Home Screen," and t
 
 What this means:
 
-- Your phone becomes a direct line to 61 agents across 8 departments
+- Your phone becomes a direct line to 63 agents across 8 departments
 - The same compounding knowledge base, the same cross-domain coherence -- accessible from wherever you are
 - Works offline for cached content, syncs when you reconnect
 
@@ -31,7 +31,7 @@ This is Phase 1 of the web platform. The mission has not changed: one founder, f
 
 Soleur is now installable as an app on any device. iOS, Android, desktop. No app store required.
 
-2/ Open app.soleur.ai in your browser. Tap "Add to Home Screen." Done. The full AI organization -- 61 agents across 8 departments -- lives on your device like a native app.
+2/ Open app.soleur.ai in your browser. Tap "Add to Home Screen." Done. The full AI organization -- 63 agents across 8 departments -- lives on your device like a native app.
 
 3/ This matters because the web platform means Soleur is no longer tied to a terminal. Same compounding knowledge base. Same cross-domain coherence. Accessible from wherever you make decisions.
 
@@ -48,7 +48,7 @@ Solo founder constraint applied to the delivery surface itself.
 
 ## Bluesky
 
-Soleur is now installable on any device -- iOS, Android, desktop. Open app.soleur.ai, tap install, done. 61 agents across 8 departments, accessible from wherever you make decisions. No app store. No terminal required.
+Soleur is now installable on any device -- iOS, Android, desktop. Open app.soleur.ai, tap install, done. 63 agents across 8 departments, accessible from wherever you make decisions. No app store. No terminal required.
 
 ---
 
@@ -58,7 +58,7 @@ Six months ago, every interaction with Soleur happened in a terminal.
 
 That worked for me -- I built the product there. But when I talked to other solo founders, the terminal was a barrier. They wanted the AI organization accessible from their phone during a commute, from a tablet at a coffee shop, from whatever device they had in front of them when a decision needed to be made.
 
-So we rebuilt the access layer. Today, Soleur is installable as an app on iOS, Android, and desktop. No app store. No download. Open app.soleur.ai in a browser, tap install, and the full organization -- 61 agents across 8 departments with compounding knowledge -- lives on your device.
+So we rebuilt the access layer. Today, Soleur is installable as an app on iOS, Android, and desktop. No app store. No download. Open app.soleur.ai in a browser, tap install, and the full organization -- 63 agents across 8 departments with compounding knowledge -- lives on your device.
 
 The architecture decision was deliberate: Progressive Web App. One codebase, three surfaces. A solo founder building the delivery layer the same way a solo founder would want to use it -- no separate iOS and Android teams needed.
 
@@ -77,7 +77,7 @@ Soleur is now installable as an app on iOS, Android, and desktop.
 
 The web platform at app.soleur.ai supports Progressive Web App installation -- open in a browser, tap install, and the full AI organization is accessible from any device. No app store required.
 
-This is Phase 1 of the platform delivery surface. 61 agents across 8 departments, compounding knowledge base, cross-domain coherence -- now accessible from wherever founders make decisions.
+This is Phase 1 of the platform delivery surface. 63 agents across 8 departments, compounding knowledge base, cross-domain coherence -- now accessible from wherever founders make decisions.
 
 <https://app.soleur.ai>
 
