@@ -13,6 +13,7 @@ export const WS_CLOSE_CODES = {
   INTERNAL_ERROR: 4005,
   RATE_LIMITED: 4008,
   IDLE_TIMEOUT: 4009,
+  SERVER_GOING_AWAY: 1001,
 } as const;
 
 export class KeyInvalidError extends Error {
