@@ -147,8 +147,12 @@ resource "terraform_data" "docker_seccomp_config" {
   provisioner "remote-exec" {
     inline = [
       "python3 -c \"import json; f='/etc/docker/daemon.json'; d=json.load(open(f)); d['seccomp-profile']='/etc/docker/seccomp-profiles/soleur-bwrap.json'; json.dump(d,open(f,'w'),indent=2); print('daemon.json updated')\"",
+      # Ubuntu 24.04 kernel restricts uid_map writes inside unprivileged user namespaces
+      # even with apparmor=unconfined. Disable this kernel-level restriction for bwrap (#1557).
+      "sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
+      "echo 'kernel.apparmor_restrict_unprivileged_userns=0' > /etc/sysctl.d/99-bwrap-userns.conf",
       "systemctl restart docker",
-      "echo 'Docker restarted with custom seccomp profile'",
+      "echo 'Docker restarted with custom seccomp profile and userns sysctl'",
     ]
   }
 }
