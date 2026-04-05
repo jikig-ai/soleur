@@ -101,7 +101,7 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Agent Runtime | Not Implemented | — | No system metrics collection |
 | Telegram Bot | Not Implemented | — | No system metrics collection |
 | Supabase PostgreSQL | Partial | Supabase Dashboard | Built-in database usage metrics |
-| Compute | Partial | Hetzner Console | Basic server metrics (CPU, RAM, disk) |
+| Compute | Partial | Hetzner Console + disk-monitor.sh | Hetzner console metrics + disk usage alerts at 80%/95% via Discord (#1409) |
 
 ### NFR-003: Service-Level Monitoring
 

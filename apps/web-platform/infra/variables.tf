@@ -29,6 +29,12 @@ variable "ssh_key_path" {
   default     = "~/.ssh/id_ed25519.pub"
 }
 
+variable "ssh_private_key_path" {
+  description = "Path to the private SSH key file (used by provisioners)"
+  type        = string
+  default     = "~/.ssh/id_ed25519"
+}
+
 variable "server_type" {
   description = "Hetzner server type (cx33 = 4 vCPU, 8GB RAM)"
   type        = string
@@ -102,4 +108,10 @@ variable "doppler_token" {
 variable "cf_notification_email" {
   description = "Email address for Cloudflare notification policies"
   type        = string
+}
+
+variable "discord_ops_webhook_url" {
+  description = "Discord webhook URL for infrastructure alerts (#ops-alerts channel)"
+  type        = string
+  sensitive   = true
 }
