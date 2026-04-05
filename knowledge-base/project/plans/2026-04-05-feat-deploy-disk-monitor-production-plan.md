@@ -38,7 +38,18 @@ Follow-through deployment for #1409 (disk space monitoring and alerting). The im
 
 ## Implementation Steps
 
-### Phase 1: Create Discord channel and webhook (automated via Discord API)
+### Phase 1: Disk cleanup (prerequisite -- server at 100%)
+
+The server disk is at 100%. Terraform provisioners copy files via SSH, which will fail if the filesystem has no space. Clean up first per the runbook (`knowledge-base/engineering/ops/runbooks/disk-monitoring.md`):
+
+```bash
+ssh root@135.181.45.178 "docker image prune -af && journalctl --vacuum-size=100M && apt clean"
+ssh root@135.181.45.178 "df -h /"
+```
+
+Verify usage drops enough for file operations to succeed (target: below 90%).
+
+### Phase 2: Create Discord channel and webhook (automated via Discord API)
 
 Use the Discord Bot API with the existing `DISCORD_BOT_TOKEN` (Doppler `dev` config) and `DISCORD_GUILD_ID` to:
 
@@ -46,11 +57,13 @@ Use the Discord Bot API with the existing `DISCORD_BOT_TOKEN` (Doppler `dev` con
 2. Create a webhook on the new channel via `POST /channels/{channel_id}/webhooks`
 3. Capture the webhook URL from the response
 
+**Prerequisite:** The bot must have `MANAGE_CHANNELS` and `MANAGE_WEBHOOKS` permissions in the Discord server. If the API returns 403, grant these permissions via Playwright or the Discord developer portal.
+
 **Automation path:** `curl` with bot token -- no browser needed.
 
 **Files:** None (API calls only)
 
-### Phase 2: Set Doppler secrets
+### Phase 3: Set Doppler secrets
 
 ```bash
 doppler secrets set DISCORD_OPS_WEBHOOK_URL '<webhook_url>' -p soleur -c prd
@@ -64,15 +77,24 @@ doppler secrets get DISCORD_OPS_WEBHOOK_URL -p soleur -c prd --plain
 doppler secrets get DISCORD_OPS_WEBHOOK_URL -p soleur -c prd_terraform --plain
 ```
 
-### Phase 3: Terraform apply
+### Phase 4: Terraform plan and apply
 
-Run from the worktree (not bare repo):
+Run `plan` first to review changes, then `apply` scoped to the disk monitor provisioner:
 
 ```bash
 doppler run -p soleur -c prd_terraform -- \
   doppler run --token "$(doppler configure get token --plain)" \
     -p soleur -c prd_terraform --name-transformer tf-var -- \
-  terraform -chdir=apps/web-platform/infra apply
+  terraform -chdir=apps/web-platform/infra plan -target=terraform_data.disk_monitor_install
+```
+
+Review the plan output. Expect `terraform_data.disk_monitor_install` to show as "will be created". Then apply:
+
+```bash
+doppler run -p soleur -c prd_terraform -- \
+  doppler run --token "$(doppler configure get token --plain)" \
+    -p soleur -c prd_terraform --name-transformer tf-var -- \
+  terraform -chdir=apps/web-platform/infra apply -target=terraform_data.disk_monitor_install
 ```
 
 This will create `terraform_data.disk_monitor_install` which:
@@ -82,7 +104,7 @@ This will create `terraform_data.disk_monitor_install` which:
 - Installs systemd service and timer units
 - Enables and starts `disk-monitor.timer`
 
-### Phase 4: Verify deployment
+### Phase 5: Verify deployment
 
 ```bash
 ssh root@135.181.45.178 "systemctl is-active disk-monitor.timer"
@@ -92,18 +114,10 @@ ssh root@135.181.45.178 "systemctl list-timers disk-monitor.timer --no-pager"
 # Expected: shows next/last run times
 
 ssh root@135.181.45.178 "bash /usr/local/bin/disk-monitor.sh"
-# Expected: alerts fire in #ops-alerts (disk at 100%)
+# Expected: alerts fire in #ops-alerts (disk may still be above 80%)
 ```
 
-### Phase 5: Disk cleanup (address 100% usage)
-
-While on the server, clean up disk space per the runbook (`knowledge-base/engineering/ops/runbooks/disk-monitoring.md`):
-
-```bash
-ssh root@135.181.45.178 "docker image prune -af && journalctl --vacuum-size=100M && apt clean"
-```
-
-Verify usage drops below 80% to prevent immediate re-alerting.
+Verify disk usage is below 80% after Phase 1 cleanup. If still above, run additional cleanup per the runbook.
 
 ## Domain Review
 
