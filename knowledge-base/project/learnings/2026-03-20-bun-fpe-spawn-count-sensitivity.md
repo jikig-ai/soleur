@@ -1,16 +1,16 @@
 ---
-title: "Bun 1.3.5 FPE crash correlates with subprocess spawn count in test runner"
+title: "Bun <=1.3.6 FPE crash correlates with subprocess spawn count in test runner"
 date: 2026-03-20
 category: runtime-errors
 tags: [bun, testing, fpe, sigfpe, spawn, subprocess, gc]
 module: scripts/test-all.sh
 ---
 
-# Learning: Bun 1.3.5 FPE crash correlates with subprocess spawn count in test runner
+# Learning: Bun <=1.3.6 FPE crash correlates with subprocess spawn count in test runner
 
 ## Problem
 
-Running `bun test` from the repo root (or `bun test test/`) crashes with a floating point exception (SIGFPE) on Bun 1.3.5. The crash is intermittent per-file but approaches 100% when all root-level test files run together via directory discovery.
+Running `bun test` from the repo root (or `bun test test/`) crashes with a floating point exception (SIGFPE) on Bun <=1.3.6. The crash is intermittent per-file but approaches 100% when all root-level test files run together via directory discovery.
 
 ```
 panic: Floating point error at address 0x41C038E
@@ -34,7 +34,7 @@ The crash belongs to a known class of Bun GC/allocator bugs. [oven-sh/bun#20429]
 
 ## Bun Crash Class Taxonomy
 
-This project has now documented three distinct Bun 1.3.5 crash patterns:
+This project has now documented three distinct Bun <=1.3.6 crash patterns:
 
 1. **Segfault from missing deps** (2026-03-18) — Unresolvable imports cause allocator panic. RSS spikes to ~1.1GB. Fix: auto-install deps in worktree creation.
    See: `knowledge-base/project/learnings/2026-03-18-bun-test-segfault-missing-deps.md`
@@ -44,7 +44,7 @@ This project has now documented three distinct Bun 1.3.5 crash patterns:
 
 3. **FPE from spawn count** (this issue) — High `Bun.spawnSync` count triggers GC accounting bug. Fix: version pin + sequential test runner.
 
-All three share the pattern: RSS spikes to ~1.1GB before the crash. The common thread is Bun 1.3.5's fragile GC under memory pressure from subprocess or timer accumulation.
+All three share the pattern: RSS spikes to ~1.1GB before the crash. The common thread is Bun <=1.3.6's fragile GC under memory pressure from subprocess or timer accumulation.
 
 ## Solution
 
