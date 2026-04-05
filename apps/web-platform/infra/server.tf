@@ -38,37 +38,6 @@ resource "hcloud_server" "web" {
   }
 }
 
-# One-time bootstrap: install Doppler CLI on the existing server and configure
-# the service token for the webhook systemd unit. Cloud-init handles this for
-# newly provisioned servers, but ignore_changes on user_data means the existing
-# server never received the Doppler install.
-#
-# CI drift checks run plan-only, so the SSH connection is never evaluated in CI.
-# This resource will show as "will be created" in drift reports — that is expected.
-resource "terraform_data" "doppler_install" {
-  triggers_replace = sha256(var.doppler_token)
-
-  connection {
-    type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
-    user        = "root"
-    private_key = file(var.ssh_private_key_path)
-  }
-
-  provisioner "remote-exec" {
-    inline = [
-      "curl -Ls --tlsv1.2 --proto '=https' --retry 3 https://cli.doppler.com/install.sh | sh",
-      "printf 'DOPPLER_TOKEN=%s\\n' '${var.doppler_token}' > /etc/default/webhook-deploy",
-      "chmod 600 /etc/default/webhook-deploy",
-      "chown deploy:deploy /etc/default/webhook-deploy",
-      "doppler --version",
-      # Source token from the 600-permission file to avoid exposing it in /proc/<pid>/cmdline
-      "set -a; . /etc/default/webhook-deploy; set +a; doppler secrets --only-names --project soleur --config prd | head -5",
-      "systemctl restart webhook || true",
-    ]
-  }
-}
-
 resource "hcloud_volume" "workspaces" {
   name     = "soleur-web-platform-data"
   size     = var.volume_size
