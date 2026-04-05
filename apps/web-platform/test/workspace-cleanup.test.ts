@@ -108,8 +108,48 @@ describe("removeWorkspaceDir", () => {
       "../server/workspace"
     );
 
-    expect(() => mockedRemove("/workspaces/test-cleanup")).toThrow(
+    expect(() => mockedRemove(TEST_ROOT + "/test-cleanup")).toThrow(
       /Workspace cleanup failed.*Manual cleanup required/,
     );
+  });
+});
+
+describe("removeWorkspaceDir path validation", () => {
+  test("rejects path outside workspace root", () => {
+    expect(() => removeWorkspaceDir("/etc/passwd")).toThrow(
+      "Refusing to remove path outside workspace root",
+    );
+  });
+
+  test("rejects the workspace root itself", () => {
+    expect(() => removeWorkspaceDir(TEST_ROOT)).toThrow(
+      "Refusing to remove path outside workspace root",
+    );
+  });
+
+  test("rejects prefix collision (e.g. /root-evil when root is /root)", () => {
+    expect(() => removeWorkspaceDir(TEST_ROOT + "-evil")).toThrow(
+      "Refusing to remove path outside workspace root",
+    );
+  });
+
+  test("rejects traversal that resolves outside root", () => {
+    expect(() =>
+      removeWorkspaceDir(TEST_ROOT + "/user/../../../etc"),
+    ).toThrow("Refusing to remove path outside workspace root");
+  });
+
+  test("rejects empty string (resolves to CWD)", () => {
+    expect(() => removeWorkspaceDir("")).toThrow(
+      "Refusing to remove path outside workspace root",
+    );
+  });
+
+  test("accepts valid workspace subdirectory path", () => {
+    const ws = join(TEST_ROOT, "valid-workspace");
+    mkdirSync(ws, { recursive: true });
+    // Should not throw - proceeds to normal removal logic
+    removeWorkspaceDir(ws);
+    expect(existsSync(ws)).toBe(false);
   });
 });
