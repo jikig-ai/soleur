@@ -30,7 +30,7 @@ closes: "#1511"
 
 Issue #1511 reports that `bun test` crashes with a Floating Point Error (SIGFPE) in Bun v1.3.6. Investigation confirms the crash no longer reproduces -- it was resolved by a combination of prior work:
 
-1. **Bun version pin to 1.3.11** (#860) -- `.bun-version` pins the project to a version that fixes the GC/allocator FPE bug present in Bun <= 1.3.5
+1. **Bun version pin to 1.3.11** (#860) -- `.bun-version` pins the project to a version that fixes the GC/allocator FPE bug present in Bun <= 1.3.6
 2. **Sequential test runner** (#860) -- `scripts/test-all.sh` isolates test suites to avoid the high-subprocess-count crash pattern
 3. **Dual-runner exclusion** (#1517) -- web-platform tests are excluded from `bun test` discovery via `bunfig.toml` `pathIgnorePatterns`, preventing happy-dom corruption of native APIs
 
@@ -96,12 +96,12 @@ The exact fix version is unknown because the FPE fix was not documented in any B
 
 ## Acceptance Criteria
 
-- [ ] `bun test` from repo root succeeds reliably (5+ consecutive runs) on Bun 1.3.11+
-- [ ] `bash scripts/test-all.sh` runs all suites and exits 0
-- [ ] Issue #1511 is closed with a resolution comment
-- [ ] PR #1527 is either closed (no changes needed) or merged with any version/comment fixes
-- [ ] `bunfig.toml` FPE comment says "Bun <=1.3.6" (not "<=1.3.5")
-- [ ] Learning document version references updated to include 1.3.6
+- [x] `bun test` from repo root succeeds reliably (5+ consecutive runs) on Bun 1.3.11+
+- [x] `bash scripts/test-all.sh` runs all suites and exits 0
+- [x] Issue #1511 is closed with a resolution comment
+- [x] PR #1527 is either closed (no changes needed) or merged with any version/comment fixes
+- [x] `bunfig.toml` FPE comment says "Bun <=1.3.6" (not "<=1.3.5")
+- [x] Learning document version references updated to include 1.3.6
 
 ## Test Scenarios
 

@@ -8,7 +8,7 @@ minimumReleaseAge = 259200
 # Bun already skips dot-directories by default, but explicit exclusion
 # prevents segfaults if worktrees have missing node_modules.
 # See: knowledge-base/project/learnings/2026-03-18-bun-test-segfault-missing-deps.md
-# FPE crash with Bun <=1.3.5 on root-level `bun test`. Use scripts/test-all.sh.
+# FPE crash with Bun <=1.3.6 on root-level `bun test`. Use scripts/test-all.sh.
 # See: knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md
 # Web-platform tests run exclusively under vitest (happy-dom environment).
 # Bun must not discover them: happy-dom's GlobalRegistrator corrupts native
