@@ -26,12 +26,13 @@ Issue: #1534
 ## Phase 3: Implementation
 
 - [ ] 3.1 Extract `removeWorkspaceDir(workspacePath: string): void` helper in `apps/web-platform/server/workspace.ts`
-  - Phase 1: Direct `rm -rf` (existing behavior)
-  - Phase 2: `find -mindepth 1 -delete` then `rmdir` (partial cleanup fallback)
+  - Phase 1: Direct `rm -rf` (existing behavior, handles happy path)
+  - Phase 2: `chmod -R u+rwX` (fixes permission bits on user-owned files, ignores errors on root-owned), then `find -mindepth 1 -delete` (partial cleanup), then `rmdir`
   - Log warning when Phase 2 activates
-  - Throw descriptive error with manual cleanup instructions if both phases fail
+  - Extract `stderr` from execFileSync error for actionable error messages
+  - Throw descriptive error with "Manual cleanup required: sudo rm -rf" if both phases fail
 - [ ] 3.2 Update `provisionWorkspaceWithRepo` (line 152-154) to call `removeWorkspaceDir`
-- [ ] 3.3 Update `deleteWorkspace` (line 252-254) to call `removeWorkspaceDir`
+- [ ] 3.3 Update `deleteWorkspace` (line 252-254) to call `removeWorkspaceDir`; ensure `log.info` only fires after confirmed success
 
 ## Phase 4: Verify (Green Phase)
 

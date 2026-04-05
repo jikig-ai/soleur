@@ -7,6 +7,19 @@ issue: 1534
 
 # fix: workspace directory permission denied during project re-setup
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-05
+**Sections enhanced:** 4 (Root Cause, Implementation, Test Scenarios, Edge Cases)
+**Research sources:** Agent SDK docs (Context7), bubblewrap UID namespace testing, institutional learnings (3 relevant)
+
+### Key Improvements
+
+1. Refined root cause analysis with empirical UID namespace behavior
+2. Added `chmod -R u+rwX` back as part of Phase 2 (fixes user-owned restrictive files before `find -delete`)
+3. Added TOCTOU race condition handling and `execFileSync` error typing
+4. Added edge cases for concurrent cleanup and empty workspace directories
+
 ## Problem
 
 When a user attempts to re-setup a project (connecting a new repository when a workspace already exists), `provisionWorkspaceWithRepo` fails with permission denied errors at the cleanup step:
@@ -29,9 +42,21 @@ The same bug affects `deleteWorkspace` (line 252 of `workspace.ts`), which is ca
 
 ### Root Cause Analysis
 
-The bubblewrap sandbox creates a user namespace where the sandboxed process sees itself as UID 0 (root) internally. When bubblewrap bind-mounts the workspace directory, files created by the sandboxed process appear as UID 0 on the host filesystem if the kernel's user namespace implementation maps the inner UID 0 back to the outer calling user's UID -- but this mapping can fail or behave differently depending on the kernel version and bwrap flags. Files created with inner UID 0 that are NOT remapped to outer UID 1001 end up owned by root on the persistent volume.
+Two verified causes for root-owned files in the workspace:
 
-Additionally, files may have been created by a prior container deployment that ran as root (before the non-root user migration in the Dockerfile).
+1. **Bubblewrap user namespace UID remapping.** The Agent SDK's bubblewrap sandbox creates a user namespace where the sandboxed process sees itself as UID 0 (root) internally. On Linux, bubblewrap uses `--uid 0 --gid 0` inside the namespace, but bind-mounted writes are mapped back to the outer UID (1001) via `/proc/<pid>/uid_map`. However, this mapping depends on kernel version and namespace configuration. On kernels where the mapping is incomplete or when bubblewrap uses `--unshare-user` without explicit `--uid`/`--gid` mapping, files written through bind mounts can end up owned by UID 0 on the host filesystem.
+
+2. **Legacy root-user containers.** Prior to the non-root migration (learning: `2026-03-20-docker-nonroot-user-with-volume-mounts.md`), the container ran as root. Any workspace files created during that period are owned by UID 0 and persist on the volume mount across container restarts.
+
+### Research Insights: Permission Behavior
+
+Empirical testing confirms the permission model:
+
+- `chmod u+rwX` succeeds on files owned by the current user regardless of current mode (fixes restrictive permission bits)
+- `chmod u+rwX` fails on files owned by a different UID (root) without `CAP_FOWNER`
+- `find -delete` returns exit code 1 when individual files cannot be deleted, but continues processing (partial cleanup)
+- `rm -rf` aborts on the first permission error without deleting accessible siblings
+- `execFileSync` throws on non-zero exit codes -- the error object includes a `stderr` Buffer
 
 ## Proposed Solution
 
@@ -43,9 +68,11 @@ Replace the bare `rm -rf` with a two-phase cleanup that handles permission denie
 
 Try `rm -rf` as the current user (UID 1001). If this succeeds, done.
 
-### Phase 2: Partial cleanup with find+delete
+### Phase 2: Fix permissions and partial cleanup
 
-If Phase 1 fails, use `find <workspace> -mindepth 1 -delete` which processes files individually and continues past individual failures (deleting UID 1001-owned files while skipping root-owned ones), then attempt `rmdir` on the workspace directory. If root-owned files remain, throw a clear error with actionable information.
+If Phase 1 fails, first attempt `chmod -R u+rwX` to fix permission bits on user-owned files (this handles git pack files with mode 444 and directories with mode 555, which are user-owned but non-writable). Then use `find <workspace> -mindepth 1 -delete` which processes files individually, continuing past failures on truly root-owned files while deleting everything the current user can delete. Finally attempt `rmdir` on the workspace directory.
+
+If root-owned files remain after `find -delete`, throw a clear error with actionable manual cleanup instructions.
 
 Log a warning when Phase 2 activates so operations can track frequency and investigate the root cause.
 
@@ -67,7 +94,17 @@ function removeWorkspaceDir(workspacePath: string): void {
     log.warn({ workspacePath }, "Direct rm -rf failed, attempting partial cleanup");
   }
 
-  // Phase 2: Individual file deletion (continues past permission errors)
+  // Phase 2: Fix permission bits on user-owned files, then delete individually.
+  // chmod fixes restrictive modes (git pack 444, dirs 555) on files WE own.
+  // find -delete continues past root-owned files instead of aborting.
+  try {
+    execFileSync("chmod", ["-R", "u+rwX", workspacePath], {
+      stdio: "pipe",
+    });
+  } catch {
+    // chmod may fail on root-owned files -- continue to find -delete
+  }
+
   try {
     execFileSync(
       "find",
@@ -76,8 +113,9 @@ function removeWorkspaceDir(workspacePath: string): void {
     );
     execFileSync("rmdir", [workspacePath], { stdio: "pipe" });
   } catch (err) {
+    const stderr = (err as { stderr?: Buffer })?.stderr?.toString() ?? "";
     throw new Error(
-      `Workspace cleanup failed: ${(err as Error).message}. ` +
+      `Workspace cleanup failed: ${stderr || (err as Error).message}. ` +
       `Some files in ${workspacePath} may be owned by root. ` +
       `Manual cleanup required: sudo rm -rf ${workspacePath}`,
     );
@@ -137,11 +175,26 @@ The application-level fix above is a defensive workaround. The upstream fix is t
 
 ## Test Scenarios
 
-- Given a workspace with all files owned by UID 1001, when `provisionWorkspaceWithRepo` runs, then Phase 1 succeeds and the workspace is replaced (existing behavior preserved)
-- Given a workspace with files that have restrictive permissions (mode 000), when `provisionWorkspaceWithRepo` runs, then Phase 2 (find -delete) removes accessible files
-- Given a workspace that cannot be deleted at all, when `provisionWorkspaceWithRepo` runs, then an error is thrown with a message containing "Workspace cleanup failed"
-- Given a workspace with restrictive-permission files, when `deleteWorkspace` runs during account deletion, then the workspace cleanup is attempted with both phases
-- Given no existing workspace, when `provisionWorkspaceWithRepo` runs, then the removal step is a no-op and cloning proceeds normally
+- Given a workspace with all files owned by UID 1001, when `removeWorkspaceDir` runs, then Phase 1 (`rm -rf`) succeeds and the directory is removed
+- Given a workspace with files that have restrictive permission bits (mode 000 on files, mode 555 on dirs), when `removeWorkspaceDir` runs, then Phase 2 (`chmod` + `find -delete`) removes them
+- Given a workspace that cannot be fully deleted (root-owned files persist), when `removeWorkspaceDir` runs, then an error is thrown with a message containing "Workspace cleanup failed" and "Manual cleanup required"
+- Given no existing workspace directory, when `removeWorkspaceDir` runs, then it returns immediately without spawning child processes
+- Given a workspace with restrictive-permission files, when `deleteWorkspace` runs during account deletion, then the workspace cleanup is attempted and `log.info` only fires on success
+- Given an empty workspace directory, when `removeWorkspaceDir` runs, then Phase 1 succeeds (rm -rf handles empty dirs)
+
+### Test Implementation Notes
+
+- Root-owned files cannot be created in unit tests without elevated privileges. Tests simulate the permission failure by creating user-owned files with mode 000 in non-writable directories (mode 555). This triggers the same `EACCES` error path.
+- The `removeWorkspaceDir` function should be exported (or tested indirectly through `provisionWorkspaceWithRepo` and `deleteWorkspace`) to allow targeted unit testing of the cleanup logic.
+
+## Edge Cases
+
+- **TOCTOU race:** `existsSync` check followed by `execFileSync("rm")` has a time-of-check/time-of-use gap. If the directory is deleted between the check and the operation, `rm -rf` exits 0 (idempotent). `find -delete` on a non-existent path exits with error. Mitigation: the `existsSync` guard in `removeWorkspaceDir` prevents spawning unnecessary child processes, but Phase 2's `find` should tolerate `ENOENT` gracefully.
+- **Concurrent re-setup:** If two `provisionWorkspaceWithRepo` calls race for the same userId (the optimistic lock in the route handler prevents this, but defense-in-depth), the second call may find a partially deleted directory. Both `rm -rf` and `find -delete` handle partially deleted trees correctly.
+- **Empty workspace directory:** If the workspace directory exists but is empty (e.g., a previous failed clone left an empty dir), `rmdir` succeeds directly after `find -delete` (no-op on empty tree).
+- **Symlink inside workspace:** `rm -rf` follows directory symlinks and deletes targets. Since `removeWorkspaceDir` operates on the workspace root (not user-controlled paths), this is acceptable. The workspace path is validated by UUID regex and `join(getWorkspacesRoot(), userId)`.
+- **Very large workspaces:** `find -delete` processes files depth-first (same as `rm -rf`). No memory scaling concern. The `execFileSync` call blocks the event loop, but this runs in a background `.then()` chain, not in the request handler.
+- **`deleteWorkspace` log placement:** The `log.info` after `removeWorkspaceDir` should only execute when cleanup succeeds. If `removeWorkspaceDir` throws, the caller (`account-delete.ts:53-57`) catches it as non-fatal, so the log line in `deleteWorkspace` must be inside a success path.
 
 ## Alternative Approaches Considered
 
@@ -157,8 +210,12 @@ The application-level fix above is a defensive workaround. The upstream fix is t
 
 - Discovered during follow-through verification for #1498
 - The error was triggered by attempting to set up `torvalds/linux` when an existing workspace existed from a previous `shelter-me` setup
-- Related learning: `knowledge-base/project/learnings/2026-03-20-docker-nonroot-user-with-volume-mounts.md`
-- Related learning: `knowledge-base/project/learnings/2026-03-20-cloud-init-chown-ordering-recursive-before-specific.md`
+- Related learning: `knowledge-base/project/learnings/2026-03-20-docker-nonroot-user-with-volume-mounts.md` (three-file sync rule for non-root Docker USER changes)
+- Related learning: `knowledge-base/project/learnings/2026-03-20-cloud-init-chown-ordering-recursive-before-specific.md` (broadest-to-narrowest chown ordering)
+- Related learning: `knowledge-base/project/learnings/2026-03-20-symlink-escape-cwe59-workspace-sandbox.md` (workspace path validation uses `realpathSync` -- relevant since `removeWorkspaceDir` operates on the same paths)
+- Related code: `apps/web-platform/server/agent-runner.ts:347-379` (sandbox config with `allowWrite: [workspacePath]`, bubblewrap enabled)
+- Related infra: `apps/web-platform/infra/cloud-init.yml:209` (`chown 1001:1001 /mnt/data/workspaces` -- top-level only, not recursive)
+- Agent SDK docs: bubblewrap sandbox uses OS primitives for read/write restriction but does not document UID mapping behavior for bind-mounted writes
 
 ## Domain Review
 
