@@ -66,18 +66,17 @@ This plan verifies all five pieces work end-to-end in production.
 
 ## Acceptance Criteria
 
-- [ ] **AC1: Sentry event captured** -- After triggering a setup failure, the
-  Sentry API returns at least one issue/event within 5 minutes containing the
-  error message from the failed setup attempt
-- [ ] **AC2: Error message displayed in UI** -- The failure page shows an "Error
-  details" card with a specific error message (not just "Something went wrong"
-  or "Project Setup Failed" with no details)
-- [ ] **AC3: Database error persisted** -- The `repo_error` column in the
-  `users` table contains the error message from the failed attempt
-- [ ] **AC4: Error cleared on retry** -- After clicking "Try Again" and starting
-  a new setup attempt, `repo_error` is set to `null` (verified via code review:
-  line 66 of `setup/route.ts` sets `repo_error: null` in the optimistic lock
-  UPDATE -- no runtime test needed)
+- [ ] **AC1: Sentry event captured** -- FAILED: Zero events in Sentry project
+  despite correct configuration. DSN is valid (manual test event received),
+  but the app's `captureException` calls produce no events. Root cause:
+  likely `SENTRY_DSN` not reaching container runtime env. Filed as #1533.
+- [x] **AC2: Error message displayed in UI** -- VERIFIED 2026-04-05: FailedState
+  shows "Error details" card with specific error (`Command failed: rm -rf...
+  Permission denied`). Screenshot: `setup-failure-error-ui.png`.
+- [x] **AC3: Database error persisted** -- VERIFIED 2026-04-05: `repo_error`
+  column contains full error message via Supabase REST API query.
+- [x] **AC4: Error cleared on retry** -- VERIFIED via code review: line 66 of
+  `setup/route.ts` sets `repo_error: null` in the optimistic lock UPDATE.
 
 ## Test Scenarios
 
@@ -288,3 +287,35 @@ No cross-domain implications detected -- internal verification/follow-through ta
 | `apps/web-platform/server/workspace.ts` | Workspace provisioning with step-specific error wrapping |
 | `apps/web-platform/sentry.server.config.ts` | Sentry server configuration |
 | `apps/web-platform/supabase/migrations/013_repo_error.sql` | Migration adding `repo_error` column |
+
+## Verification Results (2026-04-05)
+
+### Summary
+
+| AC | Status | Evidence |
+|----|--------|----------|
+| AC1: Sentry event | FAILED | Zero events ever in project. DSN valid (manual test received). Filed #1533. |
+| AC2: UI error display | PASSED | Screenshot shows "Error details" card with specific error message |
+| AC3: Database persistence | PASSED | `repo_error` column populated via Supabase REST API |
+| AC4: Error cleared on retry | PASSED | Code review: `setup/route.ts:66` sets `repo_error: null` |
+
+### Bugs Discovered
+
+1. **#1533** - Sentry server-side SDK not sending events from production
+   container. Zero events ever recorded. Likely `SENTRY_DSN` missing from
+   container runtime environment.
+2. **#1534** - Workspace directory permission denied during project re-setup.
+   Files owned by root cannot be deleted by UID 1001 (soleur user).
+
+### Method
+
+- Authenticated via Supabase admin API `generate_link` (no OTP handoff needed)
+- Triggered setup failure by intercepting `fetch('/api/repo/setup')` to send
+  `https://github.com/torvalds/linux` (passes URL regex, fails at clone)
+- Actual failure was workspace cleanup (`rm -rf`) permission denied, not clone
+  failure — exposed #1534
+- Verified UI via Playwright snapshot and screenshot
+- Verified database via Supabase REST API with service role key
+- Verified Sentry via API queries (DE region) — zero events found
+- Confirmed DSN validity by sending manual test event via curl
+- Cleaned up test state (reset `repo_status` to `not_connected`)
