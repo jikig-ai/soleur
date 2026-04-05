@@ -4,7 +4,6 @@ set -euo pipefail
 # disk-monitor.sh -- Proactive disk space monitoring with Discord alerting.
 # Runs as a systemd timer every 5 minutes. Always exits 0.
 
-readonly SCRIPT_NAME="disk-monitor"
 readonly COOLDOWN_DIR="${COOLDOWN_DIR:-/var/run}"
 readonly COOLDOWN_SECONDS=3600
 readonly WARN_THRESHOLD=80
@@ -28,8 +27,9 @@ USAGE_PCT=$(df --output=pcent / 2>/dev/null | tail -1 | tr -d ' %') || {
   echo "WARNING: df command failed" >&2
   exit 0
 }
-AVAIL_KB=$(df --output=avail / 2>/dev/null | tail -1 | tr -d ' ') || AVAIL_KB="unknown"
-AVAIL_GB=$(( ${AVAIL_KB:-0} / 1048576 ))
+AVAIL_KB=$(df --output=avail / 2>/dev/null | tail -1 | tr -d ' ') || AVAIL_KB="0"
+[[ "$AVAIL_KB" =~ ^[0-9]+$ ]] || AVAIL_KB=0
+AVAIL_GB=$(( AVAIL_KB / 1048576 ))
 
 # --- Cooldown Check (per-threshold) ---
 check_cooldown() {
@@ -52,14 +52,15 @@ update_cooldown() {
   date +%s > "${COOLDOWN_DIR}/disk-monitor-alert-${threshold}"
 }
 
-# --- Build Disk Consumer Report ---
-TOP_CONSUMERS=$(timeout 10 du -sh /* 2>/dev/null | sort -rh | head -5) || TOP_CONSUMERS="(timed out)"
-
 # --- Send Alert ---
 send_alert() {
   local level="$1" threshold="$2" mentions="$3"
   local server_hostname
   server_hostname=$(hostname)
+
+  # Build disk consumer report lazily (only when alerting)
+  local TOP_CONSUMERS
+  TOP_CONSUMERS=$(timeout 10 du -sh /* 2>/dev/null | sort -rh | head -5) || TOP_CONSUMERS="(timed out)"
 
   local PAYLOAD
   PAYLOAD=$(jq -n \
@@ -69,7 +70,7 @@ send_alert() {
     --argjson mentions "$mentions" \
     '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: $mentions}')
 
-  curl -s -o /dev/null -w "" \
+  curl -s -o /dev/null \
     --max-time 10 \
     -H "Content-Type: application/json" \
     -d "$PAYLOAD" \
@@ -79,6 +80,9 @@ send_alert() {
 }
 
 # --- Evaluate Thresholds ---
+# Both thresholds are evaluated independently (not elif) so a 96% disk triggers
+# both CRITICAL and WARNING if neither is in cooldown. This matches standard
+# monitoring practice: warning and critical are separate alert channels.
 if [[ "$USAGE_PCT" -ge "$CRIT_THRESHOLD" ]]; then
   if check_cooldown "$CRIT_THRESHOLD"; then
     send_alert "CRITICAL" "$CRIT_THRESHOLD" '{"parse":["everyone"]}'

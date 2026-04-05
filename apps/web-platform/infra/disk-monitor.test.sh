@@ -325,6 +325,34 @@ test_independent_cooldowns
 echo ""
 echo "--- Error handling ---"
 
+# Test: missing env file exits 0 with warning
+test_missing_env_file() {
+  TOTAL=$((TOTAL + 1))
+  local description="missing env file exits 0 with stderr warning"
+  local mock_dir
+  mock_dir=$(mktemp -d)
+
+  local output actual_exit
+  output=$(
+    export ENV_FILE="$mock_dir/nonexistent-env-file"
+    export COOLDOWN_DIR="$mock_dir"
+    # No mocks needed -- script exits before using any commands
+    bash "$MONITOR_SCRIPT" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -qiF "warning"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (exit=$actual_exit)"
+    echo "        output: $output"
+  fi
+  rm -rf "$mock_dir"
+}
+
+test_missing_env_file
+
 # Test: df failure exits 0 with warning
 test_df_failure() {
   TOTAL=$((TOTAL + 1))

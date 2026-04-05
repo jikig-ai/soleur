@@ -47,7 +47,7 @@ write_files:
   # Disk monitor environment file (webhook URL, chmod 600 for secrets).
   - path: /etc/default/disk-monitor
     content: |
-      DISCORD_OPS_WEBHOOK_URL=${discord_ops_webhook_url}
+      DISCORD_OPS_WEBHOOK_URL='${discord_ops_webhook_url}'
     owner: root:root
     permissions: '0600'
 
