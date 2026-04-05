@@ -4,6 +4,22 @@ type: feat
 date: 2026-04-05
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-05
+**Sections enhanced:** 1 (References)
+**Research agents used:** learnings-scanner (3 related learnings reviewed)
+
+### Key Findings
+
+1. The proposed bullet is technically accurate -- verified against the source learning and two related learnings (cross-runner compat, vi.stubEnv unavailability)
+2. No additional bullet points needed -- the cross-runner compat and vi.stubEnv learnings cover different failure modes (mocking API differences, not preload execution order) and are already discoverable via the learnings directory
+3. The placement in "Test environment setup" is correct -- this is exactly where an agent would need the guidance, before writing the RED test
+
+### Deepening Assessment
+
+This plan is a 2-line documentation edit with no architecture, performance, security, or UI implications. Full parallel research (40+ agents) would produce zero actionable enhancements. The deepening value here is the verification that the technical claim is accurate and the placement is optimal.
+
 # Add Bun Preload Execution-Order Guidance to Work SKILL.md
 
 ## Overview
@@ -42,10 +58,10 @@ Add a single bullet to the existing **Test environment setup** paragraph in Phas
 
 ## Acceptance Criteria
 
-- [ ] The bullet appears in `plugins/soleur/skills/work/SKILL.md` under Phase 2 > Task Execution Loop > Test environment setup
-- [ ] The bullet text matches the issue body exactly, with an added source reference to the learning file
-- [ ] The existing paragraph text is unchanged
-- [ ] Markdown linting passes (`npx markdownlint-cli2 --fix plugins/soleur/skills/work/SKILL.md`)
+- [x] The bullet appears in `plugins/soleur/skills/work/SKILL.md` under Phase 2 > Task Execution Loop > Test environment setup
+- [x] The bullet text matches the issue body exactly, with an added source reference to the learning file
+- [x] The existing paragraph text is unchanged
+- [x] Markdown linting passes (`npx markdownlint-cli2 --fix plugins/soleur/skills/work/SKILL.md`)
 
 ## Test Scenarios
 
@@ -71,3 +87,5 @@ No cross-domain implications detected -- infrastructure/tooling change.
 - Source learning: `knowledge-base/project/learnings/test-failures/2026-04-03-bun-test-dom-preload-execution-order.md`
 - Target file: `plugins/soleur/skills/work/SKILL.md` (line 241)
 - Related issue: #1430 (original test failure fix)
+- Related learning (cross-runner compat): `knowledge-base/project/learnings/integration-issues/vitest-bun-test-cross-runner-compat-20260402.md`
+- Related learning (vi.stubEnv): `knowledge-base/project/learnings/developer-experience/2026-03-29-bun-test-vi-stubenv-unavailable.md`
