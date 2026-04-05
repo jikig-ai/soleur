@@ -141,13 +141,13 @@ Since web-platform tests will only run under vitest (which has its own `environm
 
 ## Acceptance Criteria
 
-- [ ] `bun test` from repo root passes with 0 failures
-- [ ] `cd apps/web-platform && npx vitest run` passes with 0 failures (no regression)
-- [ ] `bash scripts/test-all.sh` passes with 0 failures (no regression)
-- [ ] `apps/web-platform/bunfig.toml` no longer has `[test].preload`
-- [ ] Root `bunfig.toml` excludes `apps/web-platform/**` from bun test discovery
-- [ ] `@happy-dom/global-registrator` removed from web-platform devDependencies
-- [ ] Both `bun.lock` and `package-lock.json` regenerated after dependency removal
+- [x] `bun test` from repo root passes with 0 failures
+- [x] `cd apps/web-platform && npx vitest run` passes with 0 failures (no regression)
+- [x] `bash scripts/test-all.sh` passes with 0 failures (no regression)
+- [x] `apps/web-platform/bunfig.toml` no longer has `[test].preload`
+- [x] Root `bunfig.toml` excludes `apps/web-platform/**` from bun test discovery
+- [x] `@happy-dom/global-registrator` removed from web-platform devDependencies
+- [x] Both `bun.lock` and `package-lock.json` regenerated after dependency removal
 
 ## Test Scenarios
 
