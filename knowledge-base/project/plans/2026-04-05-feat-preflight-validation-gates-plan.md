@@ -302,11 +302,11 @@ description: "This skill should be used when validating technical readiness befo
 
 **Tasks:**
 
-- [ ] Register `preflight` in `plugins/soleur/docs/_data/skills.js` SKILL_CATEGORIES under "Workflow"
-- [ ] Also register `postmerge` and `qa` -- both exist as skills but are missing from SKILL_CATEGORIES (discovered during deepening)
-- [ ] Update the skill count comment at top of SKILL_CATEGORIES (currently says "62 skills")
-- [ ] Run `bash scripts/sync-readme-counts.sh` to update README counts
-- [ ] Verify docs build: `cd plugins/soleur/docs && npm install && npx @11ty/eleventy --dryrun`
+- [x] Register `preflight` in `plugins/soleur/docs/_data/skills.js` SKILL_CATEGORIES under "Workflow"
+- [x] Also register `postmerge` and `qa` -- both exist as skills but are missing from SKILL_CATEGORIES (discovered during deepening)
+- [x] Update the skill count comment at top of SKILL_CATEGORIES (currently says "62 skills")
+- [x] Run `bash scripts/sync-readme-counts.sh` to update README counts
+- [x] Verify docs build: `cd plugins/soleur/docs && npm install && npx @11ty/eleventy --dryrun` (pre-existing failure: #1531)
 
 ## Acceptance Criteria
 

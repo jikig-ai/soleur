@@ -66,8 +66,8 @@ Source plan: `knowledge-base/project/plans/2026-04-05-feat-preflight-validation-
 
 ### 3.1 Register skill and update counts
 
-- [ ] Add `preflight: "Workflow"` to SKILL_CATEGORIES in `plugins/soleur/docs/_data/skills.js`
-- [ ] Also add missing `postmerge: "Workflow"` and `qa: "Workflow"` (discovered during deepening)
-- [ ] Update skill count comment (currently says "62 skills")
-- [ ] Run `bash scripts/sync-readme-counts.sh` to update README counts
-- [ ] Verify docs build: `cd plugins/soleur/docs && npm install && npx @11ty/eleventy --dryrun`
+- [x] Add `preflight: "Workflow"` to SKILL_CATEGORIES in `plugins/soleur/docs/_data/skills.js`
+- [x] Also add missing `postmerge: "Workflow"` and `qa: "Workflow"` (discovered during deepening)
+- [x] Update skill count comment (currently says "62 skills")
+- [x] Run `bash scripts/sync-readme-counts.sh` to update README counts
+- [x] Verify docs build: pre-existing failure in sitemap.njk (#1531), data loads fine
