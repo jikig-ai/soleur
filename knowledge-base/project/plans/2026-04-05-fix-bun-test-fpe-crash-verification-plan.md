@@ -44,23 +44,16 @@ The crash occurs during Bun's internal process accounting when the GC fires duri
 
 ## Proposed Solution
 
-### Phase 1: Verification and documentation
+### Tasks
 
-1. **Confirm no FPE crash on current setup** -- run `bun test` 5+ times from repo root, run `scripts/test-all.sh`, verify 0 crashes (DONE during planning -- see Current State table above)
-2. **Update issue #1511** -- add a comment documenting the resolution path and close the issue
-3. **Update PR #1527** -- either close it (if no code changes needed) or use it to carry any remaining fixes
+1. **Fix bunfig.toml comment version range** -- the root `bunfig.toml` comment says "Bun <=1.3.5" but the FPE also affects 1.3.6 (confirmed by issue #1511's crash report URL which contains `1.3.6` in the path). Update to "Bun <=1.3.6"
+2. **Fix learning doc version range** -- `knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md` title references "Bun 1.3.5" but the FPE class extends through 1.3.6. Update references for accuracy
+3. **Close issue #1511** -- add a resolution comment documenting the three-layer fix path (#860 version pin, #860 sequential runner, #1517 dual-runner exclusion) and close
+4. **Update PR #1527** -- either close it (if only comment fixes) or use it to carry the bunfig.toml and learning doc corrections
 
-### Phase 2: Version evaluation (conditional)
+### Version range resolution
 
-Check whether a Bun version newer than 1.3.11 is available. If so, evaluate whether upgrading provides value:
-
-- If newer version exists and has no regressions: update `.bun-version`, run full test suite, commit
-- If 1.3.11 is still latest: no change needed, document in the issue comment
-
-### Phase 3: Cleanup
-
-1. **Verify the FPE learning doc is accurate** -- `knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md` references Bun 1.3.5 but the issue title says 1.3.6. Confirm whether 1.3.6 was also affected and update if needed
-2. **Verify bunfig.toml comment accuracy** -- the root `bunfig.toml` comment says "Bun <=1.3.5" but issue #1511 references 1.3.6. Update the comment if the FPE affected versions through 1.3.6
+The original FPE was reported on Bun 1.3.5 (issue #860). Issue #1511 reports the same crash class on Bun 1.3.6 (crash report URL: `bun.report/1.3.6/...`). Both versions are affected. The correct range for comments and documentation is **<=1.3.6**. Bun 1.3.11 is the first version in the project's history where the crash does not reproduce
 
 ## Non-goals
 
@@ -75,15 +68,14 @@ Check whether a Bun version newer than 1.3.11 is available. If so, evaluate whet
 - [ ] `bash scripts/test-all.sh` runs all suites and exits 0
 - [ ] Issue #1511 is closed with a resolution comment
 - [ ] PR #1527 is either closed (no changes needed) or merged with any version/comment fixes
-- [ ] `bunfig.toml` FPE comment accurately reflects the affected version range
-- [ ] Learning document version references are consistent with issue #1511
+- [ ] `bunfig.toml` FPE comment says "Bun <=1.3.6" (not "<=1.3.5")
+- [ ] Learning document version references updated to include 1.3.6
 
 ## Test Scenarios
 
 - Given Bun 1.3.11 installed, when `bun test` runs 5 times from repo root, then all runs complete with 0 failures and no SIGFPE crash
 - Given `scripts/test-all.sh` exists, when executed, then all suites pass
-- Given `.bun-version` contains 1.3.11, when CI runs, then `oven-sh/setup-bun` installs the correct version
-- Given bunfig.toml comment says "Bun <=1.3.X", when reading, then the version range matches the actual affected versions (1.3.5 and 1.3.6)
+- Given bunfig.toml comment updated, when reading line 11, then it says "Bun <=1.3.6" (not "<=1.3.5")
 
 ## Domain Review
 
@@ -95,8 +87,8 @@ No cross-domain implications detected -- infrastructure/tooling verification and
 
 | File | Change |
 |---|---|
-| `bunfig.toml` | Update FPE comment version range from "<=1.3.5" to "<=1.3.6" if confirmed |
-| `.bun-version` | Update to newer version if one exists and is stable |
+| `bunfig.toml` | Update FPE comment version range from "<=1.3.5" to "<=1.3.6" |
+| `knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md` | Update version references to include 1.3.6 |
 
 ## References
 
