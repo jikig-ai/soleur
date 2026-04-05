@@ -164,8 +164,8 @@ This change must go through Terraform per AGENTS.md rules (never modify server s
 
 - [x] Investigate bubblewrap UID namespace mapping behavior for bind-mounted writes
 - [x] Determine if `--uid`/`--gid` tuning can prevent root-owned files
-- [ ] Document the limitation (this plan file)
-- [ ] If not fixable at this level, document the limitation in the issue and close
+- [x] Document the limitation (this plan file)
+- [x] If not fixable at this level, document the limitation in the issue and close
 
 ## Test Scenarios
 
