@@ -90,12 +90,12 @@ When running `cd ../../../ && npx @11ty/eleventy` from the docs `package.json`, 
 
 ## Acceptance Criteria
 
-- [ ] `npx @11ty/eleventy` succeeds from the **repo root** (existing behavior preserved)
-- [ ] `npm run docs:build` succeeds from `plugins/soleur/docs/` (new convenience script)
-- [ ] `sitemap.xml` contains valid `<lastmod>` dates in `YYYY-MM-DD` format
-- [ ] Passthrough copies (CSS, fonts, images, CNAME) present in `_site/` output
+- [x] `npx @11ty/eleventy` succeeds from the **repo root** (existing behavior preserved)
+- [x] `npm run docs:build` succeeds from `plugins/soleur/docs/` (new convenience script)
+- [x] `sitemap.xml` contains valid `<lastmod>` dates in `YYYY-MM-DD` format
+- [x] Passthrough copies (CSS, fonts, images, CNAME) present in `_site/` output
 - [ ] CI `deploy-docs.yml` workflow continues to pass
-- [ ] No duplicate config file -- single source of truth (`eleventy.config.js` at repo root)
+- [x] No duplicate config file -- single source of truth (`eleventy.config.js` at repo root)
 
 ## Test Scenarios
 
