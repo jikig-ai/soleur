@@ -158,46 +158,38 @@ CSP is generated per-request in middleware.ts with a per-request nonce via `cryp
 
 ### Check 3: Lockfile Consistency
 
-**Step 3.1: Detect lockfile changes in this branch.**
+**Step 3.1: Detect lockfile modifications in this branch.**
 
 ```bash
-git diff --name-only origin/main...HEAD -- '*/bun.lock' '*/package-lock.json' 'bun.lock' 'package-lock.json'
+git diff --name-status origin/main...HEAD -- '*/bun.lock' '*/package-lock.json' 'bun.lock' 'package-lock.json'
 ```
 
-If no lockfile changes are found, return **SKIP**.
+This returns status letters (M=modified, A=added, D=deleted) alongside file paths. If no output, return **SKIP**.
 
-**Step 3.2: Group lockfiles by directory.**
+Only lockfiles with status **M** (modified) trigger the consistency check. Added (A) or deleted (D) lockfiles are one-time structural changes that do not require sibling updates.
 
-From the diff output, extract the unique parent directories. For root-level lockfiles (`bun.lock`, `package-lock.json` without a path prefix), use `.` as the directory. For nested lockfiles (e.g., `apps/web-platform/bun.lock`), extract the directory path (e.g., `apps/web-platform`).
+**Step 3.2: For each modified lockfile, verify its sibling.**
 
-**Step 3.3: For each directory, check if it is a dual-lockfile directory.**
+For each lockfile with status M in the Step 3.1 output:
 
-For each unique directory from Step 3.2, run separate Bash calls to check if both lockfiles exist in the working tree:
-
-```bash
-test -f <directory>/bun.lock && echo "exists" || echo "missing"
-```
+1. Extract the directory path (e.g., `apps/web-platform` from `apps/web-platform/bun.lock`). For root-level lockfiles (`bun.lock` or `package-lock.json` with no path prefix), use the repository root directory.
+2. Determine the sibling: if the modified file is `bun.lock`, the sibling is `package-lock.json` (and vice versa).
+3. Check if the sibling exists in the working tree (separate Bash call):
 
 ```bash
 test -f <directory>/package-lock.json && echo "exists" || echo "missing"
 ```
 
-If the directory does NOT have both lockfiles (single-lockfile directory), skip it -- no consistency check needed.
+4. If the sibling does NOT exist (single-lockfile directory), skip this file -- no consistency check needed.
+5. If the sibling exists (dual-lockfile directory), check whether the sibling also appears in the Step 3.1 output (any status: M, A, or D). If the sibling is NOT in the diff at all, report **FAIL**: "`<directory>/` modified `bun.lock` but not `package-lock.json`. Both lockfiles must be updated together (see AGENTS.md dual-lockfile rule). Run `npm install` in `<directory>/` to regenerate `package-lock.json`." (If `package-lock.json` was modified without `bun.lock`, say: "Run `bun install` in `<directory>/` to regenerate `bun.lock`.")
 
-**Step 3.4: For each dual-lockfile directory, verify both lockfiles changed.**
-
-Compare the diff output from Step 3.1 against the directory. If the directory has both `bun.lock` and `package-lock.json` in the working tree but only ONE appears in the diff:
-
-- Identify which lockfile is **missing** from the diff
-- Report **FAIL**: "`<directory>/` changed `<present-lockfile>` but not `<missing-lockfile>`. Both lockfiles must be updated together (see AGENTS.md dual-lockfile rule). Run `npm install` or `bun install` in `<directory>/` to regenerate the missing lockfile."
-
-If multiple directories fail, report each one. Any single directory failure means the overall check result is FAIL.
+If multiple files fail, report each one. Any single failure means the overall check result is FAIL.
 
 **Result:**
 
-- **PASS** -- All dual-lockfile directories have consistent lockfile updates
-- **FAIL** -- One or more dual-lockfile directories have only one lockfile updated (message names each directory and missing lockfile)
-- **SKIP** -- No lockfile changes in the diff
+- **PASS** -- All modified lockfiles in dual-lockfile directories have consistent sibling updates
+- **FAIL** -- One or more dual-lockfile directories have a modified lockfile without its sibling updated (message names each directory and missing file)
+- **SKIP** -- No lockfile changes in this branch
 
 ## Phase 2: Aggregate Go/No-Go Report
 
