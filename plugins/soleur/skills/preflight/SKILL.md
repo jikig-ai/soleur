@@ -1,6 +1,6 @@
 ---
 name: preflight
-description: "This skill should be used when running pre-ship checks on migrations and security headers."
+description: "This skill should be used when running pre-ship checks on migrations, security headers, and lockfiles."
 ---
 
 # preflight Skill
@@ -26,7 +26,7 @@ Run `git rev-parse --abbrev-ref HEAD` to get the current branch name.
 
 ## Phase 1: Run All Checks in Parallel
 
-Run these three validations as parallel Bash tool calls. Each returns PASS, FAIL, or SKIP.
+Run these four validations as parallel Bash tool calls. Each returns PASS, FAIL, or SKIP.
 
 ### Assertion: Not-Bare-Repo
 
@@ -156,6 +156,49 @@ CSP is generated per-request in middleware.ts with a per-request nonce via `cryp
 - **FAIL** -- Any critical header missing or invalid
 - **SKIP** -- No relevant file changes or no production URL available
 
+### Check 3: Lockfile Consistency
+
+**Step 3.1: Detect lockfile changes in this branch.**
+
+```bash
+git diff --name-only origin/main...HEAD -- '*/bun.lock' '*/package-lock.json' 'bun.lock' 'package-lock.json'
+```
+
+If no lockfile changes are found, return **SKIP**.
+
+**Step 3.2: Group lockfiles by directory.**
+
+From the diff output, extract the unique parent directories. For root-level lockfiles (`bun.lock`, `package-lock.json` without a path prefix), use `.` as the directory. For nested lockfiles (e.g., `apps/web-platform/bun.lock`), extract the directory path (e.g., `apps/web-platform`).
+
+**Step 3.3: For each directory, check if it is a dual-lockfile directory.**
+
+For each unique directory from Step 3.2, run separate Bash calls to check if both lockfiles exist in the working tree:
+
+```bash
+test -f <directory>/bun.lock && echo "exists" || echo "missing"
+```
+
+```bash
+test -f <directory>/package-lock.json && echo "exists" || echo "missing"
+```
+
+If the directory does NOT have both lockfiles (single-lockfile directory), skip it -- no consistency check needed.
+
+**Step 3.4: For each dual-lockfile directory, verify both lockfiles changed.**
+
+Compare the diff output from Step 3.1 against the directory. If the directory has both `bun.lock` and `package-lock.json` in the working tree but only ONE appears in the diff:
+
+- Identify which lockfile is **missing** from the diff
+- Report **FAIL**: "`<directory>/` changed `<present-lockfile>` but not `<missing-lockfile>`. Both lockfiles must be updated together (see AGENTS.md dual-lockfile rule). Run `npm install` or `bun install` in `<directory>/` to regenerate the missing lockfile."
+
+If multiple directories fail, report each one. Any single directory failure means the overall check result is FAIL.
+
+**Result:**
+
+- **PASS** -- All dual-lockfile directories have consistent lockfile updates
+- **FAIL** -- One or more dual-lockfile directories have only one lockfile updated (message names each directory and missing lockfile)
+- **SKIP** -- No lockfile changes in the diff
+
 ## Phase 2: Aggregate Go/No-Go Report
 
 After all checks complete, aggregate results into a structured report:
@@ -168,6 +211,7 @@ After all checks complete, aggregate results into a structured report:
 | Not-Bare-Repo | PASS/FAIL | <details> |
 | DB Migration Status | PASS/FAIL/SKIP | <details> |
 | Security Headers | PASS/FAIL/SKIP | <details> |
+| Lockfile Consistency | PASS/FAIL/SKIP | <details> |
 
 **Overall: PASS / FAIL**
 ```

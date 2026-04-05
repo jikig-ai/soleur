@@ -41,15 +41,15 @@ Add "Check 3: Lockfile Consistency" to `plugins/soleur/skills/preflight/SKILL.md
 
 ## Acceptance Criteria
 
-- [ ] AC1: PR where `apps/web-platform/bun.lock` changed but NOT `apps/web-platform/package-lock.json` → FAIL naming the directory and missing file
-- [ ] AC2: PR where both `apps/web-platform/bun.lock` and `apps/web-platform/package-lock.json` changed → PASS
-- [ ] AC3: PR where `apps/web-platform/package-lock.json` changed but NOT `apps/web-platform/bun.lock` → FAIL (reverse direction)
-- [ ] AC4: PR with no lockfile changes → SKIP
-- [ ] AC5: PR where root `bun.lock` changed but NOT root `package-lock.json` → FAIL
-- [ ] AC6: PR where only `spike/package-lock.json` changed (single-lockfile directory) → PASS (not a dual-lockfile directory)
-- [ ] AC7: Check runs in parallel with existing migration and security header checks
-- [ ] AC8: Phase 2 aggregation table includes the new check row
-- [ ] AC9: PR where `apps/web-platform/bun.lock` changed (FAIL) AND both `apps/telegram-bridge/` lockfiles changed (PASS) → overall FAIL (mixed per-directory results)
+- [x] AC1: PR where `apps/web-platform/bun.lock` changed but NOT `apps/web-platform/package-lock.json` → FAIL naming the directory and missing file
+- [x] AC2: PR where both `apps/web-platform/bun.lock` and `apps/web-platform/package-lock.json` changed → PASS
+- [x] AC3: PR where `apps/web-platform/package-lock.json` changed but NOT `apps/web-platform/bun.lock` → FAIL (reverse direction)
+- [x] AC4: PR with no lockfile changes → SKIP
+- [x] AC5: PR where root `bun.lock` changed but NOT root `package-lock.json` → FAIL
+- [x] AC6: PR where only `spike/package-lock.json` changed (single-lockfile directory) → PASS (not a dual-lockfile directory)
+- [x] AC7: Check runs in parallel with existing migration and security header checks
+- [x] AC8: Phase 2 aggregation table includes the new check row
+- [x] AC9: PR where `apps/web-platform/bun.lock` changed (FAIL) AND both `apps/telegram-bridge/` lockfiles changed (PASS) → overall FAIL (mixed per-directory results)
 
 ## Test Scenarios
 
