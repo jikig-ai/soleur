@@ -4,7 +4,35 @@ type: fix
 date: 2026-04-05
 source_issue: "#1498"
 source_pr: "#1494"
+deepened: 2026-04-05
 ---
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-05
+**Sections enhanced:** 4 (Test Scenarios, Implementation Approach, Risks, new
+Institutional Learnings section)
+**Research sources:** Sentry API docs, existing e2e verification plan patterns,
+3 institutional learnings, auth flow code analysis
+
+### Key Improvements
+
+1. Added concrete Sentry API query with `jq` parsing and event-level drill-down
+2. Added critical risk from institutional learning: `SENTRY_DSN` may not be in
+   container runtime env (zero events despite `captureException` in code)
+3. Specified email OTP as the Playwright auth strategy with concrete steps
+4. Added Sentry event-level verification (not just issue-level)
+
+### New Considerations Discovered
+
+- Prior session (2026-03-28) found Sentry showed zero events despite
+  `captureException` calls -- `SENTRY_DSN` may be missing from Docker runtime
+- The `repo_error` field stores sanitized error messages (filesystem paths
+  stripped via regex in `workspace.ts:172`) but is NOT routed through the
+  `sanitizeErrorForClient` allowlist -- this is correct because it is diagnostic
+  info for the user, not an internal server error
+- The setup route URL validation regex (line 39) rejects non-GitHub URLs, so
+  the test URL must match `^https://github.com/[owner]/[repo]$` format
 
 # Verify Sentry Capture and Error UI for Project Setup Failures
 
@@ -78,7 +106,43 @@ access to (e.g., a private repo in a different org)
 **API verify:**
 
 ```bash
-doppler run -c prd -- curl -s "https://sentry.io/api/0/projects/jikigai/soleur-web-platform/issues/?query=&statsPeriod=1h" -H "Authorization: Bearer <SENTRY_API_TOKEN>"
+# Step 1: List recent issues (last 1 hour)
+SENTRY_TOKEN=$(doppler secrets get SENTRY_API_TOKEN -p soleur -c prd --plain)
+curl -s -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "https://sentry.io/api/0/projects/jikigai/soleur-web-platform/issues/?query=is:unresolved&statsPeriod=1h" \
+  | jq '.[].title' | head -10
+
+# Step 2: Drill into the latest issue's events for error details
+ISSUE_ID=$(curl -s -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+  "https://sentry.io/api/0/projects/jikigai/soleur-web-platform/issues/?query=is:unresolved&statsPeriod=1h" \
+  | jq -r '.[0].id // empty')
+if [ -n "$ISSUE_ID" ]; then
+  curl -s -H "Authorization: Bearer ${SENTRY_TOKEN}" \
+    "https://sentry.io/api/0/issues/${ISSUE_ID}/events/latest/" \
+    | jq '{title: .title, message: .message, tags: [.tags[] | select(.key == "environment" or .key == "server_name")]}'
+fi
+```
+
+### Research Insights (Sentry API)
+
+**Best Practices:**
+
+- Query issues first (`/issues/`), then drill into events (`/events/latest/`)
+  for full stack trace and context
+- Use `statsPeriod=1h` to narrow results to the verification window
+- The org slug is `jikigai` (not `jikig`) per Doppler `SENTRY_ORG` -- a prior
+  session hit a 404 using the wrong slug
+- Sentry ingestion typically takes 30-60 seconds but can take up to 5 minutes
+  under load
+
+**Edge Case:** If `SENTRY_DSN` is missing from the Docker container's runtime
+environment, `captureException` calls silently no-op (the SDK logs a warning
+but does not throw). This was observed in the 2026-03-28 session where zero
+events appeared despite `captureException` in deployed code. If no events appear
+after 5 minutes, verify `SENTRY_DSN` is in the container env:
+
+```bash
+ssh root@app.soleur.ai "docker exec \$(docker ps -q -f name=web-platform) printenv SENTRY_DSN" 2>/dev/null
 ```
 
 ### Scenario 3: Verify Error Displayed in UI
@@ -113,21 +177,52 @@ doppler run -c prd -- curl -s "<SUPABASE_URL>/rest/v1/users?select=repo_status,r
 
 ### Phase 1: Trigger the Failure and Verify UI (Playwright MCP)
 
-1. Navigate to `https://app.soleur.ai` and authenticate
-2. Navigate to `/connect-repo`
-3. Select a repository that the GitHub App installation cannot access, OR
-   modify the setup request to use a known-inaccessible repo URL
-4. Wait for the failure state to appear (poll or wait for UI transition)
-5. Screenshot the failure page
-6. Confirm the "Error details" card is visible with a specific error message
-   (not just "Something went wrong" or the generic heading alone)
+**Authentication strategy:** The app supports email OTP and OAuth (GitHub,
+Google). Email OTP is the most automatable path for Playwright:
 
-**Key consideration:** The setup flow requires a real GitHub App installation.
-The simplest approach is to use the founder's account (already has the app
-installed) and attempt to clone a repo the installation cannot access. If no
-inaccessible repo exists, an alternative is to temporarily revoke repository
-access in the GitHub App settings for a specific repo, trigger setup, then
-restore access.
+1. Navigate to `https://app.soleur.ai/login`
+2. Enter the founder's email address in the email field
+3. Submit to trigger OTP send
+4. **Hand off to user** for the 6-digit OTP code (or retrieve from email if
+   accessible via API/CLI)
+5. Enter OTP and complete login
+
+**Alternative:** If the user is already logged in from a prior session and
+cookies are available, skip auth and navigate directly to `/connect-repo`.
+Note: Playwright `--isolated` mode creates a fresh profile each time, so
+prior session cookies are NOT available.
+
+**Trigger the failure:**
+
+6. Navigate to `/connect-repo`
+7. The connect-repo flow shows repos from the GitHub App installation. To
+   trigger a failure, use a repo URL the installation cannot access. Two
+   approaches:
+   - **Preferred:** Use the browser console to directly call `fetch('/api/repo/setup', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({repoUrl: 'https://github.com/torvalds/linux'}) })` -- this bypasses the repo picker UI and sends a URL the installation cannot clone
+   - **Alternative:** If the user has repos listed, select one, then temporarily
+     revoke that repo's access in GitHub App settings before starting setup
+8. Wait for the failure state (poll `/api/repo/status` every 2s, max 60
+   attempts). The clone timeout is 120 seconds (`workspace.ts:168`).
+9. Screenshot the failure page
+10. Confirm the "Error details" card is visible with a specific error message
+    containing `Git clone failed:` (not just "Something went wrong" or the
+    generic heading alone)
+
+### Research Insights (Playwright Auth)
+
+**Auth flow details:**
+
+- Login page is at `/login` (not `/signin` or `/auth/login`)
+- Email OTP uses `supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: false } })`
+- OTP is 6 digits (`EMAIL_OTP_LENGTH` constant from `lib/auth/constants`)
+- After OTP verification, the app redirects to the return URL or `/dashboard`
+- The connect-repo page requires an authenticated session -- unauthenticated
+  access redirects to `/login`
+
+**Setup URL validation:** The `POST /api/repo/setup` route validates the URL
+format with regex: `/^https:\/\/github\.com\/[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/`
+(line 39). A URL like `https://github.com/torvalds/linux` passes validation but
+will fail at clone because the installation token cannot access it.
 
 ### Phase 2: Verify Sentry (API)
 
@@ -149,10 +244,33 @@ restore access.
 
 | Risk | Mitigation |
 |------|-----------|
-| No inaccessible repo available to trigger failure | Use a nonexistent private repo URL or temporarily modify GitHub App permissions |
+| No inaccessible repo available to trigger failure | Use browser console `fetch()` to POST a valid-format URL (e.g., `https://github.com/torvalds/linux`) that the installation cannot clone |
 | Sentry ingestion delay exceeds 5 minutes | Retry the Sentry API query with increasing wait intervals (1m, 3m, 5m) |
-| Playwright `--isolated` mode requires fresh auth every time | Authenticate via the login flow as the first step in Phase 1 |
-| Setup route rejects invalid URL format before reaching clone | Use a valid-format URL (e.g., `https://github.com/octocat/private-repo`) that passes validation but fails at clone |
+| Playwright `--isolated` mode requires fresh auth every time | Authenticate via email OTP as the first step in Phase 1; hand off OTP entry to user |
+| Setup route rejects invalid URL format before reaching clone | Use `https://github.com/torvalds/linux` format -- passes the regex at line 39 but fails at clone |
+| `SENTRY_DSN` missing from container runtime env | If zero events after 5 min, SSH to check `printenv SENTRY_DSN` in the container (see Research Insights above) |
+| Clone takes full 120s timeout before failing | The git clone has a 120s timeout (`workspace.ts:168`); polling `/api/repo/status` at 2s intervals will eventually see the `error` status |
+
+## Institutional Learnings Applied
+
+Three learnings from `knowledge-base/project/learnings/` are relevant:
+
+1. **silent-setup-failure-no-error-capture-20260403** -- Documents the original
+   bug this verification follows up on. Key insight: the Sentry API org slug is
+   `jikigai` (not `jikig`). Agent previously hit a 404 using the wrong slug.
+   Applied: all Sentry API calls in this plan use the correct `jikigai` slug.
+
+2. **2026-03-28-unapplied-migration-command-center-chat-failure** -- Documents a
+   case where `SENTRY_DSN` was apparently missing from the Docker runtime,
+   causing zero events despite `captureException` calls in the code. Applied:
+   added a fallback verification step (SSH to check `printenv SENTRY_DSN`) if
+   Sentry shows no events after 5 minutes.
+
+3. **2026-03-20-websocket-error-sanitization-cwe-209** -- Documents the error
+   sanitization pattern (`sanitizeErrorForClient`). Applied: confirmed that
+   `repo_error` is NOT routed through this sanitizer (correct -- it uses its own
+   path sanitization in `workspace.ts:172` and stores user-diagnostic info, not
+   internal server state).
 
 ## Domain Review
 
