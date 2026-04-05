@@ -42,39 +42,20 @@ eleventyConfig.addFilter("dateToShort", (date) => {
 
 ## Proposed Solution
 
-Make the docs build resilient to being run from either the repo root or the docs subdirectory. Two complementary approaches:
+Add a `package.json` in `plugins/soleur/docs/` with a `docs:build` script that uses Eleventy's `--config` flag to point at the root config. This ensures builds from the docs subdirectory use the same single config file as root builds -- zero filter duplication, zero drift risk.
 
-### Approach A: Add a local `eleventy.config.js` in the docs directory (Recommended)
+```json
+{
+  "scripts": {
+    "docs:build": "npx @11ty/eleventy --config=../../../eleventy.config.js",
+    "docs:dev": "npx @11ty/eleventy --config=../../../eleventy.config.js --serve"
+  }
+}
+```
 
-Create `plugins/soleur/docs/eleventy.config.js` that re-exports the root config. This way, running Eleventy from the docs directory still picks up all filters, plugins, and passthrough copies.
+When an agent or developer is in the docs directory, `npm run docs:build` works. Running bare `npx @11ty/eleventy` from the wrong directory still fails -- but now there is an obvious correct command available.
 
-However, Eleventy v3's config resolution with ESM modules does not support re-exporting cleanly when `dir.input` is set differently per location. A simpler and more robust variant:
-
-### Approach B: Register the `dateToShort` filter inline in `sitemap.njk` using Nunjucks
-
-Nunjucks does not support defining filters inline in templates. This approach is not viable.
-
-### Approach C: Move the filter to a Nunjucks extension or data file
-
-Eleventy data files (`_data/*.js`) can export computed data but cannot register template filters. This approach is not viable.
-
-### Approach D: Add a guard script that detects wrong CWD (Recommended -- simplest)
-
-The root cause is running from the wrong directory. Rather than trying to make it work from both directories, add a `package.json` in the docs directory with a build script that delegates to the root, and update the learning/documentation to be explicit. Additionally, ensure the sitemap template degrades gracefully if the filter is missing.
-
-### Selected Approach: Hybrid (D + defensive template)
-
-1. **Primary fix:** Replace the `dateToShort` filter usage in `sitemap.njk` with an inline Nunjucks expression that does not depend on a custom filter. Nunjucks has no built-in date formatting, but Eleventy provides `entry.date` as a JavaScript Date object. Use Eleventy's built-in `toISOString` approach via a computed data file or replace the filter call with a built-in alternative.
-
-   Since Nunjucks templates cannot call `.toISOString()` on Date objects directly, the most robust fix is to use Eleventy's built-in `dateToRfc3339` filter from the RSS plugin (already installed as `@11ty/eleventy-plugin-rss`) and extract the date portion, OR keep the custom filter but ensure it is always available.
-
-2. **Actual simplest fix:** The `dateToShort` filter IS defined in `eleventy.config.js` and works correctly when run from the repo root. The real fix is to ensure developers and agents always run from the repo root. But to make the template resilient, move the filter registration to a `.eleventy.js` plugin file that can be loaded from either location.
-
-**Final recommended approach:** The simplest, most defensive fix:
-
-1. Keep the `dateToShort` filter in `eleventy.config.js` (already works for CI and root builds)
-2. Add a `plugins/soleur/docs/eleventy.config.js` that imports and re-applies the filter registration, so builds from the docs directory also work
-3. Update the existing learning to note the fix
+[Updated 2026-04-05 -- plan review: replaced duplicate config file approach with `--config` flag. One source of truth for filters.]
 
 ## Acceptance Criteria
 
@@ -82,7 +63,7 @@ The root cause is running from the wrong directory. Rather than trying to make i
 - [ ] `npx @11ty/eleventy` succeeds from `plugins/soleur/docs/` (currently fails -- this is the fix)
 - [ ] `sitemap.xml` contains valid `<lastmod>` dates in `YYYY-MM-DD` format in both scenarios
 - [ ] CI `deploy-docs.yml` workflow continues to pass
-- [ ] No duplicate filter registration warnings when running from the repo root
+- [ ] No duplicate filter registration or second config file -- single source of truth
 
 ## Test Scenarios
 
@@ -102,7 +83,7 @@ No cross-domain implications detected -- infrastructure/tooling change.
 
 | File | Change |
 |------|--------|
-| `plugins/soleur/docs/eleventy.config.js` | **New file** -- local Eleventy config that registers the `dateToShort` filter so builds from the docs directory work |
+| `plugins/soleur/docs/package.json` | **New file** -- adds `docs:build` and `docs:dev` scripts using `--config` flag to point at root config |
 | `eleventy.config.js` | No change needed -- root config already correct |
 | `plugins/soleur/docs/sitemap.njk` | No change needed -- template already correct |
 
@@ -110,10 +91,10 @@ No cross-domain implications detected -- infrastructure/tooling change.
 
 | Approach | Why Rejected |
 |----------|-------------|
+| Duplicate `eleventy.config.js` in docs directory | Two config files will drift; any new filter must be added in two places |
 | Inline Nunjucks expression in sitemap.njk | Nunjucks cannot call `.toISOString()` on Date objects; no built-in date formatting |
 | Move filter to `_data/*.js` data file | Data files export data, not template filters |
-| Use RSS plugin's `dateToRfc3339` filter | Outputs full RFC 3339 (with time), not `YYYY-MM-DD`; would need post-processing which is equally complex |
-| Add `npm run docs:build` script in docs `package.json` | Only fixes the "how to build" question, doesn't fix `npx @11ty/eleventy` from wrong CWD |
+| Use RSS plugin's `dateToRfc3339` filter | Outputs full RFC 3339 (with time), not `YYYY-MM-DD`; would need post-processing |
 
 ## References
 
