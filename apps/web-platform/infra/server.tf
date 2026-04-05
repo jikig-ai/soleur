@@ -51,10 +51,10 @@ resource "terraform_data" "disk_monitor_install" {
   ]))
 
   connection {
-    type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
-    user        = "root"
-    private_key = file(var.ssh_private_key_path)
+    type  = "ssh"
+    host  = hcloud_server.web.ipv4_address
+    user  = "root"
+    agent = true
   }
 
   provisioner "file" {
@@ -76,22 +76,61 @@ resource "terraform_data" "disk_monitor_install" {
   }
 }
 
-# Deploy custom seccomp profile and update Docker daemon config (#1557).
-# Enables bubblewrap sandbox inside containers by allowing CLONE_NEWUSER.
-# Also updates ci-deploy.sh on the existing server (cloud-init ignore_changes
-# means the original ci-deploy.sh from provisioning time is never updated).
-# Shows as "will be created" in CI drift reports -- expected behavior.
-resource "terraform_data" "docker_seccomp_config" {
+# Fix deploy pipeline: push current ci-deploy.sh, update webhook.service
+# (EnvironmentFile + ReadWritePaths=/var/lock), and delete stale /mnt/data/.env.
+# Cloud-init handles new servers; this provisioner fixes the existing one
+# (ignore_changes on user_data means cloud-init changes do not apply to it).
+# Shows as "will be created" in CI drift reports -- expected behavior (#1409).
+# Source of truth for webhook.service: cloud-init.yml (search "path: /etc/systemd/system/webhook.service").
+# The standalone webhook.service file keeps triggers_replace and the file provisioner in sync.
+resource "terraform_data" "deploy_pipeline_fix" {
   triggers_replace = sha256(join(",", [
-    file("${path.module}/seccomp-bwrap.json"),
     file("${path.module}/ci-deploy.sh"),
+    file("${path.module}/webhook.service"),
   ]))
 
   connection {
-    type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
-    user        = "root"
-    private_key = file(var.ssh_private_key_path)
+    type  = "ssh"
+    host  = hcloud_server.web.ipv4_address
+    user  = "root"
+    agent = true
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/ci-deploy.sh"
+    destination = "/usr/local/bin/ci-deploy.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/webhook.service"
+    destination = "/etc/systemd/system/webhook.service"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "chmod +x /usr/local/bin/ci-deploy.sh",
+      "systemctl daemon-reload",
+      "systemctl restart webhook",
+      # One-time cleanup: delete stale .env so deploys fail loudly if Doppler is unavailable.
+      # rm -f is idempotent -- safe to re-run if this resource is tainted and re-created.
+      "rm -f /mnt/data/.env",
+    ]
+  }
+}
+
+# Deploy custom seccomp profile and update Docker daemon config (#1557).
+# Enables bubblewrap sandbox inside containers by allowing CLONE_NEWUSER.
+# ci-deploy.sh is deployed by deploy_pipeline_fix above; this resource
+# only handles the seccomp profile and daemon.json configuration.
+# Shows as "will be created" in CI drift reports -- expected behavior.
+resource "terraform_data" "docker_seccomp_config" {
+  triggers_replace = sha256(file("${path.module}/seccomp-bwrap.json"))
+
+  connection {
+    type  = "ssh"
+    host  = hcloud_server.web.ipv4_address
+    user  = "root"
+    agent = true
   }
 
   provisioner "remote-exec" {
@@ -105,14 +144,8 @@ resource "terraform_data" "docker_seccomp_config" {
     destination = "/etc/docker/seccomp-profiles/soleur-bwrap.json"
   }
 
-  provisioner "file" {
-    source      = "${path.module}/ci-deploy.sh"
-    destination = "/usr/local/bin/ci-deploy.sh"
-  }
-
   provisioner "remote-exec" {
     inline = [
-      "chmod +x /usr/local/bin/ci-deploy.sh",
       "python3 -c \"import json; f='/etc/docker/daemon.json'; d=json.load(open(f)); d['seccomp-profile']='/etc/docker/seccomp-profiles/soleur-bwrap.json'; json.dump(d,open(f,'w'),indent=2); print('daemon.json updated')\"",
       "systemctl restart docker",
       "echo 'Docker restarted with custom seccomp profile'",
