@@ -8,22 +8,15 @@ Issue: #1548
 - [ ] 1.1 Read `apps/web-platform/infra/cloud-init.yml`
 - [ ] 1.2 Add `/var/lock` to `ReadWritePaths` in the webhook.service unit definition (line 150: `ReadWritePaths=/mnt/data` becomes `ReadWritePaths=/mnt/data /var/lock`)
 
-## Phase 2: Add terraform_data provisioners to server.tf
+## Phase 2: Add terraform_data provisioner to server.tf
 
 - [ ] 2.1 Read `apps/web-platform/infra/server.tf` (use `disk_monitor_install` as template)
-- [ ] 2.2 Add `terraform_data.ci_deploy_install` resource
-  - [ ] 2.2.1 `triggers_replace` = `sha256(file("ci-deploy.sh"))`
+- [ ] 2.2 Add single `terraform_data.deploy_pipeline_fix` resource
+  - [ ] 2.2.1 `triggers_replace` = `sha256(join(",", [file("ci-deploy.sh"), <systemd_unit_content>]))`
   - [ ] 2.2.2 `connection` block matching `disk_monitor_install` pattern
   - [ ] 2.2.3 `file` provisioner: source `ci-deploy.sh`, destination `/usr/local/bin/ci-deploy.sh`
-  - [ ] 2.2.4 `remote-exec`: `chmod +x /usr/local/bin/ci-deploy.sh`
-- [ ] 2.3 Add `terraform_data.webhook_service_update` resource
-  - [ ] 2.3.1 `triggers_replace` = sha256 of the systemd unit content string
-  - [ ] 2.3.2 `remote-exec`: write updated webhook.service with `EnvironmentFile=/etc/default/webhook-deploy` and `ReadWritePaths=/mnt/data /var/lock`
-  - [ ] 2.3.3 `remote-exec`: `systemctl daemon-reload && systemctl restart webhook`
-- [ ] 2.4 Add `terraform_data.stale_env_cleanup` resource
-  - [ ] 2.4.1 `triggers_replace` = static string (one-time)
-  - [ ] 2.4.2 `remote-exec`: `rm -f /mnt/data/.env`
-- [ ] 2.5 Add comments explaining CI drift report behavior (references #1409)
+  - [ ] 2.2.4 `remote-exec` inline sequence: chmod +x, write webhook.service unit (with EnvironmentFile and ReadWritePaths=/mnt/data /var/lock), daemon-reload, restart webhook, rm -f /mnt/data/.env
+- [ ] 2.3 Add comments explaining CI drift report behavior (references #1409) and documenting the duplication with cloud-init.yml
 
 ## Phase 3: Terraform apply and verification
 

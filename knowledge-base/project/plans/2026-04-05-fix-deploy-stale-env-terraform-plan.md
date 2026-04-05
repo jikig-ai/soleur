@@ -82,8 +82,8 @@ scripts that may need `/var/lock`.
 
 ## Proposed Solution
 
-All changes go through `apps/web-platform/infra/` Terraform. Three new
-`terraform_data` resources follow the existing `disk_monitor_install` pattern.
+All changes go through `apps/web-platform/infra/` Terraform. One new
+`terraform_data` resource follows the existing `disk_monitor_install` pattern.
 
 ### Phase 1: Update cloud-init for new servers
 
@@ -93,25 +93,23 @@ scratch get the correct configuration.
 
 ### Phase 2: Provision existing server via terraform_data
 
-Create three `terraform_data` resources:
+Create a single `terraform_data.deploy_pipeline_fix` resource that performs
+all three operations in one SSH session (script push, systemd update, stale
+file cleanup are one logical operation):
 
-**2a. `ci_deploy_install`** -- Push current `ci-deploy.sh` to server:
-
-- `triggers_replace`: `sha256(file("ci-deploy.sh"))` -- re-runs on script changes
+- `triggers_replace`: `sha256(join(",", [file("ci-deploy.sh"), <systemd_unit_content>]))` -- re-runs when either changes
 - `file` provisioner: push `ci-deploy.sh` to `/usr/local/bin/ci-deploy.sh`
-- `remote-exec`: `chmod +x`, restart webhook service
+- `remote-exec` inline sequence:
+  1. `chmod +x /usr/local/bin/ci-deploy.sh`
+  2. Write updated webhook.service unit with `EnvironmentFile=/etc/default/webhook-deploy` and `ReadWritePaths=/mnt/data /var/lock`
+  3. `systemctl daemon-reload && systemctl restart webhook`
+  4. `rm -f /mnt/data/.env` (one-time cleanup; comment documents this is intentionally not re-triggerable)
 
-**2b. `webhook_service_update`** -- Update webhook.service with correct
-ReadWritePaths:
-
-- `triggers_replace`: sha256 of the systemd unit content
-- `remote-exec`: write the updated webhook.service unit file, daemon-reload,
-  restart webhook
-
-**2c. `stale_env_cleanup`** -- Remove stale `/mnt/data/.env`:
-
-- `triggers_replace`: static value (one-time operation)
-- `remote-exec`: `rm -f /mnt/data/.env`
+**Note on duplication:** The webhook.service unit content appears in both
+`cloud-init.yml` (for new servers) and the `remote-exec` inline string (for
+the existing server). This is acceptable because the provisioner is a
+one-time bridge -- future servers use cloud-init. Document the duplication
+with a comment in `server.tf` pointing to the cloud-init source of truth.
 
 ### Phase 3: Apply and verify
 
@@ -135,8 +133,8 @@ Run `terraform apply` to execute all provisioners atomically, then verify:
 - **CI drift detection:** `terraform_data` resources with `remote-exec` show
   as "will be created" in CI drift reports because CI uses dummy SSH keys.
   This is expected behavior (documented in #1409 for disk_monitor_install).
-- **Atomicity:** The three `terraform_data` resources are independent and
-  can run in parallel. Terraform handles this automatically.
+- **Atomicity:** All operations are in a single `terraform_data` resource,
+  executing sequentially in one SSH session.
 - **Rollback:** If `terraform apply` fails partway, re-run it. Provisioners
   are idempotent (file overwrites, systemd reload, rm -f).
 - **Post-merge apply:** These `terraform_data` resources require real SSH
@@ -152,7 +150,7 @@ Run `terraform apply` to execute all provisioners atomically, then verify:
 | File | Change |
 |------|--------|
 | `apps/web-platform/infra/cloud-init.yml` | Add `/var/lock` to `ReadWritePaths` in webhook.service unit |
-| `apps/web-platform/infra/server.tf` | Add `terraform_data.ci_deploy_install`, `terraform_data.webhook_service_update`, `terraform_data.stale_env_cleanup` resources |
+| `apps/web-platform/infra/server.tf` | Add `terraform_data.deploy_pipeline_fix` resource (script push + systemd update + stale env cleanup) |
 
 ## Acceptance Criteria
 
@@ -206,11 +204,12 @@ Run `terraform apply` to execute all provisioners atomically, then verify:
 **When** `ci-deploy.sh` executes `flock` on `/var/lock/ci-deploy.lock`
 **Then** the lock is acquired successfully (no permission denied error)
 
-### Scenario 7: cloud-init Correctness for New Servers
+### Scenario 7: cloud-init Correctness for New Servers (code review only)
 
 **Given** the updated `cloud-init.yml`
-**When** a new server is provisioned from scratch
-**Then** the webhook.service unit includes `ReadWritePaths=/mnt/data /var/lock`
+**When** reviewing the webhook.service unit definition in the template
+**Then** `ReadWritePaths` includes both `/mnt/data` and `/var/lock`
+**Note:** Verified by code review only -- no new server provisioning needed.
 
 ## Domain Review
 
