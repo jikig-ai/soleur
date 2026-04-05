@@ -8,15 +8,15 @@
 
 import { execFileSync } from "child_process";
 import { unlinkSync, writeFileSync } from "fs";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { generateInstallationToken, randomCredentialPath } from "./github-app";
 import { createChildLogger } from "./logger";
 
 const log = createChildLogger("session-sync");
 
-let _supabase: ReturnType<typeof createClient> | null = null;
+let _supabase: SupabaseClient | null = null;
 
-function getSupabase(): ReturnType<typeof createClient> | null {
+function getSupabase(): SupabaseClient | null {
   if (_supabase) return _supabase;
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;

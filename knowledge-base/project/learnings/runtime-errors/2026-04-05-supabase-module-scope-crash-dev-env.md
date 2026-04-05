@@ -9,9 +9,11 @@
 Replace module-level client instantiation with a lazy getter that returns `null` when env vars are absent:
 
 ```typescript
-let _supabase: ReturnType<typeof createClient> | null = null;
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-function getSupabase(): ReturnType<typeof createClient> | null {
+let _supabase: SupabaseClient | null = null;
+
+function getSupabase(): SupabaseClient | null {
   if (_supabase) return _supabase;
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
