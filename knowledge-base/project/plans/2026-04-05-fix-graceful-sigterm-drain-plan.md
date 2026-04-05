@@ -158,14 +158,14 @@ import { WebSocket } from "ws";
 
 ## Acceptance Criteria
 
-- [ ] SIGTERM handler calls `server.close()` and `server.closeIdleConnections()` before `process.exit()`
-- [ ] WebSocket connections are closed with code `1001` and "Server shutting down" message
-- [ ] Sentry events are flushed within the shutdown window
-- [ ] Total shutdown completes within Docker's 10-second grace period (8s hard timeout in code)
-- [ ] Client auto-reconnects after server restart (code 1001 is not in `NON_TRANSIENT_CLOSE_CODES`)
-- [ ] Re-entrancy guard prevents double-shutdown from multiple SIGTERM deliveries
-- [ ] Hard-deadline timeout calls `server.closeAllConnections()` before force-exit
-- [ ] No new dependencies added
+- [x] SIGTERM handler calls `server.close()` and `server.closeIdleConnections()` before `process.exit()`
+- [x] WebSocket connections are closed with code `1001` and "Server shutting down" message
+- [x] Sentry events are flushed within the shutdown window
+- [x] Total shutdown completes within Docker's 10-second grace period (8s hard timeout in code)
+- [x] Client auto-reconnects after server restart (code 1001 is not in `NON_TRANSIENT_CLOSE_CODES`)
+- [x] Re-entrancy guard prevents double-shutdown from multiple SIGTERM deliveries
+- [x] Hard-deadline timeout calls `server.closeAllConnections()` before force-exit
+- [x] No new dependencies added
 
 ## Test Scenarios
 
