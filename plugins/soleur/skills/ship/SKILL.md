@@ -242,6 +242,7 @@ Ship Checklist for [branch name]:
 - [x/skip] Learnings captured (/compound)
 - [x/skip] README counts synced (`bash scripts/sync-readme-counts.sh`)
 - [x/skip] Tests pass
+- [ ] Preflight passed (Phase 5.4 gate)
 - [ ] Code review completed (Phase 5.5 gate)
 - [ ] Push to remote
 - [ ] Create PR with semver label

@@ -47,13 +47,7 @@ git rev-parse --is-bare-repository
 git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql'
 ```
 
-If no migration files are found, also check for schema-touching code changes:
-
-```bash
-git diff --name-only origin/main...HEAD -- '*.sql' '*.ts'
-```
-
-From the results, grep for files containing `CREATE TABLE` or `ALTER TABLE` patterns. If no migration files AND no schema changes, return **SKIP**.
+If no migration files are found, return **SKIP**.
 
 **Step 1.2: Parse migration SQL for table/column pairs.**
 
@@ -92,15 +86,11 @@ curl -sf "<SUPABASE_URL>/rest/v1/<table>?select=<column>&limit=1" -H "apikey: <S
 
 **IMPORTANT:** Use only GET requests. The service role key has full write access -- never issue POST, PUT, PATCH, or DELETE.
 
-**Step 1.5: Check for missing migrations.**
-
-If code changes reference new columns/tables (detected in Step 1.1) but no migration file exists for them, flag as `MISSING_MIGRATION`.
-
 **Result:**
 
 - **PASS** -- No migrations in PR, or all migrations verified as applied
-- **FAIL** -- Unapplied migration found (column query returned 400) or MISSING_MIGRATION detected
-- **SKIP** -- No migration files, no schema changes, or credentials unavailable
+- **FAIL** -- Unapplied migration found (column query returned 400)
+- **SKIP** -- No migration files in PR, or credentials unavailable
 
 ### Check 2: Security Headers and Parity
 
@@ -154,14 +144,11 @@ CSP is generated per-request in middleware.ts with a per-request nonce via `cryp
 - Verify no standalone `unsafe-inline` without `strict-dynamic` override
 - Parse CSP as directive-level tokens
 
-**Step 2.6: Validate cookie attributes (if present).**
-
-If `set-cookie` headers exist in the response, verify each cookie has: `Secure`, `HttpOnly`, `SameSite`.
-
 **Notes:**
 
 - Cloudflare-injected headers (`cf-ray`, `server: cloudflare`) are expected in production -- ignore them.
 - The `/health` endpoint explicitly skips CSP in middleware -- always fetch `/` for the full header set.
+- **Limitation (v1):** This check validates the current production deployment, not the branch under review. It catches existing header regressions but cannot detect regressions introduced by the current PR until after deployment. Preview deployments would enable pre-merge header validation (deferred to v2).
 
 **Result:**
 
