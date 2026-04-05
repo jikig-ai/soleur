@@ -499,4 +499,13 @@ If re-running `soleur:plan` for the same feature, read the existing plan first. 
 **Archive completed plans:**
 Run `bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` from the repository root. This moves matching artifacts to `knowledge-base/project/plans/archive/` with timestamp prefixes, preserving git history. Commit with `git commit -m "plan: archive <topic>"`.
 
+## Sharp Edges
+
+- When a plan corrects a factual claim (e.g., updates a version range from X to Y), grep the plan output for the old incorrect value before finalizing. Subagents can echo stale data from their initial context even when their analysis concludes otherwise.
+- When a plan adds `cloudflare_record` resources with `name = "@"`, flag it during plan review — the Cloudflare API normalizes `@` to the FQDN on storage, causing perpetual Terraform drift. Use the FQDN (e.g., `"soleur.ai"`) instead.
+- When a plan prescribes a fix based on exit code semantics of shell commands, include a verification step: "Test each command's actual exit code in the target environment before implementing." Plans that assume exit codes without verification (e.g., assuming `git diff --cached --quiet` returns 128 in bare repos when it actually returns 1) lead to implementation pivots during GREEN phase.
+- When a plan prescribes dependency upgrades within a major version range, specify the npm version tag explicitly (e.g., `npm install next@15`, not `npm install next@latest`). The `@latest` tag resolves globally and may cross major version boundaries.
+- When a plan references specific dependency version ranges or peer constraints, verify them via `npm view <pkg> peerDependencies` before prescribing a fix approach. Plans have prescribed wrong version ranges that were only caught during implementation.
+- When a plan adds a new required check to CI/branch protection rulesets, the plan MUST include an audit step that greps for ALL workflows creating PRs via `GITHUB_TOKEN` or `create-pull-request` action and lists each one requiring synthetic check updates. Plans that claim "only N workflows need updating" without showing the grep output are incomplete.
+
 NEVER CODE! Just research and write the plan.

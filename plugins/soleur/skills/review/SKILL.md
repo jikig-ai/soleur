@@ -283,6 +283,8 @@ Remove duplicates, prioritize by severity and impact.
 
 </synthesis_tasks>
 
+**Coupling note:** Ship Phase 1.5, Phase 5.5, and pre-merge hook Guard 6 detect review evidence by searching for GitHub issues with the `code-review` label whose body contains `PR #<number>`. If the issue body template or label changes, update detection logic in `ship/SKILL.md` and `.claude/hooks/pre-merge-rebase.sh`.
+
 #### Step 2: Create GitHub Issues
 
 <critical_instruction> Create GitHub issues for ALL findings immediately using `gh issue create` with `--body-file`. Do NOT present findings one-by-one asking for user approval. Create all issues, then summarize results to user. </critical_instruction>
