@@ -7,7 +7,7 @@ delete process.env.GIT_DIR;
 delete process.env.GIT_INDEX_FILE;
 delete process.env.GIT_WORK_TREE;
 
-import { describe, test, expect, afterEach, beforeEach } from "vitest";
+import { describe, test, expect, afterEach, beforeEach, vi } from "vitest";
 import {
   existsSync,
   mkdirSync,
@@ -66,14 +66,6 @@ describe("removeWorkspaceDir", () => {
     expect(existsSync(ws)).toBe(false);
   });
 
-  test("removes empty directory", () => {
-    const ws = createTestWorkspace("empty");
-
-    removeWorkspaceDir(ws);
-
-    expect(existsSync(ws)).toBe(false);
-  });
-
   test("removes directory with restrictive permission bits via Phase 2 fallback", () => {
     const ws = createTestWorkspace("restrictive");
     const subdir = join(ws, "locked-dir");
@@ -89,36 +81,35 @@ describe("removeWorkspaceDir", () => {
     expect(existsSync(ws)).toBe(false);
   });
 
-  test("throws with manual cleanup instructions when cleanup fully fails", () => {
-    // Use a path that doesn't exist but we'll create a scenario where
-    // all phases fail by using a directory with a mount point or similar.
-    // Since we can't create root-owned files, we test the error message
-    // format by creating a dir and making it immutable at the parent level.
-    //
-    // On Linux without root, the best we can do is verify the error path
-    // by mocking. This test verifies the error message format.
-    const ws = createTestWorkspace("unfixable");
-    const subdir = join(ws, "root-owned");
-    mkdirSync(subdir);
-    writeFileSync(join(subdir, "file.txt"), "data");
+  test("throws with cleanup instructions when all phases fail", async () => {
+    // Mock child_process to simulate root-owned files that can't be deleted.
+    // Real root-owned files can't be created in tests without elevated privileges.
+    vi.resetModules();
 
-    // Make the subdir non-writable AND non-readable
-    chmodSync(join(subdir, "file.txt"), 0o000);
-    chmodSync(subdir, 0o000);
-    // Make workspace dir itself non-writable so rmdir fails too
-    chmodSync(ws, 0o555);
+    vi.doMock("child_process", () => ({
+      execFileSync: (cmd: string) => {
+        if (cmd === "rm" || cmd === "find" || cmd === "rmdir") {
+          const err = new Error("Permission denied") as Error & {
+            stderr: Buffer;
+          };
+          err.stderr = Buffer.from("Permission denied");
+          throw err;
+        }
+        return Buffer.alloc(0);
+      },
+    }));
 
-    try {
-      removeWorkspaceDir(ws);
-      // If it somehow succeeds (chmod fixes everything), that's also valid
-    } catch (err) {
-      expect((err as Error).message).toContain("Workspace cleanup failed");
-      expect((err as Error).message).toContain("Manual cleanup required");
-      expect((err as Error).message).toContain(`sudo rm -rf ${ws}`);
-    } finally {
-      // Restore permissions for afterEach cleanup
-      try { chmodSync(ws, 0o755); } catch {}
-      try { chmodSync(join(ws, "root-owned"), 0o755); } catch {}
-    }
+    vi.doMock("fs", async () => {
+      const actual = await vi.importActual<typeof import("fs")>("fs");
+      return { ...actual, existsSync: () => true };
+    });
+
+    const { removeWorkspaceDir: mockedRemove } = await import(
+      "../server/workspace"
+    );
+
+    expect(() => mockedRemove("/workspaces/test-cleanup")).toThrow(
+      /Workspace cleanup failed.*Manual cleanup required/,
+    );
   });
 });

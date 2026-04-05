@@ -291,10 +291,10 @@ export function removeWorkspaceDir(workspacePath: string): void {
     execFileSync("rmdir", [workspacePath], { stdio: "pipe" });
   } catch (err) {
     const stderr = (err as { stderr?: Buffer })?.stderr?.toString() ?? "";
+    log.error({ workspacePath, stderr }, "Workspace cleanup failed");
     throw new Error(
-      `Workspace cleanup failed: ${stderr || (err as Error).message}. ` +
-        `Some files in ${workspacePath} may be owned by root. ` +
-        `Manual cleanup required: sudo rm -rf ${workspacePath}`,
+      "Workspace cleanup failed. Some files may be owned by root. " +
+        "Manual cleanup required: sudo rm -rf <workspace-path>",
     );
   }
 }
