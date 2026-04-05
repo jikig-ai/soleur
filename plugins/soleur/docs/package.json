@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "docs:build": "cd ../../../ && npx @11ty/eleventy",
+    "docs:dev": "cd ../../../ && npx @11ty/eleventy --serve"
+  }
+}
