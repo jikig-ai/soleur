@@ -70,11 +70,11 @@ Expected: exit code 0 (no changes). If exit code 2, investigate what else has dr
 
 ## Acceptance Criteria
 
-- [ ] `terraform_data.doppler_install` resource block removed from `server.tf`
-- [ ] `ssh_private_key_path` variable removed from `variables.tf`
-- [ ] Resource removed from Terraform state (`terraform state rm`)
-- [ ] `terraform plan -detailed-exitcode` returns exit 0 for web-platform stack
-- [ ] Drift workflow no longer shows false positive for this resource
+- [x] `terraform_data.doppler_install` resource block removed from `server.tf`
+- [x] `ssh_private_key_path` variable removed from `variables.tf`
+- [x] Resource removed from Terraform state (`terraform state rm`)
+- [x] `terraform plan -detailed-exitcode` returns exit 0 for web-platform stack
+- [x] Drift workflow no longer shows false positive for this resource
 
 ## Test Scenarios
 
