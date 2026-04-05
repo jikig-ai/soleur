@@ -437,10 +437,10 @@ assert_canary_trace_order() {
 }
 
 # Canary success: prune → pull → stop(stale canary) → rm(stale canary) → run(canary) →
-#   stop(old) → rm(old) → run(prod) → stop(canary) → rm(canary)
+#   bwrap sandbox check (docker exec) → stop(old) → rm(old) → run(prod) → stop(canary) → rm(canary)
 assert_canary_trace_order "canary success: correct docker trace order" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
-  "image|pull|stop|rm|run|stop|rm|run|stop|rm"
+  "image|pull|stop|rm|run|exec|stop|rm|run|stop|rm"
 
 # Canary failure / rollback: prune → pull → stop(stale) → rm(stale) → run(canary) →
 #   logs(canary) → stop(canary) → rm(canary)
@@ -552,8 +552,8 @@ assert_prod_start_failure() {
   traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
 
   # prune, pull, stale cleanup (stop, rm), canary run (ok), canary health ok,
-  # old stop, old rm, prod run (fails), canary stop, canary rm
-  local expected="image|pull|stop|rm|run|stop|rm|run|stop|rm"
+  # bwrap sandbox check, old stop, old rm, prod run (fails), canary stop, canary rm
+  local expected="image|pull|stop|rm|run|exec|stop|rm|run|stop|rm"
 
   if [[ "$actual_exit" -ne 0 ]] && [[ "$traces" == "$expected" ]]; then
     PASS=$((PASS + 1))
@@ -820,6 +820,330 @@ assert_doppler_success() {
 }
 
 assert_doppler_success
+
+echo ""
+echo "--- AppArmor unconfined on docker run ---"
+
+assert_apparmor_unconfined() {
+  # Verify that docker run commands include --security-opt apparmor=unconfined
+  local description="$1"
+  local cmd="$2"
+
+  TOTAL=$((TOTAL + 1))
+
+  local output actual_exit
+  output=$(
+    export SSH_ORIGINAL_COMMAND="$cmd"
+    MOCK_DIR=$(mktemp -d)
+    trap 'rm -rf "$MOCK_DIR"' EXIT
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+
+    cat > "$MOCK_DIR/logger" << 'MOCK'
+#!/bin/bash
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/logger"
+
+    # Docker mock that logs full args for 'run' commands
+    cat > "$MOCK_DIR/docker" << 'MOCK'
+#!/bin/bash
+if [[ "${1:-}" == "run" ]]; then
+  echo "DOCKER_RUN_ARGS:$*"
+  echo "abc123"
+fi
+if [[ "${1:-}" == "exec" ]]; then
+  echo "DOCKER_EXEC_ARGS:$*"
+fi
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/docker"
+
+    cat > "$MOCK_DIR/curl" << 'MOCK'
+#!/bin/bash
+for arg in "$@"; do
+  if [[ "$arg" == *"http_code"* ]]; then echo "200"; exit 0; fi
+done
+echo "OK"
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/curl"
+
+    cat > "$MOCK_DIR/sudo" << 'MOCK'
+#!/bin/bash
+exec "$@"
+MOCK
+    chmod +x "$MOCK_DIR/sudo"
+
+    cat > "$MOCK_DIR/chown" << 'MOCK'
+#!/bin/bash
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/chown"
+
+    cat > "$MOCK_DIR/seq" << 'MOCK'
+#!/bin/bash
+echo "1"
+MOCK
+    chmod +x "$MOCK_DIR/seq"
+
+    cat > "$MOCK_DIR/flock" << 'MOCK'
+#!/bin/bash
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/flock"
+
+    cat > "$MOCK_DIR/df" << 'MOCK'
+#!/bin/bash
+echo "Avail"
+echo "20000000"
+MOCK
+    chmod +x "$MOCK_DIR/df"
+
+    cat > "$MOCK_DIR/doppler" << 'MOCK'
+#!/bin/bash
+if [[ "${1:-}" == "secrets" ]]; then echo "KEY=value"; exit 0; fi
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/doppler"
+
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$PATH"
+    bash "$DEPLOY_SCRIPT" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  # Check that all DOCKER_RUN_ARGS lines contain apparmor=unconfined
+  local run_lines
+  run_lines=$(printf '%s\n' "$output" | grep "^DOCKER_RUN_ARGS:" || true)
+
+  if [[ -z "$run_lines" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (no DOCKER_RUN_ARGS lines found)"
+    echo "        output: $output"
+    return
+  fi
+
+  local all_have_apparmor=true
+  while IFS= read -r line; do
+    if ! printf '%s\n' "$line" | grep -qF "apparmor=unconfined"; then
+      all_have_apparmor=false
+      break
+    fi
+  done <<< "$run_lines"
+
+  if [[ "$all_have_apparmor" == "true" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (docker run missing --security-opt apparmor=unconfined)"
+    echo "        docker run lines:"
+    printf '%s\n' "$run_lines" | head -5
+  fi
+}
+
+assert_apparmor_unconfined "web-platform: docker run has apparmor=unconfined" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+
+echo ""
+echo "--- Bwrap canary sandbox check ---"
+
+assert_bwrap_canary_check() {
+  # Verify that a bwrap check runs against the canary container after health check.
+  TOTAL=$((TOTAL + 1))
+
+  local output actual_exit
+  output=$(
+    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+    MOCK_DIR=$(mktemp -d)
+    trap 'rm -rf "$MOCK_DIR"' EXIT
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+
+    cat > "$MOCK_DIR/logger" << 'MOCK'
+#!/bin/bash
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/logger"
+
+    # Docker mock that traces exec calls
+    cat > "$MOCK_DIR/docker" << 'MOCK'
+#!/bin/bash
+if [[ "${1:-}" == "run" ]]; then echo "abc123"; fi
+if [[ "${1:-}" == "exec" ]]; then
+  echo "DOCKER_EXEC:$*"
+  # Check if this is a bwrap check
+  for arg in "$@"; do
+    if [[ "$arg" == *"bwrap"* ]]; then
+      echo "BWRAP_CANARY_CHECK"
+      exit 0
+    fi
+  done
+fi
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/docker"
+
+    cat > "$MOCK_DIR/curl" << 'MOCK'
+#!/bin/bash
+for arg in "$@"; do
+  if [[ "$arg" == *"http_code"* ]]; then echo "200"; exit 0; fi
+done
+echo "OK"
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/curl"
+
+    cat > "$MOCK_DIR/sudo" << 'MOCK'
+#!/bin/bash
+exec "$@"
+MOCK
+    chmod +x "$MOCK_DIR/sudo"
+
+    cat > "$MOCK_DIR/chown" << 'MOCK'
+#!/bin/bash
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/chown"
+
+    cat > "$MOCK_DIR/seq" << 'MOCK'
+#!/bin/bash
+echo "1"
+MOCK
+    chmod +x "$MOCK_DIR/seq"
+
+    cat > "$MOCK_DIR/flock" << 'MOCK'
+#!/bin/bash
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/flock"
+
+    cat > "$MOCK_DIR/df" << 'MOCK'
+#!/bin/bash
+echo "Avail"
+echo "20000000"
+MOCK
+    chmod +x "$MOCK_DIR/df"
+
+    cat > "$MOCK_DIR/doppler" << 'MOCK'
+#!/bin/bash
+if [[ "${1:-}" == "secrets" ]]; then echo "KEY=value"; exit 0; fi
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/doppler"
+
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$PATH"
+    bash "$DEPLOY_SCRIPT" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -qF "BWRAP_CANARY_CHECK"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: bwrap canary sandbox check runs during deploy"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: bwrap canary sandbox check runs during deploy (exit=$actual_exit)"
+    echo "        output: $output"
+  fi
+}
+
+assert_bwrap_canary_check
+
+assert_bwrap_canary_failure_rollback() {
+  # Verify that bwrap check failure triggers canary rollback.
+  TOTAL=$((TOTAL + 1))
+
+  local output actual_exit
+  output=$(
+    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+    MOCK_DIR=$(mktemp -d)
+    trap 'rm -rf "$MOCK_DIR"' EXIT
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+
+    cat > "$MOCK_DIR/logger" << 'MOCK'
+#!/bin/bash
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/logger"
+
+    # Docker mock: bwrap exec fails
+    cat > "$MOCK_DIR/docker" << 'MOCK'
+#!/bin/bash
+if [[ "${1:-}" == "run" ]]; then echo "abc123"; fi
+if [[ "${1:-}" == "exec" ]]; then
+  for arg in "$@"; do
+    if [[ "$arg" == *"bwrap"* ]]; then
+      echo "bwrap: No permissions to create new namespace" >&2
+      exit 1
+    fi
+  done
+fi
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/docker"
+
+    cat > "$MOCK_DIR/curl" << 'MOCK'
+#!/bin/bash
+for arg in "$@"; do
+  if [[ "$arg" == *"http_code"* ]]; then echo "200"; exit 0; fi
+done
+echo "OK"
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/curl"
+
+    cat > "$MOCK_DIR/sudo" << 'MOCK'
+#!/bin/bash
+exec "$@"
+MOCK
+    chmod +x "$MOCK_DIR/sudo"
+
+    cat > "$MOCK_DIR/chown" << 'MOCK'
+#!/bin/bash
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/chown"
+
+    cat > "$MOCK_DIR/seq" << 'MOCK'
+#!/bin/bash
+echo "1"
+MOCK
+    chmod +x "$MOCK_DIR/seq"
+
+    cat > "$MOCK_DIR/flock" << 'MOCK'
+#!/bin/bash
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/flock"
+
+    cat > "$MOCK_DIR/df" << 'MOCK'
+#!/bin/bash
+echo "Avail"
+echo "20000000"
+MOCK
+    chmod +x "$MOCK_DIR/df"
+
+    cat > "$MOCK_DIR/doppler" << 'MOCK'
+#!/bin/bash
+if [[ "${1:-}" == "secrets" ]]; then echo "KEY=value"; exit 0; fi
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/doppler"
+
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$PATH"
+    bash "$DEPLOY_SCRIPT" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  if [[ "$actual_exit" -ne 0 ]] && printf '%s\n' "$output" | grep -qiF "sandbox"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: bwrap canary failure triggers rollback"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: bwrap canary failure triggers rollback (exit=$actual_exit)"
+    echo "        output: $output"
+  fi
+}
+
+assert_bwrap_canary_failure_rollback
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="

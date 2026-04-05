@@ -76,6 +76,50 @@ resource "terraform_data" "disk_monitor_install" {
   }
 }
 
+# Deploy custom seccomp profile and update Docker daemon config (#1557).
+# Enables bubblewrap sandbox inside containers by allowing CLONE_NEWUSER.
+# Also updates ci-deploy.sh on the existing server (cloud-init ignore_changes
+# means the original ci-deploy.sh from provisioning time is never updated).
+# Shows as "will be created" in CI drift reports -- expected behavior.
+resource "terraform_data" "docker_seccomp_config" {
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/seccomp-bwrap.json"),
+    file("${path.module}/ci-deploy.sh"),
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = file(var.ssh_private_key_path)
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "mkdir -p /etc/docker/seccomp-profiles",
+    ]
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/seccomp-bwrap.json"
+    destination = "/etc/docker/seccomp-profiles/soleur-bwrap.json"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/ci-deploy.sh"
+    destination = "/usr/local/bin/ci-deploy.sh"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "chmod +x /usr/local/bin/ci-deploy.sh",
+      "python3 -c \"import json; f='/etc/docker/daemon.json'; d=json.load(open(f)); d['seccomp-profile']='/etc/docker/seccomp-profiles/soleur-bwrap.json'; json.dump(d,open(f,'w'),indent=2); print('daemon.json updated')\"",
+      "systemctl restart docker",
+      "echo 'Docker restarted with custom seccomp profile'",
+    ]
+  }
+}
+
 resource "hcloud_volume" "workspaces" {
   name     = "soleur-web-platform-data"
   size     = var.volume_size

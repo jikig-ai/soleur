@@ -132,9 +132,12 @@ case "$COMPONENT" in
     ENV_FILE=$(resolve_env_file)
 
     # Start canary on port 3001 (old container still serving on 80/3000)
+    # AppArmor unconfined: Ubuntu 24.04 docker-default profile blocks mount()
+    # inside user namespaces, which bwrap needs for OS-level sandbox (#1557).
     docker run -d \
       --name soleur-web-platform-canary \
       --restart no \
+      --security-opt apparmor=unconfined \
       --env-file "$ENV_FILE" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
@@ -153,6 +156,21 @@ case "$COMPONENT" in
       sleep 3
     done
 
+    # Verify bwrap sandbox works inside canary (#1557).
+    # If bwrap fails, the OS-level sandbox (Layer 1) is non-functional.
+    if [[ "$CANARY_HEALTHY" == "true" ]]; then
+      echo "Verifying bwrap sandbox..."
+      if ! docker exec soleur-web-platform-canary bwrap --new-session --die-with-parent --dev /dev --unshare-pid --bind / / -- true 2>&1; then
+        echo "Canary sandbox check failed, rolling back..."
+        logger -t "$LOG_TAG" "DEPLOY_ROLLBACK: bwrap sandbox non-functional in $IMAGE:$TAG"
+        { docker stop soleur-web-platform-canary 2>/dev/null || true; }
+        { docker rm soleur-web-platform-canary 2>/dev/null || true; }
+        cleanup_env_file "$ENV_FILE"
+        exit 1
+      fi
+      echo "Sandbox OK"
+    fi
+
     if [[ "$CANARY_HEALTHY" == "true" ]]; then
       # SUCCESS: swap canary to production
       echo "Canary passed, swapping to production..."
@@ -162,6 +180,7 @@ case "$COMPONENT" in
       if docker run -d \
         --name soleur-web-platform \
         --restart unless-stopped \
+        --security-opt apparmor=unconfined \
         --env-file "$ENV_FILE" \
         -v /mnt/data/workspaces:/workspaces \
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
