@@ -21,7 +21,9 @@ The resource cannot be planned in CI (no real SSH keys), so every scheduled drif
 
 ## Proposed Solution
 
-Three-step cleanup, all automatable by the agent:
+Four-step cleanup (three changes + one verification), all automatable by the agent:
+
+**Ordering note:** Steps 1-2 (code changes) and Step 3 (`state rm`) should happen in the same session. If the code is merged before `state rm` runs, the next `terraform plan` would show `terraform_data.doppler_install` as "will be destroyed" -- harmless for a `terraform_data` resource (no real infrastructure), but it would still trigger a drift notification until state is cleaned.
 
 ### Step 1: Remove the resource block from `server.tf`
 
