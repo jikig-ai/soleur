@@ -5,7 +5,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "fs";
-import { join } from "path";
+import { join, resolve } from "path";
 import { execFileSync } from "child_process";
 import { createChildLogger } from "./logger";
 import { generateInstallationToken, randomCredentialPath } from "./github-app";
@@ -265,6 +265,12 @@ export async function deleteWorkspace(userId: string): Promise<void> {
  * fully removed (e.g., root-owned files that require sudo).
  */
 export function removeWorkspaceDir(workspacePath: string): void {
+  const root = resolve(getWorkspacesRoot());
+  const resolved = resolve(workspacePath);
+  if (resolved === root || !resolved.startsWith(root + "/")) {
+    throw new Error("Refusing to remove path outside workspace root");
+  }
+
   if (!existsSync(workspacePath)) return;
 
   // Phase 1: Direct removal (works when all files owned by current user)

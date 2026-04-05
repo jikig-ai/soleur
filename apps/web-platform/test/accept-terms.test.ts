@@ -10,10 +10,11 @@ describe("WebSocket close code allocation", () => {
     expect(new Set(codes).size).toBe(codes.length);
   });
 
-  test("all close codes are in the application-reserved range (4000-4999)", () => {
-    for (const code of Object.values(WS_CLOSE_CODES)) {
-      expect(code).toBeGreaterThanOrEqual(4000);
-      expect(code).toBeLessThanOrEqual(4999);
+  test("all close codes are in valid WebSocket ranges", () => {
+    for (const [name, code] of Object.entries(WS_CLOSE_CODES)) {
+      const isRfcStandard = code >= 1000 && code <= 2999;
+      const isAppReserved = code >= 4000 && code <= 4999;
+      expect(isRfcStandard || isAppReserved, `${name} (${code}) is not in a valid range`).toBe(true);
     }
   });
 });

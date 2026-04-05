@@ -6,7 +6,9 @@ import * as Sentry from "@sentry/nextjs";
 import { createServer } from "http";
 import next from "next";
 import { parse } from "url";
+import { WebSocket } from "ws";
 import { setupWebSocket } from "./ws-handler";
+import { WS_CLOSE_CODES } from "@/lib/types";
 import { cleanupOrphanedConversations, startInactivityTimer } from "./agent-runner";
 import { handleConversationMessages } from "./api-messages";
 import { createChildLogger } from "./logger";
@@ -46,7 +48,7 @@ app.prepare().then(() => {
     handle(req, res, parsedUrl);
   });
 
-  setupWebSocket(server);
+  const wss = setupWebSocket(server);
 
   // Clean up conversations left in active/waiting_for_user from before restart
   cleanupOrphanedConversations().catch((err) => {
@@ -71,9 +73,34 @@ app.prepare().then(() => {
     }
   });
 
+  const SHUTDOWN_TIMEOUT_MS = 8_000;
+  let shuttingDown = false;
+
   process.on("SIGTERM", async () => {
-    log.info("SIGTERM received, flushing Sentry events...");
-    await Sentry.flush(2000);
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    log.info("SIGTERM received, starting graceful shutdown...");
+
+    const forceExit = setTimeout(() => {
+      log.warn("Shutdown timeout reached, forcing exit");
+      server.closeAllConnections();
+      process.exit(1);
+    }, SHUTDOWN_TIMEOUT_MS);
+    forceExit.unref();
+
+    server.close();
+    server.closeIdleConnections();
+
+    for (const client of wss.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.close(WS_CLOSE_CODES.SERVER_GOING_AWAY, "Server shutting down");
+      }
+    }
+
+    await Sentry.flush(2_000);
+
+    log.info("Graceful shutdown complete");
     process.exit(0);
   });
 });
