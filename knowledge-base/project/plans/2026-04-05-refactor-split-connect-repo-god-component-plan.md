@@ -2,11 +2,26 @@
 title: "refactor: split connect-repo/page.tsx god component"
 type: refactor
 date: 2026-04-05
+deepened: 2026-04-05
 ---
 
 # refactor: split connect-repo/page.tsx god component
 
 `apps/web-platform/app/(auth)/connect-repo/page.tsx` is 1,380 lines containing 13 inline SVG icon components, 4 shared UI primitives, 1 helper function, 8 state-view components, and the main page orchestrator with all handlers. Extract each concern into its own file following the existing `@/components/<domain>/<file>` convention.
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-05
+**Sections enhanced:** 5
+**Sources used:** Next.js official docs (Context7), codebase pattern analysis, institutional learnings
+
+### Key Improvements
+
+1. Font sharing strategy validated against Next.js official documentation -- the `fonts.ts` shared module pattern is the recommended approach
+2. Shared types strategy refined -- `Repo` and `SetupStep` types extracted to `components/connect-repo/types.ts` to avoid duplication across state-view files
+3. `"use client"` directive guidance added for each extracted component category
+4. Lint/CI coupling check added to prevent extraction from breaking downstream validators
+5. Import order convention documented for consistency across all extracted files
 
 ## Acceptance Criteria
 
@@ -16,6 +31,7 @@ date: 2026-04-05
 - [ ] `GOLD_GRADIENT` constant extracted to `components/ui/constants.ts` (shared by `GoldButton` and `SettingUpState`)
 - [ ] 8 state-view components extracted to `components/connect-repo/` as individual files
 - [ ] Font declarations (`serif`, `sans`) extracted to `components/connect-repo/fonts.ts` so state-views can import them directly
+- [ ] `Repo` and `SetupStep` types extracted to `components/connect-repo/types.ts` (shared by page.tsx and state-view components)
 - [ ] `relativeTime` helper extracted to `lib/relative-time.ts` (consistent with existing `lib/safe-return-to.ts`)
 - [ ] All imports use the `@/components/` alias pattern consistent with the rest of the codebase
 - [ ] Zero runtime behavior change -- the page renders and behaves identically before and after the refactor
@@ -50,7 +66,8 @@ The existing `components/ui/` directory already contains `error-card.tsx`. Add t
 
 **Shared dependencies first:**
 
-- `components/connect-repo/fonts.ts` -- export `serif` and `sans` font declarations (currently in `page.tsx`). State-view components that render headings need `serif.className`. Extracting to a shared module avoids prop-threading font class names through every component.
+- `components/connect-repo/fonts.ts` -- export `serif` and `sans` font declarations (currently in `page.tsx`). State-view components that render headings need `serif.className`. Extracting to a shared module avoids prop-threading font class names through every component. This follows the [Next.js recommended pattern](https://nextjs.org/docs/app/api-reference/components/font) for sharing font instances across files: "If you need to use the same font in multiple places, you should load it in one place and import the related font object where you need it."
+- `components/connect-repo/types.ts` -- export `Repo` and `SetupStep` types. Both are used by `page.tsx` state and by state-view prop interfaces (`SelectProjectState` needs `Repo`, `SettingUpState` needs `SetupStep`). Without a shared types file, the type definitions would be duplicated in each consumer -- violating DRY for a structural type that should be a single source of truth. The `State` union type stays in `page.tsx` since only the orchestrator uses it.
 - `lib/relative-time.ts` -- export `relativeTime` helper (pure utility, consistent with existing `lib/safe-return-to.ts`)
 
 **State-view files:** Create `apps/web-platform/components/connect-repo/` with individual files for each state-view. Each file imports icons from `@/components/icons`, UI primitives from `@/components/ui`, and fonts from `./fonts`.
@@ -58,6 +75,7 @@ The existing `components/ui/` directory already contains `error-card.tsx`. Add t
 **Files to create:**
 
 - `components/connect-repo/fonts.ts` -- `serif`, `sans` font declarations
+- `components/connect-repo/types.ts` -- `Repo`, `SetupStep` types
 - `lib/relative-time.ts` -- `relativeTime` helper
 - `components/connect-repo/choose-state.tsx` -- `ChooseState`
 - `components/connect-repo/create-project-state.tsx` -- `CreateProjectState`
@@ -89,7 +107,57 @@ Replace all inline definitions in `page.tsx` with imports from the extracted fil
 
 ## Shared Types
 
-The `State`, `Repo`, and `SetupStep` types are used by both `page.tsx` and the state-view components. Each state-view already receives its data via props, so each file defines its own prop interface locally. The `State` union type stays in `page.tsx` (only the orchestrator uses it). `Repo` and `SetupStep` are passed as props -- state-views that need them define the shape in their prop interface. If duplication becomes a problem, extract to `components/connect-repo/types.ts` later.
+Three types exist: `State`, `Repo`, and `SetupStep`.
+
+- **`State`** stays in `page.tsx` -- only the orchestrator uses it for the state machine union.
+- **`Repo`** and **`SetupStep`** go to `components/connect-repo/types.ts` -- both are used by `page.tsx` state declarations AND by state-view prop interfaces (`SelectProjectState` needs `Repo`, `SettingUpState` needs `SetupStep`). Duplicating these across files invites drift.
+- Each state-view component defines its own **props interface** locally (e.g., `interface ChooseStateProps { onCreateNew: () => void; ... }`). Props interfaces are component-specific and do not need sharing.
+
+## Implementation Notes
+
+### `"use client"` directive
+
+All extracted `.tsx` component files need `"use client"` at the top. The reason: the page is already a client component, and several state-view components use React hooks internally (`useState` in `CreateProjectState` and `SelectProjectState`). For consistency and to avoid confusing Next.js boundary issues, add the directive to all component files. The `.ts` files (`fonts.ts`, `types.ts`, `constants.ts`, `relative-time.ts`) do NOT need `"use client"` since they export only data/types.
+
+### Import order convention
+
+Follow the existing codebase pattern (visible in `components/auth/oauth-buttons.tsx`, `components/chat/chat-input.tsx`):
+
+1. `"use client";` directive (first line, if applicable)
+2. React imports (`import { useState } from "react"`)
+3. Next.js imports (`import { useRouter } from "next/navigation"`)
+4. Absolute project imports (`import { ... } from "@/components/..."`, `import { ... } from "@/lib/..."`)
+5. Relative imports (`import { serif } from "./fonts"`)
+6. Blank line, then component code
+
+### Lint/CI coupling check
+
+Per institutional learning `2026-03-20-lint-scripts-break-on-extract-refactor`: before implementing, run `grep -r "connect-repo" apps/web-platform/ --include="*.ts" --include="*.tsx" --include="*.sh"` to find any scripts, tests, or CI checks that grep for patterns inside the file being split. If any downstream validator matches strings being moved, update it in the same PR.
+
+### Font module structure
+
+The `fonts.ts` file follows Next.js's official recommended pattern for font sharing ([docs reference](https://nextjs.org/docs/app/api-reference/components/font)):
+
+```typescript
+// components/connect-repo/fonts.ts
+import { Cormorant_Garamond, Inter } from "next/font/google";
+
+export const serif = Cormorant_Garamond({
+  subsets: ["latin"],
+  weight: ["400", "600", "700"],
+  variable: "--font-serif",
+  display: "swap",
+});
+
+export const sans = Inter({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-sans",
+  display: "swap",
+});
+```
+
+Next.js loads each font instance only once regardless of how many files import it. The `variable` property generates CSS custom properties (`--font-serif`, `--font-sans`) that are applied via `className` on the page wrapper.
 
 ## Test Scenarios
 
