@@ -25,18 +25,18 @@ deepened: 2026-04-05
 
 ## Acceptance Criteria
 
-- [ ] `page.tsx` contains only the main `ConnectRepoPage` component, types, constants, font declarations, and handler functions
-- [ ] All 13 SVG icon components consolidated into a single `components/icons/index.tsx` as named exports
-- [ ] 4 shared UI primitives (`Badge`, `GoldButton`, `OutlinedButton`, `Card`) extracted to `components/ui/` as individual files
-- [ ] `GOLD_GRADIENT` constant extracted to `components/ui/constants.ts` (shared by `GoldButton` and `SettingUpState`)
-- [ ] 8 state-view components extracted to `components/connect-repo/` as individual files
-- [ ] Font declarations (`serif`, `sans`) extracted to `components/connect-repo/fonts.ts` so state-views can import them directly
-- [ ] `Repo` and `SetupStep` types extracted to `components/connect-repo/types.ts` (shared by page.tsx and state-view components)
-- [ ] `relativeTime` helper extracted to `lib/relative-time.ts` (consistent with existing `lib/safe-return-to.ts`)
-- [ ] All imports use the `@/components/` alias pattern consistent with the rest of the codebase
-- [ ] Zero runtime behavior change -- the page renders and behaves identically before and after the refactor
-- [ ] TypeScript compiles without errors (`npx tsc --noEmit`)
-- [ ] Existing tests (if any) continue to pass
+- [x] `page.tsx` contains only the main `ConnectRepoPage` component, types, constants, font declarations, and handler functions
+- [x] All 13 SVG icon components consolidated into a single `components/icons/index.tsx` as named exports
+- [x] 4 shared UI primitives (`Badge`, `GoldButton`, `OutlinedButton`, `Card`) extracted to `components/ui/` as individual files
+- [x] `GOLD_GRADIENT` constant extracted to `components/ui/constants.ts` (shared by `GoldButton` and `SettingUpState`)
+- [x] 8 state-view components extracted to `components/connect-repo/` as individual files
+- [x] Font declarations (`serif`, `sans`) extracted to `components/connect-repo/fonts.ts` so state-views can import them directly
+- [x] `Repo` and `SetupStep` types extracted to `components/connect-repo/types.ts` (shared by page.tsx and state-view components)
+- [x] `relativeTime` helper extracted to `lib/relative-time.ts` (consistent with existing `lib/safe-return-to.ts`)
+- [x] All imports use the `@/components/` alias pattern consistent with the rest of the codebase
+- [x] Zero runtime behavior change -- the page renders and behaves identically before and after the refactor
+- [x] TypeScript compiles without errors (`npx tsc --noEmit`)
+- [x] Existing tests (if any) continue to pass
 
 ## Implementation Phases
 
