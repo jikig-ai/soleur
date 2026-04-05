@@ -27,9 +27,9 @@ Issue: #1534
 
 - [ ] 3.1 Extract `removeWorkspaceDir(workspacePath: string): void` helper in `apps/web-platform/server/workspace.ts`
   - Phase 1: Direct `rm -rf` (existing behavior)
-  - Phase 2: `chmod -R u+rwX` then retry `rm -rf`
-  - Phase 3: `find -mindepth 1 -delete` then `rmdir`
-  - Throw descriptive error if all phases fail
+  - Phase 2: `find -mindepth 1 -delete` then `rmdir` (partial cleanup fallback)
+  - Log warning when Phase 2 activates
+  - Throw descriptive error with manual cleanup instructions if both phases fail
 - [ ] 3.2 Update `provisionWorkspaceWithRepo` (line 152-154) to call `removeWorkspaceDir`
 - [ ] 3.3 Update `deleteWorkspace` (line 252-254) to call `removeWorkspaceDir`
 

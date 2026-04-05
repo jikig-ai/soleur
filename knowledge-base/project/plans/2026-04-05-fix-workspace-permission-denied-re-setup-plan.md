@@ -35,23 +35,19 @@ Additionally, files may have been created by a prior container deployment that r
 
 ## Proposed Solution
 
-Replace the bare `rm -rf` with a two-phase cleanup that handles permission denied errors gracefully:
+Replace the bare `rm -rf` with a two-phase cleanup that handles permission denied errors gracefully.
+
+> **[Updated 2026-04-05 -- Plan Review]** Original three-phase approach (rm, chmod+rm, find+delete) was simplified to two phases after review identified that `chmod -R u+rwX` cannot change ownership of root-owned files without `CAP_FOWNER`. The chmod phase was dropped.
 
 ### Phase 1: Attempt direct removal
 
 Try `rm -rf` as the current user (UID 1001). If this succeeds, done.
 
-### Phase 2: Chmod-then-remove fallback
+### Phase 2: Partial cleanup with find+delete
 
-If Phase 1 fails, recursively fix permissions with `chmod -R u+rwX` on the workspace directory, then retry `rm -rf`. The `chmod` works because:
+If Phase 1 fails, use `find <workspace> -mindepth 1 -delete` which processes files individually and continues past individual failures (deleting UID 1001-owned files while skipping root-owned ones), then attempt `rmdir` on the workspace directory. If root-owned files remain, throw a clear error with actionable information.
 
-- On files owned by UID 1001: already has permission, no-op
-- On files owned by root in a user namespace: the `soleur` user may have `CAP_FOWNER` equivalent within the user namespace, allowing `chmod` on files it doesn't own
-- If even `chmod` fails on some files: the error is caught and reported clearly
-
-### Phase 3: Last-resort find+delete
-
-If Phase 2 still fails, use `find <workspace> -mindepth 1 -delete` which processes files individually and continues past individual failures, then remove the now-empty directory.
+Log a warning when Phase 2 activates so operations can track frequency and investigate the root cause.
 
 ### Implementation
 
@@ -68,19 +64,10 @@ function removeWorkspaceDir(workspacePath: string): void {
     execFileSync("rm", ["-rf", workspacePath], { stdio: "pipe" });
     return;
   } catch {
-    // Fall through to Phase 2
+    log.warn({ workspacePath }, "Direct rm -rf failed, attempting partial cleanup");
   }
 
-  // Phase 2: Fix permissions, then retry removal
-  try {
-    execFileSync("chmod", ["-R", "u+rwX", workspacePath], { stdio: "pipe" });
-    execFileSync("rm", ["-rf", workspacePath], { stdio: "pipe" });
-    return;
-  } catch {
-    // Fall through to Phase 3
-  }
-
-  // Phase 3: Individual file deletion (continues past individual failures)
+  // Phase 2: Individual file deletion (continues past permission errors)
   try {
     execFileSync(
       "find",
@@ -91,7 +78,8 @@ function removeWorkspaceDir(workspacePath: string): void {
   } catch (err) {
     throw new Error(
       `Workspace cleanup failed: ${(err as Error).message}. ` +
-      `Some files in ${workspacePath} may be owned by root.`,
+      `Some files in ${workspacePath} may be owned by root. ` +
+      `Manual cleanup required: sudo rm -rf ${workspacePath}`,
     );
   }
 }
@@ -127,6 +115,10 @@ removeWorkspaceDir(workspacePath);
 log.info({ userId }, "Workspace deleted");
 ```
 
+### Future Investigation: Prevent Root-Owned Files
+
+The application-level fix above is a defensive workaround. The upstream fix is to prevent root-owned files from being created in the first place by investigating whether the Agent SDK's bubblewrap sandbox configuration (`--uid`/`--gid` flags) can be tuned to preserve the outer UID when writing through bind mounts. This should be tracked as a separate investigation issue.
+
 ### Files Changed
 
 | File | Change |
@@ -136,18 +128,19 @@ log.info({ userId }, "Workspace deleted");
 
 ## Acceptance Criteria
 
-- [ ] `provisionWorkspaceWithRepo` succeeds when workspace contains root-owned files
-- [ ] `deleteWorkspace` succeeds when workspace contains root-owned files
-- [ ] When all three cleanup phases fail, a clear error message is thrown with actionable information
+- [ ] `provisionWorkspaceWithRepo` succeeds when workspace contains files with restrictive permissions
+- [ ] `deleteWorkspace` succeeds when workspace contains files with restrictive permissions
+- [ ] When both cleanup phases fail, a clear error message is thrown with actionable manual cleanup instructions
+- [ ] A warning log is emitted when the Phase 2 fallback activates
 - [ ] Existing tests continue to pass (no regression on normal workspace provisioning)
 - [ ] The fix is contained to `workspace.ts` -- no Dockerfile, cloud-init, or CI changes required
 
 ## Test Scenarios
 
 - Given a workspace with all files owned by UID 1001, when `provisionWorkspaceWithRepo` runs, then Phase 1 succeeds and the workspace is replaced (existing behavior preserved)
-- Given a workspace with some files owned by root (UID 0), when `provisionWorkspaceWithRepo` runs, then Phase 2 (chmod + rm) or Phase 3 (find -delete) succeeds
+- Given a workspace with files that have restrictive permissions (mode 000), when `provisionWorkspaceWithRepo` runs, then Phase 2 (find -delete) removes accessible files
 - Given a workspace that cannot be deleted at all, when `provisionWorkspaceWithRepo` runs, then an error is thrown with a message containing "Workspace cleanup failed"
-- Given a workspace with root-owned files, when `deleteWorkspace` runs during account deletion, then the workspace is fully removed
+- Given a workspace with restrictive-permission files, when `deleteWorkspace` runs during account deletion, then the workspace cleanup is attempted with both phases
 - Given no existing workspace, when `provisionWorkspaceWithRepo` runs, then the removal step is a no-op and cloning proceeds normally
 
 ## Alternative Approaches Considered
