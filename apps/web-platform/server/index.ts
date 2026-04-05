@@ -2,6 +2,7 @@
 // instrumentation.ts register() is NOT called by Next.js with custom servers.
 import "../sentry.server.config";
 
+import * as Sentry from "@sentry/nextjs";
 import { createServer } from "http";
 import next from "next";
 import { parse } from "url";
@@ -9,6 +10,7 @@ import { setupWebSocket } from "./ws-handler";
 import { cleanupOrphanedConversations, startInactivityTimer } from "./agent-runner";
 import { handleConversationMessages } from "./api-messages";
 import { createChildLogger } from "./logger";
+import { buildHealthResponse } from "./health";
 
 const log = createChildLogger("startup");
 
@@ -17,39 +19,18 @@ const dev = process.env.NODE_ENV !== "production";
 const app = next({ dev });
 const handle = app.getRequestHandler();
 
-async function checkSupabase(): Promise<boolean> {
-  try {
-    const response = await fetch(
-      `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/`,
-      {
-        headers: { apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY! },
-        signal: AbortSignal.timeout(2000),
-      },
-    );
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
-
 app.prepare().then(() => {
   const server = createServer(async (req, res) => {
     const parsedUrl = parse(req.url!, true);
 
     // Health check for deployment
     if (parsedUrl.pathname === "/health") {
-      const supabaseOk = await checkSupabase();
       // Always return 200 — the server is running and serving traffic.
-      // Supabase status is informational; a degraded dependency should not
+      // Supabase/Sentry status is informational; a degraded dependency should not
       // cause deploy verification or load balancer health checks to fail.
+      const health = await buildHealthResponse();
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({
-        status: "ok",
-        version: process.env.BUILD_VERSION || "dev",
-        supabase: supabaseOk ? "connected" : "error",
-        uptime: Math.floor(process.uptime()),
-        memory: Math.floor(process.memoryUsage().rss / 1024 / 1024),
-      }));
+      res.end(JSON.stringify(health));
       return;
     }
 
@@ -77,5 +58,22 @@ app.prepare().then(() => {
 
   server.listen(port, () => {
     log.info({ port, env: dev ? "development" : "production" }, "Server ready");
+    log.info({
+      sentryConfigured: !!process.env.SENTRY_DSN,
+      sentryEnvironment: process.env.NODE_ENV,
+    }, "Sentry status");
+
+    if (process.env.SENTRY_DSN) {
+      Sentry.captureMessage(
+        `Server startup v${process.env.BUILD_VERSION || "dev"}`,
+        "info",
+      );
+    }
+  });
+
+  process.on("SIGTERM", async () => {
+    log.info("SIGTERM received, flushing Sentry events...");
+    await Sentry.flush(2000);
+    process.exit(0);
   });
 });
