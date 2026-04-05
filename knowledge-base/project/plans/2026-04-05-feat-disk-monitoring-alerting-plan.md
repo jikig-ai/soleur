@@ -3,9 +3,36 @@ title: "feat: add disk space monitoring and alerting for deploy servers"
 type: feat
 date: 2026-04-05
 issue: "#1409"
+deepened: 2026-04-05
 ---
 
 # feat: Add Disk Space Monitoring and Alerting for Deploy Servers
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-05
+**Sections enhanced:** 4 (Script, Systemd, Discord payload, Tests)
+**Research sources:** ci-deploy.test.sh mock pattern, shell-script-defensive-patterns learning, scheduled-terraform-drift.yml Discord payload, systemd.timer documentation, Discord Webhook API
+
+### Key Improvements
+
+1. Concrete `disk-monitor.sh` reference implementation with project-convention compliance
+2. Exact Discord webhook payload matching the `jq -n` + `username: "Sol"` pattern from existing workflows
+3. Test mock architecture derived from the production-proven ci-deploy.test.sh pattern
+4. systemd timer `Persistent=true` ensures missed checks fire after server sleep/reboot
+
+### New Considerations Discovered
+
+- The `COOLDOWN_DIR` variable must be configurable (not hardcoded `/var/run`) for testability -- tests need to redirect cooldown files to `$MOCK_DIR`
+- Both thresholds should evaluate independently (not `elif`) so a 96% disk triggers both 80% and 95% alerts if neither is in cooldown -- this matches standard monitoring practice (warning and critical are separate concerns)
+- The `jq` binary must be available on the server -- it is already installed via cloud-init `packages: [jq]`
+- Discord rate limits: 30 requests per 60 seconds per webhook -- the 1-hour cooldown keeps the script well within limits even with multiple servers
+
+### Applied Learnings
+
+- **shell-script-defensive-patterns (2026-03-13):** Applied `trap` cleanup pattern, input validation, and catch-all error handling to the reference implementation
+- **ci-deploy-reliability-and-mock-trace-testing (2026-03-20):** Used stdout trace marker pattern and PATH prepend mock architecture for the test design
+- **docker-image-accumulation-disk-full-deploy-failure (2026-04-02):** The incident that created this issue -- the monitoring script addresses the "no proactive alert" gap identified in the Prevention section
 
 ## Overview
 
@@ -117,6 +144,196 @@ Hetzner CX33 (web-platform)          Hetzner CX22 (telegram-bridge)
   - Test: missing webhook URL exits 0 with warning to stderr
   - Test: `curl` failure exits 0 (graceful degradation)
 
+##### Research Insights: Script Implementation
+
+**Reference implementation pattern** (follows project shell conventions from constitution.md):
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# disk-monitor.sh -- Proactive disk space monitoring with Discord alerting.
+# Runs as a systemd timer every 5 minutes. Always exits 0.
+
+readonly SCRIPT_NAME="disk-monitor"
+readonly COOLDOWN_DIR="/var/run"
+readonly COOLDOWN_SECONDS=3600
+readonly WARN_THRESHOLD=80
+readonly CRIT_THRESHOLD=95
+
+# --- Load Configuration ---
+ENV_FILE="/etc/default/disk-monitor"
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "WARNING: $ENV_FILE not found, skipping" >&2
+  exit 0
+fi
+set -a; . "$ENV_FILE"; set +a
+
+if [[ -z "${DISCORD_OPS_WEBHOOK_URL:-}" ]]; then
+  echo "WARNING: DISCORD_OPS_WEBHOOK_URL not set, skipping" >&2
+  exit 0
+fi
+
+# --- Check Disk Usage ---
+USAGE_PCT=$(df --output=pcent / 2>/dev/null | tail -1 | tr -d ' %') || {
+  echo "WARNING: df command failed" >&2
+  exit 0
+}
+AVAIL_KB=$(df --output=avail / 2>/dev/null | tail -1 | tr -d ' ') || AVAIL_KB="unknown"
+AVAIL_GB=$(( ${AVAIL_KB:-0} / 1048576 ))
+
+# --- Cooldown Check (per-threshold) ---
+check_cooldown() {
+  local threshold="$1"
+  local cooldown_file="${COOLDOWN_DIR}/disk-monitor-alert-${threshold}"
+  if [[ -f "$cooldown_file" ]]; then
+    local last_alert
+    last_alert=$(cat "$cooldown_file")
+    local now
+    now=$(date +%s)
+    if (( now - last_alert < COOLDOWN_SECONDS )); then
+      return 1  # still in cooldown
+    fi
+  fi
+  return 0  # not in cooldown
+}
+
+update_cooldown() {
+  local threshold="$1"
+  date +%s > "${COOLDOWN_DIR}/disk-monitor-alert-${threshold}"
+}
+
+# --- Build Disk Consumer Report ---
+TOP_CONSUMERS=$(timeout 10 du -sh /* 2>/dev/null | sort -rh | head -5) || TOP_CONSUMERS="(timed out)"
+
+# --- Send Alert ---
+send_alert() {
+  local level="$1" threshold="$2" mentions="$3"
+  local hostname
+  hostname=$(hostname)
+
+  local PAYLOAD
+  PAYLOAD=$(jq -n \
+    --arg content "**[$level] Disk usage at ${USAGE_PCT}% on ${hostname}**"$'\n\n'"Available: ${AVAIL_GB}GB"$'\n'"Top consumers:"$'\n'"$TOP_CONSUMERS" \
+    --arg username "Sol" \
+    --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
+    --argjson mentions "$mentions" \
+    '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: $mentions}')
+
+  curl -s -o /dev/null -w "" \
+    --max-time 10 \
+    -H "Content-Type: application/json" \
+    -d "$PAYLOAD" \
+    "$DISCORD_OPS_WEBHOOK_URL" 2>/dev/null || {
+    echo "WARNING: Discord webhook POST failed" >&2
+  }
+}
+
+# --- Evaluate Thresholds ---
+if [[ "$USAGE_PCT" -ge "$CRIT_THRESHOLD" ]]; then
+  if check_cooldown "$CRIT_THRESHOLD"; then
+    send_alert "CRITICAL" "$CRIT_THRESHOLD" '{"parse":["everyone"]}'
+    update_cooldown "$CRIT_THRESHOLD"
+  fi
+fi
+
+if [[ "$USAGE_PCT" -ge "$WARN_THRESHOLD" ]]; then
+  if check_cooldown "$WARN_THRESHOLD"; then
+    send_alert "WARNING" "$WARN_THRESHOLD" '{"parse":[]}'
+    update_cooldown "$WARN_THRESHOLD"
+  fi
+fi
+
+exit 0
+```
+
+**Key design decisions from learnings:**
+
+- `set -a; . "$ENV_FILE"; set +a` pattern from `ci-deploy.sh:203` for loading secrets without exposing in `/proc/<pid>/cmdline`
+- `jq -n` for JSON payload construction matches `scheduled-terraform-drift.yml:214-218` (project standard)
+- `username: "Sol"` and `avatar_url` from the same workflow -- all Discord messages use consistent bot identity
+- `timeout 10` around `du` prevents hang on large/slow filesystems (reviewer feedback)
+- `|| { echo "WARNING" >&2; }` graceful degradation pattern -- never exit non-zero from a monitoring script
+- Both thresholds evaluated independently (not `elif`) so a 96% disk triggers both the 80% and 95% alerts if neither is in cooldown
+- Arithmetic comparison uses `[[ "$USAGE_PCT" -ge ]]` not `(( ))` to avoid exit 1 on zero values with `set -e` (constitution.md shell conventions)
+
+##### Research Insights: systemd Timer Configuration
+
+```ini
+# disk-monitor.service
+[Unit]
+Description=Disk space monitor
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/disk-monitor.sh
+# No restart -- the timer handles scheduling
+```
+
+```ini
+# disk-monitor.timer
+[Unit]
+Description=Run disk monitor every 5 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+**Why `Persistent=true`:** If the server was powered off or in maintenance, `Persistent=true` ensures the timer fires immediately upon boot if a scheduled run was missed. Without it, the next check only runs after `OnUnitActiveSec` elapses -- a 5-minute gap after reboot where disk issues go undetected.
+
+**Why `OnUnitActiveSec` over `OnCalendar`:** `OnUnitActiveSec` measures time since the last activation, which provides consistent 5-minute intervals even if a check takes variable time. `OnCalendar` would schedule at fixed wall-clock times, which can lead to drift or overlapping executions.
+
+##### Research Insights: Discord Webhook Embed Format
+
+The project uses a **content-only** Discord payload format (not embeds). This is consistent across all 5+ existing workflows. The format is:
+
+```json
+{
+  "content": "**[LEVEL] Message**\n\nDetails...",
+  "username": "Sol",
+  "avatar_url": "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png",
+  "allowed_mentions": {"parse": []}
+}
+```
+
+Rich embeds (`"embeds": [...]`) are NOT used anywhere in the project. The plan should match this pattern rather than introducing a new embed format. The `@here` mention for critical alerts requires `{"parse": ["everyone"]}` as `allowed_mentions` -- the `everyone` parse type covers both `@everyone` and `@here`.
+
+##### Research Insights: Test Mock Architecture
+
+The test file should follow the `ci-deploy.test.sh` mock architecture exactly:
+
+1. **Subshell isolation**: Each test runs in a `(...)` subshell with a `MOCK_DIR`
+2. **PATH prepending**: `export PATH="$MOCK_DIR:$PATH"` shadows real binaries
+3. **Mock scripts**: Bash scripts in `$MOCK_DIR` that simulate command behavior
+4. **Environment toggles**: `MOCK_DF_HIGH=1` style vars to control mock behavior
+5. **Trap cleanup**: `trap 'rm -rf "$MOCK_DIR"' EXIT` in each subshell
+6. **Counter/output pattern**: `PASS`/`FAIL`/`TOTAL` counters with `assert_*` helpers
+
+**Specific mocks needed for disk-monitor.test.sh:**
+
+- `df` -- configurable via `MOCK_DF_USAGE` env var (returns that percentage)
+- `curl` -- captures POST payload to a file, returns configurable exit code
+- `hostname` -- returns a fixed test hostname
+- `du` -- returns fixed output (not real filesystem)
+- `date` -- returns configurable epoch seconds for cooldown testing
+- `jq` -- must be the REAL `jq` (too complex to mock, and it is a validation layer)
+
+**Cooldown file testing pattern:**
+
+```bash
+# To test cooldown, create the cooldown file with a known timestamp
+echo "$(( $(date +%s) - 1800 ))" > "$MOCK_DIR/disk-monitor-alert-80"
+export COOLDOWN_DIR="$MOCK_DIR"  # redirect cooldown file location for testing
+```
+
+This requires the script to use `COOLDOWN_DIR` as a configurable variable (already in the reference implementation above).
+
 #### Phase 2: Doppler Secret and Terraform Provisioning
 
 - [ ] Create a dedicated `#ops-alerts` Discord channel and webhook URL for infrastructure alerts
@@ -133,6 +350,65 @@ Hetzner CX33 (web-platform)          Hetzner CX22 (telegram-bridge)
 - [ ] Provision Doppler secret: `doppler secrets set DISCORD_OPS_WEBHOOK_URL "<url>" -p soleur -c prd`
 - [ ] Add `DISCORD_OPS_WEBHOOK_URL` to Doppler `prd_terraform` config (for Terraform variable injection)
 
+##### Research Insights: Terraform Provisioner Pattern
+
+The `terraform_data` resource with `remote-exec` follows the exact pattern from `server.tf:48-70`. Key points:
+
+```hcl
+resource "terraform_data" "disk_monitor_install" {
+  triggers_replace = sha256(var.discord_ops_webhook_url)
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web.ipv4_address
+    user        = "root"
+    private_key = file(var.ssh_private_key_path)
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      # Write disk-monitor.sh
+      "cat > /usr/local/bin/disk-monitor.sh << 'SCRIPTEOF'",
+      "... (script content) ...",
+      "SCRIPTEOF",
+      "chmod +x /usr/local/bin/disk-monitor.sh",
+
+      # Write systemd units
+      "cat > /etc/systemd/system/disk-monitor.service << 'UNITEOF'",
+      "... (service unit) ...",
+      "UNITEOF",
+
+      "cat > /etc/systemd/system/disk-monitor.timer << 'TIMEREOF'",
+      "... (timer unit) ...",
+      "TIMEREOF",
+
+      # Write env file (chmod 600 for secrets)
+      "printf 'DISCORD_OPS_WEBHOOK_URL=%s\\n' '${var.discord_ops_webhook_url}' > /etc/default/disk-monitor",
+      "chmod 600 /etc/default/disk-monitor",
+
+      # Enable and start
+      "systemctl daemon-reload",
+      "systemctl enable --now disk-monitor.timer",
+      "systemctl list-timers disk-monitor.timer --no-pager",
+    ]
+  }
+}
+```
+
+**Alternative approach (base64-encode like ci-deploy.sh):** The existing pattern for `ci-deploy.sh` uses `base64encode(file())` in cloud-init.yml. For the `terraform_data` provisioner (existing server), inline heredocs are simpler since the script is short. For cloud-init.yml (new servers), use the same `base64encode` pattern:
+
+```yaml
+- path: /usr/local/bin/disk-monitor.sh
+  encoding: b64
+  content: ${disk_monitor_script_b64}
+  owner: root:root
+  permissions: '0755'
+```
+
+With `disk_monitor_script_b64 = base64encode(file("${path.module}/disk-monitor.sh"))` in the `templatefile()` call.
+
+**CI drift check impact:** The `terraform_data` resource will show as "will be created" in CI drift reports (same behavior as `doppler_install`). This is expected and documented in `server.tf:47`.
+
 #### Phase 3: Telegram-Bridge Server (deferred -- separate issue)
 
 The telegram-bridge CX22 server has a different Terraform structure (no `server.tf`, no SSH provisioner wired). Applying the same monitoring requires different plumbing (adding `hcloud` provider, server data source, SSH connection). This is deferred to a separate tracking issue to keep this plan focused on the web-platform server.
@@ -148,6 +424,21 @@ The telegram-bridge CX22 server has a different Terraform structure (no `server.
   - How to test the alert manually (`bash /usr/local/bin/disk-monitor.sh`)
 - [ ] Update `knowledge-base/engineering/architecture/nfr-register.md`:
   - NFR-002 (System-Level Monitoring): Update Compute row from "Partial | Hetzner Console" to "Partial | Hetzner Console + disk-monitor.sh (disk usage alerts at 80%/95%)"
+
+##### Research Insights: Runbook Structure
+
+The runbook should follow the pattern from `knowledge-base/engineering/ops/runbooks/cloudflare-service-token-rotation.md`. Key sections:
+
+1. **Alert received** -- what the Discord message means, severity levels (80% warning vs 95% critical)
+2. **Immediate response** -- SSH into server, run `df -h`, identify the largest consumers
+3. **Common causes and fixes:**
+   - Docker images: `docker image prune -af` (already runs per-deploy, but manual cleanup for edge cases)
+   - systemd journal: `journalctl --vacuum-size=100M`
+   - apt cache: `apt clean`
+   - tmp files: `find /tmp -type f -mtime +7 -delete`
+4. **Adjusting thresholds** -- edit `/usr/local/bin/disk-monitor.sh` on the server (or re-apply via Terraform for persistent changes)
+5. **Testing the alert manually** -- `bash /usr/local/bin/disk-monitor.sh` (will only fire if disk is actually above threshold)
+6. **Silencing alerts temporarily** -- `systemctl stop disk-monitor.timer` (document the re-enable step)
 
 ## Alternative Approaches Considered
 
