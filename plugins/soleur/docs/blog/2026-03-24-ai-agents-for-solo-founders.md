@@ -111,7 +111,7 @@ In practice, a full AI organization means:
 
 Each of these is an agent operating within shared context. The result is an organization that behaves coherently across domains — not because the founder coordinated the handoffs, but because the knowledge base did.
 
-Soleur is built on this model: 61 agents across 8 departments, sharing a knowledge base that compounds with every task completed.
+Soleur is built on this model: 63 agents across 8 departments, sharing a knowledge base that compounds with every task completed.
 
 ## Getting Started
 

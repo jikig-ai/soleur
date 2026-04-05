@@ -52,7 +52,7 @@ convergence_risk: Medium
 
 ### "Tanka has an Agent Store with specialized agents."
 
-**Response:** "Agent Store is planned but not shipped. When it launches, it will likely follow a marketplace model: individual agents built by different teams, each with their own context and conventions. Soleur's 61 agents ship as an integrated organization. They share institutional memory, follow consistent conventions, and orchestrate across domains. The difference between a marketplace of agents and an organization of agents is the same as the difference between a freelancer marketplace and a company. One assembles. The other compounds."
+**Response:** "Agent Store is planned but not shipped. When it launches, it will likely follow a marketplace model: individual agents built by different teams, each with their own context and conventions. Soleur's 63 agents ship as an integrated organization. They share institutional memory, follow consistent conventions, and orchestrate across domains. The difference between a marketplace of agents and an organization of agents is the same as the difference between a freelancer marketplace and a company. One assembles. The other compounds."
 
 ### "Tanka has SOC 2 and ISO 27001 certification."
 

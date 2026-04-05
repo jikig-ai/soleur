@@ -36,7 +36,7 @@ convergence_risk: Critical
 | Dimension | Anthropic Cowork | Soleur | Advantage |
 |-----------|-----------------|--------|-----------|
 | **Knowledge persistence** | Stateless. Each session starts fresh. | Compounding. Knowledge base grows across every session. The 100th session is dramatically more productive than the 1st. | Soleur |
-| **Cross-domain coherence** | Plugins are siloed. Marketing plugin does not know what legal plugin produced. | 61 agents share context across 8 domains. Brand guide informs marketing content. Competitive analysis shapes pricing. | Soleur |
+| **Cross-domain coherence** | Plugins are siloed. Marketing plugin does not know what legal plugin produced. | 63 agents share context across 8 domains. Brand guide informs marketing content. Competitive analysis shapes pricing. | Soleur |
 | **Workflow orchestration** | Individual task execution. No lifecycle management. | Brainstorm-plan-implement-review-compound lifecycle with full domain context at each stage. | Soleur |
 | **Pricing** | Free with Claude subscription ($20-25/mo) | Free (open source). Paid tier planned for hosted features. | Cowork (free bundled) |
 | **Distribution** | Built into Anthropic's platform. Discoverable by every Claude user. | Claude Code plugin. Requires explicit installation. | Cowork (bundled) |
@@ -68,7 +68,7 @@ convergence_risk: Critical
 | Objection | Response |
 |-----------|----------|
 | "Cowork has enterprise connectors I need (Google Workspace, DocuSign)." | "Soleur integrates through Claude Code's MCP ecosystem, which supports custom tool connections. For enterprise data sources, Cowork has a head start. For solo founders building companies, the question is whether you need DocuSign integration or whether you need your legal review to reference your brand guide and competitive position. Different needs." |
-| "Plugin Create lets me build custom agents." | "Plugin Create builds single-purpose agents. Soleur provides 61 agents that share institutional memory across 8 domains. The question is whether you want to build your own AI organization from scratch or deploy one that already works." |
+| "Plugin Create lets me build custom agents." | "Plugin Create builds single-purpose agents. Soleur provides 63 agents that share institutional memory across 8 domains. The question is whether you want to build your own AI organization from scratch or deploy one that already works." |
 | "I trust Anthropic more than a solo developer." | "Fair. Soleur is open source -- Apache-2.0. Every agent, every skill, every line of code is inspectable. The platform is designed, built, and shipped using itself: 420+ merged PRs across all 8 domains. Trust the code, not the brand." |
 
 ## Convergence Watch
