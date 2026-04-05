@@ -81,13 +81,12 @@ resource "terraform_data" "disk_monitor_install" {
 # Cloud-init handles new servers; this provisioner fixes the existing one
 # (ignore_changes on user_data means cloud-init changes do not apply to it).
 # Shows as "will be created" in CI drift reports -- expected behavior (#1409).
-# Source of truth for webhook.service content: cloud-init.yml lines 132-155.
+# Source of truth for webhook.service: cloud-init.yml (search "path: /etc/systemd/system/webhook.service").
+# The standalone webhook.service file keeps triggers_replace and the file provisioner in sync.
 resource "terraform_data" "deploy_pipeline_fix" {
   triggers_replace = sha256(join(",", [
     file("${path.module}/ci-deploy.sh"),
-    # Include webhook.service content so changes to the unit re-trigger provisioning.
-    # This duplicates cloud-init.yml's webhook.service definition -- see comment above.
-    "EnvironmentFile=/etc/default/webhook-deploy ReadWritePaths=/mnt/data /var/lock",
+    file("${path.module}/webhook.service"),
   ]))
 
   connection {
@@ -102,10 +101,14 @@ resource "terraform_data" "deploy_pipeline_fix" {
     destination = "/usr/local/bin/ci-deploy.sh"
   }
 
+  provisioner "file" {
+    source      = "${path.module}/webhook.service"
+    destination = "/etc/systemd/system/webhook.service"
+  }
+
   provisioner "remote-exec" {
     inline = [
       "chmod +x /usr/local/bin/ci-deploy.sh",
-      "cat > /etc/systemd/system/webhook.service << 'UNITEOF'\n[Unit]\nDescription=Webhook deploy listener\nAfter=network.target\n\n[Service]\nType=simple\nEnvironmentFile=/etc/default/webhook-deploy\nExecStart=/usr/local/bin/webhook -verbose -hooks /etc/webhook/hooks.json -port 9000 -ip 127.0.0.1\nRestart=on-failure\nRestartSec=5\nUser=deploy\nGroup=deploy\nProtectSystem=strict\nProtectHome=read-only\nPrivateTmp=true\nReadWritePaths=/mnt/data /var/lock\nReadOnlyPaths=/etc/webhook /usr/local/bin /etc/default/webhook-deploy\nTimeoutStopSec=180\n\n[Install]\nWantedBy=multi-user.target\nUNITEOF",
       "systemctl daemon-reload",
       "systemctl restart webhook",
       # One-time cleanup: delete stale .env so deploys fail loudly if Doppler is unavailable.
