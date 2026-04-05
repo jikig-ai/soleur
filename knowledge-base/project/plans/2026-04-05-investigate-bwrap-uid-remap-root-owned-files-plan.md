@@ -2,9 +2,23 @@
 title: "investigate: bwrap sandbox UID remapping and root-owned workspace files"
 type: fix
 date: 2026-04-05
+deepened: 2026-04-05
 ---
 
 # investigate: bwrap sandbox UID remapping and root-owned workspace files
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-05
+**Sections enhanced:** 3 (Findings #2, Findings #4, Phase 2)
+**Research sources:** bwrap man pages, Docker default seccomp profile (moby/profiles), kernel uid_map docs, project learnings
+
+### Key Improvements
+
+1. Added precise uid_map interpretation with kernel mapping semantics
+2. Added exact Docker seccomp bitmask analysis showing which CLONE_NEW* flags are blocked
+3. Added concrete custom seccomp profile JSON for Phase 2 fix (ready to implement)
+4. Cross-referenced with canUseTool defense-in-depth learning -- sandbox non-functionality has verified security impact
 
 ## Overview
 
@@ -34,7 +48,13 @@ No `--uid`, `--gid`, or `--unshare-user` flags are passed. The SDK does not expo
 
 On non-setuid bwrap (which is the case in both local dev and Docker), bwrap **automatically creates a user namespace** when any namespace flag (`--unshare-pid`, `--unshare-net`) is used. This is because creating other namespaces requires `CAP_SYS_ADMIN`, which is available inside a user namespace even for unprivileged processes.
 
-The uid_map inside the sandbox shows `1001 0 1`, meaning sandbox UID 1001 maps to host UID 0 in the parent namespace mapping table. However, this is a namespace-internal mapping -- the kernel resolves writes to the **real UID** of the calling process.
+The uid_map inside the sandbox shows `1001 0 1`. The format is `ns_uid host_uid count`:
+
+- **ns_uid=1001**: the UID visible inside the namespace
+- **host_uid=0**: the offset in the parent namespace's UID range (for single-mapping user namespaces created by unprivileged users, this is always 0 -- it maps the caller's real UID to the single slot)
+- **count=1**: only one UID is mapped
+
+The kernel resolves filesystem writes by mapping the namespace UID back to the parent namespace UID through this table. Since the parent namespace UID is the real UID of the process that created the namespace (1001), all writes hit disk as UID 1001 regardless of what the process sees inside the sandbox.
 
 ### 3. Bind-mounted writes preserve outer UID (confirmed experimentally)
 
@@ -57,6 +77,32 @@ Docker's default seccomp profile blocks `CLONE_NEWUSER` for unprivileged process
 - bwrap may be failing at runtime in production, with the SDK falling back to unsandboxed execution
 
 **This is a separate concern from #1546** but suggests the sandbox may not be active in production at all.
+
+#### Research Insight: Docker seccomp bitmask analysis
+
+The default profile (`moby/profiles/seccomp/default.json`) allows `clone(2)` for unprivileged processes only when `(flags & 0x7E020000) == 0`. The mask `0x7E020000` includes all `CLONE_NEW*` namespace flags:
+
+| Flag | Hex | Blocked? |
+|---|---|---|
+| `CLONE_NEWNS` | `0x00020000` | Yes |
+| `CLONE_NEWCGROUP` | `0x02000000` | Yes |
+| `CLONE_NEWUTS` | `0x04000000` | Yes |
+| `CLONE_NEWIPC` | `0x08000000` | Yes |
+| `CLONE_NEWUSER` | `0x10000000` | Yes |
+| `CLONE_NEWPID` | `0x20000000` | Yes |
+| `CLONE_NEWNET` | `0x40000000` | Yes |
+
+Additionally, `clone3(2)` returns `ENOSYS` (errno 38) for all unprivileged calls, and `unshare(2)` has equivalent restrictions.
+
+#### Security impact if sandbox is non-functional
+
+Per the canUseTool defense-in-depth learning (`knowledge-base/project/learnings/2026-03-20-canuse-tool-sandbox-defense-in-depth.md`), the SDK bubblewrap sandbox is **Layer 1** of the three-tier security model:
+
+1. **Layer 1 (OS-level): bubblewrap sandbox** -- filesystem/network isolation via Linux namespaces. The only layer that stops `bash -c 'cat /etc/shadow'` or `curl attacker.com`.
+2. **Layer 2 (application): canUseTool callback** -- deny-by-default tool validation, path allowlist, env-var regex
+3. **Layer 3 (SDK): disallowedTools** -- hard deny for WebSearch/WebFetch
+
+If Layer 1 is non-functional, the security posture drops to application-level checks only. Layers 2-3 are defense-in-depth against known tool invocations but cannot prevent arbitrary Bash commands from accessing the host filesystem outside the workspace.
 
 ### 5. Actual root causes of root-owned files
 
@@ -91,10 +137,28 @@ A separate investigation should verify whether bwrap actually works in the produ
 
 **Potential fixes if sandbox is broken (least-privilege first):**
 
-- Use a custom seccomp profile that allows `CLONE_NEWUSER` only (preferred -- minimal privilege escalation)
-- Set `kernel.unprivileged_userns_clone=1` on the host (may already be set; no container change needed)
-- Add `--cap-add SYS_ADMIN` (grants namespace creation capability -- broader than needed)
-- Add `--security-opt seccomp=unconfined` to Docker run (last resort -- disables ALL seccomp protections)
+1. **Custom seccomp profile (preferred)** -- modify the default Docker seccomp profile to remove `CLONE_NEWUSER` (`0x10000000`) from the blocked namespace mask. Change mask from `0x7E020000` to `0x6E020000` (decimal `1845624832`). Also add an `unshare` rule allowing `CLONE_NEWUSER`. This permits user namespace creation while keeping all other namespace types blocked for unprivileged processes. Apply via `--security-opt seccomp=/path/to/custom-seccomp.json` in `ci-deploy.sh`.
+
+2. **Host kernel sysctl** -- set `kernel.unprivileged_userns_clone=1` on the host. This does not affect Docker's seccomp profile (seccomp operates independently of this sysctl), but some kernel configurations check both. Verify current value via `sysctl kernel.unprivileged_userns_clone` on the production host.
+
+3. **`--cap-add SYS_ADMIN`** -- grants the container the ability to create ALL namespace types, not just user namespaces. Broader than needed but simpler to deploy. The Docker seccomp profile allows all `CLONE_NEW*` flags when `CAP_SYS_ADMIN` is present.
+
+4. **`--security-opt seccomp=unconfined`** -- last resort. Disables the entire seccomp profile, removing syscall filtering for 44+ dangerous syscalls. Not recommended.
+
+#### Implementation detail for option 1 (custom seccomp profile)
+
+Download the default profile, modify the clone rule mask, and deploy via Terraform:
+
+```text
+Steps:
+1. curl -o custom-seccomp.json https://raw.githubusercontent.com/moby/profiles/main/seccomp/default.json
+2. Find the clone rule with "value": 2114060288 and change to 1845624832
+3. Add an unshare rule allowing CLONE_NEWUSER
+4. Deploy the file to the server via Terraform (file provisioner or cloud-init)
+5. Add --security-opt seccomp=/path/to/custom-seccomp.json to docker run in ci-deploy.sh
+```
+
+This change must go through Terraform per AGENTS.md rules (never modify server state via manual SSH).
 
 ## Acceptance Criteria
 
