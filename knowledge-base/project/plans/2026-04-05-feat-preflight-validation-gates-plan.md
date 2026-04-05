@@ -251,15 +251,15 @@ If a check cannot run (missing credentials, no URL, no relevant files), it retur
 
 **Tasks:**
 
-- [ ] Create `plugins/soleur/skills/preflight/` directory
-- [ ] Write SKILL.md with frontmatter (`name: preflight`, `description: "This skill should be used when..."`)
-- [ ] Implement Assertion: Not-Bare-Repo (3 lines)
-- [ ] Implement Check 1: DB Migration Status (inline shell + Supabase REST API)
-- [ ] Implement Check 2: Security Headers & Parity (inline curl + header validation against 9-header checklist)
-- [ ] Implement go/no-go report (PASS/FAIL/SKIP table)
-- [ ] Add headless mode detection and `$ARGUMENTS` parsing
-- [ ] Add interactive mode: on FAIL, present findings and ask "Fix and retry, or abort?"
-- [ ] Add `## Preflight Complete` continuation marker at end of successful run
+- [x] Create `plugins/soleur/skills/preflight/` directory
+- [x] Write SKILL.md with frontmatter (`name: preflight`, `description: "This skill should be used when..."`)
+- [x] Implement Assertion: Not-Bare-Repo (3 lines)
+- [x] Implement Check 1: DB Migration Status (inline shell + Supabase REST API)
+- [x] Implement Check 2: Security Headers & Parity (inline curl + header validation against 9-header checklist)
+- [x] Implement go/no-go report (PASS/FAIL/SKIP table)
+- [x] Add headless mode detection and `$ARGUMENTS` parsing
+- [x] Add interactive mode: on FAIL, present findings and ask "Fix and retry, or abort?"
+- [x] Add `## Preflight Complete` continuation marker at end of successful run
 
 **Research Insights (Phase 1):**
 

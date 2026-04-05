@@ -6,50 +6,50 @@ Source plan: `knowledge-base/project/plans/2026-04-05-feat-preflight-validation-
 
 ### 1.1 Create skill directory and SKILL.md skeleton
 
-- [ ] Create `plugins/soleur/skills/preflight/` directory
-- [ ] Write `SKILL.md` with YAML frontmatter (`name: preflight`, third-person description, ~26 words)
-- [ ] Add headless mode detection: strip `--headless` from `$ARGUMENTS`, set `HEADLESS_MODE`
-- [ ] Add Phase 0: Context Detection (branch safety check -- abort if on main/master)
-- [ ] Follow no-command-substitution convention: two separate Bash calls for get-then-use patterns
+- [x] Create `plugins/soleur/skills/preflight/` directory
+- [x] Write `SKILL.md` with YAML frontmatter (`name: preflight`, third-person description, ~26 words)
+- [x] Add headless mode detection: strip `--headless` from `$ARGUMENTS`, set `HEADLESS_MODE`
+- [x] Add Phase 0: Context Detection (branch safety check -- abort if on main/master)
+- [x] Follow no-command-substitution convention: two separate Bash calls for get-then-use patterns
 
 ### 1.2 Implement Assertion: Not-Bare-Repo
 
-- [ ] `git rev-parse --is-bare-repository` -- if `true`, return FAIL and abort
-- [ ] If false (worktree), return PASS
-- [ ] This runs first (fail-fast before checks that would produce confusing git errors)
+- [x] `git rev-parse --is-bare-repository` -- if `true`, return FAIL and abort
+- [x] If false (worktree), return PASS
+- [x] This runs first (fail-fast before checks that would produce confusing git errors)
 
 ### 1.3 Implement Check 1: DB Migration Status
 
-- [ ] Detect new migration files: `git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql'`
-- [ ] Parse SQL files for table/column pairs: grep for `ADD COLUMN`, `CREATE TABLE` patterns
-- [ ] Get Supabase credentials: `doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain` (separate Bash call)
-- [ ] Get service role key: `doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c prd --plain` (separate Bash call)
-- [ ] Verify each column via Supabase REST API: `curl -sf "<URL>/rest/v1/<table>?select=<column>&limit=1"` with auth headers
-- [ ] Handle duplicate migration numbers (project has two `007_` files)
-- [ ] Return SKIP when no migration files and no schema changes, or when credentials missing
-- [ ] Return FAIL when column query returns 400 (column not found) or when code references new columns with no migration
-- [ ] Return PASS when all migrations verified or no migrations in PR
+- [x] Detect new migration files: `git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql'`
+- [x] Parse SQL files for table/column pairs: grep for `ADD COLUMN`, `CREATE TABLE` patterns
+- [x] Get Supabase credentials: `doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain` (separate Bash call)
+- [x] Get service role key: `doppler secrets get SUPABASE_SERVICE_ROLE_KEY -p soleur -c prd --plain` (separate Bash call)
+- [x] Verify each column via Supabase REST API: `curl -sf "<URL>/rest/v1/<table>?select=<column>&limit=1"` with auth headers
+- [x] Handle duplicate migration numbers (project has two `007_` files)
+- [x] Return SKIP when no migration files and no schema changes, or when credentials missing
+- [x] Return FAIL when column query returns 400 (column not found) or when code references new columns with no migration
+- [x] Return PASS when all migrations verified or no migrations in PR
 
 ### 1.4 Implement Check 2: Security Headers & Parity
 
-- [ ] Detect web-facing and infra file changes in PR diff (`.tsx`, `.css`, `.html`, `middleware.ts`, `next.config.*`, `.tf`, `Dockerfile`, `nginx*`, `.github/workflows/*`)
-- [ ] Get production URL: `doppler secrets get NEXT_PUBLIC_SITE_URL -p soleur -c prd --plain` (separate Bash call)
-- [ ] Return SKIP when no relevant files changed, or no production URL available
-- [ ] Fetch response headers via `curl -sI <URL>/` (use `/` not `/health` -- health endpoint skips CSP)
-- [ ] Validate 9 headers from `security-headers.ts`: CSP, X-Frame-Options, X-Content-Type-Options, HSTS, Referrer-Policy, Permissions-Policy, COOP, CORP, X-DNS-Prefetch-Control
-- [ ] Validate CSP directive structure: `strict-dynamic` present, no standalone `unsafe-inline` (ignore nonce values)
-- [ ] Validate cookie attributes (Secure, HttpOnly, SameSite) if set-cookie headers present
-- [ ] Ignore Cloudflare-injected headers (`cf-ray`, `server: cloudflare`) -- expected in production
-- [ ] Return FAIL when CSP or HSTS missing, PASS when all critical headers valid
+- [x] Detect web-facing and infra file changes in PR diff (`.tsx`, `.css`, `.html`, `middleware.ts`, `next.config.*`, `.tf`, `Dockerfile`, `nginx*`, `.github/workflows/*`)
+- [x] Get production URL: `doppler secrets get NEXT_PUBLIC_SITE_URL -p soleur -c prd --plain` (separate Bash call)
+- [x] Return SKIP when no relevant files changed, or no production URL available
+- [x] Fetch response headers via `curl -sI <URL>/` (use `/` not `/health` -- health endpoint skips CSP)
+- [x] Validate 9 headers from `security-headers.ts`: CSP, X-Frame-Options, X-Content-Type-Options, HSTS, Referrer-Policy, Permissions-Policy, COOP, CORP, X-DNS-Prefetch-Control
+- [x] Validate CSP directive structure: `strict-dynamic` present, no standalone `unsafe-inline` (ignore nonce values)
+- [x] Validate cookie attributes (Secure, HttpOnly, SameSite) if set-cookie headers present
+- [x] Ignore Cloudflare-injected headers (`cf-ray`, `server: cloudflare`) -- expected in production
+- [x] Return FAIL when CSP or HSTS missing, PASS when all critical headers valid
 
 ### 1.5 Implement go/no-go report
 
-- [ ] Collect results from 2 checks + 1 assertion into structured report
-- [ ] Format as markdown table: Check | Result (PASS/FAIL/SKIP) | Details
-- [ ] Overall: any FAIL aborts, all PASS/SKIP continues
-- [ ] Headless mode: abort on FAIL with error details, no prompt
-- [ ] Interactive mode: on FAIL, present findings and ask "Fix and retry, or abort?"
-- [ ] End with `## Preflight Complete` continuation marker for ship orchestrator
+- [x] Collect results from 2 checks + 1 assertion into structured report
+- [x] Format as markdown table: Check | Result (PASS/FAIL/SKIP) | Details
+- [x] Overall: any FAIL aborts, all PASS/SKIP continues
+- [x] Headless mode: abort on FAIL with error details, no prompt
+- [x] Interactive mode: on FAIL, present findings and ask "Fix and retry, or abort?"
+- [x] End with `## Preflight Complete` continuation marker for ship orchestrator
 
 ## Phase 2: Ship Pipeline Integration
 
