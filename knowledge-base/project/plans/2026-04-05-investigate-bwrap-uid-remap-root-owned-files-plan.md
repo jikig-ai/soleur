@@ -81,7 +81,7 @@ The existing two-phase cleanup in `removeWorkspaceDir` is the correct defense fo
 
 ### Phase 2: Investigate Docker sandbox availability (new issue)
 
-A separate investigation should verify whether bwrap actually works in the production Docker container. If Docker's seccomp profile blocks user namespaces, the entire sandbox layer is silently inactive. This is a higher-priority security concern than UID remapping.
+A separate investigation should verify whether bwrap actually works in the production Docker container. If Docker's seccomp profile blocks user namespaces, the entire sandbox layer is silently inactive. This is a **P1 security concern** -- if the sandbox is non-functional, all agent commands run unsandboxed in production.
 
 **Verification steps:**
 
@@ -89,12 +89,12 @@ A separate investigation should verify whether bwrap actually works in the produ
 2. `docker exec soleur-web-platform bwrap --new-session --die-with-parent --unshare-pid --dev /dev --proc /proc --bind / / -- id`
 3. If this fails with "No permissions to create new namespace," the sandbox is non-functional
 
-**Potential fixes if sandbox is broken:**
+**Potential fixes if sandbox is broken (least-privilege first):**
 
-- Add `--security-opt seccomp=unconfined` to Docker run (reduces container isolation)
-- Add `--cap-add SYS_ADMIN` (grants namespace creation capability)
-- Use a custom seccomp profile that allows `CLONE_NEWUSER` only
-- Set `kernel.unprivileged_userns_clone=1` on the host (may already be set)
+- Use a custom seccomp profile that allows `CLONE_NEWUSER` only (preferred -- minimal privilege escalation)
+- Set `kernel.unprivileged_userns_clone=1` on the host (may already be set; no container change needed)
+- Add `--cap-add SYS_ADMIN` (grants namespace creation capability -- broader than needed)
+- Add `--security-opt seccomp=unconfined` to Docker run (last resort -- disables ALL seccomp protections)
 
 ## Acceptance Criteria
 
