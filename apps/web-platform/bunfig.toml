@@ -4,6 +4,8 @@
 minimumReleaseAge = 259200
 
 [test]
-# Fallback for ad-hoc `bun test` runs. The canonical test path is
-# `bash scripts/test-all.sh` which uses vitest for web-platform.
-preload = ["./test/happy-dom.ts"]
+# Web-platform tests run exclusively under vitest (see vitest.config.ts).
+# Block all bun test discovery as defense-in-depth — prevents happy-dom's
+# GlobalRegistrator from corrupting native Request/Headers/Response APIs.
+# See: #1469
+pathIgnorePatterns = ["**"]

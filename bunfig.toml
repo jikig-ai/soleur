@@ -10,4 +10,9 @@ minimumReleaseAge = 259200
 # See: knowledge-base/project/learnings/2026-03-18-bun-test-segfault-missing-deps.md
 # FPE crash with Bun <=1.3.5 on root-level `bun test`. Use scripts/test-all.sh.
 # See: knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md
-pathIgnorePatterns = [".worktrees/**"]
+# Web-platform tests run exclusively under vitest (happy-dom environment).
+# Bun must not discover them: happy-dom's GlobalRegistrator corrupts native
+# Request/Headers/Response APIs, and vitest-only features (vi.resetModules,
+# per-project environments) have no bun equivalents.
+# See: #1469, #1436
+pathIgnorePatterns = [".worktrees/**", "apps/web-platform/**"]
