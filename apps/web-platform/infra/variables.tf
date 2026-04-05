@@ -109,3 +109,9 @@ variable "cf_notification_email" {
   description = "Email address for Cloudflare notification policies"
   type        = string
 }
+
+variable "discord_ops_webhook_url" {
+  description = "Discord webhook URL for infrastructure alerts (#ops-alerts channel)"
+  type        = string
+  sensitive   = true
+}

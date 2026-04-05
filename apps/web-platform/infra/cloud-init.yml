@@ -36,6 +36,50 @@ write_files:
     owner: root:root
     permissions: '0440'
 
+  # Disk space monitoring script -- alerts via Discord at 80%/95% thresholds (#1409).
+  # Content injected from disk-monitor.sh via Terraform base64encode(file()).
+  - path: /usr/local/bin/disk-monitor.sh
+    encoding: b64
+    content: ${disk_monitor_script_b64}
+    owner: root:root
+    permissions: '0755'
+
+  # Disk monitor environment file (webhook URL, chmod 600 for secrets).
+  - path: /etc/default/disk-monitor
+    content: |
+      DISCORD_OPS_WEBHOOK_URL=${discord_ops_webhook_url}
+    owner: root:root
+    permissions: '0600'
+
+  # Disk monitor systemd service (oneshot, invoked by timer).
+  - path: /etc/systemd/system/disk-monitor.service
+    content: |
+      [Unit]
+      Description=Disk space monitor
+      After=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/disk-monitor.sh
+    owner: root:root
+    permissions: '0644'
+
+  # Disk monitor systemd timer (every 5 minutes, persistent across reboots).
+  - path: /etc/systemd/system/disk-monitor.timer
+    content: |
+      [Unit]
+      Description=Run disk monitor every 5 minutes
+
+      [Timer]
+      OnBootSec=5min
+      OnUnitActiveSec=5min
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+    owner: root:root
+    permissions: '0644'
+
   # CI deploy script invoked by the webhook listener.
   # Content injected from ci-deploy.sh via Terraform base64encode(file()).
   - path: /usr/local/bin/ci-deploy.sh
@@ -185,6 +229,9 @@ runcmd:
     rm /tmp/webhook.tar.gz
   - systemctl daemon-reload
   - systemctl enable --now webhook
+
+  # Enable disk space monitoring timer (#1409)
+  - systemctl enable --now disk-monitor.timer
 
   # Weekly Docker image cleanup -- keeps only images used by running containers.
   # Prevents disk exhaustion from accumulated deploy images (#967).
