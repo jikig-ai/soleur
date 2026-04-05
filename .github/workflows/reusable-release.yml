@@ -266,6 +266,14 @@ jobs:
           printf 'released=%s\n' "true" >> "$GITHUB_OUTPUT"
           echo "Created release $TAG"
 
+      - name: Count plugin components
+        id: plugin_stats
+        if: steps.version.outputs.next != '' && inputs.docker_image != ''
+        run: |
+          AGENT_COUNT=$(find plugins/soleur/agents -name "*.md" 2>/dev/null | wc -l)
+          printf 'agent_count=%s\n' "$AGENT_COUNT" >> "$GITHUB_OUTPUT"
+          echo "Counted $AGENT_COUNT agents"
+
       - name: Docker login
         id: docker_login
         if: steps.version.outputs.next != '' && inputs.docker_image != ''
@@ -295,6 +303,7 @@ jobs:
             SENTRY_ORG=${{ secrets.SENTRY_ORG }}
             SENTRY_PROJECT=${{ secrets.SENTRY_PROJECT }}
             BUILD_VERSION=${{ steps.version.outputs.next }}
+            NEXT_PUBLIC_AGENT_COUNT=${{ steps.plugin_stats.outputs.agent_count }}
 
       - name: Set docker_pushed output
         id: docker_pushed
