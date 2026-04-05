@@ -14,10 +14,19 @@ import { createChildLogger } from "./logger";
 
 const log = createChildLogger("session-sync");
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+let _supabase: ReturnType<typeof createClient> | null = null;
+
+function getSupabase(): ReturnType<typeof createClient> | null {
+  if (_supabase) return _supabase;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) {
+    log.warn("Supabase env vars not set — session sync disabled");
+    return null;
+  }
+  _supabase = createClient(url, key);
+  return _supabase;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -80,6 +89,9 @@ function cleanupCredentialHelper(helperPath: string): void {
 }
 
 async function getInstallationId(userId: string): Promise<number | null> {
+  const supabase = getSupabase();
+  if (!supabase) return null;
+
   const { data, error } = await supabase
     .from("users")
     .select("github_installation_id")
@@ -94,6 +106,9 @@ async function getInstallationId(userId: string): Promise<number | null> {
 }
 
 async function updateLastSynced(userId: string): Promise<void> {
+  const supabase = getSupabase();
+  if (!supabase) return;
+
   const { error } = await supabase
     .from("users")
     .update({ repo_last_synced_at: new Date().toISOString() })
