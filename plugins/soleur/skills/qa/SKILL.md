@@ -88,6 +88,10 @@ For each test scenario in the plan, execute the steps it describes. Scenarios co
    - Run cleanup commands regardless of pass/fail
    - Cleanup failures produce warnings but do not mark the scenario as failed
 
+**Sharp edges for API verification:**
+
+- When verifying Sentry API events, use `statsPeriod=24h` (not `1h` — Sentry only accepts `24h` and `14d`). For EU-region DSNs (`ingest.de.sentry.io`), query `de.sentry.io/api/0/` (not `sentry.io/api/0/`).
+
 **Record the result** for each scenario: PASS or FAIL with evidence (screenshots, API response output, error messages).
 
 ### Step 4: Generate Report
@@ -139,6 +143,7 @@ The skill handles missing prerequisites without blocking the pipeline:
 
 ## Notes
 
+- For Playwright auth in production QA, use Supabase admin API `generate_link` to get the OTP code, then enter it in the OTP form. Do not use the magic link `action_link` URL — Playwright navigation does not trigger client-side hash fragment processing.
 - This skill does NOT test error paths (network failure simulation, invalid input). That capability is deferred to a future iteration.
 - Screenshots from Playwright MCP resolve from the repo root, not the shell CWD. Always use absolute paths when in a worktree.
 - Test data cleanup is critical — always include cleanup steps in test scenarios to avoid accumulating garbage data in external services.

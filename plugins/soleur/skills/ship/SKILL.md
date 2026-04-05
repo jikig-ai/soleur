@@ -754,6 +754,26 @@ Poll every 10 seconds until state is `MERGED`.
 
    **Why this matters:** In the 2026-03-28 session, migration `010_tag_and_route.sql` was committed and deployed but never applied, causing `NOT NULL` constraint failures on every Command Center session start. In the 2026-04-03 session (#1375), migration verification was left as a manual "post-merge todo" instead of being executed — violating the "execute, don't list" rule. This step ensures migrations are verified automatically.
 
+3.7. **Terraform provisioner gate.** If the PR modified `.tf` files, grep for `remote-exec` provisioner blocks. If found, warn: "This PR contains remote-exec provisioners that cannot run in CI. Run `terraform apply` now to prevent drift." Block the session from ending until apply is confirmed or explicitly deferred.
+
+   **Step 1:** Detect `.tf` files in the PR diff:
+
+   ```bash
+   git diff --name-only --diff-filter=AM HASH..HEAD -- '*.tf'
+   ```
+
+   If no `.tf` files found, skip to Step 4.
+
+   **Step 2:** Grep for `remote-exec` provisioners in changed files:
+
+   ```bash
+   grep -l 'remote-exec' <changed .tf files>
+   ```
+
+   If no matches, skip to Step 4.
+
+   **Step 3:** Display the warning and ask: "Run `terraform apply` now, or defer with justification?" If deferred, record the justification in the PR body.
+
 4. Clean up worktree and local branch:
 
    Navigate to the repository root directory, then run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged`.
