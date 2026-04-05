@@ -73,11 +73,11 @@ Both callers construct the path from `getWorkspacesRoot() + "/" + UUID`, so the 
 
 ## Acceptance Criteria
 
-- [ ] `removeWorkspaceDir` rejects paths outside workspace root (throws Error)
-- [ ] `removeWorkspaceDir` rejects the workspace root itself (throws Error)
-- [ ] `removeWorkspaceDir` rejects paths that are string prefixes of the root but not children (e.g., `/workspaces-evil` when root is `/workspaces`)
-- [ ] `removeWorkspaceDir` accepts valid workspace subdirectory paths (existing behavior preserved)
-- [ ] Existing tests continue to pass
+- [x] `removeWorkspaceDir` rejects paths outside workspace root (throws Error)
+- [x] `removeWorkspaceDir` rejects the workspace root itself (throws Error)
+- [x] `removeWorkspaceDir` rejects paths that are string prefixes of the root but not children (e.g., `/workspaces-evil` when root is `/workspaces`)
+- [x] `removeWorkspaceDir` accepts valid workspace subdirectory paths (existing behavior preserved)
+- [x] Existing tests continue to pass
 
 ## Test Scenarios
 
