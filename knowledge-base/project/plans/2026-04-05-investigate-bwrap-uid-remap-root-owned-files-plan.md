@@ -48,13 +48,13 @@ No `--uid`, `--gid`, or `--unshare-user` flags are passed. The SDK does not expo
 
 On non-setuid bwrap (which is the case in both local dev and Docker), bwrap **automatically creates a user namespace** when any namespace flag (`--unshare-pid`, `--unshare-net`) is used. This is because creating other namespaces requires `CAP_SYS_ADMIN`, which is available inside a user namespace even for unprivileged processes.
 
-The uid_map inside the sandbox shows `1001 0 1`. The format is `ns_uid host_uid count`:
+The uid_map inside the sandbox shows `0 1001 1`. The format is `ns_uid host_uid count` (per `man user_namespaces`):
 
-- **ns_uid=1001**: the UID visible inside the namespace
-- **host_uid=0**: the offset in the parent namespace's UID range (for single-mapping user namespaces created by unprivileged users, this is always 0 -- it maps the caller's real UID to the single slot)
+- **ns_uid=0**: the UID visible inside the namespace (process appears as root)
+- **host_uid=1001**: the UID in the parent namespace that this maps to (the real UID of the process that created the namespace)
 - **count=1**: only one UID is mapped
 
-The kernel resolves filesystem writes by mapping the namespace UID back to the parent namespace UID through this table. Since the parent namespace UID is the real UID of the process that created the namespace (1001), all writes hit disk as UID 1001 regardless of what the process sees inside the sandbox.
+The kernel resolves filesystem writes by mapping the namespace UID (0) back to the host UID (1001) through this table. All writes hit disk as UID 1001 regardless of what the process sees inside the sandbox.
 
 ### 3. Bind-mounted writes preserve outer UID (confirmed experimentally)
 

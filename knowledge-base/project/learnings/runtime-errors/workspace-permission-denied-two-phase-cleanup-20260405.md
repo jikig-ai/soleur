@@ -21,8 +21,10 @@ When a user attempts to re-setup a project (connecting a new repo when a workspa
 
 Two verified causes for root-owned files:
 
-1. Bubblewrap sandbox user namespace UID remapping (`--uid 0 --gid 0` inside namespace, incomplete mapping back to outer UID on some kernel configurations)
-2. Legacy root-user containers from before the non-root migration
+1. Legacy root-user containers from before the non-root migration (Dockerfile `USER soleur` added later)
+2. Kernel-specific user namespace behavior on certain configurations where the mapping is incomplete
+
+Note: The original hypothesis that bwrap UID remapping (`--uid 0 --gid 0`) causes root-owned files was debunked by the #1546 investigation. Bwrap's user namespace always maps writes back to the host UID regardless of in-sandbox appearance. See `knowledge-base/project/plans/2026-04-05-investigate-bwrap-uid-remap-root-owned-files-plan.md`.
 
 ## Investigation
 
