@@ -54,7 +54,7 @@ convergence_risk: Medium-High
 
 ### "Notion has 35 million users. You have... one."
 
-**Response:** "Notion has distribution. Soleur has depth. When Notion launched Custom Agents, 21,000 agents were built in early testing -- mostly for workspace automation (summarize this doc, update that database, post to Slack). That is valuable, but it is not Company-as-a-Service. Soleur's 61 agents are built for specific business functions -- not generic tasks but structured workflows for brand identity, competitive analysis, contract review, pricing strategy, and code architecture. Distribution wins eventually. But depth wins the early adopters who define the category."
+**Response:** "Notion has distribution. Soleur has depth. When Notion launched Custom Agents, 21,000 agents were built in early testing -- mostly for workspace automation (summarize this doc, update that database, post to Slack). That is valuable, but it is not Company-as-a-Service. Soleur's 63 agents are built for specific business functions -- not generic tasks but structured workflows for brand identity, competitive analysis, contract review, pricing strategy, and code architecture. Distribution wins eventually. But depth wins the early adopters who define the category."
 
 ### "Notion has MCP integrations with Slack, Figma, Linear, HubSpot."
 
@@ -70,7 +70,7 @@ convergence_risk: Medium-High
 |-----------|----------|
 | "I already use Notion for everything." | "Soleur is not replacing Notion. Notion is your workspace -- docs, projects, notes. Soleur is your AI organization -- agents that run your business. Use Notion for collaboration. Use Soleur for execution. They serve different functions." |
 | "Notion has scheduled agents. Soleur requires manual invocation." | "Scheduled agents are useful for routine tasks. Soleur's human-in-the-loop design is intentional: the founder decides, agents execute. For high-stakes decisions (legal review, pricing strategy, competitive positioning), you want oversight, not automation. The brainstorm-plan-implement-review-compound lifecycle keeps the founder in control at every stage." |
-| "Notion is $10/month. Soleur will cost more." | "Soleur's core is free and open source -- 61 agents, 56 skills, Apache-2.0. The planned paid tier ($49/month) covers hosted infrastructure and cloud-synced knowledge base. Compare $49/month for an AI organization running 8 business departments against the $790-2,790/month a solo founder typically spends on separate tools and services." |
+| "Notion is $10/month. Soleur will cost more." | "Soleur's core is free and open source -- 63 agents, 62 skills, Apache-2.0. The planned paid tier ($49/month) covers hosted infrastructure and cloud-synced knowledge base. Compare $49/month for an AI organization running 8 business departments against the $790-2,790/month a solo founder typically spends on separate tools and services." |
 
 ## Convergence Watch
 

@@ -2,7 +2,7 @@
 
 The Company-as-a-Service platform. Collapse the friction between a startup idea and a billion-dollar outcome.
 
-63 agents across engineering, finance, marketing, legal, operations, product, sales, and support -- compounding your company knowledge with every session.
+63 agents across engineering, finance, legal, marketing, operations, product, sales, and support -- compounding your company knowledge with every session.
 
 [![Version](https://img.shields.io/github/v/release/jikig-ai/soleur)](https://github.com/jikig-ai/soleur/releases)
 [![License](https://img.shields.io/badge/License-BSL_1.1-blue.svg)](LICENSE)

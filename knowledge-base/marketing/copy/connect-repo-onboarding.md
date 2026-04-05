@@ -384,7 +384,7 @@ Nothing was changed on your GitHub account and no access was granted.
 - The word "plugin" must not appear anywhere in this flow.
 - This page uses the **general register** per the brand guide's
   dual-register voice system. Use "your AI team" not "8 departments"
-  or "61 agents" in user-facing copy. The stats card label
+  or "63 agents" in user-facing copy. The stats card label
   "Departments ready: 8" is the one exception (data display context).
 - The word "repository" is introduced with a parenthetical definition
   on first meaningful use, then used naturally afterward. In headings
