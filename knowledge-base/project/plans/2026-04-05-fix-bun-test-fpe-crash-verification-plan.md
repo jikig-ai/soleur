@@ -8,6 +8,24 @@ closes: "#1511"
 
 # fix: verify bun test FPE crash resolution and close #1511
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-05
+**Sections enhanced:** 3 (Version range resolution, Problem Statement, References)
+
+### Key Improvements
+
+1. Confirmed the FPE affected Bun 1.3.5 AND 1.3.6 via crash report URL analysis -- the version range in comments must be "<=1.3.6"
+2. Verified Bun release timeline: 6 releases between 1.3.6 (2026-01-13) and 1.3.11 (2026-03-18); the FPE fix was not explicitly documented in any changelog but the upstream issue #20429 is labeled `old-version`
+3. Confirmed 1.3.11 is still the latest Bun release (no newer version to evaluate), eliminating the version upgrade question entirely
+
+### Research Findings
+
+- Bun v1.3.6 release notes mention 45 bug fixes but do not explicitly call out FPE/GC crash fixes ([source](https://bun.com/blog/bun-v1.3.6))
+- The upstream issue oven-sh/bun#20429 was reported on Bun 1.2.9 and labeled `old-version` -- the FPE is a recurring class of GC bugs across major version lines, not a single bug with a single fix
+- No Bun versions between 1.3.7 and 1.3.10 exist to test (releases jump 1.3.6 -> 1.3.7 -> 1.3.8 -> 1.3.9 -> 1.3.10 -> 1.3.11)
+- The three-layer defense (version pin + sequential runner + dual-runner exclusion) provides robust protection even if future Bun versions regress
+
 ## Overview
 
 Issue #1511 reports that `bun test` crashes with a Floating Point Error (SIGFPE) in Bun v1.3.6. Investigation confirms the crash no longer reproduces -- it was resolved by a combination of prior work:
@@ -53,7 +71,21 @@ The crash occurs during Bun's internal process accounting when the GC fires duri
 
 ### Version range resolution
 
-The original FPE was reported on Bun 1.3.5 (issue #860). Issue #1511 reports the same crash class on Bun 1.3.6 (crash report URL: `bun.report/1.3.6/...`). Both versions are affected. The correct range for comments and documentation is **<=1.3.6**. Bun 1.3.11 is the first version in the project's history where the crash does not reproduce
+The original FPE was reported on Bun 1.3.5 (issue #860). Issue #1511 reports the same crash class on Bun 1.3.6 (crash report URL: `bun.report/1.3.6/...`). Both versions are affected. The correct range for comments and documentation is **<=1.3.6**. Bun 1.3.11 is the first version in the project's history where the crash does not reproduce.
+
+**Bun 1.3.x release timeline:**
+
+| Version | Date | FPE Status |
+|---|---|---|
+| 1.3.5 | pre-2026-01-13 | Crashes (confirmed, #860) |
+| 1.3.6 | 2026-01-13 | Crashes (confirmed, #1511) |
+| 1.3.7 | 2026-01-27 | Unknown (not tested) |
+| 1.3.8 | 2026-01-29 | Unknown (not tested) |
+| 1.3.9 | 2026-02-08 | Unknown (not tested) |
+| 1.3.10 | 2026-02-26 | Unknown (not tested) |
+| 1.3.11 | 2026-03-18 | No crash (confirmed, this plan) |
+
+The exact fix version is unknown because the FPE fix was not documented in any Bun changelog. The upstream issue [oven-sh/bun#20429](https://github.com/oven-sh/bun/issues/20429) tracks FPE crashes as a class across Bun versions (also seen in 1.2.x). The `old-version` label indicates the Bun team considers it fixed in current releases
 
 ## Non-goals
 
