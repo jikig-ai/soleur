@@ -51,10 +51,10 @@ resource "terraform_data" "disk_monitor_install" {
   ]))
 
   connection {
-    type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
-    user        = "root"
-    private_key = file(var.ssh_private_key_path)
+    type  = "ssh"
+    host  = hcloud_server.web.ipv4_address
+    user  = "root"
+    agent = true
   }
 
   provisioner "file" {
@@ -90,10 +90,10 @@ resource "terraform_data" "deploy_pipeline_fix" {
   ]))
 
   connection {
-    type        = "ssh"
-    host        = hcloud_server.web.ipv4_address
-    user        = "root"
-    private_key = file(var.ssh_private_key_path)
+    type  = "ssh"
+    host  = hcloud_server.web.ipv4_address
+    user  = "root"
+    agent = true
   }
 
   provisioner "file" {
