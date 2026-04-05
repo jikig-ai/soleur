@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # PreToolUse guardrail hook for Bash commands.
 # Blocks: commits on main, rm -rf on worktrees, --delete-branch with active worktrees,
-# commits with conflict markers in staged content, gh issue create without --milestone.
+# commits with conflict markers in staged content, gh issue create without --milestone,
+# git stash in worktrees.
 # NOTE: When adding or modifying guards, update AGENTS.md hook awareness rule to match.
 #
 # Corresponding prose rules:
@@ -10,6 +11,7 @@
 #   Guard 3: AGENTS.md "Never --delete-branch with gh pr merge"
 #   Guard 4: constitution.md "grep staged content for conflict markers"
 #   Guard 5: AGENTS.md "Every gh issue create must include --milestone"
+#   Guard 6: AGENTS.md "Never git stash in worktrees"
 
 set -euo pipefail
 
@@ -121,6 +123,33 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create'; then
       hookSpecificOutput: {
         permissionDecision: "deny",
         permissionDecisionReason: "BLOCKED: gh issue create must include --milestone. Default to '\''Post-MVP / Later'\'' for operational issues. Read knowledge-base/product/roadmap.md for feature issues."
+      }
+    }'
+    exit 0
+  fi
+fi
+
+# Guard 6: Block git stash in worktrees
+if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+stash'; then
+  # Resolve CWD: check cd target, git -C path, .cwd field, then hook CWD
+  GUARD6_DIR=""
+  if echo "$COMMAND" | grep -qE '^\s*cd\s+'; then
+    GUARD6_DIR=$(echo "$COMMAND" | sed -nE 's/^\s*cd\s+"?([^"&;]+)"?.*/\1/p' | xargs)
+  elif echo "$COMMAND" | grep -qoE 'git\s+-C\s+\S+'; then
+    GUARD6_DIR=$(echo "$COMMAND" | grep -oE 'git\s+-C\s+\S+' | head -1 | sed -nE 's/git\s+-C\s+(\S+)/\1/p')
+  fi
+  if [ -z "$GUARD6_DIR" ] || [ ! -d "$GUARD6_DIR" ]; then
+    GUARD6_CWD=$(echo "$INPUT" | jq -r '.cwd // ""')
+    if [ -n "$GUARD6_CWD" ] && [ -d "$GUARD6_CWD" ]; then
+      GUARD6_DIR="$GUARD6_CWD"
+    fi
+  fi
+  RESOLVE_DIR="${GUARD6_DIR:-.}"
+  if echo "$(cd "$RESOLVE_DIR" 2>/dev/null && pwd)" | grep -qF '.worktrees'; then
+    jq -n '{
+      hookSpecificOutput: {
+        permissionDecision: "deny",
+        permissionDecisionReason: "BLOCKED: git stash in worktrees is not allowed. Use git show <commit>:<path> to inspect old code, or commit WIP first."
       }
     }'
     exit 0
