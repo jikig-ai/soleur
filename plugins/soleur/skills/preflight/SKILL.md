@@ -1,6 +1,6 @@
 ---
 name: preflight
-description: "This skill should be used when running pre-ship checks on migrations and security headers."
+description: "This skill should be used when running pre-ship checks on migrations, security headers, and lockfiles."
 ---
 
 # preflight Skill
@@ -26,7 +26,7 @@ Run `git rev-parse --abbrev-ref HEAD` to get the current branch name.
 
 ## Phase 1: Run All Checks in Parallel
 
-Run these three validations as parallel Bash tool calls. Each returns PASS, FAIL, or SKIP.
+Run these four validations as parallel Bash tool calls. Each returns PASS, FAIL, or SKIP.
 
 ### Assertion: Not-Bare-Repo
 
@@ -156,6 +156,41 @@ CSP is generated per-request in middleware.ts with a per-request nonce via `cryp
 - **FAIL** -- Any critical header missing or invalid
 - **SKIP** -- No relevant file changes or no production URL available
 
+### Check 3: Lockfile Consistency
+
+**Step 3.1: Detect lockfile modifications in this branch.**
+
+```bash
+git diff --name-status origin/main...HEAD -- '*/bun.lock' '*/package-lock.json' 'bun.lock' 'package-lock.json'
+```
+
+This returns status letters (M=modified, A=added, D=deleted) alongside file paths. If no output, return **SKIP**.
+
+Only lockfiles with status **M** (modified) trigger the consistency check. Added (A) or deleted (D) lockfiles are one-time structural changes that do not require sibling updates.
+
+**Step 3.2: For each modified lockfile, verify its sibling.**
+
+For each lockfile with status M in the Step 3.1 output:
+
+1. Extract the directory path (e.g., `apps/web-platform` from `apps/web-platform/bun.lock`). For root-level lockfiles (`bun.lock` or `package-lock.json` with no path prefix), use the repository root directory.
+2. Determine the sibling: if the modified file is `bun.lock`, the sibling is `package-lock.json` (and vice versa).
+3. Check if the sibling exists in the working tree (separate Bash call):
+
+```bash
+test -f <directory>/package-lock.json && echo "exists" || echo "missing"
+```
+
+4. If the sibling does NOT exist (single-lockfile directory), skip this file -- no consistency check needed.
+5. If the sibling exists (dual-lockfile directory), check whether the sibling also appears in the Step 3.1 output (any status: M, A, or D). If the sibling is NOT in the diff at all, report **FAIL**: "`<directory>/` modified `bun.lock` but not `package-lock.json`. Both lockfiles must be updated together (see AGENTS.md dual-lockfile rule). Run `npm install` in `<directory>/` to regenerate `package-lock.json`." (If `package-lock.json` was modified without `bun.lock`, say: "Run `bun install` in `<directory>/` to regenerate `bun.lock`.")
+
+If multiple files fail, report each one. Any single failure means the overall check result is FAIL.
+
+**Result:**
+
+- **PASS** -- All modified lockfiles in dual-lockfile directories have consistent sibling updates
+- **FAIL** -- One or more dual-lockfile directories have a modified lockfile without its sibling updated (message names each directory and missing file)
+- **SKIP** -- No lockfile changes in this branch
+
 ## Phase 2: Aggregate Go/No-Go Report
 
 After all checks complete, aggregate results into a structured report:
@@ -168,6 +203,7 @@ After all checks complete, aggregate results into a structured report:
 | Not-Bare-Repo | PASS/FAIL | <details> |
 | DB Migration Status | PASS/FAIL/SKIP | <details> |
 | Security Headers | PASS/FAIL/SKIP | <details> |
+| Lockfile Consistency | PASS/FAIL/SKIP | <details> |
 
 **Overall: PASS / FAIL**
 ```
