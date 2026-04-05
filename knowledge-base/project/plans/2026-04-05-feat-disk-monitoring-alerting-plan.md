@@ -53,7 +53,8 @@ On 2026-04-02, the web-platform deploy webhook accepted requests (HTTP 202) but 
 1. **`disk-monitor.sh`** -- Shell script placed at `/usr/local/bin/disk-monitor.sh`
    - Checks root filesystem (`/`) usage via `df --output=pcent /`
    - If usage >= 80%, posts a structured Discord embed with: server hostname, disk usage %, available space, timestamp
-   - Cooldown mechanism: writes last alert timestamp to `/var/run/disk-monitor-last-alert` to avoid alert flooding (re-alert every 1 hour, not every 5 minutes)
+   - Cooldown mechanism: writes last alert timestamp to separate files per threshold (`/var/run/disk-monitor-alert-80` and `/var/run/disk-monitor-alert-95`) to avoid alert flooding (re-alert every 1 hour per threshold, not every 5 minutes). Separate files ensure a 95% critical alert is not suppressed by a prior 80% warning.
+   - Discord `allowed_mentions`: 80% alert uses `{parse: []}` (no pings), 95% alert uses `{parse: ["everyone"]}` (enables `@here`)
    - Exit 0 always (cron jobs that exit non-zero generate mail noise)
 
 2. **Systemd timer** (preferred over raw crontab for logging/management)
@@ -62,8 +63,8 @@ On 2026-04-02, the web-platform deploy webhook accepted requests (HTTP 202) but 
    - Logs to journalctl for debugging
 
 3. **Discord webhook URL** -- stored in Doppler `prd` config as `DISCORD_OPS_WEBHOOK_URL`
-   - Separate from the existing `DISCORD_WEBHOOK_URL` GitHub secret (which is for CI workflows)
-   - Injected into the script via an environment file at `/etc/default/disk-monitor`
+   - Create a dedicated `#ops-alerts` Discord channel with its own webhook for signal isolation from CI notifications
+   - Injected into the script via an environment file at `/etc/default/disk-monitor` (`chmod 600`, same pattern as `/etc/default/webhook-deploy`)
 
 4. **Terraform provisioning** -- added to `apps/web-platform/infra/cloud-init.yml` for new servers and via a `terraform_data` provisioner for the existing server (same pattern as `doppler_install`)
 
@@ -93,15 +94,15 @@ Hetzner CX33 (web-platform)          Hetzner CX22 (telegram-bridge)
 
 ### Implementation Phases
 
-#### Phase 1: Script and Systemd Units (infrastructure-only, TDD exempt)
+#### Phase 1: Script and Systemd Units
 
 - [ ] Create `apps/web-platform/infra/disk-monitor.sh` -- the monitoring script
   - Parse `df --output=pcent / | tail -1 | tr -d ' %'` for integer percentage
   - Parse `df --output=avail / | tail -1 | tr -d ' '` for available KB
   - Load `DISCORD_OPS_WEBHOOK_URL` from `/etc/default/disk-monitor`
-  - Check cooldown file `/var/run/disk-monitor-last-alert` (skip if alerted within last 3600 seconds)
-  - If usage >= 80%: POST Discord webhook with structured embed (hostname, percentage, available space, top 5 disk consumers via `du -sh /* 2>/dev/null | sort -rh | head -5`)
-  - If usage >= 95%: include `@here` mention in the alert for critical urgency
+  - Check separate cooldown files per threshold (`/var/run/disk-monitor-alert-80`, `/var/run/disk-monitor-alert-95`) -- skip if alerted within last 3600 seconds for that threshold
+  - If usage >= 80%: POST Discord webhook with structured embed (hostname, percentage, available space, top 5 disk consumers via `timeout 10 du -sh /* 2>/dev/null | sort -rh | head -5`), `allowed_mentions: {parse: []}`
+  - If usage >= 95%: POST Discord webhook with `@here` mention for critical urgency, `allowed_mentions: {parse: ["everyone"]}`
   - Always exit 0
 - [ ] Create systemd unit files (embedded in cloud-init.yml via `write_files`):
   - `disk-monitor.service` -- `Type=oneshot`, `ExecStart=/usr/local/bin/disk-monitor.sh`, runs as root
@@ -110,13 +111,16 @@ Hetzner CX33 (web-platform)          Hetzner CX22 (telegram-bridge)
   - Test: normal disk usage (below 80%) produces no output and exit 0
   - Test: 80% usage triggers Discord webhook POST (mock `curl`)
   - Test: 95% usage includes `@here` mention
-  - Test: cooldown prevents duplicate alerts within 1 hour
+  - Test: cooldown prevents duplicate alerts within 1 hour (per threshold)
+  - Test: 95% alert fires even when 80% cooldown is active (separate cooldown files)
+  - Test: `df` command failure exits 0 with warning to stderr
   - Test: missing webhook URL exits 0 with warning to stderr
   - Test: `curl` failure exits 0 (graceful degradation)
 
 #### Phase 2: Doppler Secret and Terraform Provisioning
 
-- [ ] Add `DISCORD_OPS_WEBHOOK_URL` to Doppler `prd` config (reuse the existing Discord webhook or create a dedicated ops-alerts channel webhook)
+- [ ] Create a dedicated `#ops-alerts` Discord channel and webhook URL for infrastructure alerts
+- [ ] Add `DISCORD_OPS_WEBHOOK_URL` to Doppler `prd` config with the new webhook URL
 - [ ] Update `apps/web-platform/infra/cloud-init.yml`:
   - Add `write_files` entries for `disk-monitor.sh`, `disk-monitor.service`, `disk-monitor.timer`
   - Add `write_files` entry for `/etc/default/disk-monitor` with `DISCORD_OPS_WEBHOOK_URL` from Terraform variable
@@ -129,12 +133,11 @@ Hetzner CX33 (web-platform)          Hetzner CX22 (telegram-bridge)
 - [ ] Provision Doppler secret: `doppler secrets set DISCORD_OPS_WEBHOOK_URL "<url>" -p soleur -c prd`
 - [ ] Add `DISCORD_OPS_WEBHOOK_URL` to Doppler `prd_terraform` config (for Terraform variable injection)
 
-#### Phase 3: Telegram-Bridge Server (same pattern)
+#### Phase 3: Telegram-Bridge Server (deferred -- separate issue)
 
-- [ ] Apply the same monitoring to the telegram-bridge CX22 server
-  - The telegram-bridge infra does not have a `server.tf` (server is managed separately or via Hetzner console)
-  - Use SSH `remote-exec` via a new `terraform_data` resource in `apps/telegram-bridge/infra/main.tf`
-  - Requires adding `hcloud` provider and server data source, or using the server IP directly from Doppler/variables
+The telegram-bridge CX22 server has a different Terraform structure (no `server.tf`, no SSH provisioner wired). Applying the same monitoring requires different plumbing (adding `hcloud` provider, server data source, SSH connection). This is deferred to a separate tracking issue to keep this plan focused on the web-platform server.
+
+- [ ] Create GitHub issue to track telegram-bridge disk monitoring (milestone: "Post-MVP / Later")
 
 #### Phase 4: Documentation and NFR Update
 
@@ -160,11 +163,11 @@ Hetzner CX33 (web-platform)          Hetzner CX22 (telegram-bridge)
 
 ### Functional Requirements
 
-- [ ] Disk usage on both deploy servers (CX33 web-platform, CX22 telegram-bridge) is checked every 5 minutes
+- [ ] Disk usage on the web-platform deploy server (CX33) is checked every 5 minutes (telegram-bridge CX22 deferred to separate issue)
 - [ ] Alert fires when disk usage exceeds 80% on any server
 - [ ] Alert fires with elevated urgency (`@here`) when disk usage exceeds 95%
 - [ ] Alert reaches the team via Discord webhook in an ops-alerts channel
-- [ ] Cooldown prevents alert flooding (max 1 alert per hour per server at each threshold)
+- [ ] Cooldown prevents alert flooding (max 1 alert per hour per threshold, separate cooldown for 80% and 95%)
 - [ ] Monitoring script exits 0 even on failure (no cron mail noise)
 - [ ] Script gracefully handles missing webhook URL or network failure
 
@@ -189,8 +192,10 @@ Hetzner CX33 (web-platform)          Hetzner CX22 (telegram-bridge)
 - Given disk usage is 50%, when disk-monitor.sh runs, then no Discord webhook is called and exit code is 0
 - Given disk usage is 82%, when disk-monitor.sh runs, then a Discord webhook POST is made with usage percentage in the embed
 - Given disk usage is 96%, when disk-monitor.sh runs, then a Discord webhook POST includes `@here` mention
-- Given disk usage is 82% and last alert was 30 minutes ago, when disk-monitor.sh runs, then no new alert is sent (cooldown)
-- Given disk usage is 82% and last alert was 2 hours ago, when disk-monitor.sh runs, then a new alert is sent
+- Given disk usage is 82% and the 80% cooldown file was written 30 minutes ago, when disk-monitor.sh runs, then no new 80% alert is sent
+- Given disk usage is 82% and the 80% cooldown file was written 2 hours ago, when disk-monitor.sh runs, then a new 80% alert is sent
+- Given disk usage is 96% and the 80% cooldown file was written 30 minutes ago but no 95% cooldown file exists, when disk-monitor.sh runs, then a 95% critical alert is sent (independent cooldowns)
+- Given `df` command fails (filesystem error), when disk-monitor.sh runs, then a warning is logged to stderr and exit code is 0
 - Given DISCORD_OPS_WEBHOOK_URL is empty, when disk-monitor.sh runs, then a warning is logged to stderr and exit code is 0
 - Given curl fails (network error), when disk-monitor.sh runs, then the failure is logged and exit code is 0
 
