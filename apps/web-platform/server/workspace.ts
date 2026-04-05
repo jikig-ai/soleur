@@ -149,9 +149,7 @@ export async function provisionWorkspaceWithRepo(
 
   try {
     // 3. Remove existing workspace if present (fresh clone)
-    if (existsSync(workspacePath)) {
-      execFileSync("rm", ["-rf", workspacePath], { stdio: "pipe" });
-    }
+    removeWorkspaceDir(workspacePath);
 
     // 4. Clone the repository (shallow for speed)
     try {
@@ -250,8 +248,54 @@ export async function deleteWorkspace(userId: string): Promise<void> {
   const workspacePath = join(getWorkspacesRoot(), userId);
 
   if (existsSync(workspacePath)) {
-    execFileSync("rm", ["-rf", workspacePath], { stdio: "pipe" });
+    removeWorkspaceDir(workspacePath);
     log.info({ userId }, "Workspace deleted");
+  }
+}
+
+/**
+ * Removes a workspace directory, handling permission-denied errors from
+ * root-owned files (created by bubblewrap sandbox UID remapping).
+ *
+ * Phase 1: Direct rm -rf (fast path for user-owned files).
+ * Phase 2: chmod to fix restrictive permission bits, then find -delete
+ *          which continues past individual permission errors.
+ *
+ * Throws with manual cleanup instructions if the directory cannot be
+ * fully removed (e.g., root-owned files that require sudo).
+ */
+export function removeWorkspaceDir(workspacePath: string): void {
+  if (!existsSync(workspacePath)) return;
+
+  // Phase 1: Direct removal (works when all files owned by current user)
+  try {
+    execFileSync("rm", ["-rf", workspacePath], { stdio: "pipe" });
+    return;
+  } catch {
+    log.warn({ workspacePath }, "Direct rm -rf failed, attempting partial cleanup");
+  }
+
+  // Phase 2: Fix permission bits on user-owned files, then delete individually.
+  // chmod fixes restrictive modes (git pack 444, dirs 555) on files WE own.
+  // find -delete continues past root-owned files instead of aborting.
+  try {
+    execFileSync("chmod", ["-R", "u+rwX", workspacePath], { stdio: "pipe" });
+  } catch {
+    // chmod may fail on root-owned files -- continue to find -delete
+  }
+
+  try {
+    execFileSync("find", [workspacePath, "-mindepth", "1", "-delete"], {
+      stdio: "pipe",
+    });
+    execFileSync("rmdir", [workspacePath], { stdio: "pipe" });
+  } catch (err) {
+    const stderr = (err as { stderr?: Buffer })?.stderr?.toString() ?? "";
+    log.error({ workspacePath, stderr }, "Workspace cleanup failed");
+    throw new Error(
+      "Workspace cleanup failed. Some files may be owned by root. " +
+        "Manual cleanup required: sudo rm -rf <workspace-path>",
+    );
   }
 }
 
