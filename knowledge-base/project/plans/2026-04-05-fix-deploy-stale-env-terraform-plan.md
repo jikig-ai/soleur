@@ -6,6 +6,25 @@ date: 2026-04-05
 
 # fix: deploy pipeline uses stale .env instead of Doppler secrets (Terraform)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-05
+**Sections enhanced:** 4
+**Research sources:** Context7 (Terraform docs), institutional learnings (6 relevant), WebSearch (systemd hardening)
+
+### Key Improvements
+
+1. Added exact `doppler run` command for `terraform apply` (dual credential pattern from prior learning -- bare `doppler run` breaks R2 backend)
+2. Added concrete `remote-exec` inline commands for the webhook.service unit file write (copy-paste ready)
+3. Documented that webhook restart causes zero user-facing downtime (async 202 pattern) -- removes the risk row
+4. Added pre-apply SSH key verification step to prevent the encrypted key failure that has occurred twice
+
+### New Considerations Discovered
+
+- The `terraform_data` trigger hash should include the webhook.service content as a Terraform local to avoid string duplication in `triggers_replace` and `remote-exec`
+- `rm -f /mnt/data/.env` in `remote-exec` is a one-shot operation -- if the resource is tainted and re-created, the `rm -f` runs again harmlessly (idempotent)
+- The webhook service runs as `User=deploy` but `ci-deploy.sh` needs `sudo` for `chown 1001:1001` -- the `NoNewPrivileges` omission comment in cloud-init documents this constraint
+
 ## Overview
 
 The web-platform deploy pipeline silently uses a stale `/mnt/data/.env` file
@@ -111,6 +130,32 @@ the existing server). This is acceptable because the provisioner is a
 one-time bridge -- future servers use cloud-init. Document the duplication
 with a comment in `server.tf` pointing to the cloud-init source of truth.
 
+### Research Insights
+
+**Terraform provisioner guidance (Context7):** Terraform docs state provisioners
+are a "last resort" -- but this is exactly the correct use case. The server
+exists with `ignore_changes = [user_data]`, and there is no declarative
+alternative for pushing config to a running server outside cloud-init. The
+existing `disk_monitor_install` resource established this pattern.
+
+**Concrete `remote-exec` inline for webhook.service:**
+
+```hcl
+provisioner "remote-exec" {
+  inline = [
+    "chmod +x /usr/local/bin/ci-deploy.sh",
+    "cat > /etc/systemd/system/webhook.service << 'UNITEOF'\n[Unit]\nDescription=Webhook deploy listener\nAfter=network.target\n\n[Service]\nType=simple\nEnvironmentFile=/etc/default/webhook-deploy\nExecStart=/usr/local/bin/webhook -verbose -hooks /etc/webhook/hooks.json -port 9000 -ip 127.0.0.1\nRestart=on-failure\nRestartSec=5\nUser=deploy\nGroup=deploy\nProtectSystem=strict\nProtectHome=read-only\nPrivateTmp=true\nReadWritePaths=/mnt/data /var/lock\nReadOnlyPaths=/etc/webhook /usr/local/bin /etc/default/webhook-deploy\nTimeoutStopSec=180\n\n[Install]\nWantedBy=multi-user.target\nUNITEOF",
+    "systemctl daemon-reload",
+    "systemctl restart webhook",
+    "rm -f /mnt/data/.env",
+  ]
+}
+```
+
+**Note:** The `NoNewPrivileges` directive is intentionally omitted because
+`ci-deploy.sh` requires `sudo` for `chown 1001:1001 /mnt/data/workspaces`
+(documented in cloud-init comment on line 146).
+
 ### Phase 3: Apply and verify
 
 Run `terraform apply` to execute all provisioners atomically, then verify:
@@ -124,12 +169,27 @@ Run `terraform apply` to execute all provisioners atomically, then verify:
 ## Technical Considerations
 
 - **Encrypted SSH key:** The learning from #1505 documents that
-  `private_key = file(...)` fails with encrypted keys. Use
-  `connection { agent = true }` instead of `private_key = file(var.ssh_private_key_path)`
-  if the SSH agent is running. However, the existing `disk_monitor_install`
-  resource uses `private_key = file(...)` and works in the current setup
-  (the agent applied it successfully post-#1505). Keep consistent with the
-  existing pattern for now.
+  `private_key = file(...)` fails with passphrase-encrypted keys with an
+  opaque `ssh: parse error in message type 0`. The existing `disk_monitor_install`
+  uses `private_key = file(var.ssh_private_key_path)` and was applied with a
+  temporary unencrypted key. Keep consistent with the existing pattern.
+  **Pre-apply verification step:** Before running `terraform apply`, verify
+  SSH agent is loaded: `ssh-add -l | grep -q ed25519`. If not, generate a
+  temp unencrypted key per the #1505 learning.
+- **Dual credential pattern for terraform apply:** The R2 backend needs raw
+  `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, while Terraform variables
+  need `TF_VAR_*` names. Use the documented nested pattern:
+
+  ```text
+  export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
+  export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+  doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+    terraform apply -target=terraform_data.deploy_pipeline_fix \
+      -var="ssh_key_path=$HOME/.ssh/id_ed25519.pub" \
+      -var="ssh_private_key_path=/tmp/tf_temp_key" \
+      -input=false
+  ```
+
 - **CI drift detection:** `terraform_data` resources with `remote-exec` show
   as "will be created" in CI drift reports because CI uses dummy SSH keys.
   This is expected behavior (documented in #1409 for disk_monitor_install).
@@ -144,6 +204,17 @@ Run `terraform apply` to execute all provisioners atomically, then verify:
   already has `EnvironmentFile=/etc/default/webhook-deploy` (line 140). The
   issue is that this was never applied to the running server. The provisioner
   fixes this for the existing server.
+- **Webhook restart causes zero user-facing downtime:** The webhook uses
+  async fire-and-forget mode (`include-command-output-in-response: false`,
+  `success-http-response-code: 202`). A restart only affects incoming deploy
+  requests during the < 1 second restart window. Active deploys (already
+  forked by the webhook) are unaffected because they run as a separate
+  process. No user traffic flows through the webhook.
+- **systemd EnvironmentFile vs /etc/environment:** `/etc/environment` is
+  sourced by PAM (login sessions), NOT by systemd service units. The
+  `EnvironmentFile=/etc/default/webhook-deploy` directive is the only correct
+  way to inject `DOPPLER_TOKEN` into the webhook service. This was the
+  root cause of the original outage (learning from #1493).
 
 ## Files to Modify
 
@@ -154,9 +225,9 @@ Run `terraform apply` to execute all provisioners atomically, then verify:
 
 ## Acceptance Criteria
 
-- [ ] `ci-deploy.sh` on server matches repo version (no `/mnt/data/.env` fallback)
-- [ ] `webhook.service` loads `DOPPLER_TOKEN` from `/etc/default/webhook-deploy`
-- [ ] `webhook.service` has `ReadWritePaths=/mnt/data /var/lock`
+- [x] `ci-deploy.sh` on server matches repo version (no `/mnt/data/.env` fallback)
+- [x] `webhook.service` loads `DOPPLER_TOKEN` from `/etc/default/webhook-deploy`
+- [x] `webhook.service` has `ReadWritePaths=/mnt/data /var/lock`
 - [ ] Deploy successfully pulls all 32 Doppler prd secrets into the container
 - [ ] `curl https://app.soleur.ai/health | jq .sentry` returns `"configured"`
 - [ ] `/mnt/data/.env` is deleted from the server
@@ -221,8 +292,8 @@ No cross-domain implications detected -- infrastructure/deployment fix using exi
 
 | Risk | Mitigation |
 |------|-----------|
-| Encrypted SSH key blocks `terraform apply` | Use `agent = true` or generate temp unencrypted key per #1505 learning |
-| Webhook service restart causes brief deploy downtime | Restart is < 1 second, only affects new deploy requests during that window |
+| Encrypted SSH key blocks `terraform apply` | Pre-apply: verify `ssh-add -l` shows key, or generate temp unencrypted key per #1505 learning |
+| Wrong Doppler credential pattern breaks `terraform init` | Use documented dual credential pattern: export raw AWS creds first, then `doppler run --name-transformer tf-var` |
 | Stale env file deletion is irreversible | The file is already stale and harmful -- deletion is the desired outcome |
 | CI drift reports show provisioner resources as "will be created" | Expected behavior (documented in #1409), add comments to the resources |
 | Post-merge apply is forgotten | Apply in same session as merge; drift detection workflow catches gaps |
@@ -238,9 +309,19 @@ No cross-domain implications detected -- infrastructure/deployment fix using exi
 
 ### Institutional Learnings
 
-- `2026-04-03-doppler-not-installed-env-fallback-outage.md` -- Original `.env` fallback discovery
+- `2026-04-03-doppler-not-installed-env-fallback-outage.md` -- Original `.env` fallback discovery, systemd EnvironmentFile requirement
 - `2026-04-03-terraform-data-remote-exec-drift-encrypted-ssh-key.md` -- Provisioner pattern and SSH key pitfall
 - `sentry-dsn-missing-from-container-env-20260405.md` -- SENTRY_DSN missing from container confirmation
+- `2026-04-05-terraform-doppler-dual-credential-pattern.md` -- Exact `doppler run` command for Terraform with R2 backend
+- `2026-03-29-doppler-service-token-config-scope-mismatch.md` -- Service token scoping (confirms the server's token is config-scoped)
+- `2026-03-21-async-webhook-deploy-cloudflare-timeout.md` -- Async webhook pattern (confirms restart is zero-downtime)
+- `2026-03-28-canary-rollback-docker-deploy.md` -- Canary deploy pattern in ci-deploy.sh (what the fix enables)
+
+### External References
+
+- [Terraform terraform_data resource](https://developer.hashicorp.com/terraform/language/resources/terraform-data) -- Official docs confirming terraform_data as provisioner container
+- [Terraform provisioners: last resort](https://developer.hashicorp.com/terraform/language/resources/provisioners/syntax) -- Provisioners are last resort; this use case qualifies (no declarative alternative for existing servers with ignore_changes)
+- [systemd EnvironmentFile directive](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#EnvironmentFile=) -- Official systemd docs confirming EnvironmentFile is the correct mechanism
 
 ### Related Issues
 
