@@ -30,7 +30,7 @@ variable "ssh_key_path" {
 }
 
 variable "ssh_private_key_path" {
-  description = "Path to the private SSH key file (used by provisioners, stored in TF state)"
+  description = "Path to the private SSH key file (used by provisioners)"
   type        = string
   default     = "~/.ssh/id_ed25519"
 }
