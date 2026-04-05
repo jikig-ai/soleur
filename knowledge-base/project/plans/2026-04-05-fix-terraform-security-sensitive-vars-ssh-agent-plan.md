@@ -3,9 +3,23 @@ title: "fix: Terraform security — sensitive variable annotation and SSH agent 
 type: fix
 date: 2026-04-05
 issues: [1560, 1561]
+deepened: 2026-04-05
 ---
 
 # fix: Terraform security — sensitive variable annotation and SSH agent migration
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-05
+**Sections enhanced:** 3 (Proposed Changes, CI Impact, Post-merge)
+**Research sources:** Terraform connection block docs (Context7), project learnings (3 files), related plan overlap analysis
+
+### Key Improvements
+
+1. Documented that Terraform's `agent` defaults to `true` -- setting it explicitly is for clarity, not necessity
+2. Found prior learning (`2026-04-03-terraform-data-remote-exec-drift-encrypted-ssh-key.md`) that documents the exact encrypted-key problem this fix resolves, validating the approach
+3. Identified that CI workflow file changes are optional (grep guards self-disable when variable is removed) but recommended as dead code cleanup
+4. Added edge case: `disk_monitor_install` resource replacement timing depends on `triggers_replace` hash, not the connection block change
 
 ## Overview
 
@@ -59,18 +73,34 @@ Four file edits:
 
 **Keep the CI `ssh-keygen` step and `ssh_key_path` var.** The public key is still needed by `hcloud_ssh_key.default` (`public_key = file(var.ssh_key_path)`). Only the private key path is removed.
 
+### Research Insights
+
+**Terraform `agent` argument default behavior:**
+Per the [Terraform connection block docs](https://developer.hashicorp.com/terraform/language/resources/provisioners/connection), the `agent` argument is `Optional - Set to false to disable using ssh-agent to authenticate`. This means **`agent` defaults to `true`**. Technically, just removing the `private_key` line would cause Terraform to fall back to the SSH agent automatically. Setting `agent = true` explicitly is recommended for clarity and self-documentation.
+
+**CI workflow changes are optional but recommended:**
+Both CI workflows use `grep -q 'variable "ssh_private_key_path"' variables.tf` before passing `-var`. Once the variable is removed from `variables.tf`, the grep will not match and the `-var` will not be passed -- CI works without modifying the workflow files. However, removing the dead grep/var blocks is cleaner (confirmed by the [doppler-install removal plan](./2026-04-05-review-remove-terraform-data-doppler-install-plan.md) which made the same observation).
+
+**Validated by prior learning:**
+The learning at `knowledge-base/project/learnings/2026-04-03-terraform-data-remote-exec-drift-encrypted-ssh-key.md` documents the exact problem: `private_key = file(...)` fails with encrypted SSH keys (`ssh: parse error in message type 0`) and explicitly recommends `connection { agent = true }` as the fix. This plan implements that recommendation.
+
 ## CI Impact
 
 `agent = true` means the SSH agent must be running when `terraform apply` executes provisioners. CI only runs `terraform plan` (no provisioners), so no SSH agent is needed in CI. Local apply requires the developer's key loaded in ssh-agent (`ssh-add`). The `disk_monitor_install` resource continues to show as "will be created" in drift reports (expected per #1409).
 
+### Edge Cases
+
+- **Resource replacement timing:** Changing the connection block does NOT trigger `disk_monitor_install` re-creation. The resource's `triggers_replace` depends on `sha256(join(",", [var.discord_ops_webhook_url, file("disk-monitor.sh")]))` -- only webhook URL or script content changes trigger replacement. The old private key remains in state until the next trigger-based replacement. To force immediate state cleanup, run `terraform apply -replace=terraform_data.disk_monitor_install` after merging.
+- **Passphrase-encrypted keys:** With `agent = true`, passphrase-encrypted SSH keys work transparently via the SSH agent (the agent handles decryption). This resolves the `ssh: parse error in message type 0` failure documented in the 2026-04-03 learning.
+
 ## Acceptance Criteria
 
-- [ ] `connection` block in `disk_monitor_install` uses `agent = true` instead of `private_key = file(...)`
-- [ ] `ssh_private_key_path` variable removed from `variables.tf`
-- [ ] CI workflows (`infra-validation.yml`, `scheduled-terraform-drift.yml`) no longer pass `-var="ssh_private_key_path=..."` argument
-- [ ] `terraform validate` passes (CI infra-validation job)
+- [x] `connection` block in `disk_monitor_install` uses `agent = true` instead of `private_key = file(...)`
+- [x] `ssh_private_key_path` variable removed from `variables.tf`
+- [x] CI workflows (`infra-validation.yml`, `scheduled-terraform-drift.yml`) no longer pass `-var="ssh_private_key_path=..."` argument
+- [x] `terraform validate` passes (CI infra-validation job)
 - [ ] `terraform plan` succeeds locally with SSH agent running
-- [ ] #1560 closed as already-resolved (no code change needed)
+- [x] #1560 closed as already-resolved (no code change needed)
 - [ ] #1561 closed via PR
 
 ## Test Scenarios
@@ -82,7 +112,9 @@ Four file edits:
 
 ## Post-merge
 
-After applying locally, verify state cleanup: `terraform state pull | jq '.resources[] | select(.type == "terraform_data") | .instances[].attributes'` should show no private key material. Existing state retains the old key until `disk_monitor_install` is re-created (triggered by its `triggers_replace` hash changing).
+1. Run `terraform apply -replace=terraform_data.disk_monitor_install` to force re-creation with the new connection config. Without `-replace`, the old state (containing private key material) persists until the next natural trigger (webhook URL or script content change).
+2. Verify state cleanup: `terraform state pull | jq '.resources[] | select(.type == "terraform_data") | .instances[].attributes'` should show no `private_key` field.
+3. Verify the disk-monitor timer is still running on the server: `ssh root@<ip> systemctl list-timers disk-monitor.timer --no-pager` (read-only diagnosis, per AGENTS.md).
 
 ## Domain Review
 

@@ -85,9 +85,6 @@ jobs:
           if grep -q 'variable "ssh_key_path"' variables.tf 2>/dev/null; then
             VAR_ARGS+=(-var="ssh_key_path=${CI_SSH_PUB}")
           fi
-          if grep -q 'variable "ssh_private_key_path"' variables.tf 2>/dev/null; then
-            VAR_ARGS+=(-var="ssh_private_key_path=${CI_SSH_PUB%.pub}")
-          fi
           PLAN_OUTPUT=$(doppler run --name-transformer tf-var -- \
             terraform plan -detailed-exitcode -no-color -input=false \
             "${VAR_ARGS[@]}" 2>&1)
