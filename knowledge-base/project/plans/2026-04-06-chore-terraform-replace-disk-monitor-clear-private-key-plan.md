@@ -156,11 +156,11 @@ Running `-replace` alongside an unmodified `terraform plan` could surface unrela
 
 ## Acceptance Criteria
 
-- [ ] `terraform apply -replace` completes successfully for both `disk_monitor_install` and `deploy_pipeline_fix`
-- [ ] `terraform state pull | jq` shows no `private_key` field in any `terraform_data` resource attributes
-- [ ] `disk-monitor.timer` is active and running on the server
-- [ ] `webhook.service` is active on the server (deploy pipeline not broken by re-provisioning)
-- [ ] `terraform plan` shows no pending changes after apply (clean state)
+- [x] `terraform apply -replace` completes successfully for both `disk_monitor_install` and `deploy_pipeline_fix`
+- [x] `terraform state pull | jq` shows no `private_key` field in any `terraform_data` resource attributes
+- [x] `disk-monitor.timer` is active and running on the server
+- [x] `webhook.service` is active on the server (deploy pipeline not broken by re-provisioning)
+- [x] `terraform plan` shows no pending changes after apply (clean state)
 
 ## Test Scenarios
 
