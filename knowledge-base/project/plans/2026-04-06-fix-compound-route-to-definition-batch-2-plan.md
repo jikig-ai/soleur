@@ -19,6 +19,7 @@ The compound skill's headless mode creates GitHub issues for proposed route-to-d
 | [#1601](https://github.com/jikig-ai/soleur/issues/1601) | `plugins/soleur/skills/work/SKILL.md` | `test-failures/2026-04-06-vitest-mock-hoisting-requires-vi-hoisted.md` | Add `vi.hoisted()` guidance for vitest mock factories | Needs edit |
 | [#1614](https://github.com/jikig-ai/soleur/issues/1614) | `plugins/soleur/skills/work/SKILL.md` | `security-issues/canary-crash-leaks-env-file-ci-deploy-20260406.md` | Add `replace_all` grep verification step | Needs edit |
 | [#1616](https://github.com/jikig-ai/soleur/issues/1616) | `plugins/soleur/skills/one-shot/SKILL.md` | `2026-04-06-doppler-cli-checksum-cloud-init.md` | Place subagent return format instruction as LAST line with CRITICAL prefix | Needs edit |
+| [#1621](https://github.com/jikig-ai/soleur/issues/1621) | `AGENTS.md` | `integration-issues/2026-04-06-doppler-stderr-contaminates-docker-env-file.md` | Add terraform + doppler name-transformer bullet to Code Quality | Needs edit |
 
 ## Proposed Fix
 
@@ -79,20 +80,33 @@ CRITICAL: You MUST output the ## Session Summary section in EXACTLY the format a
 
 **Rationale:** Subagents frequently ignore mid-prompt format requirements. Moving the format instruction to the LAST line with CRITICAL prefix maximizes compliance. Source: #1500 session where the planning subagent did not return the exact `## Session Summary` format.
 
+### Edit 5: AGENTS.md -- terraform + doppler name-transformer [#1621]
+
+**Target section:** Code Quality -- add as a new bullet
+
+**Proposed bullet:**
+
+```markdown
+- When running terraform commands locally with Doppler, always use `doppler run --name-transformer tf-var` to match CI behavior. Export `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` separately for the R2 backend — the name transformer renames them to `TF_VAR_*` which the backend ignores.
+```
+
+**Rationale:** Source learning documents how Doppler's name transformer flag interacts with Terraform's R2 backend credentials. This is a recurring gotcha when running `terraform plan`/`apply` locally.
+
 ### Close: #1597 (stale -- already fixed)
 
 **Action:** Close issue #1597 with a comment explaining the one-shot SKILL.md already has the correct path `plugins/soleur/scripts/setup-ralph-loop.sh` (line 11). The wrong path `plugins/soleur/skills/one-shot/scripts/setup-ralph-loop.sh` does not appear in the file. No edit needed.
 
 ## Acceptance Criteria
 
-- [ ] work/SKILL.md TDD Gate section has new `vi.hoisted()` bullet after existing `vi.mock()` bullet
-- [ ] work/SKILL.md Common Pitfalls section has new `replace_all` verification bullet
-- [ ] ship/SKILL.md Phase 7 Step 3.5 has new terraform resource enumeration instruction
-- [ ] one-shot/SKILL.md subagent prompt has CRITICAL format compliance instruction at the end
-- [ ] Issue #1597 is closed as stale with explanatory comment
-- [ ] GitHub issues #1581, #1601, #1614, #1616 are closed with `Closes #N` in PR body
-- [ ] Markdown lint passes on all modified files
-- [ ] Source learning `synced_to` frontmatter is updated for each applied edit
+- [x] work/SKILL.md TDD Gate section has new `vi.hoisted()` bullet after existing `vi.mock()` bullet
+- [x] work/SKILL.md Common Pitfalls section has new `replace_all` verification bullet
+- [x] ship/SKILL.md Phase 7 Step 3.5 has new terraform resource enumeration instruction
+- [x] one-shot/SKILL.md subagent prompt has CRITICAL format compliance instruction at the end
+- [x] Issue #1597 is closed as stale with explanatory comment
+- [x] AGENTS.md Code Quality section has new terraform + doppler name-transformer bullet
+- [ ] GitHub issues #1581, #1601, #1614, #1616, #1621 are closed with `Closes #N` in PR body
+- [x] Markdown lint passes on all modified files
+- [x] Source learning `synced_to` frontmatter is updated for each applied edit
 
 ## Test Scenarios
 
@@ -109,8 +123,9 @@ CRITICAL: You MUST output the ## Session Summary section in EXACTLY the format a
 1. `plugins/soleur/skills/work/SKILL.md` -- Two bullets: vi.hoisted() after line 241, replace_all in Common Pitfalls
 2. `plugins/soleur/skills/ship/SKILL.md` -- One instruction note after line 684 in Step 3.5
 3. `plugins/soleur/skills/one-shot/SKILL.md` -- Expand subagent return contract at line 62
+4. `AGENTS.md` -- One bullet in Code Quality for terraform + doppler name-transformer
 
-### Files to Update (synced_to frontmatter)
+### Files to Update (synced_to frontmatter -- #1621 targets AGENTS.md so no synced_to update needed)
 
 1. `knowledge-base/project/learnings/test-failures/2026-04-06-vitest-mock-hoisting-requires-vi-hoisted.md` -- Add `synced_to: [work]` after `tags` field
 2. `knowledge-base/project/learnings/security-issues/canary-crash-leaks-env-file-ci-deploy-20260406.md` -- Add `synced_to: [work]` after `tags` field
@@ -139,7 +154,7 @@ No cross-domain implications detected -- internal tooling/workflow improvement a
 
 | Phase | Tasks |
 |-------|-------|
-| 1. Apply Edits | Edit work/SKILL.md (2 bullets), ship/SKILL.md (1 instruction), one-shot/SKILL.md (1 expansion) |
+| 1. Apply Edits | Edit work/SKILL.md (2 bullets), ship/SKILL.md (1 instruction), one-shot/SKILL.md (1 expansion), AGENTS.md (1 bullet) |
 | 2. Update Frontmatter | Update `synced_to` in 4 learning files |
 | 3. Close Stale | Close #1597 with explanatory comment |
 | 4. Verify | Run markdownlint on all 3 modified skill files |
@@ -151,4 +166,5 @@ No cross-domain implications detected -- internal tooling/workflow improvement a
 - Issue: [#1601](https://github.com/jikig-ai/soleur/issues/1601) -- route-to-definition proposal for work SKILL.md (vi.hoisted)
 - Issue: [#1614](https://github.com/jikig-ai/soleur/issues/1614) -- route-to-definition proposal for work SKILL.md (replace_all)
 - Issue: [#1616](https://github.com/jikig-ai/soleur/issues/1616) -- route-to-definition proposal for one-shot SKILL.md (subagent format)
+- Issue: [#1621](https://github.com/jikig-ai/soleur/issues/1621) -- route-to-definition proposal for AGENTS.md (terraform + doppler name-transformer)
 - Prior batch: `knowledge-base/project/plans/2026-04-06-fix-apply-compound-route-to-definition-proposals-plan.md`
