@@ -24,6 +24,7 @@ Source: `knowledge-base/project/plans/2026-04-06-feat-abort-agent-sessions-sigte
 - [ ] 2.1.2 Test: `abortAllSessions()` calls abort on all active sessions
 - [ ] 2.1.3 Test: `abortAllSessions()` is a no-op when no sessions exist
 - [ ] 2.1.4 Test: abort reason includes "server_shutdown"
+- [ ] 2.1.5 Test: "server_shutdown" reason does NOT trigger isSuperseded skip (catch block writes "failed")
 
 ## Phase 3: Verification
 
