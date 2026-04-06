@@ -68,7 +68,7 @@ test_duplicate_pair_detected() {
 
 ## Hard Rules
 
-- Never commit directly to main [hook-enforced: guardrails.sh Guard 1]
+- Never commit directly to main [hook-enforced: guardrails.sh guardrails:block-commit-on-main]
 - Never rm -rf on the current directory
 EOF
 
@@ -100,7 +100,7 @@ test_unrelated_pair_not_flagged() {
 
 ## Hard Rules
 
-- Never commit directly to main [hook-enforced: guardrails.sh Guard 1]
+- Never commit directly to main [hook-enforced: guardrails.sh guardrails:block-commit-on-main]
 EOF
 
   cat > "$TEST_DIR/knowledge-base/project/constitution.md" << 'EOF'

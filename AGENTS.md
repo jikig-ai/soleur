@@ -4,7 +4,7 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 
 ## Hard Rules
 
-- Never `git stash` in worktrees [hook-enforced: guardrails.sh Guard 6]. Commit WIP first, then merge. Use `git show <commit>:<path>` to inspect old code without modifying working tree state.
+- Never `git stash` in worktrees [hook-enforced: guardrails.sh guardrails:block-stash-in-worktrees]. Commit WIP first, then merge. Use `git show <commit>:<path>` to inspect old code without modifying working tree state.
 - MCP tools (Playwright, etc.) resolve paths from the repo root, not the shell CWD. Always pass absolute paths to MCP tools when in a worktree.
 - When a command exits non-zero or prints a warning, investigate before proceeding. Never treat a failed step as success.
 - Always read a file before editing it. The Edit tool rejects unread files, but context compaction erases prior reads -- re-read after any compaction event.

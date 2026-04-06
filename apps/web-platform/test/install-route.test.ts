@@ -243,6 +243,118 @@ describe("verifyInstallationOwnership", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Behavioral test — no-GitHub-identity rejection (syntax-agnostic)
+// ---------------------------------------------------------------------------
+// This test exercises the route handler itself, proving that a user with
+// user_metadata.user_name set but NO GitHub identity in the identities array
+// is rejected with 403.  Unlike the structural regex test below, this is
+// immune to syntactic evasion (bracket notation, intermediate variables, etc.).
+
+// We need to mock the Supabase server modules and Next.js imports used by
+// the route handler.  vi.mock must be called before importing the route.
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: vi.fn(),
+  createServiceClient: vi.fn(),
+}));
+vi.mock("@/lib/auth/validate-origin", () => ({
+  validateOrigin: vi.fn(),
+  rejectCsrf: vi.fn(),
+}));
+vi.mock("@/server/logger", () => {
+  const noopLogger = { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn(), child: vi.fn() };
+  noopLogger.child.mockReturnValue(noopLogger);
+  return {
+    default: noopLogger,
+    createChildLogger: vi.fn().mockReturnValue(noopLogger),
+  };
+});
+vi.mock("next/server", () => ({
+  NextResponse: {
+    json: (body: unknown, init?: { status?: number }) =>
+      new Response(JSON.stringify(body), {
+        status: init?.status ?? 200,
+        headers: { "content-type": "application/json" },
+      }),
+  },
+}));
+
+import { POST } from "../app/api/repo/install/route";
+import {
+  createClient as mockCreateClient,
+  createServiceClient as mockCreateServiceClient,
+} from "@/lib/supabase/server";
+import { validateOrigin as mockValidateOrigin } from "@/lib/auth/validate-origin";
+
+describe("install route behavioral enforcement", () => {
+  beforeEach(() => {
+    vi.mocked(mockValidateOrigin).mockReturnValue({
+      valid: true,
+      origin: "https://app.soleur.ai",
+    });
+  });
+
+  test("returns 403 when user has user_metadata.user_name but no GitHub identity", async () => {
+    const userId = "user-123";
+
+    // Mock createClient — returns a Supabase client whose auth.getUser()
+    // yields a user with user_metadata.user_name but NO GitHub identity
+    vi.mocked(mockCreateClient).mockResolvedValue({
+      auth: {
+        getUser: vi.fn().mockResolvedValue({
+          data: {
+            user: {
+              id: userId,
+              user_metadata: { user_name: "alice" },
+            },
+          },
+        }),
+      },
+    } as never);
+
+    // Mock createServiceClient — returns a service client whose
+    // auth.admin.getUserById returns a user with an email identity only
+    // (no github provider in the identities array)
+    vi.mocked(mockCreateServiceClient).mockReturnValue({
+      auth: {
+        admin: {
+          getUserById: vi.fn().mockResolvedValue({
+            data: {
+              user: {
+                id: userId,
+                identities: [
+                  {
+                    provider: "email",
+                    identity_data: { email: "alice@example.com" },
+                  },
+                ],
+                user_metadata: { user_name: "alice" },
+              },
+            },
+            error: null,
+          }),
+        },
+      },
+      from: vi.fn(),
+    } as never);
+
+    const request = new Request("https://app.soleur.ai/api/repo/install", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://app.soleur.ai",
+      },
+      body: JSON.stringify({ installationId: 42 }),
+    });
+
+    const response = await POST(request);
+    expect(response.status).toBe(403);
+
+    const body = await response.json();
+    expect(body.error).toMatch(/no github identity/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Structural test — negative-space enforcement
 // ---------------------------------------------------------------------------
 

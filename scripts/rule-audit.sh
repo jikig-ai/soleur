@@ -76,7 +76,7 @@ touch "$CANDIDATES_FILE" "$BROKEN_FILE"
 extract_hook_enforced() {
   local file="$1"
   local label="$2"
-  # Match lines like: - Some rule text [hook-enforced: guardrails.sh Guard 1]
+  # Match lines like: - Some rule text [hook-enforced: guardrails.sh guardrails:block-commit-on-main]
   # Skip template/placeholder references like [hook-enforced: <script> <guard>]
   grep -n '\[hook-enforced:' "$file" 2>/dev/null | grep -v '<script>' | while IFS= read -r line; do
     local lineno="${line%%:*}"

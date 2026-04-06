@@ -140,6 +140,7 @@ case "$COMPONENT" in
       --name soleur-web-platform-canary \
       --restart no \
       --security-opt apparmor=unconfined \
+      --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
       --env-file "$ENV_FILE" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
@@ -175,13 +176,14 @@ case "$COMPONENT" in
     if [[ "$CANARY_HEALTHY" == "true" ]]; then
       # SUCCESS: swap canary to production
       echo "Canary passed, swapping to production..."
-      { docker stop soleur-web-platform 2>/dev/null || true; }
+      { docker stop --time=12 soleur-web-platform 2>/dev/null || true; }
       { docker rm soleur-web-platform 2>/dev/null || true; }
 
       if docker run -d \
         --name soleur-web-platform \
         --restart unless-stopped \
         --security-opt apparmor=unconfined \
+        --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
         --env-file "$ENV_FILE" \
         -v /mnt/data/workspaces:/workspaces \
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
