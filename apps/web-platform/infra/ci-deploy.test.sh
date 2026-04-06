@@ -712,10 +712,10 @@ assert_doppler_success() {
 assert_doppler_success
 
 echo ""
-echo "--- AppArmor unconfined on docker run ---"
+echo "--- AppArmor profile on docker run ---"
 
-assert_apparmor_unconfined() {
-  # Verify that docker run commands include --security-opt apparmor=unconfined
+assert_apparmor_profile() {
+  # Verify that docker run commands include --security-opt apparmor=soleur-bwrap
   local description="$1"
   local cmd="$2"
 
@@ -748,7 +748,7 @@ MOCK
     bash "$DEPLOY_SCRIPT" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  # Check that all DOCKER_RUN_ARGS lines contain apparmor=unconfined
+  # Check that all DOCKER_RUN_ARGS lines contain apparmor=soleur-bwrap
   local run_lines
   run_lines=$(printf '%s\n' "$output" | grep "^DOCKER_RUN_ARGS:" || true)
 
@@ -761,7 +761,7 @@ MOCK
 
   local all_have_apparmor=true
   while IFS= read -r line; do
-    if ! printf '%s\n' "$line" | grep -qF "apparmor=unconfined"; then
+    if ! printf '%s\n' "$line" | grep -qF "apparmor=soleur-bwrap"; then
       all_have_apparmor=false
       break
     fi
@@ -772,13 +772,13 @@ MOCK
     echo "  PASS: $description"
   else
     FAIL=$((FAIL + 1))
-    echo "  FAIL: $description (docker run missing --security-opt apparmor=unconfined)"
+    echo "  FAIL: $description (docker run missing --security-opt apparmor=soleur-bwrap)"
     echo "        docker run lines:"
     printf '%s\n' "$run_lines" | head -5
   fi
 }
 
-assert_apparmor_unconfined "web-platform: docker run has apparmor=unconfined" \
+assert_apparmor_profile "web-platform: docker run has apparmor=soleur-bwrap" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
 
 echo ""
