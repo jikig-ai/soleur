@@ -167,8 +167,15 @@ runcmd:
   # Apply SSH hardening immediately (drop-in written by write_files above)
   - systemctl restart sshd
 
-  # Install Doppler CLI (for secrets injection)
-  - curl -Ls --tlsv1.2 --proto "=https" --retry 3 https://cli.doppler.com/install.sh | sh
+  # Install Doppler CLI v3.75.3 (for secrets injection) with checksum verification
+  - |
+    DOPPLER_VERSION="3.75.3"
+    DOPPLER_SHA256="9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
+    curl -fsSL --retry 3 "https://github.com/DopplerHQ/cli/releases/download/$${DOPPLER_VERSION}/doppler_$${DOPPLER_VERSION}_linux_amd64.tar.gz" -o /tmp/doppler.tar.gz
+    echo "$${DOPPLER_SHA256}  /tmp/doppler.tar.gz" | sha256sum -c -
+    tar xzf /tmp/doppler.tar.gz -C /usr/local/bin doppler
+    chmod +x /usr/local/bin/doppler
+    rm /tmp/doppler.tar.gz
   # Create dedicated env file for webhook systemd service (chmod 600, deploy:deploy).
   # Token is NOT written to /etc/environment (world-readable) -- only this restricted file.
   - printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/webhook-deploy
