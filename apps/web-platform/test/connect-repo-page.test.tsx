@@ -131,8 +131,8 @@ describe("Phase 1: Callback handler", () => {
 
     // Verify POST /api/repo/install was called with the installation ID
     const installCall = mockFetch.mock.calls.find(
-      ([url, opts]: [string, RequestInit?]) =>
-        url === "/api/repo/install" && opts?.method === "POST",
+      (call) =>
+        call[0] === "/api/repo/install" && (call[1] as RequestInit | undefined)?.method === "POST",
     );
     expect(installCall).toBeDefined();
     const installBody = JSON.parse(installCall![1]!.body as string);
@@ -149,8 +149,8 @@ describe("Phase 1: Callback handler", () => {
     });
 
     const installCall = mockFetch.mock.calls.find(
-      ([url, opts]: [string, RequestInit?]) =>
-        url === "/api/repo/install" && opts?.method === "POST",
+      (call) =>
+        call[0] === "/api/repo/install" && (call[1] as RequestInit | undefined)?.method === "POST",
     );
     expect(installCall).toBeDefined();
     const installBody = JSON.parse(installCall![1]!.body as string);
@@ -170,7 +170,7 @@ describe("Phase 1: Callback handler", () => {
     });
 
     const installCall = mockFetch.mock.calls.find(
-      ([url]: [string]) => url === "/api/repo/install",
+      (call) => call[0] === "/api/repo/install",
     );
     expect(installCall).toBeUndefined();
   });
@@ -282,8 +282,8 @@ describe("Phase 2: Skip redirect via on-click fetch", () => {
     // Should call POST /api/repo/create directly (no GitHub redirect)
     await waitFor(() => {
       const createCall = mockFetch.mock.calls.find(
-        ([url, opts]: [string, RequestInit?]) =>
-          url === "/api/repo/create" && opts?.method === "POST",
+        (call) =>
+          call[0] === "/api/repo/create" && (call[1] as RequestInit | undefined)?.method === "POST",
       );
       expect(createCall).toBeDefined();
     });
@@ -393,7 +393,7 @@ describe("Phase 3: Auto-refresh on visibility change", () => {
     // Should re-fetch repos
     await waitFor(() => {
       const reposCalls = mockFetch.mock.calls.filter(
-        ([url]: [string]) => url === "/api/repo/repos",
+        (call) => call[0] === "/api/repo/repos",
       );
       expect(reposCalls.length).toBeGreaterThanOrEqual(1);
     });
@@ -438,7 +438,7 @@ describe("Phase 3: Auto-refresh on visibility change", () => {
     });
 
     const reposCalls = mockFetch.mock.calls.filter(
-      ([url]: [string]) => url === "/api/repo/repos",
+      (call) => call[0] === "/api/repo/repos",
     );
     expect(reposCalls.length).toBe(0);
   });
