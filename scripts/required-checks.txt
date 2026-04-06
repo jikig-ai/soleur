@@ -1,17 +1,24 @@
 # Required synthetic check-run names for bot PRs.
 #
+# These checks span multiple GitHub rulesets:
+#   - "CI Required" ruleset: test, dependency-review, e2e
+#     (managed by scripts/create-ci-required-ruleset.sh)
+#   - "CLA Required" ruleset: cla-check
+#
 # Every scheduled-*.yml workflow that creates PRs via GITHUB_TOKEN must post
 # synthetic check-runs for each name listed here. GITHUB_TOKEN PRs do not
 # trigger CI (GitHub prevents infinite loops), so without synthetics the
-# CI Required ruleset blocks auto-merge indefinitely.
+# rulesets block auto-merge indefinitely.
 #
-# When adding a new required check to the CI Required ruleset
-# (scripts/create-ci-required-ruleset.sh), add it here too.
+# When adding a new required check to any ruleset, add it here too.
 #
 # Format: one check name per line, blank lines and # comments ignored.
 # Refs: #826, #1468
 
+# CI Required ruleset
 test
-cla-check
 dependency-review
 e2e
+
+# CLA Required ruleset
+cla-check

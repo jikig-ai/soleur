@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Create the "CI Required" repository ruleset on jikig-ai/soleur.
 #
-# This script adds the `test` status check as a required check on main,
-# preventing auto-merge when CI fails or is skipped.
+# This script adds the `test`, `dependency-review`, and `e2e` status checks
+# as required checks on main, preventing auto-merge when CI fails or is skipped.
 #
 # IMPORTANT: Run this AFTER the bot workflow updates have merged to main.
 # If run before, bot PRs using [skip ci] will be permanently blocked
-# because the `test` check remains in "Pending" state forever.
+# because the required checks remain in "Pending" state forever.
 #
 # Refs: #826, #820
 
