@@ -73,6 +73,7 @@ app.prepare().then(() => {
     }
   });
 
+  // Must be less than Docker stop --time (12s) to allow graceful drain before SIGKILL
   const SHUTDOWN_TIMEOUT_MS = 8_000;
   let shuttingDown = false;
 

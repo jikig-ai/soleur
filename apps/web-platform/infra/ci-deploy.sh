@@ -171,7 +171,7 @@ case "$COMPONENT" in
     if [[ "$CANARY_HEALTHY" == "true" ]]; then
       # SUCCESS: swap canary to production
       echo "Canary passed, swapping to production..."
-      { docker stop soleur-web-platform 2>/dev/null || true; }
+      { docker stop --time=12 soleur-web-platform 2>/dev/null || true; }
       { docker rm soleur-web-platform 2>/dev/null || true; }
 
       if docker run -d \
