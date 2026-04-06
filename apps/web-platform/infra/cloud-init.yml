@@ -171,7 +171,7 @@ runcmd:
   - curl -Ls --tlsv1.2 --proto "=https" --retry 3 https://cli.doppler.com/install.sh | sh
   # Create dedicated env file for webhook systemd service (chmod 600, deploy:deploy).
   # Token is NOT written to /etc/environment (world-readable) -- only this restricted file.
-  - printf 'DOPPLER_TOKEN=%s\n' '${doppler_token}' > /etc/default/webhook-deploy
+  - printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/webhook-deploy
   - chmod 600 /etc/default/webhook-deploy
   - chown deploy:deploy /etc/default/webhook-deploy
 

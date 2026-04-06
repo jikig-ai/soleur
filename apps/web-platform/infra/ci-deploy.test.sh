@@ -686,6 +686,7 @@ MOCK
       if [[ "${MOCK_DOPPLER_FAIL:-}" == "1" ]]; then
         cat > "$MOCK_DIR/doppler" << 'MOCK'
 #!/bin/bash
+echo "Doppler Error: mkdir /home/deploy/.doppler: read-only file system" >&2
 exit 1
 MOCK
       else
@@ -768,7 +769,7 @@ assert_doppler_download_fails() {
     run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -qF "Failed to download secrets from Doppler"; then
+  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -qF "Failed to download secrets from Doppler:"; then
     PASS=$((PASS + 1))
     echo "  PASS: doppler download failure exits with error"
   else
@@ -779,6 +780,27 @@ assert_doppler_download_fails() {
 }
 
 assert_doppler_download_fails
+
+# Test: Doppler download fails -> error message includes actual Doppler error
+assert_doppler_error_logged() {
+  TOTAL=$((TOTAL + 1))
+  local output actual_exit
+  output=$(
+    export MOCK_DOPPLER_FAIL=1
+    run_deploy_doppler "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -qF "read-only file system"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: doppler error message included in output"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: doppler error message included in output (exit=$actual_exit)"
+    echo "        output: $output"
+  fi
+}
+
+assert_doppler_error_logged
 
 # Test: No fallback to /mnt/data/.env in any failure case
 assert_no_env_fallback() {
