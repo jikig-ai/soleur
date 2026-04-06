@@ -81,14 +81,46 @@ describe("removeWorkspaceDir", () => {
     expect(existsSync(ws)).toBe(false);
   });
 
-  test("throws with cleanup instructions when all phases fail", async () => {
-    // Mock child_process to simulate root-owned files that can't be deleted.
-    // Real root-owned files can't be created in tests without elevated privileges.
+  test("moves workspace aside when rm/find/rmdir fail but mv succeeds", async () => {
+    vi.resetModules();
+
+    const calls: string[] = [];
+    vi.doMock("child_process", () => ({
+      execFileSync: (cmd: string, args: string[]) => {
+        calls.push(cmd);
+        if (cmd === "rm" || cmd === "find" || cmd === "rmdir") {
+          const err = new Error("Permission denied") as Error & {
+            stderr: Buffer;
+          };
+          err.stderr = Buffer.from("Permission denied");
+          throw err;
+        }
+        // chmod and mv succeed
+        return Buffer.alloc(0);
+      },
+    }));
+
+    vi.doMock("fs", async () => {
+      const actual = await vi.importActual<typeof import("fs")>("fs");
+      return { ...actual, existsSync: () => true };
+    });
+
+    const { removeWorkspaceDir: mockedRemove } = await import(
+      "../server/workspace"
+    );
+
+    // Should NOT throw -- mv-aside succeeds
+    expect(() => mockedRemove(TEST_ROOT + "/test-cleanup")).not.toThrow();
+    // Verify all phases attempted in order before falling back to mv
+    expect(calls).toEqual(["rm", "chmod", "find", "rmdir", "mv"]);
+  });
+
+  test("throws user-friendly error (no sudo) when all phases including mv fail", async () => {
     vi.resetModules();
 
     vi.doMock("child_process", () => ({
       execFileSync: (cmd: string) => {
-        if (cmd === "rm" || cmd === "find" || cmd === "rmdir") {
+        if (cmd === "rm" || cmd === "find" || cmd === "rmdir" || cmd === "mv") {
           const err = new Error("Permission denied") as Error & {
             stderr: Buffer;
           };
@@ -108,9 +140,16 @@ describe("removeWorkspaceDir", () => {
       "../server/workspace"
     );
 
-    expect(() => mockedRemove(TEST_ROOT + "/test-cleanup")).toThrow(
-      /Workspace cleanup failed.*Manual cleanup required/,
-    );
+    let thrown: Error | undefined;
+    try {
+      mockedRemove(TEST_ROOT + "/test-cleanup");
+    } catch (e) {
+      thrown = e as Error;
+    }
+    expect(thrown).toBeDefined();
+    expect(thrown!.message).toMatch(/please try again or contact support/);
+    // Must NOT contain sudo instructions
+    expect(thrown!.message).not.toMatch(/sudo/);
   });
 });
 

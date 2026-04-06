@@ -294,13 +294,34 @@ export function removeWorkspaceDir(workspacePath: string): void {
     execFileSync("find", [workspacePath, "-mindepth", "1", "-delete"], {
       stdio: "pipe",
     });
+  } catch {
+    // find -delete continues past individual errors; ignore aggregate exit code
+  }
+
+  // Check if workspace dir is now empty
+  try {
     execFileSync("rmdir", [workspacePath], { stdio: "pipe" });
-  } catch (err) {
-    const stderr = (err as { stderr?: Buffer })?.stderr?.toString() ?? "";
-    log.error({ workspacePath, stderr }, "Workspace cleanup failed");
+    return; // fully cleaned
+  } catch {
+    // Directory not empty -- root-owned files remain
+  }
+
+  // Phase 3: Move aside so provisioning can proceed.
+  // mv (rename) operates on the parent directory's inode, not the contents,
+  // so it succeeds even when the directory contains root-owned files.
+  const orphanedPath = workspacePath + `.orphaned-${Date.now()}`;
+  try {
+    execFileSync("mv", [workspacePath, orphanedPath], { stdio: "pipe" });
+    log.warn(
+      { workspacePath, orphanedPath },
+      "Workspace contained undeletable files; moved aside for background cleanup",
+    );
+    return;
+  } catch (mvErr) {
+    const stderr = (mvErr as { stderr?: Buffer })?.stderr?.toString() ?? "";
+    log.error({ workspacePath, stderr }, "Workspace cleanup failed: cannot move aside");
     throw new Error(
-      "Workspace cleanup failed. Some files may be owned by root. " +
-        "Manual cleanup required: sudo rm -rf <workspace-path>",
+      "Workspace cleanup failed \u2014 please try again or contact support",
     );
   }
 }
