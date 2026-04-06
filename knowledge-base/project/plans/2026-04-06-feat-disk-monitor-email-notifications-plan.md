@@ -133,16 +133,16 @@ The `triggers_replace` hash must change from `var.discord_ops_webhook_url` to `v
 
 ## Acceptance Criteria
 
-- [ ] `disk-monitor.sh` sends alerts via Resend email API to `ops@jikigai.com` instead of Discord webhook
-- [ ] `RESEND_API_KEY` env var replaces `DISCORD_OPS_WEBHOOK_URL` in `/etc/default/disk-monitor`
-- [ ] Email subject includes alert level and hostname (e.g., `[CRITICAL] Disk usage at 96% on soleur-web-platform`)
-- [ ] Email body includes available disk space and top 5 consumers
-- [ ] Cooldown mechanism continues to work (per-threshold, 1-hour window)
-- [ ] Script always exits 0 (resilient to Resend API failures)
+- [x] `disk-monitor.sh` sends alerts via Resend email API to `ops@jikigai.com` instead of Discord webhook
+- [x] `RESEND_API_KEY` env var replaces `DISCORD_OPS_WEBHOOK_URL` in `/etc/default/disk-monitor`
+- [x] Email subject includes alert level and hostname (e.g., `[CRITICAL] Disk usage at 96% on soleur-web-platform`)
+- [x] Email body includes available disk space and top 5 consumers
+- [x] Cooldown mechanism continues to work (per-threshold, 1-hour window)
+- [x] Script always exits 0 (resilient to Resend API failures)
 - [ ] `terraform plan` shows clean after apply (no drift)
-- [ ] All existing tests in `disk-monitor.test.sh` pass with updated mocks
-- [ ] Disk-monitoring runbook updated with email alerting instructions
-- [ ] `discord_ops_webhook_url` variable fully removed from Terraform config
+- [x] All existing tests in `disk-monitor.test.sh` pass with updated mocks
+- [x] Disk-monitoring runbook updated with email alerting instructions
+- [x] `discord_ops_webhook_url` variable fully removed from Terraform config
 
 ## Test Scenarios
 
