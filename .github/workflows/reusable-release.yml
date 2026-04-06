@@ -337,17 +337,22 @@ jobs:
             echo "No Discord webhook URL configured, skipping"
             exit 0
           fi
+          echo "::add-mask::$WEBHOOK"
 
-          BODY=$(cat "$RELEASE_NOTES_FILE")
+          if [ -f "$RELEASE_NOTES_FILE" ]; then
+            BODY=$(cat "$RELEASE_NOTES_FILE")
+          else
+            BODY=""
+          fi
           REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
           RELEASE_URL="${REPO_URL}/releases/tag/${TAG}"
 
-          if [[ ${#BODY} -gt 1800 ]]; then
-            BODY="${BODY:0:1797}..."
-          fi
-
           MESSAGE=$(printf '**%s v%s released!**\n\n%s\n\nFull release notes: %s' \
             "$COMPONENT_DISPLAY" "$VERSION" "$BODY" "$RELEASE_URL")
+
+          if [[ ${#MESSAGE} -gt 1950 ]]; then
+            MESSAGE="${MESSAGE:0:1947}..."
+          fi
 
           PAYLOAD=$(jq -n \
             --arg content "$MESSAGE" \
@@ -356,6 +361,7 @@ jobs:
             '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
 
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
             --max-time 15 \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
