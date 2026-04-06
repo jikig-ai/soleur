@@ -319,6 +319,8 @@ jobs:
           body: '<p><strong>${{ inputs.component_display }} v${{ steps.version.outputs.next }} released!</strong></p><p><a href="${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}">View release notes</a></p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
+      # Inline step required: GITHUB_TOKEN-created releases don't fire
+      # 'release: published' events, so a separate workflow cannot trigger.
       - name: Post to Discord (release)
         if: steps.create_release.outputs.released == 'true'
         continue-on-error: true
@@ -354,6 +356,7 @@ jobs:
             '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
 
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 15 \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
             "$WEBHOOK")
