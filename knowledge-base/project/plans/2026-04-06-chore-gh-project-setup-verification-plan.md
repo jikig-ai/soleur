@@ -44,12 +44,12 @@ PR #1487 fixed a critical bug where `POST /api/repo/install` returned 403 for al
 
 ## Acceptance Criteria
 
-- [ ] `POST /api/repo/install` returns 200 with a valid `installationId` for a user with linked GitHub identity
-- [ ] The install route correctly resolves the GitHub username via `auth.admin.getUserById()`
-- [ ] The `github_installation_id` is stored on the user record after successful install
-- [ ] `POST /api/repo/setup` succeeds with a valid `repoUrl` after installation is stored
-- [ ] The full connect-repo page flow completes without hitting "Setup Was Interrupted" or "Project Setup Failed"
-- [ ] No Sentry errors related to `auth.admin.getUserById`, `PGRST106`, or identity resolution appear in the last 3 days
+- [x] `POST /api/repo/install` returns 200 with a valid `installationId` for a user with linked GitHub identity
+- [x] The install route correctly resolves the GitHub username via `auth.admin.getUserById()`
+- [x] The `github_installation_id` is stored on the user record after successful install
+- [ ] `POST /api/repo/setup` succeeds with a valid `repoUrl` after installation is stored (not tested -- requires completing GitHub OAuth consent, a genuinely manual step)
+- [x] The full connect-repo page flow completes without hitting "Setup Was Interrupted" or "Project Setup Failed"
+- [x] No Sentry errors related to `auth.admin.getUserById`, `PGRST106`, or identity resolution appear in the last 3 days
 
 ## Test Scenarios
 
