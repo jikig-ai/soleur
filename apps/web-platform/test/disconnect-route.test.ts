@@ -169,8 +169,8 @@ describe("DELETE /api/repo/disconnect", () => {
       repo_status: "not_connected",
       repo_last_synced_at: null,
       repo_error: null,
-      workspace_path: null,
-      workspace_status: null,
+      workspace_path: "",
+      workspace_status: "provisioning",
     });
 
     expect(mockDeleteWorkspace).toHaveBeenCalledWith(TEST_USER_ID);

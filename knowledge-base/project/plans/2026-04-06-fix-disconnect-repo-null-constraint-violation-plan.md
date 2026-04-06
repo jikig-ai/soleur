@@ -54,11 +54,11 @@ The unit test (`disconnect-route.test.ts`) did not catch this because it mocks t
 
 ## Acceptance Criteria
 
-- [ ] `DELETE /api/repo/disconnect` sets `workspace_path` to `''` (empty string) instead of `null`
-- [ ] `DELETE /api/repo/disconnect` sets `workspace_status` to `'provisioning'` instead of `null`
-- [ ] Existing unit test assertions are updated to match the new values
-- [ ] Disconnecting a repository on the Settings page succeeds (returns `{ ok: true }`)
-- [ ] After disconnect, the user record shows `workspace_path = ''` and `workspace_status = 'provisioning'`
+- [x] `DELETE /api/repo/disconnect` sets `workspace_path` to `''` (empty string) instead of `null`
+- [x] `DELETE /api/repo/disconnect` sets `workspace_status` to `'provisioning'` instead of `null`
+- [x] Existing unit test assertions are updated to match the new values
+- [x] Disconnecting a repository on the Settings page succeeds (returns `{ ok: true }`)
+- [x] After disconnect, the user record shows `workspace_path = ''` and `workspace_status = 'provisioning'`
 
 ## Implementation
 
