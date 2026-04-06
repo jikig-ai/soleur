@@ -1,10 +1,10 @@
 import { Server as HTTPServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { parse } from "url";
-import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
 
 import { KeyInvalidError, WS_CLOSE_CODES, type WSMessage, type Conversation } from "@/lib/types";
+import { createServiceClient } from "@/lib/supabase/service";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { MAX_SELECTION_LENGTH } from "./review-gate";
@@ -32,10 +32,7 @@ const log = createChildLogger("ws");
 // ---------------------------------------------------------------------------
 // Supabase admin client (service role -- server-side only)
 // ---------------------------------------------------------------------------
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 // ---------------------------------------------------------------------------
 // Session tracking
