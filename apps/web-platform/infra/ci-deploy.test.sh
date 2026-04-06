@@ -11,39 +11,30 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-run_deploy() {
-  # Run ci-deploy.sh in a subshell with SSH_ORIGINAL_COMMAND set.
-  # Mock out docker, curl, logger, chown, flock so the script only tests validation logic.
-  local cmd="${1:-}"
-  (
-    export SSH_ORIGINAL_COMMAND="$cmd"
-    # Create temp bin dir with mocks
-    MOCK_DIR=$(mktemp -d)
-    trap 'rm -rf "$MOCK_DIR"' EXIT
+# Shared mock scaffold: creates all common mock binaries in $MOCK_DIR.
+# Each run_deploy* variant calls this first, then overlays specialized mocks.
+create_base_mocks() {
+  local mock_dir="$1"
 
-    # Use temp lock file for flock
-    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
-
-    # Mock logger (accept any args silently)
-    cat > "$MOCK_DIR/logger" << 'MOCK'
+  # Mock logger (accept any args silently)
+  cat > "$mock_dir/logger" << 'MOCK'
 #!/bin/bash
 exit 0
 MOCK
-    chmod +x "$MOCK_DIR/logger"
+  chmod +x "$mock_dir/logger"
 
-    # Mock docker (accept any args silently)
-    cat > "$MOCK_DIR/docker" << 'MOCK'
+  # Mock docker (accept any args, print fake container ID for 'run')
+  cat > "$mock_dir/docker" << 'MOCK'
 #!/bin/bash
-# For 'docker run -d' print a fake container ID
 if [[ "${1:-}" == "run" ]]; then
   echo "abc123"
 fi
 exit 0
 MOCK
-    chmod +x "$MOCK_DIR/docker"
+  chmod +x "$mock_dir/docker"
 
-    # Mock curl (simulate healthy endpoint)
-    cat > "$MOCK_DIR/curl" << 'MOCK'
+  # Mock curl (simulate healthy endpoint)
+  cat > "$mock_dir/curl" << 'MOCK'
 #!/bin/bash
 for arg in "$@"; do
   if [[ "$arg" == *"http_code"* ]]; then
@@ -54,39 +45,38 @@ done
 echo "OK"
 exit 0
 MOCK
-    chmod +x "$MOCK_DIR/curl"
+  chmod +x "$mock_dir/curl"
 
-    # Mock sudo (just runs the command without privilege escalation)
-    cat > "$MOCK_DIR/sudo" << 'MOCK'
+  # Mock sudo (just runs the command without privilege escalation)
+  cat > "$mock_dir/sudo" << 'MOCK'
 #!/bin/bash
 exec "$@"
 MOCK
-    chmod +x "$MOCK_DIR/sudo"
+  chmod +x "$mock_dir/sudo"
 
-    # Mock chown
-    cat > "$MOCK_DIR/chown" << 'MOCK'
+  # Mock chown
+  cat > "$mock_dir/chown" << 'MOCK'
 #!/bin/bash
 exit 0
 MOCK
-    chmod +x "$MOCK_DIR/chown"
+  chmod +x "$mock_dir/chown"
 
-    # Mock seq (for health check loops)
-    cat > "$MOCK_DIR/seq" << 'MOCK'
+  # Mock seq (for health check loops -- return "1" so the loop runs once)
+  cat > "$mock_dir/seq" << 'MOCK'
 #!/bin/bash
-# Just return "1" so the loop runs once
 echo "1"
 MOCK
-    chmod +x "$MOCK_DIR/seq"
+  chmod +x "$mock_dir/seq"
 
-    # Mock flock (always succeeds -- lock not contended)
-    cat > "$MOCK_DIR/flock" << 'MOCK'
+  # Mock flock (always succeeds -- lock not contended)
+  cat > "$mock_dir/flock" << 'MOCK'
 #!/bin/bash
 exit 0
 MOCK
-    chmod +x "$MOCK_DIR/flock"
+  chmod +x "$mock_dir/flock"
 
-    # Mock df (reports plenty of disk space; MOCK_DF_LOW=1 simulates low disk)
-    cat > "$MOCK_DIR/df" << 'MOCK'
+  # Mock df (reports plenty of disk space; MOCK_DF_LOW=1 simulates low disk)
+  cat > "$mock_dir/df" << 'MOCK'
 #!/bin/bash
 echo "Avail"
 if [[ "${MOCK_DF_LOW:-}" == "1" ]]; then
@@ -95,10 +85,10 @@ else
   echo "20000000"
 fi
 MOCK
-    chmod +x "$MOCK_DIR/df"
+  chmod +x "$mock_dir/df"
 
-    # Mock doppler (simulate successful secrets download)
-    cat > "$MOCK_DIR/doppler" << 'MOCK'
+  # Mock doppler (simulate successful secrets download)
+  cat > "$mock_dir/doppler" << 'MOCK'
 #!/bin/bash
 if [[ "${1:-}" == "secrets" ]]; then
   echo "KEY=value"
@@ -106,7 +96,20 @@ if [[ "${1:-}" == "secrets" ]]; then
 fi
 exit 0
 MOCK
-    chmod +x "$MOCK_DIR/doppler"
+  chmod +x "$mock_dir/doppler"
+}
+
+run_deploy() {
+  # Run ci-deploy.sh in a subshell with SSH_ORIGINAL_COMMAND set.
+  # Mock out docker, curl, logger, chown, flock so the script only tests validation logic.
+  local cmd="${1:-}"
+  (
+    export SSH_ORIGINAL_COMMAND="$cmd"
+    MOCK_DIR=$(mktemp -d)
+    trap 'rm -rf "$MOCK_DIR"' EXIT
+
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    create_base_mocks "$MOCK_DIR"
 
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$PATH"
@@ -168,16 +171,10 @@ run_deploy_traced() {
     MOCK_DIR=$(mktemp -d)
     trap 'rm -rf "$MOCK_DIR"' EXIT
 
-    # Use temp lock file for flock
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    create_base_mocks "$MOCK_DIR"
 
-    cat > "$MOCK_DIR/logger" << 'MOCK'
-#!/bin/bash
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/logger"
-
-    # Docker mock with trace markers and configurable failures
+    # Override: docker mock with trace markers and configurable failures
     cat > "$MOCK_DIR/docker" << 'MOCK'
 #!/bin/bash
 echo "DOCKER_TRACE:$1"
@@ -204,7 +201,7 @@ exit 0
 MOCK
     chmod +x "$MOCK_DIR/docker"
 
-    # Curl mock with port-based routing for canary health checks
+    # Override: curl mock with port-based routing for canary health checks
     cat > "$MOCK_DIR/curl" << 'MOCK'
 #!/bin/bash
 for arg in "$@"; do
@@ -218,53 +215,6 @@ echo "OK"
 exit 0
 MOCK
     chmod +x "$MOCK_DIR/curl"
-
-    cat > "$MOCK_DIR/sudo" << 'MOCK'
-#!/bin/bash
-exec "$@"
-MOCK
-    chmod +x "$MOCK_DIR/sudo"
-
-    cat > "$MOCK_DIR/chown" << 'MOCK'
-#!/bin/bash
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/chown"
-
-    cat > "$MOCK_DIR/seq" << 'MOCK'
-#!/bin/bash
-echo "1"
-MOCK
-    chmod +x "$MOCK_DIR/seq"
-
-    cat > "$MOCK_DIR/flock" << 'MOCK'
-#!/bin/bash
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/flock"
-
-    # Mock df (reports plenty of disk space; MOCK_DF_LOW=1 simulates low disk)
-    cat > "$MOCK_DIR/df" << 'MOCK'
-#!/bin/bash
-echo "Avail"
-if [[ "${MOCK_DF_LOW:-}" == "1" ]]; then
-  echo "1000000"
-else
-  echo "20000000"
-fi
-MOCK
-    chmod +x "$MOCK_DIR/df"
-
-    # Mock doppler (simulate successful secrets download)
-    cat > "$MOCK_DIR/doppler" << 'MOCK'
-#!/bin/bash
-if [[ "${1:-}" == "secrets" ]]; then
-  echo "KEY=value"
-  exit 0
-fi
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/doppler"
 
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$PATH"
@@ -568,22 +518,14 @@ assert_flock_rejection() {
     MOCK_DIR=$(mktemp -d)
     trap 'rm -rf "$MOCK_DIR"' EXIT
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    create_base_mocks "$MOCK_DIR"
 
-    # Mock flock to simulate lock contention
+    # Override: flock simulates lock contention
     cat > "$MOCK_DIR/flock" << 'MOCK'
 #!/bin/bash
 exit 1
 MOCK
     chmod +x "$MOCK_DIR/flock"
-
-    # Standard mocks for validation to pass
-    for cmd in logger docker curl sudo chown seq; do
-      cat > "$MOCK_DIR/$cmd" << 'MOCK'
-#!/bin/bash
-exit 0
-MOCK
-      chmod +x "$MOCK_DIR/$cmd"
-    done
 
     export PATH="$MOCK_DIR:$PATH"
     bash "$DEPLOY_SCRIPT" 2>&1
@@ -616,81 +558,17 @@ run_deploy_doppler() {
     trap 'rm -rf "$MOCK_DIR"' EXIT
 
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    create_base_mocks "$MOCK_DIR"
 
-    cat > "$MOCK_DIR/logger" << 'MOCK'
-#!/bin/bash
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/logger"
-
-    cat > "$MOCK_DIR/docker" << 'MOCK'
-#!/bin/bash
-if [[ "${1:-}" == "run" ]]; then echo "abc123"; fi
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/docker"
-
-    cat > "$MOCK_DIR/curl" << 'MOCK'
-#!/bin/bash
-for arg in "$@"; do
-  if [[ "$arg" == *"http_code"* ]]; then echo "200"; exit 0; fi
-done
-echo "OK"
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/curl"
-
-    cat > "$MOCK_DIR/sudo" << 'MOCK'
-#!/bin/bash
-exec "$@"
-MOCK
-    chmod +x "$MOCK_DIR/sudo"
-
-    cat > "$MOCK_DIR/chown" << 'MOCK'
-#!/bin/bash
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/chown"
-
-    cat > "$MOCK_DIR/seq" << 'MOCK'
-#!/bin/bash
-echo "1"
-MOCK
-    chmod +x "$MOCK_DIR/seq"
-
-    cat > "$MOCK_DIR/flock" << 'MOCK'
-#!/bin/bash
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/flock"
-
-    cat > "$MOCK_DIR/df" << 'MOCK'
-#!/bin/bash
-echo "Avail"
-echo "20000000"
-MOCK
-    chmod +x "$MOCK_DIR/df"
-
-    # Doppler mock: present unless MOCK_DOPPLER_MISSING=1
-    if [[ "${MOCK_DOPPLER_MISSING:-}" != "1" ]]; then
-      if [[ "${MOCK_DOPPLER_FAIL:-}" == "1" ]]; then
-        cat > "$MOCK_DIR/doppler" << 'MOCK'
+    # Override: doppler mock with MOCK_DOPPLER_MISSING/MOCK_DOPPLER_FAIL support
+    if [[ "${MOCK_DOPPLER_MISSING:-}" == "1" ]]; then
+      rm -f "$MOCK_DIR/doppler"
+    elif [[ "${MOCK_DOPPLER_FAIL:-}" == "1" ]]; then
+      cat > "$MOCK_DIR/doppler" << 'MOCK'
 #!/bin/bash
 echo "Doppler Error: mkdir /home/deploy/.doppler: read-only file system" >&2
 exit 1
 MOCK
-      else
-        cat > "$MOCK_DIR/doppler" << 'MOCK'
-#!/bin/bash
-# Simulate successful secrets download
-if [[ "${1:-}" == "secrets" ]]; then
-  echo "KEY=value"
-  exit 0
-fi
-echo "doppler mock"
-exit 0
-MOCK
-      fi
       chmod +x "$MOCK_DIR/doppler"
     fi
 
@@ -849,14 +727,9 @@ assert_apparmor_unconfined() {
     MOCK_DIR=$(mktemp -d)
     trap 'rm -rf "$MOCK_DIR"' EXIT
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    create_base_mocks "$MOCK_DIR"
 
-    cat > "$MOCK_DIR/logger" << 'MOCK'
-#!/bin/bash
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/logger"
-
-    # Docker mock that logs full args for 'run' commands
+    # Override: docker mock that logs full args for 'run' commands
     cat > "$MOCK_DIR/docker" << 'MOCK'
 #!/bin/bash
 if [[ "${1:-}" == "run" ]]; then
@@ -869,54 +742,6 @@ fi
 exit 0
 MOCK
     chmod +x "$MOCK_DIR/docker"
-
-    cat > "$MOCK_DIR/curl" << 'MOCK'
-#!/bin/bash
-for arg in "$@"; do
-  if [[ "$arg" == *"http_code"* ]]; then echo "200"; exit 0; fi
-done
-echo "OK"
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/curl"
-
-    cat > "$MOCK_DIR/sudo" << 'MOCK'
-#!/bin/bash
-exec "$@"
-MOCK
-    chmod +x "$MOCK_DIR/sudo"
-
-    cat > "$MOCK_DIR/chown" << 'MOCK'
-#!/bin/bash
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/chown"
-
-    cat > "$MOCK_DIR/seq" << 'MOCK'
-#!/bin/bash
-echo "1"
-MOCK
-    chmod +x "$MOCK_DIR/seq"
-
-    cat > "$MOCK_DIR/flock" << 'MOCK'
-#!/bin/bash
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/flock"
-
-    cat > "$MOCK_DIR/df" << 'MOCK'
-#!/bin/bash
-echo "Avail"
-echo "20000000"
-MOCK
-    chmod +x "$MOCK_DIR/df"
-
-    cat > "$MOCK_DIR/doppler" << 'MOCK'
-#!/bin/bash
-if [[ "${1:-}" == "secrets" ]]; then echo "KEY=value"; exit 0; fi
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/doppler"
 
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$PATH"
@@ -969,14 +794,9 @@ assert_bwrap_canary_check() {
     MOCK_DIR=$(mktemp -d)
     trap 'rm -rf "$MOCK_DIR"' EXIT
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    create_base_mocks "$MOCK_DIR"
 
-    cat > "$MOCK_DIR/logger" << 'MOCK'
-#!/bin/bash
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/logger"
-
-    # Docker mock that traces exec calls
+    # Override: docker mock that traces exec calls
     cat > "$MOCK_DIR/docker" << 'MOCK'
 #!/bin/bash
 if [[ "${1:-}" == "run" ]]; then echo "abc123"; fi
@@ -993,54 +813,6 @@ fi
 exit 0
 MOCK
     chmod +x "$MOCK_DIR/docker"
-
-    cat > "$MOCK_DIR/curl" << 'MOCK'
-#!/bin/bash
-for arg in "$@"; do
-  if [[ "$arg" == *"http_code"* ]]; then echo "200"; exit 0; fi
-done
-echo "OK"
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/curl"
-
-    cat > "$MOCK_DIR/sudo" << 'MOCK'
-#!/bin/bash
-exec "$@"
-MOCK
-    chmod +x "$MOCK_DIR/sudo"
-
-    cat > "$MOCK_DIR/chown" << 'MOCK'
-#!/bin/bash
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/chown"
-
-    cat > "$MOCK_DIR/seq" << 'MOCK'
-#!/bin/bash
-echo "1"
-MOCK
-    chmod +x "$MOCK_DIR/seq"
-
-    cat > "$MOCK_DIR/flock" << 'MOCK'
-#!/bin/bash
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/flock"
-
-    cat > "$MOCK_DIR/df" << 'MOCK'
-#!/bin/bash
-echo "Avail"
-echo "20000000"
-MOCK
-    chmod +x "$MOCK_DIR/df"
-
-    cat > "$MOCK_DIR/doppler" << 'MOCK'
-#!/bin/bash
-if [[ "${1:-}" == "secrets" ]]; then echo "KEY=value"; exit 0; fi
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/doppler"
 
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$PATH"
@@ -1069,14 +841,9 @@ assert_bwrap_canary_failure_rollback() {
     MOCK_DIR=$(mktemp -d)
     trap 'rm -rf "$MOCK_DIR"' EXIT
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    create_base_mocks "$MOCK_DIR"
 
-    cat > "$MOCK_DIR/logger" << 'MOCK'
-#!/bin/bash
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/logger"
-
-    # Docker mock: bwrap exec fails
+    # Override: docker mock where bwrap exec fails
     cat > "$MOCK_DIR/docker" << 'MOCK'
 #!/bin/bash
 if [[ "${1:-}" == "run" ]]; then echo "abc123"; fi
@@ -1091,54 +858,6 @@ fi
 exit 0
 MOCK
     chmod +x "$MOCK_DIR/docker"
-
-    cat > "$MOCK_DIR/curl" << 'MOCK'
-#!/bin/bash
-for arg in "$@"; do
-  if [[ "$arg" == *"http_code"* ]]; then echo "200"; exit 0; fi
-done
-echo "OK"
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/curl"
-
-    cat > "$MOCK_DIR/sudo" << 'MOCK'
-#!/bin/bash
-exec "$@"
-MOCK
-    chmod +x "$MOCK_DIR/sudo"
-
-    cat > "$MOCK_DIR/chown" << 'MOCK'
-#!/bin/bash
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/chown"
-
-    cat > "$MOCK_DIR/seq" << 'MOCK'
-#!/bin/bash
-echo "1"
-MOCK
-    chmod +x "$MOCK_DIR/seq"
-
-    cat > "$MOCK_DIR/flock" << 'MOCK'
-#!/bin/bash
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/flock"
-
-    cat > "$MOCK_DIR/df" << 'MOCK'
-#!/bin/bash
-echo "Avail"
-echo "20000000"
-MOCK
-    chmod +x "$MOCK_DIR/df"
-
-    cat > "$MOCK_DIR/doppler" << 'MOCK'
-#!/bin/bash
-if [[ "${1:-}" == "secrets" ]]; then echo "KEY=value"; exit 0; fi
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/doppler"
 
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$PATH"
@@ -1177,14 +896,9 @@ assert_env_file_cleanup() {
     trap 'rm -rf "$MOCK_DIR"' EXIT
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
     export ENV_FILE_TRACKER="$tracker_dir/env_file_path"
+    create_base_mocks "$MOCK_DIR"
 
-    cat > "$MOCK_DIR/logger" << 'MOCK'
-#!/bin/bash
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/logger"
-
-    # Docker mock with configurable canary failure
+    # Override: docker mock with configurable canary failure
     cat > "$MOCK_DIR/docker" << 'MOCK'
 #!/bin/bash
 if [[ "${1:-}" == "run" ]]; then
@@ -1201,54 +915,6 @@ fi
 exit 0
 MOCK
     chmod +x "$MOCK_DIR/docker"
-
-    cat > "$MOCK_DIR/curl" << 'MOCK'
-#!/bin/bash
-for arg in "$@"; do
-  if [[ "$arg" == *"http_code"* ]]; then echo "200"; exit 0; fi
-done
-echo "OK"
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/curl"
-
-    cat > "$MOCK_DIR/sudo" << 'MOCK'
-#!/bin/bash
-exec "$@"
-MOCK
-    chmod +x "$MOCK_DIR/sudo"
-
-    cat > "$MOCK_DIR/chown" << 'MOCK'
-#!/bin/bash
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/chown"
-
-    cat > "$MOCK_DIR/seq" << 'MOCK'
-#!/bin/bash
-echo "1"
-MOCK
-    chmod +x "$MOCK_DIR/seq"
-
-    cat > "$MOCK_DIR/flock" << 'MOCK'
-#!/bin/bash
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/flock"
-
-    cat > "$MOCK_DIR/df" << 'MOCK'
-#!/bin/bash
-echo "Avail"
-echo "20000000"
-MOCK
-    chmod +x "$MOCK_DIR/df"
-
-    cat > "$MOCK_DIR/doppler" << 'MOCK'
-#!/bin/bash
-if [[ "${1:-}" == "secrets" ]]; then echo "KEY=value"; exit 0; fi
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/doppler"
 
     # Mock mktemp: create a real temp file but record its path to the tracker
     cat > "$MOCK_DIR/mktemp" << 'MOCK'
