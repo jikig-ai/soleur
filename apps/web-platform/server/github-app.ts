@@ -45,6 +45,15 @@ interface VerifyResult {
   status?: number; // HTTP status to return to client
 }
 
+class InstallationError extends Error {
+  constructor(
+    message: string,
+    public readonly code: "NOT_FOUND" | "NO_ACCOUNT" | "FETCH_FAILED",
+  ) {
+    super(message);
+  }
+}
+
 interface GitHubInstallationTokenResponse {
   token: string;
   expires_at: string;
@@ -179,6 +188,43 @@ async function githubFetch(
 }
 
 // ---------------------------------------------------------------------------
+// Installation account lookup
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch the account (user or org) that owns a GitHub App installation.
+ * Used by verifyInstallationOwnership and createRepo to determine
+ * whether the installation is on a user account or an organization.
+ */
+export async function getInstallationAccount(
+  installationId: number,
+): Promise<InstallationAccount> {
+  const jwt = createAppJwt();
+  const response = await githubFetch(
+    `${GITHUB_API}/app/installations/${installationId}`,
+    { headers: { Authorization: `Bearer ${jwt}` } },
+  );
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new InstallationError("Installation not found", "NOT_FOUND");
+    }
+    throw new InstallationError(
+      `Failed to fetch installation: ${response.status}`,
+      "FETCH_FAILED",
+    );
+  }
+
+  const data = (await response.json()) as {
+    account?: InstallationAccount;
+  };
+  if (!data.account?.login) {
+    throw new InstallationError("Installation has no account", "NO_ACCOUNT");
+  }
+  return data.account;
+}
+
+// ---------------------------------------------------------------------------
 // Installation ownership verification
 // ---------------------------------------------------------------------------
 
@@ -191,27 +237,23 @@ export async function verifyInstallationOwnership(
   installationId: number,
   expectedLogin: string,
 ): Promise<VerifyResult> {
-  const jwt = createAppJwt();
-  const response = await githubFetch(
-    `${GITHUB_API}/app/installations/${installationId}`,
-    { headers: { Authorization: `Bearer ${jwt}` } },
-  );
-
-  if (!response.ok) {
-    if (response.status === 404) {
-      return { verified: false, error: "Installation not found", status: 404 };
+  let account: InstallationAccount;
+  try {
+    account = await getInstallationAccount(installationId);
+  } catch (err) {
+    if (err instanceof InstallationError) {
+      if (err.code === "NOT_FOUND") {
+        return { verified: false, error: "Installation not found", status: 404 };
+      }
+      if (err.code === "NO_ACCOUNT") {
+        return { verified: false, error: "Installation has no account", status: 502 };
+      }
     }
     log.error(
-      { status: response.status, installationId },
+      { installationId, err },
       "GitHub API error during installation verification",
     );
     return { verified: false, error: "Failed to verify installation", status: 502 };
-  }
-
-  const data = (await response.json()) as { account?: InstallationAccount };
-  const account = data.account;
-  if (!account?.login) {
-    return { verified: false, error: "Installation has no account", status: 502 };
   }
 
   // Organization installations: verify the user is a member of the org.
@@ -372,19 +414,24 @@ export async function listInstallationRepos(
 /**
  * Create a repository using the GitHub App installation token.
  *
- * Uses the authenticated user endpoint via installation token. The repo
- * is created under the account that installed the GitHub App.
+ * Determines whether the installation is on a user account or an
+ * organization, then calls the appropriate GitHub API endpoint:
+ * - Organization: POST /orgs/{org}/repos (requires administration:write)
+ * - User: POST /user/repos
  */
 export async function createRepo(
   installationId: number,
   name: string,
   isPrivate: boolean,
 ): Promise<{ repoUrl: string; fullName: string }> {
+  const account = await getInstallationAccount(installationId);
   const token = await generateInstallationToken(installationId);
 
-  // For GitHub App installations on user accounts, use /user/repos.
-  // The installation token scopes the request to the installing user.
-  const response = await githubFetch(`${GITHUB_API}/user/repos`, {
+  const endpoint = account.type === "Organization"
+    ? `${GITHUB_API}/orgs/${account.login}/repos`
+    : `${GITHUB_API}/user/repos`;
+
+  const response = await githubFetch(endpoint, {
     method: "POST",
     headers: {
       Authorization: `token ${token}`,
@@ -393,18 +440,29 @@ export async function createRepo(
     body: JSON.stringify({
       name,
       private: isPrivate,
-      auto_init: true, // Initialize with README
+      auto_init: true,
       description: "Knowledge base managed by Soleur",
     }),
   });
 
   if (!response.ok) {
     const body = await response.text();
+    let errorMessage = `GitHub create repo failed: ${response.status}`;
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed.errors?.[0]?.message) {
+        errorMessage = parsed.errors[0].message;
+      } else if (parsed.message) {
+        errorMessage = `GitHub create repo failed: ${response.status} - ${parsed.message}`;
+      }
+    } catch {
+      // Non-JSON response
+    }
     log.error(
       { status: response.status, body: body.slice(0, 500), installationId, name },
       "Failed to create repo",
     );
-    throw new Error(`GitHub create repo failed: ${response.status}`);
+    throw new Error(errorMessage);
   }
 
   const data = (await response.json()) as GitHubRepoResponse;

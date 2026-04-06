@@ -129,6 +129,8 @@ export default function ConnectRepoPage() {
             }),
           });
           if (!createRes.ok) {
+            const data = await createRes.json().catch(() => null);
+            setSetupError(data?.error ?? "Failed to create repository");
             setState("failed");
             return;
           }
@@ -215,6 +217,8 @@ export default function ConnectRepoPage() {
         });
         if (!res.ok) {
           if (stepTimerRef.current) clearInterval(stepTimerRef.current);
+          const data = await res.json().catch(() => null);
+          setSetupError(data?.error ?? "Failed to start project setup");
           setState("failed");
           return;
         }
