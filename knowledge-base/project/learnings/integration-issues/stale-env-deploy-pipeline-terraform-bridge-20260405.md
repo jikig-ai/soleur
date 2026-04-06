@@ -12,7 +12,7 @@ root_cause: config_error
 resolution_type: config_change
 severity: critical
 tags: [terraform, doppler, systemd, cloud-init, provisioner, webhook, env-file]
-synced_to: []
+synced_to: [work]
 ---
 
 # Troubleshooting: Deploy pipeline uses stale .env instead of Doppler secrets

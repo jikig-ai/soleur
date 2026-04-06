@@ -25,7 +25,7 @@ Then `cd` into the worktree path printed by the script. Parallel agents on the s
 bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh draft-pr
 ```
 
-If this fails (no network), print a warning but continue. The branch exists locally.
+If this fails (no network, or "No commits between main and <branch>"), print a warning but continue. The branch exists locally and the `/ship` phase will create the PR after implementation commits exist.
 
 **Steps 1-2: Plan + Deepen (Isolated Subagent)**
 

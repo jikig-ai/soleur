@@ -11,6 +11,7 @@ root_cause: config_error
 resolution_type: config_change
 severity: critical
 tags: [bwrap, bubblewrap, seccomp, apparmor, docker, user-namespaces, sandbox, clone-newuser]
+synced_to: [work]
 ---
 
 # Troubleshooting: bwrap sandbox non-functional in Docker container (three-layer fix)
