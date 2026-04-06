@@ -104,8 +104,8 @@ variable "cf_notification_email" {
   type        = string
 }
 
-variable "discord_ops_webhook_url" {
-  description = "Discord webhook URL for infrastructure alerts (#ops-alerts channel)"
+variable "resend_api_key" {
+  description = "Resend API key for infrastructure alert emails to ops@jikigai.com"
   type        = string
   sensitive   = true
 }
