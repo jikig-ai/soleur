@@ -3,9 +3,23 @@ title: "feat(infra): migrate disk-monitor.sh from Discord to email notifications
 type: feat
 date: 2026-04-06
 issue: "#1595"
+deepened: 2026-04-06
 ---
 
 # feat(infra): migrate disk-monitor.sh from Discord to email notifications
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-06
+**Sections enhanced:** 4 (Technical Considerations, Implementation Notes Phase 1/3/5)
+**Research sources:** Resend API docs (Context7), shell-api-wrapper-hardening-patterns learning, shell-script-defensive-patterns learning, doppler-tf-var-naming-alignment learning, terraform-data-connection-block-no-auto-replace learning
+
+### Key Improvements
+
+1. Added concrete `send_alert` function implementation with shell API hardening patterns (curl stderr suppression, jq fallback chains, HTTP response code checking)
+2. Added Resend API rate limit context (2 req/s default -- no concern for disk monitor's usage pattern)
+3. Added curl mock implementation detail for tests (must output HTTP code on stdout for `-w "%{http_code}"` pattern)
+4. Specified `text` parameter (not `html`) for email body since disk usage output is plain text data, avoiding unnecessary HTML formatting
 
 ## Overview
 
@@ -46,7 +60,24 @@ curl -s -o /dev/null -w "%{http_code}" \
   -d "$PAYLOAD"
 ```
 
-The disk-monitor.sh script will use this exact pattern, with `jq` already available on the server (installed via cloud-init packages).
+The disk-monitor.sh script will use this pattern with one modification: use `text` instead of `html` since disk usage output is plain text (top consumers from `du`, available GB). No HTML formatting needed for ops alerts.
+
+### Research Insights: Resend API
+
+- **Rate limit:** 2 requests/second per team (default). Disk monitor runs every 5 min with max 2 alerts per run -- nowhere near the limit. No retry/backoff logic needed.
+- **Error codes:** 429 (rate limit), 422 (validation), 403 (auth). The script should log the HTTP code on failure for diagnostics.
+- **Idempotency:** Resend supports `Idempotency-Key` header for deduplication, but the cooldown mechanism already prevents duplicate alerts. Not needed here.
+- **`text` vs `html` parameter:** Resend accepts both. Use `text` for plain text body (disk usage data is inherently plain text). The composite action uses `html` because workflow notifications benefit from formatting; disk alerts do not.
+
+### Research Insights: Shell API Hardening (from learnings)
+
+Per `knowledge-base/project/learnings/2026-03-09-shell-api-wrapper-hardening-patterns.md`, shell scripts calling REST APIs need defense at five layers. For disk-monitor.sh specifically:
+
+1. **Transport:** Keep `2>/dev/null` on curl to prevent `Authorization: Bearer` header leaking to systemd journal on connection failure
+2. **Response checking:** Use `-w "%{http_code}"` pattern to capture HTTP status and log non-2xx codes
+3. **jq fallback:** The `jq -n` call for payload construction cannot fail with malformed input (it creates JSON from args, not from untrusted data), so no fallback chain needed here -- but the `du` output piped into `jq --arg` must handle the case where `du` output contains characters that break JSON (backslashes, quotes). Use `--rawfile` or sanitize via `tr`
+4. **Input validation:** All inputs (USAGE_PCT, AVAIL_GB, hostname) come from system commands, not user input -- no URL interpolation risk
+5. **HTTPS hardcoded:** The Resend API URL is hardcoded (`https://api.resend.com/emails`), not configurable -- no scheme validation needed
 
 ### Terraform variable wiring
 
@@ -134,9 +165,53 @@ No cross-domain implications detected -- infrastructure/tooling change.
 
 ### Phase 1: Update disk-monitor.sh
 
-Replace the `send_alert` function body. Keep the same function signature `send_alert(level, threshold, mentions)` but the `mentions` parameter becomes unused (email has no equivalent of Discord `allowed_mentions`). The parameter can be kept for backward compatibility in the threshold evaluation section or removed since both callers are in the same file.
+Replace the `send_alert` function body. Remove the `mentions` parameter entirely (Discord-specific). Update the two callers in the threshold evaluation section to pass only `level` and `threshold`.
 
-Recommended: remove the `mentions` parameter entirely since it is Discord-specific and the evaluation section is trivially updated.
+**Concrete `send_alert` implementation:**
+
+```bash
+send_alert() {
+  local level="$1" threshold="$2"
+  local server_hostname
+  server_hostname=$(hostname)
+
+  # Build disk consumer report lazily (only when alerting)
+  local TOP_CONSUMERS
+  TOP_CONSUMERS=$(timeout 10 du -sh /* 2>/dev/null | sort -rh | head -5) || TOP_CONSUMERS="(timed out)"
+
+  local SUBJECT="[${level}] Disk usage at ${USAGE_PCT}% on ${server_hostname}"
+  local BODY
+  BODY=$(printf 'Disk usage: %s%%\nAvailable: %sGB\n\nTop consumers:\n%s' \
+    "$USAGE_PCT" "$AVAIL_GB" "$TOP_CONSUMERS")
+
+  local PAYLOAD
+  PAYLOAD=$(jq -n \
+    --arg from "Soleur Ops <noreply@send.soleur.ai>" \
+    --arg subject "$SUBJECT" \
+    --arg text "$BODY" \
+    '{from: $from, to: ["ops@jikigai.com"], subject: $subject, text: $text}')
+
+  local HTTP_CODE
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+    --max-time 10 \
+    -X POST "https://api.resend.com/emails" \
+    -H "Authorization: Bearer ${RESEND_API_KEY}" \
+    -H "Content-Type: application/json" \
+    -d "$PAYLOAD" 2>/dev/null) || HTTP_CODE="000"
+
+  if [[ ! "$HTTP_CODE" =~ ^2 ]]; then
+    echo "WARNING: Resend API POST failed (HTTP ${HTTP_CODE})" >&2
+  fi
+}
+```
+
+Key design decisions:
+
+- Uses `text` parameter (not `html`) -- disk usage data is plain text
+- `2>/dev/null` on curl prevents Authorization header leaking to journal on connection failure
+- `|| HTTP_CODE="000"` handles curl transport failure (no response at all)
+- `--max-time 10` matches existing Discord implementation timeout
+- `jq --arg text "$BODY"` safely escapes newlines and special characters in `du` output
 
 ### Phase 2: Update Terraform config
 
@@ -153,9 +228,27 @@ Update `disk-monitor.test.sh`:
 
 - Replace `DISCORD_OPS_WEBHOOK_URL` with `RESEND_API_KEY` in mock env file creation
 - Update `MOCK_NO_WEBHOOK` toggle description and env var name
-- Update curl mock to capture Resend API call args (Authorization header, JSON body) and output an HTTP status code (e.g., `echo "200"`) since the new implementation may use `-w "%{http_code}"` to check response codes
-- Update assertions to check for Resend API URL instead of Discord webhook URL
-- Update "everyone" mentions test to verify CRITICAL emails include "[CRITICAL]" in subject instead
+- Update curl mock to handle the `-w "%{http_code}"` pattern: the mock must output the HTTP status code on stdout (the real curl writes it to stdout when `-w` is used with `-o /dev/null`)
+- Update assertions to check for Resend API URL (`api.resend.com`) instead of Discord webhook URL
+- Update "everyone" mentions test to verify CRITICAL emails include "[CRITICAL]" in the subject (check the `-d` payload arg for the subject field)
+
+**Concrete curl mock update:**
+
+```bash
+# Mock curl -- writes args to file, outputs HTTP status code for -w "%{http_code}"
+cat > "$mock_dir/curl" << MOCK
+#!/bin/bash
+if [[ "\${MOCK_CURL_FAIL:-}" == "1" ]]; then
+  echo "000"  # transport failure
+  exit 1
+fi
+echo "\$*" >> "$mock_dir/curl_args"
+echo "200"  # HTTP status code (matches -w "%{http_code}" output)
+exit 0
+MOCK
+```
+
+This ensures the test mock accurately simulates the `-s -o /dev/null -w "%{http_code}"` pattern where curl outputs the HTTP code on stdout.
 
 ### Phase 4: Update runbook
 
@@ -168,20 +261,26 @@ Update `knowledge-base/engineering/ops/runbooks/disk-monitoring.md`:
 
 ### Phase 5: Deploy
 
+**Note:** Per `knowledge-base/project/learnings/2026-04-06-terraform-data-connection-block-no-auto-replace.md`, changing `triggers_replace` from `var.discord_ops_webhook_url` to `var.resend_api_key` WILL trigger automatic replacement of `terraform_data.disk_monitor_install` because the hash value changes. However, use `-replace` explicitly for safety to ensure the provisioner runs even if the hash computation has an edge case.
+
 Run `terraform apply -replace=terraform_data.disk_monitor_install` to force-replace the disk monitor provisioner:
 
 ```bash
+cd apps/web-platform/infra && \
 doppler run --project soleur --config prd_terraform -- \
   doppler run --token "$(doppler configure get token --plain)" \
     --project soleur --config prd_terraform --name-transformer tf-var -- \
   terraform apply -replace=terraform_data.disk_monitor_install
 ```
 
+**Important:** Export `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` separately for the R2 backend (per AGENTS.md -- the name transformer renames them to `TF_VAR_*` which the backend ignores).
+
 Verify post-apply:
 
 - `terraform plan` shows no changes
 - SSH verify: `systemctl is-active disk-monitor.timer` returns "active"
 - SSH verify: `grep RESEND_API_KEY /etc/default/disk-monitor` shows the key
+- SSH verify: `grep -c DISCORD /etc/default/disk-monitor` returns 0
 - End-to-end verify: trigger `bash /usr/local/bin/disk-monitor.sh` on the server (if disk usage is above 80%) or temporarily lower `WARN_THRESHOLD` in the script, run it, and confirm an email arrives at `ops@jikigai.com`
 
 ## References
