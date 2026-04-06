@@ -317,9 +317,8 @@ export function removeWorkspaceDir(workspacePath: string): void {
       "Workspace contained undeletable files; moved aside for background cleanup",
     );
     return;
-  } catch (mvErr) {
-    const stderr = (mvErr as { stderr?: Buffer })?.stderr?.toString() ?? "";
-    log.error({ workspacePath, stderr }, "Workspace cleanup failed: cannot move aside");
+  } catch (err) {
+    log.error({ workspacePath, err }, "Workspace cleanup failed: cannot move aside");
     throw new Error(
       "Workspace cleanup failed \u2014 please try again or contact support",
     );
