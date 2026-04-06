@@ -277,7 +277,25 @@ export default function ConnectRepoPage() {
     setState("create_project");
   }
 
-  function handleConnectExisting() {
+  async function handleConnectExisting() {
+    setReposLoading(true);
+    try {
+      const res = await fetch("/api/repo/repos");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.repos && data.repos.length > 0) {
+          setRepos(data.repos);
+          setState("select_project");
+        } else {
+          setState("no_projects");
+        }
+        return;
+      }
+    } catch {
+      // Network error — fall through to GitHub redirect
+    } finally {
+      setReposLoading(false);
+    }
     setState("github_redirect");
   }
 
@@ -304,7 +322,33 @@ export default function ConnectRepoPage() {
     router.push(returnPath);
   }
 
-  function handleCreateSubmit(name: string, isPrivate: boolean) {
+  async function handleCreateSubmit(name: string, isPrivate: boolean) {
+    // Try creating directly — skip GitHub redirect if already installed
+    try {
+      const createRes = await fetch("/api/repo/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, private: isPrivate }),
+      });
+      if (createRes.ok) {
+        const data = await createRes.json();
+        startSetup(data.repoUrl, data.fullName);
+        return;
+      }
+      const errorData = await createRes.json().catch(() => null);
+      // 400 with "not installed" → fall back to GitHub redirect
+      if (createRes.status === 400) {
+        setPendingCreate({ name, isPrivate });
+        setState("github_redirect");
+        return;
+      }
+      // Other errors → show failed state
+      setSetupError(errorData?.error ?? "Failed to create repository");
+      setState("failed");
+      return;
+    } catch {
+      // Network error — fall back to GitHub redirect
+    }
     setPendingCreate({ name, isPrivate });
     setState("github_redirect");
   }

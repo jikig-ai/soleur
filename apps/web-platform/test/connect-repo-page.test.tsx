@@ -175,3 +175,149 @@ describe("Phase 1: Callback handler", () => {
     expect(installCall).toBeUndefined();
   });
 });
+
+// ===========================================================================
+// Phase 2: Skip redirect via on-click fetch
+// ===========================================================================
+
+describe("Phase 2: Skip redirect via on-click fetch", () => {
+  test("Connect Existing with installation skips redirect, shows repos", async () => {
+    // No callback params — user is on the choose screen
+    setupFetchMock({
+      "/api/repo/repos": () =>
+        Promise.resolve(
+          new Response(JSON.stringify({ repos: [mockRepo] }), { status: 200 }),
+        ),
+    });
+
+    render(<ConnectRepoPage />);
+
+    // Click "Connect Project" (the Connect Existing button)
+    const connectBtn = await screen.findByText("Connect Project");
+    await userEvent.click(connectBtn);
+
+    // Should skip GitHub redirect and show repo list directly
+    await waitFor(() => {
+      expect(screen.getByText("Select a Project")).toBeInTheDocument();
+    });
+
+    // Should NOT have redirected to GitHub
+    expect(hrefSetter).not.toHaveBeenCalled();
+  });
+
+  test("Connect Existing without installation shows GitHub redirect", async () => {
+    // Repos endpoint returns 400 (no installation)
+    setupFetchMock({
+      "/api/repo/repos": () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ error: "GitHub App not installed" }),
+            { status: 400 },
+          ),
+        ),
+    });
+
+    render(<ConnectRepoPage />);
+
+    const connectBtn = await screen.findByText("Connect Project");
+    await userEvent.click(connectBtn);
+
+    // Should show the GitHub redirect screen
+    await waitFor(() => {
+      expect(screen.getByText("Connecting to GitHub")).toBeInTheDocument();
+    });
+  });
+
+  test("Connect Existing with network error falls back to GitHub redirect", async () => {
+    setupFetchMock({
+      "/api/repo/repos": () => Promise.reject(new Error("Network error")),
+    });
+
+    render(<ConnectRepoPage />);
+
+    const connectBtn = await screen.findByText("Connect Project");
+    await userEvent.click(connectBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText("Connecting to GitHub")).toBeInTheDocument();
+    });
+  });
+
+  test("Connect Existing with installation but no repos shows no-projects state", async () => {
+    setupFetchMock({
+      "/api/repo/repos": () =>
+        Promise.resolve(
+          new Response(JSON.stringify({ repos: [] }), { status: 200 }),
+        ),
+    });
+
+    render(<ConnectRepoPage />);
+
+    const connectBtn = await screen.findByText("Connect Project");
+    await userEvent.click(connectBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText("No projects found")).toBeInTheDocument();
+    });
+  });
+
+  test("Create New with installation creates repo directly (no redirect)", async () => {
+    // Mock repos to return 200 (installation exists — detected during create)
+    setupFetchMock();
+
+    render(<ConnectRepoPage />);
+
+    // Click "Create Project"
+    const createBtn = await screen.findByText("Create Project");
+    await userEvent.click(createBtn);
+
+    // Fill in project name
+    const nameInput = await screen.findByLabelText("Project Name");
+    await userEvent.type(nameInput, "my-test-project");
+
+    // Submit the form
+    const submitBtn = screen.getByRole("button", { name: /Create Project/i });
+    await userEvent.click(submitBtn);
+
+    // Should call POST /api/repo/create directly (no GitHub redirect)
+    await waitFor(() => {
+      const createCall = mockFetch.mock.calls.find(
+        ([url, opts]: [string, RequestInit?]) =>
+          url === "/api/repo/create" && opts?.method === "POST",
+      );
+      expect(createCall).toBeDefined();
+    });
+
+    // Should NOT have redirected to GitHub
+    expect(hrefSetter).not.toHaveBeenCalled();
+  });
+
+  test("Create New without installation falls back to redirect", async () => {
+    // Create endpoint returns 400 (no installation)
+    setupFetchMock({
+      "/api/repo/create": () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ error: "GitHub App not installed" }),
+            { status: 400 },
+          ),
+        ),
+    });
+
+    render(<ConnectRepoPage />);
+
+    const createBtn = await screen.findByText("Create Project");
+    await userEvent.click(createBtn);
+
+    const nameInput = await screen.findByLabelText("Project Name");
+    await userEvent.type(nameInput, "my-test-project");
+
+    const submitBtn = screen.getByRole("button", { name: /Create Project/i });
+    await userEvent.click(submitBtn);
+
+    // Should fall back to GitHub redirect
+    await waitFor(() => {
+      expect(screen.getByText("Connecting to GitHub")).toBeInTheDocument();
+    });
+  });
+});
