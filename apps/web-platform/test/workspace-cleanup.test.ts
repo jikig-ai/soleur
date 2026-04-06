@@ -85,9 +85,13 @@ describe("removeWorkspaceDir", () => {
     vi.resetModules();
 
     const calls: string[] = [];
+    let mvArgs: string[] = [];
     vi.doMock("child_process", () => ({
       execFileSync: (cmd: string, args: string[]) => {
         calls.push(cmd);
+        if (cmd === "mv") {
+          mvArgs = args;
+        }
         if (cmd === "rm" || cmd === "find" || cmd === "rmdir") {
           const err = new Error("Permission denied") as Error & {
             stderr: Buffer;
@@ -113,6 +117,10 @@ describe("removeWorkspaceDir", () => {
     expect(() => mockedRemove(TEST_ROOT + "/test-cleanup")).not.toThrow();
     // Verify all phases attempted in order before falling back to mv
     expect(calls).toEqual(["rm", "chmod", "find", "rmdir", "mv"]);
+    // Verify mv destination uses the .orphaned- suffix pattern
+    expect(mvArgs).toHaveLength(2);
+    expect(mvArgs[0]).toBe(TEST_ROOT + "/test-cleanup");
+    expect(mvArgs[1]).toMatch(/\.orphaned-\d+$/);
   });
 
   test("throws user-friendly error (no sudo) when all phases including mv fail", async () => {
