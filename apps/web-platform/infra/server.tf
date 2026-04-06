@@ -109,6 +109,10 @@ resource "terraform_data" "deploy_pipeline_fix" {
   provisioner "remote-exec" {
     inline = [
       "chmod +x /usr/local/bin/ci-deploy.sh",
+      # Append DOPPLER_CONFIG_DIR and DOPPLER_ENABLE_VERSION_CHECK to webhook-deploy env file.
+      # Redirects Doppler CLI config to /tmp (writable under PrivateTmp) instead of ~/.doppler
+      # (blocked by ProtectHome=read-only). grep guard makes this idempotent.
+      "grep -q DOPPLER_CONFIG_DIR /etc/default/webhook-deploy || printf 'DOPPLER_CONFIG_DIR=/tmp/.doppler\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' >> /etc/default/webhook-deploy",
       "systemctl daemon-reload",
       "systemctl restart webhook",
       # One-time cleanup: delete stale .env so deploys fail loudly if Doppler is unavailable.
