@@ -5,8 +5,8 @@ Issue: [#1648](https://github.com/jikig-ai/soleur/issues/1648)
 
 ## Phase 1: Setup
 
-- [ ] 1.1 Verify `zod` is available in `apps/web-platform/` (transitive from SDK or explicit dependency)
-- [ ] 1.2 Verify `tool` and `createSdkMcpServer` exports exist in `@anthropic-ai/claude-agent-sdk` v0.2.80
+- [x] 1.1 ~~Verify `zod` is available~~ -- confirmed: zod v4.3.6 in `node_modules/zod/`; import via `"zod/v4"` (not `"zod"`)
+- [x] 1.2 ~~Verify `tool` and `createSdkMcpServer` exports~~ -- confirmed in `sdk.d.ts`; both are exported and typed
 - [ ] 1.3 Add `github_installation_id` and `repo_url` to the user select query in `agent-runner.ts` (currently only selects `workspace_path, repo_status`)
 
 ## Phase 2: Core Implementation
@@ -22,8 +22,8 @@ Issue: [#1648](https://github.com/jikig-ai/soleur/issues/1648)
 
 ### 2.2 Inline MCP Server Tool in agent-runner.ts
 
-- [ ] 2.2.1 Import `tool`, `createSdkMcpServer` from `@anthropic-ai/claude-agent-sdk` and `z` from `zod`
-- [ ] 2.2.2 After user data query, parse `owner`/`repo` from `repo_url`
+- [ ] 2.2.1 Import `tool`, `createSdkMcpServer` from `@anthropic-ai/claude-agent-sdk` and `z` from `zod/v4`
+- [ ] 2.2.2 After user data query, parse `owner`/`repo` from `repo_url` with validation (non-empty strings)
 - [ ] 2.2.3 Define `create_pull_request` tool with Zod schema (head, base, title, body)
 - [ ] 2.2.4 Tool handler: try/catch around `createPullRequest`, return `isError` content on failure
 - [ ] 2.2.5 Create `soleur_platform` MCP server with the tool
@@ -45,6 +45,7 @@ Issue: [#1648](https://github.com/jikig-ai/soleur/issues/1648)
 - [ ] 3.1.4 Test 422 error: PR already exists for head/base
 - [ ] 3.1.5 Test 404 error: repo not found
 - [ ] 3.1.6 Test token generation failure propagation
+- [ ] 3.1.7 Use unique `installationId` per test (per learning: token cache test isolation)
 
 ### 3.2 Integration Tests: Agent Tool Wiring
 

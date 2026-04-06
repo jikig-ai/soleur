@@ -3,9 +3,29 @@ title: "feat: server-side PR creation endpoint for agent-driven pull requests"
 type: feat
 date: 2026-04-06
 semver: minor
+deepened: 2026-04-06
 ---
 
 # feat: server-side PR creation endpoint for agent-driven pull requests
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-06
+**Sections enhanced:** 5 (Technical Approach, Dependencies, Security, Test Scenarios, Edge Cases)
+**Research sources:** Claude Agent SDK type definitions (v0.2.80), GitHub REST API docs (Context7), 4 institutional learnings
+
+### Key Improvements
+
+1. **Zod v4 import path verified** -- SDK uses `import { z } from 'zod/v4'` not `'zod'`; plan code updated
+2. **GitHub API `head` field format** -- for same-repo PRs, `head` is just the branch name (not `owner:branch`); for cross-repo it requires the `owner:branch` prefix
+3. **Institutional learnings applied** -- "draft PR requires commit" learning confirms the plan's non-goal correctly; GITHUB_TOKEN PR learning is not applicable (we use installation tokens); token cache test isolation learning informs test design
+4. **canUseTool routing clarified** -- SDK type definitions confirm `canUseTool` fires for all tool calls including MCP tools (via `toolUseID` parameter); defensive `mcp__` prefix check is correct
+
+### New Considerations Discovered
+
+- `zod` v4.3.6 is already available as a transitive dependency (no new install needed), but the import path must be `zod/v4` to match the SDK's type expectations
+- GitHub API returns 422 with `errors[].message` containing "A pull request already exists" when duplicating -- parse this for user-friendly messaging
+- The `head` parameter for same-repo PRs must be just the branch name; `owner:branch` format is only for cross-repo/fork PRs
 
 ## Overview
 
@@ -65,6 +85,39 @@ Add a `createPullRequest` function to `apps/web-platform/server/github-app.ts`:
 
 **File:** `apps/web-platform/server/github-app.ts`
 
+### Research Insights: createPullRequest Implementation
+
+**GitHub API response fields to extract (from `POST /repos/{owner}/{repo}/pulls` 201 response):**
+
+```typescript
+interface GitHubPullRequestResponse {
+  number: number;       // PR number (e.g., 1347)
+  html_url: string;     // "https://github.com/owner/repo/pull/1347"
+  url: string;          // API URL
+  state: string;        // "open"
+  title: string;
+}
+
+// Return type for createPullRequest:
+interface PullRequestResult {
+  number: number;
+  htmlUrl: string;
+  url: string;
+}
+```
+
+**Error codes to handle:**
+
+- 201: success
+- 403: insufficient permissions (installation token lacks `pull_requests:write`)
+- 404: repository not found or branch not found
+- 422: validation failed -- three sub-cases:
+  - `"No commits between {base} and {head}"` -- identical branches
+  - `"A pull request already exists for {owner}:{head}"` -- duplicate PR
+  - `"head.ref must be a branch"` -- head branch doesn't exist on remote
+
+**Institutional learning applied:** Per `2026-03-18-draft-pr-requires-commit.md`, GitHub requires at least one commit difference between base and head. The error message is `"No commits between..."`. The tool should surface this clearly to the agent so it can commit and push first.
+
 #### Phase 2: Inline MCP Server in Agent Runner
 
 Define the tool factory inline in `startAgentSession` within `agent-runner.ts` -- one tool does not warrant a separate module. Extract to `agent-tools.ts` only when a second tool is added.
@@ -74,7 +127,8 @@ The tool derives `owner`/`repo` server-side from the user's `repo_url` (already 
 ```typescript
 // Inline in startAgentSession, after querying user data
 import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
-import { z } from "zod";
+// IMPORTANT: SDK imports from "zod/v4" (not "zod") per sdk.d.ts type definitions
+import { z } from "zod/v4";
 
 // Parse owner/repo from repo_url (e.g., "https://github.com/owner/repo")
 const repoUrl = new URL(user.repo_url);
@@ -82,12 +136,14 @@ const [, owner, repo] = repoUrl.pathname.split("/");
 
 const createPr = tool(
   "create_pull_request",
-  "Create a pull request on the user's connected GitHub repository",
+  "Create a pull request on the user's connected GitHub repository. " +
+  "The repository is determined server-side from the user's connected repo. " +
+  "The head branch must already exist on the remote (push first via git).",
   {
-    head: z.string().describe("Branch containing changes"),
-    base: z.string().default("main").describe("Target branch"),
+    head: z.string().describe("Branch name containing changes (just the name, not owner:branch)"),
+    base: z.string().default("main").describe("Target branch to merge into"),
     title: z.string().describe("PR title"),
-    body: z.string().optional().describe("PR description (markdown)"),
+    body: z.string().optional().describe("PR description body (markdown)"),
   },
   async (args) => {
     try {
@@ -113,6 +169,22 @@ const toolServer = createSdkMcpServer({
   tools: [createPr],
 });
 ```
+
+### Research Insights: Agent SDK Custom Tools
+
+**Verified from SDK type definitions (`sdk.d.ts` in v0.2.80):**
+
+- `tool()` and `createSdkMcpServer()` are exported and typed
+- `McpSdkServerConfigWithInstance` is accepted by `query()` via `mcpServers: Record<string, McpServerConfig>`
+- `canUseTool` fires for ALL tool calls -- the `toolUseID` parameter is present on every invocation; MCP tools are not exempt
+- `AnyZodRawShape` accepts both `zod` (v3) and `zod/v4` schemas, but the SDK internally imports from `zod/v4` -- use `zod/v4` for consistency
+- `allowedTools` must list MCP tool names explicitly (format: `mcp__{serverName}__{toolName}`)
+
+**GitHub API `head` field format (from REST API docs):**
+
+- For same-repo PRs: `head` is just the branch name (e.g., `"feat/my-feature"`)
+- For cross-repo/fork PRs: `head` requires `"owner:branch"` format
+- Since agents work on the user's own repos (Non-Goal: no fork support), the branch name alone is correct
 
 #### Phase 3: Wire Into Agent Runner
 
@@ -187,8 +259,11 @@ Write tests covering:
 
 ### Edge Cases
 
-- Given a PR already exists for the same head/base combination, when `create_pull_request` is called, then GitHub returns 422 -- the tool surfaces this as a user-friendly error
+- Given a PR already exists for the same head/base combination, when `create_pull_request` is called, then GitHub returns 422 with `errors[].message` containing "A pull request already exists" -- the tool surfaces this as a user-friendly error
 - Given the installation token is expired, when `create_pull_request` is called, then `generateInstallationToken` refreshes it transparently (existing cache logic)
+- Given the head branch has not been pushed to the remote, when `create_pull_request` is called, then GitHub returns 422 with "head.ref must be a branch" -- the tool should advise the agent to push first
+- Given no commits exist between head and base, when `create_pull_request` is called, then GitHub returns 422 with "No commits between {base} and {head}" -- the tool should advise the agent to commit first (per learning: `2026-03-18-draft-pr-requires-commit.md`)
+- Given `repo_url` is malformed or has unexpected path segments, when the URL is parsed, then the `new URL()` constructor may throw or produce empty owner/repo -- validate both are non-empty strings before proceeding
 
 ## Technical Considerations
 
@@ -208,11 +283,22 @@ Write tests covering:
 ### Dependencies
 
 - `@anthropic-ai/claude-agent-sdk` v0.2.80 (already installed) -- provides `tool`, `createSdkMcpServer`
-- `zod` -- verify in `apps/web-platform/package.json` at implementation time; the SDK likely brings it as a peer/transitive dependency but confirm before relying on it
+- `zod` v4.3.6 (already available as transitive dependency in `node_modules/zod/`) -- no new install needed; import via `"zod/v4"` subpath to match SDK's internal usage
 
 ### canUseTool Interaction
 
-The current `canUseTool` callback in `agent-runner.ts` has a deny-by-default fallback for unrecognized tools (lines ~502-506). In-process MCP server tools may or may not route through `canUseTool` -- the SDK documentation does not explicitly clarify this. The plan adds a defensive `mcp__` prefix check before the deny-by-default block to prevent runtime failures. This must be tested during implementation: if MCP tools bypass `canUseTool` entirely, the check is a harmless no-op.
+The current `canUseTool` callback in `agent-runner.ts` has a deny-by-default fallback for unrecognized tools (lines ~502-506). **Verified from SDK type definitions:** `canUseTool` fires for ALL tool calls -- the `CanUseTool` type signature includes `toolUseID` which is present on every invocation, confirming MCP tools route through canUseTool. The `mcp__` prefix check before deny-by-default is therefore **required**, not merely defensive.
+
+**Implementation detail:** Add the check between the Agent tool block and the `isSafeTool` block:
+
+```typescript
+// Allow in-process MCP server tools (registered via mcpServers option)
+if (toolName.startsWith("mcp__")) {
+  return { behavior: "allow" as const };
+}
+```
+
+**Per institutional learning `github-org-membership-api-redirect-handling-20260402.md`:** When testing functions that interact with module-level caches (like the token cache), use unique `installationId` values per test to ensure predictable mock sequences. This applies to `createPullRequest` tests that mock `generateInstallationToken`.
 
 ## Alternative Approaches Considered
 
