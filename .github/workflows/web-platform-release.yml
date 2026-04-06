@@ -95,20 +95,27 @@ jobs:
         env:
           VERSION: ${{ needs.release.outputs.version }}
         run: |
-          for i in $(seq 1 12); do
+          for i in $(seq 1 30); do
             HEALTH=$(curl -sf "https://app.soleur.ai/health" 2>/dev/null || echo "")
-            if echo "$HEALTH" | grep -q "ok"; then
-              DEPLOYED_VERSION=$(echo "$HEALTH" | jq -r '.version // empty')
-              if [ "$DEPLOYED_VERSION" = "$VERSION" ]; then
-                echo "Deploy verified: version $VERSION running"
-                echo "$HEALTH" | jq .
-                exit 0
-              fi
-              echo "Version mismatch: expected $VERSION, got $DEPLOYED_VERSION (attempt $i/12)"
+            if [ -z "$HEALTH" ]; then
+              echo "Attempt $i/30: health endpoint unreachable"
             else
-              echo "Attempt $i/12: waiting for healthy response..."
+              STATUS=$(echo "$HEALTH" | jq -r '.status // empty')
+              if [ "$STATUS" = "ok" ]; then
+                DEPLOYED_VERSION=$(echo "$HEALTH" | jq -r '.version // empty')
+                if [ "$DEPLOYED_VERSION" = "$VERSION" ]; then
+                  echo "Deploy verified: version $VERSION running"
+                  echo "$HEALTH" | jq .
+                  exit 0
+                fi
+                UPTIME=$(echo "$HEALTH" | jq -r '.uptime // "unknown"')
+                echo "Attempt $i/30: version mismatch (expected=$VERSION got=$DEPLOYED_VERSION uptime=${UPTIME}s)"
+              else
+                echo "Attempt $i/30: health status=$STATUS"
+                echo "$HEALTH" | jq . 2>/dev/null || echo "$HEALTH"
+              fi
             fi
             sleep 10
           done
-          echo "::error::Deploy verification failed after 120s"
+          echo "::error::Deploy verification failed after 300s — expected version $VERSION"
           exit 1

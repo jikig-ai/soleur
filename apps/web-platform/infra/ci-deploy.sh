@@ -31,13 +31,17 @@ resolve_env_file() {
   tmpenv=$(mktemp /tmp/doppler-env.XXXXXX)
   chmod 600 "$tmpenv"
 
-  local doppler_output
-  if ! doppler_output=$(doppler secrets download --no-file --format docker --project soleur --config prd 2>&1); then
-    logger -t "$LOG_TAG" "FATAL: Doppler secrets download failed: $doppler_output"
-    rm -f "$tmpenv"
-    echo "Error: Failed to download secrets from Doppler: $doppler_output" >&2
+  local doppler_output doppler_stderr_file
+  doppler_stderr_file=$(mktemp /tmp/doppler-stderr.XXXXXX)
+  if ! doppler_output=$(doppler secrets download --no-file --format docker --project soleur --config prd 2>"$doppler_stderr_file"); then
+    local doppler_stderr
+    doppler_stderr=$(cat "$doppler_stderr_file")
+    logger -t "$LOG_TAG" "FATAL: Doppler secrets download failed: $doppler_stderr"
+    rm -f "$tmpenv" "$doppler_stderr_file"
+    echo "Error: Failed to download secrets from Doppler: $doppler_stderr" >&2
     exit 1
   fi
+  rm -f "$doppler_stderr_file"
 
   echo "$doppler_output" > "$tmpenv"
   echo "$tmpenv"
