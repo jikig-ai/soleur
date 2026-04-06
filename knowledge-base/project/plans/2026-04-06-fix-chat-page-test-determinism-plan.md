@@ -163,12 +163,12 @@ it("shows error card and does not send msg when server errors before session_sta
 
 ## Acceptance Criteria
 
-- [ ] No `setTimeout` used for negative assertions in chat-page tests
-- [ ] Test for `handleSend` independence from `sessionConfirmed` exists and passes
-- [ ] Test for no-msg-param baseline exists and passes
-- [ ] Test for error-before-confirmation exists and passes
-- [ ] All existing tests continue to pass (no regressions)
-- [ ] All tests pass deterministically with no timing-dependent assertions
+- [x] No `setTimeout` used for negative assertions in chat-page tests
+- [x] Test for `handleSend` independence from `sessionConfirmed` exists and passes
+- [x] Test for no-msg-param baseline exists and passes
+- [x] Test for error-before-confirmation exists and passes
+- [x] All existing tests continue to pass (no regressions)
+- [x] All tests pass deterministically with no timing-dependent assertions
 
 ## Test Scenarios
 
