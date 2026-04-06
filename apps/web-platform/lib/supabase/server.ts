@@ -1,6 +1,10 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
-import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
+
+// Re-export serverUrl and createServiceClient from the standalone module.
+// Custom server files (ws-handler, agent-runner, etc.) import from
+// @/lib/supabase/service directly to avoid pulling in next/headers.
+export { serverUrl, createServiceClient } from "./service";
 
 export async function createClient() {
   const cookieStore = await cookies();
@@ -33,24 +37,6 @@ export async function createClient() {
             // Server component — can't set cookies
           }
         },
-      },
-    },
-  );
-}
-
-/** Server-side Supabase URL: prefer direct project URL over custom domain. */
-export function serverUrl(): string {
-  return process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL!;
-}
-
-export function createServiceClient() {
-  return createSupabaseClient(
-    serverUrl(),
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
       },
     },
   );

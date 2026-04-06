@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from "fs";
 import path from "path";
 import { z } from "zod/v4";
 
-import { createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/service";
 import { DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { routeMessage } from "./domain-router";
 import { KeyInvalidError } from "@/lib/types";

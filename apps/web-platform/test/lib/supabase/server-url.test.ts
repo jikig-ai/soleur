@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { serverUrl } from "@/lib/supabase/server";
+import { serverUrl } from "@/lib/supabase/service";
 
 describe("serverUrl", () => {
   const originalEnv = process.env;

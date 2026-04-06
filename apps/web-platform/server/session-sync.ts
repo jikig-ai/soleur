@@ -8,7 +8,7 @@
 
 import { execFileSync } from "child_process";
 import { unlinkSync, writeFileSync } from "fs";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/service";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateInstallationToken, randomCredentialPath } from "./github-app";
 import { createChildLogger } from "./logger";

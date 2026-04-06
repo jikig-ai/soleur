@@ -1,4 +1,4 @@
-import { serverUrl } from "@/lib/supabase/server";
+import { serverUrl } from "@/lib/supabase/service";
 
 async function checkSupabase(): Promise<boolean> {
   try {

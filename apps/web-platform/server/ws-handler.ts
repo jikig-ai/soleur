@@ -4,7 +4,7 @@ import { parse } from "url";
 import { randomUUID } from "crypto";
 
 import { KeyInvalidError, WS_CLOSE_CODES, type WSMessage, type Conversation } from "@/lib/types";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/service";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { MAX_SELECTION_LENGTH } from "./review-gate";
