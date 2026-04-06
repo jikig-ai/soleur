@@ -98,7 +98,7 @@ if [[ ${#bun_tests[@]} -gt 0 ]]; then
   vitest_tests=()
   pure_bun_tests=()
   for bt in "${bun_tests[@]}"; do
-    if [[ "$bt" == apps/web-platform/test/*.tsx || "$bt" == apps/web-platform/test/*.ts ]]; then
+    if [[ "$bt" == apps/web-platform/test/*.tsx || "$bt" == apps/web-platform/test/*.ts || "$bt" == apps/web-platform/lib/*.test.ts ]]; then
       vitest_tests+=("$bt")
     else
       pure_bun_tests+=("$bt")
