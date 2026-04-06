@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import * as Sentry from "@sentry/nextjs";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { createRepo } from "@/server/github-app";
@@ -69,8 +70,10 @@ export async function POST(request: Request) {
       { err, userId: user.id, repoName: name },
       "Failed to create repository",
     );
+    Sentry.captureException(err);
+    const message = err instanceof Error ? err.message : "Failed to create repository";
     return NextResponse.json(
-      { error: "Failed to create repository" },
+      { error: message },
       { status: 500 },
     );
   }

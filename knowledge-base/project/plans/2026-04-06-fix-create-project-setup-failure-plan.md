@@ -310,18 +310,18 @@ Resolve the two stale unresolved issues in Sentry:
 
 ## Acceptance Criteria
 
-- [ ] The GitHub App has `administration:write` repository permission (required for `POST /orgs/{org}/repos`)
-- [ ] `getInstallationAccount` helper is extracted and reused by both `verifyInstallationOwnership` and `createRepo`
-- [ ] `createRepo` uses `POST /orgs/{org}/repos` for organization installations
-- [ ] `createRepo` continues to use `POST /user/repos` for user-account installations
-- [ ] `createRepo` extracts specific error messages from GitHub API responses (matching `createPullRequest` pattern)
-- [ ] `POST /api/repo/create` returns specific error messages from the GitHub API (not just "Failed to create repository")
-- [ ] `POST /api/repo/create` reports errors to Sentry via `captureException`
-- [ ] The client displays specific error messages in the `FailedState` component when repo creation fails
-- [ ] The client displays specific error messages when `POST /api/repo/setup` returns a non-200 response
-- [ ] The "Start Fresh" flow completes successfully for an organization installation (creates repo + clones)
-- [ ] The "Connect Existing" flow completes successfully after ca-certificates fix deploys
-- [ ] No new unresolved Sentry errors related to project setup appear within 24 hours of deploy
+- [ ] The GitHub App has `administration:write` repository permission (required for `POST /orgs/{org}/repos`) — Phase 0, requires Playwright
+- [x] `getInstallationAccount` helper is extracted and reused by both `verifyInstallationOwnership` and `createRepo`
+- [x] `createRepo` uses `POST /orgs/{org}/repos` for organization installations
+- [x] `createRepo` continues to use `POST /user/repos` for user-account installations
+- [x] `createRepo` extracts specific error messages from GitHub API responses (matching `createPullRequest` pattern)
+- [x] `POST /api/repo/create` returns specific error messages from the GitHub API (not just "Failed to create repository")
+- [x] `POST /api/repo/create` reports errors to Sentry via `captureException`
+- [x] The client displays specific error messages in the `FailedState` component when repo creation fails
+- [x] The client displays specific error messages when `POST /api/repo/setup` returns a non-200 response
+- [ ] The "Start Fresh" flow completes successfully for an organization installation (creates repo + clones) — E2E post-deploy
+- [ ] The "Connect Existing" flow completes successfully after ca-certificates fix deploys — E2E post-deploy
+- [ ] No new unresolved Sentry errors related to project setup appear within 24 hours of deploy — E2E post-deploy
 
 ## Test Scenarios
 
