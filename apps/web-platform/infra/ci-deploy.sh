@@ -30,15 +30,18 @@ resolve_env_file() {
   local tmpenv
   tmpenv=$(mktemp /tmp/doppler-env.XXXXXX)
   chmod 600 "$tmpenv"
-  if doppler secrets download --no-file --format docker --project soleur --config prd > "$tmpenv" 2>/dev/null; then
-    echo "$tmpenv"
-    return 0
+
+  local doppler_output
+  if ! doppler_output=$(doppler secrets download --no-file --format docker --project soleur --config prd 2>&1); then
+    logger -t "$LOG_TAG" "FATAL: Doppler secrets download failed: $doppler_output"
+    rm -f "$tmpenv"
+    echo "Error: Failed to download secrets from Doppler: $doppler_output" >&2
+    exit 1
   fi
 
-  rm -f "$tmpenv"
-  logger -t "$LOG_TAG" "FATAL: Doppler secrets download failed"
-  echo "Error: Failed to download secrets from Doppler" >&2
-  exit 1
+  echo "$doppler_output" > "$tmpenv"
+  echo "$tmpenv"
+  return 0
 }
 
 # Clean up temp env file after container starts (secrets are in container memory).
