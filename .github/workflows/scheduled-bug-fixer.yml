@@ -229,6 +229,7 @@ jobs:
 
       - name: Email notification (auto-merge queued)
         if: always() && steps.check_auto_merge.outputs.queued == 'true'
+        continue-on-error: true
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[BOT-FIX] Auto-merge queued for PR #${{ steps.detect_pr.outputs.pr_number }}'

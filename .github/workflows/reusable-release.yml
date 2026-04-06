@@ -312,6 +312,7 @@ jobs:
 
       - name: Email notification (release)
         if: steps.create_release.outputs.released == 'true'
+        continue-on-error: true
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[RELEASE] ${{ inputs.component_display }} v${{ steps.version.outputs.next }}'

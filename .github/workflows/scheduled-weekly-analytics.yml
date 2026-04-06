@@ -49,6 +49,7 @@ jobs:
 
       - name: Email notification (KPI miss)
         if: steps.analytics.outputs.kpi_miss == 'true'
+        continue-on-error: true
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[ALERT] Weekly Analytics: KPI Miss'

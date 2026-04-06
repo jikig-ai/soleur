@@ -23,8 +23,8 @@ runs:
         EMAIL_BODY: ${{ inputs.body }}
       run: |
         if [[ -z "${RESEND_API_KEY:-}" ]]; then
-          echo "::warning::RESEND_API_KEY not set, skipping email notification"
-          exit 0
+          echo "::error::RESEND_API_KEY not set — email notification cannot be sent"
+          exit 1
         fi
 
         PAYLOAD=$(jq -n \
@@ -33,7 +33,7 @@ runs:
           --arg html "$EMAIL_BODY" \
           '{from: $from, to: ["ops@jikigai.com"], subject: $subject, html: $html}')
 
-        HTTP_CODE=$(curl -s -o /tmp/resend-response.txt -w "%{http_code}" \
+        HTTP_CODE=$(curl -s -o "${RUNNER_TEMP}/resend-response.txt" -w "%{http_code}" \
           -X POST "https://api.resend.com/emails" \
           -H "Authorization: Bearer ${RESEND_API_KEY}" \
           -H "Content-Type: application/json" \
@@ -42,5 +42,5 @@ runs:
         if [[ "$HTTP_CODE" =~ ^2 ]]; then
           echo "Email notification sent to ops@jikigai.com (HTTP ${HTTP_CODE})"
         else
-          echo "::warning::Email notification failed (HTTP ${HTTP_CODE}): $(cat /tmp/resend-response.txt)"
+          echo "::warning::Email notification failed (HTTP ${HTTP_CODE}). Check Resend dashboard for details."
         fi

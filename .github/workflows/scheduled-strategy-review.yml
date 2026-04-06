@@ -43,6 +43,6 @@ jobs:
         if: failure()
         uses: ./.github/actions/notify-ops-email
         with:
-          subject: '[FAIL] Strategy Review workflow failed'
+          subject: '[FAIL] Scheduled: Strategy Review workflow failed'
           body: '<p><strong>Strategy Review</strong> failed.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}

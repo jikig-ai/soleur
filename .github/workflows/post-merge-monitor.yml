@@ -201,6 +201,7 @@ jobs:
 
       - name: Email notification (bot-fix reverted)
         if: steps.extract.outputs.issue && steps.commit.outputs.conclusion == 'failure'
+        continue-on-error: true
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[ALERT] Bot-fix reverted on main'
@@ -209,6 +210,7 @@ jobs:
 
       - name: Email notification (bot-fix verified)
         if: steps.extract.outputs.issue && steps.commit.outputs.conclusion == 'success'
+        continue-on-error: true
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[OK] Bot-fix verified on main'
