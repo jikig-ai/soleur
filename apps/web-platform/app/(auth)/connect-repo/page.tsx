@@ -75,6 +75,7 @@ export default function ConnectRepoPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stateRef = useRef<State>(state);
+  const loadingRef = useRef(false);
 
   // ---------------------------------------------------------------------------
   // On mount: fetch dynamic app slug and check for GitHub callback params
@@ -189,9 +190,10 @@ export default function ConnectRepoPage() {
   // Refresh repos (error-safe — keeps current state on failure)
   // ---------------------------------------------------------------------------
   const refreshRepos = useCallback(async () => {
-    if (reposLoading) return;
+    if (loadingRef.current) return;
     const currentState = stateRef.current;
     if (currentState !== "select_project" && currentState !== "no_projects") return;
+    loadingRef.current = true;
     setReposLoading(true);
     try {
       const res = await fetch("/api/repo/repos");
@@ -206,9 +208,10 @@ export default function ConnectRepoPage() {
     } catch {
       // Silently keep current state — don't transition to interrupted
     } finally {
+      loadingRef.current = false;
       setReposLoading(false);
     }
-  }, [reposLoading]);
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Auto-refresh on tab focus
@@ -322,6 +325,8 @@ export default function ConnectRepoPage() {
   }
 
   async function handleConnectExisting() {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     setReposLoading(true);
     try {
       const res = await fetch("/api/repo/repos");
@@ -338,6 +343,7 @@ export default function ConnectRepoPage() {
     } catch {
       // Network error — fall through to GitHub redirect
     } finally {
+      loadingRef.current = false;
       setReposLoading(false);
     }
     setState("github_redirect");
