@@ -235,12 +235,12 @@ respects the repository's ruleset configuration.
 
 ## Acceptance Criteria
 
-- [ ] CI Required ruleset bypass_mode is `"pull_request"` for both actors
-- [ ] `scripts/create-ci-required-ruleset.sh` uses `"pull_request"` bypass mode
-- [ ] Ruleset verified via API after update
-- [ ] Bot synthetic completeness lint passes
+- [x] CI Required ruleset bypass_mode is `"pull_request"` for both actors
+- [x] `scripts/create-ci-required-ruleset.sh` uses `"pull_request"` bypass mode
+- [x] Ruleset verified via API after update
+- [x] Bot synthetic completeness lint passes
 - [ ] Auto-merge still works (verified on this PR's own merge)
-- [ ] Admin can still bypass when explicitly choosing to (escape hatch preserved)
+- [x] Admin can still bypass when explicitly choosing to (escape hatch preserved)
 
 ## Test Scenarios
 
