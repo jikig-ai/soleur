@@ -264,7 +264,7 @@ Run the Task code-simplicity-reviewer() to see if we can simplify the code.
 
 ### 5. Findings Synthesis and GitHub Issue Creation
 
-<critical_requirement> ALL findings MUST be stored as GitHub issues via `gh issue create`. Create issues immediately after synthesis - do NOT present findings for user approval first. Every issue must include `--milestone` (AGENTS.md Guard 5). </critical_requirement>
+<critical_requirement> ALL findings MUST be stored as GitHub issues via `gh issue create`. Create issues immediately after synthesis - do NOT present findings for user approval first. Every issue must include `--milestone` (AGENTS.md guardrails:require-milestone). </critical_requirement>
 
 #### Step 1: Synthesize All Findings
 
@@ -283,7 +283,7 @@ Remove duplicates, prioritize by severity and impact.
 
 </synthesis_tasks>
 
-**Coupling note:** Ship Phase 1.5, Phase 5.5, and pre-merge hook Guard 6 detect review evidence by searching for GitHub issues with the `code-review` label whose body contains `PR #<number>`. If the issue body template or label changes, update detection logic in `ship/SKILL.md` and `.claude/hooks/pre-merge-rebase.sh`.
+**Coupling note:** Ship Phase 1.5, Phase 5.5, and pre-merge hook pre-merge:review-evidence-gate detect review evidence by searching for GitHub issues with the `code-review` label whose body contains `PR #<number>`. If the issue body template or label changes, update detection logic in `ship/SKILL.md` and `.claude/hooks/pre-merge-rebase.sh`.
 
 #### Step 2: Create GitHub Issues
 
