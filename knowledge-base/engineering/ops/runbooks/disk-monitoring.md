@@ -76,7 +76,7 @@ This only fires an alert if disk usage is actually above the threshold. To force
 curl -s -X POST "https://api.resend.com/emails" \
   -H "Authorization: Bearer $(grep RESEND_API_KEY /etc/default/disk-monitor | cut -d= -f2-)" \
   -H "Content-Type: application/json" \
-  -d '{"from":"Soleur Ops <noreply@send.soleur.ai>","to":["ops@jikigai.com"],"subject":"[TEST] Disk monitoring test","text":"Manual test"}'
+  -d '{"from":"Soleur Ops <noreply@soleur.ai>","to":["ops@jikigai.com"],"subject":"[TEST] Disk monitoring test","text":"Manual test"}'
 ```
 
 ## Silencing Alerts Temporarily
