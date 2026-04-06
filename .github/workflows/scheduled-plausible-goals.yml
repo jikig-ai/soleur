@@ -8,7 +8,7 @@
 # Required secrets:
 #   PLAUSIBLE_API_KEY  - Plausible API key
 #   PLAUSIBLE_SITE_ID  - Site ID (typically the domain, e.g. soleur.ai)
-#   DISCORD_WEBHOOK_URL - (optional) Discord webhook for failure notifications
+#   RESEND_API_KEY     - Resend API key for email failure notifications
 #
 # Security: No external code execution. Shell script + curl + jq only.
 #   No untrusted input is used in run: commands -- all inputs come from
@@ -42,31 +42,10 @@ jobs:
           PLAUSIBLE_SITE_ID: ${{ secrets.PLAUSIBLE_SITE_ID }}
         run: bash scripts/provision-plausible-goals.sh
 
-      - name: Discord notification (failure)
+      - name: Email notification (failure)
         if: failure()
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-        run: |
-          if [[ -z "${DISCORD_WEBHOOK_URL:-}" ]]; then
-            echo "DISCORD_WEBHOOK_URL not set, skipping failure notification"
-            exit 0
-          fi
-          RUN_URL="${REPO_URL}/actions/runs/${RUN_ID}"
-          MESSAGE=$(printf '**Plausible goal provisioning failed**\n\nWorkflow run: %s\n\nCheck logs for details.' \
-            "$RUN_URL")
-          PAYLOAD=$(jq -n \
-            --arg content "$MESSAGE" \
-            --arg username "Sol" \
-            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
-            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            "$DISCORD_WEBHOOK_URL")
-          if [[ "$HTTP_CODE" =~ ^2 ]]; then
-            echo "Discord failure notification sent (HTTP $HTTP_CODE)"
-          else
-            echo "::warning::Discord failure notification failed (HTTP $HTTP_CODE)"
-          fi
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[FAIL] Scheduled: Plausible Goals workflow failed'
+          body: '<p><strong>Scheduled: Plausible Goals</strong> failed.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}

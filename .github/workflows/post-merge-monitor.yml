@@ -197,39 +197,22 @@ jobs:
             --comment "Autonomous fix verified -- CI passed on main. Closing."
           echo "[ok] Issue #$ISSUE_NUM closed with bot-fix/verified label"
 
-      # --- Discord Notification ---
+      # --- Email Notifications ---
 
-      - name: Discord notification
-        if: steps.extract.outputs.issue
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          ISSUE_NUM: ${{ steps.extract.outputs.issue }}
-          COMMIT_SHA: ${{ steps.commit.outputs.sha }}
-          CONCLUSION: ${{ steps.commit.outputs.conclusion }}
-        run: |
-          if [[ -z "$DISCORD_WEBHOOK_URL" ]]; then
-            echo "DISCORD_WEBHOOK_URL not set, skipping"
-            exit 0
-          fi
-          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
-          if [[ "$CONCLUSION" == "failure" ]]; then
-            MESSAGE=$(printf '**[ALERT] Bot-fix reverted on main**\n\nIssue: %s/issues/%s\nCommit: %s/commit/%s\n\nCI failed after autonomous merge. Commit has been auto-reverted.' \
-              "$REPO_URL" "$ISSUE_NUM" "$REPO_URL" "$COMMIT_SHA")
-          else
-            MESSAGE=$(printf '**Bot-fix verified on main**\n\nIssue: %s/issues/%s (closed)\nCommit: %s/commit/%s\n\nCI passed after autonomous merge.' \
-              "$REPO_URL" "$ISSUE_NUM" "$REPO_URL" "$COMMIT_SHA")
-          fi
-          PAYLOAD=$(jq -n \
-            --arg content "$MESSAGE" \
-            --arg username "Sol" \
-            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
-            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            "$DISCORD_WEBHOOK_URL")
-          if [[ "$HTTP_CODE" =~ ^2 ]]; then
-            echo "Discord notification sent (HTTP $HTTP_CODE)"
-          else
-            echo "::warning::Discord notification failed (HTTP $HTTP_CODE)"
-          fi
+      - name: Email notification (bot-fix reverted)
+        if: steps.extract.outputs.issue && steps.commit.outputs.conclusion == 'failure'
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[ALERT] Bot-fix reverted on main'
+          body: '<p><strong>[ALERT] Bot-fix reverted on main</strong></p><p>Issue: <a href="${{ github.server_url }}/${{ github.repository }}/issues/${{ steps.extract.outputs.issue }}">#${{ steps.extract.outputs.issue }}</a><br>Commit: <code>${{ steps.commit.outputs.sha }}</code></p><p>CI failed after autonomous merge. Commit has been auto-reverted.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+
+      - name: Email notification (bot-fix verified)
+        if: steps.extract.outputs.issue && steps.commit.outputs.conclusion == 'success'
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[OK] Bot-fix verified on main'
+          body: '<p><strong>Bot-fix verified on main</strong></p><p>Issue: <a href="${{ github.server_url }}/${{ github.repository }}/issues/${{ steps.extract.outputs.issue }}">#${{ steps.extract.outputs.issue }}</a> (closed)<br>Commit: <code>${{ steps.commit.outputs.sha }}</code></p><p>CI passed after autonomous merge.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
