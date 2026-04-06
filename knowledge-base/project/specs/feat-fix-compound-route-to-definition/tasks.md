@@ -1,32 +1,24 @@
-# Tasks: fix apply compound route-to-definition proposals
+# Tasks: Apply Compound Route-to-Definition Proposals (Batch 2)
 
-## Phase 1: Apply Edits to work/SKILL.md
+## Phase 1: Apply Edits
 
-- [x] 1.1 Read `plugins/soleur/skills/work/SKILL.md` and locate the Infrastructure Validation section (step 6)
-- [x] 1.2 Grep for key phrases ("seccomp", "includes.caps", "triggers_replace") to verify no duplicate content exists
-- [x] 1.3 Add bwrap/seccomp bullet (#1572) after the existing cloud-init/lifecycle bullet (line 321)
-  - [x] 1.3.1 Match existing 3-space indentation under the numbered list item
-- [x] 1.4 Add Terraform triggers_replace bullet (#1564) after the bwrap/seccomp bullet
-  - [x] 1.4.1 Match existing 3-space indentation under the numbered list item
+- [ ] 1.1 Edit `plugins/soleur/skills/work/SKILL.md` -- add `vi.hoisted()` bullet after line 241 (existing `vi.mock()` bullet in TDD Gate section)
+- [ ] 1.2 Edit `plugins/soleur/skills/work/SKILL.md` -- add `replace_all` grep verification bullet in Common Pitfalls to Avoid section
+- [ ] 1.3 Edit `plugins/soleur/skills/ship/SKILL.md` -- add terraform resource enumeration instruction after line 684 in Phase 7 Step 3.5
+- [ ] 1.4 Edit `plugins/soleur/skills/one-shot/SKILL.md` -- expand subagent return contract at line 62 with CRITICAL format compliance instruction
 
-## Phase 2: Apply Edit to one-shot/SKILL.md
+## Phase 2: Update Learning Frontmatter
 
-- [x] 2.1 Read `plugins/soleur/skills/one-shot/SKILL.md` and locate Step 0c
-- [x] 2.2 Grep for "No commits between" to verify no duplicate content exists
-- [x] 2.3 Expand the failure handling text on line 28 to cover "No commits between branches" error
+- [ ] 2.1 Update `knowledge-base/project/learnings/test-failures/2026-04-06-vitest-mock-hoisting-requires-vi-hoisted.md` -- add `synced_to: [work]` after `tags` field
+- [ ] 2.2 Update `knowledge-base/project/learnings/security-issues/canary-crash-leaks-env-file-ci-deploy-20260406.md` -- add `synced_to: [work]` after `tags` field
+- [ ] 2.3 Update `knowledge-base/project/learnings/2026-04-06-terraform-data-connection-block-no-auto-replace.md` -- change `synced_to: []` to `synced_to: [ship]`
+- [ ] 2.4 Update `knowledge-base/project/learnings/2026-04-06-doppler-cli-checksum-cloud-init.md` -- add `synced_to: [one-shot]` after `tags` field
 
-## Phase 3: Update synced_to Frontmatter
+## Phase 3: Close Stale Issue
 
-- [x] 3.1 Read `knowledge-base/project/learnings/security-issues/bwrap-sandbox-three-layer-docker-fix-20260405.md` frontmatter
-- [x] 3.2 Add or update `synced_to` field to include `work`
-- [x] 3.3 Read `knowledge-base/project/learnings/integration-issues/stale-env-deploy-pipeline-terraform-bridge-20260405.md` frontmatter
-- [x] 3.4 Add or update `synced_to` field to include `work`
-- [x] 3.5 Read `knowledge-base/project/learnings/2026-04-05-graceful-sigterm-shutdown-node-patterns.md` frontmatter
-- [x] 3.6 Add or update `synced_to` field to include `one-shot`
+- [ ] 3.1 Close #1597 with comment explaining the fix is already present in one-shot/SKILL.md
 
-## Phase 4: Validation
+## Phase 4: Verify
 
-- [x] 4.1 Run `npx markdownlint-cli2 --fix` on both modified SKILL.md files
-- [x] 4.2 Re-read work/SKILL.md to verify both new bullets exist in correct position with correct indentation
-- [x] 4.3 Re-read one-shot/SKILL.md to verify Step 0c failure text covers the new error case
-- [x] 4.4 Verify all three learning files have updated `synced_to` frontmatter
+- [ ] 4.1 Run `npx markdownlint-cli2` on all three modified SKILL.md files -- exit code must be 0
+- [ ] 4.2 Grep each target file for key phrases to confirm edits are present
