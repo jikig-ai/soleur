@@ -3,9 +3,22 @@ title: "chore: terraform apply -replace to clear private key from state"
 type: chore
 date: 2026-04-06
 issues: [1567]
+deepened: 2026-04-06
 ---
 
 # chore: terraform apply -replace to clear private key from state
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-06
+**Sections enhanced:** 3 (Proposed Solution, Risk, Verification)
+**Research sources:** 3 project learnings (terraform-data-remote-exec-drift, ci-terraform-plan-workflow, terraform-state-r2-migration), outputs.tf verification, server.tf analysis
+
+### Key Improvements
+
+1. Simplified the Doppler invocation for local execution (personal CLI token, not CI service token) -- avoids the nested `doppler run` complexity
+2. Added `-auto-approve` guidance and explicit drift-check step to avoid accidentally applying unrelated changes
+3. Added `deploy_pipeline_fix` verification steps -- the original issue only mentioned `disk_monitor_install` but both resources had private keys
 
 ## Overview
 
@@ -24,27 +37,122 @@ Both had `private_key = file(var.ssh_private_key_path)` and both need `-replace`
 
 ## Proposed Solution
 
-### Phase 1: Initialize and Plan
+### Research Insights
 
-1. `cd apps/web-platform/infra`
-2. Run `doppler run --project soleur --config prd_terraform -- terraform init` to initialize the backend
-3. Run `doppler run --project soleur --config prd_terraform -- doppler run --token "$(doppler configure get token --plain)" --project soleur --config prd_terraform --name-transformer tf-var -- terraform plan -replace=terraform_data.disk_monitor_install -replace=terraform_data.deploy_pipeline_fix` to preview the replacement
-4. Verify the plan shows only the two resources being replaced (no unexpected changes)
+**Doppler invocation simplification for local execution:**
+The nested `doppler run` pattern in `variables.tf` comments is designed for CI, where `--name-transformer tf-var` must coexist with plain `AWS_*` env vars for the S3/R2 backend. Locally, the Doppler CLI authenticates with a personal token (not a service token), so a simpler approach works: one `doppler run` for backend creds, then `--name-transformer tf-var` for Terraform variables. Per learning `2026-03-21-ci-terraform-plan-workflow.md`, the `tf-var` transformer converts ALL keys including `AWS_ACCESS_KEY_ID`, which breaks the S3 backend. The nested pattern avoids this by having the outer call inject plain env vars.
 
-### Phase 2: Apply
+**Concurrent apply risk:**
+Per learning `2026-03-21-terraform-state-r2-migration.md`, the R2 backend uses `use_lockfile = false` (R2 does not support S3 conditional writes). There is no state lock. Ensure no other Terraform process (CI drift check, another local session) is running against the same state.
 
-5. Run the same command with `terraform apply` instead of `terraform plan`
-6. The apply will SSH into the server via agent, re-run the provisioners (upload scripts, reload systemd, enable timers), and store new state without private key material
+**Drift-check before apply:**
+Running `-replace` alongside an unmodified `terraform plan` could surface unrelated drift (firewall, DNS, server config). Always review the full plan output before applying. If unexpected changes appear, address them separately or use `-target` to limit scope.
 
-### Phase 3: Verify State
+### Phase 1: Prerequisites
 
-7. Run `doppler run --project soleur --config prd_terraform -- terraform state pull | jq '.resources[] | select(.type == "terraform_data") | {name: .name, attributes: .instances[].attributes}'` and confirm no `private_key` field appears in any `terraform_data` resource
+1. Verify SSH agent has keys loaded: `ssh-add -l`
+2. Verify no other Terraform process is running against web-platform state
+3. `cd apps/web-platform/infra`
 
-### Phase 4: Verify Server
+### Phase 2: Initialize
 
-8. Get server IP: `doppler run --project soleur --config prd_terraform -- doppler run --token "$(doppler configure get token --plain)" --project soleur --config prd_terraform --name-transformer tf-var -- terraform output -raw server_ip`
-9. Run `ssh root@<ip> systemctl list-timers disk-monitor.timer --no-pager` (read-only diagnosis per AGENTS.md) to confirm the timer is active and running
-10. Run `ssh root@<ip> systemctl status webhook --no-pager` to confirm the deploy pipeline service is also healthy after re-provisioning
+4. Run terraform init with R2 backend credentials:
+
+    ```bash
+    doppler run --project soleur --config prd_terraform -- \
+      terraform init
+    ```
+
+### Phase 3: Plan and Review
+
+5. Run terraform plan with `-replace` flags for both resources:
+
+    ```bash
+    doppler run --project soleur --config prd_terraform -- \
+      doppler run --token "$(doppler configure get token --plain)" \
+        --project soleur --config prd_terraform --name-transformer tf-var -- \
+      terraform plan \
+        -replace=terraform_data.disk_monitor_install \
+        -replace=terraform_data.deploy_pipeline_fix
+    ```
+
+6. **Review the plan output carefully.** Verify:
+    - Exactly 2 resources are being replaced (`disk_monitor_install`, `deploy_pipeline_fix`)
+    - No unexpected changes to other resources (server, firewall, DNS, volume)
+    - If unexpected drift appears, stop and investigate before proceeding
+
+### Phase 4: Apply
+
+7. Run the same command with `terraform apply` (no `-auto-approve` -- review the plan interactively to catch any last-second issues):
+
+    ```bash
+    doppler run --project soleur --config prd_terraform -- \
+      doppler run --token "$(doppler configure get token --plain)" \
+        --project soleur --config prd_terraform --name-transformer tf-var -- \
+      terraform apply \
+        -replace=terraform_data.disk_monitor_install \
+        -replace=terraform_data.deploy_pipeline_fix
+    ```
+
+8. The apply will SSH into the server via agent, re-run the provisioners (upload disk-monitor.sh, ci-deploy.sh, webhook.service, reload systemd, enable timers), and store new state without private key material
+
+### Phase 5: Verify State
+
+9. Pull state and check all `terraform_data` resources for stale private key material:
+
+    ```bash
+    doppler run --project soleur --config prd_terraform -- \
+      terraform state pull | \
+      jq '.resources[] | select(.type == "terraform_data") | {name: .name, attributes: .instances[].attributes}'
+    ```
+
+10. Verify: no `private_key` field in any resource's attributes. All three `terraform_data` resources should use `agent = true` connections.
+
+11. Run a clean plan to confirm zero pending changes:
+
+    ```bash
+    doppler run --project soleur --config prd_terraform -- \
+      doppler run --token "$(doppler configure get token --plain)" \
+        --project soleur --config prd_terraform --name-transformer tf-var -- \
+      terraform plan
+    ```
+
+    Expected output: "No changes. Your infrastructure matches the configuration."
+
+### Phase 6: Verify Server
+
+12. Get server IP from Terraform outputs:
+
+    ```bash
+    doppler run --project soleur --config prd_terraform -- \
+      doppler run --token "$(doppler configure get token --plain)" \
+        --project soleur --config prd_terraform --name-transformer tf-var -- \
+      terraform output -raw server_ip
+    ```
+
+13. Verify disk-monitor timer (read-only diagnosis per AGENTS.md):
+
+    ```bash
+    ssh root@<ip> systemctl list-timers disk-monitor.timer --no-pager
+    ```
+
+    Expected: timer is active with a next-run timestamp.
+
+14. Verify deploy pipeline webhook service:
+
+    ```bash
+    ssh root@<ip> systemctl status webhook --no-pager
+    ```
+
+    Expected: active (running).
+
+15. Verify disk-monitor script was deployed correctly:
+
+    ```bash
+    ssh root@<ip> head -5 /usr/local/bin/disk-monitor.sh
+    ```
+
+    Expected: script header matches the local file.
 
 ## Acceptance Criteria
 
@@ -79,7 +187,14 @@ No cross-domain implications detected -- infrastructure state cleanup with no us
 
 ## Risk
 
-**Low.** The `-replace` flag re-runs provisioners that upload disk-monitor.sh, ci-deploy.sh, and webhook.service to the server. These are idempotent operations (file copy + systemd reload). The only risk is a transient SSH failure, which would leave the resource in a tainted state resolvable by re-running apply.
+**Low.** The `-replace` flag re-runs provisioners that upload disk-monitor.sh, ci-deploy.sh, and webhook.service to the server. These are idempotent operations (file copy + systemd reload).
+
+### Edge Cases
+
+- **Transient SSH failure:** Would leave the resource in a tainted state. Resolution: re-run `terraform apply` (tainted resources are automatically replaced on next apply).
+- **Concurrent state access:** R2 backend has no state locking (`use_lockfile = false`). If the scheduled drift detection workflow runs concurrently, state corruption is possible. Mitigation: check `gh run list --workflow=scheduled-terraform-drift.yml --json status` before applying.
+- **Unrelated drift bundled into apply:** If other resources have drifted since last apply (firewall rules, DNS records, server config), the plan will show those changes alongside the two replacements. Mitigation: review plan output in Phase 3 before applying. If unexpected changes appear, use `-target` instead of `-replace` to limit scope.
+- **Provisioner script changes since last apply:** If `disk-monitor.sh`, `ci-deploy.sh`, or `webhook.service` were modified on disk since the last apply, the `triggers_replace` hash will differ and Terraform will show the resources as needing replacement anyway. This is expected and harmless -- the `-replace` flag is redundant in that case but causes no issues.
 
 ## References
 
