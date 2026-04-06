@@ -140,6 +140,7 @@ case "$COMPONENT" in
       --name soleur-web-platform-canary \
       --restart no \
       --security-opt apparmor=unconfined \
+      --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
       --env-file "$ENV_FILE" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
@@ -182,6 +183,7 @@ case "$COMPONENT" in
         --name soleur-web-platform \
         --restart unless-stopped \
         --security-opt apparmor=unconfined \
+        --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
         --env-file "$ENV_FILE" \
         -v /mnt/data/workspaces:/workspaces \
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
