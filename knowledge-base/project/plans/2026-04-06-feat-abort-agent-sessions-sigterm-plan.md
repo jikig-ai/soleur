@@ -143,12 +143,12 @@ Ordering matters:
 
 ## Acceptance Criteria
 
-- [ ] `abortAllSessions()` exported from `agent-runner.ts`
-- [ ] SIGTERM handler calls `abortAllSessions()` before WebSocket close loop
-- [ ] Agent SDK sessions receive abort signal during shutdown (AbortController.abort() called)
-- [ ] Conversation status updated to "failed" in database during shutdown (handled by existing catch block in `startAgentSession`)
-- [ ] Existing abort patterns (disconnect, superseded, account_deleted) are not affected
-- [ ] No new dependencies added
+- [x] `abortAllSessions()` exported from `agent-runner.ts`
+- [x] SIGTERM handler calls `abortAllSessions()` before WebSocket close loop
+- [x] Agent SDK sessions receive abort signal during shutdown (AbortController.abort() called)
+- [x] Conversation status updated to "failed" in database during shutdown (handled by existing catch block in `startAgentSession`)
+- [x] Existing abort patterns (disconnect, superseded, account_deleted) are not affected
+- [x] No new dependencies added
 
 ## Test Scenarios
 

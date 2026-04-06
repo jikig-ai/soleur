@@ -9,7 +9,7 @@ import { parse } from "url";
 import { WebSocket } from "ws";
 import { setupWebSocket } from "./ws-handler";
 import { WS_CLOSE_CODES } from "@/lib/types";
-import { cleanupOrphanedConversations, startInactivityTimer } from "./agent-runner";
+import { abortAllSessions, cleanupOrphanedConversations, startInactivityTimer } from "./agent-runner";
 import { handleConversationMessages } from "./api-messages";
 import { createChildLogger } from "./logger";
 import { buildHealthResponse } from "./health";
@@ -88,6 +88,10 @@ app.prepare().then(() => {
       process.exit(1);
     }, SHUTDOWN_TIMEOUT_MS);
     forceExit.unref();
+
+    // Abort all active agent sessions first — stops API credit consumption
+    // and triggers the catch block which updates conversation status to "failed".
+    abortAllSessions();
 
     server.close();
     server.closeIdleConnections();
