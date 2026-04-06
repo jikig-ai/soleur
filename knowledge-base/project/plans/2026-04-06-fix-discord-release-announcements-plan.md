@@ -59,13 +59,13 @@ The reason the Discord step must be inline (not a separate workflow) is architec
 
 ## Acceptance Criteria
 
-- [ ] `reusable-release.yml` posts release announcements to Discord `DISCORD_RELEASES_WEBHOOK_URL` (with fallback to `DISCORD_WEBHOOK_URL`) when a release is created
-- [ ] `reusable-release.yml` retains the existing email notification step (both email AND Discord for releases)
-- [ ] Discord message includes: component name, version, release notes (truncated to 1900 chars), release URL, Sol bot identity (username + avatar)
-- [ ] Discord step uses `continue-on-error: true` (non-blocking -- a Discord failure should not fail the release)
-- [ ] Discord step uses `allowed_mentions: {parse: []}` to prevent accidental @everyone/@here pings
-- [ ] `release-announce/SKILL.md` description remains accurate (it already says Discord is handled by CI -- this will be true again after the fix)
-- [ ] No other stale references remain in skill/agent files
+- [x] `reusable-release.yml` posts release announcements to Discord `DISCORD_RELEASES_WEBHOOK_URL` (with fallback to `DISCORD_WEBHOOK_URL`) when a release is created
+- [x] `reusable-release.yml` retains the existing email notification step (both email AND Discord for releases)
+- [x] Discord message includes: component name, version, release notes (truncated to 1900 chars), release URL, Sol bot identity (username + avatar)
+- [x] Discord step uses `continue-on-error: true` (non-blocking -- a Discord failure should not fail the release)
+- [x] Discord step uses `allowed_mentions: {parse: []}` to prevent accidental @everyone/@here pings
+- [x] `release-announce/SKILL.md` description remains accurate (it already says Discord is handled by CI -- this will be true again after the fix)
+- [x] No other stale references remain in skill/agent files
 
 ## Implementation
 
