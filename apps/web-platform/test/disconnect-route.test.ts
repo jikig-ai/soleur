@@ -41,11 +41,6 @@ vi.mock("@/server/rate-limiter", () => ({
 
 vi.mock("@/server/logger", () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-  createChildLogger: vi.fn(() => ({
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  })),
 }));
 
 vi.mock("@sentry/nextjs", () => ({
@@ -71,6 +66,33 @@ function makeRequest(): Request {
 }
 
 const TEST_USER_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+/** Sets up Supabase mock chain for the users table. */
+function setupUserMocks(opts: {
+  repoStatus?: string;
+  updateError?: { message: string } | null;
+}) {
+  const { repoStatus = "ready", updateError = null } = opts;
+
+  const mockSelectSingle = vi.fn().mockResolvedValue({
+    data: { repo_status: repoStatus },
+    error: null,
+  });
+  const mockSelectEq = vi.fn(() => ({ single: mockSelectSingle }));
+  const mockSelect = vi.fn(() => ({ eq: mockSelectEq }));
+
+  const mockUpdateEq = vi.fn().mockResolvedValue({ error: updateError });
+  const mockUpdate = vi.fn(() => ({ eq: mockUpdateEq }));
+
+  mockFrom.mockImplementation((table: string) => {
+    if (table === "users") {
+      return { select: mockSelect, update: mockUpdate };
+    }
+    return {};
+  });
+
+  return { mockUpdate };
+}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -102,7 +124,7 @@ describe("DELETE /api/repo/disconnect", () => {
     expect(res.status).toBe(429);
 
     const body = await res.json();
-    expect(body.error).toBeDefined();
+    expect(body.error).toMatch(/too many/i);
   });
 
   test("returns 403 on CSRF rejection", async () => {
@@ -115,30 +137,24 @@ describe("DELETE /api/repo/disconnect", () => {
     expect(res.status).toBe(403);
   });
 
+  test("returns 409 when repo is currently cloning", async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: TEST_USER_ID } },
+    });
+    setupUserMocks({ repoStatus: "cloning" });
+
+    const res = await DELETE(makeRequest());
+    expect(res.status).toBe(409);
+
+    const body = await res.json();
+    expect(body.error).toMatch(/in progress/i);
+  });
+
   test("returns 200 and clears all repo fields on successful disconnect", async () => {
     mockGetUser.mockResolvedValue({
       data: { user: { id: TEST_USER_ID } },
     });
-
-    // Mock select to return user with workspace_path
-    const mockSelectSingle = vi.fn().mockResolvedValue({
-      data: { workspace_path: "/workspaces/" + TEST_USER_ID },
-      error: null,
-    });
-    const mockSelectEq = vi.fn(() => ({ single: mockSelectSingle }));
-    const mockSelect = vi.fn(() => ({ eq: mockSelectEq }));
-
-    // Mock update
-    const mockUpdateEq = vi.fn().mockResolvedValue({ error: null });
-    const mockUpdate = vi.fn(() => ({ eq: mockUpdateEq }));
-
-    mockFrom.mockImplementation((table: string) => {
-      if (table === "users") {
-        return { select: mockSelect, update: mockUpdate };
-      }
-      return {};
-    });
-
+    const { mockUpdate } = setupUserMocks({ repoStatus: "ready" });
     mockDeleteWorkspace.mockResolvedValue(undefined);
 
     const res = await DELETE(makeRequest());
@@ -147,7 +163,6 @@ describe("DELETE /api/repo/disconnect", () => {
     const body = await res.json();
     expect(body.ok).toBe(true);
 
-    // Verify DB update was called with correct fields
     expect(mockUpdate).toHaveBeenCalledWith({
       github_installation_id: null,
       repo_url: null,
@@ -158,7 +173,6 @@ describe("DELETE /api/repo/disconnect", () => {
       workspace_status: null,
     });
 
-    // Verify workspace deletion was called
     expect(mockDeleteWorkspace).toHaveBeenCalledWith(TEST_USER_ID);
   });
 
@@ -166,23 +180,7 @@ describe("DELETE /api/repo/disconnect", () => {
     mockGetUser.mockResolvedValue({
       data: { user: { id: TEST_USER_ID } },
     });
-
-    const mockSelectSingle = vi.fn().mockResolvedValue({
-      data: { workspace_path: "/workspaces/" + TEST_USER_ID },
-      error: null,
-    });
-    const mockSelectEq = vi.fn(() => ({ single: mockSelectSingle }));
-    const mockSelect = vi.fn(() => ({ eq: mockSelectEq }));
-    const mockUpdateEq = vi.fn().mockResolvedValue({ error: null });
-    const mockUpdate = vi.fn(() => ({ eq: mockUpdateEq }));
-
-    mockFrom.mockImplementation((table: string) => {
-      if (table === "users") {
-        return { select: mockSelect, update: mockUpdate };
-      }
-      return {};
-    });
-
+    setupUserMocks({ repoStatus: "ready" });
     mockDeleteWorkspace.mockRejectedValue(new Error("Directory already removed"));
 
     const res = await DELETE(makeRequest());
@@ -196,30 +194,13 @@ describe("DELETE /api/repo/disconnect", () => {
     mockGetUser.mockResolvedValue({
       data: { user: { id: TEST_USER_ID } },
     });
-
-    const mockSelectSingle = vi.fn().mockResolvedValue({
-      data: { workspace_path: null },
-      error: null,
-    });
-    const mockSelectEq = vi.fn(() => ({ single: mockSelectSingle }));
-    const mockSelect = vi.fn(() => ({ eq: mockSelectEq }));
-    const mockUpdateEq = vi.fn().mockResolvedValue({ error: null });
-    const mockUpdate = vi.fn(() => ({ eq: mockUpdateEq }));
-
-    mockFrom.mockImplementation((table: string) => {
-      if (table === "users") {
-        return { select: mockSelect, update: mockUpdate };
-      }
-      return {};
-    });
+    setupUserMocks({ repoStatus: "not_connected" });
+    mockDeleteWorkspace.mockResolvedValue(undefined);
 
     const res = await DELETE(makeRequest());
     expect(res.status).toBe(200);
 
     const body = await res.json();
     expect(body.ok).toBe(true);
-
-    // Workspace deletion should NOT be called when no workspace exists
-    expect(mockDeleteWorkspace).not.toHaveBeenCalled();
   });
 });

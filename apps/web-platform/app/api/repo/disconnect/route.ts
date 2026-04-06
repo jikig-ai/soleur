@@ -40,10 +40,11 @@ export async function DELETE(request: Request) {
 
   const serviceClient = createServiceClient();
 
-  // Fetch current workspace_path for disk cleanup
-  const { data: userData, error: fetchError } = await serviceClient
+  // Reject disconnect while clone is in progress — the background
+  // provisionWorkspaceWithRepo would overwrite cleared fields on completion.
+  const { data: currentUser, error: fetchError } = await serviceClient
     .from("users")
-    .select("workspace_path")
+    .select("repo_status")
     .eq("id", user.id)
     .single();
 
@@ -55,6 +56,13 @@ export async function DELETE(request: Request) {
     return NextResponse.json(
       { error: "Failed to disconnect repository" },
       { status: 500 },
+    );
+  }
+
+  if (currentUser?.repo_status === "cloning") {
+    return NextResponse.json(
+      { error: "Cannot disconnect while repository setup is in progress. Please wait for cloning to complete." },
+      { status: 409 },
     );
   }
 
@@ -83,17 +91,16 @@ export async function DELETE(request: Request) {
     );
   }
 
-  // Best-effort workspace cleanup
-  if (userData?.workspace_path) {
-    try {
-      await deleteWorkspace(user.id);
-    } catch (err) {
-      logger.warn(
-        { err, userId: user.id },
-        "Workspace cleanup failed during disconnect (best-effort)",
-      );
-      Sentry.captureException(err);
-    }
+  // Best-effort workspace cleanup — deleteWorkspace derives path from
+  // getWorkspacesRoot() + userId, handles non-existent directories.
+  try {
+    await deleteWorkspace(user.id);
+  } catch (err) {
+    logger.warn(
+      { err, userId: user.id },
+      "Workspace cleanup failed during disconnect (best-effort)",
+    );
+    Sentry.captureException(err);
   }
 
   return NextResponse.json({ ok: true });
