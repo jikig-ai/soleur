@@ -66,6 +66,7 @@ for file in "${strategy_files[@]}"; do
 
   # Map cadence to days
   case "$review_cadence" in
+    weekly)    cadence_days=7 ;;
     monthly)   cadence_days=30 ;;
     quarterly) cadence_days=90 ;;
     biannual)  cadence_days=180 ;;
