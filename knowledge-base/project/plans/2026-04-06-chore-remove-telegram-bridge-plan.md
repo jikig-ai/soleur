@@ -2,9 +2,30 @@
 title: "chore: remove Telegram bridge entirely"
 type: chore
 date: 2026-04-06
+deepened: 2026-04-06
 ---
 
 # Remove Telegram Bridge
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-06
+**Sections enhanced:** 4 (Proposed Solution, Code/Config Removal, Documentation Updates, GitHub Issues)
+**Research method:** Full-repo grep for `telegram-bridge|soleur-bridge|soleur-telegram`, learnings review, gap analysis
+
+### Key Improvements
+
+1. **15 additional files discovered** that reference telegram-bridge but were missing from the original plan (ship/SKILL.md, deploy/hetzner-setup.md, constitution.md, README.md, ADRs, reusable-release.yml, .env.example, todos/)
+2. **Terraform destroy credential pattern clarified** -- must use the dual Doppler invocation (outer plain for R2 backend, inner with --name-transformer for TF_VAR_*), per documented learning
+3. **Additional learnings to archive** identified (timer-based tests, coverage config patterns)
+4. **Todo files cleanup** added -- 12 todo files in `todos/` reference telegram-bridge and need deletion or updating
+
+### New Considerations Discovered
+
+- The `scheduled-terraform-drift.yml` matrix will become single-entry after removal -- verify YAML matrix syntax still works with one element
+- `reusable-release.yml` uses telegram-bridge as an example in input descriptions -- update examples
+- `plugins/soleur/skills/ship/SKILL.md` has telegram-bridge app labeling logic that must be removed
+- `constitution.md` line 205 mentions telegram-bridge cloud-init parity -- remove the rule since it only applied to multi-server deploys
 
 ## Overview
 
@@ -64,18 +85,34 @@ The Telegram bridge (`apps/telegram-bridge/`) was the original mobile interface 
 1. Line 26: "Existing Terraform patterns live in `apps/telegram-bridge/infra/` and `apps/web-platform/infra/`" -- update to reference only `apps/web-platform/infra/`
 2. Line 28: "Copy the backend block from `apps/telegram-bridge/infra/main.tf`" -- update to reference `apps/web-platform/infra/main.tf`
 
-### Architecture Docs
+### Architecture and Documentation Files
 
 | File | Change |
 |------|--------|
 | `knowledge-base/engineering/architecture/diagrams/container.md` | Remove Telegram Bot container, Telegram API external system, related relations |
 | `knowledge-base/engineering/architecture/diagrams/system-context.md` | Remove Telegram external system and relations |
 | `knowledge-base/engineering/architecture/nfr-register.md` | Remove all "Telegram Bot" rows (~30 rows across all NFR categories) |
+| `knowledge-base/engineering/architecture/decisions/ADR-006-terraform-remote-backend-r2.md` | Update example key path reference |
+| `knowledge-base/engineering/architecture/decisions/ADR-019-terraform-only-for-infrastructure.md` | Remove telegram-bridge pattern reference |
 | `knowledge-base/project/components/telegram-bridge.md` | Delete |
+| `knowledge-base/project/constitution.md` | Remove line 205 (multi-server cloud-init parity rule -- only applied to telegram-bridge) |
+| `knowledge-base/project/README.md` | Remove `telegram-bridge/` from directory tree |
 | `knowledge-base/legal/compliance-posture.md` | Update Hetzner DPA row to remove "and CX22 (telegram-bridge)" |
 | `knowledge-base/operations/expenses.md` | Remove CX22 line (stale -- server already gone), update last_updated date |
 | `knowledge-base/engineering/ops/runbooks/disk-monitoring.md` | Remove "(telegram-bridge CX22 deferred)" reference |
 | `knowledge-base/product/roadmap.md` | Line 113 already says "Deferred" -- update to note removal/archive |
+| `plugins/soleur/skills/ship/SKILL.md` | Remove telegram-bridge app labeling logic (lines ~476-483) |
+| `plugins/soleur/skills/deploy/references/hetzner-setup.md` | Remove telegram-bridge infra reference |
+| `.github/workflows/reusable-release.yml` | Update input description examples to remove telegram-bridge |
+| `apps/web-platform/.env.example` | Remove comment referencing telegram-bridge README |
+
+### Todo Files to Clean Up
+
+12 files in `todos/` reference telegram-bridge. Telegram-specific todos should be deleted; others need reference updates:
+
+- **Delete**: `003-pending-p3-bridge-health-endpoint.md` (bridge-specific)
+- **Delete**: `029-pending-p2-refactor-health-state-to-callback.md` through `036-complete-p3-shutdown-try-finally.md` (all bridge code review items)
+- **Update or delete**: `001-pending-p3-doppler-token-permissions.md`, `002-pending-p3-cloud-init-ordering.md`, `003-complete-p3-add-scripts-exclusion.md` (check if bridge-specific or shared)
 
 ### Knowledge-Base Files to Archive
 
@@ -94,10 +131,12 @@ The Telegram bridge (`apps/telegram-bridge/`) was the original mobile interface 
 - `feat-telegram-streaming/`
 - `fix-tg-health-864/`
 
-**Learnings** (3):
+**Learnings** (5):
 
 - `runtime-errors/2026-02-11-async-status-message-lifecycle-telegram.md`
 - `technical-debt/2026-03-03-telegram-bridge-index-ts-mixed-concerns.md`
+- `technical-debt/2026-03-03-timer-based-async-settling-in-bridge-tests.md`
+- `implementation-patterns/2026-02-11-testability-refactoring-dependency-injection.md` (telegram-bridge specific)
 - `2026-03-02-telegram-streaming-repurpose-status-message.md`
 
 **Component doc** (1):
@@ -132,12 +171,16 @@ Order matters: destroy infra first, then remove code.
    `ssh root@135.181.45.178 "docker stop soleur-bridge && docker rm soleur-bridge && docker image prune -af"`
    (Read-only exception: this is a one-time teardown, not ongoing server management)
 
-2. **Run `terraform destroy`** in `apps/telegram-bridge/infra/` to remove Cloudflare tunnel, DNS CNAME, Access application, service token, and Access policy:
+2. **Run `terraform destroy`** in `apps/telegram-bridge/infra/` to remove Cloudflare tunnel, DNS CNAME, Access application, service token, and Access policy.
+
+   **Credential pattern** (from learning `2026-04-05-terraform-doppler-dual-credential-pattern.md`): The telegram-bridge Terraform has only Cloudflare variables (no Hetzner), so `--name-transformer tf-var` alone suffices for variables. However, `terraform init` needs raw `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` for the R2 backend. Extract R2 credentials first, then run init and destroy:
 
    ```text
    cd apps/telegram-bridge/infra
+   export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
+   export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
    terraform init
-   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform destroy
+   doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform destroy -auto-approve
    ```
 
 3. **Remove GitHub repo secrets** (6 secrets via `gh secret delete`)
@@ -152,20 +195,29 @@ Order matters: destroy infra first, then remove code.
 2. **Delete** `.github/workflows/telegram-bridge-release.yml`
 3. **Edit** `.github/workflows/ci.yml` -- remove telegram-bridge install and coverage steps
 4. **Edit** `.github/workflows/main-health-monitor.yml` -- remove telegram-bridge install step
-5. **Edit** `.github/workflows/scheduled-terraform-drift.yml` -- remove telegram-bridge from matrix and comment
-6. **Edit** `scripts/test-all.sh` -- remove telegram-bridge test suite line
-7. **Edit** `apps/web-platform/infra/ci-deploy.sh` -- remove telegram-bridge from ALLOWED_IMAGES and case handler
-8. **Edit** `apps/web-platform/infra/ci-deploy.test.sh` -- remove telegram-bridge test cases
+5. **Edit** `.github/workflows/scheduled-terraform-drift.yml` -- remove telegram-bridge from matrix and comment (note: verify single-element YAML matrix syntax works)
+6. **Edit** `.github/workflows/reusable-release.yml` -- update input description examples to remove telegram-bridge references
+7. **Edit** `scripts/test-all.sh` -- remove telegram-bridge test suite line
+8. **Edit** `apps/web-platform/infra/ci-deploy.sh` -- remove telegram-bridge from ALLOWED_IMAGES and case handler
+9. **Edit** `apps/web-platform/infra/ci-deploy.test.sh` -- remove telegram-bridge test cases
+10. **Edit** `plugins/soleur/skills/ship/SKILL.md` -- remove telegram-bridge app labeling logic
+11. **Edit** `apps/web-platform/.env.example` -- remove telegram-bridge README reference comment
+12. **Delete** telegram-specific todo files in `todos/` (003-bridge-health, 029-036 bridge code review items)
 
 ### Phase 3: Documentation Updates
 
 1. **Edit** `AGENTS.md` -- update Terraform pattern references from telegram-bridge to web-platform
 2. **Edit** architecture diagrams (container.md, system-context.md) -- remove Telegram elements
 3. **Edit** `nfr-register.md` -- remove all Telegram Bot rows
-4. **Edit** `compliance-posture.md` -- update Hetzner DPA line
-5. **Edit** `expenses.md` -- remove CX22 line, update date
-6. **Edit** `disk-monitoring.md` -- remove bridge reference
-7. **Edit** `roadmap.md` -- note removal (already deferred)
+4. **Edit** `ADR-006-terraform-remote-backend-r2.md` -- update example key path
+5. **Edit** `ADR-019-terraform-only-for-infrastructure.md` -- remove telegram-bridge reference
+6. **Edit** `constitution.md` -- remove line 205 (multi-server cloud-init parity rule)
+7. **Edit** `knowledge-base/project/README.md` -- remove telegram-bridge from directory tree
+8. **Edit** `compliance-posture.md` -- update Hetzner DPA line
+9. **Edit** `expenses.md` -- remove CX22 line, update date
+10. **Edit** `disk-monitoring.md` -- remove bridge reference
+11. **Edit** `roadmap.md` -- note removal (already deferred)
+12. **Edit** `plugins/soleur/skills/deploy/references/hetzner-setup.md` -- remove telegram-bridge infra reference
 
 ### Phase 4: Knowledge-Base Archival
 
@@ -182,19 +234,26 @@ Archive telegram-specific plans, brainstorms, specs, learnings, and component do
 - [ ] Cloudflare tunnel `soleur-telegram-bridge` destroyed (no `deploy-bridge.soleur.ai` DNS)
 - [ ] `apps/telegram-bridge/` directory deleted
 - [ ] `.github/workflows/telegram-bridge-release.yml` deleted
-- [ ] CI workflows (`ci.yml`, `main-health-monitor.yml`, `scheduled-terraform-drift.yml`) have no telegram references
+- [ ] CI workflows (`ci.yml`, `main-health-monitor.yml`, `scheduled-terraform-drift.yml`, `reusable-release.yml`) have no telegram references
 - [ ] `scripts/test-all.sh` has no telegram references
 - [ ] `ci-deploy.sh` and `ci-deploy.test.sh` have no telegram-bridge references
 - [ ] `AGENTS.md` references `apps/web-platform/infra/main.tf` instead of `apps/telegram-bridge/infra/main.tf`
 - [ ] Architecture diagrams have no Telegram elements
 - [ ] `nfr-register.md` has no Telegram Bot rows
+- [ ] ADR-006 and ADR-019 have no telegram-bridge references
+- [ ] `constitution.md` has no telegram-bridge references
+- [ ] `knowledge-base/project/README.md` has no telegram-bridge references
+- [ ] `plugins/soleur/skills/ship/SKILL.md` has no telegram-bridge app labeling
+- [ ] `plugins/soleur/skills/deploy/references/hetzner-setup.md` has no telegram-bridge reference
 - [ ] `expenses.md` has no CX22 line
 - [ ] 6 GitHub secrets removed
 - [ ] Doppler telegram secrets removed from prd, prd_terraform, ci configs
 - [ ] 7 GitHub issues closed, 4 updated
 - [ ] Telegram-specific knowledge-base files archived
+- [ ] Telegram-specific todo files in `todos/` deleted
 - [ ] `bun test` and `scripts/test-all.sh` pass without telegram-bridge
 - [ ] `ci-deploy.test.sh` passes without telegram-bridge test cases
+- [ ] Full-repo grep for `telegram-bridge` returns only: this plan, the tasks file, archived files, and knowledge-base files that mention telegram as a platform (not as infrastructure)
 
 ## Test Scenarios
 
