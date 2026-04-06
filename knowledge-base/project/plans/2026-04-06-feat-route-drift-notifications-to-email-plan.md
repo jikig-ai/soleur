@@ -115,14 +115,14 @@ This phase is tracked separately -- see Deferral Tracking below.
 
 ## Acceptance Criteria
 
-- [ ] `scheduled-terraform-drift.yml` sends email to `ops@jikigai.com` when drift is detected (exit code 2)
-- [ ] `scheduled-terraform-drift.yml` sends email to `ops@jikigai.com` when plan fails (exit code 1)
-- [ ] Email includes stack name, alert type (drift vs error), workflow run link, and truncated plan output
-- [ ] Email comes from `noreply@soleur.ai` (Resend verified domain)
-- [ ] Discord notification step is removed from the drift workflow
-- [ ] `RESEND_API_KEY` GitHub Actions secret is provisioned
-- [ ] Workflow continues to function when `RESEND_API_KEY` is not set (graceful skip)
-- [ ] Other workflows using `DISCORD_WEBHOOK_URL` are not affected by this change
+- [x] `scheduled-terraform-drift.yml` sends email to `ops@jikigai.com` when drift is detected (exit code 2)
+- [x] `scheduled-terraform-drift.yml` sends email to `ops@jikigai.com` when plan fails (exit code 1)
+- [x] Email includes stack name, alert type (drift vs error), workflow run link, and truncated plan output
+- [x] Email comes from `noreply@send.soleur.ai` (Resend verified domain)
+- [x] Discord notification step is removed from the drift workflow
+- [x] `RESEND_API_KEY` GitHub Actions secret is provisioned
+- [x] Workflow continues to function when `RESEND_API_KEY` is not set (graceful skip)
+- [x] All 14 workflows migrated from Discord to email (scope expanded per user request)
 
 ## Test Scenarios
 
