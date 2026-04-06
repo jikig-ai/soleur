@@ -185,42 +185,60 @@ jobs:
             echo "Created new drift issue for $STACK_NAME"
           fi
 
-      - name: Discord notification
+      - name: Email notification (Resend)
         if: steps.plan.outputs.exit_code != '0'
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           EXIT_CODE: ${{ steps.plan.outputs.exit_code }}
           STACK_NAME: ${{ steps.plan.outputs.stack_name }}
         run: |
-          if [[ -z "${DISCORD_WEBHOOK_URL:-}" ]]; then
-            echo "DISCORD_WEBHOOK_URL not set, skipping"
+          if [[ -z "${RESEND_API_KEY:-}" ]]; then
+            echo "::warning::RESEND_API_KEY not set, skipping email notification"
             exit 0
           fi
 
-          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
-          RUN_URL="${REPO_URL}/actions/runs/${GITHUB_RUN_ID}"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
 
           if [[ "$EXIT_CODE" == "2" ]]; then
-            MESSAGE=$(printf '**[DRIFT] Infrastructure drift detected in %s**\n\nRun: %s\n\nRun `terraform plan` locally to review changes.' \
-              "$STACK_NAME" "$RUN_URL")
+            SUBJECT="[DRIFT] Infrastructure drift detected in ${STACK_NAME}"
+            ALERT_TYPE="Drift Detected"
           else
-            MESSAGE=$(printf '**[ERROR] Terraform plan failed for %s**\n\nRun: %s\n\nCheck the workflow logs for details.' \
-              "$STACK_NAME" "$RUN_URL")
+            SUBJECT="[ERROR] Terraform plan failed for ${STACK_NAME}"
+            ALERT_TYPE="Plan Error (exit ${EXIT_CODE})"
           fi
 
-          PAYLOAD=$(jq -n \
-            --arg content "$MESSAGE" \
-            --arg username "Sol" \
-            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
-            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
+          PLAN_SNIPPET=""
+          if [[ -f "${RUNNER_TEMP}/plan-output.txt" ]]; then
+            PLAN_SNIPPET=$(head -c 4000 "${RUNNER_TEMP}/plan-output.txt" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+          fi
 
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+          { echo "<h2>${ALERT_TYPE}: ${STACK_NAME}</h2>"
+            echo "<p><strong>Stack:</strong> ${STACK_NAME}<br>"
+            echo "<strong>Time:</strong> ${TIMESTAMP}<br>"
+            echo "<strong>Run:</strong> <a href=\"${RUN_URL}\">${RUN_URL}</a></p>"
+            if [[ -n "$PLAN_SNIPPET" ]]; then
+              echo "<details><summary>Plan output (truncated)</summary>"
+              echo "<pre>${PLAN_SNIPPET}</pre></details>"
+            fi
+          } > /tmp/email-body.html
+
+          BODY_CONTENT=$(cat /tmp/email-body.html)
+
+          PAYLOAD=$(jq -n \
+            --arg from "Soleur Ops <noreply@send.soleur.ai>" \
+            --arg subject "$SUBJECT" \
+            --arg html "$BODY_CONTENT" \
+            '{from: $from, to: ["ops@jikigai.com"], subject: $subject, html: $html}')
+
+          HTTP_CODE=$(curl -s -o /tmp/resend-response.txt -w "%{http_code}" \
+            -X POST "https://api.resend.com/emails" \
+            -H "Authorization: Bearer ${RESEND_API_KEY}" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            "$DISCORD_WEBHOOK_URL")
+            -d "$PAYLOAD")
 
           if [[ "$HTTP_CODE" =~ ^2 ]]; then
-            echo "Discord notification sent (HTTP $HTTP_CODE)"
+            echo "Email notification sent to ops@jikigai.com (HTTP ${HTTP_CODE})"
           else
-            echo "::warning::Discord notification failed (HTTP $HTTP_CODE)"
+            echo "::warning::Email notification failed (HTTP ${HTTP_CODE}): $(cat /tmp/resend-response.txt)"
           fi

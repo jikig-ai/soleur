@@ -8,7 +8,7 @@
 # Required secrets:
 #   PLAUSIBLE_API_KEY  - Plausible API key
 #   PLAUSIBLE_SITE_ID  - Site ID (typically the domain, e.g. soleur.ai)
-#   DISCORD_WEBHOOK_URL - (optional) Discord webhook for failure notifications
+#   RESEND_API_KEY     - Resend API key for email failure notifications
 #
 # Security: No external code execution. Shell script + curl + jq only.
 #   No untrusted input is used in run: commands -- all inputs come from
@@ -47,36 +47,13 @@ jobs:
           PLAUSIBLE_SITE_ID: ${{ secrets.PLAUSIBLE_SITE_ID }}
         run: bash scripts/weekly-analytics.sh
 
-      - name: Discord notification (KPI miss)
+      - name: Email notification (KPI miss)
         if: steps.analytics.outputs.kpi_miss == 'true'
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          KPI_PHASE: ${{ steps.analytics.outputs.kpi_phase }}
-          KPI_TARGET: ${{ steps.analytics.outputs.kpi_target }}
-          KPI_ACTUAL: ${{ steps.analytics.outputs.kpi_actual }}
-          KPI_VISITORS: ${{ steps.analytics.outputs.kpi_visitors }}
-          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
-        run: |
-          if [[ -z "${DISCORD_WEBHOOK_URL:-}" ]]; then
-            echo "DISCORD_WEBHOOK_URL not set, skipping KPI miss notification"
-            exit 0
-          fi
-          MESSAGE=$(printf '**Weekly Analytics: KPI Miss**\n\nPhase: %s\nTarget: %s WoW\nActual: %s WoW\nVisitors: %s\n\nDashboard: %s/tree/main/knowledge-base/marketing/analytics\n\nRemediation: SEO audit, growth execution, and content generator workflows will be dispatched.' \
-            "$KPI_PHASE" "$KPI_TARGET" "$KPI_ACTUAL" "$KPI_VISITORS" "$REPO_URL")
-          PAYLOAD=$(jq -n \
-            --arg content "$MESSAGE" \
-            --arg username "Sol" \
-            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
-            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            "$DISCORD_WEBHOOK_URL")
-          if [[ "$HTTP_CODE" =~ ^2 ]]; then
-            echo "Discord KPI miss notification sent (HTTP $HTTP_CODE)"
-          else
-            echo "::warning::Discord KPI miss notification failed (HTTP $HTTP_CODE)"
-          fi
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[ALERT] Weekly Analytics: KPI Miss'
+          body: '<p><strong>Weekly Analytics: KPI Miss</strong></p><p>Phase: ${{ steps.analytics.outputs.kpi_phase }}<br>Target: ${{ steps.analytics.outputs.kpi_target }} WoW<br>Actual: ${{ steps.analytics.outputs.kpi_actual }} WoW<br>Visitors: ${{ steps.analytics.outputs.kpi_visitors }}</p><p><a href="${{ github.server_url }}/${{ github.repository }}/tree/main/knowledge-base/marketing/analytics">Dashboard</a></p><p>Remediation: SEO audit, growth execution, and content generator workflows will be dispatched.</p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       - name: Dispatch CMO remediation workflows
         if: steps.analytics.outputs.kpi_miss == 'true'
@@ -140,31 +117,10 @@ jobs:
 
           gh pr merge "$BRANCH" --squash --auto
 
-      - name: Discord notification (failure)
+      - name: Email notification (failure)
         if: failure()
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-        run: |
-          if [[ -z "${DISCORD_WEBHOOK_URL:-}" ]]; then
-            echo "DISCORD_WEBHOOK_URL not set, skipping failure notification"
-            exit 0
-          fi
-          RUN_URL="${REPO_URL}/actions/runs/${RUN_ID}"
-          MESSAGE=$(printf '**Weekly Analytics snapshot failed**\n\nWorkflow run: %s\n\nCheck logs for details.' \
-            "$RUN_URL")
-          PAYLOAD=$(jq -n \
-            --arg content "$MESSAGE" \
-            --arg username "Sol" \
-            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
-            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            "$DISCORD_WEBHOOK_URL")
-          if [[ "$HTTP_CODE" =~ ^2 ]]; then
-            echo "Discord failure notification sent (HTTP $HTTP_CODE)"
-          else
-            echo "::warning::Discord failure notification failed (HTTP $HTTP_CODE)"
-          fi
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[FAIL] Scheduled: Weekly Analytics workflow failed'
+          body: '<p><strong>Scheduled: Weekly Analytics</strong> failed.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}

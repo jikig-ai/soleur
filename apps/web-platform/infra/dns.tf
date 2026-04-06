@@ -45,6 +45,15 @@ resource "cloudflare_record" "mx_send" {
   ttl      = 1
 }
 
+# DKIM for send.soleur.ai subdomain (Resend HTTP API — ops notifications)
+resource "cloudflare_record" "dkim_resend_send" {
+  zone_id = var.cf_zone_id
+  name    = "resend._domainkey.send"
+  content = "p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC+EB1JLvPe+4RhVmheTK4jzPX22+fpYACUnrjws2hOJzzCOMLh1QhqBc5KrSHvyJpRsrvuYKVJguyliwLoY9NMARrdMQb0J7kayw7Ia2U5h1V3B+dP2OBi8WApYNUrkIlW4fY7OHRGEXk+J8als23Rx7cDhnZRwp0+LokLaXvT2wIDAQAB"
+  type    = "TXT"
+  ttl     = 1
+}
+
 resource "cloudflare_record" "dmarc" {
   zone_id = var.cf_zone_id
   name    = "_dmarc"
