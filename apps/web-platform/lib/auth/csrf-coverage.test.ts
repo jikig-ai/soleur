@@ -17,15 +17,17 @@ const EXEMPT_ROUTES = new Set([
 ]);
 
 describe("CSRF coverage", () => {
-  it("every POST route either uses validateOrigin or is explicitly exempt", () => {
+  it("every state-mutating route either uses validateOrigin or is explicitly exempt", () => {
     const appDir = resolve(__dirname, "../../app/api");
     const routeFiles = findRouteFiles(appDir);
 
     const unprotected: string[] = [];
+    const mutatingMethodRe = /export\s+(async\s+)?function\s+(POST|DELETE|PUT|PATCH)/;
 
     for (const filePath of routeFiles) {
       const content = readFileSync(filePath, "utf-8");
-      if (!/export\s+(async\s+)?function\s+POST/.test(content)) continue;
+      const match = content.match(mutatingMethodRe);
+      if (!match) continue;
 
       const relativePath = filePath
         .split("/apps/web-platform/")[1];
@@ -33,13 +35,13 @@ describe("CSRF coverage", () => {
       if (EXEMPT_ROUTES.has(relativePath)) continue;
 
       if (!content.includes("validateOrigin")) {
-        unprotected.push(relativePath);
+        unprotected.push(`${relativePath} (${match[2]})`);
       }
     }
 
     expect(
       unprotected,
-      `POST routes missing validateOrigin (add protection or add to EXEMPT_ROUTES with justification): ${unprotected.join(", ")}`,
+      `State-mutating routes missing validateOrigin (add protection or add to EXEMPT_ROUTES with justification): ${unprotected.join(", ")}`,
     ).toEqual([]);
   });
 });
