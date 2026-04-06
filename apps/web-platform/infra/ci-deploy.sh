@@ -130,12 +130,12 @@ case "$COMPONENT" in
     trap 'rm -f "$ENV_FILE"' EXIT
 
     # Start canary on port 3001 (old container still serving on 80/3000)
-    # AppArmor unconfined: Ubuntu 24.04 docker-default profile blocks mount()
-    # inside user namespaces, which bwrap needs for OS-level sandbox (#1557).
+    # Custom AppArmor profile: allows mount/umount/pivot_root for bwrap
+    # while maintaining Docker's other security restrictions (#1570).
     docker run -d \
       --name soleur-web-platform-canary \
       --restart no \
-      --security-opt apparmor=unconfined \
+      --security-opt apparmor=soleur-bwrap \
       --env-file "$ENV_FILE" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
@@ -177,7 +177,7 @@ case "$COMPONENT" in
       if docker run -d \
         --name soleur-web-platform \
         --restart unless-stopped \
-        --security-opt apparmor=unconfined \
+        --security-opt apparmor=soleur-bwrap \
         --env-file "$ENV_FILE" \
         -v /mnt/data/workspaces:/workspaces \
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
