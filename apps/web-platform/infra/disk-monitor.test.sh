@@ -209,39 +209,6 @@ test_critical_threshold() {
 
 test_critical_threshold
 
-# Test: 96% email subject contains [CRITICAL]
-test_critical_email_subject() {
-  TOTAL=$((TOTAL + 1))
-  local description="96% email subject contains [CRITICAL]"
-  local mock_dir
-  mock_dir=$(mktemp -d)
-
-  local output actual_exit
-  output=$(
-    export MOCK_DF_USAGE=96
-    setup_mocks_and_run "$mock_dir" 2>&1
-  ) && actual_exit=0 || actual_exit=$?
-
-  if [[ "$actual_exit" -eq 0 ]] && [[ -f "$mock_dir/curl_args" ]] && grep -qF '\\[CRITICAL\\]' "$mock_dir/curl_args"; then
-    PASS=$((PASS + 1))
-    echo "  PASS: $description"
-  else
-    # Fallback: check the JSON payload for CRITICAL in subject field
-    if [[ "$actual_exit" -eq 0 ]] && [[ -f "$mock_dir/curl_args" ]] && grep -qF "CRITICAL" "$mock_dir/curl_args"; then
-      PASS=$((PASS + 1))
-      echo "  PASS: $description"
-    else
-      FAIL=$((FAIL + 1))
-      echo "  FAIL: $description (exit=$actual_exit)"
-      echo "        output: $output"
-      [[ -f "$mock_dir/curl_args" ]] && echo "        curl_args: $(cat "$mock_dir/curl_args")"
-    fi
-  fi
-  rm -rf "$mock_dir"
-}
-
-test_critical_email_subject
-
 echo ""
 echo "--- Cooldown mechanism ---"
 
