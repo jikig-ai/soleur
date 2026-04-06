@@ -4,9 +4,32 @@ type: chore
 date: 2026-04-06
 issue: "#1316"
 semver: patch
+deepened: 2026-04-06
 ---
 
 # Migrate Hook-Enforced Rules from AGENTS.md to Constitution.md
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-06
+**Sections enhanced:** 4 (Phases 1, 2, 4; new Sharp Edges section)
+**Research sources:** 6 institutional learnings, guardrails.sh/pre-merge-rebase.sh/worktree-write-guard.sh source analysis
+
+### Key Improvements
+
+1. Added Sharp Edges section with 4 concrete pitfalls from institutional learnings
+2. Refined --delete-branch rule wording to reflect blanket-block semantics (per learning 2026-02-19)
+3. Added pre-merge-rebase.sh comment update precision guidance (review evidence rule stays)
+4. Added verification that `scripts/rule-audit.sh` header comment references remain accurate
+
+### Relevant Institutional Learnings Applied
+
+- `2026-02-25-lean-agents-md-gotchas-only.md` -- validates migration direction
+- `2026-03-05-plan-review-scope-reduction-and-hook-enforced-annotations.md` -- confirms annotation convention
+- `2026-02-26-worktree-enforcement-pretooluse-hook.md` -- validates hooks > prose principle
+- `2026-02-19-never-use-delete-branch-with-parallel-worktrees.md` -- blanket block, not conditional
+- `2026-02-24-guardrails-chained-commit-bypass.md` -- comment-only changes safe; grep patterns unaffected
+- `2026-02-24-guardrails-grep-false-positive-worktree-text.md` -- single-pattern principle for guards
 
 ## Problem
 
@@ -18,12 +41,19 @@ defense-in-depth. Migrating them to constitution.md (where four already have
 duplicates) reduces the AGENTS.md count and brings the total back under budget by
 consolidating duplicates.
 
+Per the "lean AGENTS.md" principle (learning 2026-02-25): "Can the agent discover
+this on its own?" For hook-enforced rules, the answer is yes -- the hook itself
+prevents the violation regardless of whether the agent reads the prose rule.
+Constitution.md preserves the documentation for agents without hook context (CI,
+external contributors) without consuming Tier 2 (every-turn) context budget.
+
 ## Context
 
 - **Issue:** #1316
 - **Brainstorm:** `knowledge-base/project/brainstorms/2026-03-30-rule-audit-ci-brainstorm.md`
 - **Audit script:** `scripts/rule-audit.sh` (generated the migration candidates)
 - **Enforcement tier model:** Tier 1 (hooks) > Tier 2 (AGENTS.md) > Tier 3 (constitution.md)
+- **Annotation convention:** `[hook-enforced: script.sh Guard N]` per learning 2026-03-05
 
 ## Migration Analysis
 
@@ -96,8 +126,13 @@ Add to Architecture > Never section (after existing worktree/branch rules around
 1. **--delete-branch rule:**
 
    ```
-   - Never use `--delete-branch` with `gh pr merge` when worktrees exist [hook-enforced: guardrails.sh Guard 3] -- use `gh pr merge <number> --squash --auto` then poll with `gh pr view <number> --json state --jq .state` until MERGED, then run `cleanup-merged`; `--delete-branch` orphans active worktrees whose branches are deleted out from under them
+   - Never use `--delete-branch` with `gh pr merge` [hook-enforced: guardrails.sh Guard 3] -- the hook blocks this whenever ANY worktree exists, not just the one for the branch being merged; in parallel development with multiple features in flight, there will almost always be other worktrees active; use `gh pr merge <number> --squash --auto` then poll with `gh pr view <number> --json state --jq .state` until MERGED, then run `cleanup-merged`
    ```
+
+   **Research insight:** Per learning 2026-02-19, the original AGENTS.md wording
+   "while a worktree exists for that branch" was misleading -- the guard is a
+   blanket block. The constitution.md version must reflect the blanket semantics
+   to avoid the same confusion.
 
 2. **rm -rf rule:**
 
@@ -139,9 +174,19 @@ Update the "Corresponding prose rules" header comments to reflect that migrated 
 
 **pre-merge-rebase.sh** (lines 15-17):
 
-- Remove `AGENTS.md "Before merging any PR..."` reference
-- Remove `AGENTS.md "gh pr merge without review evidence"` reference (the review evidence rule stays in AGENTS.md but the summary line L18 is being removed; the hook comment should reference the remaining constitution.md rule only)
+- Remove `AGENTS.md "Before merging any PR..."` reference (migrated to constitution.md)
+- Keep `AGENTS.md "gh pr merge without review evidence"` reference -- this is Guard 6 (review evidence gate) which was NOT in the migration candidate list; the guard itself lives in pre-merge-rebase.sh and is documented in AGENTS.md via other rules that remain (the review/QA workflow gates)
 - Keep `constitution.md "Before creating a PR or merging..."` reference
+
+  **Research insight:** The pre-merge-rebase.sh header (line 16) references
+  `AGENTS.md "gh pr merge without review evidence"`. This refers to the review
+  evidence gate (Guard 6 in pre-merge-rebase.sh), which is NOT the same as
+  AGENTS.md L18 (the summary bullet). The summary bullet mentioned "gh pr merge
+  without review evidence" as one item in a list, but the underlying review
+  evidence enforcement is independent. After removing L18, the hook comment
+  should still reference the review evidence gate -- it just no longer has a
+  dedicated AGENTS.md bullet. Update the comment to reference the hook's own
+  Guard 6 documentation instead of pointing to a now-deleted AGENTS.md line.
 
 **worktree-write-guard.sh** (lines 7-8):
 
@@ -185,6 +230,35 @@ No cross-domain implications detected -- infrastructure/tooling change affecting
 
 This is a single-PR change. All phases execute in one pass.
 
+## Sharp Edges
+
+1. **Blanket vs conditional --delete-branch block.** The AGENTS.md wording said
+   "while a worktree exists for that branch" which incorrectly implied it was safe
+   when the specific feature's worktree was gone. The hook checks for ANY
+   worktree. The constitution.md version must say "whenever ANY worktree exists"
+   -- not "when worktrees exist for the branch being merged." (Source: learning
+   2026-02-19)
+
+2. **Comment-only hook changes are safe.** Phases 4 touches only shell comment
+   lines (lines 9-14 of guardrails.sh, lines 15-17 of pre-merge-rebase.sh, lines
+   7-8 of worktree-write-guard.sh). These are above the `set -euo pipefail` line
+   and the `INPUT=$(cat)` line in all three scripts. No grep patterns, no regex,
+   no logic is modified. Verify by diffing only comment lines before committing.
+   (Source: learnings 2026-02-24 guardrails false positives)
+
+3. **Review evidence gate is NOT migrated.** pre-merge-rebase.sh Guard 6 (review
+   evidence) blocks `gh pr merge` without review evidence. This guard was
+   mentioned in AGENTS.md L18 (the summary bullet) but has its own enforcement
+   independent of L18. Removing L18 does not affect Guard 6 behavior. However,
+   the hook comment referencing L18 needs updating to avoid a stale pointer.
+
+4. **rule-audit.sh header references AGENTS.md rules.** The script at
+   `scripts/rule-audit.sh` lines 18-19 contains comments referencing AGENTS.md
+   rules about --milestone and heredoc indentation. The --milestone reference
+   points to a rule being migrated. Update this comment to reference
+   constitution.md instead, or remove it (the hook enforces the rule regardless
+   of where the prose lives).
+
 ## Files Changed
 
 | File | Change Type | Description |
@@ -194,3 +268,4 @@ This is a single-PR change. All phases execute in one pass.
 | `.claude/hooks/guardrails.sh` | Edit (comments only) | Update prose rule location references in header |
 | `.claude/hooks/pre-merge-rebase.sh` | Edit (comments only) | Update prose rule location references in header |
 | `.claude/hooks/worktree-write-guard.sh` | Edit (comments only) | Update prose rule location references in header |
+| `scripts/rule-audit.sh` | Edit (comments only) | Update AGENTS.md reference in header to constitution.md |
