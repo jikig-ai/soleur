@@ -6,6 +6,25 @@ date: 2026-04-06
 
 # fix: Apply Compound Route-to-Definition Proposals
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-06
+**Sections enhanced:** 3 (Proposed Fix, Sharp Edges, Context)
+**Research sources:** Verified line numbers, frontmatter state, duplicate checks, and synced_to consumption
+
+### Key Improvements
+
+1. Verified exact insertion points against current file content (line 321 for work/SKILL.md, line 28 for one-shot/SKILL.md)
+2. Confirmed no duplicate content exists in either target file (grep for key phrases returned zero matches)
+3. Discovered that one learning file already has `synced_to: []` (empty array) while two have no `synced_to` field -- implementation must handle both cases
+4. Confirmed `synced_to` is consumed by compound-capture Step 8.4 and `plugins/soleur/commands/sync.md` -- not dead code
+
+### New Considerations Discovered
+
+- The stale-env learning (#1564) already has `synced_to: []` in its frontmatter -- append `work` to the existing array instead of adding a new field
+- The bwrap learning (#1572) and sigterm learning (#1556) have no `synced_to` field -- add `synced_to: [work]` and `synced_to: [one-shot]` respectively after the `tags` field
+- Edit 3 (one-shot Step 0c) is a sentence replacement (expanding existing text), not an addition of a new line -- use Edit tool's string replacement, not append
+
 ## Problem
 
 The compound skill's headless mode now correctly files GitHub issues instead of skipping route-to-definition proposals (fixed in #1299). Three such issues have accumulated and need to be resolved by applying the proposed edits to their target skill definition files:
@@ -62,12 +81,12 @@ If this fails (no network, or "No commits between main and <branch>"), print a w
 
 ## Acceptance Criteria
 
-- [ ] work/SKILL.md Infrastructure Validation section has two new bullets (Docker seccomp and Terraform triggers_replace)
-- [ ] one-shot/SKILL.md Step 0c failure handling covers "No commits between branches" error
-- [ ] All three source learning files exist and are referenced correctly
+- [x] work/SKILL.md Infrastructure Validation section has two new bullets (Docker seccomp and Terraform triggers_replace)
+- [x] one-shot/SKILL.md Step 0c failure handling covers "No commits between branches" error
+- [x] All three source learning files exist and are referenced correctly
 - [ ] GitHub issues #1556, #1564, and #1572 are closed with `Closes #N` in PR body
-- [ ] Markdown lint passes on both modified files
-- [ ] Source learning `synced_to` frontmatter is updated for each applied edit
+- [x] Markdown lint passes on both modified files
+- [x] Source learning `synced_to` frontmatter is updated for each applied edit
 
 ## Test Scenarios
 
@@ -95,9 +114,10 @@ These are all compound route-to-definition proposals -- same origin mechanism, s
 
 ### Sharp Edges
 
-1. **Verify indentation matches existing bullets.** The work/SKILL.md Infrastructure Validation bullets use 3-space indentation (under a numbered list item). New bullets must match exactly or markdownlint will flag inconsistency.
-2. **Check for duplicate content.** Before adding each bullet, grep the target file for key phrases from the proposed edit to avoid duplication if the edit was partially applied in a prior session.
-3. **Update synced_to arrays, not overwrite.** If the learning already has a `synced_to` field, append to the array -- do not replace it.
+1. **Verify indentation matches existing bullets.** The work/SKILL.md Infrastructure Validation bullets use 3-space indentation (under a numbered list item). New bullets must match exactly or markdownlint will flag inconsistency. Verified: line 321 uses `- When cloud-init...` (3-space indent, dash, space).
+2. **Check for duplicate content.** Before adding each bullet, grep the target file for key phrases from the proposed edit to avoid duplication if the edit was partially applied in a prior session. Verified: `seccomp`, `includes.caps`, `triggers_replace` return zero matches in work/SKILL.md; `No commits between` returns zero matches in one-shot/SKILL.md.
+3. **Handle synced_to frontmatter differences across files.** The stale-env learning (`integration-issues/stale-env-deploy-pipeline-terraform-bridge-20260405.md`) already has `synced_to: []` -- append `work` to the existing array. The bwrap learning and sigterm learning have no `synced_to` field -- add it after the `tags` field. Do not overwrite existing frontmatter fields.
+4. **Edit 3 is a replacement, not an append.** The one-shot Step 0c edit replaces the sentence `If this fails (no network), print a warning but continue. The branch exists locally.` with an expanded version. Use the Edit tool's exact string matching, not line-number-based insertion.
 
 ## Domain Review
 

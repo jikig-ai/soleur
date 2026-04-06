@@ -3,6 +3,7 @@ title: "Node.js graceful SIGTERM shutdown requires explicit idle connection and 
 category: runtime-errors
 module: web-platform/server
 tags: [sigterm, graceful-shutdown, websocket, docker, node-http]
+synced_to: [one-shot]
 date: 2026-04-05
 ---
 
