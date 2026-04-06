@@ -468,6 +468,7 @@ create_dedup_issue() {
   local title="$1"
   local body="$2"
   local labels="$3"
+  local milestone="${4:-Post-MVP / Later}"
 
   # Check for existing open issue with exact title match
   local existing
@@ -479,7 +480,7 @@ create_dedup_issue() {
     return 0
   fi
 
-  if gh issue create --title "$title" --label "$labels" --milestone "Post-MVP / Later" --body "$body"; then
+  if gh issue create --title "$title" --label "$labels" --milestone "$milestone" --body "$body"; then
     echo "[ok] Issue created: $title"
   else
     echo "Error: Failed to create issue: $title" >&2
