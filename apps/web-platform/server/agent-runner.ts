@@ -1,8 +1,9 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
 import { readFileSync, writeFileSync } from "fs";
 import path from "path";
+import { z } from "zod/v4";
 
 import { DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { routeMessage } from "./domain-router";
@@ -18,6 +19,7 @@ import { createSandboxHook } from "./sandbox-hook";
 import { abortableReviewGate, validateSelection, type AgentSession } from "./review-gate";
 import { createChildLogger } from "./logger";
 import { syncPull, syncPush } from "./session-sync";
+import { createPullRequest } from "./github-app";
 
 const log = createChildLogger("agent");
 
@@ -313,10 +315,10 @@ export async function startAgentSession(
     const leader = DOMAIN_LEADERS.find((l) => l.id === effectiveLeaderId);
     if (!leader) throw new Error(`Unknown leader: ${effectiveLeaderId}`);
 
-    // Get user workspace path and repo status
+    // Get user workspace path, repo status, and GitHub App connection
     const { data: user } = await supabase
       .from("users")
-      .select("workspace_path, repo_status")
+      .select("workspace_path, repo_status, github_installation_id, repo_url")
       .eq("id", userId)
       .single();
 
@@ -349,6 +351,71 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
       systemPrompt += `\n\nThe user is currently viewing: ${context.path}\n\nArtifact content:\n${context.content}\n\nAnswer in the context of this artifact.`;
     }
 
+    // ---------------------------------------------------------------------------
+    // In-process MCP server for platform tools (PR creation, etc.)
+    // Only available when user has a GitHub App installation with a connected repo.
+    // ---------------------------------------------------------------------------
+    const installationId = user.github_installation_id as number | null;
+    const repoUrl = user.repo_url as string | null;
+
+    let mcpServersOption: Record<string, ReturnType<typeof createSdkMcpServer>> | undefined;
+    let platformToolNames: string[] = [];
+
+    if (installationId && repoUrl) {
+      // Parse owner/repo from repo_url (e.g., "https://github.com/owner/repo")
+      let owner: string;
+      let repo: string;
+      try {
+        const parsed = new URL(repoUrl);
+        const segments = parsed.pathname.split("/").filter(Boolean);
+        owner = segments[0] ?? "";
+        repo = segments[1] ?? "";
+      } catch {
+        owner = "";
+        repo = "";
+      }
+
+      if (owner && repo) {
+        const createPr = tool(
+          "create_pull_request",
+          "Create a pull request on the user's connected GitHub repository. " +
+          "The repository is determined server-side from the user's connected repo. " +
+          "The head branch must already exist on the remote (push first via git).",
+          {
+            head: z.string().describe("Branch name containing changes (just the name, not owner:branch)"),
+            base: z.string().default("main").describe("Target branch to merge into"),
+            title: z.string().describe("PR title"),
+            body: z.string().optional().describe("PR description body (markdown)"),
+          },
+          async (args) => {
+            try {
+              const result = await createPullRequest(
+                installationId, owner, repo,
+                args.head, args.base, args.title, args.body,
+              );
+              return {
+                content: [{ type: "text" as const, text: JSON.stringify(result) }],
+              };
+            } catch (err) {
+              return {
+                content: [{ type: "text" as const, text: `Error creating PR: ${(err as Error).message}` }],
+                isError: true,
+              };
+            }
+          },
+        );
+
+        const toolServer = createSdkMcpServer({
+          name: "soleur_platform",
+          version: "1.0.0",
+          tools: [createPr],
+        });
+
+        mcpServersOption = { soleur_platform: toolServer };
+        platformToolNames = ["mcp__soleur_platform__create_pull_request"];
+      }
+    }
+
     // Run the Agent SDK query
     const prompt = userMessage
       ?? `[Session started with ${leader.name}] How can I help you today?`;
@@ -373,6 +440,8 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         systemPrompt,
         env: buildAgentEnv(apiKey),
         disallowedTools: ["WebSearch", "WebFetch"],
+        ...(mcpServersOption ? { mcpServers: mcpServersOption } : {}),
+        ...(platformToolNames.length > 0 ? { allowedTools: platformToolNames } : {}),
         sandbox: {
           enabled: true,
           autoAllowBashIfSandboxed: true,
@@ -496,6 +565,12 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           // LS removed (#891) -- it accepts path inputs and routes through
           // isPathInWorkspace. NotebookRead removed -- SDK reads via Read tool.
           if (isSafeTool(toolName)) {
+            return { behavior: "allow" as const };
+          }
+
+          // Allow in-process MCP server tools (registered via mcpServers option).
+          // SDK confirms canUseTool fires for ALL tool calls including MCP tools.
+          if (toolName.startsWith("mcp__")) {
             return { behavior: "allow" as const };
           }
 

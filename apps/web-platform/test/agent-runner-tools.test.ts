@@ -1,0 +1,240 @@
+import { vi, describe, test, expect, beforeEach } from "vitest";
+
+// ---------------------------------------------------------------------------
+// Mock all heavy dependencies so agent-runner loads without side effects.
+// Use vi.hoisted() for variables referenced inside vi.mock() factories
+// (vitest hoists vi.mock to the top of the file before let/const execute).
+// ---------------------------------------------------------------------------
+
+const { mockFrom, mockQuery } = vi.hoisted(() => ({
+  mockFrom: vi.fn(),
+  mockQuery: vi.fn(),
+}));
+
+vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
+  query: mockQuery,
+  tool: vi.fn((_name: string, _desc: string, _schema: unknown, handler: Function) => ({
+    name: _name,
+    handler,
+  })),
+  createSdkMcpServer: vi.fn((opts: { name: string; tools: unknown[] }) => ({
+    type: "sdk",
+    name: opts.name,
+    instance: { tools: opts.tools },
+  })),
+}));
+
+vi.mock("@supabase/supabase-js", () => ({
+  createClient: vi.fn(() => ({ from: mockFrom })),
+}));
+vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
+vi.mock("../server/ws-handler", () => ({ sendToClient: vi.fn() }));
+vi.mock("../server/logger", () => ({
+  createChildLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+vi.mock("../server/byok", () => ({
+  decryptKey: vi.fn(() => "sk-test-key"),
+  decryptKeyLegacy: vi.fn(),
+  encryptKey: vi.fn(),
+}));
+vi.mock("../server/error-sanitizer", () => ({
+  sanitizeErrorForClient: vi.fn(() => "error"),
+}));
+vi.mock("../server/sandbox", () => ({ isPathInWorkspace: vi.fn(() => true) }));
+vi.mock("../server/tool-path-checker", () => ({
+  UNVERIFIED_PARAM_TOOLS: [],
+  extractToolPath: vi.fn(),
+  isFileTool: vi.fn(() => false),
+  isSafeTool: vi.fn(() => false),
+}));
+vi.mock("../server/agent-env", () => ({ buildAgentEnv: vi.fn(() => ({})) }));
+vi.mock("../server/sandbox-hook", () => ({
+  createSandboxHook: vi.fn(() => vi.fn()),
+}));
+vi.mock("../server/review-gate", () => ({
+  abortableReviewGate: vi.fn(),
+  validateSelection: vi.fn(),
+  MAX_SELECTION_LENGTH: 200,
+  REVIEW_GATE_TIMEOUT_MS: 300_000,
+}));
+vi.mock("../server/domain-leaders", () => ({
+  DOMAIN_LEADERS: [{ id: "cpo", name: "CPO", title: "Chief Product Officer", description: "Product" }],
+}));
+vi.mock("../server/domain-router", () => ({ routeMessage: vi.fn() }));
+vi.mock("../server/session-sync", () => ({
+  syncPull: vi.fn(),
+  syncPush: vi.fn(),
+}));
+
+import { startAgentSession } from "../server/agent-runner";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function setupSupabaseMock(userData: Record<string, unknown>) {
+  mockFrom.mockImplementation((table: string) => {
+    if (table === "api_keys") {
+      return {
+        select: () => ({
+          eq: () => ({
+            eq: () => ({
+              eq: () => ({
+                limit: () => ({
+                  single: () => ({
+                    data: {
+                      id: "key-1",
+                      encrypted_key: Buffer.from("test").toString("base64"),
+                      iv: Buffer.from("test-iv-1234").toString("base64"),
+                      auth_tag: Buffer.from("test-tag-1234567").toString("base64"),
+                      key_version: 2,
+                    },
+                    error: null,
+                  }),
+                }),
+              }),
+            }),
+          }),
+        }),
+      };
+    }
+    if (table === "users") {
+      return {
+        select: () => ({
+          eq: () => ({
+            single: () => ({
+              data: userData,
+              error: null,
+            }),
+          }),
+        }),
+      };
+    }
+    if (table === "conversations") {
+      return {
+        update: vi.fn(() => ({
+          eq: vi.fn(() => ({ error: null })),
+        })),
+      };
+    }
+    if (table === "messages") {
+      return { insert: () => ({ error: null }) };
+    }
+    return {
+      select: () => ({ eq: () => ({ single: () => ({ data: null, error: null }) }) }),
+      update: () => ({ eq: () => ({ error: null }) }),
+      insert: () => ({ error: null }),
+    };
+  });
+}
+
+function setupQueryMockImmediate() {
+  mockQuery.mockReturnValue({
+    async *[Symbol.asyncIterator]() {
+      yield { type: "result", session_id: "sess-1" };
+    },
+    next: vi.fn(),
+    return: vi.fn(),
+    throw: vi.fn(),
+  } as any);
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe("agent-runner MCP tool wiring", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test("passes mcpServers to query() when user has installationId and repo_url", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/alice/my-repo",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    expect(mockQuery).toHaveBeenCalledOnce();
+    const options = mockQuery.mock.calls[0][0].options;
+
+    // mcpServers should contain soleur_platform
+    expect(options.mcpServers).toBeDefined();
+    expect(options.mcpServers.soleur_platform).toBeDefined();
+
+    // allowedTools should include the MCP tool
+    expect(options.allowedTools).toContain("mcp__soleur_platform__create_pull_request");
+  });
+
+  test("omits mcpServers when user has no installationId", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: null,
+      github_installation_id: null,
+      repo_url: null,
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    expect(mockQuery).toHaveBeenCalledOnce();
+    const options = mockQuery.mock.calls[0][0].options;
+
+    // mcpServers should NOT be present
+    expect(options.mcpServers).toBeUndefined();
+  });
+
+  test("canUseTool allows mcp__ prefixed tools", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: null,
+      github_installation_id: null,
+      repo_url: null,
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    const canUseTool = options.canUseTool!;
+
+    // mcp__ prefixed tools should be allowed
+    const result = await canUseTool(
+      "mcp__soleur_platform__create_pull_request",
+      { head: "feat-branch", base: "main", title: "test" },
+      { signal: new AbortController().signal },
+    );
+    expect(result.behavior).toBe("allow");
+  });
+
+  test("canUseTool still denies non-mcp unrecognized tools", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: null,
+      github_installation_id: null,
+      repo_url: null,
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    const canUseTool = options.canUseTool!;
+
+    // Unknown non-mcp tools should still be denied
+    const result = await canUseTool(
+      "SomeUnknownTool",
+      {},
+      { signal: new AbortController().signal },
+    );
+    expect(result.behavior).toBe("deny");
+  });
+});
