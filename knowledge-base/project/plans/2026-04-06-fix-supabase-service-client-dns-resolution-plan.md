@@ -38,31 +38,42 @@ Introduce a new environment variable `SUPABASE_URL` (server-side only, no `NEXT_
 
 #### 1. `apps/web-platform/lib/supabase/server.ts`
 
-- `createServiceClient()`: use `SUPABASE_URL` (falling back to `NEXT_PUBLIC_SUPABASE_URL`)
+- Add `serverUrl()` helper that prefers `SUPABASE_URL` over `NEXT_PUBLIC_SUPABASE_URL`
+- Update `createServiceClient()` to use `serverUrl()`
+- Export `serverUrl()` for use by `health.ts` (which uses raw `fetch`, not a Supabase client)
 
 #### 2. `apps/web-platform/server/health.ts`
 
-- `checkSupabase()`: use `SUPABASE_URL` (falling back to `NEXT_PUBLIC_SUPABASE_URL`) for the REST ping
+- Import `serverUrl` from `@/lib/supabase/server`
+- Use `serverUrl()` instead of `process.env.NEXT_PUBLIC_SUPABASE_URL` for the REST ping
 
 #### 3. `apps/web-platform/server/ws-handler.ts`
 
-- Module-level `createClient()` call at line 35-38: use `SUPABASE_URL`
+- Remove inline `createClient()` call (line 35-38) and import `createServiceClient` from `@/lib/supabase/server`
+- Eliminates duplicate service client initialization
 
 #### 4. `apps/web-platform/server/agent-runner.ts`
 
-- Module-level `createClient()` call at line 26-29: use `SUPABASE_URL`
+- Remove inline `createClient()` call (line 26-29) and import `createServiceClient` from `@/lib/supabase/server`
+- Eliminates duplicate service client initialization
 
 #### 5. `apps/web-platform/server/api-messages.ts`
 
-- Module-level `createClient()` call at line 4-7: use `SUPABASE_URL`
+- Remove inline `createClient()` call (line 4-7) and import `createServiceClient` from `@/lib/supabase/server`
+- Eliminates duplicate service client initialization
 
 #### 6. `apps/web-platform/server/session-sync.ts`
 
-- `getSupabase()` function at line 21: use `SUPABASE_URL`
+- Remove inline `createClient()` call in `getSupabase()` and import `createServiceClient` from `@/lib/supabase/server`
+- Eliminates duplicate service client initialization
 
 #### 7. Doppler `prd` config
 
 - Add `SUPABASE_URL=https://ifsccnjhymdmidffkzhl.supabase.co` to the `prd` config
+
+### Consolidation Rationale
+
+Four server files (`ws-handler.ts`, `agent-runner.ts`, `api-messages.ts`, `session-sync.ts`) each create their own Supabase service client with raw env vars. This is the same pattern as `createServiceClient()` in `lib/supabase/server.ts`. By refactoring them to import `createServiceClient()`, the `serverUrl()` fix only needs to be applied in one place. This eliminates future drift -- any change to service client configuration (URL, auth options, timeouts) happens in one file.
 
 ### Implementation Pattern
 
@@ -77,7 +88,7 @@ function serverUrl(): string {
 }
 ```
 
-Use `serverUrl()` in `createServiceClient()` and export it for use by other server modules (`health.ts`, `ws-handler.ts`, `agent-runner.ts`, `api-messages.ts`, `session-sync.ts`).
+Use `serverUrl()` in `createServiceClient()` and export it for `health.ts` (raw fetch). Refactor `ws-handler.ts`, `agent-runner.ts`, `api-messages.ts`, and `session-sync.ts` to import `createServiceClient()` instead of creating their own clients.
 
 ### What NOT to Change
 
@@ -109,10 +120,10 @@ The root cause (Docker DNS resolution failure for the CNAME) is not directly fix
 - [ ] `/health` endpoint returns `supabase: "connected"` in production
 - [ ] `/api/repo/install` successfully resolves GitHub identities via `auth.admin.getUserById()`
 - [ ] `/api/repo/create` successfully reads the `users` table via service client
-- [ ] `SUPABASE_URL` is set in Doppler `prd` config
-- [ ] Local development works without setting `SUPABASE_URL` (fallback to `NEXT_PUBLIC_SUPABASE_URL`)
-- [ ] All existing server-side Supabase clients use the direct URL
-- [ ] WebSocket handler, agent runner, api-messages, and session-sync all use the direct URL
+- [x] `SUPABASE_URL` is set in Doppler `prd` config
+- [x] Local development works without setting `SUPABASE_URL` (fallback to `NEXT_PUBLIC_SUPABASE_URL`)
+- [x] All existing server-side Supabase clients use the direct URL
+- [x] WebSocket handler, agent runner, api-messages, and session-sync all use the direct URL
 
 ## Test Scenarios
 
@@ -133,6 +144,10 @@ The root cause (Docker DNS resolution failure for the CNAME) is not directly fix
 **Domains relevant:** none
 
 No cross-domain implications detected -- infrastructure/runtime bug fix with no user-facing, marketing, legal, or product impact.
+
+## Follow-up
+
+- [ ] File a GitHub issue to investigate Docker DNS resolver configuration on the Hetzner server (root cause of the CNAME resolution failure). The `SUPABASE_URL` env var sidesteps the issue, but Docker DNS should resolve CNAMEs correctly.
 
 ## Context
 

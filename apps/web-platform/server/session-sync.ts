@@ -8,7 +8,8 @@
 
 import { execFileSync } from "child_process";
 import { unlinkSync, writeFileSync } from "fs";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createServiceClient } from "@/lib/supabase/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateInstallationToken, randomCredentialPath } from "./github-app";
 import { createChildLogger } from "./logger";
 
@@ -18,13 +19,12 @@ let _supabase: SupabaseClient | null = null;
 
 function getSupabase(): SupabaseClient | null {
   if (_supabase) return _supabase;
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) {
+  if (!key) {
     log.warn("Supabase env vars not set — session sync disabled");
     return null;
   }
-  _supabase = createClient(url, key);
+  _supabase = createServiceClient();
   return _supabase;
 }
 

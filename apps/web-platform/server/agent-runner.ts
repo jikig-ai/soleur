@@ -1,10 +1,10 @@
 import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
-import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
 import { readFileSync, writeFileSync } from "fs";
 import path from "path";
 import { z } from "zod/v4";
 
+import { createServiceClient } from "@/lib/supabase/server";
 import { DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { routeMessage } from "./domain-router";
 import { KeyInvalidError } from "@/lib/types";
@@ -23,10 +23,7 @@ import { createPullRequest } from "./github-app";
 
 const log = createChildLogger("agent");
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 const PLUGIN_PATH =
   process.env.SOLEUR_PLUGIN_PATH || "/app/shared/plugins/soleur";
