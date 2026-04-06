@@ -55,6 +55,14 @@ cat > "$payload" << 'EOF'
           {
             "context": "test",
             "integration_id": 15368
+          },
+          {
+            "context": "dependency-review",
+            "integration_id": 15368
+          },
+          {
+            "context": "e2e",
+            "integration_id": 15368
           }
         ]
       }
@@ -64,12 +72,12 @@ cat > "$payload" << 'EOF'
     {
       "actor_id": null,
       "actor_type": "OrganizationAdmin",
-      "bypass_mode": "always"
+      "bypass_mode": "pull_request"
     },
     {
       "actor_id": 5,
       "actor_type": "RepositoryRole",
-      "bypass_mode": "always"
+      "bypass_mode": "pull_request"
     }
   ]
 }
