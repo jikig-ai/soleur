@@ -54,7 +54,8 @@ export default function ConnectRepoPage() {
     // Avoid flashing the "choose" screen when returning from GitHub App install
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
-      if (params.get("installation_id") && params.get("setup_action") === "install") {
+      const action = params.get("setup_action");
+      if (params.get("installation_id") && (action === "install" || action === "update")) {
         return "github_redirect";
       }
     }
@@ -73,6 +74,8 @@ export default function ConnectRepoPage() {
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stateRef = useRef<State>(state);
+  const loadingRef = useRef(false);
 
   // ---------------------------------------------------------------------------
   // On mount: fetch dynamic app slug and check for GitHub callback params
@@ -88,7 +91,7 @@ export default function ConnectRepoPage() {
     const installationId = searchParams.get("installation_id");
     const setupAction = searchParams.get("setup_action");
 
-    if (!installationId || setupAction !== "install") return;
+    if (!installationId || (setupAction !== "install" && setupAction !== "update")) return;
 
     // Single atomic effect: register install, then handle pending create or
     // fetch repos. Merging these prevents concurrent useEffect race conditions
@@ -156,6 +159,11 @@ export default function ConnectRepoPage() {
     };
   }, []);
 
+  // Keep stateRef in sync for use in event listeners
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
   // ---------------------------------------------------------------------------
   // Fetch repos
   // ---------------------------------------------------------------------------
@@ -177,6 +185,46 @@ export default function ConnectRepoPage() {
       setReposLoading(false);
     }
   }, []);
+
+  // ---------------------------------------------------------------------------
+  // Refresh repos (error-safe — keeps current state on failure)
+  // ---------------------------------------------------------------------------
+  const refreshRepos = useCallback(async () => {
+    if (loadingRef.current) return;
+    const currentState = stateRef.current;
+    if (currentState !== "select_project" && currentState !== "no_projects") return;
+    loadingRef.current = true;
+    setReposLoading(true);
+    try {
+      const res = await fetch("/api/repo/repos");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.repos && data.repos.length > 0) {
+        setRepos(data.repos);
+        setState("select_project");
+      } else {
+        setState("no_projects");
+      }
+    } catch {
+      // Silently keep current state — don't transition to interrupted
+    } finally {
+      loadingRef.current = false;
+      setReposLoading(false);
+    }
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Auto-refresh on tab focus
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        refreshRepos();
+      }
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [refreshRepos]);
 
   // ---------------------------------------------------------------------------
   // Start setup + polling
@@ -276,7 +324,28 @@ export default function ConnectRepoPage() {
     setState("create_project");
   }
 
-  function handleConnectExisting() {
+  async function handleConnectExisting() {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    setReposLoading(true);
+    try {
+      const res = await fetch("/api/repo/repos");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.repos && data.repos.length > 0) {
+          setRepos(data.repos);
+          setState("select_project");
+        } else {
+          setState("no_projects");
+        }
+        return;
+      }
+    } catch {
+      // Network error — fall through to GitHub redirect
+    } finally {
+      loadingRef.current = false;
+      setReposLoading(false);
+    }
     setState("github_redirect");
   }
 
@@ -303,7 +372,33 @@ export default function ConnectRepoPage() {
     router.push(returnPath);
   }
 
-  function handleCreateSubmit(name: string, isPrivate: boolean) {
+  async function handleCreateSubmit(name: string, isPrivate: boolean) {
+    // Try creating directly — skip GitHub redirect if already installed
+    try {
+      const createRes = await fetch("/api/repo/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, private: isPrivate }),
+      });
+      if (createRes.ok) {
+        const data = await createRes.json();
+        startSetup(data.repoUrl, data.fullName);
+        return;
+      }
+      const errorData = await createRes.json().catch(() => null);
+      // 400 with "not installed" → fall back to GitHub redirect
+      if (createRes.status === 400) {
+        setPendingCreate({ name, isPrivate });
+        setState("github_redirect");
+        return;
+      }
+      // Other errors → show failed state
+      setSetupError(errorData?.error ?? "Failed to create repository");
+      setState("failed");
+      return;
+    } catch {
+      // Network error — fall back to GitHub redirect
+    }
     setPendingCreate({ name, isPrivate });
     setState("github_redirect");
   }
@@ -403,12 +498,14 @@ export default function ConnectRepoPage() {
             loading={reposLoading}
             onSelect={handleSelectProject}
             onBack={() => setState("choose")}
+            onRefresh={refreshRepos}
           />
         )}
         {state === "no_projects" && (
           <NoProjectsState
             onUpdateAccess={handleUpdateAccess}
             onBack={() => setState("choose")}
+            onRefresh={refreshRepos}
           />
         )}
         {state === "setting_up" && <SettingUpState steps={setupSteps} />}

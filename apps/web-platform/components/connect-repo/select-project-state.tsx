@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import { ArrowLeftIcon, SearchIcon, SpinnerIcon, ChevronDownIcon } from "@/components/icons";
+import { ArrowLeftIcon, SearchIcon, SpinnerIcon, ChevronDownIcon, RefreshIcon } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
 import { GoldButton } from "@/components/ui/gold-button";
 import { relativeTime } from "@/lib/relative-time";
@@ -14,9 +14,10 @@ interface SelectProjectStateProps {
   loading: boolean;
   onSelect: (repo: Repo) => void;
   onBack: () => void;
+  onRefresh?: () => void;
 }
 
-export function SelectProjectState({ repos, loading, onSelect, onBack }: SelectProjectStateProps) {
+export function SelectProjectState({ repos, loading, onSelect, onBack, onRefresh }: SelectProjectStateProps) {
   const [selected, setSelected] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -47,6 +48,16 @@ export function SelectProjectState({ repos, loading, onSelect, onBack }: SelectP
           <ArrowLeftIcon className="h-4 w-4" />
         </button>
         <Badge>CONNECT PROJECT</Badge>
+        {onRefresh && (
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-neutral-700 text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-neutral-200"
+            aria-label="Refresh"
+          >
+            <RefreshIcon className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       <div className="space-y-2">

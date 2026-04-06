@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-04-03
+last_updated: 2026-04-06
 ---
 
 # Campaign Calendar
@@ -20,7 +20,7 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|-------------|----------|--------|
 | AI Agents for Solo Founders: The Definitive Guide | pillar | - | discord, x, bluesky, linkedin-company | draft |
-| From Scattered Positioning to a Full Brand Guide in Two Sessions | case-study | - | discord, x, bluesky, linkedin-company | draft |
+| From Scattered Positioning to a Full Brand Guide in Two Sessions | case-study | 2026-03-21 | discord, x, bluesky, linkedin-company | draft |
 | Soleur vs. Polsia: Two Architectures for Running a Company with AI | pillar | - | discord, x, bluesky, linkedin-company | draft |
 
 ## Published
