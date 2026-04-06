@@ -190,6 +190,16 @@ describe("DELETE /api/repo/disconnect", () => {
     expect(body.ok).toBe(true);
   });
 
+  test("returns 500 when database update fails", async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
+    setupUserMocks({ repoStatus: "ready", updateError: { message: "constraint violation" } });
+
+    const res = await DELETE(makeRequest());
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error).toMatch(/failed to disconnect/i);
+  });
+
   test("returns 200 idempotently when user has no connected repo", async () => {
     mockGetUser.mockResolvedValue({
       data: { user: { id: TEST_USER_ID } },
