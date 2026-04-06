@@ -45,6 +45,15 @@ interface VerifyResult {
   status?: number; // HTTP status to return to client
 }
 
+class InstallationError extends Error {
+  constructor(
+    message: string,
+    public readonly code: "NOT_FOUND" | "NO_ACCOUNT" | "FETCH_FAILED",
+  ) {
+    super(message);
+  }
+}
+
 interface GitHubInstallationTokenResponse {
   token: string;
   expires_at: string;
@@ -198,10 +207,11 @@ export async function getInstallationAccount(
 
   if (!response.ok) {
     if (response.status === 404) {
-      throw new Error("Installation not found");
+      throw new InstallationError("Installation not found", "NOT_FOUND");
     }
-    throw new Error(
+    throw new InstallationError(
       `Failed to fetch installation: ${response.status}`,
+      "FETCH_FAILED",
     );
   }
 
@@ -209,7 +219,7 @@ export async function getInstallationAccount(
     account?: InstallationAccount;
   };
   if (!data.account?.login) {
-    throw new Error("Installation has no account");
+    throw new InstallationError("Installation has no account", "NO_ACCOUNT");
   }
   return data.account;
 }
@@ -231,11 +241,13 @@ export async function verifyInstallationOwnership(
   try {
     account = await getInstallationAccount(installationId);
   } catch (err) {
-    if (err instanceof Error && err.message === "Installation not found") {
-      return { verified: false, error: "Installation not found", status: 404 };
-    }
-    if (err instanceof Error && err.message === "Installation has no account") {
-      return { verified: false, error: "Installation has no account", status: 502 };
+    if (err instanceof InstallationError) {
+      if (err.code === "NOT_FOUND") {
+        return { verified: false, error: "Installation not found", status: 404 };
+      }
+      if (err.code === "NO_ACCOUNT") {
+        return { verified: false, error: "Installation has no account", status: 502 };
+      }
     }
     log.error(
       { installationId, err },

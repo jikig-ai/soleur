@@ -237,4 +237,33 @@ describe("getInstallationAccount", () => {
       getInstallationAccount(installationId),
     ).rejects.toThrow(/Installation not found/);
   });
+
+  test("throws on no account in response", async () => {
+    const installationId = uniqueInstallationId();
+
+    // Mock: GET /app/installations/{id} — success but no account
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ account: null }),
+    });
+
+    await expect(
+      getInstallationAccount(installationId),
+    ).rejects.toThrow(/Installation has no account/);
+  });
+
+  test("throws on non-404 error status", async () => {
+    const installationId = uniqueInstallationId();
+
+    // Mock: GET /app/installations/{id} — 500
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      json: async () => ({ message: "Internal Server Error" }),
+    });
+
+    await expect(
+      getInstallationAccount(installationId),
+    ).rejects.toThrow(/Failed to fetch installation: 500/);
+  });
 });
