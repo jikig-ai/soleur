@@ -29,7 +29,7 @@ Plan: `knowledge-base/project/plans/2026-04-06-feat-disk-monitor-email-notificat
 
 - [ ] 3.1 Update `setup_mocks_and_run` in `disk-monitor.test.sh` to write `RESEND_API_KEY` instead of `DISCORD_OPS_WEBHOOK_URL` in mock env file
 - [ ] 3.2 Update `MOCK_NO_WEBHOOK` toggle to control `RESEND_API_KEY` instead
-- [ ] 3.3 Update curl mock to capture Resend API-specific args (Authorization header, JSON body with `from`/`to`/`subject`/`html`)
+- [ ] 3.3 Update curl mock to capture Resend API-specific args (Authorization header, JSON body with `from`/`to`/`subject`/`html`) and output HTTP status code (e.g., `echo "200"`) for response code checking
 - [ ] 3.4 Update `test_warning_threshold` to verify WARNING in curl args (Resend payload)
 - [ ] 3.5 Update `test_critical_threshold` to verify CRITICAL in curl args
 - [ ] 3.6 Replace `test_critical_mentions` (Discord `everyone`) with test verifying CRITICAL email subject format
@@ -50,3 +50,4 @@ Plan: `knowledge-base/project/plans/2026-04-06-feat-disk-monitor-email-notificat
 - [ ] 5.3 SSH verify: `systemctl is-active disk-monitor.timer` returns "active"
 - [ ] 5.4 SSH verify: `grep RESEND_API_KEY /etc/default/disk-monitor` confirms key present
 - [ ] 5.5 SSH verify: `grep -c DISCORD /etc/default/disk-monitor` returns 0
+- [ ] 5.6 End-to-end verify: trigger disk-monitor.sh on server and confirm email arrives at `ops@jikigai.com`

@@ -153,7 +153,7 @@ Update `disk-monitor.test.sh`:
 
 - Replace `DISCORD_OPS_WEBHOOK_URL` with `RESEND_API_KEY` in mock env file creation
 - Update `MOCK_NO_WEBHOOK` toggle description and env var name
-- Update curl mock to capture Resend API call args (Authorization header, JSON body)
+- Update curl mock to capture Resend API call args (Authorization header, JSON body) and output an HTTP status code (e.g., `echo "200"`) since the new implementation may use `-w "%{http_code}"` to check response codes
 - Update assertions to check for Resend API URL instead of Discord webhook URL
 - Update "everyone" mentions test to verify CRITICAL emails include "[CRITICAL]" in subject instead
 
@@ -182,6 +182,7 @@ Verify post-apply:
 - `terraform plan` shows no changes
 - SSH verify: `systemctl is-active disk-monitor.timer` returns "active"
 - SSH verify: `grep RESEND_API_KEY /etc/default/disk-monitor` shows the key
+- End-to-end verify: trigger `bash /usr/local/bin/disk-monitor.sh` on the server (if disk usage is above 80%) or temporarily lower `WARN_THRESHOLD` in the script, run it, and confirm an email arrives at `ops@jikigai.com`
 
 ## References
 
