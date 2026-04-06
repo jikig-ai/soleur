@@ -1,8 +1,0 @@
-[install]
-# Reject packages published less than 3 days ago (supply chain defense).
-# See: https://github.com/jikig-ai/soleur/issues/1174
-minimumReleaseAge = 259200
-
-[test]
-coverage = true
-coverageThreshold = { line = 0.8, function = 0.8 }

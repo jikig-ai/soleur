@@ -111,7 +111,6 @@ Rules enforced by PreToolUse hooks are annotated with `[hook-enforced: <script>]
 ```
 soleur/
   apps/                     # Standalone applications
-    telegram-bridge/        # Telegram bot bridge to Claude
   plugins/soleur/           # The Claude Code plugin
     agents/                 # AI agents by domain (63 agents)
       engineering/          # review/, design/, discovery/, infra/, research/, workflow/

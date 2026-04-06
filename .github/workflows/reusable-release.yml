@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       component:
-        description: "Component identifier (e.g., plugin, web-platform, telegram-bridge)"
+        description: "Component identifier (e.g., plugin, web-platform)"
         type: string
         required: true
       component_display:
@@ -16,7 +16,7 @@ on:
         type: string
         required: true
       tag_prefix:
-        description: "Git tag prefix (e.g., v, web-v, telegram-v)"
+        description: "Git tag prefix (e.g., v, web-v)"
         type: string
         required: true
       docker_image:

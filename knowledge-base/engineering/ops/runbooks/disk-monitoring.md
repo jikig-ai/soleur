@@ -1,7 +1,7 @@
 # Disk Space Monitoring Runbook
 
 **Issue:** #1409
-**Servers:** web-platform CX33 (telegram-bridge CX22 deferred)
+**Servers:** web-platform CX33
 
 ## Alert Types
 

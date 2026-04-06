@@ -45,9 +45,9 @@ test_files=()
 while IFS= read -r file; do
   [[ -z "$file" ]] && continue
 
-  # If a test file was directly changed, include it
+  # If a test file was directly changed, include it (skip if deleted)
   if [[ "$file" == *.test.ts || "$file" == *.test.js || "$file" == *.test.sh ]]; then
-    if [[ -z "${seen_tests[$file]:-}" ]]; then
+    if [[ -f "$file" && -z "${seen_tests[$file]:-}" ]]; then
       seen_tests["$file"]=1
       test_files+=("$file")
     fi

@@ -14,8 +14,6 @@ System_Ext(cloudflare, "Cloudflare", "DNS, CDN, Tunnel, R2")
 System_Ext(doppler, "Doppler", "Secrets management")
 System_Ext(stripe, "Stripe", "Payment processing")
 System_Ext(plausible, "Plausible", "Privacy-focused analytics")
-System_Ext(telegram_api, "Telegram Bot API", "Messaging")
-
 Enterprise_Boundary(b0, "Soleur Platform") {
 
     Container_Boundary(web, "Web Application") {
@@ -36,14 +34,10 @@ Enterprise_Boundary(b0, "Soleur Platform") {
         Container(kb, "Knowledge Base", "Markdown + YAML", "Conventions, learnings, ADRs, specs, plans, brainstorms")
     }
 
-    Container_Boundary(tgbridge, "Telegram Bridge") {
-        Container(tgbot, "Telegram Bot", "grammy, TypeScript", "Bridges Telegram messages to Claude Code CLI sessions")
-    }
-
     Container_Boundary(infra, "Infrastructure") {
         ContainerDb(supabase, "Supabase PostgreSQL", "PostgreSQL", "Users, BYOK-encrypted API keys, conversation sessions")
         Container(tunnel, "Cloudflare Tunnel", "cloudflared", "Zero-trust inbound access — no exposed ports")
-        Container(hetzner, "Compute", "Hetzner Cloud", "Docker containers running web app, CLI engine, and telegram bridge")
+        Container(hetzner, "Compute", "Hetzner Cloud", "Docker containers running web app and CLI engine")
     }
 }
 
@@ -66,9 +60,6 @@ Rel(doppler, claude, "Injects secrets", "CLI")
 Rel(auth, supabase, "Validates tokens", "HTTPS")
 Rel(api, stripe, "Checkout and webhooks", "HTTPS")
 Rel(dashboard, plausible, "Page view events", "JS snippet")
-Rel(tgbot, telegram_api, "Receives/sends messages", "grammy SDK")
-Rel(tgbot, claude, "Bridges to CLI", "Subprocess")
-Rel(hetzner, tgbot, "Hosts", "Docker")
 ```
 
 ## Notes
@@ -80,4 +71,3 @@ Rel(hetzner, tgbot, "Hosts", "Docker")
 - Version derived from git tags at merge time, not committed files (ADR-017)
 - Stripe handles subscription checkout sessions and payment webhooks (test mode)
 - Plausible analytics embedded as JS snippet in the web dashboard (no cookies, GDPR-compliant)
-- Telegram bridge is a separate app (apps/telegram-bridge/) running as its own Docker container on Hetzner

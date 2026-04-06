@@ -30,7 +30,6 @@ jobs:
     strategy:
       matrix:
         directory:
-          - apps/telegram-bridge/infra
           - apps/web-platform/infra
       fail-fast: false
 
@@ -79,8 +78,6 @@ jobs:
           MATRIX_DIR: ${{ matrix.directory }}
         run: |
           set +e
-          # Only pass ssh_key_path to stacks that define it (web-platform needs it,
-          # telegram-bridge does not — it has no Hetzner resources).
           VAR_ARGS=()
           if grep -q 'variable "ssh_key_path"' variables.tf 2>/dev/null; then
             VAR_ARGS+=(-var="ssh_key_path=${CI_SSH_PUB}")

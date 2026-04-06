@@ -6,7 +6,6 @@ First-time setup for deploying containerized applications to a Hetzner Cloud VM.
 
 Always provision infrastructure via Terraform for reproducibility and cloud portability. See existing patterns:
 
-- `apps/telegram-bridge/infra/` — CX22/CPX21 server, volume, firewall, cloud-init
 - `apps/web-platform/infra/` — CPX21 server, 20GB volume, HTTP/HTTPS firewall
 
 ### Quick Start
