@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-03
-last_reviewed: 2026-04-03
+last_updated: 2026-04-06
+last_reviewed: 2026-04-06
 review_cadence: weekly
 owner: CPO
 depends_on:
@@ -72,9 +72,9 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | Dimension | Status |
 |-----------|--------|
 | Phase 1 (Close the Loop) | Complete. Milestone closed. All 15 issues closed. |
-| Phase 2 (Secure for Beta) | Near-complete. 13/14 items done. Remaining: #1375 (onboarding walkthrough). |
+| Phase 2 (Secure for Beta) | Complete. Milestone closed. All 20 issues closed (including #1375). |
 | Phase 3 (Make it Sticky) | In progress. 11 open, 2 closed. |
-| Phase 4 (Validate + Scale) | Not started. 14 open, 7 closed (6 issues added in 2026-04-03 review for missing rows 4.1–4.5, 4.10). |
+| Phase 4 (Validate + Scale) | Not started. 18 open, 9 closed. |
 | Phase 5 (Desktop Native App) | Defined. 5 issues created (#1423-#1429). Trigger-gated on user demand. |
 | Post-MVP / Later | 56 open, 75 closed. |
 | Beta users | 0 |
@@ -145,7 +145,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 2.8 | Update Cookie Policy for app.soleur.ai | P1 | [#1048](https://github.com/jikig-ai/soleur/issues/1048) | Done |
 | 2.9 | Add conversation history to Privacy Policy, DPD, GDPR register | P1 | [#1048](https://github.com/jikig-ai/soleur/issues/1048) | Done |
 | 2.10 | Error + empty states (agent failure, network loss, rate limit) | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Done |
-| 2.11 | First-time onboarding walkthrough (include PWA install guidance for iOS) | P2 | [#1375](https://github.com/jikig-ai/soleur/issues/1375) | Not started |
+| 2.11 | First-time onboarding walkthrough (include PWA install guidance for iOS) | P2 | [#1375](https://github.com/jikig-ai/soleur/issues/1375) | Done |
 | 2.12 | UX audit of all Phase 1 screens | P2 | [#674](https://github.com/jikig-ai/soleur/issues/674) | Done |
 | 2.13 | Supply chain dependency hardening (lockfile integrity, pinning, scanning) | P1 | [#1174](https://github.com/jikig-ai/soleur/issues/1174) | Done |
 | 2.14 | OAuth sign-in (Google, Apple, GitHub, Microsoft) via Supabase redirect flow | P2 | [#1210](https://github.com/jikig-ai/soleur/issues/1210) | Done |
@@ -220,7 +220,7 @@ Before recruiting founders, all public surfaces must reflect the cloud platform 
 | M3 | Update marketing strategy for cloud pivot | 2 hours | Not started — [#1051](https://github.com/jikig-ai/soleur/issues/1051) |
 | M4 | Draft recruitment messaging templates per channel | 2 hours | Not started — [#1445](https://github.com/jikig-ai/soleur/issues/1445) |
 | M5 | Update Getting Started page (cloud platform primary, CLI plugin secondary) | 2 hours | Not started — [#1446](https://github.com/jikig-ai/soleur/issues/1446) |
-| M6 | Standardize agent/skill counts across all surfaces | 2 hours | Not started — [#1447](https://github.com/jikig-ai/soleur/issues/1447) |
+| M6 | Standardize agent/skill counts across all surfaces | 2 hours | Done — [#1447](https://github.com/jikig-ai/soleur/issues/1447) |
 | M7 | Exclude feed.xml from sitemap.xml | 15 min | Done — [#1122](https://github.com/jikig-ai/soleur/issues/1122) |
 | M8 | Add case studies to Atom feed entries | 30 min | Done — [#1123](https://github.com/jikig-ai/soleur/issues/1123) |
 | M9 | Fix author URL to point to About page (blocked by About page creation) | 30 min | Done — [#1124](https://github.com/jikig-ai/soleur/issues/1124) |
@@ -372,4 +372,4 @@ Next review: 2026-04-10.
 
 ---
 
-_Generated: 2026-03-23. Domain review: CTO, CLO, CFO, CMO (2026-03-23). Milestone audit: 2026-04-03. Sources: business-validation.md (2026-03-12), competitive-intelligence.md (2026-03-12), pricing-strategy.md (2026-03-12), brand-guide.md (2026-02-21). Workshop conducted via /soleur:product-roadmap skill._
+_Generated: 2026-03-23. Domain review: CTO, CLO, CFO, CMO (2026-03-23). Milestone audit: 2026-04-03. CPO weekly review: 2026-04-06. Sources: business-validation.md (2026-03-12), competitive-intelligence.md (2026-03-12), pricing-strategy.md (2026-03-12), brand-guide.md (2026-02-21). Workshop conducted via /soleur:product-roadmap skill._
