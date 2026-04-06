@@ -189,6 +189,37 @@ resource "terraform_data" "apparmor_bwrap_profile" {
   }
 }
 
+# Deploy orphan-reaper.sh and systemd timer to clean up stale .orphaned-*
+# workspace directories under /mnt/data/workspaces/. workspace.ts moves
+# root-owned dirs aside but nothing cleans them up (#1640).
+# Shows as "will be created" in CI drift reports -- expected behavior (#1409).
+resource "terraform_data" "orphan_reaper_install" {
+  triggers_replace = sha256(file("${path.module}/orphan-reaper.sh"))
+
+  connection {
+    type  = "ssh"
+    host  = hcloud_server.web.ipv4_address
+    user  = "root"
+    agent = true
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/orphan-reaper.sh"
+    destination = "/usr/local/bin/orphan-reaper.sh"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "chmod +x /usr/local/bin/orphan-reaper.sh",
+      "cat > /etc/systemd/system/orphan-reaper.service << 'UNITEOF'\n[Unit]\nDescription=Orphaned workspace directory reaper\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/orphan-reaper.sh\nUNITEOF",
+      "cat > /etc/systemd/system/orphan-reaper.timer << 'TIMEREOF'\n[Unit]\nDescription=Run orphan reaper every 6 hours\n\n[Timer]\nOnBootSec=10min\nOnUnitActiveSec=6h\nPersistent=true\n\n[Install]\nWantedBy=timers.target\nTIMEREOF",
+      "systemctl daemon-reload",
+      "systemctl enable --now orphan-reaper.timer",
+      "systemctl list-timers orphan-reaper.timer --no-pager",
+    ]
+  }
+}
+
 resource "hcloud_volume" "workspaces" {
   name     = "soleur-web-platform-data"
   size     = var.volume_size
