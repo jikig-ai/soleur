@@ -304,6 +304,38 @@ test_independent_cooldowns() {
 
 test_independent_cooldowns
 
+# Test: 96% with no cooldowns fires both CRITICAL and WARNING alerts
+test_dual_alert_no_cooldown() {
+  TOTAL=$((TOTAL + 1))
+  local description="96% with no cooldowns fires both CRITICAL and WARNING"
+  local mock_dir
+  mock_dir=$(mktemp -d)
+
+  local output actual_exit
+  output=$(
+    export MOCK_DF_USAGE=96
+    setup_mocks_and_run "$mock_dir" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  local curl_count=0
+  [[ -f "$mock_dir/curl_args" ]] && curl_count=$(grep -c '^-s -o /dev/null' "$mock_dir/curl_args")
+
+  if [[ "$actual_exit" -eq 0 ]] && [[ "$curl_count" -eq 2 ]] \
+     && grep -qF "CRITICAL" "$mock_dir/curl_args" \
+     && grep -qF "WARNING" "$mock_dir/curl_args"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (exit=$actual_exit, curl_count=$curl_count)"
+    echo "        output: $output"
+    [[ -f "$mock_dir/curl_args" ]] && echo "        curl_args: $(cat "$mock_dir/curl_args")"
+  fi
+  rm -rf "$mock_dir"
+}
+
+test_dual_alert_no_cooldown
+
 echo ""
 echo "--- Error handling ---"
 
