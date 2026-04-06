@@ -111,7 +111,8 @@ describe("removeWorkspaceDir", () => {
 
     // Should NOT throw -- mv-aside succeeds
     expect(() => mockedRemove(TEST_ROOT + "/test-cleanup")).not.toThrow();
-    expect(calls).toContain("mv");
+    // Verify all phases attempted in order before falling back to mv
+    expect(calls).toEqual(["rm", "chmod", "find", "rmdir", "mv"]);
   });
 
   test("throws user-friendly error (no sudo) when all phases including mv fail", async () => {
@@ -139,13 +140,16 @@ describe("removeWorkspaceDir", () => {
       "../server/workspace"
     );
 
-    expect(() => mockedRemove(TEST_ROOT + "/test-cleanup")).toThrow(
-      /please try again or contact support/,
-    );
+    let thrown: Error | undefined;
+    try {
+      mockedRemove(TEST_ROOT + "/test-cleanup");
+    } catch (e) {
+      thrown = e as Error;
+    }
+    expect(thrown).toBeDefined();
+    expect(thrown!.message).toMatch(/please try again or contact support/);
     // Must NOT contain sudo instructions
-    expect(() => mockedRemove(TEST_ROOT + "/test-cleanup")).toThrow(
-      expect.not.objectContaining({ message: expect.stringMatching(/sudo/) }),
-    );
+    expect(thrown!.message).not.toMatch(/sudo/);
   });
 });
 
