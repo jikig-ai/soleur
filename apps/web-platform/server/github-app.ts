@@ -27,6 +27,12 @@ export interface Repo {
   updatedAt: string;
 }
 
+export interface PullRequestResult {
+  number: number;
+  htmlUrl: string;
+  url: string;
+}
+
 interface InstallationAccount {
   login: string;
   id: number;
@@ -405,5 +411,69 @@ export async function createRepo(
   return {
     repoUrl: data.html_url,
     fullName: data.full_name,
+  };
+}
+
+/**
+ * Create a pull request on a repository using the GitHub App installation token.
+ *
+ * For same-repo PRs, `head` is just the branch name (not `owner:branch`).
+ * Throws on error with a descriptive message extracted from GitHub's response.
+ */
+export async function createPullRequest(
+  installationId: number,
+  owner: string,
+  repo: string,
+  head: string,
+  base: string,
+  title: string,
+  body?: string,
+): Promise<PullRequestResult> {
+  const token = await generateInstallationToken(installationId);
+
+  const response = await githubFetch(
+    `${GITHUB_API}/repos/${owner}/${repo}/pulls`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `token ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ head, base, title, body }),
+    },
+  );
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    // Extract the most useful error message from GitHub's response
+    let errorMessage = `GitHub create PR failed: ${response.status}`;
+    try {
+      const parsed = JSON.parse(errorBody);
+      const firstError = parsed.errors?.[0]?.message;
+      if (firstError) {
+        errorMessage = firstError;
+      } else if (parsed.message) {
+        errorMessage = `GitHub create PR failed: ${response.status} - ${parsed.message}`;
+      }
+    } catch {
+      // Non-JSON response body -- use generic message
+    }
+    log.error(
+      { status: response.status, body: errorBody.slice(0, 500), installationId, owner, repo },
+      "Failed to create pull request",
+    );
+    throw new Error(errorMessage);
+  }
+
+  const data = (await response.json()) as {
+    number: number;
+    html_url: string;
+    url: string;
+  };
+
+  return {
+    number: data.number,
+    htmlUrl: data.html_url,
+    url: data.url,
   };
 }
