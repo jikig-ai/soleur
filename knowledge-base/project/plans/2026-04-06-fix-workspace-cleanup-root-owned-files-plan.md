@@ -148,13 +148,13 @@ This fix does not introduce new security surfaces. It modifies the error-handlin
 
 ## Acceptance Criteria
 
-- [ ] Given a workspace with root-owned files, when `removeWorkspaceDir` is called, then user-owned files are deleted, root-owned files are moved to an orphaned directory, and the function returns without error
-- [ ] Given a workspace with only user-owned files, when `removeWorkspaceDir` is called, then the workspace is fully deleted (no orphan created)
-- [ ] Given a non-existent workspace path, when `removeWorkspaceDir` is called, then the function returns without error
-- [ ] Given `mv` also fails (e.g., parent dir permissions changed), when `removeWorkspaceDir` is called, then a user-friendly error is thrown (no `sudo rm -rf` instructions)
-- [ ] When an orphan is created, a pino warning is logged with both the original and orphaned paths (Sentry capture is NOT needed -- the operation succeeded; pino is the reliable observability path)
-- [ ] The error message `"sudo rm -rf"` no longer appears in any code path reachable by users
-- [ ] Existing path validation tests continue to pass (traversal, root, prefix collision)
+- [x] Given a workspace with root-owned files, when `removeWorkspaceDir` is called, then user-owned files are deleted, root-owned files are moved to an orphaned directory, and the function returns without error
+- [x] Given a workspace with only user-owned files, when `removeWorkspaceDir` is called, then the workspace is fully deleted (no orphan created)
+- [x] Given a non-existent workspace path, when `removeWorkspaceDir` is called, then the function returns without error
+- [x] Given `mv` also fails (e.g., parent dir permissions changed), when `removeWorkspaceDir` is called, then a user-friendly error is thrown (no `sudo rm -rf` instructions)
+- [x] When an orphan is created, a pino warning is logged with both the original and orphaned paths (Sentry capture is NOT needed -- the operation succeeded; pino is the reliable observability path)
+- [x] The error message `"sudo rm -rf"` no longer appears in any code path reachable by users
+- [x] Existing path validation tests continue to pass (traversal, root, prefix collision)
 
 ## Test Scenarios
 
