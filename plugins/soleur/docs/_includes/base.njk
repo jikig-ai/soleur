@@ -34,15 +34,7 @@
         "@type": "WebSite",
         "name": "{{ site.name }}",
         "url": "{{ site.url }}",
-        "description": "{{ site.description }}",
-        "potentialAction": {
-          "@type": "SearchAction",
-          "target": {
-            "@type": "EntryPoint",
-            "urlTemplate": "{{ site.url }}/blog/?q={search_term_string}"
-          },
-          "query-input": "required name=search_term_string"
-        }
+        "description": "{{ site.description }}"
       },
       {
         "@type": "WebPage",
@@ -60,6 +52,7 @@
         "@type": "SoftwareApplication",
         "name": "{{ site.name }}",
         "url": "{{ site.url }}",
+        "image": "{{ site.url }}/images/logo-mark-512.png",
         "applicationCategory": "BusinessApplication",
         "operatingSystem": "macOS, Linux, Windows",
         "softwareVersion": "{{ plugin.version }}",
