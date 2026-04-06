@@ -6,19 +6,19 @@
 # NOTE: When adding or modifying guards, update the corresponding prose rule comments below.
 #
 # Corresponding prose rules:
-#   Guard 1: constitution.md "Never allow agents to work directly on the default branch"
-#   Guard 2: constitution.md "Never rm -rf on the current directory, a worktree path, or the repo root"
-#   Guard 3: constitution.md "Never use --delete-branch with gh pr merge"
-#   Guard 4: constitution.md "grep staged content for conflict markers"
-#   Guard 5: constitution.md "GitHub Actions workflows and shell scripts that create issues must include --milestone"
-#   Guard 6: AGENTS.md "Never git stash in worktrees"
+#   guardrails:block-commit-on-main — constitution.md "Never allow agents to work directly on the default branch"
+#   guardrails:block-rm-rf-worktrees — constitution.md "Never rm -rf on the current directory, a worktree path, or the repo root"
+#   guardrails:block-delete-branch — constitution.md "Never use --delete-branch with gh pr merge"
+#   guardrails:block-conflict-markers — constitution.md "grep staged content for conflict markers"
+#   guardrails:require-milestone — constitution.md "GitHub Actions workflows and shell scripts that create issues must include --milestone"
+#   guardrails:block-stash-in-worktrees — AGENTS.md "Never git stash in worktrees"
 
 set -euo pipefail
 
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
 
-# Guard 1: Block git commit on main branch
+# guardrails:block-commit-on-main — Block git commit on main branch
 # Match git commit at start of string OR after chain operators (&&, ||, ;)
 # so chained commands like "git add && git commit" are caught.
 if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+commit'; then
@@ -54,7 +54,7 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+commit'; then
   fi
 fi
 
-# Guard 2: Block rm -rf on worktree paths
+# guardrails:block-rm-rf-worktrees — Block rm -rf on worktree paths
 # Match rm with recursive-force flags followed by a worktree path as an argument.
 # Uses a single pattern to avoid false positives when .worktrees/ appears in
 # unrelated text (e.g., inside a gh issue comment body or heredoc).
@@ -68,7 +68,7 @@ if echo "$COMMAND" | grep -qE 'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[
   exit 0
 fi
 
-# Guard 3: Block gh pr merge --delete-branch when worktrees exist
+# guardrails:block-delete-branch — Block gh pr merge --delete-branch when worktrees exist
 if echo "$COMMAND" | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
   WORKTREE_COUNT=$(git worktree list 2>/dev/null | wc -l)
   if [ "$WORKTREE_COUNT" -gt 1 ]; then
@@ -82,26 +82,26 @@ if echo "$COMMAND" | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
   fi
 fi
 
-# Guard 4: Block commits with conflict markers in staged content
+# guardrails:block-conflict-markers — Block commits with conflict markers in staged content
 # Matches git commit and git merge --continue (which internally commits).
 # Allows optional -C <path> between git and commit/merge.
 # Checks only added lines (^\+) to avoid blocking removal of markers.
-# CWD resolution mirrors Guard 1: cd, git -C, .cwd fallback.
+# CWD resolution mirrors guardrails:block-commit-on-main: cd, git -C, .cwd fallback.
 if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|merge\s+--continue)'; then
-  GUARD4_DIR=""
+  CONFLICT_MARKERS_DIR=""
   if echo "$COMMAND" | grep -qE '^\s*cd\s+'; then
-    GUARD4_DIR=$(echo "$COMMAND" | sed -nE 's/^\s*cd\s+"?([^"&;]+)"?.*/\1/p' | xargs)
+    CONFLICT_MARKERS_DIR=$(echo "$COMMAND" | sed -nE 's/^\s*cd\s+"?([^"&;]+)"?.*/\1/p' | xargs)
   elif echo "$COMMAND" | grep -qoE 'git\s+-C\s+\S+'; then
-    GUARD4_DIR=$(echo "$COMMAND" | grep -oE 'git\s+-C\s+\S+' | head -1 | sed -nE 's/git\s+-C\s+(\S+)/\1/p')
+    CONFLICT_MARKERS_DIR=$(echo "$COMMAND" | grep -oE 'git\s+-C\s+\S+' | head -1 | sed -nE 's/git\s+-C\s+(\S+)/\1/p')
   fi
-  if [ -z "$GUARD4_DIR" ] || [ ! -d "$GUARD4_DIR" ]; then
-    GUARD4_CWD=$(echo "$INPUT" | jq -r '.cwd // ""')
-    if [ -n "$GUARD4_CWD" ] && [ -d "$GUARD4_CWD" ]; then
-      GUARD4_DIR="$GUARD4_CWD"
+  if [ -z "$CONFLICT_MARKERS_DIR" ] || [ ! -d "$CONFLICT_MARKERS_DIR" ]; then
+    CONFLICT_MARKERS_CWD=$(echo "$INPUT" | jq -r '.cwd // ""')
+    if [ -n "$CONFLICT_MARKERS_CWD" ] && [ -d "$CONFLICT_MARKERS_CWD" ]; then
+      CONFLICT_MARKERS_DIR="$CONFLICT_MARKERS_CWD"
     fi
   fi
-  if [ -n "$GUARD4_DIR" ] && [ -d "$GUARD4_DIR" ]; then
-    STAGED_DIFF=$(git -C "$GUARD4_DIR" diff --cached 2>/dev/null || true)
+  if [ -n "$CONFLICT_MARKERS_DIR" ] && [ -d "$CONFLICT_MARKERS_DIR" ]; then
+    STAGED_DIFF=$(git -C "$CONFLICT_MARKERS_DIR" diff --cached 2>/dev/null || true)
   else
     STAGED_DIFF=$(git diff --cached 2>/dev/null || true)
   fi
@@ -116,7 +116,7 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|merge
   fi
 fi
 
-# Guard 5: Block gh issue create without --milestone
+# guardrails:require-milestone — Block gh issue create without --milestone
 if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create'; then
   if ! echo "$COMMAND" | grep -qF -- '--milestone'; then
     jq -n '{
@@ -129,22 +129,22 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create'; then
   fi
 fi
 
-# Guard 6: Block git stash in worktrees
+# guardrails:block-stash-in-worktrees — Block git stash in worktrees
 if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+stash'; then
   # Resolve CWD: check cd target, git -C path, .cwd field, then hook CWD
-  GUARD6_DIR=""
+  STASH_GUARD_DIR=""
   if echo "$COMMAND" | grep -qE '^\s*cd\s+'; then
-    GUARD6_DIR=$(echo "$COMMAND" | sed -nE 's/^\s*cd\s+"?([^"&;]+)"?.*/\1/p' | xargs)
+    STASH_GUARD_DIR=$(echo "$COMMAND" | sed -nE 's/^\s*cd\s+"?([^"&;]+)"?.*/\1/p' | xargs)
   elif echo "$COMMAND" | grep -qoE 'git\s+-C\s+\S+'; then
-    GUARD6_DIR=$(echo "$COMMAND" | grep -oE 'git\s+-C\s+\S+' | head -1 | sed -nE 's/git\s+-C\s+(\S+)/\1/p')
+    STASH_GUARD_DIR=$(echo "$COMMAND" | grep -oE 'git\s+-C\s+\S+' | head -1 | sed -nE 's/git\s+-C\s+(\S+)/\1/p')
   fi
-  if [ -z "$GUARD6_DIR" ] || [ ! -d "$GUARD6_DIR" ]; then
-    GUARD6_CWD=$(echo "$INPUT" | jq -r '.cwd // ""')
-    if [ -n "$GUARD6_CWD" ] && [ -d "$GUARD6_CWD" ]; then
-      GUARD6_DIR="$GUARD6_CWD"
+  if [ -z "$STASH_GUARD_DIR" ] || [ ! -d "$STASH_GUARD_DIR" ]; then
+    STASH_GUARD_CWD=$(echo "$INPUT" | jq -r '.cwd // ""')
+    if [ -n "$STASH_GUARD_CWD" ] && [ -d "$STASH_GUARD_CWD" ]; then
+      STASH_GUARD_DIR="$STASH_GUARD_CWD"
     fi
   fi
-  RESOLVE_DIR="${GUARD6_DIR:-.}"
+  RESOLVE_DIR="${STASH_GUARD_DIR:-.}"
   if echo "$(cd "$RESOLVE_DIR" 2>/dev/null && pwd)" | grep -qF '.worktrees'; then
     jq -n '{
       hookSpecificOutput: {
