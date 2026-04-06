@@ -1158,6 +1158,142 @@ MOCK
 assert_bwrap_canary_failure_rollback
 
 echo ""
+echo "--- Env file cleanup on all exit paths ---"
+
+assert_env_file_cleanup() {
+  local description="$1"
+  local extra_env="${2:-}"
+
+  TOTAL=$((TOTAL + 1))
+
+  # Tracker dir survives both the deploy process and test subshell
+  local tracker_dir
+  tracker_dir=$(mktemp -d)
+
+  local output actual_exit
+  output=$(
+    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+    MOCK_DIR=$(mktemp -d)
+    trap 'rm -rf "$MOCK_DIR"' EXIT
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export ENV_FILE_TRACKER="$tracker_dir/env_file_path"
+
+    cat > "$MOCK_DIR/logger" << 'MOCK'
+#!/bin/bash
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/logger"
+
+    # Docker mock with configurable canary failure
+    cat > "$MOCK_DIR/docker" << 'MOCK'
+#!/bin/bash
+if [[ "${1:-}" == "run" ]]; then
+  for arg in "$@"; do
+    if [[ "$arg" == *"-canary" ]] && [[ "${MOCK_DOCKER_RUN_FAIL_CANARY:-}" == "1" ]]; then
+      exit 1
+    fi
+  done
+  echo "abc123"
+fi
+if [[ "${1:-}" == "exec" ]]; then
+  exit 0
+fi
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/docker"
+
+    cat > "$MOCK_DIR/curl" << 'MOCK'
+#!/bin/bash
+for arg in "$@"; do
+  if [[ "$arg" == *"http_code"* ]]; then echo "200"; exit 0; fi
+done
+echo "OK"
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/curl"
+
+    cat > "$MOCK_DIR/sudo" << 'MOCK'
+#!/bin/bash
+exec "$@"
+MOCK
+    chmod +x "$MOCK_DIR/sudo"
+
+    cat > "$MOCK_DIR/chown" << 'MOCK'
+#!/bin/bash
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/chown"
+
+    cat > "$MOCK_DIR/seq" << 'MOCK'
+#!/bin/bash
+echo "1"
+MOCK
+    chmod +x "$MOCK_DIR/seq"
+
+    cat > "$MOCK_DIR/flock" << 'MOCK'
+#!/bin/bash
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/flock"
+
+    cat > "$MOCK_DIR/df" << 'MOCK'
+#!/bin/bash
+echo "Avail"
+echo "20000000"
+MOCK
+    chmod +x "$MOCK_DIR/df"
+
+    cat > "$MOCK_DIR/doppler" << 'MOCK'
+#!/bin/bash
+if [[ "${1:-}" == "secrets" ]]; then echo "KEY=value"; exit 0; fi
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/doppler"
+
+    # Mock mktemp: create a real temp file but record its path to the tracker
+    cat > "$MOCK_DIR/mktemp" << 'MOCK'
+#!/bin/bash
+tmpfile=$(/usr/bin/mktemp "$@")
+if [[ -n "${ENV_FILE_TRACKER:-}" ]]; then
+  echo "$tmpfile" > "$ENV_FILE_TRACKER"
+fi
+echo "$tmpfile"
+MOCK
+    chmod +x "$MOCK_DIR/mktemp"
+
+    eval "$extra_env"
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$PATH"
+    bash "$DEPLOY_SCRIPT" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  # Check: does the env file still exist?
+  if [[ -f "$tracker_dir/env_file_path" ]]; then
+    local env_file_path
+    env_file_path=$(cat "$tracker_dir/env_file_path")
+    if [[ ! -f "$env_file_path" ]]; then
+      PASS=$((PASS + 1))
+      echo "  PASS: $description"
+    else
+      FAIL=$((FAIL + 1))
+      echo "  FAIL: $description (env file still exists: $env_file_path)"
+      rm -f "$env_file_path"  # clean up leaked file
+    fi
+  else
+    # No env file was ever created (e.g., failure before resolve_env_file)
+    PASS=$((PASS + 1))
+    echo "  PASS: $description (no env file created)"
+  fi
+
+  rm -rf "$tracker_dir"
+}
+
+assert_env_file_cleanup "canary crash cleans up env file" \
+  "export MOCK_DOCKER_RUN_FAIL_CANARY=1"
+
+assert_env_file_cleanup "successful deploy cleans up env file" ""
+
+echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
 if [[ "$FAIL" -gt 0 ]]; then
