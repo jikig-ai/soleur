@@ -13,7 +13,7 @@ readonly LOG_TAG="ci-deploy"
 trap 'echo "DEPLOY_ERROR: ci-deploy.sh failed at line $LINENO (exit $?)" >&2' ERR
 
 # Resolve env file: download secrets from Doppler to a temp file (chmod 600).
-# Caller must clean up via cleanup_env_file. Exits on any failure -- no fallback.
+# Cleaned up automatically via EXIT trap after resolve_env_file. Exits on any failure -- no fallback.
 resolve_env_file() {
   if ! command -v doppler >/dev/null 2>&1; then
     logger -t "$LOG_TAG" "FATAL: Doppler CLI not installed"
@@ -46,11 +46,6 @@ resolve_env_file() {
   echo "$doppler_output" > "$tmpenv"
   echo "$tmpenv"
   return 0
-}
-
-# Clean up temp env file after container starts (secrets are in container memory).
-cleanup_env_file() {
-  rm -f "$1"
 }
 
 # Exact allowlist of valid images per component (not prefix match -- prevents suffix injection).
@@ -136,6 +131,7 @@ case "$COMPONENT" in
     # Prepare environment (shared between canary and production)
     sudo chown 1001:1001 /mnt/data/workspaces
     ENV_FILE=$(resolve_env_file)
+    trap 'rm -f "$ENV_FILE"' EXIT
 
     # Start canary on port 3001 (old container still serving on 80/3000)
     # AppArmor unconfined: Ubuntu 24.04 docker-default profile blocks mount()
@@ -171,7 +167,6 @@ case "$COMPONENT" in
         logger -t "$LOG_TAG" "DEPLOY_ROLLBACK: bwrap sandbox non-functional in $IMAGE:$TAG"
         { docker stop soleur-web-platform-canary 2>/dev/null || true; }
         { docker rm soleur-web-platform-canary 2>/dev/null || true; }
-        cleanup_env_file "$ENV_FILE"
         exit 1
       fi
       echo "Sandbox OK"
@@ -195,7 +190,6 @@ case "$COMPONENT" in
         "$IMAGE:$TAG"; then
         { docker stop soleur-web-platform-canary 2>/dev/null || true; }
         { docker rm soleur-web-platform-canary 2>/dev/null || true; }
-        cleanup_env_file "$ENV_FILE"
         echo "Deploy succeeded"
         exit 0
       else
@@ -203,7 +197,6 @@ case "$COMPONENT" in
         logger -t "$LOG_TAG" "DEPLOY_ERROR: production container failed to start after canary passed"
         { docker stop soleur-web-platform-canary 2>/dev/null || true; }
         { docker rm soleur-web-platform-canary 2>/dev/null || true; }
-        cleanup_env_file "$ENV_FILE"
         exit 1
       fi
     else
@@ -212,7 +205,6 @@ case "$COMPONENT" in
       { docker logs soleur-web-platform-canary --tail 30 2>&1 || true; } | logger -t "$LOG_TAG"
       { docker stop soleur-web-platform-canary 2>/dev/null || true; }
       { docker rm soleur-web-platform-canary 2>/dev/null || true; }
-      cleanup_env_file "$ENV_FILE"
       logger -t "$LOG_TAG" "DEPLOY_ROLLBACK: canary failed for $IMAGE:$TAG, keeping previous version"
       exit 1
     fi

@@ -102,6 +102,15 @@ export function abortAllUserSessions(userId: string): void {
   }
 }
 
+/** Abort ALL active sessions (called during server shutdown).
+ *  Triggers the catch block in startAgentSession which updates
+ *  conversation status to "failed" in the database. */
+export function abortAllSessions(): void {
+  for (const [, session] of activeSessions) {
+    session.abort.abort(new Error("Session aborted: server_shutdown"));
+  }
+}
+
 // ---------------------------------------------------------------------------
 // BYOK key retrieval
 // ---------------------------------------------------------------------------
