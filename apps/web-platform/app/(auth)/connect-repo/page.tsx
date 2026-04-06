@@ -74,6 +74,7 @@ export default function ConnectRepoPage() {
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stateRef = useRef<State>(state);
 
   // ---------------------------------------------------------------------------
   // On mount: fetch dynamic app slug and check for GitHub callback params
@@ -157,6 +158,11 @@ export default function ConnectRepoPage() {
     };
   }, []);
 
+  // Keep stateRef in sync for use in event listeners
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
   // ---------------------------------------------------------------------------
   // Fetch repos
   // ---------------------------------------------------------------------------
@@ -178,6 +184,44 @@ export default function ConnectRepoPage() {
       setReposLoading(false);
     }
   }, []);
+
+  // ---------------------------------------------------------------------------
+  // Refresh repos (error-safe — keeps current state on failure)
+  // ---------------------------------------------------------------------------
+  const refreshRepos = useCallback(async () => {
+    if (reposLoading) return;
+    const currentState = stateRef.current;
+    if (currentState !== "select_project" && currentState !== "no_projects") return;
+    setReposLoading(true);
+    try {
+      const res = await fetch("/api/repo/repos");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.repos && data.repos.length > 0) {
+        setRepos(data.repos);
+        setState("select_project");
+      } else {
+        setState("no_projects");
+      }
+    } catch {
+      // Silently keep current state — don't transition to interrupted
+    } finally {
+      setReposLoading(false);
+    }
+  }, [reposLoading]);
+
+  // ---------------------------------------------------------------------------
+  // Auto-refresh on tab focus
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        refreshRepos();
+      }
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [refreshRepos]);
 
   // ---------------------------------------------------------------------------
   // Start setup + polling
@@ -448,12 +492,14 @@ export default function ConnectRepoPage() {
             loading={reposLoading}
             onSelect={handleSelectProject}
             onBack={() => setState("choose")}
+            onRefresh={refreshRepos}
           />
         )}
         {state === "no_projects" && (
           <NoProjectsState
             onUpdateAccess={handleUpdateAccess}
             onBack={() => setState("choose")}
+            onRefresh={refreshRepos}
           />
         )}
         {state === "setting_up" && <SettingUpState steps={setupSteps} />}

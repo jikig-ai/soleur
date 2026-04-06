@@ -1,6 +1,6 @@
 "use client";
 
-import { FolderIcon } from "@/components/icons";
+import { FolderIcon, RefreshIcon } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
 import { GoldButton } from "@/components/ui/gold-button";
 import { OutlinedButton } from "@/components/ui/outlined-button";
@@ -10,9 +10,10 @@ import { serif } from "./fonts";
 interface NoProjectsStateProps {
   onUpdateAccess: () => void;
   onBack: () => void;
+  onRefresh?: () => void;
 }
 
-export function NoProjectsState({ onUpdateAccess, onBack }: NoProjectsStateProps) {
+export function NoProjectsState({ onUpdateAccess, onBack, onRefresh }: NoProjectsStateProps) {
   return (
     <div className="mx-auto max-w-lg space-y-6">
       <div className="flex items-center gap-3">
@@ -37,6 +38,12 @@ export function NoProjectsState({ onUpdateAccess, onBack }: NoProjectsStateProps
 
       <div className="flex items-center gap-3">
         <GoldButton onClick={onUpdateAccess}>Update Access on GitHub</GoldButton>
+        {onRefresh && (
+          <OutlinedButton onClick={onRefresh}>
+            <RefreshIcon className="mr-1.5 inline h-4 w-4" />
+            Refresh
+          </OutlinedButton>
+        )}
         <OutlinedButton onClick={onBack}>Go Back</OutlinedButton>
       </div>
     </div>

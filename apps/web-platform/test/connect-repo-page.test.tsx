@@ -321,3 +321,160 @@ describe("Phase 2: Skip redirect via on-click fetch", () => {
     });
   });
 });
+
+// ===========================================================================
+// Phase 3: Refresh UI + auto-refresh
+// ===========================================================================
+
+describe("Phase 3: Refresh button", () => {
+  test("SelectProjectState Refresh button triggers onRefresh", async () => {
+    const { SelectProjectState } = await import(
+      "@/components/connect-repo/select-project-state"
+    );
+    const onRefresh = vi.fn();
+    render(
+      <SelectProjectState
+        repos={[mockRepo]}
+        loading={false}
+        onSelect={vi.fn()}
+        onBack={vi.fn()}
+        onRefresh={onRefresh}
+      />,
+    );
+
+    const refreshBtn = screen.getByRole("button", { name: /refresh/i });
+    await userEvent.click(refreshBtn);
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+
+  test("NoProjectsState Refresh button triggers onRefresh", async () => {
+    const { NoProjectsState } = await import(
+      "@/components/connect-repo/no-projects-state"
+    );
+    const onRefresh = vi.fn();
+    render(
+      <NoProjectsState
+        onUpdateAccess={vi.fn()}
+        onBack={vi.fn()}
+        onRefresh={onRefresh}
+      />,
+    );
+
+    const refreshBtn = screen.getByRole("button", { name: /refresh/i });
+    await userEvent.click(refreshBtn);
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+});
+
+describe("Phase 3: Auto-refresh on visibility change", () => {
+  test("visibilitychange to visible triggers repo re-fetch in select_project state", async () => {
+    setupFetchMock();
+    render(<ConnectRepoPage />);
+
+    // Navigate to select_project via Connect Existing
+    const connectBtn = await screen.findByText("Connect Project");
+    await userEvent.click(connectBtn);
+    await waitFor(() => {
+      expect(screen.getByText("Select a Project")).toBeInTheDocument();
+    });
+
+    // Clear fetch calls to track only the refresh
+    mockFetch.mockClear();
+    setupFetchMock();
+
+    // Simulate tab becoming visible
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      configurable: true,
+      writable: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    // Should re-fetch repos
+    await waitFor(() => {
+      const reposCalls = mockFetch.mock.calls.filter(
+        ([url]: [string]) => url === "/api/repo/repos",
+      );
+      expect(reposCalls.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  test("visibilitychange does NOT trigger fetch in setting_up state", async () => {
+    setupFetchMock();
+    render(<ConnectRepoPage />);
+
+    // Navigate to select_project, then select a repo to enter setting_up
+    const connectBtn = await screen.findByText("Connect Project");
+    await userEvent.click(connectBtn);
+    await waitFor(() => {
+      expect(screen.getByText("Select a Project")).toBeInTheDocument();
+    });
+
+    // Select the repo to start setup
+    const repoBtn = screen.getByText("test-repo");
+    await userEvent.click(repoBtn);
+    const connectRepoBtn = screen.getByText("Connect This Repository");
+    await userEvent.click(connectRepoBtn);
+
+    // Wait for setting_up state
+    await waitFor(() => {
+      expect(screen.getByText("Copying your project files")).toBeInTheDocument();
+    });
+
+    // Clear fetch and simulate visibility change
+    mockFetch.mockClear();
+    setupFetchMock();
+
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      configurable: true,
+      writable: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    // Wait a tick to ensure no fetch fires
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 100));
+    });
+
+    const reposCalls = mockFetch.mock.calls.filter(
+      ([url]: [string]) => url === "/api/repo/repos",
+    );
+    expect(reposCalls.length).toBe(0);
+  });
+
+  test("refresh error keeps current state (no transition to interrupted)", async () => {
+    setupFetchMock();
+    render(<ConnectRepoPage />);
+
+    // Navigate to select_project
+    const connectBtn = await screen.findByText("Connect Project");
+    await userEvent.click(connectBtn);
+    await waitFor(() => {
+      expect(screen.getByText("Select a Project")).toBeInTheDocument();
+    });
+
+    // Make repos endpoint fail for the refresh
+    mockFetch.mockClear();
+    setupFetchMock({
+      "/api/repo/repos": () => Promise.reject(new Error("Network error")),
+    });
+
+    // Trigger refresh via visibilitychange
+    Object.defineProperty(document, "visibilityState", {
+      value: "visible",
+      configurable: true,
+      writable: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    // Wait and verify state remains select_project
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 200));
+    });
+
+    // Should still show the repo list, not the interrupted screen
+    expect(screen.getByText("Select a Project")).toBeInTheDocument();
+    expect(screen.queryByText("Resume")).not.toBeInTheDocument();
+  });
+});
