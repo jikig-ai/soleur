@@ -231,21 +231,21 @@ Write tests covering:
 
 ### Functional Requirements
 
-- [ ] Agent can invoke `mcp__soleur_platform__create_pull_request` tool during a session
-- [ ] Tool creates a PR on the user's connected GitHub repo using the installation token
-- [ ] Tool returns the PR URL, number, and HTML URL to the agent
-- [ ] Tool returns a structured error (not crash) when the branch doesn't exist or has no diff
-- [ ] Tool is only available when the user has a GitHub App installation (`installationId` is not null)
-- [ ] No GitHub tokens are exposed to the agent subprocess environment
+- [x] Agent can invoke `mcp__soleur_platform__create_pull_request` tool during a session
+- [x] Tool creates a PR on the user's connected GitHub repo using the installation token
+- [x] Tool returns the PR URL, number, and HTML URL to the agent
+- [x] Tool returns a structured error (not crash) when the branch doesn't exist or has no diff
+- [x] Tool is only available when the user has a GitHub App installation (`installationId` is not null)
+- [x] No GitHub tokens are exposed to the agent subprocess environment
 
 ### Non-Functional Requirements
 
-- [ ] Token generation uses existing cache in `github-app.ts` (no extra API calls for warm cache)
-- [ ] Tool handler validates all inputs via Zod schema before calling GitHub API
-- [ ] PR body is optional (GitHub defaults to empty)
-- [ ] Owner/repo derived server-side from `repo_url` -- agent does not provide these
-- [ ] Error messages from GitHub API are sanitized before returning to agent (no internal paths or tokens)
-- [ ] `canUseTool` allows `mcp__` prefixed tools (not blocked by deny-by-default fallback)
+- [x] Token generation uses existing cache in `github-app.ts` (no extra API calls for warm cache)
+- [x] Tool handler validates all inputs via Zod schema before calling GitHub API
+- [x] PR body is optional (GitHub defaults to empty)
+- [x] Owner/repo derived server-side from `repo_url` -- agent does not provide these
+- [x] Error messages from GitHub API are sanitized before returning to agent (no internal paths or tokens)
+- [x] `canUseTool` allows `mcp__` prefixed tools (not blocked by deny-by-default fallback)
 
 ## Test Scenarios
 

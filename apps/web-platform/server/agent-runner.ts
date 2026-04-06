@@ -571,6 +571,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           // Allow in-process MCP server tools (registered via mcpServers option).
           // SDK confirms canUseTool fires for ALL tool calls including MCP tools.
           if (toolName.startsWith("mcp__")) {
+            log.info({ sec: true, toolName, agentId: options.agentID }, "MCP tool invoked");
             return { behavior: "allow" as const };
           }
 
