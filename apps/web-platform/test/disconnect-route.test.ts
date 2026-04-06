@@ -70,13 +70,14 @@ const TEST_USER_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 /** Sets up Supabase mock chain for the users table. */
 function setupUserMocks(opts: {
   repoStatus?: string;
+  selectError?: { message: string } | null;
   updateError?: { message: string } | null;
 }) {
-  const { repoStatus = "ready", updateError = null } = opts;
+  const { repoStatus = "ready", selectError = null, updateError = null } = opts;
 
   const mockSelectSingle = vi.fn().mockResolvedValue({
-    data: { repo_status: repoStatus },
-    error: null,
+    data: selectError ? null : { repo_status: repoStatus },
+    error: selectError,
   });
   const mockSelectEq = vi.fn(() => ({ single: mockSelectSingle }));
   const mockSelect = vi.fn(() => ({ eq: mockSelectEq }));
@@ -148,6 +149,16 @@ describe("DELETE /api/repo/disconnect", () => {
 
     const body = await res.json();
     expect(body.error).toMatch(/in progress/i);
+  });
+
+  test("returns 500 when select query fails", async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } } });
+    setupUserMocks({ selectError: { message: "database unreachable" } });
+
+    const res = await DELETE(makeRequest());
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error).toMatch(/failed to disconnect/i);
   });
 
   test("returns 200 and clears all repo fields on successful disconnect", async () => {
