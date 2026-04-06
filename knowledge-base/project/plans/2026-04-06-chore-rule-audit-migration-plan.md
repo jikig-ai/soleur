@@ -82,15 +82,15 @@ rules would be needed to reach 300 -- that is out of scope for this issue.
 
 ## Acceptance Criteria
 
-- [ ] Seven identified rules removed from AGENTS.md Hard Rules section
-- [ ] Two net-new rules added to constitution.md Architecture > Never section:
+- [x] Seven identified rules removed from AGENTS.md Hard Rules section
+- [x] Two net-new rules added to constitution.md Architecture > Never section:
   - Never use `--delete-branch` with `gh pr merge` (with hook tag and rationale)
   - Never `rm -rf` on worktree paths (with hook tag and rationale)
-- [ ] constitution.md L82 (--milestone rule) gains `[hook-enforced: guardrails.sh Guard 5]` annotation
-- [ ] Hook script prose rule comments updated to reflect new locations (guardrails.sh header, pre-merge-rebase.sh header, worktree-write-guard.sh header)
-- [ ] No behavioral change: all 7 rules remain enforced by their PreToolUse hooks
-- [ ] `scripts/rule-audit.sh` output shows reduced AGENTS.md count (56)
-- [ ] Markdown lint passes on both AGENTS.md and constitution.md
+- [x] constitution.md L82 (--milestone rule) gains `[hook-enforced: guardrails.sh Guard 5]` annotation
+- [x] Hook script prose rule comments updated to reflect new locations (guardrails.sh header, pre-merge-rebase.sh header, worktree-write-guard.sh header)
+- [x] No behavioral change: all 7 rules remain enforced by their PreToolUse hooks
+- [x] `scripts/rule-audit.sh` output shows reduced AGENTS.md count (62, not 56 -- baseline drifted from 63 to 69 since audit)
+- [x] Markdown lint passes on both AGENTS.md and constitution.md
 
 ## Non-Goals
 

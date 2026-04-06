@@ -6,11 +6,11 @@
 # NOTE: When adding or modifying guards, update AGENTS.md hook awareness rule to match.
 #
 # Corresponding prose rules:
-#   Guard 1: AGENTS.md "Never commit directly to main", constitution.md "Never allow agents to work directly on the default branch"
-#   Guard 2: AGENTS.md "Never rm -rf on the current directory, a worktree path, or the repo root"
-#   Guard 3: AGENTS.md "Never --delete-branch with gh pr merge"
+#   Guard 1: constitution.md "Never allow agents to work directly on the default branch"
+#   Guard 2: constitution.md "Never rm -rf on the current directory, a worktree path, or the repo root"
+#   Guard 3: constitution.md "Never use --delete-branch with gh pr merge"
 #   Guard 4: constitution.md "grep staged content for conflict markers"
-#   Guard 5: AGENTS.md "Every gh issue create must include --milestone"
+#   Guard 5: constitution.md "GitHub Actions workflows and shell scripts that create issues must include --milestone"
 #   Guard 6: AGENTS.md "Never git stash in worktrees"
 
 set -euo pipefail
