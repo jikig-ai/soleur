@@ -127,4 +127,36 @@ describe("ProjectSetupCard", () => {
     expect(screen.getByText("Project")).toBeInTheDocument();
     unmount();
   });
+
+  it("shows Disconnect button when repoStatus is ready", async () => {
+    const { ProjectSetupCard } = await import(
+      "@/components/settings/project-setup-card"
+    );
+    render(
+      <ProjectSetupCard
+        repoUrl="https://github.com/owner/my-repo"
+        repoStatus="ready"
+        repoLastSyncedAt="2026-04-01T12:00:00Z"
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: /disconnect/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("does NOT show Disconnect button when repoStatus is not_connected", async () => {
+    const { ProjectSetupCard } = await import(
+      "@/components/settings/project-setup-card"
+    );
+    render(
+      <ProjectSetupCard
+        repoUrl={null}
+        repoStatus="not_connected"
+        repoLastSyncedAt={null}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: /disconnect/i }),
+    ).not.toBeInTheDocument();
+  });
 });

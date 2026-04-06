@@ -12,9 +12,8 @@
 # Note: filename says "rebase" for historical reasons; strategy is merge (not rebase).
 #
 # Corresponding prose rules:
-#   AGENTS.md "Before merging any PR, merge origin/main into the feature branch"
-#   AGENTS.md "gh pr merge without review evidence" (PreToolUse hooks block list)
 #   constitution.md "Before creating a PR or merging, merge latest origin/main into the feature branch"
+#   Guard 6 (review evidence): blocks gh pr merge without review evidence (self-documented in this script)
 #
 # Error handling: fail-open on infrastructure errors (network, non-git context),
 # fail-closed on logical errors (conflicts, dirty tree, push failure, missing review evidence).
