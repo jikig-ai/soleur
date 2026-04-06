@@ -10,18 +10,17 @@ dependencies: []
 
 ## Problem Statement
 
-The telegram-bridge `.dockerignore` excludes `scripts/`. The web-platform does not, because `apps/web-platform/scripts/` doesn't currently exist. If scripts are added later, they'll leak into the Docker image.
+The web-platform `.dockerignore` does not exclude `scripts/`, because `apps/web-platform/scripts/` doesn't currently exist. If scripts are added later, they'll leak into the Docker image.
 
 ## Findings
 
-- Architecture reviewer flagged this as an asymmetric handling between the two apps
 - Zero-cost defensive measure for forward-compatibility
 
 ## Proposed Solutions
 
 ### Option A: Add scripts/ exclusion (Recommended)
 Add `scripts/` to the .dockerignore
-- Pros: Consistent with telegram-bridge pattern, defensive
+- Pros: Defensive forward-compatibility measure
 - Cons: Pattern matches nothing today
 - Effort: Small
 - Risk: Low

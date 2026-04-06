@@ -13,7 +13,7 @@ Both Terraform stacks used local backend with no locking and no backup. State wa
 
 ## Decision
 
-Cloudflare R2 as remote backend with bucket versioning. Single bucket `soleur-terraform-state` with per-app key paths (e.g., `telegram-bridge/terraform.tfstate`). Doppler-first secrets (only DOPPLER_TOKEN in GitHub Secrets, rest pulled at runtime). Every new Terraform root must include R2 remote backend block.
+Cloudflare R2 as remote backend with bucket versioning. Single bucket `soleur-terraform-state` with per-app key paths (e.g., `web-platform/terraform.tfstate`). Doppler-first secrets (only DOPPLER_TOKEN in GitHub Secrets, rest pulled at runtime). Every new Terraform root must include R2 remote backend block.
 
 ## Consequences
 

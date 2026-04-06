@@ -1,9 +1,0 @@
-node_modules
-.env
-.env.example
-infra/
-scripts/
-.git
-.gitignore
-*.md
-tsconfig.json

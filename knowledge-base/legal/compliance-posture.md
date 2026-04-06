@@ -26,7 +26,7 @@ Source: `knowledge-base/project/specs/feat-vendor-ops-legal/dpa-verification-mem
 
 | Vendor | DPA Status | Signed/Verified | Transfer Mechanism | Data Region | Notes |
 |--------|-----------|----------------|-------------------|-------------|-------|
-| Hetzner Online GmbH | SIGNED | 2026-03-19 | N/A (EU-only) | hel1 (Finland) + fsn1 (Germany) | Covers both CX33 (web platform) and CX22 (telegram-bridge) |
+| Hetzner Online GmbH | SIGNED | 2026-03-19 | N/A (EU-only) | hel1 (Finland) | Covers CX33 (web platform) |
 | Supabase Inc | SIGNED | 2026-03-19 | N/A (EU-only) | eu-west-1 (Ireland) | DPA version: August 5, 2025. SCCs Module 2+3. Governing law: Irish |
 | Stripe Inc | AUTO | 2026-03-19 | EU-US DPF + SCCs | US-based | Automatic via Services Agreement. SAQ-A eligible (PCI) |
 | Cloudflare Inc | AUTO | 2026-03-19 | DPF + SCCs + CBPR | Global CDN | Self-executing via Self-Serve Agreement |

@@ -13,7 +13,7 @@ Vendor-specific APIs (Hetzner API, AWS CLI) were used for creating servers, volu
 
 ## Decision
 
-Always use Terraform for infrastructure provisioning — never vendor-specific APIs for creating servers, volumes, firewalls, or DNS records. Use vendor APIs only for read-only operations (checking availability, listing resources) or account-level tasks that Terraform doesn't cover. Existing patterns live in apps/telegram-bridge/infra/ and apps/web-platform/infra/.
+Always use Terraform for infrastructure provisioning — never vendor-specific APIs for creating servers, volumes, firewalls, or DNS records. Use vendor APIs only for read-only operations (checking availability, listing resources) or account-level tasks that Terraform doesn't cover. Existing patterns live in apps/web-platform/infra/.
 
 ## Consequences
 

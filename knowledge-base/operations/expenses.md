@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-03-28
+last_updated: 2026-04-06
 ---
 
 # Expenses
@@ -9,7 +9,6 @@ last_updated: 2026-03-28
 | Service | Provider | Category | Amount | Status | Renewal Date | Notes |
 |---------|----------|----------|--------|--------|--------------|-------|
 | GitHub Copilot | GitHub | dev-tools | 10.00 | active | 2026-03-14 | Business plan |
-| Hetzner CX22 | Hetzner | hosting | 5.83 | active | 2026-03-01 | 2 vCPU, 4 GB RAM, 40 GB SSD, eu-central (telegram-bridge) |
 | Hetzner CX33 | Hetzner | hosting | 15.37 | active | 2026-04-01 | 4 vCPU, 8 GB RAM, 160 GB SSD, hel1 (web platform). DPA: must be signed via Hetzner Console |
 | Hetzner Volume (20 GB) | Hetzner | hosting | 0.88 | active | 2026-04-01 | Persistent storage for /workspaces, hel1 (web platform) |
 | Supabase Pro + Custom Domain | Supabase | saas | 35.00 | active | 2026-04-03 | Pro plan ($25/mo) + custom domain add-on ($10/mo). Custom domain: api.soleur.ai for branded OAuth callbacks |

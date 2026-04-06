@@ -17,7 +17,7 @@ Tracks NFRs across the Soleur platform with per-container and per-link applicabi
 
 ## Container & Link Inventory
 
-Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md` (13 containers, 7 external systems, 22 relationships).
+Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md` (12 containers, 6 external systems, 19 relationships).
 
 ### Container Classification
 
@@ -29,7 +29,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Agent Runtime | Runtime | `claude` | Claude Code agent orchestration |
 | Skill Loader | Runtime (lifecycle shared with Agent Runtime) | `skillloader` | Plugin discovery for skills and agents |
 | Hook Engine | Runtime | `hooks` | PreToolUse syntactic guards |
-| Telegram Bot | Runtime | `tgbot` | grammy bridge to Claude Code CLI |
 | Skills | Passive | `skills` | 61 workflow skills (Markdown SKILL.md) |
 | Agents | Passive | `agents` | 65 domain agents (Markdown definitions) |
 | Knowledge Base | Passive | `kb` | Conventions, learnings, ADRs, specs (Markdown + YAML) |
@@ -53,8 +52,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Cloudflare Tunnel -> API Routes | Network | HTTPS |
 | Doppler -> Agent Runtime | Network | CLI |
 | Dashboard -> Plausible | Network | JS snippet |
-| Telegram Bot -> Telegram API | Network | grammy SDK |
-| Telegram Bot -> Agent Runtime | Internal | Subprocess |
 | Agent Runtime -> Skill Loader | Internal | File I/O |
 | Skill Loader -> Skills | Internal | Directory scan |
 | Skill Loader -> Agents | Internal | Recursive scan |
@@ -62,7 +59,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Skills -> Knowledge Base | Internal | File I/O |
 | Agents -> Knowledge Base | Internal | File I/O |
 | Compute -> Agent Runtime | Infrastructure | Docker |
-| Compute -> Telegram Bot | Infrastructure | Docker |
 
 ### NFR Scope Classification
 
@@ -86,7 +82,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | API Routes | Partial | console.log | Next.js API route logging; no structured format |
 | Agent Runtime | Partial | Docker logs | Container stdout/stderr captured via `docker logs` |
 | Hook Engine | Partial | stderr | Guard scripts write to stderr on block |
-| Telegram Bot | Partial | grammy logger | grammy framework logging; Docker container logs |
 | Supabase PostgreSQL | Implemented | Supabase Dashboard | Built-in query and auth logs |
 | Compute | Partial | Docker logs | `docker logs` available on host; no centralized aggregation |
 
@@ -99,7 +94,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | Not Implemented | — | No system metrics collection |
 | API Routes | Not Implemented | — | No system metrics collection |
 | Agent Runtime | Not Implemented | — | No system metrics collection |
-| Telegram Bot | Not Implemented | — | No system metrics collection |
 | Supabase PostgreSQL | Partial | Supabase Dashboard | Built-in database usage metrics |
 | Compute | Partial | Hetzner Console + disk-monitor.sh | Hetzner console metrics + disk usage alerts at 80%/95% via Discord (#1409) |
 
@@ -112,7 +106,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | Not Implemented | — | No health dashboards or uptime monitoring |
 | API Routes | Not Implemented | — | No uptime monitoring |
 | Agent Runtime | Not Implemented | — | No service health tracking |
-| Telegram Bot | Not Implemented | — | No bot availability monitoring |
 | Supabase PostgreSQL | Implemented | Supabase Dashboard | Built-in service health monitoring |
 
 ### NFR-004: Process-Level Monitoring
@@ -124,7 +117,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | Not Implemented | — | No process metrics |
 | API Routes | Not Implemented | — | No process metrics |
 | Agent Runtime | Not Implemented | — | No process metrics; Docker restart provides basic recovery |
-| Telegram Bot | Not Implemented | — | No process metrics |
 | Compute | Partial | Docker | `restart: unless-stopped` provides basic process recovery |
 
 ### NFR-005: Telemetry Dashboards
@@ -136,7 +128,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | Implemented | Plausible Analytics | Page views, referrers, device data via JS snippet |
 | API Routes | Not Implemented | — | No API telemetry dashboards |
 | Agent Runtime | Not Implemented | — | No agent session telemetry |
-| Telegram Bot | Not Implemented | — | No bot usage telemetry |
 
 ### NFR-006: Distributed Tracing
 
@@ -159,7 +150,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | Not Implemented | — | No deployment event correlation with metrics |
 | API Routes | Not Implemented | — | No deployment event correlation |
 | Agent Runtime | Not Implemented | — | GitHub Releases track versions but no performance correlation |
-| Telegram Bot | Not Implemented | — | No deployment event tracking |
 
 ### NFR-033: Unified Logging Format
 
@@ -171,7 +161,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | API Routes | Not Implemented | — | Next.js default console output format |
 | Agent Runtime | Not Implemented | — | Unstructured stdout/stderr |
 | Hook Engine | Not Implemented | — | Ad-hoc stderr messages |
-| Telegram Bot | Not Implemented | — | grammy default format; differs from other containers |
 
 ### NFR-044: Dynamic Logging Configuration
 
@@ -182,7 +171,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | Not Implemented | — | No runtime log level control |
 | API Routes | Not Implemented | — | No runtime log level control |
 | Agent Runtime | Not Implemented | — | No runtime log level control |
-| Telegram Bot | Not Implemented | — | No runtime log level control |
 
 ---
 
@@ -199,7 +187,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | API Routes -> Supabase | Not Implemented | — | No fallback for database errors |
 | API Routes -> Stripe | Not Implemented | — | No fallback for payment failures |
 | Agent Runtime -> GitHub | Not Implemented | — | No fallback for git operations |
-| Telegram Bot -> Telegram API | Not Implemented | — | grammy retry plugin available but not configured |
 
 ### NFR-008: Low Latency
 
@@ -231,7 +218,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | Implemented | Next.js, Docker | Stateless; supports multiple instances |
 | API Routes | Partial | Next.js, Docker | Stateless but WebSocket sessions are per-instance |
 | Agent Runtime | Partial | Docker | Containerized; natural per-user sharding; no load balancer |
-| Telegram Bot | Partial | Docker | Containerized; single-instance by design (one bot token) |
 | Compute | Partial | Hetzner Cloud | Can add VPS instances; no orchestrator configured |
 
 ### NFR-045: API Backwards Compatibility
@@ -242,7 +228,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 |----------------|--------|-------------|----------|
 | Dashboard -> API Routes | N/A | — | Internal API with single consumer |
 | API Routes -> Agent Runtime | N/A | — | Internal WebSocket protocol |
-| Telegram Bot -> Agent Runtime | N/A | — | Internal subprocess interface |
 
 ---
 
@@ -258,7 +243,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | API Routes | Implemented | Bun test | API endpoint tests |
 | Agent Runtime | Implemented | Bun test, Lefthook | 964+ plugin tests; pre-commit hooks enforce |
 | Hook Engine | Implemented | Bun test | Hook behavior tests |
-| Telegram Bot | Implemented | Bun test | Bridge test suite |
 | Skills | Implemented | Bun test | Component count validation tests |
 
 ### NFR-012: Automated Performance Testability
@@ -288,7 +272,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 |----------------|--------|-------------|----------|
 | Dashboard | Not Implemented | — | npm dependencies not license-scanned |
 | Agent Runtime | Not Implemented | — | Plugin dependencies not license-scanned |
-| Telegram Bot | Not Implemented | — | npm dependencies not license-scanned |
 
 ### NFR-046: Automated Failure Injection Testing
 
@@ -299,7 +282,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | N/A | — | Single-instance scale; chaos engineering not applicable |
 | API Routes | N/A | — | Single-instance scale; chaos engineering not applicable |
 | Agent Runtime | N/A | — | Single-instance scale; chaos engineering not applicable |
-| Telegram Bot | N/A | — | Single-instance scale; chaos engineering not applicable |
 | Dashboard -> API Routes | N/A | — | No fault injection infrastructure |
 | API Routes -> Agent Runtime | N/A | — | No fault injection infrastructure |
 | Agent Runtime -> Anthropic | N/A | — | No fault injection infrastructure |
@@ -317,7 +299,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | Implemented | Doppler | Secrets injected via `doppler run` |
 | API Routes | Implemented | Doppler | Shared environment with Dashboard |
 | Agent Runtime | Implemented | Doppler | `doppler run` for all secrets (ADR-007) |
-| Telegram Bot | Implemented | Doppler | Bot token via Doppler |
 | Supabase PostgreSQL | Implemented | Supabase Dashboard | Configuration via dashboard; no local .env |
 
 ### NFR-015: Documentation of Internal Services
@@ -342,7 +323,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | Implemented | GitHub Actions | Push-to-deploy via Cloudflare Tunnel webhook |
 | API Routes | Implemented | GitHub Actions | Shared deployment with Dashboard |
 | Agent Runtime | Implemented | GitHub Actions | ci-deploy.sh handles Docker build and health checks |
-| Telegram Bot | Implemented | GitHub Actions | Separate deployment workflow |
 | Skills | Implemented | Git, semver labels | Version bumped by CI on merge (ADR-017) |
 
 ### NFR-017: Graceful Shutdown
@@ -354,7 +334,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | Partial | Docker | SIGTERM with 10s grace; no in-flight request draining |
 | API Routes | Partial | Docker | SIGTERM with 10s grace; WebSocket connections dropped |
 | Agent Runtime | Partial | Docker | SIGTERM with 10s grace; active agent sessions terminated |
-| Telegram Bot | Partial | Docker | SIGTERM with 10s grace; no graceful webhook deregistration |
 
 ### NFR-018: Canary Upgrade
 
@@ -365,7 +344,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | Not Implemented | — | Single-instance deployment; rollback via previous Docker tag |
 | API Routes | Not Implemented | — | Shared deployment with Dashboard |
 | Agent Runtime | Not Implemented | — | Single-instance; no canary strategy |
-| Telegram Bot | Not Implemented | — | Single-instance; no canary strategy |
 
 ### NFR-032: Automatic Rollback on KPI Alert
 
@@ -376,7 +354,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | Not Implemented | — | No KPI-based rollback triggers |
 | API Routes | Not Implemented | — | No error rate monitoring for rollback |
 | Agent Runtime | Not Implemented | — | No deployment health scoring |
-| Telegram Bot | Not Implemented | — | No automated rollback mechanism |
 
 ### NFR-034: Stable Dependency Versioning
 
@@ -387,7 +364,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | Implemented | bun.lockb | Lockfile committed; pinned dependency versions |
 | API Routes | Implemented | bun.lockb | Shared lockfile with Dashboard |
 | Agent Runtime | Implemented | bun.lockb | Plugin lockfile committed |
-| Telegram Bot | Implemented | bun.lockb | Separate lockfile committed |
 
 ### NFR-035: Semantic Versioning
 
@@ -406,7 +382,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 |----------------|--------|-------------|----------|
 | Dashboard | Implemented | GHCR | Docker image tagged with SHA and version |
 | Agent Runtime | Implemented | GHCR | Docker image tagged with SHA and version |
-| Telegram Bot | Implemented | GHCR | Docker image tagged with SHA and version |
 | Skills | Implemented | GitHub Releases | Release artifacts immutable once published |
 
 ### NFR-043: Rolling Update Deployment
@@ -418,7 +393,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | Not Implemented | — | Single instance; replaced atomically |
 | API Routes | Not Implemented | — | Shared deployment with Dashboard |
 | Agent Runtime | Not Implemented | — | Single instance; no rolling strategy |
-| Telegram Bot | Not Implemented | — | Single instance; no rolling strategy |
 
 ---
 
@@ -433,7 +407,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | N/A | — | Single Hetzner VPS; not applicable at current scale |
 | API Routes | N/A | — | Single Hetzner VPS |
 | Agent Runtime | N/A | — | Single Hetzner VPS |
-| Telegram Bot | N/A | — | Single Hetzner VPS |
 | Compute | N/A | — | No orchestrator for auto-scaling |
 
 ### NFR-020: Auto-Healing
@@ -445,7 +418,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | Partial | Docker | `restart: unless-stopped`; no health check recovery |
 | API Routes | Partial | Docker | `restart: unless-stopped` |
 | Agent Runtime | Partial | Docker | `restart: unless-stopped` |
-| Telegram Bot | Partial | Docker | `restart: unless-stopped` |
 | Supabase PostgreSQL | Implemented | Supabase | Managed service with automatic recovery |
 
 ### NFR-021: Readiness Endpoint
@@ -457,7 +429,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | Not Implemented | — | No `/ready` endpoint |
 | API Routes | Not Implemented | — | No `/ready` endpoint |
 | Agent Runtime | Not Implemented | — | ci-deploy.sh health check not exposed as HTTP endpoint |
-| Telegram Bot | Not Implemented | — | No readiness probe |
 
 ### NFR-022: Liveness Endpoint
 
@@ -468,7 +439,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | Not Implemented | — | No `/health` or `/live` endpoint |
 | API Routes | Not Implemented | — | No liveness endpoint |
 | Agent Runtime | Not Implemented | — | Docker health check relies on process existence |
-| Telegram Bot | Not Implemented | — | No liveness endpoint |
 
 ### NFR-031: Periodic Backup & Recovery
 
@@ -518,7 +488,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Founder -> Dashboard | Implemented | Cloudflare | Rate limiting on external traffic |
 | Dashboard -> API Routes | Partial | Cloudflare | HTTP rate limiting; no WebSocket rate limiting |
 | API Routes -> Agent Runtime | Not Implemented | — | No rate limiting on WebSocket connections |
-| Telegram Bot -> Telegram API | Implemented | Telegram API | Telegram enforces rate limits server-side |
 
 ### NFR-026: Encryption In-Transit
 
@@ -538,7 +507,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Cloudflare Tunnel -> API Routes | Implemented | HTTPS | Tunnel uses encrypted connection |
 | Doppler -> Agent Runtime | Implemented | HTTPS | Doppler CLI uses HTTPS for secret fetch |
 | Dashboard -> Plausible | Implemented | HTTPS | JS snippet loaded via HTTPS |
-| Telegram Bot -> Telegram API | Implemented | HTTPS | grammy SDK enforces HTTPS |
 
 ### NFR-027: Encryption At-Rest
 
@@ -559,7 +527,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Dashboard | Partial | Cloudflare CDN | Static assets cached at edge; SSR single-region |
 | API Routes | Not Implemented | — | Single Hetzner EU region |
 | Agent Runtime | Not Implemented | — | Single Hetzner EU region |
-| Telegram Bot | Not Implemented | — | Single Hetzner EU region |
 | Supabase PostgreSQL | Not Implemented | — | Single Supabase region |
 
 ### NFR-038: Least Privilege Container Images
@@ -570,7 +537,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 |----------------|--------|-------------|----------|
 | Dashboard | Partial | Dockerfile | Node.js base image; not fully hardened |
 | Agent Runtime | Partial | Dockerfile | Runs as non-root in some configurations |
-| Telegram Bot | Partial | Dockerfile | Node.js base image; room for hardening |
 
 ### NFR-039: Container Image Security Scanning
 
@@ -580,7 +546,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 |----------------|--------|-------------|----------|
 | Dashboard | Not Implemented | — | No Trivy/Snyk/Grype scanning in CI |
 | Agent Runtime | Not Implemented | — | No image vulnerability scanning |
-| Telegram Bot | Not Implemented | — | No image vulnerability scanning |
 
 ### NFR-040: Data Retention Policy
 
@@ -603,7 +568,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 | Agent Runtime -> Supabase | Implemented | Supabase RLS | Service role key scoped by RLS |
 | Dashboard -> API Routes | Partial | Session auth | Session-based auth; no network-level ACL |
 | API Routes -> Agent Runtime | Partial | WebSocket auth | WebSocket auth; no network-level ACL |
-| Telegram Bot -> Agent Runtime | Not Implemented | — | Subprocess; no access control beyond process isolation |
 
 ### NFR-047: Certificate Scope Control
 
@@ -613,7 +577,6 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/container.md`
 |----------------|--------|-------------|----------|
 | Founder -> Dashboard | Implemented | Cloudflare | Per-domain certificates; no wildcards |
 | Cloudflare Tunnel -> API Routes | Implemented | Cloudflare | Origin certificates per tunnel |
-| Telegram Bot -> Telegram API | Implemented | Telegram | Platform-managed certificates |
 
 ---
 

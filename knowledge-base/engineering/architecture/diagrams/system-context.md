@@ -21,10 +21,8 @@ System_Ext(doppler, "Doppler", "Centralized secrets management with runtime inje
 System_Ext(discord, "Discord", "Community notifications and release announcements")
 System_Ext(stripe, "Stripe", "Payment processing and subscription billing")
 System_Ext(plausible, "Plausible Analytics", "Privacy-focused website analytics")
-System_Ext(telegram, "Telegram Bot API", "Messaging bridge for CLI access via Telegram")
 
 Rel(founder, webapp, "Interacts via browser", "HTTPS")
-Rel(founder, telegram, "Messages via Telegram", "Bot API")
 Rel(webapp, engine, "Thin view/control layer", "WebSocket")
 Rel(webapp, supabase, "Auth and data", "HTTPS")
 Rel(webapp, stripe, "Checkout and billing", "HTTPS")
@@ -33,7 +31,6 @@ Rel(engine, anthropic, "LLM calls with BYOK keys", "HTTPS")
 Rel(engine, github, "Git operations and CI", "HTTPS/SSH")
 Rel(engine, supabase, "Sessions and encrypted keys", "HTTPS")
 Rel(engine, discord, "Notifications", "Webhook")
-Rel(telegram, engine, "Bridges messages to CLI", "grammy SDK")
 Rel(cloudflare, webapp, "Tunnel, DNS, CDN", "HTTPS")
 Rel(doppler, engine, "Runtime secrets", "CLI")
 Rel(stripe, webapp, "Payment webhooks", "HTTPS")
@@ -49,4 +46,3 @@ Rel(stripe, webapp, "Payment webhooks", "HTTPS")
 - Zero-trust access via Cloudflare Tunnel — server invisible to port scanners (ADR-008)
 - Stripe in test mode — subscription billing via checkout sessions and webhooks
 - Plausible Analytics for privacy-focused tracking (no cookies, GDPR-compliant)
-- Telegram bridge is a separate app (apps/telegram-bridge/) using grammy SDK

@@ -52,7 +52,6 @@ cleanup_env_file() {
 # Exact allowlist of valid images per component (not prefix match -- prevents suffix injection).
 declare -A ALLOWED_IMAGES=(
   [web-platform]="ghcr.io/jikig-ai/soleur-web-platform"
-  [telegram-bridge]="ghcr.io/jikig-ai/soleur-telegram-bridge"
 )
 
 # Log truncated command to avoid persisting attacker payloads to syslog
@@ -213,37 +212,6 @@ case "$COMPONENT" in
       logger -t "$LOG_TAG" "DEPLOY_ROLLBACK: canary failed for $IMAGE:$TAG, keeping previous version"
       exit 1
     fi
-    ;;
-  telegram-bridge)
-    echo "Pruning unused Docker images..."
-    docker image prune -af
-    docker pull "$IMAGE:$TAG"
-    { docker stop soleur-bridge || true; }
-    { docker rm soleur-bridge || true; }
-    ENV_FILE=$(resolve_env_file)
-    docker run -d \
-      --name soleur-bridge \
-      --restart unless-stopped \
-      --env-file "$ENV_FILE" \
-      -v /mnt/data:/home/soleur/data \
-      -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
-      -p 127.0.0.1:8080:8080 \
-      "$IMAGE:$TAG"
-    cleanup_env_file "$ENV_FILE"
-    echo "Waiting for health endpoint..."
-    for i in $(seq 1 24); do
-      STATUS=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/health 2>/dev/null) || STATUS="000"
-      if [ "$STATUS" = "200" ] || [ "$STATUS" = "503" ]; then
-        BODY=$(curl -s http://localhost:8080/health)
-        echo "Health endpoint responded: HTTP $STATUS - $BODY"
-        exit 0
-      fi
-      echo "Attempt $i/24: HTTP $STATUS (waiting...)"
-      sleep 5
-    done
-    echo "Health check failed after 120s"
-    docker logs soleur-bridge --tail 30 2>&1 | logger -t ci-deploy
-    exit 1
     ;;
   *)
     logger -t "$LOG_TAG" "ERROR: no deploy handler for '$COMPONENT'"

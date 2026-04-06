@@ -230,30 +230,30 @@ Archive telegram-specific plans, brainstorms, specs, learnings, and component do
 
 ## Acceptance Criteria
 
-- [ ] No `soleur-bridge` container running on CX33 server
-- [ ] Cloudflare tunnel `soleur-telegram-bridge` destroyed (no `deploy-bridge.soleur.ai` DNS)
-- [ ] `apps/telegram-bridge/` directory deleted
-- [ ] `.github/workflows/telegram-bridge-release.yml` deleted
-- [ ] CI workflows (`ci.yml`, `main-health-monitor.yml`, `scheduled-terraform-drift.yml`, `reusable-release.yml`) have no telegram references
-- [ ] `scripts/test-all.sh` has no telegram references
-- [ ] `ci-deploy.sh` and `ci-deploy.test.sh` have no telegram-bridge references
-- [ ] `AGENTS.md` references `apps/web-platform/infra/main.tf` instead of `apps/telegram-bridge/infra/main.tf`
-- [ ] Architecture diagrams have no Telegram elements
-- [ ] `nfr-register.md` has no Telegram Bot rows
-- [ ] ADR-006 and ADR-019 have no telegram-bridge references
-- [ ] `constitution.md` has no telegram-bridge references
-- [ ] `knowledge-base/project/README.md` has no telegram-bridge references
-- [ ] `plugins/soleur/skills/ship/SKILL.md` has no telegram-bridge app labeling
-- [ ] `plugins/soleur/skills/deploy/references/hetzner-setup.md` has no telegram-bridge reference
-- [ ] `expenses.md` has no CX22 line
-- [ ] 6 GitHub secrets removed
-- [ ] Doppler telegram secrets removed from prd, prd_terraform, ci configs
-- [ ] 7 GitHub issues closed, 4 updated
-- [ ] Telegram-specific knowledge-base files archived
-- [ ] Telegram-specific todo files in `todos/` deleted
-- [ ] `bun test` and `scripts/test-all.sh` pass without telegram-bridge
-- [ ] `ci-deploy.test.sh` passes without telegram-bridge test cases
-- [ ] Full-repo grep for `telegram-bridge` returns only: this plan, the tasks file, archived files, and knowledge-base files that mention telegram as a platform (not as infrastructure)
+- [x] No `soleur-bridge` container running on CX33 server
+- [x] Cloudflare tunnel `soleur-telegram-bridge` destroyed (no `deploy-bridge.soleur.ai` DNS)
+- [x] `apps/telegram-bridge/` directory deleted
+- [x] `.github/workflows/telegram-bridge-release.yml` deleted
+- [x] CI workflows (`ci.yml`, `main-health-monitor.yml`, `scheduled-terraform-drift.yml`, `reusable-release.yml`) have no telegram references
+- [x] `scripts/test-all.sh` has no telegram references
+- [x] `ci-deploy.sh` and `ci-deploy.test.sh` have no telegram-bridge references
+- [x] `AGENTS.md` references `apps/web-platform/infra/main.tf` instead of `apps/telegram-bridge/infra/main.tf`
+- [x] Architecture diagrams have no Telegram elements
+- [x] `nfr-register.md` has no Telegram Bot rows
+- [x] ADR-006 and ADR-019 have no telegram-bridge references
+- [x] `constitution.md` has no telegram-bridge references
+- [x] `knowledge-base/project/README.md` has no telegram-bridge references
+- [x] `plugins/soleur/skills/ship/SKILL.md` has no telegram-bridge app labeling
+- [x] `plugins/soleur/skills/deploy/references/hetzner-setup.md` has no telegram-bridge reference
+- [x] `expenses.md` has no CX22 line
+- [x] 6 GitHub secrets removed
+- [x] Doppler telegram secrets removed from prd, prd_terraform, ci configs
+- [x] 7 GitHub issues closed, 4 updated
+- [x] Telegram-specific knowledge-base files archived
+- [x] Telegram-specific todo files in `todos/` deleted
+- [x] `bun test` and `scripts/test-all.sh` pass without telegram-bridge
+- [x] `ci-deploy.test.sh` passes without telegram-bridge test cases
+- [x] Full-repo grep for `telegram-bridge` returns only: this plan, the tasks file, archived files, and knowledge-base files that mention telegram as a platform (not as infrastructure)
 
 ## Test Scenarios
 

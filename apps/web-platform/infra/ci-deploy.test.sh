@@ -45,7 +45,6 @@ MOCK
     # Mock curl (simulate healthy endpoint)
     cat > "$MOCK_DIR/curl" << 'MOCK'
 #!/bin/bash
-# Handle -w '%{http_code}' for telegram-bridge health check
 for arg in "$@"; do
   if [[ "$arg" == *"http_code"* ]]; then
     echo "200"
@@ -280,9 +279,6 @@ echo "--- Happy path ---"
 assert_exit "web-platform deploy succeeds" 0 \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
 
-assert_exit "telegram-bridge deploy succeeds" 0 \
-  "deploy telegram-bridge ghcr.io/jikig-ai/soleur-telegram-bridge v2.3.1"
-
 echo ""
 echo "--- Empty/missing command ---"
 assert_exit_contains "empty command rejected" 1 "no command provided" ""
@@ -313,9 +309,6 @@ echo ""
 echo "--- Image allowlist (exact match, not prefix) ---"
 assert_exit_contains "suffix injection rejected" 1 "invalid image" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-attacker-repo v1.0.0"
-
-assert_exit_contains "wrong image for component rejected" 1 "invalid image" \
-  "deploy web-platform ghcr.io/jikig-ai/soleur-telegram-bridge v1.0.0"
 
 assert_exit_contains "arbitrary image rejected" 1 "invalid image" \
   "deploy web-platform evil-image:latest v1.0.0"
@@ -378,9 +371,6 @@ assert_prune_before_pull() {
 
 assert_prune_before_pull "web-platform: prune runs before pull" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
-
-assert_prune_before_pull "telegram-bridge: prune runs before pull" \
-  "deploy telegram-bridge ghcr.io/jikig-ai/soleur-telegram-bridge v2.3.1"
 
 echo ""
 echo "--- Disk space pre-flight check ---"

@@ -473,17 +473,15 @@ Replace `HASH` with the actual commit hash.
 
 ```bash
 git diff --name-only HASH..HEAD -- apps/web-platform/ | head -1
-git diff --name-only HASH..HEAD -- apps/telegram-bridge/ | head -1
 ```
 
-If `apps/web-platform/` has changes, apply `app:web-platform` label. If `apps/telegram-bridge/` has changes, apply `app:telegram-bridge` label:
+If `apps/web-platform/` has changes, apply `app:web-platform` label:
 
 ```bash
 gh pr edit PR_NUMBER --add-label app:web-platform
-gh pr edit PR_NUMBER --add-label app:telegram-bridge
 ```
 
-Only apply each label if the corresponding path has changes.
+Only apply the label if the path has changes.
 
 **Step 2:** Determine the bump type:
 

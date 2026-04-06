@@ -110,7 +110,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 
 **Deferred from P1:**
 
-- ~~1.12 Telegram bridge~~ → Deferred to a later phase. Reach is meaningless with 0 users.
+- ~~1.12 Telegram bridge~~ → Removed in April 2026 — will redesign as channel connector using unified backend.
 - ~~Private repo support for 1.10~~ → Included in P1. GitHub App tokens provide identical security for both public and private repos.
 
 **UX Vision: L2 → L4**
