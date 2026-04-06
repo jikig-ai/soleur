@@ -75,14 +75,16 @@ The webhook binary install (lines 222-229) provides the exact template:
 Replace `cloud-init.yml` line 171:
 
 ```yaml
-# Before (line 171):
-- curl -Ls --tlsv1.2 --proto "=https" --retry 3 https://cli.doppler.com/install.sh | sh
+# Before (lines 170-171):
+  # Install Doppler CLI (for secrets injection)
+  - curl -Ls --tlsv1.2 --proto "=https" --retry 3 https://cli.doppler.com/install.sh | sh
 
 # After:
+  # Install Doppler CLI v3.75.3 (for secrets injection) with checksum verification
 - |
   DOPPLER_VERSION="3.75.3"
   DOPPLER_SHA256="9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
-  curl -fsSL "https://github.com/DopplerHQ/cli/releases/download/$${DOPPLER_VERSION}/doppler_$${DOPPLER_VERSION}_linux_amd64.tar.gz" -o /tmp/doppler.tar.gz
+  curl -fsSL --retry 3 "https://github.com/DopplerHQ/cli/releases/download/$${DOPPLER_VERSION}/doppler_$${DOPPLER_VERSION}_linux_amd64.tar.gz" -o /tmp/doppler.tar.gz
   echo "$${DOPPLER_SHA256}  /tmp/doppler.tar.gz" | sha256sum -c -
   tar xzf /tmp/doppler.tar.gz -C /usr/local/bin doppler
   chmod +x /usr/local/bin/doppler
@@ -113,14 +115,17 @@ Key differences from the webhook pattern:
 
 ## Acceptance Criteria
 
-- [ ] `cloud-init.yml` Doppler CLI install uses pinned version `3.75.3` with SHA-256
+- [x] `cloud-init.yml` Doppler CLI install uses pinned version `3.75.3` with SHA-256
   checksum `9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db`
-- [ ] Checksum verification fails loudly (non-zero exit) if hash mismatches
-- [ ] No `curl | sh` pattern remains for Doppler install
-- [ ] `server.tf` is NOT modified (no install logic there)
-- [ ] Existing Doppler token setup and secrets download remain unchanged
-- [ ] The `$${VAR}` Terraform template escape syntax is used correctly (double `$$` to
+- [x] Checksum verification fails loudly (non-zero exit) if hash mismatches
+- [x] No `curl | sh` pattern remains for Doppler install
+- [x] `server.tf` is NOT modified (no install logic there)
+- [x] Existing Doppler token setup and secrets download remain unchanged
+- [x] The `$${VAR}` Terraform template escape syntax is used correctly (double `$$` to
   produce literal `$` in rendered cloud-init)
+- [x] Comment updated to include version: `# Install Doppler CLI v3.75.3 (for secrets
+  injection) with checksum verification`
+- [x] `curl` includes `--retry 3` for resilience during provisioning
 
 ## Test Scenarios
 
@@ -148,6 +153,17 @@ No cross-domain implications detected -- infrastructure/tooling change.
 - **Learning:** `knowledge-base/project/learnings/2026-03-20-doppler-secrets-manager-setup-patterns.md`
   documents the Doppler binary download URL pattern (`cli.doppler.com/download?os=linux&arch=...`)
   but GitHub releases provide checksums; the `cli.doppler.com` URL does not
+
+## Plan Review
+
+All three reviewers approved. Applied two non-blocking suggestions:
+
+1. Added `--retry 3` to the `curl` command for provisioning resilience
+2. Added acceptance criterion for updated comment with version number
+
+**Follow-up:** The Docker install at `cloud-init.yml:179` (`curl -fsSL https://get.docker.com | sh`)
+has the same pipe-to-shell pattern. Out of scope for this PR but should be tracked as a
+separate issue.
 
 ## References
 
