@@ -319,6 +319,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    These checks replace the "tests may be skipped" exemption for infra files. If any check fails, fix before proceeding to the next task.
 
    - When cloud-init has `lifecycle { ignore_changes = [user_data] }`, changes to cloud-init templates are never applied to existing servers. Use a `terraform_data` provisioner with `remote-exec` to bridge the gap. Verify systemd services use `EnvironmentFile=` directives (not `/etc/environment`) for token injection.
+   - When fixing syscall-level issues in Docker containers, test with `--privileged` first to establish a working baseline, then remove privileges one at a time. Docker's seccomp `includes.caps` is compile-time (evaluated when building BPF filter), not runtime -- processes gaining capabilities inside user namespaces do NOT gain access to capability-gated seccomp rules.
+   - When a `terraform_data` provisioner writes a systemd unit or config file via `remote-exec` heredoc, extract the content to a standalone file and use `file()` in both `triggers_replace` and a `file` provisioner. Inline heredoc strings desync from the trigger hash -- partial strings in `triggers_replace` silently skip re-provisioning when the unit content changes.
 
 7. **Track Progress**
    - Keep TodoWrite updated as you complete tasks
