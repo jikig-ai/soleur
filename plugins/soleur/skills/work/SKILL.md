@@ -239,6 +239,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    Skipping this gate — writing implementation before tests — is a workflow violation equivalent to committing directly to main. The rationalization "this is simple enough to not need test-first" is exactly the reasoning TDD is designed to prevent.
 
    - When adding route handler tests that require `vi.mock()`, create a separate test file from existing unit tests that import the real module. Vitest hoists all `vi.mock()` calls to the top of the file, clobbering real imports for the entire file regardless of describe block scope.
+   - When creating test files with `vi.mock()` factories that reference shared variables, use `vi.hoisted()` from the start -- vitest hoists `vi.mock` to the top of the file before `const`/`let` declarations execute.
 
    **Test environment setup:** If the project's test runner cannot run the type of test needed (e.g., React component tests require jsdom but vitest is configured for node), set up the test environment BEFORE starting the task. This is part of RED — the test infrastructure must exist for the test to fail properly.
 
@@ -517,3 +518,4 @@ For most features: tests + linting + following patterns is sufficient.
 - **Silent plan omissions** - When dropping a conditional plan item, document why in the commit or plan
 - **Research without cascade-validate loop** - For knowledge-base research deliverables, Phase 2.5 enforces: cascade findings into source artifacts → re-run validation → cascade again if new weak spots emerge → update brief with final results → present founder summary. "Findings written" is not "done" — "findings applied, validated, and all documents reflect the final state" is done. See Phase 2.5.
 - **Missing founder summary** - After completing research, analysis, or audit work, present a concise summary: key findings table + all files changed table (file, what changed, before/after metrics if applicable). The founder needs to review what changed, not just what was discovered.
+- **Incomplete replace_all** - After any `replace_all` Edit operation, grep the file to verify zero remaining matches before proceeding to the next task. `replace_all` can miss occurrences with different surrounding context (whitespace, indentation).

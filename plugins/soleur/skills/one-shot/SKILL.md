@@ -59,7 +59,9 @@ When both steps are done, output a summary in this exact format:
 ### Components Invoked
 <list of commands/skills/agents invoked>
 
-Do NOT proceed beyond deepen-plan. Do NOT start work."
+Do NOT proceed beyond deepen-plan. Do NOT start work.
+
+CRITICAL: You MUST output the ## Session Summary section in EXACTLY the format above. Place it as the last thing in your output."
 ```
 
 **Parse subagent output and write session-state.md:**

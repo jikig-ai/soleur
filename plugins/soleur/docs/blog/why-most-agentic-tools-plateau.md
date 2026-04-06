@@ -104,7 +104,7 @@ The compound step does not just capture learnings into a file. It routes insight
 This is what it looks like when a system's governance document contains a rule that reads:
 
 ```
-- Never commit directly to main [hook-enforced: guardrails.sh Guard 1]
+- Never commit directly to main [hook-enforced: guardrails.sh guardrails:block-commit-on-main]
 - Never edit files in the main repo when a worktree is active [hook-enforced: worktree-write-guard.sh]
 - Before merging any PR, merge origin/main into the feature branch [hook-enforced: pre-merge-rebase.sh]
 ```

@@ -84,6 +84,9 @@ resource "terraform_data" "disk_monitor_install" {
 # Source of truth for webhook.service: cloud-init.yml (search "path: /etc/systemd/system/webhook.service").
 # The standalone webhook.service file keeps triggers_replace and the file provisioner in sync.
 resource "terraform_data" "deploy_pipeline_fix" {
+  # AppArmor profile must be loaded before ci-deploy.sh references it (#1570).
+  depends_on = [terraform_data.apparmor_bwrap_profile]
+
   triggers_replace = sha256(join(",", [
     file("${path.module}/ci-deploy.sh"),
     file("${path.module}/webhook.service"),
@@ -122,10 +125,10 @@ resource "terraform_data" "deploy_pipeline_fix" {
   }
 }
 
-# Deploy custom seccomp profile and update Docker daemon config (#1557).
+# Deploy custom seccomp profile for per-container use (#1557, #1569).
 # Enables bubblewrap sandbox inside containers by allowing CLONE_NEWUSER.
-# ci-deploy.sh is deployed by deploy_pipeline_fix above; this resource
-# only handles the seccomp profile and daemon.json configuration.
+# ci-deploy.sh applies the profile via --security-opt seccomp=<path>;
+# this resource only provisions the profile file and kernel sysctl.
 # Shows as "will be created" in CI drift reports -- expected behavior.
 resource "terraform_data" "docker_seccomp_config" {
   triggers_replace = sha256(file("${path.module}/seccomp-bwrap.json"))
@@ -150,13 +153,38 @@ resource "terraform_data" "docker_seccomp_config" {
 
   provisioner "remote-exec" {
     inline = [
-      "python3 -c \"import json; f='/etc/docker/daemon.json'; d=json.load(open(f)); d['seccomp-profile']='/etc/docker/seccomp-profiles/soleur-bwrap.json'; json.dump(d,open(f,'w'),indent=2); print('daemon.json updated')\"",
       # Ubuntu 24.04 kernel restricts uid_map writes inside unprivileged user namespaces
       # even with apparmor=unconfined. Disable this kernel-level restriction for bwrap (#1557).
       "sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
       "echo 'kernel.apparmor_restrict_unprivileged_userns=0' > /etc/sysctl.d/99-bwrap-userns.conf",
-      "systemctl restart docker",
-      "echo 'Docker restarted with custom seccomp profile and userns sysctl'",
+      "echo 'Seccomp profile provisioned and userns sysctl applied'",
+    ]
+  }
+}
+
+# Deploy custom AppArmor profile for bwrap sandbox (#1570).
+# Replaces apparmor=unconfined with a scoped profile that allows
+# mount/umount/pivot_root while maintaining Docker's other restrictions.
+# Shows as "will be created" in CI drift reports -- expected behavior.
+resource "terraform_data" "apparmor_bwrap_profile" {
+  triggers_replace = sha256(file("${path.module}/apparmor-soleur-bwrap.profile"))
+
+  connection {
+    type  = "ssh"
+    host  = hcloud_server.web.ipv4_address
+    user  = "root"
+    agent = true
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/apparmor-soleur-bwrap.profile"
+    destination = "/etc/apparmor.d/soleur-bwrap"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "apparmor_parser -r /etc/apparmor.d/soleur-bwrap",
+      "echo 'AppArmor profile soleur-bwrap loaded'",
     ]
   }
 }

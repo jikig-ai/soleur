@@ -10,6 +10,7 @@ root_cause: test_isolation
 resolution_type: code_fix
 severity: medium
 tags: [vitest, vi-mock, vi-hoisted, mock-hoisting, testing]
+synced_to: [work]
 ---
 
 # Learning: vitest vi.mock() factory requires vi.hoisted() for shared mock references

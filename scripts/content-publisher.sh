@@ -39,6 +39,8 @@ AVATAR_URL="https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleu
 
 # Global set per-file in the scan loop, used by fallback issue creators
 CASE_NAME=""
+# Holds the last Discord error for passing to fallback issue creators
+DISCORD_LAST_ERROR=""
 
 # --- Temp File Cleanup ---
 # Track all temp files and clean up on any exit (normal, error, or signal).
@@ -162,16 +164,22 @@ post_discord() {
     --arg avatar_url "$AVATAR_URL" \
     '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
 
-  local http_code
-  http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+  local stderr_file http_code response_body
+  stderr_file=$(make_tmp)
+  http_code=$(curl -s -w "%{http_code}" -o "$stderr_file" \
     -H "Content-Type: application/json" \
     -d "$payload" \
     "$webhook_url")
 
   if [[ "$http_code" =~ ^2 ]]; then
+    rm -f "$stderr_file"
     echo "[ok] Discord message posted (HTTP $http_code)."
   else
+    response_body=$(head -c 1000 "$stderr_file")
+    rm -f "$stderr_file"
     echo "Error: Discord webhook returned HTTP $http_code." >&2
+    # Store error context for caller to pass to fallback issue
+    DISCORD_LAST_ERROR="HTTP $http_code: $response_body"
     return 1
   fi
 }
@@ -204,12 +212,17 @@ post_discord_warning() {
 
 create_x_fallback_issue() {
   local file="$1"
+  local error_reason="${2:-}"
   local x_content
   x_content=$(extract_section "$file" "X/Twitter Thread")
 
   local title="[Content Publisher] X API failed -- manual posting required for $CASE_NAME"
+  local error_section=""
+  if [[ -n "$error_reason" ]]; then
+    error_section=$(printf '\n\n**Error:**\n```\n%s\n```' "${error_reason:0:1000}")
+  fi
   local body
-  body=$(printf '## Manual X/Twitter Posting Required\n\nThe scheduled content publisher could not post to X/Twitter for **%s**.\n\nPost this thread manually at https://x.com/compose/post:\n\n---\n\n%s' "$CASE_NAME" "$x_content")
+  body=$(printf '## Manual X/Twitter Posting Required\n\nThe scheduled content publisher could not post to X/Twitter for **%s**.%s\n\nPost this thread manually at https://x.com/compose/post:\n\n---\n\n%s' "$CASE_NAME" "$error_section" "$x_content")
 
   create_dedup_issue "$title" "$body" "action-required,content-publisher" || {
     echo "FATAL: X posting failed AND fallback issue creation failed." >&2
@@ -221,13 +234,18 @@ create_partial_thread_issue() {
   local file="$1"
   local last_tweet_id="$2"
   local resume_from="$3"
+  local error_reason="${4:-}"
   local x_content
   x_content=$(extract_section "$file" "X/Twitter Thread")
 
   local title="[Content Publisher] Partial X thread -- resume for $CASE_NAME"
+  local error_section=""
+  if [[ -n "$error_reason" ]]; then
+    error_section=$(printf '\n\n**Error:**\n```\n%s\n```' "${error_reason:0:1000}")
+  fi
   local body
-  body=$(printf '## Partial X Thread -- Resume Required\n\nThe thread for **%s** was partially posted. Resume from tweet %s.\n\n**Last successful tweet:** https://x.com/soleur_ai/status/%s\n**Resume with:** `--reply-to %s`\n\n---\n\n%s' \
-    "$CASE_NAME" "$resume_from" "$last_tweet_id" "$last_tweet_id" "$x_content")
+  body=$(printf '## Partial X Thread -- Resume Required\n\nThe thread for **%s** was partially posted. Resume from tweet %s.%s\n\n**Last successful tweet:** https://x.com/soleur_ai/status/%s\n**Resume with:** `--reply-to %s`\n\n---\n\n%s' \
+    "$CASE_NAME" "$resume_from" "$error_section" "$last_tweet_id" "$last_tweet_id" "$x_content")
 
   create_dedup_issue "$title" "$body" "action-required,content-publisher" || {
     echo "FATAL: Partial thread issue creation failed. Data loss: thread stalled at tweet $resume_from." >&2
@@ -237,9 +255,14 @@ create_partial_thread_issue() {
 
 create_discord_fallback_issue() {
   local content="$1"
+  local error_reason="${2:-}"
   local title="[Content Publisher] Discord posting failed -- manual posting required for $CASE_NAME"
+  local error_section=""
+  if [[ -n "$error_reason" ]]; then
+    error_section=$(printf '\n\n**Error:**\n```\n%s\n```' "${error_reason:0:1000}")
+  fi
   local body
-  body=$(printf '## Manual Discord Posting Required\n\nThe scheduled content publisher could not post to Discord for **%s**.\n\nPost this content manually in the Discord channel:\n\n---\n\n%s' "$CASE_NAME" "$content")
+  body=$(printf '## Manual Discord Posting Required\n\nThe scheduled content publisher could not post to Discord for **%s**.%s\n\nPost this content manually in the Discord channel:\n\n---\n\n%s' "$CASE_NAME" "$error_section" "$content")
   create_dedup_issue "$title" "$body" "action-required,content-publisher"
 }
 
@@ -275,11 +298,11 @@ post_x_thread() {
     rm -f "$hook_stderr"
     if echo "$err_text" | grep -q "402"; then
       echo "X API returned 402 (Payment Required). Creating fallback issue." >&2
-      create_x_fallback_issue "$file"
+      create_x_fallback_issue "$file" "$err_text"
       return 1
     fi
     echo "Error posting hook tweet (exit $exit_code): $err_text" >&2
-    create_x_fallback_issue "$file"
+    create_x_fallback_issue "$file" "$err_text"
     return 1
   }
   rm -f "$hook_stderr"
@@ -287,7 +310,7 @@ post_x_thread() {
   hook_id=$(echo "$hook_result" | jq -r '.id // empty')
   if [[ -z "$hook_id" ]]; then
     echo "Error: Failed to extract tweet ID from hook response." >&2
-    create_x_fallback_issue "$file"
+    create_x_fallback_issue "$file" "Failed to extract tweet ID from response: ${hook_result:0:500}"
     return 1
   fi
   echo "[ok] Hook tweet posted: https://x.com/soleur_ai/status/$hook_id"
@@ -307,14 +330,14 @@ post_x_thread() {
         echo "Error posting tweet $((i+1))/${#tweets[@]} (exit $reply_exit): $reply_err" >&2
       fi
       rm -f "$reply_stderr"
-      create_partial_thread_issue "$file" "$prev_id" "$((i+1))"
+      create_partial_thread_issue "$file" "$prev_id" "$((i+1))" "$reply_err"
       return 1
     }
     reply_id=$(echo "$reply_result" | jq -r '.id // empty')
     if [[ -z "$reply_id" ]]; then
       echo "Error: Failed to extract reply ID for tweet $((i+1)). Thread is partial." >&2
       rm -f "$reply_stderr"
-      create_partial_thread_issue "$file" "$prev_id" "$((i+1))"
+      create_partial_thread_issue "$file" "$prev_id" "$((i+1))" "Failed to extract reply ID from response: ${reply_result:0:500}"
       return 1
     fi
     prev_id="$reply_id"
@@ -421,12 +444,17 @@ post_linkedin_company() {
 
 create_bluesky_fallback_issue() {
   local file="$1"
+  local error_reason="${2:-}"
   local bsky_content
   bsky_content=$(extract_section "$file" "Bluesky")
 
   local title="[Content Publisher] Bluesky API failed -- manual posting required for $CASE_NAME"
+  local error_section=""
+  if [[ -n "$error_reason" ]]; then
+    error_section=$(printf '\n\n**Error:**\n```\n%s\n```' "${error_reason:0:1000}")
+  fi
   local body
-  body=$(printf '## Manual Bluesky Posting Required\n\nThe scheduled content publisher could not post to Bluesky for **%s**.\n\nPost this content manually at https://bsky.app:\n\n---\n\n%s' "$CASE_NAME" "$bsky_content")
+  body=$(printf '## Manual Bluesky Posting Required\n\nThe scheduled content publisher could not post to Bluesky for **%s**.%s\n\nPost this content manually at https://bsky.app:\n\n---\n\n%s' "$CASE_NAME" "$error_section" "$bsky_content")
 
   create_dedup_issue "$title" "$body" "action-required,content-publisher" || {
     echo "FATAL: Bluesky posting failed AND fallback issue creation failed." >&2
@@ -454,11 +482,17 @@ post_bluesky() {
     return 0
   fi
 
-  bash "$BSKY_SCRIPT" post "$content" || {
+  local stderr_file
+  stderr_file=$(make_tmp)
+  if ! bash "$BSKY_SCRIPT" post "$content" 2>"$stderr_file"; then
+    local error_reason
+    error_reason=$(head -c 1000 "$stderr_file")
+    rm -f "$stderr_file"
     echo "Error: Bluesky posting failed. Creating fallback issue." >&2
-    create_bluesky_fallback_issue "$file"
+    create_bluesky_fallback_issue "$file" "$error_reason"
     return 1
-  }
+  fi
+  rm -f "$stderr_file"
   echo "[ok] Bluesky post published."
 }
 
@@ -583,11 +617,12 @@ main() {
           local discord_content
           discord_content=$(extract_section "$file" "$section")
           if [[ -n "$discord_content" ]]; then
+            DISCORD_LAST_ERROR=""
             if post_discord "$discord_content"; then
               file_successes=$((file_successes + 1))
             else
               echo "Warning: Discord posting failed. Creating fallback issue." >&2
-              create_discord_fallback_issue "$discord_content" || true
+              create_discord_fallback_issue "$discord_content" "$DISCORD_LAST_ERROR" || true
               file_failures=$((file_failures + 1))
             fi
           else

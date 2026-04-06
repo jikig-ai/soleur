@@ -12,7 +12,7 @@ None
 ### Decisions
 
 - Warp constraint scoped more precisely: the actual failure surface is cursor position queries and TUI rendering, not tab renaming. Rule wording uses "automated terminal manipulation via escape sequences."
-- Documentation-only enforcement for now, with a Guard 5 regex pattern documented as ready-to-add follow-up.
+- Documentation-only enforcement for now, with a guardrails:require-milestone regex pattern documented as ready-to-add follow-up.
 - AGENTS.md Hard Rules is the correct location (CLAUDE.md is a pointer file, settings.json only sets env vars).
 - No plugin version bump needed -- changes are to AGENTS.md and constitution.md, not plugin files.
 - Constitution.md gets a single extensibility principle directing future constraints to AGENTS.md Hard Rules.

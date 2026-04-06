@@ -32,8 +32,9 @@ fi
 
 # --- Status Definitions ---
 # Add new required status checks here. Each entry: "context|description"
-# When adding a new entry, also update scripts/create-ci-required-ruleset.sh
-# to include the new context in the required_status_checks array.
+# When adding a new entry, also update:
+#   - scripts/required-checks.txt (lint source of truth)
+#   - scripts/create-ci-required-ruleset.sh (ruleset provisioning)
 
 STATUSES=(
   "cla-check|CLA not required for automated PRs"
