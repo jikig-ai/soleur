@@ -192,12 +192,12 @@ describe("agent-runner MCP tool wiring", () => {
     expect(options.mcpServers).toBeUndefined();
   });
 
-  test("canUseTool allows mcp__ prefixed tools", async () => {
+  test("canUseTool allows registered platform MCP tools", async () => {
     setupSupabaseMock({
       workspace_path: "/tmp/test-workspace",
-      repo_status: null,
-      github_installation_id: null,
-      repo_url: null,
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/alice/my-repo",
     });
     setupQueryMockImmediate();
 
@@ -206,13 +206,36 @@ describe("agent-runner MCP tool wiring", () => {
     const options = mockQuery.mock.calls[0][0].options;
     const canUseTool = options.canUseTool!;
 
-    // mcp__ prefixed tools should be allowed
+    // Registered platform tool should be allowed
     const result = await canUseTool(
       "mcp__soleur_platform__create_pull_request",
       { head: "feat-branch", base: "main", title: "test" },
       { signal: new AbortController().signal },
     );
     expect(result.behavior).toBe("allow");
+  });
+
+  test("canUseTool denies unregistered mcp__ tools", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/alice/my-repo",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    const canUseTool = options.canUseTool!;
+
+    // Unregistered MCP tool should be denied (not blanket mcp__ allow)
+    const result = await canUseTool(
+      "mcp__other_server__dangerous_tool",
+      {},
+      { signal: new AbortController().signal },
+    );
+    expect(result.behavior).toBe("deny");
   });
 
   test("canUseTool still denies non-mcp unrecognized tools", async () => {
