@@ -1,6 +1,6 @@
 # Spec: GitHub App Reinstall Flow Improvement
 
-**Issue:** TBD
+**Issue:** #1678
 **Branch:** feat-github-app-reinstall-flow
 **Brainstorm:** [2026-04-06-github-app-reinstall-flow-brainstorm.md](../../brainstorms/2026-04-06-github-app-reinstall-flow-brainstorm.md)
 

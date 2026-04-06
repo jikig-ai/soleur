@@ -12,13 +12,13 @@ When the Soleur GitHub App is already installed, the `/connect-repo` page forces
 
 ## Acceptance Criteria
 
-- [ ] User with existing `github_installation_id` clicks "Connect Existing" -- skips GitHub redirect, sees repo list directly
-- [ ] User with existing `github_installation_id` clicks "Create New" -- skips GitHub redirect, creates repo directly after name input
-- [ ] User without installation -- goes through current GitHub redirect flow (no regression)
-- [ ] Callback processes both `setup_action=install` and `setup_action=update`
-- [ ] Repo list auto-refreshes when user returns to tab (via `visibilitychange`)
-- [ ] Manual "Refresh" button on `SelectProjectState` and `NoProjectsState`
-- [ ] Auto-refresh debounced to prevent rapid-fire API calls
+- [x] User with existing `github_installation_id` clicks "Connect Existing" -- skips GitHub redirect, sees repo list directly
+- [x] User with existing `github_installation_id` clicks "Create New" -- skips GitHub redirect, creates repo directly after name input
+- [x] User without installation -- goes through current GitHub redirect flow (no regression)
+- [x] Callback processes both `setup_action=install` and `setup_action=update`
+- [x] Repo list auto-refreshes when user returns to tab (via `visibilitychange`)
+- [x] Manual "Refresh" button on `SelectProjectState` and `NoProjectsState`
+- [x] Auto-refresh debounced to prevent rapid-fire API calls
 
 ## Test Scenarios
 
