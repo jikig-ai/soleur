@@ -238,6 +238,71 @@ describe("agent-runner MCP tool wiring", () => {
     expect(result.behavior).toBe("deny");
   });
 
+  test("omits mcpServers when repo_url owner contains URL-encoded traversal", async () => {
+    // %2F decodes to '/' inside a segment — the regex rejects '%'
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/..%2F..%2Fetc/passwd",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    expect(mockQuery).toHaveBeenCalledOnce();
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(options.mcpServers).toBeUndefined();
+  });
+
+  test("omits mcpServers when repo_url has missing segments", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/owner-only",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    expect(mockQuery).toHaveBeenCalledOnce();
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(options.mcpServers).toBeUndefined();
+  });
+
+  test("omits mcpServers when repo_url is not a valid URL", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "not-a-url",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    expect(mockQuery).toHaveBeenCalledOnce();
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(options.mcpServers).toBeUndefined();
+  });
+
+  test("omits mcpServers when repo_url owner contains special characters", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/owner%2F..%2F/repo",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    expect(mockQuery).toHaveBeenCalledOnce();
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(options.mcpServers).toBeUndefined();
+  });
+
   test("canUseTool still denies non-mcp unrecognized tools", async () => {
     setupSupabaseMock({
       workspace_path: "/tmp/test-workspace",

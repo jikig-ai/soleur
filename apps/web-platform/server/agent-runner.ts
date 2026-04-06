@@ -375,6 +375,14 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         repo = "";
       }
 
+      // Validate owner/repo contain only safe GitHub name characters
+      // to prevent path-traversal or injection in API URL interpolation.
+      const GITHUB_NAME_RE = /^[a-zA-Z0-9._-]+$/;
+      if (!GITHUB_NAME_RE.test(owner) || !GITHUB_NAME_RE.test(repo)) {
+        owner = "";
+        repo = "";
+      }
+
       if (owner && repo) {
         const createPr = tool(
           "create_pull_request",
