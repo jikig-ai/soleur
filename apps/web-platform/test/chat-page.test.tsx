@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 // Mock useWebSocket hook
 const mockStartSession = vi.fn();
@@ -69,9 +70,9 @@ describe("ChatPage", () => {
     mockSearchParams.set("msg", "help with pricing");
     wsReturn.sessionConfirmed = false;
     await renderChatPage();
-    // Wait a tick to let effects settle
-    await new Promise((r) => setTimeout(r, 50));
-    expect(mockSendMessage).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(mockSendMessage).not.toHaveBeenCalled();
+    });
   });
 
   it("sends msg only after sessionConfirmed becomes true", async () => {
@@ -100,9 +101,48 @@ describe("ChatPage", () => {
     wsReturn.status = "connected";
     mockSearchParams.set("msg", "help with pricing");
     await renderChatPage();
-    await new Promise((r) => setTimeout(r, 50));
-    // Should NOT send again since sessionConfirmed is false after reconnection
-    expect(mockSendMessage).not.toHaveBeenCalled();
+    await waitFor(() => {
+      // Should NOT send again since sessionConfirmed is false after reconnection
+      expect(mockSendMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  it("handleSend works when sessionConfirmed is false and status is connected", async () => {
+    wsReturn.sessionConfirmed = false;
+    wsReturn.status = "connected";
+    await renderChatPage();
+
+    const input = screen.getByPlaceholderText(/follow up or ask another question/i);
+    await userEvent.type(input, "manual message");
+    await userEvent.click(screen.getByLabelText("Send message"));
+
+    expect(mockSendMessage).toHaveBeenCalledWith("manual message");
+  });
+
+  it("does not send any message when no ?msg= param is present even after sessionConfirmed", async () => {
+    wsReturn.sessionConfirmed = true;
+    wsReturn.status = "connected";
+    await renderChatPage();
+
+    await waitFor(() => {
+      expect(mockSendMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  it("shows error card and does not send msg when server errors before session_started", async () => {
+    mockSearchParams.set("msg", "help with pricing");
+    wsReturn.sessionConfirmed = false;
+    wsReturn.lastError = {
+      code: "rate_limited",
+      message: "You've been rate limited.",
+    };
+    await renderChatPage();
+
+    expect(screen.getByText("You've been rate limited.")).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(mockSendMessage).not.toHaveBeenCalled();
+    });
   });
 
   it("shows routing badge for auto-routed messages", async () => {
