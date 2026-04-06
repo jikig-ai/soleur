@@ -1,3 +1,7 @@
+"use client";
+
+import { DisconnectRepoDialog } from "./disconnect-repo-dialog";
+
 export type RepoStatus = "not_connected" | "ready" | "error" | "cloning";
 
 interface ProjectSetupCardProps {
@@ -40,21 +44,24 @@ export function ProjectSetupCard({
         )}
 
         {repoStatus === "ready" && repoUrl && (
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <p className="text-sm font-medium text-white">
-                {extractRepoName(repoUrl)}
-              </p>
-              <span className="rounded-full bg-green-900/50 px-2 py-0.5 text-xs font-medium text-green-400">
-                Connected
-              </span>
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium text-white">
+                  {extractRepoName(repoUrl)}
+                </p>
+                <span className="rounded-full bg-green-900/50 px-2 py-0.5 text-xs font-medium text-green-400">
+                  Connected
+                </span>
+              </div>
+              {repoLastSyncedAt && (
+                <p className="text-sm text-neutral-400">
+                  Last synced:{" "}
+                  {new Date(repoLastSyncedAt).toLocaleDateString()}
+                </p>
+              )}
             </div>
-            {repoLastSyncedAt && (
-              <p className="text-sm text-neutral-400">
-                Last synced:{" "}
-                {new Date(repoLastSyncedAt).toLocaleDateString()}
-              </p>
-            )}
+            <DisconnectRepoDialog repoName={extractRepoName(repoUrl)} />
           </div>
         )}
 
