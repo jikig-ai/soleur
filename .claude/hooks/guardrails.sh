@@ -3,7 +3,7 @@
 # Blocks: commits on main, rm -rf on worktrees, --delete-branch with active worktrees,
 # commits with conflict markers in staged content, gh issue create without --milestone,
 # git stash in worktrees.
-# NOTE: When adding or modifying guards, update AGENTS.md hook awareness rule to match.
+# NOTE: When adding or modifying guards, update the corresponding prose rule comments below.
 #
 # Corresponding prose rules:
 #   Guard 1: constitution.md "Never allow agents to work directly on the default branch"

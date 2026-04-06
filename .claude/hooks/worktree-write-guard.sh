@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse hook for Write and Edit tools.
 # Blocks file writes to the main repo checkout when worktrees exist.
-# NOTE: When adding or modifying guards, update AGENTS.md hook awareness rule to match.
+# NOTE: When adding or modifying guards, update the corresponding prose rule comments below.
 #
 # Corresponding prose rules:
 #   constitution.md "Never edit files in the main repo root when a worktree is active for the current feature"
