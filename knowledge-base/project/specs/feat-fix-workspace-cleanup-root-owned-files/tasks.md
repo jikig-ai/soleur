@@ -19,7 +19,7 @@
 
 - [ ] After Phase 2 find-delete, attempt `rmdir` to check if directory is empty
 - [ ] If `rmdir` fails, rename workspace to `<path>.orphaned-<timestamp>`
-- [ ] Log Sentry warning with both original and orphaned paths
+- [ ] Log pino warning (`log.warn`) with both original and orphaned paths (NOT Sentry -- workspace.ts uses pino; callers handle Sentry)
 - [ ] If `mv` also fails, throw user-friendly error: "please try again or contact support"
 - [ ] Remove the `sudo rm -rf` error message from the function
 - **File:** `apps/web-platform/server/workspace.ts`
