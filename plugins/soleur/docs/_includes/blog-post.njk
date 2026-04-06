@@ -29,7 +29,13 @@ layout: base.njk
   "publisher": {
     "@type": "Organization",
     "name": "{{ site.name }}",
-    "url": "{{ site.url }}"
+    "url": "{{ site.url }}",
+    "logo": {
+      "@type": "ImageObject",
+      "url": "{{ site.url }}/images/logo-mark-512.png",
+      "width": 512,
+      "height": 512
+    }
   }
 }
 </script>
