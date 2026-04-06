@@ -2,7 +2,7 @@
 
 ## Plan Phase
 
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-fix-compound-route-to-definition/knowledge-base/project/plans/2026-04-06-fix-apply-compound-route-to-definition-proposals-plan.md
+- Plan file: knowledge-base/project/plans/2026-04-06-fix-compound-route-to-definition-batch-2-plan.md
 - Status: complete
 
 ### Errors
@@ -11,14 +11,13 @@ None
 
 ### Decisions
 
-- Batched all 3 compound route-to-definition proposals (#1556, #1564, #1572) into a single plan rather than separate branches
-- Verified exact insertion points against current file content -- line 321 in work/SKILL.md, line 28 in one-shot/SKILL.md
-- Confirmed `synced_to` is consumed by compound-capture and sync command -- not dead code, so frontmatter updates are warranted
-- Identified that one learning already has `synced_to: []` (append) while two have no field (add new) -- implementation must handle both cases
-- Skipped heavy parallel research deepening as disproportionate to plan complexity (3 pre-approved bullet edits)
+- Batch all 6 route-to-definition issues (#1581, #1597, #1601, #1614, #1616, #1621) into one PR
+- #1597 is already fixed -- close as stale, no edit needed
+- #1621 (AGENTS.md terraform + doppler name-transformer) added per user request
+- Each edit targets a specific section identified in the issue proposal
+- synced_to frontmatter updates track which learnings have been applied
 
 ### Components Invoked
 
 - soleur:plan
-- soleur:plan-review (DHH, Kieran, code-simplicity reviewers)
-- soleur:deepen-plan
+- soleur:deepen-plan (plan-review with 3 reviewers)

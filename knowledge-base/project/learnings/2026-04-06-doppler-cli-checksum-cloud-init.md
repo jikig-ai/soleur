@@ -10,6 +10,7 @@ root_cause: config_error
 resolution_type: config_change
 severity: high
 tags: [supply-chain, checksum, cloud-init, doppler, binary-verification]
+synced_to: [one-shot]
 ---
 
 # Troubleshooting: Doppler CLI pipe-to-shell install in cloud-init lacks checksum verification

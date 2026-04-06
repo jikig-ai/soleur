@@ -683,6 +683,8 @@ Poll every 10 seconds until state is `MERGED`.
 
    Then read `knowledge-base/product/roadmap.md` to determine the appropriate milestone. Default to "Post-MVP / Later" if unclear.
 
+   When follow-through items reference `terraform apply -replace`, enumerate ALL affected resources by scanning the full PR diff for `terraform_data` and `null_resource` connection block changes -- not just the resource named in the PR title or description. Use `git diff MERGE_BASE..HEAD -- '*.tf' | grep -E '(terraform_data|null_resource)' | grep -E '(connection|provisioner)'` to detect all changed provisioner blocks.
+
    Before creating each follow-through issue, check for duplicates:
 
    ```bash

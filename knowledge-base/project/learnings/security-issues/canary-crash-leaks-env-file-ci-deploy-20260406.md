@@ -10,6 +10,7 @@ root_cause: missing_workflow_step
 resolution_type: code_fix
 severity: high
 tags: [secrets-leak, trap-cleanup, shell-script, canary-deploy, exit-trap]
+synced_to: [work]
 ---
 
 # Troubleshooting: Canary crash leaks temp secrets file on disk

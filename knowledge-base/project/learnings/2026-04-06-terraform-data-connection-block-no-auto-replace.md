@@ -10,7 +10,7 @@ root_cause: terraform_behavior
 resolution_type: manual_replace
 severity: low
 tags: [terraform, terraform_data, connection, agent, private_key, state, replace]
-synced_to: []
+synced_to: [ship]
 ---
 
 # terraform_data Connection Block Changes Don't Trigger Replacement
