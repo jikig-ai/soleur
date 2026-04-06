@@ -210,41 +210,28 @@ jobs:
           gh pr merge "$PR_NUM" --squash --auto
           echo "Auto-merge queued for PR #$PR_NUM"
 
-      - name: Discord notification (auto-merge queued)
+      - name: Check auto-merge status
         if: always() && steps.detect_pr.outputs.pr_number
+        id: check_auto_merge
         env:
           GH_TOKEN: ${{ github.token }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           PR_NUM: ${{ steps.detect_pr.outputs.pr_number }}
         run: |
-          if [[ -z "$DISCORD_WEBHOOK_URL" ]]; then
-            echo "DISCORD_WEBHOOK_URL not set, skipping"
-            exit 0
-          fi
-
-          # Only notify if auto-merge was actually queued
           AUTO_MERGE=$(gh pr view "$PR_NUM" \
             --json autoMergeRequest \
             --jq '.autoMergeRequest // empty')
-          if [[ -z "$AUTO_MERGE" ]]; then
+          if [[ -n "$AUTO_MERGE" ]]; then
+            echo "queued=true" >> "$GITHUB_OUTPUT"
+          else
             echo "Auto-merge not queued, skipping notification"
-            exit 0
+            echo "queued=false" >> "$GITHUB_OUTPUT"
           fi
 
-          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
-          MESSAGE=$(printf '**Bot fix auto-merge queued**\n\nPR: %s/pull/%s\n\nWill merge automatically once CI passes.' \
-            "$REPO_URL" "$PR_NUM")
-          PAYLOAD=$(jq -n \
-            --arg content "$MESSAGE" \
-            --arg username "Sol" \
-            --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
-            '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            "$DISCORD_WEBHOOK_URL")
-          if [[ "$HTTP_CODE" =~ ^2 ]]; then
-            echo "Discord notification sent (HTTP $HTTP_CODE)"
-          else
-            echo "::warning::Discord notification failed (HTTP $HTTP_CODE)"
-          fi
+      - name: Email notification (auto-merge queued)
+        if: always() && steps.check_auto_merge.outputs.queued == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[BOT-FIX] Auto-merge queued for PR #${{ steps.detect_pr.outputs.pr_number }}'
+          body: '<p><strong>Bot fix auto-merge queued</strong></p><p>PR: <a href="${{ github.server_url }}/${{ github.repository }}/pull/${{ steps.detect_pr.outputs.pr_number }}">#${{ steps.detect_pr.outputs.pr_number }}</a></p><p>Will merge automatically once CI passes.</p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
