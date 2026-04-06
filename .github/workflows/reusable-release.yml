@@ -340,8 +340,8 @@ jobs:
           REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
           RELEASE_URL="${REPO_URL}/releases/tag/${TAG}"
 
-          if [ ${#BODY} -gt 1900 ]; then
-            BODY="${BODY:0:1897}..."
+          if [[ ${#BODY} -gt 1800 ]]; then
+            BODY="${BODY:0:1797}..."
           fi
 
           MESSAGE=$(printf '**%s v%s released!**\n\n%s\n\nFull release notes: %s' \
