@@ -15,7 +15,7 @@
 #   1 - Required file missing or unrecoverable error
 #
 # Corresponding rules:
-#   AGENTS.md "Every gh issue create must include --milestone"
+#   constitution.md "GitHub Actions workflows and shell scripts that create issues must include --milestone"
 #   AGENTS.md "In GitHub Actions run: blocks, never indent heredoc body content"
 #
 # Related: #451, #422
