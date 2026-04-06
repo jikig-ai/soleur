@@ -683,6 +683,14 @@ Poll every 10 seconds until state is `MERGED`.
 
    Then read `knowledge-base/product/roadmap.md` to determine the appropriate milestone. Default to "Post-MVP / Later" if unclear.
 
+   Before creating each follow-through issue, check for duplicates:
+
+   ```bash
+   gh issue list --label follow-through --state open --search "Source PR: #<PR_NUMBER>" --json title --jq '.[].title'
+   ```
+
+   If an issue with a matching title prefix already exists, skip creation and note "Dedup: skipped [title] -- existing issue found."
+
    For each item, write the issue body to a temp file (do NOT use heredocs in this step — write with `{ echo "..."; } > /tmp/follow-through-body.md`), then create the issue:
 
    ```bash
