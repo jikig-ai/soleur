@@ -38,11 +38,10 @@ Both phases fail on root-owned files because the container runs as UID 1001 (`so
 
 Replace the "throw and give up" behavior with a **skip-and-continue** strategy. When root-owned files cannot be deleted, the function should:
 
-1. Log the undeletable files for ops visibility
+1. Log the undeletable files for ops visibility (Sentry warning)
 2. Delete everything it can (user-owned files)
 3. Move the remaining root-owned directory aside (rename with a `.orphaned-<timestamp>` suffix)
 4. Return successfully so the new workspace can be provisioned
-5. A background cleanup mechanism handles the orphaned directories
 
 ### Implementation Detail
 
@@ -80,40 +79,7 @@ try {
 
 **Edge case -- orphanedPath already exists:** `mv` will fail if a directory with the orphaned name already exists. Since the timestamp suffix is millisecond-granular, collisions are extremely unlikely. But as defense-in-depth, the catch block will still produce a clear error.
 
-#### 2. Add background orphan cleanup
-
-Create a periodic cleanup function that runs on server startup and on a timer (e.g., every 6 hours):
-
-```typescript
-// In apps/web-platform/server/workspace.ts
-export function cleanupOrphanedWorkspaces(): void {
-  const root = getWorkspacesRoot();
-  try {
-    const entries = readdirSync(root);
-    for (const entry of entries) {
-      if (!entry.includes(".orphaned-")) continue;
-      const fullPath = join(root, entry);
-      try {
-        execFileSync("rm", ["-rf", fullPath], { stdio: "pipe" });
-        log.info({ path: fullPath }, "Cleaned up orphaned workspace");
-      } catch {
-        // Still root-owned -- will be cleaned on next container restart as root
-        // or by ops via scheduled task
-        log.debug({ path: fullPath }, "Orphaned workspace still not removable");
-      }
-    }
-  } catch (err) {
-    log.warn({ err }, "Failed to scan for orphaned workspaces");
-  }
-}
-```
-
-This is best-effort. Root-owned orphans persist until either:
-
-- A container restart runs as root before dropping to `soleur` (not currently the case)
-- An ops scheduled task runs cleanup with elevated privileges
-
-#### 3. Improve the error message for the final fallback
+#### 2. Improve the error message for the final fallback
 
 If `mv` also fails (e.g., filesystem full, permissions on parent dir changed), the error message should be user-friendly, not tell them to run `sudo`:
 
@@ -123,7 +89,7 @@ If `mv` also fails (e.g., filesystem full, permissions on parent dir changed), t
 
 The server-side log retains full diagnostic detail (paths, stderr).
 
-#### 4. Update `FailedState` component (optional improvement)
+#### 3. Update `FailedState` component (optional improvement)
 
 No changes required to the component itself. The fix prevents the error from reaching the UI at all. However, the generic "usually a temporary issue" message is already appropriate for the rare case where `mv` fails too.
 
@@ -138,19 +104,18 @@ No changes required to the component itself. The fix prevents the error from rea
 ### Performance
 
 - `mv` (rename within same filesystem) is O(1) -- it modifies directory entries, not file contents. No data is copied.
-- Background orphan cleanup runs on a timer, not on every request.
 
 ### Disk space
 
 - Orphaned directories consume disk space until cleaned up. The `/mnt/data/workspaces` volume is 20 GB (`apps/web-platform/infra/variables.tf:50-53`). Each workspace is typically 50-200 MB (shallow clone). Even 10 orphaned workspaces would use ~2 GB.
-- The ops team should be alerted if orphaned directories accumulate. This can be a Sentry warning logged by the background cleanup when it finds directories older than 7 days.
+- A single Sentry warning is logged at orphan creation time so ops has visibility. If orphans accumulate, a host-level cron job running as root is the correct cleanup mechanism (tracked via follow-up issue).
 
 ### Attack Surface Enumeration
 
 This fix does not introduce new security surfaces. It modifies the error-handling path of an existing operation:
 
 1. **`mv` target path:** Constructed from `workspacePath + ".orphaned-" + Date.now()`. The `workspacePath` is already validated against the workspace root. The suffix contains only a numeric timestamp.
-2. **Background cleanup:** Uses `readdirSync` on the workspace root + `rm -rf` on entries matching `.orphaned-`. The `rm -rf` target is always within the workspace root (constructed via `join(root, entry)`).
+2. **No new runtime processes:** The fix adds a `mv` call in the existing error path. No background timers, no new filesystem scanning.
 
 ## Acceptance Criteria
 
@@ -158,7 +123,7 @@ This fix does not introduce new security surfaces. It modifies the error-handlin
 - [ ] Given a workspace with only user-owned files, when `removeWorkspaceDir` is called, then the workspace is fully deleted (no orphan created)
 - [ ] Given a non-existent workspace path, when `removeWorkspaceDir` is called, then the function returns without error
 - [ ] Given `mv` also fails (e.g., parent dir permissions changed), when `removeWorkspaceDir` is called, then a user-friendly error is thrown (no `sudo rm -rf` instructions)
-- [ ] Given orphaned directories older than 7 days, when `cleanupOrphanedWorkspaces` runs, then it logs a Sentry warning for ops attention
+- [ ] When an orphan is created, a Sentry warning is logged with both the original and orphaned paths
 - [ ] The error message `"sudo rm -rf"` no longer appears in any code path reachable by users
 - [ ] Existing path validation tests continue to pass (traversal, root, prefix collision)
 
@@ -167,11 +132,8 @@ This fix does not introduce new security surfaces. It modifies the error-handlin
 ### Unit Tests (`apps/web-platform/test/workspace-cleanup.test.ts`)
 
 - Given a workspace where `rm -rf` fails and `find -delete` leaves undeletable files, when `removeWorkspaceDir` is called, then the workspace is renamed to `*.orphaned-<timestamp>` and the function returns without throwing
-- Given a workspace where `rm -rf` fails, `find -delete` leaves files, and `mv` also fails, when `removeWorkspaceDir` is called, then it throws with message matching `/please try again or contact support/` (not matching `/sudo/)
+- Given a workspace where `rm -rf` fails, `find -delete` leaves files, and `mv` also fails, when `removeWorkspaceDir` is called, then it throws with message matching `/please try again or contact support/` (not matching `/sudo/`)
 - Given a workspace with restrictive permissions (mode 444/555) but owned by current user, when `removeWorkspaceDir` is called, then the workspace is fully deleted via Phase 2 (chmod + find -delete)
-- Given the orphan cleanup function, when an orphaned directory exists that can be deleted, then it is deleted and logged
-- Given the orphan cleanup function, when an orphaned directory exists that cannot be deleted (root-owned), then it is skipped with a debug log (no error thrown)
-- Given the orphan cleanup function, when an orphaned directory is older than 7 days, then a warning is logged for ops
 
 ### Integration
 
@@ -193,7 +155,8 @@ No cross-domain implications detected -- infrastructure/tooling fix in server-si
 | Use `fakeroot` to simulate root permissions | Rejected | `fakeroot` wraps libc calls, doesn't provide actual kernel capabilities for deletion |
 | Delete via Docker exec as root from the host | Rejected | Requires orchestration between app and host; AGENTS.md prohibits manual SSH/server modifications |
 | Ignore the error and let user retry | Rejected | This IS the current behavior; retrying fails the same way because root-owned files persist |
-| Add a cron job on the host to clean orphaned dirs | Deferred | May be needed later if orphans accumulate, but the in-process cleanup should handle most cases. The periodic in-process cleanup + Sentry alerting provides visibility |
+| Add a cron job on the host to clean orphaned dirs | Deferred (follow-up) | The correct cleanup mechanism for root-owned files -- runs as root on the host. Create a follow-up issue if orphans accumulate. Sentry warning at orphan creation provides visibility |
+| In-process background cleanup timer | Rejected (per review) | The app user cannot delete root-owned files, so a periodic timer scanning for orphans it cannot remove is a no-op. Cleanup belongs at the infrastructure level |
 
 ## References
 

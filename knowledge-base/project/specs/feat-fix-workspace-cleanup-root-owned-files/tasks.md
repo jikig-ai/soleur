@@ -6,18 +6,9 @@
 
 - [ ] Add test: `removeWorkspaceDir` renames workspace to `*.orphaned-<timestamp>` when rm and find-delete fail but mv succeeds
 - [ ] Add test: `removeWorkspaceDir` throws user-friendly error (no `sudo`) when rm, find-delete, AND mv all fail
-- [ ] Add test: orphaned path is within workspace root (path validation)
 - **File:** `apps/web-platform/test/workspace-cleanup.test.ts`
 
-### 1.2 Write failing tests for orphan cleanup function
-
-- [ ] Add test: `cleanupOrphanedWorkspaces` deletes deletable orphaned directories
-- [ ] Add test: `cleanupOrphanedWorkspaces` skips undeletable orphaned directories without throwing
-- [ ] Add test: `cleanupOrphanedWorkspaces` logs warning for orphans older than 7 days
-- [ ] Add test: `cleanupOrphanedWorkspaces` ignores non-orphaned directories (UUID-named workspaces)
-- **File:** `apps/web-platform/test/workspace-cleanup.test.ts`
-
-### 1.3 Verify existing tests still pass
+### 1.2 Verify existing tests still pass
 
 - [ ] Run `./node_modules/.bin/vitest run test/workspace-cleanup.test.ts` -- confirm existing tests pass, new tests fail
 - **File:** `apps/web-platform/test/workspace-cleanup.test.ts`
@@ -28,28 +19,12 @@
 
 - [ ] After Phase 2 find-delete, attempt `rmdir` to check if directory is empty
 - [ ] If `rmdir` fails, rename workspace to `<path>.orphaned-<timestamp>`
-- [ ] Log warning with both original and orphaned paths
+- [ ] Log Sentry warning with both original and orphaned paths
 - [ ] If `mv` also fails, throw user-friendly error: "please try again or contact support"
 - [ ] Remove the `sudo rm -rf` error message from the function
 - **File:** `apps/web-platform/server/workspace.ts`
 
-### 2.2 Add `cleanupOrphanedWorkspaces` function
-
-- [ ] Scan workspace root for entries matching `.orphaned-`
-- [ ] Attempt `rm -rf` on each
-- [ ] Log info on success, debug on skip (still undeletable)
-- [ ] Log Sentry warning for orphans older than 7 days (parse timestamp from suffix)
-- [ ] Export function for use in server startup
-- **File:** `apps/web-platform/server/workspace.ts`
-
-### 2.3 Wire orphan cleanup to server lifecycle
-
-- [ ] Call `cleanupOrphanedWorkspaces` on server startup
-- [ ] Set interval for periodic cleanup (every 6 hours)
-- [ ] Clear interval on SIGTERM
-- **File:** `apps/web-platform/server/index.ts` (or wherever the server entry point is)
-
-### 2.4 Run tests -- all should pass
+### 2.2 Run tests -- all should pass
 
 - [ ] Run `./node_modules/.bin/vitest run test/workspace-cleanup.test.ts`
 - [ ] Verify all new and existing tests pass
