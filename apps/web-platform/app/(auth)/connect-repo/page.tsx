@@ -54,7 +54,8 @@ export default function ConnectRepoPage() {
     // Avoid flashing the "choose" screen when returning from GitHub App install
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
-      if (params.get("installation_id") && params.get("setup_action") === "install") {
+      const action = params.get("setup_action");
+      if (params.get("installation_id") && (action === "install" || action === "update")) {
         return "github_redirect";
       }
     }
@@ -88,7 +89,7 @@ export default function ConnectRepoPage() {
     const installationId = searchParams.get("installation_id");
     const setupAction = searchParams.get("setup_action");
 
-    if (!installationId || setupAction !== "install") return;
+    if (!installationId || (setupAction !== "install" && setupAction !== "update")) return;
 
     // Single atomic effect: register install, then handle pending create or
     // fetch repos. Merging these prevents concurrent useEffect race conditions
