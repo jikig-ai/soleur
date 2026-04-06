@@ -28,7 +28,7 @@ runs:
         fi
 
         PAYLOAD=$(jq -n \
-          --arg from "Soleur Ops <noreply@send.soleur.ai>" \
+          --arg from "Soleur Ops <noreply@soleur.ai>" \
           --arg subject "$EMAIL_SUBJECT" \
           --arg html "$EMAIL_BODY" \
           '{from: $from, to: ["ops@jikigai.com"], subject: $subject, html: $html}')

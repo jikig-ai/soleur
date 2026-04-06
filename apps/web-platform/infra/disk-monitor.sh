@@ -69,7 +69,7 @@ send_alert() {
 
   local PAYLOAD
   PAYLOAD=$(jq -n \
-    --arg from "Soleur Ops <noreply@send.soleur.ai>" \
+    --arg from "Soleur Ops <noreply@soleur.ai>" \
     --arg subject "$SUBJECT" \
     --arg text "$BODY" \
     '{from: $from, to: ["ops@jikigai.com"], subject: $subject, text: $text}')
