@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse hook: review evidence gate + auto-sync against origin/main before gh pr merge.
 #
-# Guard 6 (review evidence): blocks gh pr merge when no review evidence exists on the branch.
+# pre-merge:review-evidence-gate — blocks gh pr merge when no review evidence exists on the branch.
 # Review evidence is detected via three signals (any one suffices):
 # (1) todos/ files tagged "code-review" (legacy, pre-#1329)
 # (2) a commit matching "refactor: add code review findings" (legacy, pre-#1329)
@@ -13,7 +13,7 @@
 #
 # Corresponding prose rules:
 #   constitution.md "Before creating a PR or merging, merge latest origin/main into the feature branch"
-#   Guard 6 (review evidence): blocks gh pr merge without review evidence (self-documented in this script)
+#   pre-merge:review-evidence-gate — blocks gh pr merge without review evidence (self-documented in this script)
 #
 # Error handling: fail-open on infrastructure errors (network, non-git context),
 # fail-closed on logical errors (conflicts, dirty tree, push failure, missing review evidence).
@@ -51,7 +51,7 @@ if [[ "$CURRENT_BRANCH" == "main" ]] || [[ "$CURRENT_BRANCH" == "master" ]]; the
   exit 0
 fi
 
-# Guard 6: Review evidence gate.
+# pre-merge:review-evidence-gate — Review evidence gate.
 # Block gh pr merge when no review evidence exists on the branch.
 # Signals 1-2 are local; Signal 3 requires network (gh API).
 # Fires before detached HEAD exit because gh pr merge operates on a PR number,

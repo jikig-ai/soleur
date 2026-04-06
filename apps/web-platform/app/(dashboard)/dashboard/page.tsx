@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
@@ -9,7 +9,7 @@ import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { LEADER_BG_COLORS } from "@/components/chat/leader-colors";
 import { WelcomeCard } from "@/components/chat/welcome-card";
 import { PwaInstallBanner } from "@/components/chat/pwa-install-banner";
-import { createClient } from "@/lib/supabase/client";
+import { useOnboarding } from "@/hooks/use-onboarding";
 
 const SUGGESTED_PROMPTS = [
   {
@@ -40,52 +40,19 @@ export default function DashboardPage() {
   const [atVisible, setAtVisible] = useState(false);
   const [atPosition, setAtPosition] = useState(0);
   const insertRef = useRef<((text: string, replaceFrom: number) => void) | null>(null);
-  const [onboardingLoaded, setOnboardingLoaded] = useState(false);
-  const [showOnboarding, setShowOnboarding] = useState(false);
-  const [pwaDismissed, setPwaDismissed] = useState(true); // default hidden until fetch
-
-  useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (!user) {
-        setOnboardingLoaded(true);
-        return;
-      }
-      supabase
-        .from("users")
-        .select("onboarding_completed_at, pwa_banner_dismissed_at")
-        .eq("id", user.id)
-        .single()
-        .then(({ data, error }) => {
-          if (error) {
-            console.error("[onboarding] fetch error:", error.message);
-          } else if (data) {
-            if (!data.onboarding_completed_at) setShowOnboarding(true);
-            setPwaDismissed(!!data.pwa_banner_dismissed_at);
-          }
-          setOnboardingLoaded(true);
-        });
-    });
-  }, []);
+  const {
+    onboardingLoaded,
+    showOnboarding,
+    pwaDismissed,
+    completeOnboarding,
+    dismissPwaBanner,
+  } = useOnboarding();
 
   const handleSend = useCallback(
     (message: string) => {
       // Complete onboarding on first message (fire-and-forget DB update)
       if (showOnboarding) {
-        setShowOnboarding(false);
-        const supabase = createClient();
-        supabase.auth.getUser().then(({ data: { user } }) => {
-          if (user) {
-            supabase
-              .from("users")
-              .update({ onboarding_completed_at: new Date().toISOString() })
-              .eq("id", user.id)
-              .then(({ error }) => {
-                if (error) console.error("[onboarding] update error:", error.message);
-                else console.debug("[onboarding]", "first_message_sent");
-              });
-          }
-        });
+        completeOnboarding();
       }
 
       // Extract @-mentions to determine leader param
@@ -107,7 +74,7 @@ export default function DashboardPage() {
       }
       router.push(`/dashboard/chat/new?${params.toString()}`);
     },
-    [router, showOnboarding],
+    [router, showOnboarding, completeOnboarding],
   );
 
   const handleAtTrigger = useCallback((query: string, cursorPosition: number) => {
@@ -149,21 +116,8 @@ export default function DashboardPage() {
   );
 
   const handlePwaDismiss = useCallback(() => {
-    setPwaDismissed(true);
-    console.debug("[onboarding]", "pwa_banner_dismissed");
-    const supabase = createClient();
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user) {
-        supabase
-          .from("users")
-          .update({ pwa_banner_dismissed_at: new Date().toISOString() })
-          .eq("id", user.id)
-          .then(({ error }) => {
-            if (error) console.error("[onboarding] pwa dismiss error:", error.message);
-          });
-      }
-    });
-  }, []);
+    dismissPwaBanner();
+  }, [dismissPwaBanner]);
 
   return (
     <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">

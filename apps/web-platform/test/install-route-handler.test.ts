@@ -49,6 +49,18 @@ function makeRequest(body: Record<string, unknown>) {
   });
 }
 
+/** Mock the admin getUserById response with the given identities list. */
+function mockIdentitiesQuery(
+  userId: string,
+  identities: Array<{ provider: string; identity_data: Record<string, unknown> }> | null,
+) {
+  mockAdminGetUserById.mockResolvedValue({
+    data: {
+      user: identities === null ? null : { id: userId, identities },
+    },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -77,17 +89,10 @@ describe("POST /api/repo/install — identity resolution", () => {
       },
     });
 
-    mockAdminGetUserById.mockResolvedValue({
-      data: {
-        user: {
-          id: "user-abc",
-          identities: [
-            { provider: "email", identity_data: {} },
-            { provider: "github", identity_data: { user_name: "deruelle" } },
-          ],
-        },
-      },
-    });
+    mockIdentitiesQuery("user-abc", [
+      { provider: "email", identity_data: {} },
+      { provider: "github", identity_data: { user_name: "deruelle" } },
+    ]);
 
     const res = await POST(makeRequest({ installationId: 100 }));
     expect(res.status).toBe(200);
@@ -106,16 +111,9 @@ describe("POST /api/repo/install — identity resolution", () => {
       },
     });
 
-    mockAdminGetUserById.mockResolvedValue({
-      data: {
-        user: {
-          id: "user-xyz",
-          identities: [
-            { provider: "email", identity_data: {} },
-          ],
-        },
-      },
-    });
+    mockIdentitiesQuery("user-xyz", [
+      { provider: "email", identity_data: {} },
+    ]);
 
     const res = await POST(makeRequest({ installationId: 100 }));
     expect(res.status).toBe(403);
@@ -136,16 +134,9 @@ describe("POST /api/repo/install — identity resolution", () => {
       },
     });
 
-    mockAdminGetUserById.mockResolvedValue({
-      data: {
-        user: {
-          id: "user-def",
-          identities: [
-            { provider: "github", identity_data: { user_name: "alice" } },
-          ],
-        },
-      },
-    });
+    mockIdentitiesQuery("user-def", [
+      { provider: "github", identity_data: { user_name: "alice" } },
+    ]);
 
     const res = await POST(makeRequest({ installationId: 100 }));
     expect(res.status).toBe(200);
@@ -164,9 +155,7 @@ describe("POST /api/repo/install — identity resolution", () => {
       },
     });
 
-    mockAdminGetUserById.mockResolvedValue({
-      data: { user: null },
-    });
+    mockIdentitiesQuery("user-missing", null);
 
     const res = await POST(makeRequest({ installationId: 100 }));
     expect(res.status).toBe(403);

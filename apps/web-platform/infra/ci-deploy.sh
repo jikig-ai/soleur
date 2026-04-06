@@ -31,13 +31,17 @@ resolve_env_file() {
   tmpenv=$(mktemp /tmp/doppler-env.XXXXXX)
   chmod 600 "$tmpenv"
 
-  local doppler_output
-  if ! doppler_output=$(doppler secrets download --no-file --format docker --project soleur --config prd 2>&1); then
-    logger -t "$LOG_TAG" "FATAL: Doppler secrets download failed: $doppler_output"
-    rm -f "$tmpenv"
-    echo "Error: Failed to download secrets from Doppler: $doppler_output" >&2
+  local doppler_output doppler_stderr_file
+  doppler_stderr_file=$(mktemp /tmp/doppler-stderr.XXXXXX)
+  if ! doppler_output=$(doppler secrets download --no-file --format docker --project soleur --config prd 2>"$doppler_stderr_file"); then
+    local doppler_stderr
+    doppler_stderr=$(cat "$doppler_stderr_file")
+    logger -t "$LOG_TAG" "FATAL: Doppler secrets download failed: $doppler_stderr"
+    rm -f "$tmpenv" "$doppler_stderr_file"
+    echo "Error: Failed to download secrets from Doppler: $doppler_stderr" >&2
     exit 1
   fi
+  rm -f "$doppler_stderr_file"
 
   echo "$doppler_output" > "$tmpenv"
   echo "$tmpenv"
@@ -136,6 +140,7 @@ case "$COMPONENT" in
       --name soleur-web-platform-canary \
       --restart no \
       --security-opt apparmor=soleur-bwrap \
+      --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
       --env-file "$ENV_FILE" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
@@ -171,13 +176,14 @@ case "$COMPONENT" in
     if [[ "$CANARY_HEALTHY" == "true" ]]; then
       # SUCCESS: swap canary to production
       echo "Canary passed, swapping to production..."
-      { docker stop soleur-web-platform 2>/dev/null || true; }
+      { docker stop --time=12 soleur-web-platform 2>/dev/null || true; }
       { docker rm soleur-web-platform 2>/dev/null || true; }
 
       if docker run -d \
         --name soleur-web-platform \
         --restart unless-stopped \
         --security-opt apparmor=soleur-bwrap \
+        --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
         --env-file "$ENV_FILE" \
         -v /mnt/data/workspaces:/workspaces \
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \

@@ -70,9 +70,12 @@ describe("ChatPage", () => {
     mockSearchParams.set("msg", "help with pricing");
     wsReturn.sessionConfirmed = false;
     await renderChatPage();
+    // Verify component rendered (effects have run)
     await waitFor(() => {
-      expect(mockSendMessage).not.toHaveBeenCalled();
+      expect(screen.getByText(/send a message to get started/i)).toBeInTheDocument();
     });
+    // Now assert the negative — effects already confirmed
+    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 
   it("sends msg only after sessionConfirmed becomes true", async () => {
@@ -101,10 +104,12 @@ describe("ChatPage", () => {
     wsReturn.status = "connected";
     mockSearchParams.set("msg", "help with pricing");
     await renderChatPage();
+    // Verify component rendered (effects have run)
     await waitFor(() => {
-      // Should NOT send again since sessionConfirmed is false after reconnection
-      expect(mockSendMessage).not.toHaveBeenCalled();
+      expect(screen.getByText(/send a message to get started/i)).toBeInTheDocument();
     });
+    // Now assert the negative — effects already confirmed
+    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 
   it("handleSend works when sessionConfirmed is false and status is connected", async () => {
@@ -124,9 +129,12 @@ describe("ChatPage", () => {
     wsReturn.status = "connected";
     await renderChatPage();
 
+    // Verify component rendered (effects have run)
     await waitFor(() => {
-      expect(mockSendMessage).not.toHaveBeenCalled();
+      expect(screen.getByText(/send a message to get started/i)).toBeInTheDocument();
     });
+    // Now assert the negative — effects already confirmed
+    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 
   it("shows error card and does not send msg when server errors before session_started", async () => {
@@ -138,11 +146,12 @@ describe("ChatPage", () => {
     };
     await renderChatPage();
 
-    expect(screen.getByText("You've been rate limited.")).toBeInTheDocument();
-
+    // Verify component rendered (effects have run)
     await waitFor(() => {
-      expect(mockSendMessage).not.toHaveBeenCalled();
+      expect(screen.getByText("You've been rate limited.")).toBeInTheDocument();
     });
+    // Now assert the negative — effects already confirmed
+    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 
   it("shows routing badge for auto-routed messages", async () => {

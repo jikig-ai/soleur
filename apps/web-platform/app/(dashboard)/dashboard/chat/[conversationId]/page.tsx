@@ -37,6 +37,7 @@ export default function ChatPage() {
 
   const [sessionStarted, setSessionStarted] = useState(false);
   const [initialMsgSent, setInitialMsgSent] = useState(false);
+  const [sessionStartTimeout, setSessionStartTimeout] = useState(false);
   const [atQuery, setAtQuery] = useState("");
   const [atVisible, setAtVisible] = useState(false);
   const [atPosition, setAtPosition] = useState(0);
@@ -66,6 +67,17 @@ export default function ChatPage() {
       router.replace(pathname, { scroll: false });
     }
   }, [sessionConfirmed, msgParam, initialMsgSent, sendMessage, router, pathname]);
+
+  // Session confirmation timeout: if server never confirms, show error
+  useEffect(() => {
+    if (!sessionStarted || sessionConfirmed) return;
+
+    const timer = setTimeout(() => {
+      setSessionStartTimeout(true);
+    }, 10_000);
+
+    return () => clearTimeout(timer);
+  }, [sessionStarted, sessionConfirmed]);
 
   // Derive leader names for routing badge
   const respondingLeaders = messages
@@ -168,6 +180,17 @@ export default function ChatPage() {
               onRetry={lastError.code !== "key_invalid" ? reconnect : undefined}
               retryLabel="Reconnect"
               action={lastError.action}
+            />
+          </div>
+        )}
+
+        {sessionStartTimeout && !sessionConfirmed && (
+          <div className="mx-auto mb-4 max-w-3xl">
+            <ErrorCard
+              title="Session Failed to Start"
+              message="The server did not confirm the session within 10 seconds. Please try again."
+              onRetry={reconnect}
+              retryLabel="Reconnect"
             />
           </div>
         )}
