@@ -387,10 +387,10 @@ test_missing_webhook() {
 
 test_missing_webhook
 
-# Test: curl failure exits 0
+# Test: curl failure exits 0 and logs Resend API warning
 test_curl_failure() {
   TOTAL=$((TOTAL + 1))
-  local description="curl failure exits 0"
+  local description="curl failure exits 0 and logs Resend API warning"
   local mock_dir
   mock_dir=$(mktemp -d)
 
@@ -401,7 +401,7 @@ test_curl_failure() {
     setup_mocks_and_run "$mock_dir" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq 0 ]]; then
+  if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -qF "Resend API POST failed"; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"
   else
