@@ -36,7 +36,7 @@ write_files:
     owner: root:root
     permissions: '0440'
 
-  # Disk space monitoring script -- alerts via Discord at 80%/95% thresholds (#1409).
+  # Disk space monitoring script -- alerts via email (Resend) at 80%/95% thresholds (#1409).
   # Content injected from disk-monitor.sh via Terraform base64encode(file()).
   - path: /usr/local/bin/disk-monitor.sh
     encoding: b64
@@ -44,10 +44,10 @@ write_files:
     owner: root:root
     permissions: '0755'
 
-  # Disk monitor environment file (webhook URL, chmod 600 for secrets).
+  # Disk monitor environment file (API key, chmod 600 for secrets).
   - path: /etc/default/disk-monitor
     content: |
-      DISCORD_OPS_WEBHOOK_URL='${discord_ops_webhook_url}'
+      RESEND_API_KEY='${resend_api_key}'
     owner: root:root
     permissions: '0600'
 

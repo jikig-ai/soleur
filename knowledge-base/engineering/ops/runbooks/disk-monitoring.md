@@ -5,12 +5,12 @@
 
 ## Alert Types
 
-| Level | Threshold | Discord Mentions | Cooldown |
-|-------|-----------|-----------------|----------|
-| WARNING | >= 80% | None (silent post) | 1 hour |
-| CRITICAL | >= 95% | `@here` | 1 hour |
+| Level | Threshold | Email Subject | Cooldown |
+|-------|-----------|---------------|----------|
+| WARNING | >= 80% | `[WARNING] Disk usage at X% on <hostname>` | 1 hour |
+| CRITICAL | >= 95% | `[CRITICAL] Disk usage at X% on <hostname>` | 1 hour |
 
-Alerts post to the `#ops-alerts` Discord channel via webhook.
+Alerts are sent to `ops@jikigai.com` via the Resend email API.
 
 ## Alert Received -- Immediate Response
 
@@ -70,12 +70,13 @@ For persistent changes across reprovisioning, update `apps/web-platform/infra/di
 bash /usr/local/bin/disk-monitor.sh
 ```
 
-This only fires an alert if disk usage is actually above the threshold. To force-test the Discord webhook:
+This only fires an alert if disk usage is actually above the threshold. To force-test the Resend email API:
 
 ```bash
-curl -H "Content-Type: application/json" \
-  -d '{"content":"**[TEST] Disk monitoring test**","username":"Sol"}' \
-  "$(grep DISCORD_OPS_WEBHOOK_URL /etc/default/disk-monitor | cut -d= -f2-)"
+curl -s -X POST "https://api.resend.com/emails" \
+  -H "Authorization: Bearer $(grep RESEND_API_KEY /etc/default/disk-monitor | cut -d= -f2-)" \
+  -H "Content-Type: application/json" \
+  -d '{"from":"Soleur Ops <noreply@send.soleur.ai>","to":["ops@jikigai.com"],"subject":"[TEST] Disk monitoring test","text":"Manual test"}'
 ```
 
 ## Silencing Alerts Temporarily

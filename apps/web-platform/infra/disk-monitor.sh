@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# disk-monitor.sh -- Proactive disk space monitoring with Discord alerting.
+# disk-monitor.sh -- Proactive disk space monitoring with email alerting via Resend.
 # Runs as a systemd timer every 5 minutes. Always exits 0.
 
 readonly COOLDOWN_DIR="${COOLDOWN_DIR:-/var/run}"
@@ -17,8 +17,8 @@ if [[ ! -f "$ENV_FILE" ]]; then
 fi
 set -a; . "$ENV_FILE"; set +a
 
-if [[ -z "${DISCORD_OPS_WEBHOOK_URL:-}" ]]; then
-  echo "WARNING: DISCORD_OPS_WEBHOOK_URL not set, skipping" >&2
+if [[ -z "${RESEND_API_KEY:-}" ]]; then
+  echo "WARNING: RESEND_API_KEY not set, skipping" >&2
   exit 0
 fi
 
@@ -54,7 +54,7 @@ update_cooldown() {
 
 # --- Send Alert ---
 send_alert() {
-  local level="$1" threshold="$2" mentions="$3"
+  local level="$1" threshold="$2"
   local server_hostname
   server_hostname=$(hostname)
 
@@ -62,21 +62,29 @@ send_alert() {
   local TOP_CONSUMERS
   TOP_CONSUMERS=$(timeout 10 du -sh /* 2>/dev/null | sort -rh | head -5) || TOP_CONSUMERS="(timed out)"
 
+  local SUBJECT="[${level}] Disk usage at ${USAGE_PCT}% on ${server_hostname}"
+  local BODY
+  BODY=$(printf 'Disk usage: %s%%\nAvailable: %sGB\n\nTop consumers:\n%s' \
+    "$USAGE_PCT" "$AVAIL_GB" "$TOP_CONSUMERS")
+
   local PAYLOAD
   PAYLOAD=$(jq -n \
-    --arg content "**[$level] Disk usage at ${USAGE_PCT}% on ${server_hostname}**"$'\n\n'"Available: ${AVAIL_GB}GB"$'\n'"Top consumers:"$'\n'"$TOP_CONSUMERS" \
-    --arg username "Sol" \
-    --arg avatar_url "https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/docs/images/logo-mark-512.png" \
-    --argjson mentions "$mentions" \
-    '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: $mentions}')
+    --arg from "Soleur Ops <noreply@send.soleur.ai>" \
+    --arg subject "$SUBJECT" \
+    --arg text "$BODY" \
+    '{from: $from, to: ["ops@jikigai.com"], subject: $subject, text: $text}')
 
-  curl -s -o /dev/null \
+  local HTTP_CODE
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
     --max-time 10 \
+    -X POST "https://api.resend.com/emails" \
+    -H "Authorization: Bearer ${RESEND_API_KEY}" \
     -H "Content-Type: application/json" \
-    -d "$PAYLOAD" \
-    "$DISCORD_OPS_WEBHOOK_URL" 2>/dev/null || {
-    echo "WARNING: Discord webhook POST failed" >&2
-  }
+    -d "$PAYLOAD" 2>/dev/null) || HTTP_CODE="000"
+
+  if [[ ! "$HTTP_CODE" =~ ^2 ]]; then
+    echo "WARNING: Resend API POST failed (HTTP ${HTTP_CODE})" >&2
+  fi
 }
 
 # --- Evaluate Thresholds ---
@@ -85,14 +93,14 @@ send_alert() {
 # monitoring practice: warning and critical are separate alert channels.
 if [[ "$USAGE_PCT" -ge "$CRIT_THRESHOLD" ]]; then
   if check_cooldown "$CRIT_THRESHOLD"; then
-    send_alert "CRITICAL" "$CRIT_THRESHOLD" '{"parse":["everyone"]}'
+    send_alert "CRITICAL" "$CRIT_THRESHOLD"
     update_cooldown "$CRIT_THRESHOLD"
   fi
 fi
 
 if [[ "$USAGE_PCT" -ge "$WARN_THRESHOLD" ]]; then
   if check_cooldown "$WARN_THRESHOLD"; then
-    send_alert "WARNING" "$WARN_THRESHOLD" '{"parse":[]}'
+    send_alert "WARNING" "$WARN_THRESHOLD"
     update_cooldown "$WARN_THRESHOLD"
   fi
 fi

@@ -24,7 +24,7 @@ resource "hcloud_server" "web" {
     tunnel_token            = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
     webhook_deploy_secret   = var.webhook_deploy_secret
     doppler_token           = var.doppler_token
-    discord_ops_webhook_url = var.discord_ops_webhook_url
+    resend_api_key          = var.resend_api_key
   })
 
   # cloud-init and ssh_keys are create-time attributes. After import,
@@ -46,7 +46,7 @@ resource "hcloud_server" "web" {
 # Shows as "will be created" in CI drift reports -- expected behavior (#1409).
 resource "terraform_data" "disk_monitor_install" {
   triggers_replace = sha256(join(",", [
-    var.discord_ops_webhook_url,
+    var.resend_api_key,
     file("${path.module}/disk-monitor.sh"),
   ]))
 
@@ -65,7 +65,7 @@ resource "terraform_data" "disk_monitor_install" {
   provisioner "remote-exec" {
     inline = [
       "chmod +x /usr/local/bin/disk-monitor.sh",
-      "printf 'DISCORD_OPS_WEBHOOK_URL=%s\\n' '${var.discord_ops_webhook_url}' > /etc/default/disk-monitor",
+      "printf 'RESEND_API_KEY=%s\\n' '${var.resend_api_key}' > /etc/default/disk-monitor",
       "chmod 600 /etc/default/disk-monitor",
       "cat > /etc/systemd/system/disk-monitor.service << 'UNITEOF'\n[Unit]\nDescription=Disk space monitor\nAfter=network-online.target\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/disk-monitor.sh\nUNITEOF",
       "cat > /etc/systemd/system/disk-monitor.timer << 'TIMEREOF'\n[Unit]\nDescription=Run disk monitor every 5 minutes\n\n[Timer]\nOnBootSec=5min\nOnUnitActiveSec=5min\nPersistent=true\n\n[Install]\nWantedBy=timers.target\nTIMEREOF",

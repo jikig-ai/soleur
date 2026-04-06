@@ -23,7 +23,7 @@ TOTAL=0
 #   MOCK_DF_FAIL=1        - df exits non-zero
 #   MOCK_CURL_FAIL=1      - curl exits non-zero
 #   MOCK_DATE_EPOCH=<int> - epoch returned by date +%s (default: 1700000000)
-#   MOCK_NO_WEBHOOK=1     - leave DISCORD_OPS_WEBHOOK_URL unset
+#   MOCK_NO_WEBHOOK=1     - leave RESEND_API_KEY unset
 #
 # Files created by mocks:
 #   $MOCK_DIR/curl_args    - all curl invocation args (one line per call)
@@ -36,7 +36,7 @@ setup_mocks_and_run() {
   # Create env file
   local env_file="$mock_dir/disk-monitor-env"
   if [[ "${MOCK_NO_WEBHOOK:-}" != "1" ]]; then
-    printf 'DISCORD_OPS_WEBHOOK_URL=%s\n' "${MOCK_WEBHOOK_URL:-https://discord.test/webhook}" > "$env_file"
+    printf 'RESEND_API_KEY=%s\n' "${MOCK_RESEND_KEY:-re_test_fake_key_123}" > "$env_file"
   else
     : > "$env_file"
   fi
@@ -61,11 +61,16 @@ done
 MOCK
   chmod +x "$mock_dir/df"
 
-  # Mock curl -- writes all args to curl_args file for inspection
+  # Mock curl -- writes all args to curl_args file, outputs HTTP status code
+  # for the -w "%{http_code}" pattern (real curl outputs the code on stdout)
   cat > "$mock_dir/curl" << MOCK
 #!/bin/bash
-if [[ "\${MOCK_CURL_FAIL:-}" == "1" ]]; then exit 1; fi
+if [[ "\${MOCK_CURL_FAIL:-}" == "1" ]]; then
+  echo "000"
+  exit 1
+fi
 echo "\$*" >> "$mock_dir/curl_args"
+echo "200"
 exit 0
 MOCK
   chmod +x "$mock_dir/curl"
@@ -156,7 +161,9 @@ test_warning_threshold() {
     setup_mocks_and_run "$mock_dir" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq 0 ]] && [[ -f "$mock_dir/curl_args" ]] && grep -qF "WARNING" "$mock_dir/curl_args"; then
+  if [[ "$actual_exit" -eq 0 ]] && [[ -f "$mock_dir/curl_args" ]] \
+     && grep -qF "WARNING" "$mock_dir/curl_args" \
+     && grep -qF "api.resend.com" "$mock_dir/curl_args"; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"
   else
@@ -186,7 +193,9 @@ test_critical_threshold() {
     setup_mocks_and_run "$mock_dir" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq 0 ]] && [[ -f "$mock_dir/curl_args" ]] && grep -qF "CRITICAL" "$mock_dir/curl_args"; then
+  if [[ "$actual_exit" -eq 0 ]] && [[ -f "$mock_dir/curl_args" ]] \
+     && grep -qF "CRITICAL" "$mock_dir/curl_args" \
+     && grep -qF "api.resend.com" "$mock_dir/curl_args"; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"
   else
@@ -199,33 +208,6 @@ test_critical_threshold() {
 }
 
 test_critical_threshold
-
-# Test: 96% uses everyone allowed_mentions
-test_critical_mentions() {
-  TOTAL=$((TOTAL + 1))
-  local description="96% uses everyone allowed_mentions"
-  local mock_dir
-  mock_dir=$(mktemp -d)
-
-  local output actual_exit
-  output=$(
-    export MOCK_DF_USAGE=96
-    setup_mocks_and_run "$mock_dir" 2>&1
-  ) && actual_exit=0 || actual_exit=$?
-
-  if [[ "$actual_exit" -eq 0 ]] && [[ -f "$mock_dir/curl_args" ]] && grep -qF "everyone" "$mock_dir/curl_args"; then
-    PASS=$((PASS + 1))
-    echo "  PASS: $description"
-  else
-    FAIL=$((FAIL + 1))
-    echo "  FAIL: $description (exit=$actual_exit)"
-    echo "        output: $output"
-    [[ -f "$mock_dir/curl_args" ]] && echo "        curl_args: $(cat "$mock_dir/curl_args")"
-  fi
-  rm -rf "$mock_dir"
-}
-
-test_critical_mentions
 
 echo ""
 echo "--- Cooldown mechanism ---"
@@ -379,10 +361,10 @@ test_df_failure() {
 
 test_df_failure
 
-# Test: missing webhook URL exits 0 with warning
+# Test: missing RESEND_API_KEY exits 0 with warning
 test_missing_webhook() {
   TOTAL=$((TOTAL + 1))
-  local description="missing webhook URL exits 0 with stderr warning"
+  local description="missing RESEND_API_KEY exits 0 with stderr warning"
   local mock_dir
   mock_dir=$(mktemp -d)
 
@@ -405,10 +387,10 @@ test_missing_webhook() {
 
 test_missing_webhook
 
-# Test: curl failure exits 0
+# Test: curl failure exits 0 and logs Resend API warning
 test_curl_failure() {
   TOTAL=$((TOTAL + 1))
-  local description="curl failure exits 0"
+  local description="curl failure exits 0 and logs Resend API warning"
   local mock_dir
   mock_dir=$(mktemp -d)
 
@@ -419,7 +401,7 @@ test_curl_failure() {
     setup_mocks_and_run "$mock_dir" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq 0 ]]; then
+  if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -qF "Resend API POST failed"; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"
   else
