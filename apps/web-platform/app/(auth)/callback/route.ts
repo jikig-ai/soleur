@@ -55,6 +55,15 @@ export async function GET(request: NextRequest) {
         { err: error, status: error.status, errorName: error.name },
         "exchangeCodeForSession failed",
       );
+
+      // If this was an identity linking attempt (from connect-repo), redirect
+      // back to connect-repo with an error instead of dumping the user on login
+      const from = searchParams.get("from");
+      if (from === "link") {
+        const linkError = encodeURIComponent(error.message ?? "Failed to link GitHub account");
+        return redirectWithCookies(`${origin}/connect-repo?link_error=${linkError}`, pendingCookies);
+      }
+
       // Return specific error so the login page can show a helpful message
       const errorCode = error.message?.includes("code verifier")
         ? "code_verifier_missing"
