@@ -127,12 +127,12 @@ New persistent page at the root of the KB section:
 
 ### Product
 
-**Summary:** This is a critical onboarding UX improvement. The current "Nothing Here Yet" KB state after project connection is a value gap -- users connect a project expecting intelligence, and get an empty shell. The fast scan + auto-sync closes this gap automatically. The KB overview page provides ongoing project health visibility that compounds value over time.
+**Summary:** This belongs in Phase 3 (Make it Sticky). T3 ("Make the Moat Visible") requires founders to see KB value -- a post-connect sync that immediately populates KB artifacts is the fastest path. Risk to P4 validation is high if absent: the 2026-03-03 onboarding audit rated "no post-install guidance" as P0. If beta founders connect repos and get silence, the 2-week unassisted usage metric (P4 item 4.4) will fail. Roadmap needs a Phase 3 line item (e.g., 3.16).
 
 ### Marketing
 
-**Summary:** First-run experience is a key conversion moment. A populated KB with actionable recommendations on first visit demonstrates immediate value -- "Soleur already understands your project." The health snapshot is a potential content hook for marketing ("Connect your project, get instant insights"). Consider featuring the status report in product demos and onboarding screenshots.
+**Summary:** This is the single highest-leverage marketing moment -- it turns the abstract promise ("AI that already knows your business") into a concrete first-session experience. Product strategy TR5 already prescribes this exact sequence (install -> sync -> one domain task -> result). The status report output is inherently shareable for build-in-public content. Copy quality for the sync proposal and status report is critical -- these are the first branded words a new user reads after connecting. Risk: sync output quality varies by project size; must be useful even for small/simple repos.
 
 ### Support
 
-**Summary:** The biggest support driver for new users is "I installed it, now what?" Auto-triggering sync and showing a status report eliminates the most common onboarding confusion. The recommendations engine also serves as self-service guidance, reducing support tickets for "how do I set up X" questions.
+**Summary:** Eliminates the "blank slate" problem -- the single largest source of "I installed it, now what?" confusion. Needs support runbooks before shipping: sync failure triage guide, onboarding friction playbook, and sync FAQ. Scope boundary between `/soleur:sync` and `/soleur:bootstrap` must be clarified to avoid "which one do I use?" questions. Resume community digest generation (stale since Mar 24) to detect onboarding confusion signals.
