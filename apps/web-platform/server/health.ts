@@ -2,7 +2,7 @@ import { serverUrl } from "@/lib/supabase/service";
 
 async function checkSupabase(): Promise<boolean> {
   try {
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
     const response = await fetch(
       `${serverUrl()}/rest/v1/`,
       {
