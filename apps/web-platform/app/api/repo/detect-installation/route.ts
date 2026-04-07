@@ -88,6 +88,16 @@ export async function POST(request: Request) {
     );
   }
 
+  // Fallback: use stored github_username for email-only users
+  if (!githubLogin) {
+    const { data: usernameRow } = await serviceClient
+      .from("users")
+      .select("github_username")
+      .eq("id", user.id)
+      .single();
+    githubLogin = usernameRow?.github_username ?? undefined;
+  }
+
   if (!githubLogin) {
     return NextResponse.json({
       installed: false,
