@@ -672,11 +672,11 @@ describe("Phase 4: Auto-detect existing installation", () => {
 });
 
 // ===========================================================================
-// Phase 5: Link GitHub identity for email-only accounts
+// Phase 5: Email-only users go through GitHub App redirect
 // ===========================================================================
 
-describe("Phase 5: Link GitHub identity", () => {
-  test("on mount: shows link_github state when no GitHub identity", async () => {
+describe("Phase 5: Email-only users", () => {
+  test("on mount: stays on choose when no GitHub identity (no auto-redirect)", async () => {
     setupFetchMock({
       "/api/repo/detect-installation": () =>
         Promise.resolve(
@@ -689,12 +689,15 @@ describe("Phase 5: Link GitHub identity", () => {
 
     render(<ConnectRepoPage />);
 
+    // Should stay on choose screen — user clicks Connect/Create to proceed
     await waitFor(() => {
-      expect(screen.getByText("Connect Your GitHub Account")).toBeInTheDocument();
+      expect(
+        screen.getByText("Give Your AI Team the Full Picture"),
+      ).toBeInTheDocument();
     });
   });
 
-  test("Connect Existing: shows link_github when no GitHub identity", async () => {
+  test("Connect Existing: shows GitHub redirect when no GitHub identity", async () => {
     let detectCount = 0;
     setupFetchMock({
       "/api/repo/repos": () =>
@@ -707,15 +710,15 @@ describe("Phase 5: Link GitHub identity", () => {
       "/api/repo/detect-installation": () => {
         detectCount++;
         if (detectCount === 1) {
-          // Mount detection: not installed (show choose first)
+          // Mount: no identity
           return Promise.resolve(
             new Response(
-              JSON.stringify({ installed: false, reason: "not_installed" }),
+              JSON.stringify({ installed: false, reason: "no_github_identity" }),
               { status: 200 },
             ),
           );
         }
-        // Click detection: no GitHub identity
+        // Click: still no identity
         return Promise.resolve(
           new Response(
             JSON.stringify({ installed: false, reason: "no_github_identity" }),
@@ -730,47 +733,9 @@ describe("Phase 5: Link GitHub identity", () => {
     const connectBtn = await screen.findByText("Connect Project");
     await userEvent.click(connectBtn);
 
+    // Should go to GitHub redirect, not link_github
     await waitFor(() => {
-      expect(screen.getByText("Connect Your GitHub Account")).toBeInTheDocument();
-    });
-  });
-
-  test("link_github state shows error from link_error query param", async () => {
-    setCallbackParams("?link_error=Identity+already+linked");
-    setupFetchMock();
-
-    render(<ConnectRepoPage />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Connect Your GitHub Account")).toBeInTheDocument();
-      expect(screen.getByText("Identity already linked")).toBeInTheDocument();
-    });
-  });
-
-  test("link_github Go Back returns to choose state", async () => {
-    setupFetchMock({
-      "/api/repo/detect-installation": () =>
-        Promise.resolve(
-          new Response(
-            JSON.stringify({ installed: false, reason: "no_github_identity" }),
-            { status: 200 },
-          ),
-        ),
-    });
-
-    render(<ConnectRepoPage />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Connect Your GitHub Account")).toBeInTheDocument();
-    });
-
-    const goBackBtn = screen.getByText("Go Back");
-    await userEvent.click(goBackBtn);
-
-    await waitFor(() => {
-      expect(
-        screen.getByText("Give Your AI Team the Full Picture"),
-      ).toBeInTheDocument();
+      expect(screen.getByText("Connecting to GitHub")).toBeInTheDocument();
     });
   });
 });
