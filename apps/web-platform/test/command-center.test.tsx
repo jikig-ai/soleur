@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
-// Mock next/navigation
+// Mock next/navigation — stable reference prevents useEffect re-fires
 const mockPush = vi.fn();
+const mockRouter = { push: mockPush };
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: mockPush }),
+  useRouter: () => mockRouter,
   usePathname: () => "/dashboard",
 }));
 
@@ -85,6 +86,8 @@ function createQueryBuilder(data: unknown[]) {
     is: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockReturnThis(),
+    single: vi.fn().mockReturnThis(),
+    update: vi.fn().mockReturnThis(),
     then: (onfulfilled: (value: unknown) => unknown) =>
       Promise.resolve(result).then(onfulfilled),
   };
@@ -118,6 +121,25 @@ describe("Command Center", () => {
     mockChannel.mockClear();
     conversationBuilder = createQueryBuilder(mockConversations);
     messageBuilder = createQueryBuilder(mockMessages);
+
+    // Mock fetch for KB tree — return all foundation files so page shows Command Center
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          tree: {
+            name: "knowledge-base",
+            type: "directory",
+            children: [
+              { name: "overview", type: "directory", children: [{ name: "vision.md", type: "file", path: "overview/vision.md" }] },
+              { name: "marketing", type: "directory", children: [{ name: "brand-guide.md", type: "file", path: "marketing/brand-guide.md" }] },
+              { name: "product", type: "directory", children: [{ name: "business-validation.md", type: "file", path: "product/business-validation.md" }] },
+              { name: "legal", type: "directory", children: [{ name: "privacy-policy.md", type: "file", path: "legal/privacy-policy.md" }] },
+            ],
+          },
+        }),
+    });
   });
 
   it("shows empty state with suggested prompts when user has no conversations", async () => {
