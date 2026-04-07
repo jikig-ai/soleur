@@ -59,6 +59,17 @@ Use "None" if no NFR impact.
 Example: "Improves NFR-026 (Encryption In-Transit) from Partial to Implemented.
 No impact on NFR-008 (Low Latency) — additional TLS termination handled by Cloudflare."]
 
+## Principle Alignment
+
+[Which architectural principles does this decision align with or deviate from?
+Reference principle IDs from knowledge-base/engineering/architecture/principles-register.md.
+Use "None" if no principle impact.
+
+Format: AP-NNN (Title): Aligned | Deviation | N/A — brief note
+
+Example: "AP-001 (Terraform-only): Aligned — new infrastructure uses Terraform.
+AP-008 (Doppler secrets): Deviation — uses .env file for local-only dev secret. Exception documented."]
+
 ## Diagram
 
 [Optional Mermaid diagram illustrating the decision.
