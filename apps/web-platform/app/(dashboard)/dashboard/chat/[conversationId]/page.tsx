@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { useWebSocket } from "@/lib/ws-client";
+import type { ConversationContext } from "@/lib/types";
 import { ErrorCard } from "@/components/ui/error-card";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
@@ -19,6 +20,7 @@ export default function ChatPage() {
   const conversationId = params.conversationId;
   const leaderId = searchParams.get("leader") as DomainLeaderId | null;
   const msgParam = searchParams.get("msg");
+  const contextParam = searchParams.get("context");
 
   const {
     messages,
@@ -43,19 +45,47 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const insertRef = useRef<((text: string, replaceFrom: number) => void) | null>(null);
 
+  // Fetch KB content when ?context= param is present
+  const [kbContext, setKbContext] = useState<ConversationContext | undefined>();
+  const [contextLoading, setContextLoading] = useState(!!contextParam);
+
+  useEffect(() => {
+    if (!contextParam) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const res = await fetch(`/api/kb/content/${contextParam}`);
+        if (res.ok && !cancelled) {
+          const data = await res.json();
+          setKbContext({
+            path: contextParam,
+            type: "kb-viewer",
+            content: data.content,
+          });
+        }
+      } catch {
+        // Graceful degradation: proceed without context
+      } finally {
+        if (!cancelled) setContextLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [contextParam]);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Start session when connection is established for a new conversation
+  // Start session when connected AND context is resolved (or not needed)
   useEffect(() => {
-    if (status === "connected" && conversationId === "new" && !sessionStarted) {
-      startSession(leaderId ?? undefined);
+    if (status === "connected" && conversationId === "new" && !sessionStarted && !contextLoading) {
+      startSession(leaderId ?? undefined, kbContext);
       setSessionStarted(true);
     }
-  }, [status, conversationId, leaderId, sessionStarted, startSession]);
+  }, [status, conversationId, leaderId, sessionStarted, startSession, contextLoading, kbContext]);
 
   // Send initial message from ?msg= param after server confirms session
   useEffect(() => {

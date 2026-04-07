@@ -123,12 +123,12 @@ No modifications required on the server.
 
 ## Acceptance Criteria
 
-- [ ] KB viewer "Chat about this" URL includes `?context=<kb-path>` param
-- [ ] Chat page fetches file content from `/api/kb/content/<path>` when `?context=` is present
-- [ ] `startSession` receives `ConversationContext` with `{ path, type: "kb-viewer", content }`
-- [ ] Agent's system prompt includes the artifact content (visible in server logs or agent behavior)
-- [ ] Session starts without context if the KB content fetch fails (graceful degradation)
-- [ ] Session starts normally when no `?context=` param is present (no regression)
+- [x] KB viewer "Chat about this" URL includes `?context=<kb-path>` param
+- [x] Chat page fetches file content from `/api/kb/content/<path>` when `?context=` is present
+- [x] `startSession` receives `ConversationContext` with `{ path, type: "kb-viewer", content }`
+- [x] Agent's system prompt includes the artifact content (visible in server logs or agent behavior)
+- [x] Session starts without context if the KB content fetch fails (graceful degradation)
+- [x] Session starts normally when no `?context=` param is present (no regression)
 
 ## Domain Review
 
@@ -144,6 +144,7 @@ No cross-domain implications detected -- internal plumbing change wiring existin
 - Given `?context=product/roadmap.md` param and the KB API returns 404, when session starts, then `startSession` is called without context (graceful degradation)
 - Given no `?context=` param, when session starts, then `startSession` is called with `undefined` context (no regression)
 - Given `?context=` param, session should not start until context fetch resolves (no race condition)
+- Given `?context=` with empty string value, when session starts, then `startSession` is called with `undefined` context (treated as no context)
 
 ### Protocol Tests (`apps/web-platform/test/ws-protocol.test.ts`)
 

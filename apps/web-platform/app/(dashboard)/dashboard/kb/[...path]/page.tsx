@@ -94,7 +94,7 @@ export default function KbContentPage({
     );
   }
 
-  const chatUrl = `/dashboard/chat/new?msg=${encodeURIComponent(`Tell me about the file at ${joinedPath}`)}&leader=cto`;
+  const chatUrl = `/dashboard/chat/new?msg=${encodeURIComponent(`Tell me about the file at ${joinedPath}`)}&leader=cto&context=${encodeURIComponent(joinedPath)}`;
 
   return (
     <div className="flex h-full flex-col">
