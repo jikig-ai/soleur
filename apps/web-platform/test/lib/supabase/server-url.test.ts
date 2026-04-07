@@ -32,4 +32,13 @@ describe("serverUrl", () => {
 
     expect(serverUrl()).toBe("https://custom.domain.com");
   });
+
+  it("throws when both SUPABASE_URL and NEXT_PUBLIC_SUPABASE_URL are missing", () => {
+    delete process.env.SUPABASE_URL;
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+
+    expect(() => serverUrl()).toThrow(
+      "Missing SUPABASE_URL and NEXT_PUBLIC_SUPABASE_URL",
+    );
+  });
 });

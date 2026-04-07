@@ -4,7 +4,7 @@ async function checkSupabase(): Promise<boolean> {
   try {
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
     const response = await fetch(
-      `${serverUrl()}/rest/v1/`,
+      `${serverUrl()}/rest/v1/users?select=id&limit=1`,
       {
         headers: {
           apikey: key,

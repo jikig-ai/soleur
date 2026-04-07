@@ -23,7 +23,8 @@ import { createPullRequest } from "./github-app";
 
 const log = createChildLogger("agent");
 
-const supabase = createServiceClient();
+let _supabase: ReturnType<typeof createServiceClient>;
+function supabase() { return _supabase ??= createServiceClient(); }
 
 const PLUGIN_PATH =
   process.env.SOLEUR_PLUGIN_PATH || "/app/shared/plugins/soleur";
@@ -114,7 +115,7 @@ export function abortAllSessions(): void {
 // BYOK key retrieval
 // ---------------------------------------------------------------------------
 async function getUserApiKey(userId: string): Promise<string> {
-  const { data, error } = await supabase
+  const { data, error } = await supabase()
     .from("api_keys")
     .select("id, encrypted_key, iv, auth_tag, key_version")
     .eq("user_id", userId)
@@ -135,7 +136,7 @@ async function getUserApiKey(userId: string): Promise<string> {
     // Lazy migration: decrypt with raw key, re-encrypt with HKDF-derived key
     const plaintext = decryptKeyLegacy(encrypted, iv, authTag);
     const reEncrypted = encryptKey(plaintext, userId);
-    await supabase
+    await supabase()
       .from("api_keys")
       .update({
         encrypted_key: reEncrypted.encrypted.toString("base64"),
@@ -161,7 +162,7 @@ async function saveMessage(
   toolCalls?: unknown,
   leaderId?: string,
 ) {
-  const { error } = await supabase.from("messages").insert({
+  const { error } = await supabase().from("messages").insert({
     id: randomUUID(),
     conversation_id: conversationId,
     role,
@@ -179,7 +180,7 @@ async function updateConversationStatus(
   conversationId: string,
   status: string,
 ) {
-  const { error } = await supabase
+  const { error } = await supabase()
     .from("conversations")
     .update({ status, last_active: new Date().toISOString() })
     .eq("id", conversationId);
@@ -199,7 +200,7 @@ const MAX_REPLAY_MESSAGES = 20;
 async function loadConversationHistory(
   conversationId: string,
 ): Promise<Array<{ role: string; content: string }>> {
-  const { data, error } = await supabase
+  const { data, error } = await supabase()
     .from("messages")
     .select("role, content, created_at")
     .eq("conversation_id", conversationId)
@@ -234,7 +235,7 @@ function buildReplayPrompt(
 // ---------------------------------------------------------------------------
 export async function cleanupOrphanedConversations(): Promise<void> {
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1_000).toISOString();
-  const { error } = await supabase
+  const { error } = await supabase()
     .from("conversations")
     .update({ status: "failed" })
     .in("status", ["active", "waiting_for_user"])
@@ -254,7 +255,7 @@ const INACTIVITY_CHECK_INTERVAL_MS = 60 * 60 * 1_000; // Check every hour
 export function startInactivityTimer(): void {
   const timer = setInterval(async () => {
     const cutoff = new Date(Date.now() - INACTIVITY_TIMEOUT_MS).toISOString();
-    const { data, error } = await supabase
+    const { data, error } = await supabase()
       .from("conversations")
       .update({ status: "completed" })
       .in("status", ["waiting_for_user"])
@@ -313,7 +314,7 @@ export async function startAgentSession(
     if (!leader) throw new Error(`Unknown leader: ${effectiveLeaderId}`);
 
     // Get user workspace path, repo status, and GitHub App connection
-    const { data: user } = await supabase
+    const { data: user } = await supabase()
       .from("users")
       .select("workspace_path, repo_status, github_installation_id, repo_url")
       .eq("id", userId)
@@ -604,7 +605,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
       if (!session.sessionId && "session_id" in message && message.session_id) {
         session.sessionId = message.session_id;
         // Persist to DB for cross-turn resume
-        const { error: updateErr } = await supabase
+        const { error: updateErr } = await supabase()
           .from("conversations")
           .update({ session_id: message.session_id })
           .eq("id", conversationId);
@@ -764,7 +765,7 @@ export async function sendUserMessage(
 ): Promise<void> {
   // Verify conversation ownership BEFORE saving the message to prevent
   // cross-user writes (the message insert has no user_id check itself).
-  const { data: conv, error: convErr } = await supabase
+  const { data: conv, error: convErr } = await supabase()
     .from("conversations")
     .select("domain_leader, session_id")
     .eq("id", conversationId)
@@ -828,7 +829,7 @@ export async function sendUserMessage(
     ).catch(async (err) => {
       log.warn({ err }, "SDK resume failed, falling back to message replay");
       // Clear stale session_id
-      const { error: clearErr } = await supabase
+      const { error: clearErr } = await supabase()
         .from("conversations")
         .update({ session_id: null })
         .eq("id", conversationId);

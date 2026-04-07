@@ -162,6 +162,9 @@ describe("pre-merge-rebase hook (with git repo)", () => {
   beforeEach(() => {
     spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
     spawnChecked(["git", "reset", "--hard", "origin/main"], { cwd: repoDir });
+    // Remove untracked files/directories (e.g., todos/ from addReviewEvidence).
+    // git reset --hard only resets tracked files; clean -fd handles the rest.
+    spawnChecked(["git", "clean", "-fd"], { cwd: repoDir });
     const branches = Bun.spawnSync(["git", "branch", "--list", "test-*"], {
       cwd: repoDir,
       env: GIT_ENV,
@@ -383,6 +386,14 @@ describe("pre-merge-rebase hook (with git repo)", () => {
   });
 
   test("detached HEAD without review evidence is denied", async () => {
+    // Precondition: verify no review evidence leaked from prior tests.
+    // Without this, a leaked todos/ directory causes a silent false-green
+    // (hook finds evidence, skips deny, test gets empty stdout, JSON.parse throws).
+    const todosCheck = Bun.spawnSync(["test", "-d", "todos"], {
+      cwd: repoDir, env: GIT_ENV,
+    });
+    expect(todosCheck.exitCode, "todos/ must NOT exist — review evidence leaked from a prior test").not.toBe(0);
+
     const headSha = spawnChecked(["git", "rev-parse", "HEAD"], { cwd: repoDir });
     const sha = new TextDecoder().decode(headSha.stdout).trim();
     Bun.spawnSync(["git", "checkout", sha], { cwd: repoDir, env: GIT_ENV });
