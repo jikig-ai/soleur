@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -276,5 +276,112 @@ describe("ChatPage", () => {
     expect(scripts.length).toBe(0);
     // Safe text should still render
     expect(screen.getByText(/Safe text/)).toBeInTheDocument();
+  });
+
+  describe("ConversationContext from ?context= param", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let fetchSpy: any;
+
+    beforeEach(() => {
+      fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(JSON.stringify({ content: "# Roadmap\nPhase 1..." }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    afterEach(() => {
+      fetchSpy.mockRestore();
+    });
+
+    it("passes ConversationContext to startSession when ?context= is present", async () => {
+      mockSearchParams.set("context", "product/roadmap.md");
+      mockSearchParams.set("msg", "Tell me about this file");
+      wsReturn.status = "connected";
+
+      await renderChatPage();
+
+      await waitFor(() => {
+        expect(mockStartSession).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({
+            path: "product/roadmap.md",
+            type: "kb-viewer",
+            content: "# Roadmap\nPhase 1...",
+          }),
+        );
+      });
+    });
+
+    it("starts session without context when KB API returns 404 (graceful degradation)", async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response("Not found", { status: 404 }),
+      );
+      mockSearchParams.set("context", "missing/file.md");
+      wsReturn.status = "connected";
+
+      await renderChatPage();
+
+      await waitFor(() => {
+        expect(mockStartSession).toHaveBeenCalledWith(undefined, undefined);
+      });
+    });
+
+    it("starts session without context when no ?context= param (no regression)", async () => {
+      // No context param set
+      wsReturn.status = "connected";
+
+      await renderChatPage();
+
+      await waitFor(() => {
+        expect(mockStartSession).toHaveBeenCalledWith(undefined, undefined);
+      });
+      // fetch should not be called for KB content
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("does not start session until context fetch resolves", async () => {
+      let resolveKbFetch!: (value: Response) => void;
+      fetchSpy.mockReturnValueOnce(
+        new Promise<Response>((resolve) => {
+          resolveKbFetch = resolve;
+        }),
+      );
+      mockSearchParams.set("context", "product/roadmap.md");
+      wsReturn.status = "connected";
+
+      await renderChatPage();
+
+      // Session should NOT have started yet (fetch still pending)
+      expect(mockStartSession).not.toHaveBeenCalled();
+
+      // Resolve the fetch
+      resolveKbFetch(
+        new Response(JSON.stringify({ content: "file content" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+      await waitFor(() => {
+        expect(mockStartSession).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({ content: "file content" }),
+        );
+      });
+    });
+
+    it("treats empty ?context= as no context", async () => {
+      mockSearchParams.set("context", "");
+      wsReturn.status = "connected";
+
+      await renderChatPage();
+
+      await waitFor(() => {
+        expect(mockStartSession).toHaveBeenCalledWith(undefined, undefined);
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
   });
 });
