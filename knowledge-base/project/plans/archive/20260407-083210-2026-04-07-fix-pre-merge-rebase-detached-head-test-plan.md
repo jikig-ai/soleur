@@ -123,12 +123,12 @@ test("detached HEAD without review evidence is denied", async () => {
 
 ## Acceptance Criteria
 
-- [ ] Test "detached HEAD without review evidence is denied" passes reliably (10 consecutive runs)
-- [ ] `beforeEach` explicitly cleans untracked files via `git clean -fd`
-- [ ] No cross-test state leakage possible for `todos/` directory
-- [ ] All 21 existing tests continue to pass
-- [ ] No new test flakiness introduced
-- [ ] Precondition assertion in the failing test catches isolation failures early
+- [x] Test "detached HEAD without review evidence is denied" passes reliably (10 consecutive runs)
+- [x] `beforeEach` explicitly cleans untracked files via `git clean -fd`
+- [x] No cross-test state leakage possible for `todos/` directory
+- [x] All 21 existing tests continue to pass
+- [x] No new test flakiness introduced
+- [x] Precondition assertion in the failing test catches isolation failures early
 
 ## Test Scenarios
 
