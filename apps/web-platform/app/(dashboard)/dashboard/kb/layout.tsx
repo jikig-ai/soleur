@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, Component } from "react";
+import { useState, useEffect, useCallback, useMemo, Component } from "react";
 import type { ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { KbContext } from "@/components/kb/kb-context";
@@ -70,13 +70,13 @@ export default function KbLayout({ children }: { children: ReactNode }) {
   const isContentView = pathname !== "/dashboard/kb";
   const hasTreeContent = tree?.children && tree.children.length > 0;
 
-  const ctxValue: KbContextValue = {
+  const ctxValue: KbContextValue = useMemo(() => ({
     tree,
     loading,
     error,
     expanded,
     toggleExpanded,
-  };
+  }), [tree, loading, error, expanded, toggleExpanded]);
 
   // Full-width states: loading, errors, or empty KB (no sidebar needed)
   if (loading || error || (!loading && !hasTreeContent)) {

@@ -40,13 +40,16 @@ const MARKDOWN_COMPONENTS: Components = {
   td: ({ children }) => (
     <td className="border border-neutral-700 px-3 py-1.5 text-neutral-300">{children}</td>
   ),
-  code: ({ className, children, node }) => {
-    const isBlock = node?.position && node.position.start.line !== node.position.end.line
-      || /language-/.test(className || "");
+  pre: ({ children }) => (
+    <pre className="mb-3 overflow-x-auto rounded-lg bg-neutral-950 p-3 text-xs text-neutral-300">
+      {children}
+    </pre>
+  ),
+  code: ({ className, children }) => {
+    // Block code: has a language class from rehype-highlight or fenced blocks
+    const isBlock = /language-|hljs/.test(className || "");
     return isBlock ? (
-      <pre className="mb-3 overflow-x-auto rounded-lg bg-neutral-950 p-3">
-        <code className="text-xs text-neutral-300">{children}</code>
-      </pre>
+      <code className={className}>{children}</code>
     ) : (
       <code className="rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-amber-300">{children}</code>
     );

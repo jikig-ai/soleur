@@ -18,6 +18,7 @@ export function FileTree() {
             key={node.name}
             node={node}
             depth={0}
+            parentPath=""
             expanded={expanded}
             onToggle={toggleExpanded}
           />
@@ -30,11 +31,13 @@ export function FileTree() {
 function TreeItem({
   node,
   depth,
+  parentPath,
   expanded,
   onToggle,
 }: {
   node: TreeNode;
   depth: number;
+  parentPath: string;
   expanded: Set<string>;
   onToggle: (path: string) => void;
 }) {
@@ -44,7 +47,7 @@ function TreeItem({
   const paddingLeft = `${indent * 12 + 8}px`;
 
   if (node.type === "directory") {
-    const dirKey = node.path ?? node.name;
+    const dirKey = parentPath ? `${parentPath}/${node.name}` : node.name;
     const isExpanded = expanded.has(dirKey);
 
     return (
@@ -81,6 +84,7 @@ function TreeItem({
                 key={child.name}
                 node={child}
                 depth={depth + 1}
+                parentPath={dirKey}
                 expanded={expanded}
                 onToggle={onToggle}
               />

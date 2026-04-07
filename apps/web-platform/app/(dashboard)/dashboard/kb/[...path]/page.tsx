@@ -31,6 +31,10 @@ export default function KbContentPage({
       try {
         const res = await fetch(`/api/kb/content/${joinedPath}`);
         if (!cancelled) {
+          if (res.status === 401) {
+            router.replace("/login");
+            return;
+          }
           if (res.status === 404) {
             setError("not-found");
             setLoading(false);
