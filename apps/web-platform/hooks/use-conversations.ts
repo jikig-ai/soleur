@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Conversation, Message, ConversationStatus } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
@@ -48,8 +48,7 @@ export function useConversations(
   const [conversations, setConversations] = useState<ConversationWithPreview[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const userIdRef = useRef<string | null>(null);
-  const channelRef = useRef<ReturnType<ReturnType<typeof createClient>["channel"]> | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
 
   const fetchConversations = useCallback(async () => {
     setLoading(true);
@@ -57,19 +56,21 @@ export function useConversations(
 
     const supabase = createClient();
 
-    // Get user ID for Realtime filter
+    // Get user ID for query filter and Realtime subscription
     const { data: authData, error: authError } = await supabase.auth.getUser();
     if (authError || !authData.user) {
       setError("Authentication required");
       setLoading(false);
       return;
     }
-    userIdRef.current = authData.user.id;
+    const currentUserId = authData.user.id;
+    setUserId(currentUserId);
 
-    // Query 1: Fetch conversations
+    // Query 1: Fetch conversations (explicit user_id filter for defence-in-depth)
     let query = supabase
       .from("conversations")
       .select("*")
+      .eq("user_id", currentUserId)
       .order("last_active", { ascending: false })
       .order("created_at", { ascending: false });
 
@@ -131,8 +132,9 @@ export function useConversations(
   }, [fetchConversations]);
 
   // Supabase Realtime subscription for status updates
+  // Uses userId state (not ref) so effect re-runs when auth completes
   useEffect(() => {
-    if (!userIdRef.current) return;
+    if (!userId) return;
 
     const supabase = createClient();
     const channel = supabase
@@ -143,10 +145,12 @@ export function useConversations(
           event: "UPDATE",
           schema: "public",
           table: "conversations",
-          filter: `user_id=eq.${userIdRef.current}`,
+          filter: `user_id=eq.${userId}`,
         },
         (payload) => {
           const updated = payload.new as Conversation;
+          // Client-side user_id check: Free tier ignores server-side filter
+          if (updated.user_id !== userId) return;
           setConversations((prev) =>
             prev.map((c) =>
               c.id === updated.id
@@ -158,12 +162,10 @@ export function useConversations(
       )
       .subscribe();
 
-    channelRef.current = channel;
-
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [conversations.length > 0 ? userIdRef.current : null]);
+  }, [userId]);
 
   return { conversations, loading, error, refetch: fetchConversations };
 }
