@@ -11,7 +11,7 @@ import logger from "@/server/logger";
  *
  * Sets a state nonce cookie for CSRF protection and redirects to GitHub.
  */
-export async function GET() {
+export async function GET(_request: Request) {
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://app.soleur.ai";
 
   // Defense-in-depth: verify session even though middleware enforces auth
