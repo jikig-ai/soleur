@@ -60,8 +60,6 @@ export default function ConnectRepoPage() {
       if (params.get("installation_id") && (action === "install" || action === "update")) {
         return "github_redirect";
       }
-      // Returning from failed GitHub identity resolve attempt
-      // (resolve_error=1 is set by the OAuth callback on any failure)
     }
     return "choose";
   });

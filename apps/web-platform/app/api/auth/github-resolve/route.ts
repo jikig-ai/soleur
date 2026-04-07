@@ -11,14 +11,15 @@ import logger from "@/server/logger";
  * Sets a state nonce cookie for CSRF protection and redirects to GitHub.
  */
 export async function GET() {
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://app.soleur.ai";
   const clientId = process.env.GITHUB_CLIENT_ID;
   if (!clientId) {
     logger.error("GITHUB_CLIENT_ID not configured");
-    return NextResponse.redirect(new URL("/connect-repo?resolve_error=1", "https://app.soleur.ai"));
+    return NextResponse.redirect(new URL("/connect-repo?resolve_error=1", siteUrl));
   }
 
   const state = crypto.randomUUID();
-  const callbackUrl = `${process.env.NEXT_PUBLIC_SITE_URL ?? "https://app.soleur.ai"}/api/auth/github-resolve/callback`;
+  const callbackUrl = `${siteUrl}/api/auth/github-resolve/callback`;
 
   const authorizeUrl = new URL("https://github.com/login/oauth/authorize");
   authorizeUrl.searchParams.set("client_id", clientId);

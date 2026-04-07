@@ -64,11 +64,13 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
   });
 
   test("uses stored github_username when no Supabase GitHub identity exists", async () => {
-    // No github_installation_id stored
+    // No github_installation_id but github_username stored from prior OAuth resolve
     mockServiceFrom.mockReturnValueOnce({
       select: vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({
-          single: vi.fn().mockResolvedValue({ data: { github_installation_id: null } }),
+          single: vi.fn().mockResolvedValue({
+            data: { github_installation_id: null, github_username: "deruelle" },
+          }),
         }),
       }),
     });
@@ -76,15 +78,6 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
     // No GitHub identity in Supabase
     mockAdminGetUserById.mockResolvedValue({
       data: { user: { id: "user-123", identities: [{ provider: "email", identity_data: {} }] } },
-    });
-
-    // github_username stored from prior OAuth resolve
-    mockServiceFrom.mockReturnValueOnce({
-      select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          single: vi.fn().mockResolvedValue({ data: { github_username: "deruelle" } }),
-        }),
-      }),
     });
 
     // Installation found
@@ -108,11 +101,13 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
   });
 
   test("returns no_github_identity when neither Supabase identity nor github_username exists", async () => {
-    // No github_installation_id stored
+    // No github_installation_id and no github_username
     mockServiceFrom.mockReturnValueOnce({
       select: vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({
-          single: vi.fn().mockResolvedValue({ data: { github_installation_id: null } }),
+          single: vi.fn().mockResolvedValue({
+            data: { github_installation_id: null, github_username: null },
+          }),
         }),
       }),
     });
@@ -120,15 +115,6 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
     // No GitHub identity in Supabase
     mockAdminGetUserById.mockResolvedValue({
       data: { user: { id: "user-123", identities: [{ provider: "email", identity_data: {} }] } },
-    });
-
-    // No github_username stored either
-    mockServiceFrom.mockReturnValueOnce({
-      select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          single: vi.fn().mockResolvedValue({ data: { github_username: null } }),
-        }),
-      }),
     });
 
     const response = await POST(makeRequest());
