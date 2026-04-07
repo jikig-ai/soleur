@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-04-06
+last_updated: 2026-04-07
 ---
 
 # Expenses
@@ -19,6 +19,7 @@ last_updated: 2026-04-06
 | X API Basic (DEFERRED) | X Corp | api | 100.00 | deferred | - | DEFERRED: $100/mo Basic tier for fetch-mentions/timeline. Trigger: first paying customer or $500 MRR. See #497 |
 | Sentry | Sentry | observability | 0.00 | free-tier | - | Error tracking + CSP report-uri for web platform. Org: jikigai, project: soleur-web-platform. Free tier: 5K errors/mo. Upgrade triggers: error volume |
 | Better Stack | Better Stack | observability | 0.00 | free-tier | - | Uptime monitoring for app.soleur.ai/health (3-min interval). Free tier: 10 monitors, email alerts. Upgrade triggers: Telegram/SMS alerts, phone calls |
+| Doppler | Doppler | secrets-mgmt | 0.00 | free-tier | - | Secrets management. Developer plan (free). Account: <ops@jikigai.com>. 6 configs: dev, dev_personal, ci, prd, prd_scheduled, prd_terraform. Upgrade triggers: team growth, audit logs |
 
 ## One-Time
 
