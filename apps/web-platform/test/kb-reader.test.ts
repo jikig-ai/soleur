@@ -6,6 +6,9 @@ import {
   buildTree,
   readContent,
   searchKb,
+  KbNotFoundError,
+  KbAccessDeniedError,
+  KbValidationError,
   type TreeNode,
 } from "../server/kb-reader";
 
@@ -137,32 +140,33 @@ broken: [unclosed
     expect(result.content).toContain("# Content");
   });
 
-  test("throws for non-existent file", async () => {
-    await expect(readContent(kbRoot, "missing.md")).rejects.toThrow();
+  test("throws KbNotFoundError for non-existent file", async () => {
+    await expect(readContent(kbRoot, "missing.md")).rejects.toThrow(KbNotFoundError);
   });
 
-  test("throws for non-.md file", async () => {
+  test("throws KbNotFoundError for non-.md file", async () => {
     fs.writeFileSync(path.join(kbRoot, "data.json"), "{}");
-    await expect(readContent(kbRoot, "data.json")).rejects.toThrow();
+    await expect(readContent(kbRoot, "data.json")).rejects.toThrow(KbNotFoundError);
   });
 
-  test("throws for path traversal attempt", async () => {
-    await expect(readContent(kbRoot, "../../etc/passwd")).rejects.toThrow();
+  test("throws KbAccessDeniedError for path traversal attempt", async () => {
+    // Use a .md extension so it passes the extension check and hits the path validation
+    await expect(readContent(kbRoot, "../../etc/passwd.md")).rejects.toThrow(KbAccessDeniedError);
   });
 
-  test("throws for path with null bytes", async () => {
-    await expect(readContent(kbRoot, "file\0.md")).rejects.toThrow();
+  test("throws KbAccessDeniedError for path with null bytes", async () => {
+    await expect(readContent(kbRoot, "file\0.md")).rejects.toThrow(KbAccessDeniedError);
   });
 
-  test("throws for directory path without extension", async () => {
+  test("throws KbNotFoundError for directory path without extension", async () => {
     fs.mkdirSync(path.join(kbRoot, "project"), { recursive: true });
-    await expect(readContent(kbRoot, "project")).rejects.toThrow();
+    await expect(readContent(kbRoot, "project")).rejects.toThrow(KbNotFoundError);
   });
 
-  test("throws for file over 1MB", async () => {
+  test("throws KbValidationError for file over 1MB", async () => {
     const bigContent = "x".repeat(1024 * 1024 + 1);
     fs.writeFileSync(path.join(kbRoot, "big.md"), bigContent);
-    await expect(readContent(kbRoot, "big.md")).rejects.toThrow();
+    await expect(readContent(kbRoot, "big.md")).rejects.toThrow(KbValidationError);
   });
 
   test("reads nested file paths", async () => {
@@ -253,13 +257,13 @@ describe("searchKb", () => {
     expect(result.total).toBe(0);
   });
 
-  test("throws for empty query", async () => {
-    await expect(searchKb(kbRoot, "")).rejects.toThrow();
+  test("throws KbValidationError for empty query", async () => {
+    await expect(searchKb(kbRoot, "")).rejects.toThrow(KbValidationError);
   });
 
-  test("throws for query exceeding 200 characters", async () => {
+  test("throws KbValidationError for query exceeding 200 characters", async () => {
     const longQuery = "a".repeat(201);
-    await expect(searchKb(kbRoot, longQuery)).rejects.toThrow();
+    await expect(searchKb(kbRoot, longQuery)).rejects.toThrow(KbValidationError);
   });
 
   test("includes frontmatter in results", async () => {

@@ -77,10 +77,8 @@ function parseFrontmatter(raw: string): {
       content: parsed.content.trim(),
     };
   } catch {
-    // Malformed YAML — return content without frontmatter
-    // Strip the frontmatter block manually if present
-    const stripped = raw.replace(/^---[\s\S]*?---\n*/, "").trim();
-    return { frontmatter: {}, content: stripped || raw.trim() };
+    // Malformed YAML — return raw content without attempting to parse
+    return { frontmatter: {}, content: raw.trim() };
   }
 }
 
@@ -109,7 +107,11 @@ async function collectMdFiles(
 
 // --- Public API ---
 
-export async function buildTree(kbRoot: string): Promise<TreeNode> {
+export async function buildTree(
+  kbRoot: string,
+  topRoot?: string,
+): Promise<TreeNode> {
+  const effectiveTopRoot = topRoot ?? kbRoot;
   const rootName = path.basename(kbRoot);
   const root: TreeNode = { name: rootName, type: "directory", children: [] };
 
@@ -126,24 +128,16 @@ export async function buildTree(kbRoot: string): Promise<TreeNode> {
   for (const entry of entries) {
     const fullPath = path.join(kbRoot, entry.name);
     if (entry.isDirectory() && !entry.isSymbolicLink()) {
-      const child = await buildTree(fullPath);
+      const child = await buildTree(fullPath, effectiveTopRoot);
       child.name = entry.name;
-      // Exclude empty directories
       if (child.children && child.children.length > 0) {
         dirs.push(child);
       }
     } else if (entry.isFile() && !entry.isSymbolicLink() && entry.name.endsWith(".md")) {
-      // Compute path relative to the top-level KB root
-      const kbTopRoot = kbRoot.includes("knowledge-base")
-        ? kbRoot.substring(
-            0,
-            kbRoot.indexOf("knowledge-base") + "knowledge-base".length,
-          )
-        : kbRoot;
       fileNodes.push({
         name: entry.name,
         type: "file",
-        path: path.relative(kbTopRoot, fullPath),
+        path: path.relative(effectiveTopRoot, fullPath),
       });
     }
   }
@@ -222,6 +216,8 @@ export async function searchKb(
     const fullPath = path.join(kbRoot, relativePath);
     let raw: string;
     try {
+      const stat = await fs.promises.stat(fullPath);
+      if (stat.size > MAX_FILE_SIZE) continue;
       raw = await fs.promises.readFile(fullPath, "utf-8");
     } catch {
       continue;
