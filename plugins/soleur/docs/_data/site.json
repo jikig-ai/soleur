@@ -32,7 +32,8 @@
     { "label": "Blog", "url": "blog/" },
     { "label": "Community", "url": "pages/community.html" },
     { "label": "Vision", "url": "pages/vision.html" },
-    { "label": "About", "url": "about/" }
+    { "label": "About", "url": "about/" },
+    { "label": "Status", "url": "https://soleur-ai.betteruptime.com/", "external": true }
   ],
   "footerLegal": [
     { "label": "Legal", "url": "pages/legal.html" },
