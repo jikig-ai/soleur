@@ -64,8 +64,9 @@ export default function ChatPage() {
             content: data.content,
           });
         }
-      } catch {
+      } catch (err) {
         // Graceful degradation: proceed without context
+        console.error("KB context fetch failed:", err);
       } finally {
         if (!cancelled) setContextLoading(false);
       }
