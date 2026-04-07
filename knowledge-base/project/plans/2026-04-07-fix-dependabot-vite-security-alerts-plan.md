@@ -6,6 +6,18 @@ date: 2026-04-07
 
 # fix: Resolve Dependabot Security Alerts for Vite
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-07
+**Sections enhanced:** 3 (Technical Considerations, MVP, Risk Assessment)
+**Research sources:** lockfile learnings, npm outdated analysis, AGENTS.md dual-lockfile rule
+
+### Key Improvements
+
+1. Added `npm update vite` scoping warning -- `npm update` without a target would pull in 8+ other package updates (ws, jsdom, supabase-js, etc.)
+2. Added lockfile order constraint -- `npm update vite` must run before `bun install` to avoid lockfile divergence
+3. Documented that vitest 3.2.4 is pinned at `Current == Wanted` so the vite update cannot cascade to a vitest major version bump
+
 ## Overview
 
 Three open Dependabot security alerts target `vite` in `apps/web-platform/package-lock.json`. All three are resolved by updating vite from `7.3.1` to `7.3.2`. Vite is a transitive dependency pulled in by `vitest ^3.1.0` (devDependencies), not a direct dependency.
@@ -56,6 +68,19 @@ The fix targets `vite@7.3.2` specifically (within the `^7.0.0-0` peer constraint
 
 `vite` is pulled in transitively by `vitest`. The `package.json` does not list `vite` as a dependency. The lockfile update is sufficient.
 
+### Scoping the Update
+
+`npm outdated` shows 16 packages with available updates in `apps/web-platform`. Running bare `npm update` (without a target) would pull in updates to `ws`, `jsdom`, `@supabase/supabase-js`, `@sentry/nextjs`, `@tailwindcss/postcss`, and others -- a much larger change surface. The command must be scoped to `npm update vite` to limit the blast radius to the single security-relevant package.
+
+Additionally, `vitest` current version (3.2.4) equals its wanted version -- it will not be updated by `npm update vite`. The vite peer constraint (`^5.0.0 || ^6.0.0 || ^7.0.0-0`) is satisfied by 7.3.2 without any vitest change.
+
+### Lockfile Regeneration Order
+
+1. **First:** `npm update vite` -- updates `package-lock.json` with the new vite resolution
+2. **Second:** `bun install` -- reads the updated `package.json` (unchanged) and resolves independently; verify bun also picks up vite >= 7.3.2
+
+Both must be committed together. Per AGENTS.md, the Dockerfile uses `npm ci` so `package-lock.json` is the production-critical lockfile.
+
 ## Acceptance Criteria
 
 - [ ] `apps/web-platform/package-lock.json` resolves vite to `>= 7.3.2`
@@ -85,9 +110,19 @@ No cross-domain implications detected -- dev dependency security patch.
 ### Phase 1: Update Lockfiles
 
 ```bash
-# In apps/web-platform/
+# In apps/web-platform/ -- ORDER MATTERS
+# 1. Update npm lockfile (scoped to vite only)
 npm update vite
+
+# 2. Verify vite version in package-lock.json
+cat package-lock.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['packages']['node_modules/vite']['version'])"
+# Expected: 7.3.2
+
+# 3. Update bun lockfile
 bun install
+
+# 4. Verify no other packages were inadvertently updated
+git diff --stat package-lock.json  # Should only show vite-related changes
 ```
 
 ### Phase 2: Verify

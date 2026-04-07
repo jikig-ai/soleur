@@ -2,9 +2,11 @@
 
 ## Phase 1: Update Lockfiles
 
-- [ ] 1.1 Run `npm update vite` in `apps/web-platform/` to update `package-lock.json`
-- [ ] 1.2 Run `bun install` in `apps/web-platform/` to update `bun.lock`
-- [ ] 1.3 Verify vite resolves to `>= 7.3.2` in both lockfiles
+- [ ] 1.1 Run `npm update vite` in `apps/web-platform/` to update `package-lock.json` (scoped to vite only -- do NOT run bare `npm update`)
+- [ ] 1.2 Verify vite resolves to `>= 7.3.2` in `package-lock.json`
+- [ ] 1.3 Run `bun install` in `apps/web-platform/` to update `bun.lock`
+- [ ] 1.4 Verify vite resolves to `>= 7.3.2` in `bun.lock`
+- [ ] 1.5 Verify `git diff --stat` shows only vite-related lockfile changes (no unintended package updates)
 
 ## Phase 2: Verify
 
