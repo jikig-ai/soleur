@@ -121,30 +121,40 @@
 
   <footer class="site-footer">
     <div class="footer-inner">
-      <div class="footer-left">
-        <div class="footer-mark">S</div>
-        <span class="footer-name">{{ site.name }}</span>
+      <div class="footer-top">
+        <div class="footer-brand">
+          <div class="footer-logo">
+            <div class="footer-mark">S</div>
+            <span class="footer-name">{{ site.name }}</span>
+          </div>
+          <p class="footer-tagline">Designed, built, and shipped by {{ site.name }} &mdash; using {{ site.name }}.</p>
+          <div class="footer-social">
+            <a href="{{ site.discord }}" target="_blank" rel="noopener" aria-label="Discord">Discord</a>
+            <a href="{{ site.github }}" target="_blank" rel="noopener" aria-label="GitHub">GitHub</a>
+            <a href="{{ site.x }}" target="_blank" rel="noopener" aria-label="X / Twitter">X</a>
+            <a href="{{ site.linkedinCompany }}" target="_blank" rel="noopener" aria-label="LinkedIn">LinkedIn</a>
+            <a href="{{ site.bluesky }}" target="_blank" rel="noopener" aria-label="Bluesky">Bluesky</a>
+          </div>
+        </div>
+        {%- for col in site.footerColumns %}
+        <div class="footer-col">
+          <h4 class="footer-heading">{{ col.heading }}</h4>
+          <ul class="footer-links">
+            {%- for link in col.links %}
+            <li><a href="{{ link.url }}"{% if link.external %} target="_blank" rel="noopener"{% endif %}>{{ link.label }}</a></li>
+            {%- endfor %}
+          </ul>
+        </div>
+        {%- endfor %}
       </div>
-      <div class="footer-nav-group">
-        <ul class="footer-links">
-          {%- for link in site.footerNav %}
-          <li><a href="{{ link.url }}"{% if link.external %} target="_blank" rel="noopener"{% endif %}>{{ link.label }}</a></li>
-          {%- endfor %}
-        </ul>
+      <div class="footer-bottom">
         <ul class="footer-legal">
           {%- for link in site.footerLegal %}
           <li><a href="{{ link.url }}">{{ link.label }}</a></li>
           {%- endfor %}
         </ul>
+        <span class="footer-copyright">&copy; {{ site.name }} 2026</span>
       </div>
-      <div class="footer-social">
-        <a href="{{ site.discord }}" target="_blank" rel="noopener" aria-label="Discord">Discord</a>
-        <a href="{{ site.github }}" target="_blank" rel="noopener" aria-label="GitHub">GitHub</a>
-        <a href="{{ site.x }}" target="_blank" rel="noopener" aria-label="X / Twitter">X</a>
-        <a href="{{ site.linkedinCompany }}" target="_blank" rel="noopener" aria-label="LinkedIn">LinkedIn</a>
-        <a href="{{ site.bluesky }}" target="_blank" rel="noopener" aria-label="Bluesky">Bluesky</a>
-      </div>
-      <span class="footer-tagline">Designed, built, and shipped by {{ site.name }} &mdash; using {{ site.name }}.</span>
     </div>
   </footer>
 
