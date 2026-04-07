@@ -29,10 +29,11 @@ vi.mock("@/server/logger", () => ({
 
 vi.mock("@/server/github-app", () => ({
   verifyInstallationOwnership: vi.fn(),
+  getInstallationAccount: vi.fn(),
 }));
 
 import { POST } from "../app/api/repo/install/route";
-import { verifyInstallationOwnership as mockVerifyOwnership } from "../server/github-app";
+import { verifyInstallationOwnership as mockVerifyOwnership, getInstallationAccount as mockGetInstallationAccount } from "../server/github-app";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -100,7 +101,7 @@ describe("POST /api/repo/install — identity resolution", () => {
     expect(body.ok).toBe(true);
   });
 
-  test("returns 403 when no GitHub identity found via admin API", async () => {
+  test("email-only user via admin API: succeeds when installation exists", async () => {
     mockGetUser.mockResolvedValue({
       data: {
         user: {
@@ -114,11 +115,20 @@ describe("POST /api/repo/install — identity resolution", () => {
     mockIdentitiesQuery("user-xyz", [
       { provider: "email", identity_data: {} },
     ]);
+    // Installation exists
+    vi.mocked(mockGetInstallationAccount).mockResolvedValue({
+      login: "someuser",
+      id: 1,
+      type: "User",
+    });
+    mockServiceFrom.mockReturnValue({
+      update: vi.fn().mockReturnValue({
+        eq: vi.fn().mockResolvedValue({ error: null }),
+      }),
+    });
 
     const res = await POST(makeRequest({ installationId: 100 }));
-    expect(res.status).toBe(403);
-    const body = await res.json();
-    expect(body.error).toMatch(/no github identity/i);
+    expect(res.status).toBe(200);
   });
 
   test("succeeds when admin API returns GitHub identity (standard flow)", async () => {
@@ -144,23 +154,51 @@ describe("POST /api/repo/install — identity resolution", () => {
     expect(body.ok).toBe(true);
   });
 
-  test("returns 403 when admin getUserById returns null user", async () => {
+  test("email-only user: stores installation when it exists", async () => {
     mockGetUser.mockResolvedValue({
       data: {
         user: {
-          id: "user-missing",
+          id: "user-email-only",
           identities: null,
           app_metadata: { providers: ["email"] },
         },
       },
     });
 
-    mockIdentitiesQuery("user-missing", null);
+    mockIdentitiesQuery("user-email-only", null);
+    // getInstallationAccount succeeds — installation exists
+    vi.mocked(mockGetInstallationAccount).mockResolvedValue({
+      login: "someuser",
+      id: 1,
+      type: "User",
+    });
+    mockServiceFrom.mockReturnValue({
+      update: vi.fn().mockReturnValue({
+        eq: vi.fn().mockResolvedValue({ error: null }),
+      }),
+    });
 
     const res = await POST(makeRequest({ installationId: 100 }));
-    expect(res.status).toBe(403);
-    const body = await res.json();
-    expect(body.error).toMatch(/no github identity/i);
+    expect(res.status).toBe(200);
+  });
+
+  test("email-only user: returns 404 when installation does not exist", async () => {
+    mockGetUser.mockResolvedValue({
+      data: {
+        user: {
+          id: "user-email-only-2",
+          identities: null,
+          app_metadata: { providers: ["email"] },
+        },
+      },
+    });
+
+    mockIdentitiesQuery("user-email-only-2", null);
+    // getInstallationAccount throws — installation not found
+    vi.mocked(mockGetInstallationAccount).mockRejectedValue(new Error("Installation not found"));
+
+    const res = await POST(makeRequest({ installationId: 999 }));
+    expect(res.status).toBe(404);
   });
 
   test("returns 500 with descriptive error when getUserById throws", async () => {

@@ -117,8 +117,6 @@ export default function ConnectRepoPage() {
           } else {
             setState("no_projects");
           }
-        } else if (!data.installed && data.reason === "no_github_identity") {
-          setState("link_github");
         }
       } catch {
         // Silent — user can still proceed manually via choose screen
@@ -397,11 +395,6 @@ export default function ConnectRepoPage() {
           }
           return;
         }
-        // No GitHub identity linked — prompt to link
-        if (!detectData.installed && detectData.reason === "no_github_identity") {
-          setState("link_github");
-          return;
-        }
       }
     } catch {
       // Network error — fall through to GitHub redirect
@@ -409,7 +402,7 @@ export default function ConnectRepoPage() {
       loadingRef.current = false;
       setReposLoading(false);
     }
-    // 3. Not installed — redirect to GitHub
+    // 3. Not installed or no GitHub identity — redirect to GitHub App flow
     setState("github_redirect");
   }
 
