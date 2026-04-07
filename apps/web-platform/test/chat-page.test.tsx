@@ -372,6 +372,24 @@ describe("ChatPage", () => {
       });
     });
 
+    it("gracefully degrades and logs when fetch rejects (network error)", async () => {
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      fetchSpy.mockRejectedValueOnce(new Error("network failure"));
+      mockSearchParams.set("context", "product/roadmap.md");
+      wsReturn.status = "connected";
+
+      await renderChatPage();
+
+      await waitFor(() => {
+        expect(mockStartSession).toHaveBeenCalledWith(undefined, undefined);
+      });
+      expect(consoleSpy).toHaveBeenCalledWith(
+        "KB context fetch failed:",
+        expect.any(Error),
+      );
+      consoleSpy.mockRestore();
+    });
+
     it("treats empty ?context= as no context", async () => {
       mockSearchParams.set("context", "");
       wsReturn.status = "connected";
