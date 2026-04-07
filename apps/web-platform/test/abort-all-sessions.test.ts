@@ -1,6 +1,9 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
 import { createClient } from "@supabase/supabase-js";
 
+// Env vars needed by serverUrl() guard — set before agent-runner is loaded
+process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
+
 // Mock all heavy dependencies so agent-runner loads without side effects
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({ query: vi.fn() }));
 

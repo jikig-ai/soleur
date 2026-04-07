@@ -1,5 +1,8 @@
 import { vi, describe, test, expect, beforeEach } from "vitest";
 
+// Env vars needed by serverUrl() guard — set before agent-runner is loaded
+process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
+
 // ---------------------------------------------------------------------------
 // Mock all heavy dependencies so agent-runner loads without side effects.
 // Use vi.hoisted() for variables referenced inside vi.mock() factories
