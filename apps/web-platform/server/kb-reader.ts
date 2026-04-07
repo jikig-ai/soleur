@@ -94,14 +94,18 @@ async function collectMdFiles(
   } catch {
     return files;
   }
+  const dirPromises: Promise<string[]>[] = [];
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory() && !entry.isSymbolicLink()) {
-      const nested = await collectMdFiles(fullPath, relativeTo);
-      files.push(...nested);
+      dirPromises.push(collectMdFiles(fullPath, relativeTo));
     } else if (entry.isFile() && !entry.isSymbolicLink() && entry.name.endsWith(".md")) {
       files.push(path.relative(relativeTo, fullPath));
     }
+  }
+  const nestedResults = await Promise.all(dirPromises);
+  for (const nested of nestedResults) {
+    files.push(...nested);
   }
   return files;
 }
@@ -123,34 +127,40 @@ export async function buildTree(
     return root;
   }
 
-  const dirs: TreeNode[] = [];
-  const fileNodes: TreeNode[] = [];
+  const dirPromises: Promise<TreeNode | null>[] = [];
+  const filePromises: Promise<TreeNode>[] = [];
 
   for (const entry of entries) {
     const fullPath = path.join(kbRoot, entry.name);
     if (entry.isDirectory() && !entry.isSymbolicLink()) {
-      const child = await buildTree(fullPath, effectiveTopRoot);
-      child.name = entry.name;
-      if (child.children && child.children.length > 0) {
-        dirs.push(child);
-      }
+      dirPromises.push(
+        buildTree(fullPath, effectiveTopRoot).then((child) => {
+          child.name = entry.name;
+          return child.children && child.children.length > 0 ? child : null;
+        }),
+      );
     } else if (entry.isFile() && !entry.isSymbolicLink() && entry.name.endsWith(".md")) {
-      let modifiedAt: string | undefined;
-      try {
-        const stat = await fs.promises.stat(fullPath);
-        modifiedAt = stat.mtime.toISOString();
-      } catch {
-        // If stat fails, omit modifiedAt
-      }
-      fileNodes.push({
-        name: entry.name,
-        type: "file",
-        path: path.relative(effectiveTopRoot, fullPath),
-        modifiedAt,
-      });
+      filePromises.push(
+        fs.promises
+          .stat(fullPath)
+          .then((stat) => stat.mtime.toISOString())
+          .catch(() => undefined)
+          .then((modifiedAt) => ({
+            name: entry.name,
+            type: "file" as const,
+            path: path.relative(effectiveTopRoot, fullPath),
+            modifiedAt,
+          })),
+      );
     }
   }
 
+  const [dirResults, fileNodes] = await Promise.all([
+    Promise.all(dirPromises),
+    Promise.all(filePromises),
+  ]);
+
+  const dirs = dirResults.filter((d): d is TreeNode => d !== null);
   dirs.sort((a, b) => a.name.localeCompare(b.name));
   fileNodes.sort((a, b) => a.name.localeCompare(b.name));
   root.children = [...dirs, ...fileNodes];
@@ -216,43 +226,48 @@ export async function searchKb(
   }
 
   const escapedQuery = escapeRegex(query);
-  const regex = new RegExp(escapedQuery, "gi");
   const mdFiles = await collectMdFiles(kbRoot, kbRoot);
 
-  const results: SearchResult[] = [];
-
-  for (const relativePath of mdFiles) {
-    const fullPath = path.join(kbRoot, relativePath);
-    let raw: string;
-    try {
-      const stat = await fs.promises.stat(fullPath);
-      if (stat.size > MAX_FILE_SIZE) continue;
-      raw = await fs.promises.readFile(fullPath, "utf-8");
-    } catch {
-      continue;
-    }
-
-    const lines = raw.split("\n");
-    const matches: SearchMatch[] = [];
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      let match: RegExpExecArray | null;
-      regex.lastIndex = 0;
-      while ((match = regex.exec(line)) !== null) {
-        matches.push({
-          line: i + 1,
-          text: line,
-          highlight: [match.index, match.index + match[0].length],
-        });
+  const searchResults = await Promise.all(
+    mdFiles.map(async (relativePath): Promise<SearchResult | null> => {
+      const fullPath = path.join(kbRoot, relativePath);
+      let raw: string;
+      try {
+        const stat = await fs.promises.stat(fullPath);
+        if (stat.size > MAX_FILE_SIZE) return null;
+        raw = await fs.promises.readFile(fullPath, "utf-8");
+      } catch {
+        return null;
       }
-    }
 
-    if (matches.length > 0) {
-      const { frontmatter } = parseFrontmatter(raw);
-      results.push({ path: relativePath, frontmatter, matches });
-    }
-  }
+      const regex = new RegExp(escapedQuery, "gi");
+      const lines = raw.split("\n");
+      const matches: SearchMatch[] = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        let match: RegExpExecArray | null;
+        regex.lastIndex = 0;
+        while ((match = regex.exec(line)) !== null) {
+          matches.push({
+            line: i + 1,
+            text: line,
+            highlight: [match.index, match.index + match[0].length],
+          });
+        }
+      }
+
+      if (matches.length > 0) {
+        const { frontmatter } = parseFrontmatter(raw);
+        return { path: relativePath, frontmatter, matches };
+      }
+      return null;
+    }),
+  );
+
+  const results = searchResults.filter(
+    (r): r is SearchResult => r !== null,
+  );
 
   // Sort by match count descending
   results.sort((a, b) => b.matches.length - a.matches.length);
