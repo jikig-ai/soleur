@@ -293,7 +293,7 @@ describe("install route behavioral enforcement", () => {
     });
   });
 
-  test("returns 403 when user has user_metadata.user_name but no GitHub identity", async () => {
+  test("email-only user: succeeds when installation exists (existence-verified)", async () => {
     const userId = "user-123";
 
     // Mock createClient — returns a Supabase client whose auth.getUser()
@@ -314,6 +314,9 @@ describe("install route behavioral enforcement", () => {
     // Mock createServiceClient — returns a service client whose
     // auth.admin.getUserById returns a user with an email identity only
     // (no github provider in the identities array)
+    const mockUpdate = vi.fn().mockReturnValue({
+      eq: vi.fn().mockResolvedValue({ error: null }),
+    });
     vi.mocked(mockCreateServiceClient).mockReturnValue({
       auth: {
         admin: {
@@ -334,8 +337,14 @@ describe("install route behavioral enforcement", () => {
           }),
         },
       },
-      from: vi.fn(),
+      from: vi.fn().mockReturnValue({ update: mockUpdate }),
     } as never);
+
+    // Mock getInstallationAccount (called via global fetch for email-only users)
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ account: { login: "someuser", id: 1, type: "User" } }),
+    });
 
     const request = new Request("https://app.soleur.ai/api/repo/install", {
       method: "POST",
@@ -347,10 +356,7 @@ describe("install route behavioral enforcement", () => {
     });
 
     const response = await POST(request);
-    expect(response.status).toBe(403);
-
-    const body = await response.json();
-    expect(body.error).toMatch(/no github identity/i);
+    expect(response.status).toBe(200);
   });
 });
 
