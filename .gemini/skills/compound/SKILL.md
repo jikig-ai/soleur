@@ -99,17 +99,3 @@ After writing the learning, check if the insight should be promoted to a project
 - If the learning exposes a gap in rules → propose a rule addition
 - Use `ask_user` to confirm before modifying convention files
 
-## Adaptation Notes (Gemini CLI Port)
-
-**Changes from Claude Code version:**
-
-- Parallel subagent spawning (5 agents via Task tool) → sequential execution within single conversation
-- `$ARGUMENTS` parameter → conversation context + `ask_user` for missing info
-- `hookSpecificOutput` (branch safety via hook response) → `run_shell_command` with git branch check
-- `skill: soleur:compound-capture` invocation → inline execution (no skill chaining needed)
-- TodoWrite progress tracking → `write_todos` for tracking
-
-**Functional impact:**
-
-- Slower execution (sequential vs parallel) but same output quality
-- No hook-level branch protection (relies on explicit check instead)
