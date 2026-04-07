@@ -22,6 +22,7 @@ import { abortableReviewGate, validateSelection, type AgentSession } from "./rev
 import { createChildLogger } from "./logger";
 import { syncPull, syncPush } from "./session-sync";
 import { createPullRequest } from "./github-app";
+import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers";
 
 const log = createChildLogger("agent");
 
@@ -410,6 +411,12 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
     // Inject artifact context when conversation started from a specific page
     if (context?.content) {
       systemPrompt += `\n\nThe user is currently viewing: ${context.path}\n\nArtifact content:\n${context.content}\n\nAnswer in the context of this artifact.`;
+    }
+
+    // CPO-scoped: enhance minimal vision.md with structured sections
+    if (effectiveLeaderId === "cpo") {
+      const enhancement = await buildVisionEnhancementPrompt(workspacePath);
+      if (enhancement) systemPrompt += enhancement;
     }
 
     // ---------------------------------------------------------------------------
@@ -839,6 +846,19 @@ export async function sendUserMessage(
 
   // Save user message to DB (after ownership verified)
   await saveMessage(conversationId, "user", content);
+
+  // Create vision.md on first message if it doesn't exist (fire-and-forget)
+  const { data: senderUser } = await supabase()
+    .from("users")
+    .select("workspace_path")
+    .eq("id", userId)
+    .single();
+
+  if (senderUser?.workspace_path) {
+    tryCreateVision(senderUser.workspace_path, content).catch((err) => {
+      log.error({ err, userId }, "Failed to create initial vision.md");
+    });
+  }
 
   // Check for an in-memory session with a captured session_id
   const key = sessionKey(userId, conversationId);
