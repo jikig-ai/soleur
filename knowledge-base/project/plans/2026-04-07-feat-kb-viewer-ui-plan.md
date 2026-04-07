@@ -69,13 +69,13 @@ Extract shared markdown renderer and install new dependency. This phase unblocks
 
 **Tasks:**
 
-- [ ] Extract `MARKDOWN_COMPONENTS`, `REMARK_PLUGINS`, `DISALLOWED_ELEMENTS`, and `MarkdownContent` from `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx:319-394` into `apps/web-platform/components/ui/markdown-renderer.tsx`
-- [ ] Update chat page to import from the new shared component
-- [ ] Install `rehype-highlight` at app level: `cd apps/web-platform && bun add rehype-highlight` (use default import — 45KB total, selective registration not worth the config complexity)
-- [ ] Regenerate both lockfiles: `bun install` then `npm install` in `apps/web-platform/`
-- [ ] Extend `buildTree()` in `apps/web-platform/server/kb-reader.ts` to include `modifiedAt` (file stat `mtime`) in `TreeNode` for files
-- [ ] Add `modifiedAt?: string` (ISO 8601) to the `TreeNode` interface
-- [ ] Verify chat page still renders markdown correctly after extraction
+- [x] Extract `MARKDOWN_COMPONENTS`, `REMARK_PLUGINS`, `DISALLOWED_ELEMENTS`, and `MarkdownContent` from `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx:319-394` into `apps/web-platform/components/ui/markdown-renderer.tsx`
+- [x] Update chat page to import from the new shared component
+- [x] Install `rehype-highlight` at app level: `cd apps/web-platform && bun add rehype-highlight` (use default import — 45KB total, selective registration not worth the config complexity)
+- [x] Regenerate both lockfiles: `bun install` then `npm install` in `apps/web-platform/`
+- [x] Extend `buildTree()` in `apps/web-platform/server/kb-reader.ts` to include `modifiedAt` (file stat `mtime`) in `TreeNode` for files
+- [x] Add `modifiedAt?: string` (ISO 8601) to the `TreeNode` interface
+- [x] Verify chat page still renders markdown correctly after extraction
 
 **Files modified:**
 
@@ -94,15 +94,15 @@ Create the route-segment layout that handles desktop sidebar vs mobile separate 
 
 **Tasks:**
 
-- [ ] Create `apps/web-platform/app/(dashboard)/dashboard/kb/layout.tsx` — `"use client"` KB-specific layout wrapping tree + content
-- [ ] Layout fetches tree from `/api/kb/tree` on mount, stores in state
-- [ ] Desktop (>= 768px): renders tree sidebar (w-64) + content area side by side
-- [ ] Mobile (< 768px): conditionally shows tree OR content based on `usePathname()` (if path segments exist beyond `/dashboard/kb`, hide tree)
-- [ ] Pass tree data, expansion state, and loading/error states to children via React context (required — App Router injects children via `{children}`, cannot pass props through that boundary)
-- [ ] Handle workspace-not-ready (503) — show "Setting up your workspace" provisioning state, distinct from empty KB
-- [ ] Handle unauthorized (401) — redirect to login
-- [ ] React error boundary wrapping the content area (not the tree) to contain fetch failures without unmounting the sidebar
-- [ ] Loading skeleton while tree fetches
+- [x] Create `apps/web-platform/app/(dashboard)/dashboard/kb/layout.tsx` — `"use client"` KB-specific layout wrapping tree + content
+- [x] Layout fetches tree from `/api/kb/tree` on mount, stores in state
+- [x] Desktop (>= 768px): renders tree sidebar (w-64) + content area side by side
+- [x] Mobile (< 768px): conditionally shows tree OR content based on `usePathname()` (if path segments exist beyond `/dashboard/kb`, hide tree)
+- [x] Pass tree data, expansion state, and loading/error states to children via React context (required — App Router injects children via `{children}`, cannot pass props through that boundary)
+- [x] Handle workspace-not-ready (503) — show "Setting up your workspace" provisioning state, distinct from empty KB
+- [x] Handle unauthorized (401) — redirect to login
+- [x] React error boundary wrapping the content area (not the tree) to contain fetch failures without unmounting the sidebar
+- [x] Loading skeleton while tree fetches
 
 **Files created:**
 
@@ -118,14 +118,14 @@ Build the recursive file tree and the root page that displays it.
 
 **Tasks:**
 
-- [ ] Create `apps/web-platform/components/kb/file-tree.tsx` — accepts `TreeNode`, renders recursive collapsible tree with node rendering inline (no separate file-tree-node component — a tree node is a `<li>` with conditional rendering, not a reusable abstraction)
-- [ ] Implement expand/collapse with `Set<string>` tracking expanded directory paths (consumed from layout context)
-- [ ] File nodes are `<Link>` elements to `/dashboard/kb/<file.path>`
-- [ ] Directory nodes toggle expand state on click
-- [ ] Format `modifiedAt` as relative time ("2d ago", "5h ago", "just now") using lightweight formatter (no external dep — simple utility function)
-- [ ] Cap visual indent at 3 levels deep — deeper items still render but don't indent further (prevents off-screen names on mobile)
-- [ ] Replace `apps/web-platform/app/(dashboard)/dashboard/kb/page.tsx` — show file tree when KB has content, branded empty state when tree is empty
-- [ ] Empty state: Variant 2 copy — "Nothing Here Yet. One Message Changes That." / subtext / "Open a Chat" CTA linking to `/dashboard/chat/new`. Cormorant Garamond 500 headline, Inter 400 subtext, gold gradient CTA. Section label "KNOWLEDGE BASE" in Inter 600 12px gold all-caps.
+- [x] Create `apps/web-platform/components/kb/file-tree.tsx` — accepts `TreeNode`, renders recursive collapsible tree with node rendering inline (no separate file-tree-node component — a tree node is a `<li>` with conditional rendering, not a reusable abstraction)
+- [x] Implement expand/collapse with `Set<string>` tracking expanded directory paths (consumed from layout context)
+- [x] File nodes are `<Link>` elements to `/dashboard/kb/<file.path>`
+- [x] Directory nodes toggle expand state on click
+- [x] Format `modifiedAt` as relative time ("2d ago", "5h ago", "just now") using lightweight formatter (no external dep — simple utility function)
+- [x] Cap visual indent at 3 levels deep — deeper items still render but don't indent further (prevents off-screen names on mobile)
+- [x] Replace `apps/web-platform/app/(dashboard)/dashboard/kb/page.tsx` — show file tree when KB has content, branded empty state when tree is empty
+- [x] Empty state: Variant 2 copy — "Nothing Here Yet. One Message Changes That." / subtext / "Open a Chat" CTA linking to `/dashboard/chat/new`. Cormorant Garamond 500 headline, Inter 400 subtext, gold gradient CTA. Section label "KNOWLEDGE BASE" in Inter 600 12px gold all-caps.
 
 **Files created/modified:**
 
@@ -140,17 +140,17 @@ Build the content page that renders markdown files with syntax highlighting.
 
 **Tasks:**
 
-- [ ] Create `apps/web-platform/app/(dashboard)/dashboard/kb/[...path]/page.tsx` — catch-all route
-- [ ] Page extracts path from `params.path` (string array), joins with `/`, fetches from `/api/kb/content/<joined-path>`
-- [ ] Render content using shared `MarkdownRenderer` with rehype-highlight plugin added
-- [ ] Create `apps/web-platform/components/kb/kb-breadcrumb.tsx` — renders path segments as clickable links (each segment links to its parent directory or root)
-- [ ] Handle 404 (file not found) — display "File not found. This file may have been renamed or removed." with link back to tree
-- [ ] Handle directory deep links (e.g., `/dashboard/kb/product/`) — plain redirect to `/dashboard/kb`
-- [ ] Handle loading state — skeleton placeholder while content loads
-- [ ] Apply brand typography: Cormorant Garamond for rendered h1/h2, Inter for body, JetBrains Mono for code
-- [ ] Syntax highlighting theme: dark theme matching neutral-950 code blocks with amber-300 strings
-- [ ] Mobile back button — visible back arrow in content header (not just breadcrumb). Design in this phase, not deferred to polish
-- [ ] "Chat about this" — inline `<Link>` in content header navigating to `/dashboard/chat/new?msg=Tell me about the file at <kb-path>&leader=cto` (uses existing `?msg=` param from chat page). No separate component file — it's one link element
+- [x] Create `apps/web-platform/app/(dashboard)/dashboard/kb/[...path]/page.tsx` — catch-all route
+- [x] Page extracts path from `params.path` (string array), joins with `/`, fetches from `/api/kb/content/<joined-path>`
+- [x] Render content using shared `MarkdownRenderer` with rehype-highlight plugin added
+- [x] Create `apps/web-platform/components/kb/kb-breadcrumb.tsx` — renders path segments as clickable links (each segment links to its parent directory or root)
+- [x] Handle 404 (file not found) — display "File not found. This file may have been renamed or removed." with link back to tree
+- [x] Handle directory deep links (e.g., `/dashboard/kb/product/`) — plain redirect to `/dashboard/kb`
+- [x] Handle loading state — skeleton placeholder while content loads
+- [x] Apply brand typography: Cormorant Garamond for rendered h1/h2, Inter for body, JetBrains Mono for code
+- [x] Syntax highlighting theme: dark theme matching neutral-950 code blocks with amber-300 strings
+- [x] Mobile back button — visible back arrow in content header (not just breadcrumb). Design in this phase, not deferred to polish
+- [x] "Chat about this" — inline `<Link>` in content header navigating to `/dashboard/chat/new?msg=Tell me about the file at <kb-path>&leader=cto` (uses existing `?msg=` param from chat page). No separate component file — it's one link element
 
 **Files created:**
 
@@ -165,14 +165,14 @@ Build the search overlay with snippet results.
 
 **Tasks:**
 
-- [ ] Create `apps/web-platform/components/kb/search-overlay.tsx` — search input + results panel
-- [ ] Debounce input (300ms) before calling `/api/kb/search?q=`
-- [ ] Render results as cards: file path + up to 3 matching line snippets per file
-- [ ] Highlight search term within snippet text using the `highlight` offsets from the API
-- [ ] Click result navigates to `/dashboard/kb/<result.path>`
-- [ ] Empty results: "No results for '<query>'" message
-- [ ] Integrate search into KB layout — search bar above file tree on desktop, top of tree view on mobile
-- [ ] Search operates independently of tree state — clicking a result navigates directly to content view
+- [x] Create `apps/web-platform/components/kb/search-overlay.tsx` — search input + results panel
+- [x] Debounce input (300ms) before calling `/api/kb/search?q=`
+- [x] Render results as cards: file path + up to 3 matching line snippets per file
+- [x] Highlight search term within snippet text using the `highlight` offsets from the API
+- [x] Click result navigates to `/dashboard/kb/<result.path>`
+- [x] Empty results: "No results for '<query>'" message
+- [x] Integrate search into KB layout — search bar above file tree on desktop, top of tree view on mobile
+- [x] Search operates independently of tree state — clicking a result navigates directly to content view
 
 **Files created:**
 
@@ -206,29 +206,29 @@ Build the search overlay with snippet results.
 
 ### Functional Requirements
 
-- [ ] Sidebar displays KB file tree with collapsible directories
-- [ ] File tree shows file name + relative last-modified date
-- [ ] Clicking a file renders markdown with proper formatting and syntax highlighting
-- [ ] Search bar returns results with file path and matching line snippets
-- [ ] Empty state displays when KB has no artifacts
-- [ ] Mobile: file tree and content are separate views with back navigation
-- [ ] Deep links work: `/dashboard/kb/product/roadmap.md` renders directly
-- [ ] "Chat about this" button opens chat with file context
-- [ ] Breadcrumb navigation shows current file path
+- [x] Sidebar displays KB file tree with collapsible directories
+- [x] File tree shows file name + relative last-modified date
+- [x] Clicking a file renders markdown with proper formatting and syntax highlighting
+- [x] Search bar returns results with file path and matching line snippets
+- [x] Empty state displays when KB has no artifacts
+- [x] Mobile: file tree and content are separate views with back navigation
+- [x] Deep links work: `/dashboard/kb/product/roadmap.md` renders directly
+- [x] "Chat about this" button opens chat with file context
+- [x] Breadcrumb navigation shows current file path
 
 ### Non-Functional Requirements
 
-- [ ] Lighthouse mobile score > 80 (Performance, Accessibility, Best Practices)
-- [ ] Solar Forge brand compliance (Cormorant Garamond headings, dark + gold theme)
-- [ ] Works in PWA standalone mode with safe-area insets
-- [ ] No markdown component duplication between chat and KB
+- [x] Lighthouse mobile score > 80 (Performance, Accessibility, Best Practices)
+- [x] Solar Forge brand compliance (Cormorant Garamond headings, dark + gold theme)
+- [x] Works in PWA standalone mode with safe-area insets
+- [x] No markdown component duplication between chat and KB
 
 ### Quality Gates
 
-- [ ] TDD: failing tests before implementation for each phase
-- [ ] Shared markdown renderer extracted and chat page verified
-- [ ] Both lockfiles (bun.lock + package-lock.json) regenerated after dependency changes
-- [ ] Markdownlint clean on all changed .md files
+- [x] TDD: failing tests before implementation for each phase
+- [x] Shared markdown renderer extracted and chat page verified
+- [x] Both lockfiles (bun.lock + package-lock.json) regenerated after dependency changes
+- [x] Markdownlint clean on all changed .md files
 
 ## Test Scenarios
 
