@@ -21,6 +21,9 @@ last_updated: 2026-04-07
 | Better Stack | Better Stack | observability | 0.00 | free-tier | - | Uptime monitoring for app.soleur.ai/health (3-min interval) + status page at soleur-ai.betteruptime.com. Free tier: 10 monitors, 1 status page, email alerts. Upgrade trigger: first paying customer (custom domain, white-label, custom CSS) |
 | Buttondown | Buttondown | saas | 0.00 | free-tier | - | Newsletter platform. Free tier: 100 subscribers, custom sending domain, API access. Upgrade trigger: >100 subscribers ($9/mo Basic) |
 | Doppler | Doppler | secrets-mgmt | 0.00 | free-tier | - | Secrets management. Developer plan (free). Account: <ops@jikigai.com>. 6 configs: dev, dev_personal, ci, prd, prd_scheduled, prd_terraform. Upgrade triggers: team growth, audit logs |
+| LinkedIn | LinkedIn | social | 0.00 | active | - | Company page + personal profile for content distribution. Free tier API access via LinkedIn Marketing Developer Platform |
+| Bluesky | Bluesky | social | 0.00 | active | - | @soleur.ai account for content distribution. AT Protocol API (free, no tier limits) |
+| Resend | Resend | email | 0.00 | free-tier | - | Transactional email API. Free tier: 100 emails/day, 3K emails/mo. Upgrade trigger: volume exceeds free tier ($20/mo for 50K emails) |
 
 ## One-Time
 
