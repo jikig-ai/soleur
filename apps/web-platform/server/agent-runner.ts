@@ -160,8 +160,6 @@ async function getUserApiKey(userId: string): Promise<string> {
 async function getUserServiceTokens(
   userId: string,
 ): Promise<Record<string, string>> {
-  const LLM_PROVIDERS: ReadonlySet<string> = new Set(["anthropic", "bedrock", "vertex"]);
-
   const { data, error } = await supabase()
     .from("api_keys")
     .select("provider, encrypted_key, iv, auth_tag, key_version")
@@ -173,7 +171,8 @@ async function getUserServiceTokens(
   const tokens: Record<string, string> = {};
 
   for (const row of data) {
-    if (LLM_PROVIDERS.has(row.provider)) continue;
+    // Skip LLM providers (handled by getUserApiKey) and excluded providers
+    if (row.provider === "anthropic") continue;
     if (EXCLUDED_FROM_SERVICES_UI.has(row.provider as Provider)) continue;
 
     const config = PROVIDER_CONFIG[row.provider as Provider];

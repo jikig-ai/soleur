@@ -1,3 +1,5 @@
+import { PROVIDER_CONFIG } from "./providers";
+
 // ---------------------------------------------------------------------------
 // Agent subprocess environment isolation (CWE-526)
 //
@@ -31,6 +33,12 @@ const AGENT_ENV_OVERRIDES = Object.freeze({
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
 } as const);
 
+// Defense-in-depth: only env var names from PROVIDER_CONFIG are allowed
+// as service token keys. Prevents injection of LD_PRELOAD, NODE_OPTIONS, etc.
+const ALLOWED_SERVICE_ENV_VARS = new Set(
+  Object.values(PROVIDER_CONFIG).map((c) => c.envVar),
+);
+
 export function buildAgentEnv(
   apiKey: string,
   serviceTokens?: Record<string, string>,
@@ -40,17 +48,23 @@ export function buildAgentEnv(
     ...AGENT_ENV_OVERRIDES,
   };
 
-  // Inject third-party service tokens (env var names from PROVIDER_CONFIG)
-  if (serviceTokens) {
-    for (const [envVar, value] of Object.entries(serviceTokens)) {
-      env[envVar] = value;
-    }
-  }
-
+  // Copy allowlisted system vars from process.env first
   for (const key of AGENT_ENV_ALLOWLIST) {
     const value = process.env[key];
     if (value !== undefined) {
       env[key] = value;
+    }
+  }
+
+  // Inject third-party service tokens AFTER the allowlist loop.
+  // Service tokens take precedence over ambient process.env values,
+  // and the env var names are validated against ALLOWED_SERVICE_ENV_VARS
+  // to prevent injection of dangerous vars like LD_PRELOAD or NODE_OPTIONS.
+  if (serviceTokens) {
+    for (const [envVar, value] of Object.entries(serviceTokens)) {
+      if (ALLOWED_SERVICE_ENV_VARS.has(envVar)) {
+        env[envVar] = value;
+      }
     }
   }
 

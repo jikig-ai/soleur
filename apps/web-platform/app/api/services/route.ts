@@ -59,6 +59,13 @@ export async function POST(request: Request) {
   const provider = body.provider as string;
   const token: string = body.token.trim();
 
+  if (token.length > 4_096) {
+    return NextResponse.json(
+      { error: "Token exceeds maximum length" },
+      { status: 400 },
+    );
+  }
+
   if (!isValidServiceProvider(provider)) {
     return NextResponse.json(
       { error: "Unsupported provider" },
