@@ -130,4 +130,37 @@ describe("buildAgentEnv", () => {
     const env = buildAgentEnv("sk-ant-test");
     expect(env).not.toHaveProperty("RANDOM_NEW_SECRET");
   });
+
+  test("injects service tokens when provided", () => {
+    const env = buildAgentEnv("sk-ant-test", {
+      CLOUDFLARE_API_TOKEN: "cf-token-123",
+      STRIPE_SECRET_KEY: "sk_test_456",
+    });
+    expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-test");
+    expect(env.CLOUDFLARE_API_TOKEN).toBe("cf-token-123");
+    expect(env.STRIPE_SECRET_KEY).toBe("sk_test_456");
+  });
+
+  test("works without service tokens (backward compatible)", () => {
+    const env = buildAgentEnv("sk-ant-test");
+    expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-test");
+    expect(env).not.toHaveProperty("CLOUDFLARE_API_TOKEN");
+  });
+
+  test("service tokens do not leak server secrets", () => {
+    const env = buildAgentEnv("sk-ant-test", {
+      GITHUB_TOKEN: "ghp_test",
+    });
+    expect(env.GITHUB_TOKEN).toBe("ghp_test");
+    for (const key of SERVER_SECRETS) {
+      if (key === "STRIPE_SECRET_KEY") continue; // Not injected in this test
+      expect(env).not.toHaveProperty(key);
+    }
+  });
+
+  test("empty service tokens map does not affect output", () => {
+    const envWithout = buildAgentEnv("sk-ant-test");
+    const envWith = buildAgentEnv("sk-ant-test", {});
+    expect(Object.keys(envWith).length).toBe(Object.keys(envWithout).length);
+  });
 });

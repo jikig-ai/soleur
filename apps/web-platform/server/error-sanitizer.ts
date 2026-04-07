@@ -21,6 +21,12 @@ const KNOWN_SAFE_MESSAGES: Record<string, string> = {
     "Session resume failed. Falling back to conversation history.",
   "Rate limited: too many sessions":
     "Too many sessions. Please wait before starting a new session.",
+  "Token validation failed":
+    "The provided token could not be validated. Please check and try again.",
+  "Failed to store token":
+    "Unable to save the service token. Please try again.",
+  "Failed to disconnect service":
+    "Unable to remove the service connection. Please try again.",
 };
 
 export function sanitizeErrorForClient(err: unknown): string {

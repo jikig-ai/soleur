@@ -15,6 +15,8 @@ import { sanitizeErrorForClient } from "./error-sanitizer";
 import { isPathInWorkspace } from "./sandbox";
 import { UNVERIFIED_PARAM_TOOLS, extractToolPath, isFileTool, isSafeTool } from "./tool-path-checker";
 import { buildAgentEnv } from "./agent-env";
+import { PROVIDER_CONFIG, EXCLUDED_FROM_SERVICES_UI } from "./providers";
+import type { Provider } from "@/lib/types";
 import { createSandboxHook } from "./sandbox-hook";
 import { abortableReviewGate, validateSelection, type AgentSession } from "./review-gate";
 import { createChildLogger } from "./logger";
@@ -150,6 +152,64 @@ async function getUserApiKey(userId: string): Promise<string> {
   }
 
   return decryptKey(encrypted, iv, authTag, userId);
+}
+
+// ---------------------------------------------------------------------------
+// Third-party service token retrieval
+// ---------------------------------------------------------------------------
+async function getUserServiceTokens(
+  userId: string,
+): Promise<Record<string, string>> {
+  const { data, error } = await supabase()
+    .from("api_keys")
+    .select("provider, encrypted_key, iv, auth_tag, key_version")
+    .eq("user_id", userId)
+    .eq("is_valid", true);
+
+  if (error || !data) return {};
+
+  const tokens: Record<string, string> = {};
+
+  for (const row of data) {
+    // Skip LLM providers (handled by getUserApiKey) and excluded providers
+    if (row.provider === "anthropic") continue;
+    if (EXCLUDED_FROM_SERVICES_UI.has(row.provider as Provider)) continue;
+
+    const config = PROVIDER_CONFIG[row.provider as Provider];
+    if (!config) continue;
+
+    try {
+      const encrypted = Buffer.from(row.encrypted_key, "base64");
+      const iv = Buffer.from(row.iv, "base64");
+      const authTag = Buffer.from(row.auth_tag, "base64");
+
+      let plaintext: string;
+      if (row.key_version === 1) {
+        plaintext = decryptKeyLegacy(encrypted, iv, authTag);
+        // Lazy migration to v2
+        const reEncrypted = encryptKey(plaintext, userId);
+        await supabase()
+          .from("api_keys")
+          .update({
+            encrypted_key: reEncrypted.encrypted.toString("base64"),
+            iv: reEncrypted.iv.toString("base64"),
+            auth_tag: reEncrypted.tag.toString("base64"),
+            key_version: 2,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("user_id", userId)
+          .eq("provider", row.provider);
+      } else {
+        plaintext = decryptKey(encrypted, iv, authTag, userId);
+      }
+
+      tokens[config.envVar] = plaintext;
+    } catch (err) {
+      log.error({ err, provider: row.provider }, "Failed to decrypt service token");
+    }
+  }
+
+  return tokens;
 }
 
 // ---------------------------------------------------------------------------
@@ -305,8 +365,11 @@ export async function startAgentSession(
   activeSessions.set(key, session);
 
   try {
-    // Get user's decrypted API key
-    const apiKey = await getUserApiKey(userId);
+    // Get user's decrypted API key and service tokens
+    const [apiKey, serviceTokens] = await Promise.all([
+      getUserApiKey(userId),
+      getUserServiceTokens(userId),
+    ]);
 
     // Get leader config (default to CPO as general advisor if no leader specified)
     const effectiveLeaderId = leaderId ?? "cpo";
@@ -444,7 +507,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         maxTurns: 50,
         maxBudgetUsd: 5.0,
         systemPrompt,
-        env: buildAgentEnv(apiKey),
+        env: buildAgentEnv(apiKey, serviceTokens),
         disallowedTools: ["WebSearch", "WebFetch"],
         ...(mcpServersOption ? { mcpServers: mcpServersOption } : {}),
         ...(platformToolNames.length > 0 ? { allowedTools: platformToolNames } : {}),

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { encryptKey, validateAnthropicKey } from "@/server/byok";
+import { encryptKey } from "@/server/byok";
+import { validateToken } from "@/server/token-validators";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import logger from "@/server/logger";
 
@@ -30,7 +31,7 @@ export async function POST(request: Request) {
   const apiKey: string = body.key.trim();
 
   // Validate against Anthropic API
-  const valid = await validateAnthropicKey(apiKey);
+  const valid = await validateToken("anthropic", apiKey);
   if (!valid) {
     return NextResponse.json({ valid: false });
   }

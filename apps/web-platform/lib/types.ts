@@ -57,15 +57,22 @@ export interface User {
   created_at: string;
 }
 
+export type Provider =
+  | "anthropic" | "bedrock" | "vertex"
+  | "cloudflare" | "stripe" | "plausible" | "hetzner"
+  | "github" | "doppler" | "resend"
+  | "x" | "linkedin" | "bluesky" | "buttondown";
+
 export interface ApiKey {
   id: string;
   user_id: string;
   encrypted_key: string;
-  provider: "anthropic" | "bedrock" | "vertex";
+  provider: Provider;
   is_valid: boolean;
   validated_at: string | null;
   iv: string;
   auth_tag: string;
+  key_version: number;
   updated_at: string;
   created_at: string;
 }

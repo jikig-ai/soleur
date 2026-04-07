@@ -84,17 +84,3 @@ export function decryptKeyLegacy(
   return decipher.update(encrypted) + decipher.final("utf8");
 }
 
-export async function validateAnthropicKey(key: string): Promise<boolean> {
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/models", {
-      method: "GET",
-      headers: {
-        "x-api-key": key,
-        "anthropic-version": "2023-06-01",
-      },
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
