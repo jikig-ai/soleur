@@ -3,7 +3,7 @@ import { serverUrl } from "@/lib/supabase/service";
 async function checkSupabase(): Promise<boolean> {
   try {
     const response = await fetch(
-      `${serverUrl()}/rest/v1/`,
+      `${serverUrl()}/rest/v1/users?select=id&limit=1`,
       {
         headers: { apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "" },
         signal: AbortSignal.timeout(2000),
