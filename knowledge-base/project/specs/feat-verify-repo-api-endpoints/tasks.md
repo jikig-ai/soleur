@@ -4,19 +4,19 @@ Source plan: `knowledge-base/project/plans/2026-04-07-chore-verify-repo-api-endp
 
 ## Phase 0: Infrastructure Pre-Checks (No Auth Required)
 
-- [ ] 0.1 Verify `SUPABASE_URL` in Doppler prd: `doppler secrets get SUPABASE_URL -p soleur -c prd --plain`
-- [ ] 0.2 Verify direct Supabase REST API reachable: `curl -sf "$SUPABASE_URL/rest/v1/" -H "apikey: $ANON_KEY" -o /dev/null -w '%{http_code}'`
-- [ ] 0.3 Verify service role key works via direct URL: `curl -sf "$SUPABASE_URL/auth/v1/admin/users?per_page=1" -H "Authorization: Bearer $SERVICE_KEY" -H "apikey: $SERVICE_KEY" | jq '.users | length'`
+- [x] 0.1 Verify `SUPABASE_URL` in Doppler prd: `doppler secrets get SUPABASE_URL -p soleur -c prd --plain`
+- [x] 0.2 Verify direct Supabase REST API reachable: `curl -sf "$SUPABASE_URL/rest/v1/" -H "apikey: $ANON_KEY" -o /dev/null -w '%{http_code}'`
+- [x] 0.3 Verify service role key works via direct URL: `curl -sf "$SUPABASE_URL/auth/v1/admin/users?per_page=1" -H "Authorization: Bearer $SERVICE_KEY" -H "apikey: $SERVICE_KEY" | jq '.users | length'`
 
 ## Phase 1: Health Endpoint Check
 
-- [ ] 1.1 Curl `https://app.soleur.ai/health` and check full response (`status`, `version`, `supabase`)
-- [ ] 1.2 If `supabase: "error"`, investigate root cause:
-  - [ ] 1.2.1 Check Sentry for server-side Supabase errors (24h window)
-  - [ ] 1.2.2 Read-only SSH: `docker exec <container> printenv SUPABASE_URL`
-  - [ ] 1.2.3 If env var missing, trigger redeploy: `gh workflow run web-platform-release.yml`
-  - [ ] 1.2.4 Wait 5 minutes, re-check health
-- [ ] 1.3 Document health check result
+- [x] 1.1 Curl `https://app.soleur.ai/health` and check full response (`status`, `version`, `supabase`)
+- [x] 1.2 If `supabase: "error"`, investigate root cause:
+  - [x] 1.2.1 Check Sentry for server-side Supabase errors (24h window) — zero errors
+  - [x] 1.2.2 Read-only SSH: `docker exec <container> printenv SUPABASE_URL` — correctly set
+  - [x] 1.2.3 Root cause: health check uses anon key on `/rest/v1/` root (401), not a connectivity issue
+  - [x] 1.2.4 Fix: updated health.ts to use service role key with Authorization header
+- [x] 1.3 Document health check result
 
 ## Phase 2: Authenticated API Verification
 
