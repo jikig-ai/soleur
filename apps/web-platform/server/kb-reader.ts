@@ -97,10 +97,10 @@ async function collectMdFiles(
   }
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
+    if (entry.isDirectory() && !entry.isSymbolicLink()) {
       const nested = await collectMdFiles(fullPath, relativeTo);
       files.push(...nested);
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
+    } else if (entry.isFile() && !entry.isSymbolicLink() && entry.name.endsWith(".md")) {
       files.push(path.relative(relativeTo, fullPath));
     }
   }
@@ -125,14 +125,14 @@ export async function buildTree(kbRoot: string): Promise<TreeNode> {
 
   for (const entry of entries) {
     const fullPath = path.join(kbRoot, entry.name);
-    if (entry.isDirectory()) {
+    if (entry.isDirectory() && !entry.isSymbolicLink()) {
       const child = await buildTree(fullPath);
       child.name = entry.name;
       // Exclude empty directories
       if (child.children && child.children.length > 0) {
         dirs.push(child);
       }
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
+    } else if (entry.isFile() && !entry.isSymbolicLink() && entry.name.endsWith(".md")) {
       // Compute path relative to the top-level KB root
       const kbTopRoot = kbRoot.includes("knowledge-base")
         ? kbRoot.substring(
