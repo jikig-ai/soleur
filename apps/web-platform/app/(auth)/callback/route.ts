@@ -120,6 +120,19 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // If this was an identity linking attempt that failed before a code was issued
+  // (e.g., Supabase redirected back with ?error=... but no ?code=), redirect to
+  // connect-repo instead of dumping the user on the login page.
+  const isLinkAttempt = request.cookies.get("soleur_link_attempt")?.value === "1";
+  if (isLinkAttempt) {
+    const errorDesc = searchParams.get("error_description") ?? searchParams.get("error") ?? "Failed to link GitHub account";
+    const linkError = encodeURIComponent(errorDesc);
+    logger.warn({ origin, error: errorDesc }, "Identity linking failed — redirecting to connect-repo");
+    const response = NextResponse.redirect(`${origin}/connect-repo?link_error=${linkError}`);
+    response.cookies.set("soleur_link_attempt", "", { maxAge: 0, path: "/" });
+    return response;
+  }
+
   // Auth failed — redirect to login with error
   logger.error({ codePresent: !!code, origin }, "Auth failed — no code or exchange error");
   return NextResponse.redirect(`${origin}/login?error=auth_failed`);
