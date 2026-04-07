@@ -228,6 +228,9 @@ export async function searchKb(
   const escapedQuery = escapeRegex(query);
   const mdFiles = await collectMdFiles(kbRoot, kbRoot);
 
+  // Flat-parallel: every file is read concurrently via Promise.all, unlike collectMdFiles
+  // and buildTree which use tree-recursive parallelism (bounded by directory depth).
+  // For very large KBs (10,000+ files), this is the first bottleneck — apply p-limit here.
   const searchResults = await Promise.all(
     mdFiles.map(async (relativePath): Promise<SearchResult | null> => {
       const fullPath = path.join(kbRoot, relativePath);
@@ -240,6 +243,8 @@ export async function searchKb(
         return null;
       }
 
+      // Created per-callback to avoid lastIndex contention across concurrent callbacks.
+      // Do not hoist — RegExp with /g flag is stateful and shared instances would skip matches.
       const regex = new RegExp(escapedQuery, "gi");
       const lines = raw.split("\n");
       const matches: SearchMatch[] = [];
