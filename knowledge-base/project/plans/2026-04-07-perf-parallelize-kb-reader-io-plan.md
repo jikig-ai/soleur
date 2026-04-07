@@ -71,12 +71,12 @@ for (const relativePath of mdFiles) {
 
 ## Acceptance Criteria
 
-- [ ] Parallelize directory reads in `collectMdFiles` using `Promise.all` over directory entries
-- [ ] Parallelize recursive calls and `stat` calls in `buildTree` using `Promise.all` over directory entries
-- [ ] Parallelize file stat+read operations in `searchKb` using `Promise.all`
-- [ ] All 17 existing tests in `apps/web-platform/test/kb-reader.test.ts` pass unchanged
-- [ ] All 4 existing tests in `apps/web-platform/test/kb-security.test.ts` pass unchanged
-- [ ] No behavioral change: same output, same error handling, same sort order
+- [x] Parallelize directory reads in `collectMdFiles` using `Promise.all` over directory entries
+- [x] Parallelize recursive calls and `stat` calls in `buildTree` using `Promise.all` over directory entries
+- [x] Parallelize file stat+read operations in `searchKb` using `Promise.all`
+- [x] All 17 existing tests in `apps/web-platform/test/kb-reader.test.ts` pass unchanged
+- [x] All 4 existing tests in `apps/web-platform/test/kb-security.test.ts` pass unchanged
+- [x] No behavioral change: same output, same error handling, same sort order
 
 ## Test Scenarios
 
