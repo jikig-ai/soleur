@@ -142,9 +142,9 @@ export async function GET(request: Request) {
 }
 
 /** Build a redirect response that also deletes the state cookie. */
-function redirectWithDeletedCookie(path: string, request: Request): NextResponse {
-  const origin = new URL(request.url).origin;
-  const response = NextResponse.redirect(new URL(path, origin), 302);
+function redirectWithDeletedCookie(path: string, _request: Request): NextResponse {
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://app.soleur.ai";
+  const response = NextResponse.redirect(new URL(path, siteUrl), 302);
   response.cookies.set("soleur_github_resolve", "", {
     httpOnly: true,
     secure: true,
