@@ -279,7 +279,8 @@ describe("ChatPage", () => {
   });
 
   describe("ConversationContext from ?context= param", () => {
-    let fetchSpy: ReturnType<typeof vi.spyOn>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let fetchSpy: any;
 
     beforeEach(() => {
       fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
