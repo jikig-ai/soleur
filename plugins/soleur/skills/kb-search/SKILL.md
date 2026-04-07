@@ -9,9 +9,9 @@ Search the knowledge base across all domains. Returns title matches first (tier 
 
 ## Arguments
 
-#$ARGUMENTS
+<search_query> #$ARGUMENTS </search_query>
 
-If no arguments are provided, ask: "What would you like to search for in the knowledge base?"
+If the search query above is empty, ask: "What would you like to search for in the knowledge base?"
 
 ## Execution
 
