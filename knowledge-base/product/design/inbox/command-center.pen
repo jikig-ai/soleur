@@ -1,0 +1,2303 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "0d29x",
+      "x": 0,
+      "y": 0,
+      "name": "01 Command Center — Desktop Populated",
+      "width": 1440,
+      "height": 900,
+      "fill": "#0a0a0a",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "8y7Dc",
+          "name": "Header",
+          "width": "fill_container",
+          "height": 72,
+          "fill": "#00000000",
+          "padding": [
+            0,
+            56
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "XEKB7",
+              "name": "Page Title",
+              "fill": "#ffffff",
+              "content": "Command Center",
+              "fontFamily": "Inter",
+              "fontSize": 24,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "QcGrG",
+              "name": "User Avatar",
+              "width": 36,
+              "height": 36,
+              "fill": "#262626",
+              "cornerRadius": 18,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "a31qz",
+                  "fill": "#a3a3a3",
+                  "content": "JD",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "500"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "vyNwB",
+          "name": "Header Divider",
+          "width": "fill_container",
+          "height": 1,
+          "fill": "#262626"
+        },
+        {
+          "type": "frame",
+          "id": "IEyfH",
+          "name": "Filter Bar",
+          "width": "fill_container",
+          "height": 72,
+          "fill": "#00000000",
+          "gap": 12,
+          "padding": [
+            16,
+            56
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "l9JPt",
+              "name": "Status Filter",
+              "width": 200,
+              "height": 40,
+              "fill": "#00000000",
+              "cornerRadius": 6,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#404040"
+              },
+              "padding": [
+                0,
+                14
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "gHUAR",
+                  "fill": "#a3a3a3",
+                  "content": "All statuses",
+                  "fontFamily": "Inter",
+                  "fontSize": 14
+                },
+                {
+                  "type": "text",
+                  "id": "wVphv",
+                  "fill": "#737373",
+                  "content": "▾",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Pw4Oi",
+              "name": "Domain Filter",
+              "width": 180,
+              "height": 40,
+              "fill": "#00000000",
+              "cornerRadius": 6,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#404040"
+              },
+              "padding": [
+                0,
+                14
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Fs1IT",
+                  "fill": "#a3a3a3",
+                  "content": "All domains",
+                  "fontFamily": "Inter",
+                  "fontSize": 14
+                },
+                {
+                  "type": "text",
+                  "id": "7w0S0",
+                  "fill": "#737373",
+                  "content": "▾",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "gC3yg",
+              "name": "Spacer",
+              "width": "fill_container",
+              "height": 1,
+              "fill": "#00000000"
+            },
+            {
+              "type": "frame",
+              "id": "djtd0",
+              "name": "New Button",
+              "width": 110,
+              "height": 40,
+              "fill": "#d97706",
+              "cornerRadius": 6,
+              "gap": 6,
+              "padding": [
+                0,
+                20
+              ],
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "sY4VN",
+                  "fill": "#ffffff",
+                  "content": "+  New",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "8UcbR",
+          "name": "Conversation List",
+          "clip": true,
+          "width": "fill_container",
+          "height": "fill_container",
+          "fill": "#00000000",
+          "layout": "vertical",
+          "padding": [
+            0,
+            56
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "XILZt",
+              "name": "Row 1 — Needs Decision",
+              "width": "fill_container",
+              "height": 80,
+              "fill": "#eab3080f",
+              "stroke": {
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "#262626"
+              },
+              "gap": 16,
+              "padding": [
+                0,
+                24
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "lj8SX",
+                  "name": "Status Badge",
+                  "width": 160,
+                  "height": 28,
+                  "fill": "#eab3081f",
+                  "cornerRadius": 14,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#eab3084d"
+                  },
+                  "gap": 6,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "kxJuT",
+                      "fill": "#eab308",
+                      "width": 8,
+                      "height": 8
+                    },
+                    {
+                      "type": "text",
+                      "id": "G3YkW",
+                      "fill": "#eab308",
+                      "content": "Needs your decision",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "qu0xx",
+                  "name": "Content",
+                  "width": "fill_container",
+                  "fill": "#00000000",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "2er3Y",
+                      "name": "Title",
+                      "fill": "#ffffff",
+                      "content": "Review PR #1742: WebSocket validation and error logging",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "cp2lH",
+                      "name": "Snippet",
+                      "fill": "#737373",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "CTO wants to merge this PR but needs your approval on the breaking change to the WebSocket handshake...",
+                      "fontFamily": "Inter",
+                      "fontSize": 13
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "xZH2o",
+                  "name": "Leader Badge CTO",
+                  "width": 32,
+                  "height": 32,
+                  "fill": "#3b82f6",
+                  "cornerRadius": 6,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "EFXe6",
+                      "fill": "#ffffff",
+                      "content": "CT",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "700"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "QHPim",
+                  "name": "Timestamp",
+                  "fill": "#525252",
+                  "content": "2m ago",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "0lNsA",
+              "name": "Row 2 — Needs Decision",
+              "width": "fill_container",
+              "height": 80,
+              "fill": "#eab3080f",
+              "stroke": {
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "#262626"
+              },
+              "gap": 16,
+              "padding": [
+                0,
+                24
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "wPT7b",
+                  "name": "Status Badge",
+                  "width": 160,
+                  "height": 28,
+                  "fill": "#eab3081f",
+                  "cornerRadius": 14,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#eab3084d"
+                  },
+                  "gap": 6,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "9BIwh",
+                      "fill": "#eab308",
+                      "width": 8,
+                      "height": 8
+                    },
+                    {
+                      "type": "text",
+                      "id": "1tiB1",
+                      "fill": "#eab308",
+                      "content": "Needs your decision",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "cWYXD",
+                  "name": "Content",
+                  "width": "fill_container",
+                  "fill": "#00000000",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "VoMJG",
+                      "name": "Title",
+                      "fill": "#ffffff",
+                      "content": "Blog post draft: \"Why Solo Founders Need an AI C-Suite\"",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "5gKJ4",
+                      "name": "Snippet",
+                      "fill": "#737373",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "CMO drafted a 1,200-word post. Needs your sign-off on the tone and the pricing mention in paragraph 3...",
+                      "fontFamily": "Inter",
+                      "fontSize": 13
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "klgd3",
+                  "name": "Leader Badge CMO",
+                  "width": 32,
+                  "height": 32,
+                  "fill": "#ec4899",
+                  "cornerRadius": 6,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ci0p5",
+                      "fill": "#ffffff",
+                      "content": "CM",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "700"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "GbOec",
+                  "name": "Timestamp",
+                  "fill": "#525252",
+                  "content": "15m ago",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "VbCQ5",
+              "name": "Row 3 — In Progress",
+              "width": "fill_container",
+              "height": 80,
+              "fill": "#00000000",
+              "stroke": {
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "#262626"
+              },
+              "gap": 16,
+              "padding": [
+                0,
+                24
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "3gSVh",
+                  "name": "Status Badge",
+                  "width": 110,
+                  "height": 28,
+                  "fill": "#22c55e14",
+                  "cornerRadius": 14,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#22c55e40"
+                  },
+                  "gap": 6,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "Mq4nC",
+                      "fill": "#22c55e",
+                      "width": 8,
+                      "height": 8
+                    },
+                    {
+                      "type": "text",
+                      "id": "NZxGM",
+                      "fill": "#22c55e",
+                      "content": "In progress",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "lggkL",
+                  "name": "Content",
+                  "width": "fill_container",
+                  "fill": "#00000000",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "qsK0k",
+                      "name": "Title",
+                      "fill": "#ffffff",
+                      "content": "Deploy documentation site to GitHub Pages",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "NzFWs",
+                      "name": "Snippet",
+                      "fill": "#737373",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Running Eleventy build, validating component counts. Currently at step 3 of 5...",
+                      "fontFamily": "Inter",
+                      "fontSize": 13
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "53wOl",
+                  "name": "Leader Badge CTO",
+                  "width": 32,
+                  "height": 32,
+                  "fill": "#3b82f6",
+                  "cornerRadius": 6,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "NxTbK",
+                      "fill": "#ffffff",
+                      "content": "CT",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "700"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "7LgzJ",
+                  "name": "Timestamp",
+                  "fill": "#525252",
+                  "content": "1h ago",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "eZGJu",
+              "name": "Row 4 — Needs Attention",
+              "width": "fill_container",
+              "height": 80,
+              "fill": "#00000000",
+              "stroke": {
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "#262626"
+              },
+              "gap": 16,
+              "padding": [
+                0,
+                24
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "XdKoo",
+                  "name": "Status Badge",
+                  "width": 135,
+                  "height": 28,
+                  "fill": "#ef444414",
+                  "cornerRadius": 14,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#ef444440"
+                  },
+                  "gap": 6,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "LPHxf",
+                      "fill": "#ef4444",
+                      "width": 8,
+                      "height": 8
+                    },
+                    {
+                      "type": "text",
+                      "id": "yer1D",
+                      "fill": "#ef4444",
+                      "content": "Needs attention",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Tgyfx",
+                  "name": "Content",
+                  "width": "fill_container",
+                  "fill": "#00000000",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "WCkuc",
+                      "name": "Title",
+                      "fill": "#ffffff",
+                      "content": "Set up Stripe webhooks for subscription billing",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "2k2FX",
+                      "name": "Snippet",
+                      "fill": "#737373",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Agent crashed during webhook endpoint configuration. Error: connection timeout to Stripe API...",
+                      "fontFamily": "Inter",
+                      "fontSize": 13
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "M7c4r",
+                  "name": "Leader Badge CFO",
+                  "width": 32,
+                  "height": 32,
+                  "fill": "#22c55e",
+                  "cornerRadius": 6,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "uPspn",
+                      "fill": "#ffffff",
+                      "content": "CF",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "700"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "dT42b",
+                  "name": "Timestamp",
+                  "fill": "#525252",
+                  "content": "3h ago",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "g9yLE",
+              "name": "Row 5 — Done",
+              "width": "fill_container",
+              "height": 80,
+              "fill": "#00000000",
+              "stroke": {
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "#262626"
+              },
+              "gap": 16,
+              "padding": [
+                0,
+                24
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "njOtm",
+                  "name": "Status Badge",
+                  "width": 80,
+                  "height": 28,
+                  "fill": "#73737314",
+                  "cornerRadius": 14,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#73737333"
+                  },
+                  "gap": 6,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "v74mh",
+                      "fill": "#737373",
+                      "width": 8,
+                      "height": 8
+                    },
+                    {
+                      "type": "text",
+                      "id": "RxZeg",
+                      "fill": "#737373",
+                      "content": "Done",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "mHVFv",
+                  "name": "Content",
+                  "width": "fill_container",
+                  "fill": "#00000000",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "YzjRp",
+                      "name": "Title",
+                      "fill": "#a3a3a3",
+                      "content": "Draft privacy policy for GDPR compliance",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "Ke968",
+                      "name": "Snippet",
+                      "fill": "#525252",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "CLO completed the privacy policy draft. Document saved to knowledge-base/legal/privacy-policy.md...",
+                      "fontFamily": "Inter",
+                      "fontSize": 13
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "C0oY2",
+                  "name": "Leader Badge CLO",
+                  "width": 32,
+                  "height": 32,
+                  "fill": "#ef4444",
+                  "cornerRadius": 6,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "lLCUn",
+                      "fill": "#ffffff",
+                      "content": "CL",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "700"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "ScEmK",
+                  "name": "Timestamp",
+                  "fill": "#525252",
+                  "content": "Yesterday",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "b4ion",
+              "name": "Row 6 — Done",
+              "width": "fill_container",
+              "height": 80,
+              "fill": "#00000000",
+              "stroke": {
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "#262626"
+              },
+              "gap": 16,
+              "padding": [
+                0,
+                24
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "OWDAK",
+                  "name": "Status Badge",
+                  "width": 80,
+                  "height": 28,
+                  "fill": "#73737314",
+                  "cornerRadius": 14,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#73737333"
+                  },
+                  "gap": 6,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "On7Tw",
+                      "fill": "#737373",
+                      "width": 8,
+                      "height": 8
+                    },
+                    {
+                      "type": "text",
+                      "id": "MJeWa",
+                      "fill": "#737373",
+                      "content": "Done",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "xh7mm",
+                  "name": "Content",
+                  "width": "fill_container",
+                  "fill": "#00000000",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "iyIh2",
+                      "name": "Title",
+                      "fill": "#a3a3a3",
+                      "content": "Competitive analysis: Cursor vs Windsurf vs Claude Code",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "mhJ5Q",
+                      "name": "Snippet",
+                      "fill": "#525252",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "CPO completed the analysis. 3 key differentiators identified. Report in knowledge-base/product/...",
+                      "fontFamily": "Inter",
+                      "fontSize": 13
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "ExaXI",
+                  "name": "Leader Badge CPO",
+                  "width": 32,
+                  "height": 32,
+                  "fill": "#a855f7",
+                  "cornerRadius": 6,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "7IPnS",
+                      "fill": "#ffffff",
+                      "content": "CP",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "700"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "OcMMO",
+                  "name": "Timestamp",
+                  "fill": "#525252",
+                  "content": "2d ago",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "UqiaM",
+      "x": 1540,
+      "y": 0,
+      "name": "02 Command Center — Mobile Populated",
+      "width": 375,
+      "height": 812,
+      "fill": "#0a0a0a",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "CJpqY",
+          "name": "Header",
+          "width": "fill_container",
+          "height": 56,
+          "fill": "#00000000",
+          "padding": [
+            0,
+            16
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "7aOSS",
+              "fill": "#ffffff",
+              "content": "Command Center",
+              "fontFamily": "Inter",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "cKpKD",
+              "name": "Avatar",
+              "width": 32,
+              "height": 32,
+              "fill": "#262626",
+              "cornerRadius": 16,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Ndln6",
+                  "fill": "#a3a3a3",
+                  "content": "JD",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "500"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "RAAQW",
+          "name": "Divider",
+          "width": "fill_container",
+          "height": 1,
+          "fill": "#262626"
+        },
+        {
+          "type": "frame",
+          "id": "7dpM1",
+          "name": "Filter Bar",
+          "width": "fill_container",
+          "fill": "#00000000",
+          "layout": "vertical",
+          "gap": 8,
+          "padding": [
+            12,
+            16
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "ABSkb",
+              "name": "Filter Row",
+              "width": "fill_container",
+              "height": 36,
+              "fill": "#00000000",
+              "gap": 8,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "4oawi",
+                  "name": "Status Filter",
+                  "width": "fill_container",
+                  "height": 36,
+                  "fill": "#00000000",
+                  "cornerRadius": 6,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#404040"
+                  },
+                  "padding": [
+                    0,
+                    10
+                  ],
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "jiAEW",
+                      "fill": "#a3a3a3",
+                      "content": "All statuses",
+                      "fontFamily": "Inter",
+                      "fontSize": 13
+                    },
+                    {
+                      "type": "text",
+                      "id": "D09TE",
+                      "fill": "#737373",
+                      "content": "▾",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "SOT33",
+                  "name": "Domain Filter",
+                  "width": "fill_container",
+                  "height": 36,
+                  "fill": "#00000000",
+                  "cornerRadius": 6,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#404040"
+                  },
+                  "padding": [
+                    0,
+                    10
+                  ],
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "u7a6G",
+                      "fill": "#a3a3a3",
+                      "content": "All domains",
+                      "fontFamily": "Inter",
+                      "fontSize": 13
+                    },
+                    {
+                      "type": "text",
+                      "id": "6O2Yk",
+                      "fill": "#737373",
+                      "content": "▾",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "4r1t4",
+              "name": "New Button",
+              "width": "fill_container",
+              "height": 44,
+              "fill": "#d97706",
+              "cornerRadius": 6,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "RrZYY",
+                  "fill": "#ffffff",
+                  "content": "+  New conversation",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "7bEBR",
+          "name": "Conversation List",
+          "clip": true,
+          "width": "fill_container",
+          "height": "fill_container",
+          "fill": "#00000000",
+          "layout": "vertical",
+          "children": [
+            {
+              "type": "frame",
+              "id": "V6O7v",
+              "name": "Row 1 — Needs Decision",
+              "width": "fill_container",
+              "fill": "#eab3080f",
+              "stroke": {
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "#262626"
+              },
+              "layout": "vertical",
+              "gap": 8,
+              "padding": [
+                12,
+                16
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "Emtyt",
+                  "name": "Top Row",
+                  "width": "fill_container",
+                  "fill": "#00000000",
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "eGWGe",
+                      "name": "Status Badge",
+                      "width": 150,
+                      "height": 24,
+                      "fill": "#eab3081f",
+                      "cornerRadius": 12,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#eab3084d"
+                      },
+                      "gap": 5,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "d1WGr",
+                          "fill": "#eab308",
+                          "width": 6,
+                          "height": 6
+                        },
+                        {
+                          "type": "text",
+                          "id": "1AFb7",
+                          "fill": "#eab308",
+                          "content": "Needs your decision",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "YIT9M",
+                      "fill": "#525252",
+                      "content": "2m ago",
+                      "fontFamily": "Inter",
+                      "fontSize": 11
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "7myWS",
+                  "name": "Title",
+                  "fill": "#ffffff",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Review PR #1742: WebSocket validation and error logging",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "chy4I",
+                  "name": "Snippet",
+                  "fill": "#737373",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "CTO wants to merge this PR but needs your approval on the breaking change...",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                },
+                {
+                  "type": "frame",
+                  "id": "D0dIR",
+                  "name": "Bottom Row",
+                  "width": "fill_container",
+                  "fill": "#00000000",
+                  "gap": 6,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "WEU4a",
+                      "name": "Leader Badge",
+                      "width": 24,
+                      "height": 24,
+                      "fill": "#3b82f6",
+                      "cornerRadius": 4,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "R0peZ",
+                          "fill": "#ffffff",
+                          "content": "CT",
+                          "fontFamily": "Inter",
+                          "fontSize": 9,
+                          "fontWeight": "700"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "yGbrF",
+                      "fill": "#a3a3a3",
+                      "content": "CTO",
+                      "fontFamily": "Inter",
+                      "fontSize": 11
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ZKV8S",
+              "name": "Row 2 — Needs Decision",
+              "width": "fill_container",
+              "fill": "#eab3080f",
+              "stroke": {
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "#262626"
+              },
+              "layout": "vertical",
+              "gap": 8,
+              "padding": [
+                12,
+                16
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "iKIpL",
+                  "name": "Top Row",
+                  "width": "fill_container",
+                  "fill": "#00000000",
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "7DbkE",
+                      "name": "Status Badge",
+                      "width": 150,
+                      "height": 24,
+                      "fill": "#eab3081f",
+                      "cornerRadius": 12,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#eab3084d"
+                      },
+                      "gap": 5,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "Q9JbV",
+                          "fill": "#eab308",
+                          "width": 6,
+                          "height": 6
+                        },
+                        {
+                          "type": "text",
+                          "id": "QANGS",
+                          "fill": "#eab308",
+                          "content": "Needs your decision",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "qash9",
+                      "fill": "#525252",
+                      "content": "15m ago",
+                      "fontFamily": "Inter",
+                      "fontSize": 11
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "1H7cH",
+                  "name": "Title",
+                  "fill": "#ffffff",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Blog post draft: \"Why Solo Founders Need an AI C-Suite\"",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "dss2E",
+                  "name": "Snippet",
+                  "fill": "#737373",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "CMO drafted a 1,200-word post. Needs your sign-off on the tone...",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                },
+                {
+                  "type": "frame",
+                  "id": "tdl6Z",
+                  "name": "Bottom Row",
+                  "width": "fill_container",
+                  "fill": "#00000000",
+                  "gap": 6,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "cNC7t",
+                      "name": "Leader Badge",
+                      "width": 24,
+                      "height": 24,
+                      "fill": "#ec4899",
+                      "cornerRadius": 4,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Iem2m",
+                          "fill": "#ffffff",
+                          "content": "CM",
+                          "fontFamily": "Inter",
+                          "fontSize": 9,
+                          "fontWeight": "700"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "QuiSJ",
+                      "fill": "#a3a3a3",
+                      "content": "CMO",
+                      "fontFamily": "Inter",
+                      "fontSize": 11
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "jgDxn",
+              "name": "Row 3 — In Progress",
+              "width": "fill_container",
+              "fill": "#00000000",
+              "stroke": {
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "#262626"
+              },
+              "layout": "vertical",
+              "gap": 8,
+              "padding": [
+                12,
+                16
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "UQZUq",
+                  "name": "Top Row",
+                  "width": "fill_container",
+                  "fill": "#00000000",
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "yhClw",
+                      "name": "Status Badge",
+                      "width": 100,
+                      "height": 24,
+                      "fill": "#22c55e14",
+                      "cornerRadius": 12,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#22c55e40"
+                      },
+                      "gap": 5,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "4hX3C",
+                          "fill": "#22c55e",
+                          "width": 6,
+                          "height": 6
+                        },
+                        {
+                          "type": "text",
+                          "id": "rQbSV",
+                          "fill": "#22c55e",
+                          "content": "In progress",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "PPD0E",
+                      "fill": "#525252",
+                      "content": "1h ago",
+                      "fontFamily": "Inter",
+                      "fontSize": 11
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "OdZCd",
+                  "name": "Title",
+                  "fill": "#ffffff",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Deploy documentation site to GitHub Pages",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "gTfUT",
+                  "name": "Snippet",
+                  "fill": "#737373",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Running Eleventy build, validating component counts...",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                },
+                {
+                  "type": "frame",
+                  "id": "SIL6k",
+                  "name": "Bottom Row",
+                  "width": "fill_container",
+                  "fill": "#00000000",
+                  "gap": 6,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "1evta",
+                      "name": "Leader Badge",
+                      "width": 24,
+                      "height": 24,
+                      "fill": "#3b82f6",
+                      "cornerRadius": 4,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "vXluw",
+                          "fill": "#ffffff",
+                          "content": "CT",
+                          "fontFamily": "Inter",
+                          "fontSize": 9,
+                          "fontWeight": "700"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "KUJtC",
+                      "fill": "#a3a3a3",
+                      "content": "CTO",
+                      "fontFamily": "Inter",
+                      "fontSize": 11
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "IDQj7",
+              "name": "Row 4 — Needs Attention",
+              "width": "fill_container",
+              "fill": "#00000000",
+              "stroke": {
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "#262626"
+              },
+              "layout": "vertical",
+              "gap": 8,
+              "padding": [
+                12,
+                16
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "V1vfS",
+                  "name": "Top Row",
+                  "width": "fill_container",
+                  "fill": "#00000000",
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "YqCKf",
+                      "name": "Status Badge",
+                      "width": 120,
+                      "height": 24,
+                      "fill": "#ef444414",
+                      "cornerRadius": 12,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#ef444440"
+                      },
+                      "gap": 5,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "XMkIA",
+                          "fill": "#ef4444",
+                          "width": 6,
+                          "height": 6
+                        },
+                        {
+                          "type": "text",
+                          "id": "9iyzA",
+                          "fill": "#ef4444",
+                          "content": "Needs attention",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "nEaFz",
+                      "fill": "#525252",
+                      "content": "3h ago",
+                      "fontFamily": "Inter",
+                      "fontSize": 11
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "hmHPY",
+                  "name": "Title",
+                  "fill": "#ffffff",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Set up Stripe webhooks for subscription billing",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "cPYk7",
+                  "name": "Snippet",
+                  "fill": "#737373",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Agent crashed during webhook endpoint configuration...",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                },
+                {
+                  "type": "frame",
+                  "id": "ruYpL",
+                  "name": "Bottom Row",
+                  "width": "fill_container",
+                  "fill": "#00000000",
+                  "gap": 6,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "F5YZo",
+                      "name": "Leader Badge",
+                      "width": 24,
+                      "height": 24,
+                      "fill": "#22c55e",
+                      "cornerRadius": 4,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "N1e95",
+                          "fill": "#ffffff",
+                          "content": "CF",
+                          "fontFamily": "Inter",
+                          "fontSize": 9,
+                          "fontWeight": "700"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "Wuyxp",
+                      "fill": "#a3a3a3",
+                      "content": "CFO",
+                      "fontFamily": "Inter",
+                      "fontSize": 11
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "qczF6",
+      "x": 2015,
+      "y": 0,
+      "name": "03 Command Center — Empty State",
+      "width": 1440,
+      "height": 900,
+      "fill": "#0a0a0a",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "0F50D",
+          "name": "Header",
+          "width": "fill_container",
+          "height": 72,
+          "fill": "#00000000",
+          "padding": [
+            0,
+            56
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "znvBW",
+              "fill": "#ffffff",
+              "content": "Command Center",
+              "fontFamily": "Inter",
+              "fontSize": 24,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "4dU3R",
+              "name": "Avatar",
+              "width": 36,
+              "height": 36,
+              "fill": "#262626",
+              "cornerRadius": 18,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "I4zV2",
+                  "fill": "#a3a3a3",
+                  "content": "JD",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "500"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "0ltWt",
+          "name": "Divider",
+          "width": "fill_container",
+          "height": 1,
+          "fill": "#262626"
+        },
+        {
+          "type": "frame",
+          "id": "wto6o",
+          "name": "Empty Content",
+          "width": "fill_container",
+          "height": "fill_container",
+          "fill": "#00000000",
+          "layout": "vertical",
+          "gap": 24,
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "br5M0",
+              "name": "Empty Icon",
+              "width": 80,
+              "height": 80,
+              "fill": "#171717",
+              "cornerRadius": 40,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#262626"
+              },
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "9nytz",
+                  "width": 36,
+                  "height": 36,
+                  "iconFontName": "inbox",
+                  "iconFontFamily": "lucide",
+                  "fill": "#525252"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "GnfiF",
+              "fill": "#a3a3a3",
+              "content": "No conversations yet",
+              "fontFamily": "Inter",
+              "fontSize": 20,
+              "fontWeight": "500"
+            },
+            {
+              "type": "text",
+              "id": "MjtSQ",
+              "fill": "#525252",
+              "content": "Start a conversation with your AI team to get things done.",
+              "fontFamily": "Inter",
+              "fontSize": 14
+            },
+            {
+              "type": "frame",
+              "id": "P7qbR",
+              "name": "New Button",
+              "width": 200,
+              "height": 48,
+              "fill": "#d97706",
+              "cornerRadius": 8,
+              "gap": 8,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "pR5GA",
+                  "fill": "#ffffff",
+                  "content": "+  New conversation",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "COEGu",
+      "x": 3555,
+      "y": 0,
+      "name": "04 Command Center — Filtered State",
+      "width": 1440,
+      "height": 900,
+      "fill": "#0a0a0a",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "qf4YF",
+          "name": "Header",
+          "width": "fill_container",
+          "height": 72,
+          "fill": "#00000000",
+          "padding": [
+            0,
+            56
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "rXHnK",
+              "fill": "#ffffff",
+              "content": "Command Center",
+              "fontFamily": "Inter",
+              "fontSize": 24,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "I1qiD",
+              "name": "Avatar",
+              "width": 36,
+              "height": 36,
+              "fill": "#262626",
+              "cornerRadius": 18,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "WlVHw",
+                  "fill": "#a3a3a3",
+                  "content": "JD",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "500"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "APnjb",
+          "name": "Divider",
+          "width": "fill_container",
+          "height": 1,
+          "fill": "#262626"
+        },
+        {
+          "type": "frame",
+          "id": "E9aFk",
+          "name": "Filter Bar",
+          "width": "fill_container",
+          "height": 72,
+          "fill": "#00000000",
+          "gap": 12,
+          "padding": [
+            16,
+            56
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "HiDKt",
+              "name": "Status Filter - Active",
+              "width": 200,
+              "height": 40,
+              "fill": "#eab30814",
+              "cornerRadius": 6,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#d97706"
+              },
+              "padding": [
+                0,
+                14
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "VjC4F",
+                  "fill": "#f59e0b",
+                  "content": "Needs your decision",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "wzEnT",
+                  "fill": "#f59e0b",
+                  "content": "▾",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "wZ2nd",
+              "name": "Domain Filter",
+              "width": 180,
+              "height": 40,
+              "fill": "#00000000",
+              "cornerRadius": 6,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#404040"
+              },
+              "padding": [
+                0,
+                14
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "n7eZ4",
+                  "fill": "#a3a3a3",
+                  "content": "All domains",
+                  "fontFamily": "Inter",
+                  "fontSize": 14
+                },
+                {
+                  "type": "text",
+                  "id": "T7Iia",
+                  "fill": "#737373",
+                  "content": "▾",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "HxxuH",
+              "name": "Result Count",
+              "height": 28,
+              "fill": "#eab3081a",
+              "cornerRadius": 14,
+              "padding": [
+                0,
+                12
+              ],
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "rYqVt",
+                  "fill": "#f59e0b",
+                  "content": "2 results",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ZKVG6",
+              "name": "Spacer",
+              "width": "fill_container",
+              "height": 1,
+              "fill": "#00000000"
+            },
+            {
+              "type": "frame",
+              "id": "ptt3U",
+              "name": "New Button",
+              "width": 110,
+              "height": 40,
+              "fill": "#d97706",
+              "cornerRadius": 6,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "SA6mJ",
+                  "fill": "#ffffff",
+                  "content": "+  New",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "RRQ0U",
+          "name": "Filtered List",
+          "clip": true,
+          "width": "fill_container",
+          "height": "fill_container",
+          "fill": "#00000000",
+          "layout": "vertical",
+          "padding": [
+            0,
+            56
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "uaVWX",
+              "name": "Row 1 — Needs Decision",
+              "width": "fill_container",
+              "height": 80,
+              "fill": "#eab3080f",
+              "stroke": {
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "#262626"
+              },
+              "gap": 16,
+              "padding": [
+                0,
+                24
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "DvffS",
+                  "name": "Status Badge",
+                  "width": 160,
+                  "height": 28,
+                  "fill": "#eab3081f",
+                  "cornerRadius": 14,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#eab3084d"
+                  },
+                  "gap": 6,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "hQOcJ",
+                      "fill": "#eab308",
+                      "width": 8,
+                      "height": 8
+                    },
+                    {
+                      "type": "text",
+                      "id": "DEve9",
+                      "fill": "#eab308",
+                      "content": "Needs your decision",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "SWgwi",
+                  "name": "Content",
+                  "width": "fill_container",
+                  "fill": "#00000000",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "mKrmI",
+                      "name": "Title",
+                      "fill": "#ffffff",
+                      "content": "Review PR #1742: WebSocket validation and error logging",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "40e3J",
+                      "name": "Snippet",
+                      "fill": "#737373",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "CTO wants to merge this PR but needs your approval on the breaking change to the WebSocket handshake...",
+                      "fontFamily": "Inter",
+                      "fontSize": 13
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "fL7l7",
+                  "name": "Leader Badge CTO",
+                  "width": 32,
+                  "height": 32,
+                  "fill": "#3b82f6",
+                  "cornerRadius": 6,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "9eEEe",
+                      "fill": "#ffffff",
+                      "content": "CT",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "700"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "EOou6",
+                  "name": "Timestamp",
+                  "fill": "#525252",
+                  "content": "2m ago",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "MB7rb",
+              "name": "Row 2 — Needs Decision",
+              "width": "fill_container",
+              "height": 80,
+              "fill": "#eab3080f",
+              "stroke": {
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "#262626"
+              },
+              "gap": 16,
+              "padding": [
+                0,
+                24
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "N8Pdk",
+                  "name": "Status Badge",
+                  "width": 160,
+                  "height": 28,
+                  "fill": "#eab3081f",
+                  "cornerRadius": 14,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#eab3084d"
+                  },
+                  "gap": 6,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "go8qm",
+                      "fill": "#eab308",
+                      "width": 8,
+                      "height": 8
+                    },
+                    {
+                      "type": "text",
+                      "id": "Q1Prl",
+                      "fill": "#eab308",
+                      "content": "Needs your decision",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "KoNBC",
+                  "name": "Content",
+                  "width": "fill_container",
+                  "fill": "#00000000",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "vMEEZ",
+                      "name": "Title",
+                      "fill": "#ffffff",
+                      "content": "Blog post draft: \"Why Solo Founders Need an AI C-Suite\"",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "y6xFm",
+                      "name": "Snippet",
+                      "fill": "#737373",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "CMO drafted a 1,200-word post. Needs your sign-off on the tone and the pricing mention in paragraph 3...",
+                      "fontFamily": "Inter",
+                      "fontSize": 13
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "5ftfL",
+                  "name": "Leader Badge CMO",
+                  "width": 32,
+                  "height": 32,
+                  "fill": "#ec4899",
+                  "cornerRadius": 6,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "6lP5x",
+                      "fill": "#ffffff",
+                      "content": "CM",
+                      "fontFamily": "Inter",
+                      "fontSize": 11,
+                      "fontWeight": "700"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "UlArN",
+                  "name": "Timestamp",
+                  "fill": "#525252",
+                  "content": "15m ago",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
