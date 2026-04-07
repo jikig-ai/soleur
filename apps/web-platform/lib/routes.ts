@@ -12,4 +12,8 @@ export const PUBLIC_PATHS = [
 ];
 
 /** Auth required, but T&C check skipped (user must reach these to accept terms) */
-export const TC_EXEMPT_PATHS = ["/accept-terms", "/api/accept-terms"];
+export const TC_EXEMPT_PATHS = [
+  "/accept-terms",
+  "/api/accept-terms",
+  "/api/auth/github-resolve/callback",
+];

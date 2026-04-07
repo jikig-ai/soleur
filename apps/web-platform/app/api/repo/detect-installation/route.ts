@@ -45,7 +45,7 @@ export async function POST(request: Request) {
   // If installation is already stored, just return repos
   const { data: userData } = await serviceClient
     .from("users")
-    .select("github_installation_id")
+    .select("github_installation_id, github_username")
     .eq("id", user.id)
     .single();
 
@@ -86,6 +86,11 @@ export async function POST(request: Request) {
       { err, userId: user.id },
       "Failed to resolve GitHub identity for detection",
     );
+  }
+
+  // Fallback: use stored github_username for email-only users
+  if (!githubLogin) {
+    githubLogin = userData?.github_username ?? undefined;
   }
 
   if (!githubLogin) {

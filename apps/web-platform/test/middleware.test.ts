@@ -44,6 +44,11 @@ describe("middleware path routing", () => {
       expect(isTcExemptPath("/api/accept-terms")).toBe(true);
       expect(isPublicPath("/api/accept-terms")).toBe(false);
     });
+
+    test("/api/auth/github-resolve/callback requires auth but skips T&C check", () => {
+      expect(isTcExemptPath("/api/auth/github-resolve/callback")).toBe(true);
+      expect(isPublicPath("/api/auth/github-resolve/callback")).toBe(false);
+    });
   });
 
   describe("protected paths (auth + T&C required)", () => {
