@@ -20,7 +20,7 @@ Email-only Soleur users cannot auto-detect their GitHub App installation during 
 - NG1: Popup-based OAuth (deferred unless redirect proves problematic on mobile)
 - NG2: Storing GitHub user access tokens (installation tokens handle all repo operations)
 - NG3: Account consolidation or merging (multi-account is supported)
-- NG4: Cleaning up vestigial `link_github` state (separate concern)
+- ~~NG4: Cleaning up vestigial `link_github` state~~ [Updated 2026-04-07: promoted to requirement per CPO review -- two parallel identity resolution states is UX debt]
 
 ## Functional Requirements
 
@@ -35,7 +35,7 @@ Email-only Soleur users cannot auto-detect their GitHub App installation during 
 
 - TR1: New `github_username` column on `public.users` table (migration 016)
 - TR2: `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` read from environment (already in Doppler `prd`)
-- TR3: New callback route added to open redirect allowlist in `lib/auth/resolve-origin.ts`
+- ~~TR3: New callback route added to open redirect allowlist~~ [Updated 2026-04-07: NOT needed -- routes use cookie-based CSRF, not origin validation]
 - TR4: New callback route added to `TC_EXEMPT_PATHS` in middleware
 - TR5: Separate callback route from Supabase OAuth callback (different client_id, state, token exchange)
 - TR6: OAuth access token discarded after username extraction (not stored)
