@@ -52,6 +52,7 @@ trap 'rm -f "$tmpfile"' EXIT
 
 printf '%s\0' "${all_files[@]}" | xargs -0 -P4 -n100 bash -c '
   KB_DIR="$1"; shift
+  sq=$(printf "\x27")
   for f in "$@"; do
     rel="${f#"$KB_DIR/"}"
     title="" heading="" fm=0 nr=0
@@ -61,6 +62,7 @@ printf '%s\0' "${all_files[@]}" | xargs -0 -P4 -n100 bash -c '
       if ((fm == 1)) && [[ "$line" == title:* ]]; then
         title="${line#title:}"; title="${title# }"
         title="${title#\"}"; title="${title%\"}"
+        title="${title#$sq}"; title="${title%$sq}"
         break
       fi
       [[ -z "$heading" && "$line" == "# "* ]] && heading="${line#\# }"
@@ -71,7 +73,8 @@ printf '%s\0' "${all_files[@]}" | xargs -0 -P4 -n100 bash -c '
       n="${n#[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-}"
       title=$(printf "%s" "$n" | tr "-" " ")
     fi
-    # Escape ] in titles to prevent markdown link injection
+    # Escape [ and ] in titles to prevent markdown link injection
+    title="${title//\[/\\[}"
     title="${title//]/\\]}"
     printf "%s\t%s\n" "$rel" "$title"
   done
