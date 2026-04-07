@@ -290,6 +290,43 @@ export async function verifyInstallationOwnership(
 }
 
 // ---------------------------------------------------------------------------
+// Installation discovery (auto-detect existing installs)
+// ---------------------------------------------------------------------------
+
+/**
+ * Find a GitHub App installation for a given user login.
+ *
+ * Uses GET /users/{login}/installation (App JWT) to check if the app is
+ * installed on the user's personal account. Returns the installation ID
+ * if found, null otherwise. This is used to auto-detect installations
+ * when the user's `github_installation_id` is missing from our database
+ * (e.g., they installed the app directly on GitHub without going through
+ * Soleur's callback flow).
+ */
+export async function findInstallationForLogin(
+  githubLogin: string,
+): Promise<number | null> {
+  const jwt = createAppJwt();
+  const response = await githubFetch(
+    `${GITHUB_API}/users/${encodeURIComponent(githubLogin)}/installation`,
+    { headers: { Authorization: `Bearer ${jwt}` } },
+  );
+
+  if (!response.ok) {
+    if (response.status !== 404) {
+      log.warn(
+        { status: response.status, githubLogin },
+        "Unexpected status from /users/{login}/installation",
+      );
+    }
+    return null;
+  }
+
+  const data = (await response.json()) as { id?: number };
+  return typeof data.id === "number" ? data.id : null;
+}
+
+// ---------------------------------------------------------------------------
 // Token cache (installation tokens are valid for 1 hour)
 // ---------------------------------------------------------------------------
 

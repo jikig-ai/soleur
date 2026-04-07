@@ -76,6 +76,7 @@ export default function ConnectRepoPage() {
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stateRef = useRef<State>(state);
   const loadingRef = useRef(false);
+  const detectAttemptedRef = useRef(false);
 
   // ---------------------------------------------------------------------------
   // On mount: fetch dynamic app slug and check for GitHub callback params
@@ -85,6 +86,37 @@ export default function ConnectRepoPage() {
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => { if (data?.slug) setAppSlug(data.slug); })
       .catch(() => { /* retain env var fallback */ });
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // On mount (no callback): auto-detect existing installation to break loop
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    // Skip if returning from GitHub callback (handled by the next useEffect)
+    if (searchParams.get("installation_id")) return;
+    if (detectAttemptedRef.current) return;
+    detectAttemptedRef.current = true;
+
+    (async () => {
+      try {
+        const res = await fetch("/api/repo/detect-installation", {
+          method: "POST",
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.installed && data.repos) {
+          if (data.repos.length > 0) {
+            setRepos(data.repos);
+            setState("select_project");
+          } else {
+            setState("no_projects");
+          }
+        }
+      } catch {
+        // Silent — user can still proceed manually via choose screen
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -329,6 +361,7 @@ export default function ConnectRepoPage() {
     loadingRef.current = true;
     setReposLoading(true);
     try {
+      // 1. Try repos directly (installation already registered)
       const res = await fetch("/api/repo/repos");
       if (res.ok) {
         const data = await res.json();
@@ -340,12 +373,30 @@ export default function ConnectRepoPage() {
         }
         return;
       }
+
+      // 2. Try auto-detection (app installed on GitHub but not registered in DB)
+      const detectRes = await fetch("/api/repo/detect-installation", {
+        method: "POST",
+      });
+      if (detectRes.ok) {
+        const detectData = await detectRes.json();
+        if (detectData.installed && detectData.repos) {
+          if (detectData.repos.length > 0) {
+            setRepos(detectData.repos);
+            setState("select_project");
+          } else {
+            setState("no_projects");
+          }
+          return;
+        }
+      }
     } catch {
       // Network error — fall through to GitHub redirect
     } finally {
       loadingRef.current = false;
       setReposLoading(false);
     }
+    // 3. Not installed — redirect to GitHub
     setState("github_redirect");
   }
 
@@ -386,8 +437,27 @@ export default function ConnectRepoPage() {
         return;
       }
       const errorData = await createRes.json().catch(() => null);
-      // 400 with "not installed" → fall back to GitHub redirect
+      // 400 with "not installed" → try auto-detection before GitHub redirect
       if (createRes.status === 400) {
+        const detectRes = await fetch("/api/repo/detect-installation", {
+          method: "POST",
+        });
+        if (detectRes.ok) {
+          const detectData = await detectRes.json();
+          if (detectData.installed) {
+            // Installation found — retry create
+            const retryRes = await fetch("/api/repo/create", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name, private: isPrivate }),
+            });
+            if (retryRes.ok) {
+              const data = await retryRes.json();
+              startSetup(data.repoUrl, data.fullName);
+              return;
+            }
+          }
+        }
         setPendingCreate({ name, isPrivate });
         setState("github_redirect");
         return;
