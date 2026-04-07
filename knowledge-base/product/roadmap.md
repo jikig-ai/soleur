@@ -176,12 +176,12 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 
 | # | Feature | Priority | Issue | Status |
 |---|---------|----------|-------|--------|
-| 3.1 | KB REST API (file tree, content, search) | P1 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
-| 3.2 | KB viewer UI (sidebar tree, markdown rendering, search) | P1 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Stub only |
-| 3.3 | Conversation inbox with status badges | P1 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
+| 3.1 | KB REST API (file tree, content, search) | P1 | [#1688](https://github.com/jikig-ai/soleur/issues/1688) | Not started |
+| 3.2 | KB viewer UI (sidebar tree, markdown rendering, search) | P1 | [#1689](https://github.com/jikig-ai/soleur/issues/1689) | Stub only |
+| 3.3 | Conversation inbox with status badges | P1 | [#1690](https://github.com/jikig-ai/soleur/issues/1690) | Not started |
 | 3.4 | API + MCP service integrations (Cloudflare, Stripe, Plausible first) | P1 | [#1050](https://github.com/jikig-ai/soleur/issues/1050) | Not started |
 | 3.5 | Secure token storage for third-party APIs (BYOK-grade encryption) | P1 | [#1076](https://github.com/jikig-ai/soleur/issues/1076) | Not started |
-| 3.6 | Usage/cost indicator (BYOK spending) | P2 | [#672](https://github.com/jikig-ai/soleur/issues/672) | Not started |
+| 3.6 | Usage/cost indicator (BYOK spending) | P2 | [#1691](https://github.com/jikig-ai/soleur/issues/1691) | Not started |
 | 3.7 | Review gate notifications (PWA push + email fallback for iOS) | P2 | [#1049](https://github.com/jikig-ai/soleur/issues/1049) | Not started |
 | 3.8 | Guided instructions fallback (deep links + review gates for services without API/MCP) | P2 | [#1077](https://github.com/jikig-ai/soleur/issues/1077) | Not started |
 | 3.9 | Chat UX redesign — remove department grid, @-mention autocomplete, auto-routing, sidebar | P2 | [#1289](https://github.com/jikig-ai/soleur/issues/1289) | Done (completed in P2) |
