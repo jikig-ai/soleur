@@ -54,22 +54,33 @@ Replace `/dashboard` with a conversation list sorted by `last_active`, showing s
 
 - **Title:** Derived from first user message, truncated at ~60 chars with ellipsis. Fallback: "Untitled conversation" for 0-message records.
 - **Preview:** Last message snippet (either role), ~100 chars, stripped of markdown formatting.
-- **Query:** Single Supabase query with PostgREST embedded resources to avoid N+1:
+- **Query strategy:** Two simple queries (PostgREST embedded resources cannot express per-resource ordering/filtering — confirmed by plan review):
 
 ```typescript
-const { data, error } = await supabase
+// Query 1: Fetch conversations
+const { data: conversations, error } = await supabase
   .from("conversations")
-  .select(`
-    *,
-    first_message:messages!inner(content).limit(1).order(created_at.asc).eq(role,user),
-    last_message:messages(content, role, leader_id).limit(1).order(created_at.desc)
-  `)
-  .eq("status", statusFilter) // if filter active
+  .select("*")
   .order("last_active", { ascending: false })
-  .range(0, 19); // cursor-based pagination
+  .order("created_at", { ascending: false }) // tiebreaker
+  .limit(50);
+
+// Query 2: Fetch first + last messages for displayed conversations
+const conversationIds = conversations.map(c => c.id);
+const { data: messages, error: msgError } = await supabase
+  .from("messages")
+  .select("conversation_id, role, content, leader_id, created_at")
+  .in("conversation_id", conversationIds)
+  .order("created_at", { ascending: true });
+
+// Client-side: derive title (first user message) and preview (last message) per conversation
 ```
 
-**Note:** PostgREST embedded resource syntax may need adjustment — verify against Supabase docs. If embedded resources can't express the lateral join, fall back to a database view or two sequential queries.
+### Domain Leader Badges
+
+- **3-letter abbreviation** using the uppercase leader ID: `CTO`, `CMO`, `CLO`, `CPO`, `CRO`, `COO`, `CFO`, `CCO`
+- No separate name label needed — the badge IS the identifier
+- Uses existing `LEADER_BG_COLORS` for per-leader color coding
 
 ### Navigation Changes
 
@@ -78,13 +89,13 @@ const { data, error } = await supabase
 | `/dashboard` → prompt composer | `/dashboard` → Command Center (conversation list) |
 | No back-to-list from chat | Chat page back arrow links to `/dashboard` (already does) |
 | Sidebar "Dashboard" active only on exact `/dashboard` | Sidebar "Dashboard" active on `/dashboard` AND `/dashboard/chat/*` |
-| Suggested prompts on dashboard | Moved to empty state + `/dashboard/chat/new` |
+| Suggested prompts on dashboard | Shown in empty state (0 conversations); hidden when conversations exist |
 
 ### Existing Assets to Reuse
 
 | Asset | Location | Usage |
 |---|---|---|
-| `Conversation` type | `lib/types.ts:80-87` | Already has correct shape |
+| `Conversation` type | `lib/types.ts:80-87` | Add `created_at: string` (missing from interface but exists in DB) |
 | `relativeTime()` | `lib/relative-time.ts` | Timestamp display |
 | `LEADER_BG_COLORS` | `components/chat/leader-colors.ts` | Domain leader badge colors |
 | `DOMAIN_LEADERS` | `server/domain-leaders.ts` | Domain filter dropdown values |
@@ -92,23 +103,19 @@ const { data, error } = await supabase
 | `createClient()` | `lib/supabase/client.ts` | Browser Supabase client (includes Realtime) |
 | Mobile patterns | Chat page | `100dvh`, `md:` breakpoints, `safe-bottom`, 44px touch targets |
 
-### Implementation Phases
+### Implementation (single phase — 2-3 days)
 
-#### Phase 1: Foundation (migration + types + query hook)
-
-**Tasks:**
-
-1.1. **Migration: REPLICA IDENTITY FULL**
+**1. Migration: REPLICA IDENTITY FULL**
 Create `supabase/migrations/0XX_conversations_replica_identity.sql`:
 
 ```sql
 ALTER TABLE public.conversations REPLICA IDENTITY FULL;
 ```
 
-This enables Supabase Realtime to include all column values in change payloads (not just primary key).
-
-1.2. **Status label types**
-Add to `lib/types.ts`:
+**2. Type updates**
+In `lib/types.ts`:
+- Add `created_at: string` to `Conversation` interface
+- Add `STATUS_LABELS` record mapping DB values to founder-language labels
 
 ```typescript
 export type ConversationStatus = Conversation["status"];
@@ -119,131 +126,66 @@ export const STATUS_LABELS: Record<ConversationStatus, string> = {
   completed: "Completed",
   failed: "Needs attention",
 } as const;
-
-export const STATUS_COLORS: Record<ConversationStatus, {
-  dot: string;
-  text: string;
-  bg: string;
-  border: string;
-}> = {
-  waiting_for_user: {
-    dot: "bg-amber-500",
-    text: "text-amber-500",
-    bg: "bg-amber-500/10",
-    border: "border-amber-500/30",
-  },
-  active: {
-    dot: "bg-blue-500",
-    text: "text-blue-500",
-    bg: "bg-blue-500/10",
-    border: "border-blue-500/30",
-  },
-  completed: {
-    dot: "bg-green-500",
-    text: "text-green-500",
-    bg: "bg-green-500/10",
-    border: "border-green-500/30",
-  },
-  failed: {
-    dot: "bg-red-500",
-    text: "text-red-500",
-    bg: "bg-red-500/10",
-    border: "border-red-500/30",
-  },
-};
 ```
 
-1.3. **Data fetching hook: `useConversations`**
+Status badge colors live inline in the component JSX, not in a lookup table.
+
+**3. `useConversations` hook (single hook — data + realtime)**
 Create `hooks/use-conversations.ts`:
-- Fetch conversations with embedded first/last message via Supabase client
+- Fetch conversations + messages via two simple queries (see Query Strategy above)
 - Accept `statusFilter` and `domainFilter` params
-- Cursor-based pagination (load 20, "Load more" button)
-- Return `{ conversations, loading, error, loadMore, hasMore }`
-- Destructure `{ data, error }` on every query — never assume success (learning: supabase-silent-error-return-values)
+- Fetch all (limit 50) — no pagination for beta
+- **Supabase Realtime subscription in the same hook:**
+  - Subscribe to `postgres_changes` on `conversations` table
+  - **CRITICAL: Must specify `filter: user_id=eq.${userId}`** — Realtime does NOT respect RLS by default. Without this filter, all users receive all conversation changes (data leak).
+  - Handle `UPDATE` events only — update badge in place without reordering the list
+  - Cleanup subscription on unmount
+- Return `{ conversations, loading, error, refetch }`
+- Destructure `{ data, error }` on every query — never assume success
 
-1.4. **Supabase Realtime hook: `useConversationRealtime`**
-Create `hooks/use-conversation-realtime.ts`:
-- Subscribe to `postgres_changes` on `conversations` table filtered by `user_id`
-- Handle `INSERT` (new from other tabs), `UPDATE` (status changes), `DELETE`
-- On UPDATE: update badge in place without reordering the list (defer full reorder to avoid jarring shifts per spec-flow-analyzer recommendation)
-- On INSERT: prepend to list
-- Cleanup subscription on unmount
-- No reconnection logic needed — Supabase client handles it internally
+```typescript
+const channel = supabase
+  .channel('command-center')
+  .on('postgres_changes', {
+    event: 'UPDATE',
+    schema: 'public',
+    table: 'conversations',
+    filter: `user_id=eq.${userId}` // CRITICAL: prevents data leak
+  }, (payload) => {
+    updateConversationStatus(payload.new);
+  })
+  .subscribe();
+```
 
-#### Phase 2: Core UI (page + components)
-
-**Tasks:**
-
-2.1. **StatusBadge component**
-Create `components/inbox/status-badge.tsx`:
-- Pill shape with colored dot + text
-- Uses `STATUS_LABELS` and `STATUS_COLORS` from types
-- Variants per status (amber/blue/green/red)
-
-2.2. **ConversationRow component**
-Create `components/inbox/conversation-row.tsx`:
-- Desktop: horizontal row with status badge, title, snippet, domain leader badge, timestamp
-- Mobile: vertical card stacking (status + timestamp on first line, title/snippet middle, leader bottom)
-- `waiting_for_user` rows get subtle amber background tint (`bg-amber-500/[0.06]`)
-- `completed` rows get muted text (`text-neutral-400` for title, `text-neutral-600` for snippet)
-- Entire row is clickable → navigates to `/dashboard/chat/[id]`
-- Touch target: min-h-[44px] on mobile
-
-2.3. **FilterBar component**
-Create `components/inbox/filter-bar.tsx`:
-- Status dropdown: All / Needs your decision / Executing / Completed / Needs attention
-- Domain dropdown: All / General / CTO / CMO / CLO / CPO / CRO / COO / CFO / CCO
-- "General" maps to `domain_leader IS NULL`
-- Active filter gets amber border + amber text
-- Result count badge when filter active ("2 results")
-- "+ New conversation" button (amber/gold, navigates to `/dashboard/chat/new`)
-- Mobile: dropdowns side-by-side, button full-width below
-
-2.4. **Replace dashboard page**
+**4. Replace dashboard page**
 Rewrite `app/(dashboard)/dashboard/page.tsx`:
-- Remove: hero, chat input, suggested prompts, leader strip, at-mention handling
-- Add: FilterBar, ConversationRow list, empty state, loading skeleton, error state
-- **Empty state (0 conversations):** "Your organization is ready." subline: "Start a conversation to put your agents to work." Button: "New conversation" (copywriter-approved copy)
+- Remove: hero, chat input, at-mention handling
+- Add: filter bar, conversation rows, empty/filtered/loading/error states
+- **Empty state (0 conversations):** Reuse current dashboard's suggested prompt cards and leader strip. Heading: "Your organization is ready." Subline: "Start a conversation to put your agents to work." Preserves onboarding/discovery flow for new users.
 - **Filtered empty state:** "No conversations match your filters." Button: "Clear filters"
-- **Loading state:** 3-4 skeleton rows matching conversation row height
+- **Loading state:** 3-4 inline skeleton rows with `animate-pulse`
 - **Error state:** Reuse `ErrorCard` with retry
+- **Filter bar:** Status dropdown + Domain dropdown + "New conversation" button. Inline in page component — extract to own file only if it exceeds ~80 lines.
+- **Conversation rows:** Each row shows status badge (pill with colored dot), title, snippet, 3-letter domain leader badge (e.g., `CTO`), relative timestamp. `waiting_for_user` rows get amber bg tint. `completed` rows get muted text. Entire row clickable → `/dashboard/chat/[id]`. Extract `ConversationRow` to own file (will exceed 80 lines with desktop/mobile variants).
+- **Status badge:** Inline in ConversationRow or extract if reused. Pill shape, colored dot + text, colors per status: amber (decision), blue (executing), green (completed), red (attention).
 
-2.5. **Update sidebar nav label**
+**5. Update sidebar nav**
 In `app/(dashboard)/layout.tsx`:
 - Change nav label from "Dashboard" to "Command Center"
-- Change active logic from `pathname === "/dashboard"` to `pathname === "/dashboard" || pathname.startsWith("/dashboard/chat")`
+- Change active logic: `pathname === "/dashboard" || pathname.startsWith("/dashboard/chat")`
 
-#### Phase 3: Polish + Tests
-
-**Tasks:**
-
-3.1. **Loading skeleton component**
-Create `components/inbox/conversation-skeleton.tsx`:
-- 3-4 animated placeholder rows with pulse animation
-- Match ConversationRow dimensions
-
-3.2. **Keyboard accessibility**
-- Conversation rows are focusable via tab
-- Enter/Space opens conversation
-- Arrow keys navigate between rows (optional, nice-to-have)
-
-3.3. **Tests**
+**6. Tests**
 Create `test/command-center.test.tsx`:
-- T1: Empty state renders "Your organization is ready" with CTA
-- T2: Populated state renders conversations sorted by last_active
-- T3: Status badges show correct founder-language labels
-- T4: Status filter shows only matching conversations
-- T5: Domain filter shows only matching conversations
-- T6: Click row navigates to `/dashboard/chat/[id]`
-- T7: "New conversation" button navigates to `/dashboard/chat/new`
-- T8: Error state renders ErrorCard with retry
-- T9: Filtered empty state differs from zero-conversations state
-- T10: Supabase error is handled (destructured, displayed)
+- T1: Empty state renders suggested prompts and "New conversation" CTA
+- T2: Populated state renders conversations sorted by `last_active` desc
+- T3: Status filter shows only matching conversations
+- T4: Click row navigates to `/dashboard/chat/[id]`
+- T5: "New conversation" button navigates to `/dashboard/chat/new`
 
-3.4. **Mobile responsiveness verification**
+**7. Mobile responsiveness verification**
 - Test at 375px (mobile), 768px (tablet), 1024px+ (desktop)
 - Verify touch targets ≥ 44px
-- Verify no auto-fill grid issues (use explicit breakpoints)
+- Verify no layout breakage at tablet breakpoint
 
 ## Alternative Approaches Considered
 
@@ -270,17 +212,15 @@ Create `test/command-center.test.tsx`:
 - [ ] "Last updated" relative timestamp (reusing `relativeTime()`)
 - [ ] Filter by status via dropdown
 - [ ] Filter by domain via dropdown (including "General" for null)
-- [ ] Result count shown when filter active
 - [ ] Click row navigates to `/dashboard/chat/[id]`
 - [ ] "New conversation" button navigates to `/dashboard/chat/new`
-- [ ] Empty state: "Your organization is ready" with CTA
+- [ ] Empty state: suggested prompt cards + leader strip + "Your organization is ready" CTA
 - [ ] Filtered empty state: "No conversations match your filters" with clear button
-- [ ] Real-time status badge updates via Supabase Realtime
-- [ ] New conversations from other tabs appear via Realtime INSERT
+- [ ] Real-time status badge updates via Supabase Realtime (UPDATE events, user_id filtered)
 - [ ] Loading skeleton during initial data fetch
 - [ ] Error state with retry (reusing ErrorCard)
-- [ ] Cursor-based pagination (load 20, "Load more")
 - [ ] Mobile-responsive (375px, 768px, 1024px+)
+- [ ] Domain leader badges use 3-letter abbreviation (CTO, CMO, etc.) — no separate name label
 - [ ] Touch targets ≥ 44px
 - [ ] Sidebar nav label updated to "Command Center"
 - [ ] Sidebar nav active state includes `/dashboard/chat/*`
@@ -319,12 +259,13 @@ Create `test/command-center.test.tsx`:
 **spec-flow-analyzer:** Identified 15 gaps. Critical ones resolved in this plan:
 - Status mapping defined explicitly (see Status Badge Mapping table)
 - First-message composition moves to `/dashboard/chat/new` (existing chat input sufficient)
-- WelcomeCard/suggested prompts removed from dashboard; empty state has brand-compliant CTA
+- WelcomeCard/suggested prompts/leader strip preserved in empty state for 0-conversation users
 - 0-message conversations show "Untitled conversation" fallback
 - Loading skeleton specified
 - Filtered vs zero-conversations empty states differentiated
-- Realtime subscribes to INSERT/UPDATE/DELETE (not just UPDATE)
+- Realtime subscribes to UPDATE only with explicit `user_id` filter (security-critical)
 - List reorders only on page load/filter change, not on realtime UPDATE (badge updates in place)
+- Domain leader badges use 3-letter abbreviation (CTO, CMO) — no name label duplication
 - Sidebar active state expanded to include `/dashboard/chat/*`
 - Domain filter includes "General" for NULL `domain_leader`
 
@@ -336,7 +277,7 @@ Create `test/command-center.test.tsx`:
 
 ### Acceptance Tests
 
-- Given a user with 0 conversations, when they load `/dashboard`, then they see "Your organization is ready" with a "New conversation" button
+- Given a user with 0 conversations, when they load `/dashboard`, then they see suggested prompt cards, leader strip, and "Your organization is ready" with a "New conversation" button
 - Given a user with mixed-status conversations, when they load `/dashboard`, then conversations are sorted by `last_active` descending with correct status badges
 - Given a user viewing the list, when they select "Needs your decision" from the status filter, then only `waiting_for_user` conversations are shown with a "2 results" count
 - Given a user viewing the list, when they select "CTO" from the domain filter, then only conversations with `domain_leader = 'cto'` are shown
@@ -348,7 +289,7 @@ Create `test/command-center.test.tsx`:
 
 - Given a conversation with 0 messages, when displayed in the list, then title shows "Untitled conversation" with no snippet
 - Given active filters that match 0 conversations, when displayed, then show "No conversations match your filters" with a "Clear filters" button (not the zero-conversations empty state)
-- Given a user with 25+ conversations, when they load the page, then only 20 are shown with a "Load more" button
+- Given a user with 60+ conversations, when they load the page, then only the 50 most recent are shown
 - Given the Supabase query fails, when the page loads, then ErrorCard is shown with a retry button
 - Given a conversation with `domain_leader = NULL`, when "General" domain filter is selected, then the conversation is shown
 
@@ -364,12 +305,9 @@ Create `test/command-center.test.tsx`:
 | Phase 2 security (#674) | CLOSED ✅ | None |
 | Tag-and-route (#1059) | CLOSED ✅ | None |
 | Supabase Realtime on project plan | Needs verification | Free tier: 200 concurrent connections. Acceptable for beta. |
-| PostgREST embedded resource syntax | Needs verification | May need alternative query approach if syntax can't express lateral join. |
 
 | Risk | Mitigation |
 |---|---|
-| PostgREST can't do the title/snippet join in one query | Fall back to two sequential queries or a database view |
-| Supabase Realtime doesn't respect RLS for subscriptions | Verify during implementation. If not, use the existing WS for user-scoped filtering |
 | REPLICA IDENTITY FULL impacts write performance | Negligible for beta user count. Monitor if conversation writes slow down |
 
 ## References & Research
