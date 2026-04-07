@@ -296,34 +296,84 @@ export async function verifyInstallationOwnership(
 /**
  * Find a GitHub App installation for a given user login.
  *
- * Uses GET /users/{login}/installation (App JWT) to check if the app is
- * installed on the user's personal account. Returns the installation ID
- * if found, null otherwise. This is used to auto-detect installations
- * when the user's `github_installation_id` is missing from our database
- * (e.g., they installed the app directly on GitHub without going through
- * Soleur's callback flow).
+ * First checks GET /users/{login}/installation for a personal installation.
+ * If not found, iterates all app installations to find org installations
+ * where the user is a member. Returns the installation ID if found, null
+ * otherwise.
  */
 export async function findInstallationForLogin(
   githubLogin: string,
 ): Promise<number | null> {
   const jwt = createAppJwt();
+
+  // 1. Check personal account installation
   const response = await githubFetch(
     `${GITHUB_API}/users/${encodeURIComponent(githubLogin)}/installation`,
     { headers: { Authorization: `Bearer ${jwt}` } },
   );
 
+  if (response.ok) {
+    const data = (await response.json()) as { id?: number };
+    if (typeof data.id === "number") return data.id;
+  } else if (response.status !== 404) {
+    log.warn(
+      { status: response.status, githubLogin },
+      "Unexpected status from /users/{login}/installation",
+    );
+  }
+
+  // 2. Check org installations — iterate all app installations and look for
+  //    orgs where the user is a member
+  return findOrgInstallationForUser(jwt, githubLogin);
+}
+
+/**
+ * Iterate all app installations looking for org installations where the
+ * given user is a member. Returns the first matching installation ID.
+ */
+async function findOrgInstallationForUser(
+  jwt: string,
+  githubLogin: string,
+): Promise<number | null> {
+  const response = await githubFetch(
+    `${GITHUB_API}/app/installations?per_page=100`,
+    { headers: { Authorization: `Bearer ${jwt}` } },
+  );
+
   if (!response.ok) {
-    if (response.status !== 404) {
-      log.warn(
-        { status: response.status, githubLogin },
-        "Unexpected status from /users/{login}/installation",
-      );
-    }
+    log.warn(
+      { status: response.status },
+      "Failed to list app installations for org detection",
+    );
     return null;
   }
 
-  const data = (await response.json()) as { id?: number };
-  return typeof data.id === "number" ? data.id : null;
+  interface AppInstallation {
+    id: number;
+    account: { login: string; type: string };
+  }
+
+  const installations = (await response.json()) as AppInstallation[];
+  const orgInstallations = installations.filter(
+    (i) => i.account?.type === "Organization",
+  );
+
+  for (const inst of orgInstallations) {
+    const memberCheck = await githubFetch(
+      `${GITHUB_API}/orgs/${encodeURIComponent(inst.account.login)}/members/${encodeURIComponent(githubLogin)}`,
+      { headers: { Authorization: `Bearer ${jwt}` } },
+    );
+    // 204 = is a member, 302 = requester is not org member, 404 = not a member
+    if (memberCheck.status === 204) {
+      log.info(
+        { githubLogin, orgLogin: inst.account.login, installationId: inst.id },
+        "Found org installation for user",
+      );
+      return inst.id;
+    }
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
