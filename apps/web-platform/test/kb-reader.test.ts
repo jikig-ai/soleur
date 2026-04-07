@@ -37,7 +37,7 @@ describe("buildTree", () => {
     fs.writeFileSync(path.join(kbRoot, "readme.md"), "# Hello");
     const tree = await buildTree(kbRoot);
     expect(tree.children).toHaveLength(1);
-    expect(tree.children![0]).toEqual({
+    expect(tree.children![0]).toMatchObject({
       name: "readme.md",
       type: "file",
       path: "readme.md",
@@ -90,6 +90,26 @@ describe("buildTree", () => {
     const tree = await buildTree(kbRoot);
     const names = tree.children!.map((c) => c.name);
     expect(names).toEqual(["alpha", "zebra", "aaa.md", "beta.md"]);
+  });
+
+  test("includes modifiedAt ISO timestamp on file nodes", async () => {
+    fs.writeFileSync(path.join(kbRoot, "readme.md"), "# Hello");
+    const tree = await buildTree(kbRoot);
+    const file = tree.children![0];
+    expect(file.modifiedAt).toBeDefined();
+    expect(typeof file.modifiedAt).toBe("string");
+    // Must be valid ISO 8601
+    const parsed = new Date(file.modifiedAt!);
+    expect(parsed.getTime()).not.toBeNaN();
+  });
+
+  test("does not include modifiedAt on directory nodes", async () => {
+    fs.mkdirSync(path.join(kbRoot, "project"));
+    fs.writeFileSync(path.join(kbRoot, "project", "doc.md"), "# Doc");
+    const tree = await buildTree(kbRoot);
+    const dir = tree.children![0];
+    expect(dir.type).toBe("directory");
+    expect(dir.modifiedAt).toBeUndefined();
   });
 
   test("handles missing knowledge-base directory gracefully", async () => {
