@@ -7,9 +7,8 @@
 
 ## Phase 2: Core Implementation
 
-- [ ] 2.1 Add `git clean -fd` to `beforeEach` after `git reset --hard origin/main` (line ~164)
-- [ ] 2.2 Add precondition assertion to "detached HEAD without review evidence" test verifying no `todos/` directory exists
-- [ ] 2.3 Add comment documenting the `gh` CLI failure assumption in the test
+- [ ] 2.1 Add `git clean -fd` to `beforeEach` after `git reset --hard origin/main` (line ~164) with comment explaining why
+- [ ] 2.2 Add precondition assertion to "detached HEAD without review evidence" test verifying no `todos/` directory exists (false-green prevention)
 
 ## Phase 3: Testing
 
