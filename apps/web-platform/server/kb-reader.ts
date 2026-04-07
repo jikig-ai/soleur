@@ -13,6 +13,7 @@ export interface TreeNode {
   name: string;
   type: "file" | "directory";
   path?: string;
+  modifiedAt?: string;
   children?: TreeNode[];
 }
 
@@ -134,10 +135,18 @@ export async function buildTree(
         dirs.push(child);
       }
     } else if (entry.isFile() && !entry.isSymbolicLink() && entry.name.endsWith(".md")) {
+      let modifiedAt: string | undefined;
+      try {
+        const stat = await fs.promises.stat(fullPath);
+        modifiedAt = stat.mtime.toISOString();
+      } catch {
+        // If stat fails, omit modifiedAt
+      }
       fileNodes.push({
         name: entry.name,
         type: "file",
         path: path.relative(effectiveTopRoot, fullPath),
+        modifiedAt,
       });
     }
   }
