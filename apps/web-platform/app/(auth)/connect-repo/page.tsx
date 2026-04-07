@@ -15,7 +15,7 @@ import { SettingUpState } from "@/components/connect-repo/setting-up-state";
 import { ReadyState } from "@/components/connect-repo/ready-state";
 import { FailedState } from "@/components/connect-repo/failed-state";
 import { InterruptedState } from "@/components/connect-repo/interrupted-state";
-import { LinkGitHubState } from "@/components/connect-repo/link-github-state";
+import { GitHubResolveState } from "@/components/connect-repo/github-resolve-state";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -24,7 +24,7 @@ type State =
   | "choose"
   | "create_project"
   | "github_redirect"
-  | "link_github"
+  | "github_resolve"
   | "select_project"
   | "no_projects"
   | "setting_up"
@@ -60,10 +60,8 @@ export default function ConnectRepoPage() {
       if (params.get("installation_id") && (action === "install" || action === "update")) {
         return "github_redirect";
       }
-      // Returning from failed identity linking attempt
-      if (params.get("link_error")) {
-        return "link_github";
-      }
+      // Returning from failed GitHub identity resolve attempt
+      // (resolve_error=1 is set by the OAuth callback on any failure)
     }
     return "choose";
   });
@@ -77,6 +75,7 @@ export default function ConnectRepoPage() {
     isPrivate: boolean;
   } | null>(null);
   const [appSlug, setAppSlug] = useState(DEFAULT_GITHUB_APP_SLUG);
+  const resolveError = searchParams.get("resolve_error") === "1";
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -395,6 +394,11 @@ export default function ConnectRepoPage() {
           }
           return;
         }
+        // Email-only user: resolve GitHub identity via OAuth first
+        if (detectData.reason === "no_github_identity") {
+          setState("github_resolve");
+          return;
+        }
       }
     } catch {
       // Network error — fall through to GitHub redirect
@@ -402,7 +406,7 @@ export default function ConnectRepoPage() {
       loadingRef.current = false;
       setReposLoading(false);
     }
-    // 3. Not installed or no GitHub identity — redirect to GitHub App flow
+    // 3. Not installed — redirect to GitHub App install flow
     setState("github_redirect");
   }
 
@@ -462,6 +466,11 @@ export default function ConnectRepoPage() {
               startSetup(data.repoUrl, data.fullName);
               return;
             }
+          }
+          // Email-only user: resolve GitHub identity via OAuth first
+          if (detectData.reason === "no_github_identity") {
+            setState("github_resolve");
+            return;
           }
         }
         setPendingCreate({ name, isPrivate });
@@ -550,11 +559,18 @@ export default function ConnectRepoPage() {
     >
       <div className="w-full max-w-3xl">
         {state === "choose" && (
-          <ChooseState
-            onCreateNew={handleCreateNew}
-            onConnectExisting={handleConnectExisting}
-            onSkip={handleSkip}
-          />
+          <>
+            {resolveError && (
+              <div className="mb-4 rounded-lg border border-red-800/50 bg-red-950/30 px-4 py-3 text-sm text-red-300">
+                GitHub connection failed. Please try again.
+              </div>
+            )}
+            <ChooseState
+              onCreateNew={handleCreateNew}
+              onConnectExisting={handleConnectExisting}
+              onSkip={handleSkip}
+            />
+          </>
         )}
         {state === "create_project" && (
           <CreateProjectState
@@ -568,11 +584,12 @@ export default function ConnectRepoPage() {
             onBack={handleGitHubRedirectBack}
           />
         )}
-        {state === "link_github" && (
-          <LinkGitHubState
+        {state === "github_resolve" && (
+          <GitHubResolveState
+            onContinue={() => {
+              window.location.href = "/api/auth/github-resolve";
+            }}
             onBack={() => setState("choose")}
-            onSkip={handleSkip}
-            initialError={searchParams.get("link_error")}
           />
         )}
         {state === "select_project" && (
