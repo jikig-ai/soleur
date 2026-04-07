@@ -108,3 +108,21 @@ resource "cloudflare_record" "google_site_verification" {
   type    = "TXT"
   ttl     = 1
 }
+
+# Buttondown managed sending domain -- NS delegation for mail.soleur.ai
+# Buttondown manages DKIM/SPF/MX records within this subdomain automatically.
+resource "cloudflare_record" "buttondown_ns1" {
+  zone_id = var.cf_zone_id
+  name    = "mail"
+  content = "ns1.onbuttondown.com"
+  type    = "NS"
+  ttl     = 1
+}
+
+resource "cloudflare_record" "buttondown_ns2" {
+  zone_id = var.cf_zone_id
+  name    = "mail"
+  content = "ns2.onbuttondown.com"
+  type    = "NS"
+  ttl     = 1
+}
