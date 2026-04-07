@@ -84,7 +84,17 @@ export interface Conversation {
   session_id: string | null;
   status: "active" | "waiting_for_user" | "completed" | "failed";
   last_active: string;
+  created_at: string;
 }
+
+export type ConversationStatus = Conversation["status"];
+
+export const STATUS_LABELS: Record<ConversationStatus, string> = {
+  waiting_for_user: "Needs your decision",
+  active: "Executing",
+  completed: "Completed",
+  failed: "Needs attention",
+} as const;
 
 export interface Message {
   id: string;

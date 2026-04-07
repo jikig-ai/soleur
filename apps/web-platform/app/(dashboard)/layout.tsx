@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
 const NAV_ITEMS = [
-  { href: "/dashboard", label: "Dashboard", icon: GridIcon },
+  { href: "/dashboard", label: "Command Center", icon: GridIcon },
   { href: "/dashboard/kb", label: "Knowledge Base", icon: BookIcon },
   { href: "/dashboard/settings", label: "Settings", icon: SettingsIcon },
 ];
@@ -116,7 +116,7 @@ export default function DashboardLayout({
           {NAV_ITEMS.map((item) => {
             const active =
               item.href === "/dashboard"
-                ? pathname === "/dashboard"
+                ? pathname === "/dashboard" || pathname.startsWith("/dashboard/chat")
                 : pathname.startsWith(item.href);
 
             return (
