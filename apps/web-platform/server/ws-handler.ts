@@ -4,6 +4,8 @@ import { parse } from "url";
 import { randomUUID } from "crypto";
 
 import { KeyInvalidError, WS_CLOSE_CODES, type WSMessage, type Conversation } from "@/lib/types";
+import type { ConversationContext } from "@/lib/types";
+import { validateConversationContext } from "./context-validation";
 import { createServiceClient } from "@/lib/supabase/service";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { TC_VERSION } from "@/lib/legal/tc-version";
@@ -187,6 +189,18 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
       }
 
       try {
+        // Validate context payload before any side effects
+        let validatedContext: ConversationContext | undefined;
+        try {
+          validatedContext = validateConversationContext(msg.context);
+        } catch (validationErr) {
+          sendToClient(userId, {
+            type: "error",
+            message: (validationErr as Error).message,
+          });
+          return;
+        }
+
         abortActiveSession(userId, session);
 
         log.info({ userId, leaderId: msg.leaderId ?? "auto-route" }, "start_session");
@@ -197,7 +211,7 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
         // which triggers sendUserMessage -> routeMessage -> dispatchToLeaders.
         if (msg.leaderId) {
           log.info({ conversationId, leaderId: msg.leaderId }, "Directed session, booting agent");
-          startAgentSession(userId, conversationId, msg.leaderId, undefined, undefined, msg.context).catch(
+          startAgentSession(userId, conversationId, msg.leaderId, undefined, undefined, validatedContext).catch(
             (err) => {
               Sentry.captureException(err);
               log.error({ userId, err }, "startAgentSession error");
