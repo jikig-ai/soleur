@@ -24,6 +24,14 @@ vi.mock("next/font/google", () => ({
   Inter: () => ({ className: "mock-sans", variable: "--font-sans" }),
 }));
 
+vi.mock("@/lib/supabase/client", () => ({
+  createClient: () => ({
+    auth: {
+      linkIdentity: vi.fn().mockResolvedValue({ data: {}, error: null }),
+    },
+  }),
+}));
+
 import ConnectRepoPage from "@/app/(auth)/connect-repo/page";
 
 // ---------------------------------------------------------------------------
@@ -206,13 +214,20 @@ describe("Phase 2: Skip redirect via on-click fetch", () => {
   });
 
   test("Connect Existing without installation shows GitHub redirect", async () => {
-    // Repos endpoint returns 400 (no installation)
+    // Repos endpoint returns 400 (no installation) AND detection returns not installed
     setupFetchMock({
       "/api/repo/repos": () =>
         Promise.resolve(
           new Response(
             JSON.stringify({ error: "GitHub App not installed" }),
             { status: 400 },
+          ),
+        ),
+      "/api/repo/detect-installation": () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ installed: false, reason: "not_installed" }),
+            { status: 200 },
           ),
         ),
     });
@@ -293,13 +308,20 @@ describe("Phase 2: Skip redirect via on-click fetch", () => {
   });
 
   test("Create New without installation falls back to redirect", async () => {
-    // Create endpoint returns 400 (no installation)
+    // Create endpoint returns 400 (no installation) AND detection returns not installed
     setupFetchMock({
       "/api/repo/create": () =>
         Promise.resolve(
           new Response(
             JSON.stringify({ error: "GitHub App not installed" }),
             { status: 400 },
+          ),
+        ),
+      "/api/repo/detect-installation": () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ installed: false, reason: "not_installed" }),
+            { status: 200 },
           ),
         ),
     });
@@ -476,5 +498,279 @@ describe("Phase 3: Auto-refresh on visibility change", () => {
     // Should still show the repo list, not the interrupted screen
     expect(screen.getByText("Select a Project")).toBeInTheDocument();
     expect(screen.queryByText("Resume")).not.toBeInTheDocument();
+  });
+});
+
+// ===========================================================================
+// Phase 4: Auto-detect existing installation (breaks redirect loop)
+// ===========================================================================
+
+describe("Phase 4: Auto-detect existing installation", () => {
+  test("on mount: auto-detects installation and skips to repo selection", async () => {
+    // No callback params, repos returns 400 (no installation_id stored),
+    // but detect-installation finds the app is installed
+    setupFetchMock({
+      "/api/repo/repos": () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ error: "GitHub App not installed" }),
+            { status: 400 },
+          ),
+        ),
+      "/api/repo/detect-installation": () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ installed: true, repos: [mockRepo] }),
+            { status: 200 },
+          ),
+        ),
+    });
+
+    render(<ConnectRepoPage />);
+
+    // Should auto-detect and skip to repo selection
+    await waitFor(() => {
+      expect(screen.getByText("Select a Project")).toBeInTheDocument();
+    });
+
+    // Verify detect-installation was called
+    const detectCall = mockFetch.mock.calls.find(
+      (call) => call[0] === "/api/repo/detect-installation",
+    );
+    expect(detectCall).toBeDefined();
+  });
+
+  test("on mount: detection returns not installed, stays on choose screen", async () => {
+    setupFetchMock({
+      "/api/repo/detect-installation": () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ installed: false, reason: "not_installed" }),
+            { status: 200 },
+          ),
+        ),
+    });
+
+    render(<ConnectRepoPage />);
+
+    // Should remain on the choose screen
+    await waitFor(() => {
+      expect(
+        screen.getByText("Give Your AI Team the Full Picture"),
+      ).toBeInTheDocument();
+    });
+  });
+
+  test("on mount: detection fails silently, stays on choose screen", async () => {
+    setupFetchMock({
+      "/api/repo/detect-installation": () =>
+        Promise.resolve(new Response("Server Error", { status: 500 })),
+    });
+
+    render(<ConnectRepoPage />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Give Your AI Team the Full Picture"),
+      ).toBeInTheDocument();
+    });
+  });
+
+  test("Connect Existing: falls back to detect-installation when repos returns 400", async () => {
+    setupFetchMock({
+      "/api/repo/repos": () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ error: "GitHub App not installed" }),
+            { status: 400 },
+          ),
+        ),
+      "/api/repo/detect-installation": () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ installed: true, repos: [mockRepo] }),
+            { status: 200 },
+          ),
+        ),
+    });
+
+    render(<ConnectRepoPage />);
+
+    // Wait for mount detection to complete (it will also detect)
+    await waitFor(() => {
+      expect(screen.getByText("Select a Project")).toBeInTheDocument();
+    });
+  });
+
+  test("Create New: falls back to detect-installation when create returns 400, then retries", async () => {
+    let createCallCount = 0;
+    let detectCallCount = 0;
+    setupFetchMock({
+      "/api/repo/create": () => {
+        createCallCount++;
+        if (createCallCount === 1) {
+          // First call: no installation
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ error: "GitHub App not installed" }),
+              { status: 400 },
+            ),
+          );
+        }
+        // Retry after detection: succeeds
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              repoUrl: "https://github.com/user/my-project",
+              fullName: "user/my-project",
+            }),
+            { status: 200 },
+          ),
+        );
+      },
+      "/api/repo/detect-installation": () => {
+        detectCallCount++;
+        if (detectCallCount === 1) {
+          // Mount-time detection: not installed (let user reach choose screen)
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ installed: false, reason: "not_installed" }),
+              { status: 200 },
+            ),
+          );
+        }
+        // Create-flow detection: installed
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ installed: true, repos: [] }),
+            { status: 200 },
+          ),
+        );
+      },
+    });
+
+    render(<ConnectRepoPage />);
+
+    // Navigate to create screen
+    const createBtn = await screen.findByText("Create Project");
+    await userEvent.click(createBtn);
+
+    const nameInput = await screen.findByLabelText("Project Name");
+    await userEvent.type(nameInput, "my-project");
+
+    const submitBtn = screen.getByRole("button", { name: /Create Project/i });
+    await userEvent.click(submitBtn);
+
+    // Should have retried create after detection, and entered setting_up
+    await waitFor(() => {
+      expect(createCallCount).toBe(2);
+    });
+
+    // Should NOT have redirected to GitHub
+    expect(hrefSetter).not.toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// Phase 5: Link GitHub identity for email-only accounts
+// ===========================================================================
+
+describe("Phase 5: Link GitHub identity", () => {
+  test("on mount: shows link_github state when no GitHub identity", async () => {
+    setupFetchMock({
+      "/api/repo/detect-installation": () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ installed: false, reason: "no_github_identity" }),
+            { status: 200 },
+          ),
+        ),
+    });
+
+    render(<ConnectRepoPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Connect Your GitHub Account")).toBeInTheDocument();
+    });
+  });
+
+  test("Connect Existing: shows link_github when no GitHub identity", async () => {
+    let detectCount = 0;
+    setupFetchMock({
+      "/api/repo/repos": () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ error: "GitHub App not installed" }),
+            { status: 400 },
+          ),
+        ),
+      "/api/repo/detect-installation": () => {
+        detectCount++;
+        if (detectCount === 1) {
+          // Mount detection: not installed (show choose first)
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ installed: false, reason: "not_installed" }),
+              { status: 200 },
+            ),
+          );
+        }
+        // Click detection: no GitHub identity
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ installed: false, reason: "no_github_identity" }),
+            { status: 200 },
+          ),
+        );
+      },
+    });
+
+    render(<ConnectRepoPage />);
+
+    const connectBtn = await screen.findByText("Connect Project");
+    await userEvent.click(connectBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText("Connect Your GitHub Account")).toBeInTheDocument();
+    });
+  });
+
+  test("link_github state shows error from link_error query param", async () => {
+    setCallbackParams("?link_error=Identity+already+linked");
+    setupFetchMock();
+
+    render(<ConnectRepoPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Connect Your GitHub Account")).toBeInTheDocument();
+      expect(screen.getByText("Identity already linked")).toBeInTheDocument();
+    });
+  });
+
+  test("link_github Go Back returns to choose state", async () => {
+    setupFetchMock({
+      "/api/repo/detect-installation": () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ installed: false, reason: "no_github_identity" }),
+            { status: 200 },
+          ),
+        ),
+    });
+
+    render(<ConnectRepoPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Connect Your GitHub Account")).toBeInTheDocument();
+    });
+
+    const goBackBtn = screen.getByText("Go Back");
+    await userEvent.click(goBackBtn);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Give Your AI Team the Full Picture"),
+      ).toBeInTheDocument();
+    });
   });
 });

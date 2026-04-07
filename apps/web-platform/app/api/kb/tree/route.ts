@@ -17,11 +17,11 @@ export async function GET() {
   const serviceClient = createServiceClient();
   const { data: userData, error: fetchError } = await serviceClient
     .from("users")
-    .select("workspace_path, workspace_status")
+    .select("workspace_path, workspace_status, repo_status")
     .eq("id", user.id)
     .single();
 
-  if (fetchError || !userData?.workspace_path) {
+  if (fetchError || !userData?.workspace_path || userData.repo_status === "not_connected") {
     return NextResponse.json({ error: "Workspace not found" }, { status: 404 });
   }
 

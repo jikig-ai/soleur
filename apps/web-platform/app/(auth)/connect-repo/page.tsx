@@ -15,6 +15,7 @@ import { SettingUpState } from "@/components/connect-repo/setting-up-state";
 import { ReadyState } from "@/components/connect-repo/ready-state";
 import { FailedState } from "@/components/connect-repo/failed-state";
 import { InterruptedState } from "@/components/connect-repo/interrupted-state";
+import { LinkGitHubState } from "@/components/connect-repo/link-github-state";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -23,6 +24,7 @@ type State =
   | "choose"
   | "create_project"
   | "github_redirect"
+  | "link_github"
   | "select_project"
   | "no_projects"
   | "setting_up"
@@ -51,12 +53,16 @@ export default function ConnectRepoPage() {
   const searchParams = useSearchParams();
 
   const [state, setState] = useState<State>(() => {
-    // Avoid flashing the "choose" screen when returning from GitHub App install
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
+      // Returning from GitHub App install callback
       const action = params.get("setup_action");
       if (params.get("installation_id") && (action === "install" || action === "update")) {
         return "github_redirect";
+      }
+      // Returning from failed identity linking attempt
+      if (params.get("link_error")) {
+        return "link_github";
       }
     }
     return "choose";
@@ -76,6 +82,7 @@ export default function ConnectRepoPage() {
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stateRef = useRef<State>(state);
   const loadingRef = useRef(false);
+  const detectAttemptedRef = useRef(false);
 
   // ---------------------------------------------------------------------------
   // On mount: fetch dynamic app slug and check for GitHub callback params
@@ -85,6 +92,39 @@ export default function ConnectRepoPage() {
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => { if (data?.slug) setAppSlug(data.slug); })
       .catch(() => { /* retain env var fallback */ });
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // On mount (no callback): auto-detect existing installation to break loop
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    // Skip if returning from GitHub callback (handled by the next useEffect)
+    if (searchParams.get("installation_id")) return;
+    if (detectAttemptedRef.current) return;
+    detectAttemptedRef.current = true;
+
+    (async () => {
+      try {
+        const res = await fetch("/api/repo/detect-installation", {
+          method: "POST",
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.installed && data.repos) {
+          if (data.repos.length > 0) {
+            setRepos(data.repos);
+            setState("select_project");
+          } else {
+            setState("no_projects");
+          }
+        } else if (!data.installed && data.reason === "no_github_identity") {
+          setState("link_github");
+        }
+      } catch {
+        // Silent — user can still proceed manually via choose screen
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -329,6 +369,7 @@ export default function ConnectRepoPage() {
     loadingRef.current = true;
     setReposLoading(true);
     try {
+      // 1. Try repos directly (installation already registered)
       const res = await fetch("/api/repo/repos");
       if (res.ok) {
         const data = await res.json();
@@ -340,12 +381,35 @@ export default function ConnectRepoPage() {
         }
         return;
       }
+
+      // 2. Try auto-detection (app installed on GitHub but not registered in DB)
+      const detectRes = await fetch("/api/repo/detect-installation", {
+        method: "POST",
+      });
+      if (detectRes.ok) {
+        const detectData = await detectRes.json();
+        if (detectData.installed && detectData.repos) {
+          if (detectData.repos.length > 0) {
+            setRepos(detectData.repos);
+            setState("select_project");
+          } else {
+            setState("no_projects");
+          }
+          return;
+        }
+        // No GitHub identity linked — prompt to link
+        if (!detectData.installed && detectData.reason === "no_github_identity") {
+          setState("link_github");
+          return;
+        }
+      }
     } catch {
       // Network error — fall through to GitHub redirect
     } finally {
       loadingRef.current = false;
       setReposLoading(false);
     }
+    // 3. Not installed — redirect to GitHub
     setState("github_redirect");
   }
 
@@ -386,8 +450,27 @@ export default function ConnectRepoPage() {
         return;
       }
       const errorData = await createRes.json().catch(() => null);
-      // 400 with "not installed" → fall back to GitHub redirect
+      // 400 with "not installed" → try auto-detection before GitHub redirect
       if (createRes.status === 400) {
+        const detectRes = await fetch("/api/repo/detect-installation", {
+          method: "POST",
+        });
+        if (detectRes.ok) {
+          const detectData = await detectRes.json();
+          if (detectData.installed) {
+            // Installation found — retry create
+            const retryRes = await fetch("/api/repo/create", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name, private: isPrivate }),
+            });
+            if (retryRes.ok) {
+              const data = await retryRes.json();
+              startSetup(data.repoUrl, data.fullName);
+              return;
+            }
+          }
+        }
         setPendingCreate({ name, isPrivate });
         setState("github_redirect");
         return;
@@ -490,6 +573,13 @@ export default function ConnectRepoPage() {
           <GitHubRedirectState
             onContinue={handleGitHubRedirectContinue}
             onBack={handleGitHubRedirectBack}
+          />
+        )}
+        {state === "link_github" && (
+          <LinkGitHubState
+            onBack={() => setState("choose")}
+            onSkip={handleSkip}
+            initialError={searchParams.get("link_error")}
           />
         )}
         {state === "select_project" && (
