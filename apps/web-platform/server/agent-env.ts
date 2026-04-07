@@ -31,11 +31,21 @@ const AGENT_ENV_OVERRIDES = Object.freeze({
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
 } as const);
 
-export function buildAgentEnv(apiKey: string): Record<string, string> {
+export function buildAgentEnv(
+  apiKey: string,
+  serviceTokens?: Record<string, string>,
+): Record<string, string> {
   const env: Record<string, string> = {
     ANTHROPIC_API_KEY: apiKey,
     ...AGENT_ENV_OVERRIDES,
   };
+
+  // Inject third-party service tokens (env var names from PROVIDER_CONFIG)
+  if (serviceTokens) {
+    for (const [envVar, value] of Object.entries(serviceTokens)) {
+      env[envVar] = value;
+    }
+  }
 
   for (const key of AGENT_ENV_ALLOWLIST) {
     const value = process.env[key];
