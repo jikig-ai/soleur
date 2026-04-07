@@ -2,6 +2,7 @@
 
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
 import type { Components } from "react-markdown";
 
 export const MARKDOWN_COMPONENTS: Components = {
@@ -67,10 +68,13 @@ export const MARKDOWN_COMPONENTS: Components = {
 export const REMARK_PLUGINS = [remarkGfm];
 export const DISALLOWED_ELEMENTS = ["script", "iframe", "form", "object", "embed", "style", "link"];
 
+const REHYPE_PLUGINS = [rehypeHighlight];
+
 export function MarkdownRenderer({ content }: { content: string }) {
   return (
     <Markdown
       remarkPlugins={REMARK_PLUGINS}
+      rehypePlugins={REHYPE_PLUGINS}
       components={MARKDOWN_COMPONENTS}
       disallowedElements={DISALLOWED_ELEMENTS}
       unwrapDisallowed
