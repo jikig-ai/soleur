@@ -29,9 +29,9 @@ if [[ ! -d "$KB_DIR" ]]; then
   exit 1
 fi
 
-# Collect all eligible .md files (exclude archive/, INDEX.md, non-.md)
+# Collect all eligible .md files (exclude archive/, INDEX.md, non-.md, symlinks)
 mapfile -t all_files < <(
-  find "$KB_DIR" -type f -name '*.md' \
+  find "$KB_DIR" -type f -not -type l -name '*.md' \
     -not -path '*/archive/*' \
     -not -name 'INDEX.md' \
     | LC_ALL=C sort
@@ -61,7 +61,6 @@ printf '%s\0' "${all_files[@]}" | xargs -0 -P4 -n100 bash -c '
       if ((fm == 1)) && [[ "$line" == title:* ]]; then
         title="${line#title:}"; title="${title# }"
         title="${title#\"}"; title="${title%\"}"
-        title="${title#\x27}"; title="${title%\x27}"
         break
       fi
       [[ -z "$heading" && "$line" == "# "* ]] && heading="${line#\# }"
@@ -70,8 +69,10 @@ printf '%s\0' "${all_files[@]}" | xargs -0 -P4 -n100 bash -c '
     if [[ -z "$title" ]]; then
       n=$(basename "$f" .md)
       n="${n#[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-}"
-      title=$(printf "%s" "$n" | tr "-" " " | sed "s/\b./\U&/g")
+      title=$(printf "%s" "$n" | tr "-" " ")
     fi
+    # Escape ] in titles to prevent markdown link injection
+    title="${title//]/\\]}"
     printf "%s\t%s\n" "$rel" "$title"
   done
 ' _ "$KB_DIR" | LC_ALL=C sort > "$tmpfile"
