@@ -22,11 +22,15 @@ export function LinkGitHubState({ onBack, onSkip, initialError }: LinkGitHubStat
     setLoading(true);
     setError(null);
 
+    // Set a cookie so the callback knows this was a link attempt
+    // (query params get lost through the Supabase → GitHub → callback chain)
+    document.cookie = "soleur_link_attempt=1; path=/; max-age=300; SameSite=Lax";
+
     const supabase = createClient();
     const { error: linkError } = await supabase.auth.linkIdentity({
       provider: "github",
       options: {
-        redirectTo: `${window.location.origin}/callback?from=link`,
+        redirectTo: `${window.location.origin}/callback`,
       },
     });
 

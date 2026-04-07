@@ -57,11 +57,17 @@ export async function GET(request: NextRequest) {
       );
 
       // If this was an identity linking attempt (from connect-repo), redirect
-      // back to connect-repo with an error instead of dumping the user on login
-      const from = searchParams.get("from");
-      if (from === "link") {
+      // back to connect-repo with an error instead of dumping the user on login.
+      // Check both cookie (reliable — survives OAuth chain) and query param (fallback).
+      const isLinkAttempt =
+        request.cookies.get("soleur_link_attempt")?.value === "1" ||
+        searchParams.get("from") === "link";
+      if (isLinkAttempt) {
         const linkError = encodeURIComponent(error.message ?? "Failed to link GitHub account");
-        return redirectWithCookies(`${origin}/connect-repo?link_error=${linkError}`, pendingCookies);
+        const response = redirectWithCookies(`${origin}/connect-repo?link_error=${linkError}`, pendingCookies);
+        // Clear the link attempt cookie
+        response.cookies.set("soleur_link_attempt", "", { maxAge: 0, path: "/" });
+        return response;
       }
 
       // Return specific error so the login page can show a helpful message
