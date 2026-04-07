@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import {
   findInstallationForLogin,
   listInstallationRepos,
@@ -26,7 +27,10 @@ import logger from "@/server/logger";
  * - { installed: true, repos: [...] } — installation found and registered
  * - { installed: false, reason: string } — no installation detected
  */
-export async function POST() {
+export async function POST(request: Request) {
+  const { valid, origin } = validateOrigin(request);
+  if (!valid) return rejectCsrf("api/repo/detect-installation", origin);
+
   const supabase = await createClient();
   const {
     data: { user },
