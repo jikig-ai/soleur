@@ -37,10 +37,10 @@ Suggested replacement comment:
 
 ## Acceptance Criteria
 
-- [ ] Comment in `apps/web-platform/server/index.ts` accurately reflects that deploy verification gates on supabase status
-- [ ] Comment still explains why HTTP 200 is always returned (load balancer compatibility)
-- [ ] No code logic changes -- comment-only update
-- [ ] Sentry mention removed from the comment (Sentry status is not gated by CI; it remains purely informational in the response body)
+- [x] Comment in `apps/web-platform/server/index.ts` accurately reflects that deploy verification gates on supabase status
+- [x] Comment still explains why HTTP 200 is always returned (load balancer compatibility)
+- [x] No code logic changes -- comment-only update
+- [x] Sentry mention removed from the comment (Sentry status is not gated by CI; it remains purely informational in the response body)
 
 ## Test Scenarios
 
