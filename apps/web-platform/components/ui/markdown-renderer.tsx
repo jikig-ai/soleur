@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import type { Components } from "react-markdown";
 
-export const MARKDOWN_COMPONENTS: Components = {
+const MARKDOWN_COMPONENTS: Components = {
   h1: ({ children }) => (
     <h1 className="mb-3 mt-4 text-lg font-semibold text-white">{children}</h1>
   ),
@@ -65,8 +65,8 @@ export const MARKDOWN_COMPONENTS: Components = {
   ),
 };
 
-export const REMARK_PLUGINS = [remarkGfm];
-export const DISALLOWED_ELEMENTS = ["script", "iframe", "form", "object", "embed", "style", "link"];
+const REMARK_PLUGINS = [remarkGfm];
+const DISALLOWED_ELEMENTS = ["script", "iframe", "form", "object", "embed", "style", "link"];
 
 const REHYPE_PLUGINS = [rehypeHighlight];
 

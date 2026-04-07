@@ -7,7 +7,6 @@ import type { SearchResult, SearchMatch } from "@/server/kb-reader";
 export function SearchOverlay() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
-  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(null);
@@ -15,7 +14,6 @@ export function SearchOverlay() {
   const search = useCallback(async (q: string) => {
     if (!q.trim()) {
       setResults([]);
-      setTotal(0);
       setSearched(false);
       setLoading(false);
       return;
@@ -27,7 +25,6 @@ export function SearchOverlay() {
       if (res.ok) {
         const data = await res.json();
         setResults(data.results ?? []);
-        setTotal(data.total ?? 0);
       }
     } catch {
       // Silently fail — search is best-effort
@@ -41,7 +38,6 @@ export function SearchOverlay() {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     if (!query.trim()) {
       setResults([]);
-      setTotal(0);
       setSearched(false);
       return;
     }
@@ -79,7 +75,7 @@ export function SearchOverlay() {
       {searched && query.trim() && (
         <div className="mt-3">
           <p className="mb-2 text-xs text-neutral-500">
-            {total} result{total !== 1 ? "s" : ""} for &ldquo;{query}&rdquo;
+            {results.length} result{results.length !== 1 ? "s" : ""} for &ldquo;{query}&rdquo;
           </p>
 
           {results.length === 0 ? (

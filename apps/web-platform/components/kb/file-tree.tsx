@@ -44,13 +44,13 @@ function TreeItem({
   const paddingLeft = `${indent * 12 + 8}px`;
 
   if (node.type === "directory") {
-    const dirPath = node.name;
-    const isExpanded = expanded.has(getDirKey(node, depth));
+    const dirKey = node.path ?? node.name;
+    const isExpanded = expanded.has(dirKey);
 
     return (
       <li>
         <button
-          onClick={() => onToggle(getDirKey(node, depth))}
+          onClick={() => onToggle(dirKey)}
           className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-neutral-300 hover:bg-neutral-800/50"
           style={{ paddingLeft }}
           aria-expanded={isExpanded}
@@ -116,13 +116,6 @@ function TreeItem({
       </Link>
     </li>
   );
-}
-
-function getDirKey(node: TreeNode, depth: number): string {
-  // Use name + depth as a simple key for expand state
-  // Since we don't have path on directory nodes, this suffices for trees
-  // where sibling directories have unique names (which they always do in a filesystem)
-  return node.path ?? node.name;
 }
 
 function formatRelativeTime(iso: string): string {

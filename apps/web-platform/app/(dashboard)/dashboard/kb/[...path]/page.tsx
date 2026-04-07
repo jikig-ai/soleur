@@ -132,6 +132,8 @@ export default function KbContentPage({
   );
 }
 
+const CONTENT_SKELETON_WIDTHS = ["85%", "70%", "90%", "65%", "80%", "75%"];
+
 function ContentSkeleton() {
   return (
     <div className="p-6 md:p-8">
@@ -139,11 +141,11 @@ function ContentSkeleton() {
         <div className="h-4 w-48 animate-pulse rounded bg-neutral-800" />
         <div className="h-8 w-64 animate-pulse rounded bg-neutral-800" />
         <div className="space-y-2">
-          {Array.from({ length: 6 }).map((_, i) => (
+          {CONTENT_SKELETON_WIDTHS.map((w, i) => (
             <div
               key={i}
               className="h-4 animate-pulse rounded bg-neutral-800"
-              style={{ width: `${60 + Math.random() * 40}%` }}
+              style={{ width: w }}
             />
           ))}
         </div>

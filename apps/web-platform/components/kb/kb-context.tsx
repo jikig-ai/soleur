@@ -6,7 +6,7 @@ import type { TreeNode } from "@/server/kb-reader";
 export interface KbContextValue {
   tree: TreeNode | null;
   loading: boolean;
-  error: "unauthorized" | "workspace-not-ready" | "not-found" | "unknown" | null;
+  error: "workspace-not-ready" | "not-found" | "unknown" | null;
   expanded: Set<string>;
   toggleExpanded: (path: string) => void;
 }
