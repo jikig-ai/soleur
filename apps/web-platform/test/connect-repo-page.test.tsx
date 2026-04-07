@@ -697,7 +697,7 @@ describe("Phase 5: Email-only users", () => {
     });
   });
 
-  test("Connect Existing: shows GitHub redirect when no GitHub identity", async () => {
+  test("Connect Existing: shows github_resolve state when no GitHub identity", async () => {
     let detectCount = 0;
     setupFetchMock({
       "/api/repo/repos": () =>
@@ -733,9 +733,34 @@ describe("Phase 5: Email-only users", () => {
     const connectBtn = await screen.findByText("Connect Project");
     await userEvent.click(connectBtn);
 
-    // Should go to GitHub redirect, not link_github
+    // Should go to github_resolve, not github_redirect
     await waitFor(() => {
-      expect(screen.getByText("Connecting to GitHub")).toBeInTheDocument();
+      expect(screen.getByText("Connect to GitHub")).toBeInTheDocument();
     });
+  });
+
+  test("shows error banner when returning with ?resolve_error=1", async () => {
+    mockSearchParams.current = new URLSearchParams("resolve_error=1");
+
+    setupFetchMock({
+      "/api/repo/detect-installation": () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ installed: false, reason: "no_github_identity" }),
+            { status: 200 },
+          ),
+        ),
+    });
+
+    render(<ConnectRepoPage />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/GitHub connection failed/i),
+      ).toBeInTheDocument();
+    });
+
+    // Reset search params for other tests
+    mockSearchParams.current = new URLSearchParams();
   });
 });
