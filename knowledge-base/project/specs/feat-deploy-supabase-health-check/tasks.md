@@ -4,16 +4,16 @@
 
 ### 1.1 Modify deploy health verification step
 
-- [ ] Edit `.github/workflows/web-platform-release.yml` "Verify deploy health and version" step
-- [ ] Add `SUPABASE_STATUS` extraction via `jq -r '.supabase // empty'` after version match check
-- [ ] Add conditional: if `SUPABASE_STATUS != "connected"`, log and continue retrying
-- [ ] Update success message to include "supabase connected" confirmation
-- [ ] Update final error message to mention "supabase connected" expectation
+- [x] Edit `.github/workflows/web-platform-release.yml` "Verify deploy health and version" step
+- [x] Add `SUPABASE_STATUS` extraction via `jq -r '.supabase // empty'` after version match check
+- [x] Add conditional: if `SUPABASE_STATUS != "connected"`, log and continue retrying
+- [x] Update success message to include "supabase connected" confirmation
+- [x] Update final error message to mention "supabase connected" expectation
 
 ### 1.2 Validate YAML syntax
 
-- [ ] Run `gh workflow view web-platform-release.yml` to verify the workflow parses correctly
-- [ ] Verify no heredocs or multi-line strings drop below YAML base indentation (AGENTS.md constraint)
+- [x] Run `gh workflow view web-platform-release.yml` to verify the workflow parses correctly
+- [x] Verify no heredocs or multi-line strings drop below YAML base indentation (AGENTS.md constraint)
 
 ## Phase 2: Testing
 

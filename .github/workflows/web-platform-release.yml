@@ -104,12 +104,18 @@ jobs:
               if [ "$STATUS" = "ok" ]; then
                 DEPLOYED_VERSION=$(echo "$HEALTH" | jq -r '.version // empty')
                 if [ "$DEPLOYED_VERSION" = "$VERSION" ]; then
-                  echo "Deploy verified: version $VERSION running"
-                  echo "$HEALTH" | jq .
-                  exit 0
+                  SUPABASE_STATUS=$(echo "$HEALTH" | jq -r '.supabase // empty')
+                  if [ "$SUPABASE_STATUS" != "connected" ]; then
+                    echo "Attempt $i/30: version $VERSION deployed but supabase not connected (status=${SUPABASE_STATUS:-missing})"
+                  else
+                    echo "Deploy verified: version $VERSION running, supabase connected"
+                    echo "$HEALTH" | jq .
+                    exit 0
+                  fi
+                else
+                  UPTIME=$(echo "$HEALTH" | jq -r '.uptime // "unknown"')
+                  echo "Attempt $i/30: version mismatch (expected=$VERSION got=$DEPLOYED_VERSION uptime=${UPTIME}s)"
                 fi
-                UPTIME=$(echo "$HEALTH" | jq -r '.uptime // "unknown"')
-                echo "Attempt $i/30: version mismatch (expected=$VERSION got=$DEPLOYED_VERSION uptime=${UPTIME}s)"
               else
                 echo "Attempt $i/30: health status=$STATUS"
                 echo "$HEALTH" | jq . 2>/dev/null || echo "$HEALTH"
@@ -117,5 +123,5 @@ jobs:
             fi
             sleep 10
           done
-          echo "::error::Deploy verification failed after 300s — expected version $VERSION"
+          echo "::error::Deploy verification failed after 300s — expected version $VERSION with supabase connected"
           exit 1

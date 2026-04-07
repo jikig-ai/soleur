@@ -2,9 +2,22 @@
 title: "fix: add supabase connectivity check to deploy health verification"
 type: fix
 date: 2026-04-07
+deepened: 2026-04-07
 ---
 
 # fix: add supabase connectivity check to deploy health verification
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-07
+**Sections enhanced:** 3 (Edge Cases, Context, Acceptance Criteria)
+**Research sources:** 3 institutional learnings, GitHub Actions runner environment audit
+
+### Key Improvements
+
+1. Added insight from Docker DNS/CNAME learning -- Supabase connectivity failures in containers are a documented production pattern, reinforcing the need for this check
+2. Added note about `jq` availability on `ubuntu-latest` runners (confirmed present)
+3. Strengthened the link between this fix and the post-merge verification workflow -- this check completes the deploy verification chain
 
 ## Overview
 
@@ -76,13 +89,26 @@ This means the deploy only passes when ALL three conditions are met:
 
 4. **AGENTS.md heredoc constraint:** The implementation must NOT use heredocs in the YAML `run:` block. The existing step already uses inline bash, so this is fine -- just adding more inline `jq` and `if` statements.
 
+5. **`jq` availability on runner:** The `ubuntu-latest` GitHub Actions runner includes `jq` pre-installed. The existing step already uses `jq` for status and version extraction, so no new dependency is introduced.
+
+### Research Insights
+
+**Institutional learnings that reinforce this fix:**
+
+- **Docker DNS/CNAME resolution failure (2026-04-06):** Production containers failed to resolve the Supabase custom domain CNAME chain (`api.soleur.ai` -> `*.supabase.co`), causing `/health` to report `supabase: "error"` while client-side auth worked fine. This is exactly the class of bug this deploy check would catch -- the container started successfully and served traffic, but Supabase connectivity was broken server-side. See `knowledge-base/project/learnings/runtime-errors/docker-dns-supabase-custom-domain-20260406.md`.
+
+- **Post-merge release workflow verification (2026-03-29):** Five consecutive release runs failed silently after a merge because the deploy verification only checked version, not dependency health. The learning led to the AGENTS.md rule requiring post-merge release verification. This fix closes a remaining gap in that verification chain -- version match alone is insufficient if a critical dependency is unreachable.
+
+- **Canary rollback pattern (2026-03-28):** The deploy uses a canary pattern where the new container is verified before traffic is switched. The health check's supabase probe uses a 2s timeout (`AbortSignal.timeout(2000)`). The 30x10s retry loop in the workflow gives the container 300s total -- more than enough for DNS propagation and initial Supabase connection establishment even in degraded network conditions.
+
 ## Acceptance Criteria
 
-- [ ] Deploy verification in `web-platform-release.yml` checks `supabase == "connected"` from the `/health` response
-- [ ] Deploy fails if supabase is not connected after 30 retries (300s)
-- [ ] Each retry attempt logs the supabase status for debugging
-- [ ] No heredocs or multi-line strings that break YAML indentation (per AGENTS.md)
-- [ ] The success message includes supabase status confirmation
+- [x] Deploy verification in `web-platform-release.yml` checks `supabase == "connected"` from the `/health` response
+- [x] Deploy fails if supabase is not connected after 30 retries (300s)
+- [x] Each retry attempt logs the supabase status for debugging
+- [x] No heredocs or multi-line strings that break YAML indentation (per AGENTS.md)
+- [x] The success message includes supabase status confirmation
+- [x] No new dependencies introduced (jq already used by existing step)
 
 ## Test Scenarios
 
@@ -110,6 +136,8 @@ No cross-domain implications detected -- infrastructure/tooling change.
 - PR #1697 changed the health check to query the `users` table instead of `/rest/v1/` root
 - Learning: `knowledge-base/project/learnings/integration-issues/supabase-health-check-anon-key-rest-root-20260407.md`
 - Learning: `knowledge-base/project/learnings/integration-issues/2026-04-06-supabase-server-side-connectivity-docker-container.md`
+- Learning: `knowledge-base/project/learnings/runtime-errors/docker-dns-supabase-custom-domain-20260406.md` (Docker DNS cannot resolve Supabase CNAME -- exact failure mode this check catches)
+- Learning: `knowledge-base/project/learnings/2026-03-29-post-merge-release-workflow-verification.md` (silent release failures from incomplete deploy verification)
 
 ## MVP
 
