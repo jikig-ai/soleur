@@ -1,0 +1,31 @@
+prompt = """Unified entry point for all Soleur workflows. Classify the user's intent and route to the correct skill.
+
+## User Input
+
+{{args}}
+
+If the user input above is empty, use `ask_user` to ask: "What would you like to do? Describe what you need and I'll route you to the right workflow."
+
+Do not proceed until there is input from the user.
+
+## Step 1: Worktree Context
+
+Run `run_shell_command` with `pwd`. If the path contains `.worktrees/`, extract the feature name and mention it:
+
+"You're in worktree **feat-[name]**. Want to continue working on this, or start something new?"
+
+If the user wants to continue the current feature, activate the `work` skill via `activate_skill`. Then stop.
+
+## Step 2: Classify and Route
+
+Analyze the user input and classify intent:
+
+| Intent | Trigger Signals | Routes To |
+|--------|----------------|-----------|
+| fix | Broken behavior, errors, regressions | Activate `one-shot` skill |
+| review | "review PR", "check this code", PR number | Activate `review` skill |
+| default | Everything else | Activate `brainstorm` skill |
+
+If intent is clear, activate the appropriate skill directly via `activate_skill`. No confirmation step.
+
+If intent is truly ambiguous, use `ask_user` with 3 options: Brainstorm (Recommended), Fix (one-shot), Review."""
